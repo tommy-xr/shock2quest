@@ -42,6 +42,21 @@ test("large weapons refuse thigh storage and recall independently from either sh
   await game.input.set("left_hand.squeeze", 0);
   await game.step({ frames: 8 });
   assert.deepEqual(await remembered(game), [pistol.id, shotgun.id]);
+  // The interface decorates the original inventory items, not duplicate slots.
+  await game.input.trigger("ToggleUseMode");
+  await game.step({ frames: 8 });
+  const assignedUi = await game.ui.state();
+  for (const [entity, label] of [[pistol.id, "Left shoulder"], [shotgun.id, "Right shoulder"]] as const) {
+    const elements = assignedUi.strip!.elements.filter(e => e.entity_id === entity);
+    assert.equal(elements.filter(e => e.kind === "button").length, 1);
+    const badge = elements.find(e => e.label === label)!;
+    assert.ok(badge, `${label} marks the original item`);
+    await aimVrHandAtCanvas(game, assignedUi.panel_pose!, [badge.rect[0] + badge.rect[2] / 2, badge.rect[1] + badge.rect[3] / 2], { hand: "right", squeeze: 0 });
+    await game.step({ frames: 2 });
+    assert.ok((await game.ui.state()).name_strip!.startsWith(`${label}:`));
+  }
+  await game.input.trigger("ToggleUseMode");
+  await game.step({ frames: 5 });
   // Cross-hand recall is based on the shoulder reached, not controller handedness.
   await reach(game, "left", 1);
   await game.input.set("left_hand.squeeze", 1);
@@ -52,6 +67,7 @@ test("large weapons refuse thigh storage and recall independently from either sh
   // Returning via the ordinary MFD preserves the shoulder assignment.
   await game.input.trigger("ToggleUseMode");
   await game.step({ frames: 5 });
+  assert.equal((await game.ui.state()).strip!.elements.some(e => e.label === "Right shoulder"), false, "recalled weapon has no inventory badge");
   const panel = (await game.ui.state()).panel_pose!;
   await aimVrHandAtCanvas(game, panel, [320, 60], { hand: "left", squeeze: 1 });
   await game.step({ frames: 5 });
@@ -59,6 +75,7 @@ test("large weapons refuse thigh storage and recall independently from either sh
   await game.step({ frames: 8 });
   assert.equal((await game.info()).player.wielded_entity_id, null);
   assert.deepEqual(await remembered(game), [pistol.id, shotgun.id]);
+  assert.ok((await game.ui.state()).strip!.elements.some(e => e.label === "Right shoulder" && e.entity_id === shotgun.id), "ordinary backpack return restores the badge");
   await game.input.trigger("ToggleUseMode");
   await game.step({ frames: 5 });
   await reach(game, "left", 1);
@@ -84,6 +101,12 @@ test("large weapons refuse thigh storage and recall independently from either sh
   await game.step({ frames: 8 });
   assert.deepEqual(await remembered(game), [null, pistol.id]);
   assert.equal((await game.player.inventory()).items.find(i => i.entity_id === shotgun.id)?.location, "inventory");
+  await game.input.trigger("ToggleUseMode");
+  await game.step({ frames: 8 });
+  const reassigned = (await game.ui.state()).strip!.elements.filter(e => e.label === "Left shoulder" || e.label === "Right shoulder");
+  assert.equal(reassigned.length, 1);
+  assert.equal(reassigned[0].entity_id, pistol.id);
+  assert.equal(reassigned[0].label, "Right shoulder");
 });
 
 test("shoulder weapon survives save/load and mission transition in the real backpack", { skip: !enabled, timeout: 240_000 }, async () => {

@@ -248,6 +248,9 @@ pub struct FlatUiHost {
     /// from [`Self::pointed_item`] / the world object the player is aiming at
     /// (see [`Self::set_name_strip`]). `None` draws an empty frame.
     name_strip: Option<String>,
+    /// Live backpack recall assignments, left/right. These decorate the
+    /// existing item icons; they never create another inventory owner.
+    shoulder_weapons: [Option<EntityId>; 2],
     /// Pointer position on the 640x480 canvas (None: no pointer / letterbox).
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
@@ -289,6 +292,7 @@ impl FlatUiHost {
             readouts: None,
             sticky_panel: false,
             name_strip: None,
+            shoulder_weapons: [None; 2],
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
@@ -386,6 +390,40 @@ impl FlatUiHost {
     /// Set the mini-frame's name line (already resolved to a display name).
     pub fn set_name_strip(&mut self, name: Option<String>) {
         self.name_strip = name;
+    }
+
+    pub(crate) fn set_shoulder_weapons(&mut self, weapons: [Option<EntityId>; 2]) {
+        self.shoulder_weapons = weapons;
+    }
+
+    /// Badge geometry comes from the same cached item rects as inventory
+    /// drawing and hit testing. A lifted item hides its badge with its icon.
+    fn shoulder_badges(&self) -> Vec<(EntityId, Rect, &'static str, &'static str)> {
+        let (Some(strip), Some(rect)) = (self.strip.as_ref(), self.strip_rect()) else {
+            return Vec::new();
+        };
+        strip
+            .components
+            .iter()
+            .filter_map(|component| {
+                let entity = component_entity(component)?;
+                if Some(entity) == self.held_entity() {
+                    return None;
+                }
+                let side = self
+                    .shoulder_weapons
+                    .iter()
+                    .position(|item| *item == Some(entity))?;
+                let slot = component.canvas_rect(rect);
+                let badge = Rect::new(slot.x + slot.w - 23.0, slot.y + slot.h - 13.0, 22.0, 12.0);
+                let (letter, label) = if side == 0 {
+                    ("L", "Left shoulder")
+                } else {
+                    ("R", "Right shoulder")
+                };
+                Some((entity, badge, letter, label))
+            })
+            .collect()
     }
 
     /// The mini-frame's current name line, for `GET /v1/ui`.
@@ -1022,6 +1060,16 @@ impl FlatUiHost {
             // Hide the item riding the cursor from the strip grid (it is drawn
             // as the cursor instead).
             draw_components(&mut canvas, &strip.components, rect, self.held_entity());
+            for (_, badge, letter, _) in self.shoulder_badges() {
+                canvas.image(badge, "frame.pcx");
+                canvas.text_native(
+                    badge,
+                    letter,
+                    NAME_STRIP_FONT,
+                    HAlign::Center,
+                    VAlign::Middle,
+                );
+            }
             // The mini-frame sits in the inventory bar, so it is up exactly
             // while the bar is. Placement is decided here, once, in canvas
             // pixels - both presentations map this rect (AGENTS.md 3).
@@ -1029,6 +1077,14 @@ impl FlatUiHost {
             canvas.image(frame, "frame.pcx");
             if let Some(name) = self.name_strip.as_deref() {
                 canvas.text_native_fit(text, name, NAME_STRIP_FONT, HAlign::Left, VAlign::Middle);
+            } else if self.shoulder_weapons.iter().any(Option::is_some) {
+                canvas.text_native_fit(
+                    text,
+                    "L / R: shoulder recall",
+                    NAME_STRIP_FONT,
+                    HAlign::Left,
+                    VAlign::Middle,
+                );
             }
         }
         if let Some(rect) = panel_rect {
@@ -1128,7 +1184,20 @@ impl FlatUiHost {
         match (self.strip.as_ref(), self.strip_rect()) {
             // Hide the item on the cursor: it left the grid for the drag.
             (Some(strip), Some(rect)) => {
-                self.elements_for(world, &strip.components, rect, self.held_entity())
+                let mut elements =
+                    self.elements_for(world, &strip.components, rect, self.held_entity());
+                elements.extend(self.shoulder_badges().into_iter().map(
+                    |(entity, r, letter, label)| crate::game_scene::DebugUiElement {
+                        kind: "text".to_owned(),
+                        texture: None,
+                        text: Some(letter.to_owned()),
+                        label: Some(label.to_owned()),
+                        entity_id: Some(entity.inner() as i32),
+                        rect: [r.x, r.y, r.w, r.h],
+                        screen_rect: self.to_screen_rect(r),
+                    },
+                ));
+                elements
             }
             _ => Vec::new(),
         }
@@ -2072,6 +2141,49 @@ mod tests {
             &[strip_item(wrench, 0)],
         );
         (world, host, wrench, inventory)
+    }
+
+    #[test]
+    fn shoulder_badges_follow_items_without_becoming_duplicate_grab_targets() {
+        let (mut world, mut host, left, _) = drag_world();
+        let right = world.add_entity(());
+        host.strip
+            .as_mut()
+            .unwrap()
+            .components
+            .push(strip_item(right, 2));
+        host.set_shoulder_weapons([Some(left), Some(right)]);
+        let badges = host.shoulder_badges();
+        assert_eq!(badges.len(), 2);
+        for (entity, rect, letter, label) in &badges {
+            assert_eq!(host.strip_item_at(rect.center()), Some(*entity));
+            assert_eq!(
+                (*letter, *label),
+                if *entity == left {
+                    ("L", "Left shoulder")
+                } else {
+                    ("R", "Right shoulder")
+                }
+            );
+        }
+        let elements = host.strip_debug_elements(&world);
+        assert_eq!(elements.iter().filter(|e| e.kind == "button").count(), 2);
+        assert_eq!(
+            elements
+                .iter()
+                .filter(|e| e.label.as_deref() == Some("Left shoulder"))
+                .count(),
+            1
+        );
+        // Cursor lifts keep backpack membership, but must not leave an orphan
+        // badge where the hidden inventory icon used to be.
+        host.cursor_item = Some(make_cursor_item(&world, left));
+        assert_eq!(host.shoulder_badges().len(), 1);
+        host.cursor_item = None;
+        host.set_shoulder_weapons([None, Some(right)]);
+        assert_eq!(host.shoulder_badges()[0].0, right);
+        host.set_strip(None);
+        assert!(host.shoulder_badges().is_empty());
     }
 
     #[test]

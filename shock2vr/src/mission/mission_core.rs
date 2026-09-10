@@ -4713,11 +4713,29 @@ impl MissionCore {
         // `resolve_item_name`, so an object is never called two things at once.
         // Unlike the brackets this readout is not gated on `P$HUDSelect`: a
         // door gets no brackets but does get named here.
+        let shoulder_weapons = self
+            .flat_ui
+            .strip_entity()
+            .map(|inventory| super::shoulder_backpack::weapons(&self.world, inventory))
+            .unwrap_or([None; 2]);
+        self.flat_ui.set_shoulder_weapons(shoulder_weapons);
         let name_strip = self.flat_ui.strip_entity().and_then(|_| {
             self.flat_ui
                 .pointed_item()
                 .or_else(|| self.name_strip_world_pick(game_options))
-                .and_then(|entity| crate::hud::resolve_item_name(asset_cache, &self.world, entity))
+                .and_then(|entity| {
+                    let name = crate::hud::resolve_item_name(asset_cache, &self.world, entity)?;
+                    Some(
+                        match shoulder_weapons
+                            .iter()
+                            .position(|item| *item == Some(entity))
+                        {
+                            Some(0) => format!("Left shoulder: {name}"),
+                            Some(1) => format!("Right shoulder: {name}"),
+                            _ => name,
+                        },
+                    )
+                })
         });
         self.flat_ui.set_name_strip(name_strip);
 

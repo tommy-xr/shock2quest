@@ -27,3 +27,32 @@ Retail behavior below is confirmed by the [System Shock 2 manual, PDF page 5](ht
 Two different guns; gun plus psi amp; swapped hands; one support grip; no weapon; dropping/swapping a weapon between drawing and clicking its control. Research active, chemical-paused and completed after the item is gone. Inspect a hypo without consumption, a gun without firing, and an ordinary object without research data. Use the same rendered/hit-test rectangles in flat and VR, and retain press-edge protection when opening or switching panels.
 
 A weapon-pinned ammo display remains a separate optional grip-editor placement mode. The psi amp keeps its authored forearm and needs its own mount; glove-mounted wrist plates deliberately skip it.
+
+## Shoulder assignments in the inventory
+
+The first MFD increment marks the existing backpack weapon icon with L or R.
+The idle item-name line explains `L / R: shoulder recall`; hovering an assigned
+weapon prefixes its name with `Left shoulder:` or `Right shoulder:`. These are
+shoulder recall assignments, independent of controller handedness.
+
+The assignment list comes from the same live backpack-membership query used by
+shoulder retrieval. There are no duplicate weapon slots or extra grab targets.
+The normal item click/grab behavior stays on the original icon, including under
+the badge. A cursor lift hides both icon and badge; recall/world removal hides
+the badge when the item leaves the backpack. Returning an assigned weapon to
+the backpack restores its mark. Reassigning a shoulder marks its new weapon.
+
+Layout is emitted once in the shared interface canvas for flat and VR. This
+increment makes existing assignments visible; editing assignments from the MFD
+is a follow-up interaction, alongside the retail utility controls above.
+
+### Next: replace the single-arm equipment column
+
+`invback.png` bakes one arm into the narrow equipment column. A proposed next
+increment overlays that column with two stacked, explicitly named LEFT HAND /
+RIGHT HAND panels and each held item icon. A support hand reads SUPPORTING
+rather than duplicating ownership. Keep armor and implant areas intact. This
+separates what is held from the shoulder recall marks on backpack items, and
+can reuse shared canvas overlays without changing the retail texture. Read the
+equipment layout and current slot behavior before adding controls; the first
+pass should prioritize readable state over new actions.
