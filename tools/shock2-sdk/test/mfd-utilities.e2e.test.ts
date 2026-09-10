@@ -244,3 +244,42 @@ for (const vr of [false,true]) {
     assert.deepEqual(await game.player.inventory(),inventory,"returning cursor item preserves inventory");
   });
 }
+
+for (const vr of [false,true]) {
+  test(`Native logs control keeps cyber open and resources follow real awards (${vr ? "VR" : "flat"})`, {
+    skip:process.env.SHOCK2_E2E!=="1",timeout:180_000,
+  },async()=>{
+    await using game=await GameServer.launch({mission:"medsci1.mis",debugFlags:vr?["--vr"]:[]});
+    await game.step({frames:30});await game.player.spawnItem(-52);
+    await game.input.trigger("ToggleUseMode");await game.step({frames:5});
+    const click=async(e:UiElement)=>{if(vr)await clickCanvasWithRay(game,requirePanelPose(await game.ui.state()),canvasCenter(e));else await clickUiElement(game,e);};
+    const logs=async()=>{const e=(await game.ui.state()).readout.find(e=>e.label==="logs");assert.ok(e);return e;};
+    const capture=async(name:string)=>{const out=process.env.ASTRA_LOG_CAPTURE;if(!out)return;await mkdir(out,{recursive:true});const path=`${out}/${vr?"vr":"flat"}-${name}`;await game.screenshot(path+".png",1600);await writeFile(path+".json",JSON.stringify({ui:await game.ui.state(),info:await game.info(),inventory:await game.player.inventory()},null,2));};
+    const inventory=await game.player.inventory();
+    await capture("idle");await click(await logs());
+    assert.equal((await game.ui.state()).mode,"use");assert.equal((await game.ui.state()).active_panel,null);
+    assert.ok((await game.ui.state()).strip!.elements.some(e=>e.label==="utility_text"&&e.text?.includes("No collected logs")),"empty logs render shared PDA feedback");
+    await capture("empty-logs");
+    await click(await logs());
+    assert.equal((await game.ui.state()).mode,"use");
+    assert.ok(!(await game.ui.state()).strip!.elements.some(e=>e.label==="utility_text"&&e.text?.includes("No collected logs")),"second click dismisses empty PDA only");
+    const [disc]=await game.entities.byTemplate(1608);assert.ok(disc);
+    await game.entities.sendMessage(disc.id,{type:"Frob"});await game.step({frames:5});
+    await click(await logs());
+    const reader=(await game.ui.state()).active_panel;assert.ok(reader);
+    assert.ok(reader.elements.some(e=>e.text?.includes("45100")),"native button opens authored Amanpour transcript");
+    await capture("reader");await click(await logs());
+    assert.equal((await game.ui.state()).active_panel,null,"button closes only the reader");assert.equal((await game.ui.state()).mode,"use");
+    const before=(await game.info()).player.stats!;
+    const nanites=(await game.entities.list({filter:"Nanite",limit:100})).entities;
+    let awarded=0;
+    for(const e of nanites){const p=(await game.entities.detail(e.id)).properties;const count=Number(p.find(p=>p.name==="StackCount")?.value??0);if(count>0){await game.entities.sendMessage(e.id,{type:"Frob"});await game.step({frames:3});awarded=count;break;}}
+    assert.ok(awarded>0,"authored nanite pickup");assert.equal((await game.info()).player.stats!.nanites,before.nanites+awarded);
+    const traps=(await game.entities.list({filter:"Experience Trap"})).entities;let experience=0;
+    for(const e of traps){const value=Number((await game.entities.detail(e.id)).properties.find(p=>p.name==="Exp")?.value??0);if(value>0){await game.entities.sendMessage(e.id,{type:"TurnOn"});await game.step({frames:3});experience=value;break;}}
+    assert.ok(experience>0);assert.equal((await game.info()).player.stats!.cyber_modules,before.cyber_modules+experience);
+    const ui=await game.ui.state();
+    for(const [x,value] of [[185,before.nanites+awarded],[224,before.cyber_modules+experience]]){assert.ok(ui.readout_elements.some(e=>e.kind==="text"&&Math.abs(e.rect[0]-x)<.01&&e.text===String(value)),"resource total matches awarded currency");}
+    await capture("awarded");assert.deepEqual(await game.player.inventory(),inventory,"resource awards do not become inventory items");
+  });
+}

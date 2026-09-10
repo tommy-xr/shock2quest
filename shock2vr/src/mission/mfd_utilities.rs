@@ -27,6 +27,7 @@ enum Control {
 pub(crate) struct MfdUtilities {
     inspecting: bool,
     research: bool,
+    empty_logs: bool,
     map_requested: bool,
     research_catalog: super::research_overview::ResearchCatalog,
     selected: Option<EntityId>,
@@ -36,8 +37,16 @@ pub(crate) struct MfdUtilities {
 }
 
 impl MfdUtilities {
-    pub(crate) fn is_research(&self) -> bool {
-        self.research
+    pub(crate) fn has_left_panel(&self) -> bool {
+        self.research || self.empty_logs
+    }
+    pub(crate) fn show_empty_logs(&mut self) {
+        *self = Self::default();
+        self.empty_logs = true;
+        self.set_content("LOGS".into(), "No collected logs.".into());
+    }
+    pub(crate) fn is_empty_logs(&self) -> bool {
+        self.empty_logs
     }
     pub(crate) fn open_research(&mut self, template: Option<i32>) {
         *self = Self::default();
@@ -47,7 +56,7 @@ impl MfdUtilities {
         }
     }
     pub(crate) fn is_open(&self) -> bool {
-        self.inspecting || self.selected.is_some() || self.research
+        self.inspecting || self.selected.is_some() || self.research || self.empty_logs
     }
     pub(crate) fn take_map_request(&mut self) -> bool {
         std::mem::take(&mut self.map_requested)
@@ -67,6 +76,9 @@ impl MfdUtilities {
             ),
             (Control::Map, Rect::new(150.0, 451.0, 32.0, 18.0), "MAP"),
         ];
+        if self.empty_logs {
+            controls.push((Control::Close, Rect::new(165.0, 132.0, 20.0, 21.0), ""));
+        }
         if self.inspecting || self.selected.is_some() {
             controls.push((Control::Close, Rect::new(570.0, 346.0, 60.0, 20.0), "CLOSE"));
             if self.page > 0 {
@@ -85,6 +97,7 @@ impl MfdUtilities {
                     Control::Research if self.research => "iface/ifbtn41.pcx",
                     Control::Research => "iface/ifbtn40.pcx",
                     Control::Map => "iface/ifbtn50.pcx",
+                    Control::Close if self.empty_logs => "iface/closeoff.pcx",
                     _ => "IFBTN00.PCX",
                 };
                 (control, rect, label, texture)
@@ -112,6 +125,7 @@ impl MfdUtilities {
                             *self = Self::default();
                         } else {
                             self.research = false;
+                            self.empty_logs = false;
                             self.inspecting = true;
                             self.selected = None;
                             self.set_content("Item information".into(), "Select an inventory or held item to inspect. Select ? again to cancel.".into());
@@ -131,6 +145,9 @@ impl MfdUtilities {
                 }
             }
             return true;
+        }
+        if self.empty_logs {
+            return Rect::new(2.0, 124.0, 188.0, 296.0).contains(point);
         }
         if self.research {
             let consumed = self.research_catalog.contains(point);
@@ -188,6 +205,19 @@ impl MfdUtilities {
     }
 
     pub(crate) fn draw(&self, canvas: &mut UiCanvas) {
+        if self.empty_logs {
+            canvas.image(Rect::new(2.0, 124.0, 188.0, 296.0), "iface/pda.pcx");
+            canvas.text_native_fit(
+                Rect::new(17.0, 136.0, 139.0, 12.0),
+                &self.title,
+                crate::ui::MFD_FONT,
+                HAlign::Left,
+                VAlign::Top,
+            );
+            for (rect, line) in self.visible_lines() {
+                canvas.text_native_fit(rect, line, crate::ui::MFD_FONT, HAlign::Left, VAlign::Top);
+            }
+        }
         if self.research {
             self.research_catalog.draw(canvas);
         }
@@ -211,7 +241,9 @@ impl MfdUtilities {
         for (control, rect, label, texture) in self.controls() {
             canvas.image(rect, texture);
             // Native navigation art contains its own glyphs (including the vial).
-            if matches!(control, Control::Close | Control::Previous | Control::Next) {
+            if !label.is_empty()
+                && matches!(control, Control::Close | Control::Previous | Control::Next)
+            {
                 canvas.text_native_fit(rect, label, FONT, HAlign::Center, VAlign::Middle);
             }
         }
@@ -223,7 +255,14 @@ impl MfdUtilities {
             .skip(self.page * PAGE_LINES)
             .take(PAGE_LINES)
             .enumerate()
-            .map(|(i, line)| (Rect::new(460.0, 152.0 + i as f32 * 11.0, 168.0, 11.0), line))
+            .map(|(i, line)| {
+                let rect = if self.empty_logs {
+                    Rect::new(17.0, 170.0 + i as f32 * 12.0, 139.0, 12.0)
+                } else {
+                    Rect::new(460.0, 152.0 + i as f32 * 11.0, 168.0, 11.0)
+                };
+                (rect, line)
+            })
     }
 
     pub(crate) fn debug_elements(&self) -> Vec<crate::game_scene::DebugUiElement> {

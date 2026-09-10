@@ -41,6 +41,14 @@ IFBTN30, and IFBTN50 artwork. Their drawing, input and debug rectangles share
 right with empty hands; its weapon controls appear only with relevant content.
 Clicking either strip while carrying a cursor item preserves the item.
 
+BIOFULL's two resource wells show nanites (`nan_ic`) and cyber modules
+(`upgrade`) with live balances. The nanite total is the same one used by
+purchases, including legacy carried stacks. The first AMMOFULL well holds the
+log disc button: it opens the existing latest-unread collected-log reader,
+falling back to the latest readable log. Pressing it again closes just that
+reader and leaves the cyber interface open. With no collected logs it shows
+an empty native PDA panel. This is a shortcut, not yet a full PDA log browser.
+
 The current ammo controls still target the hand-agnostic wielded weapon (right
 hand first in VR). Dual readouts and explicit per-weapon action routing are a
 separate increment; the restored frame does not resolve that ownership yet.

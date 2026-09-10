@@ -132,6 +132,7 @@ pub enum ReadoutButton {
     /// is a control on that canvas, so it travels with the rest through the
     /// one list the host draws and hit-tests.
     SystemMenu,
+    Logs,
 }
 
 impl ReadoutButton {
@@ -147,6 +148,7 @@ impl ReadoutButton {
             ReadoutButton::PsiPowerNext => "psi_power_next",
             ReadoutButton::PsiSelect => "psi_select",
             ReadoutButton::SystemMenu => "system_menu",
+            ReadoutButton::Logs => "logs",
         }
     }
 }

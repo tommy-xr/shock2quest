@@ -642,7 +642,7 @@ impl FlatUiHost {
     /// Bind the MFD to `entity` (the original's `gOverlayObj`). Opening a
     /// second panel replaces the first - one panel per (left) slot.
     pub fn open(&mut self, entity: EntityId) {
-        if self.utilities.is_research() {
+        if self.utilities.has_left_panel() {
             self.utilities = Default::default();
         }
         if self.active_panel != Some(entity) {
@@ -910,7 +910,7 @@ impl FlatUiHost {
                 .utilities
                 .update(canvas_pos, pressed_edge || grab_edge, candidate)
             {
-                if self.utilities.is_research() {
+                if self.utilities.has_left_panel() {
                     self.close();
                 }
                 self.hover_close = false;
@@ -2943,6 +2943,7 @@ mod tests {
     /// ((496,429) and (564,429)).
     fn readout_fixture() -> UseModeReadouts {
         UseModeReadouts {
+            resources: [0; 2],
             bio: Default::default(),
             ammo: crate::hud::ammo_panel::AmmoReadout {
                 ammo: Some(12),
@@ -2978,7 +2979,7 @@ mod tests {
                 .iter()
                 .map(|e| e.label.as_deref().unwrap())
                 .collect::<Vec<_>>(),
-            vec!["gun_setting", "cycle_ammo", "system_menu"]
+            vec!["gun_setting", "cycle_ammo", "system_menu", "logs"]
         );
         assert_eq!(elements[0].text.as_deref(), Some("NORM"));
         assert!(elements.iter().all(|e| e.kind == "button"));
@@ -3018,6 +3019,7 @@ mod tests {
     fn empty_bottom_strips_preserve_a_carried_item() {
         let (world, mut host, wrench, _) = drag_world();
         host.set_readouts(Some(UseModeReadouts {
+            resources: [0; 2],
             bio: Default::default(),
             ammo: Default::default(),
         }));
