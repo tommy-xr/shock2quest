@@ -4081,6 +4081,12 @@ impl MissionCore {
             input_context.left_hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
             input_context.right_hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
         ];
+        if self.flat_ui.utilities.is_inspecting() {
+            // Selection owns both triggers even off-panel. Upgrade an ongoing
+            // pull to safe and retain that decision until physical release,
+            // so cancelling inspection cannot consume a held hypo mid-pull.
+            self.vr_trigger_safe_latch = [Some(true); 2];
+        }
         let mut trigger_safe = latch_trigger_safe(
             &mut self.vr_trigger_safe_latch,
             pressed,
@@ -4719,6 +4725,7 @@ impl MissionCore {
             .map(|inventory| super::shoulder_backpack::weapons(&self.world, inventory))
             .unwrap_or([None; 2]);
         self.flat_ui.set_shoulder_weapons(shoulder_weapons);
+        self.flat_ui.utilities.refresh(&self.world, asset_cache);
         // Resolve physical ownership through the interaction boundary: flat's
         // internal left slot represents the visibly right-handed viewmodel.
         let held = self.interaction.held_entities();

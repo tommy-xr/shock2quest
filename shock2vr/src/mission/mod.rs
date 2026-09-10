@@ -6,6 +6,7 @@ mod body_inventory;
 pub mod entity_populator;
 pub mod flat_ui_host;
 mod holsters;
+mod mfd_utilities;
 pub mod mission_core;
 pub mod pathfinding_debug;
 pub mod pathfinding_test;

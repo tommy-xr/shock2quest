@@ -260,6 +260,7 @@ pub struct FlatUiHost {
     /// Read-only snapshots in physical left/right order. A support hand owns
     /// no item; flat wielding is mapped to its visible right hand by the caller.
     hand_items: [Option<CursorItem>; 2],
+    pub(crate) utilities: super::mfd_utilities::MfdUtilities,
     /// Pointer position on the 640x480 canvas (None: no pointer / letterbox).
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
@@ -303,6 +304,7 @@ impl FlatUiHost {
             name_strip: None,
             shoulder_weapons: [None; 2],
             hand_items: [None, None],
+            utilities: Default::default(),
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
@@ -624,6 +626,7 @@ impl FlatUiHost {
     /// entity, whose `GuiScript` already emits `SetUI` every frame - the
     /// strip just stashes and re-anchors it.
     pub fn set_strip(&mut self, entity: Option<EntityId>) {
+        self.utilities = Default::default();
         // The readout belongs to the bar: leaving use mode must not leave a
         // stale name behind for `/v1/ui` (the mission's per-frame update runs
         // before the effect that unbinds the strip).
@@ -872,6 +875,9 @@ impl FlatUiHost {
         // bare-view click: throw a held item, else close the panel. In VR the
         // canvas is the panel, so an off-panel press belongs to the world hand.
         let Some(canvas_pos) = canvas_pos else {
+            if self.utilities.is_inspecting() {
+                return (Vec::new(), Vec::new());
+            }
             if pressed_edge && pointer.bare_view == BareViewPress::Exit {
                 if let Some(held) = self.cursor_item.take() {
                     return (Vec::new(), vec![FlatUiDragAction::Throw(held.entity)]);
@@ -887,6 +893,23 @@ impl FlatUiHost {
             .and_then(|s| s.size_px)
             .map(strip_canvas_rect);
         let over_strip = strip_rect.map(|r| r.contains(canvas_pos)).unwrap_or(false);
+        if let Some(rect) = strip_rect {
+            let hand_item = hand_readout_rects(rect)
+                .iter()
+                .position(|r| r.contains(canvas_pos))
+                .and_then(|slot| self.hand_items[slot].as_ref().map(|item| item.entity));
+            let candidate = self
+                .held_entity()
+                .or(hand_item)
+                .or_else(|| self.strip_item_at(canvas_pos));
+            if self
+                .utilities
+                .update(canvas_pos, pressed_edge || grab_edge, candidate)
+            {
+                self.hover_close = false;
+                return (Vec::new(), Vec::new());
+            }
+        }
         if strip_rect.is_some_and(|r| hand_readout_rects(r).iter().any(|r| r.contains(canvas_pos)))
         {
             // Hand readouts never equip, use or throw an item.
@@ -1114,6 +1137,7 @@ impl FlatUiHost {
             readouts::emit_use_mode(&mut canvas, readouts);
         }
         if let (Some(strip), Some(rect)) = (self.strip.as_ref(), strip_rect) {
+            self.utilities.draw(&mut canvas);
             // Reverse only the source U interval: the mirrored paperdoll is
             // background art, never mirrored text, item icons, or input.
             let arm = mirrored_arm_rect(rect);
@@ -1303,6 +1327,16 @@ impl FlatUiHost {
             (Some(strip), Some(rect)) => {
                 let mut elements =
                     self.elements_for(world, &strip.components, rect, self.held_entity());
+                elements.extend(
+                    self.utilities
+                        .debug_elements()
+                        .into_iter()
+                        .map(|mut element| {
+                            let [x, y, w, h] = element.rect;
+                            element.screen_rect = self.to_screen_rect(Rect::new(x, y, w, h));
+                            element
+                        }),
+                );
                 elements.extend(self.shoulder_badges().into_iter().map(
                     |(entity, r, letter, label)| crate::game_scene::DebugUiElement {
                         kind: "text".to_owned(),
@@ -2360,7 +2394,13 @@ mod tests {
             );
         }
         let elements = host.strip_debug_elements(&world);
-        assert_eq!(elements.iter().filter(|e| e.kind == "button").count(), 2);
+        assert_eq!(
+            elements
+                .iter()
+                .filter(|e| e.kind == "button" && e.entity_id.is_some())
+                .count(),
+            2
+        );
         assert_eq!(
             elements
                 .iter()
@@ -2432,6 +2472,30 @@ mod tests {
             None,
             "the decorative arm is not another backpack cell"
         );
+    }
+
+    #[test]
+    fn inspect_click_does_not_lift_wield_or_frob_an_inventory_item() {
+        let (world, mut host, item, _) = drag_world();
+        assert!(press_edge(&mut host, &world, (468.0, 395.0)).is_empty());
+        assert!(host.utilities.is_inspecting());
+        let point = host
+            .strip_debug_elements(&world)
+            .into_iter()
+            .find(|e| e.entity_id == Some(item.inner() as i32))
+            .unwrap()
+            .rect;
+        assert!(
+            press_edge(
+                &mut host,
+                &world,
+                (point[0] + point[2] / 2.0, point[1] + point[3] / 2.0)
+            )
+            .is_empty()
+        );
+        assert!(!host.utilities.is_inspecting());
+        assert_eq!(host.held_entity(), None);
+        assert!(world.borrow::<EntitiesView>().unwrap().is_alive(item));
     }
 
     #[test]
