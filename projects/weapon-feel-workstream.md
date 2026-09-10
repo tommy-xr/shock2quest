@@ -939,3 +939,12 @@ spread, movement, or backpack capacity. They persist only for the running
 process, including across mission/save loads; return both to zero when done.
 See [the headset test recipe](../DEVELOPMENT.md#testing-vr-weapon-handling-at-different-stats).
 Agility-driven lag during rapid hand rotation remains a separate future feature.
+
+
+### Quest defaults for headset validation
+
+The Quest runtime enables `physical_held_items` and `physical_gun_weight` at
+startup, and explicitly keeps `render_particles` on for projectile orbs/trails.
+No launch-file or feature-flag edit is needed: use the Developer scene list to
+enter `debug_weapons`, then change the handling stat overrides as described
+above. Desktop/debug runtime experimental defaults remain unchanged.

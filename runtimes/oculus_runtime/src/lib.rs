@@ -543,12 +543,20 @@ fn main() {
     let now = Instant::now();
     let engine = engine::android();
     let bundle_storage = engine.get_storage();
-    let experimental_features = HashSet::new();
+    // Quest has no launch-flag UI: ship the physical gun path, including
+    // recoil/contact feedback and downward weight. Handling can be compared
+    // live through the Developer panel's Strength/Agility overrides.
+    let experimental_features = HashSet::from([
+        "physical_held_items".to_owned(),
+        "physical_gun_weight".to_owned(),
+    ]);
     let mission = quest_config::configured_mission();
     let game_init_started = Instant::now();
     let options: GameOptions = GameOptions {
         mission: mission.clone(),
         experimental_features,
+        // Projectile orbs/trails are authored particles, not optional polish.
+        render_particles: true,
         debug_skeletons: false,
         ..GameOptions::default()
     };
