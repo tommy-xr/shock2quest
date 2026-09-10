@@ -358,6 +358,11 @@ pub struct RuntimePropPlayerFiredProjectile;
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropLaunchedProjectile;
 
+/// Current world-space projectile velocity, synchronized from physics and saved
+/// so a steered or ricocheting shot resumes its flight instead of relaunching.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropProjectileVelocity(pub Vector3<f32>);
+
 // RuntimePropMapData - the automap page data for the current mission, attached
 // to the synthetic map-panel entity at mission init: the mission's level file
 // name (for the per-level `intrface/<LEVEL>/english/` art paths), its authored

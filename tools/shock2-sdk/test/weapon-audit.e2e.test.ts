@@ -14,8 +14,7 @@ const cases: Case[] = JSON.parse(readFileSync(new URL("../../test/fixtures/weapo
 const enabled = process.env.SHOCK2_E2E === "1";
 for (const vr of [false, true]) for (const row of cases) {
   test(`${vr ? "VR" : "flat"} audit: ${row.weapon} setting ${row.setting} ${row.projectileName}`,
-    { skip: !enabled || (!!process.env.WEAPON_AUDIT_PRESENTATION && process.env.WEAPON_AUDIT_PRESENTATION !== (vr ? "vr" : "flat")), timeout: 180_000,
-      todo: row.weaponTemplate === -27 ? "Homing script crashes on initialization" : undefined }, async () => {
+    { skip: !enabled || (!!process.env.WEAPON_AUDIT_PRESENTATION && process.env.WEAPON_AUDIT_PRESENTATION !== (vr ? "vr" : "flat")), timeout: 180_000 }, async () => {
     await using game = await GameServer.launch({ mission: "debug_weapons", debugFlags: vr ? ["--vr"] : [] });
     try {
     await game.step({ frames: 5 });

@@ -48,6 +48,8 @@ pub struct EntitySaveData {
     /// This is separate from launch provenance: enemy shots are launched too.
     #[serde(default)]
     pub player_fired_projectiles: Vec<u64 /* entity id */>,
+    #[serde(default)]
+    pub projectile_velocities: HashMap<u64, cgmath::Vector3<f32>>,
     /// Opt-in private state owned by scripts on these entities. Registered ECS
     /// properties and links remain in their existing fields above; this is only
     /// for runtime modes, timers, latches, and similar script internals.
@@ -69,6 +71,7 @@ impl EntitySaveData {
             canonical_template_ids: HashMap::new(),
             launched_projectiles: Vec::new(),
             player_fired_projectiles: Vec::new(),
+            projectile_velocities: HashMap::new(),
             script_states: Vec::new(),
         }
     }
@@ -94,6 +97,17 @@ impl EntitySaveData {
         }
 
         let (all_properties, _, _) = dark::properties::get::<File>();
+
+        for (old, velocity) in &self.projectile_velocities {
+            if let Some(new) =
+                EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
+            {
+                world.add_component(
+                    *new,
+                    crate::runtime_props::RuntimePropProjectileVelocity(*velocity),
+                );
+            }
+        }
 
         for prop in all_properties {
             let name = prop.name();

@@ -24,6 +24,7 @@ mod prop_gun_reliability;
 mod prop_gun_state;
 mod prop_hack_diff;
 mod prop_hit_points;
+mod prop_homing;
 mod prop_key;
 mod prop_log;
 mod prop_obj_state;
@@ -71,6 +72,7 @@ pub use prop_gun_reliability::*;
 pub use prop_gun_state::*;
 pub use prop_hack_diff::*;
 pub use prop_hit_points::*;
+pub use prop_homing::*;
 pub use prop_key::*;
 pub use prop_log::*;
 pub use prop_obj_state::*;
@@ -1898,6 +1900,13 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$PhysInitV",
             PropPhysInitialVelocity::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop("P$Homing", PropHoming::read, identity, accumulator::latest),
+        define_prop(
+            "P$TargetTyp",
+            |reader, _len| read_u32(reader),
+            PropTargetType,
             accumulator::latest,
         ),
         define_prop(

@@ -369,3 +369,37 @@ setting and ammo combinations and the current verification boundaries.
 including setting-filtered link inputs and unparsed-property gaps. The SDK
 matrix exercises both flat and right VR; diagnostic last-projectile identity
 keeps instantaneous ray shots observable without changing their lifetime.
+
+
+## Annelid homing
+
+The new stack starts from merged main `69cffd92`. Both Worm Launcher settings
+now execute the authored `Homing` script instead of panicking. `P$Homing` supplies
+target mask, range, heading filter, per-pulse turn limit and pulse interval;
+`P$TargetTyp` supplies target flags. Shipped AH/AA rockets use masks 1/2, range
+50 Dark units, a 27.158-degree yaw/pitch window, an 11.25-degree turn limit and
+200 ms pulses. Hybrids carry mask 3 and are eligible for both modes.
+
+The source baseline is Dark `shock/shkhome.h` / `shkhome.cpp`, with the one-time
+scan and recurring `HomingPulse` checked against the shipped 25AE script binary
+and [Telliamed's script reference](https://thiefmissions.com/telliamed/allscripts.html).
+Targets must be alive, referenced, in range and angular bounds, with
+terrain line of sight. A lost/dead target is not reacquired. Deliberate port
+adaptations are scanning from the actual projectile launch pose for VR hands,
+using symmetric distance bounds instead of the source's signed-axis comparison,
+and preserving actual launch speed (including modifiers) while steering.
+
+Save/load preserves target identity through remapping, pulse remainder and
+world-space projectile velocity. The shared velocity snapshot also prevents
+ordinary player-fired projectiles from restarting toward world +Z on load.
+
+Both modes have flat/VR firing coverage and visible off-axis steering/impact
+captures. Impact kills the fixture hybrid and visible blast particles expire;
+the explosion root and two particle child entities still exist after 26 seconds.
+That secondary-effect entity cleanup remains an audit gap. These checks do not
+establish full damage/stim parity.
+
+The next separate layer addresses Quest's explicit `render_particles: false`
+override. It explains the missing particle orbs despite smaller mesh effects
+(the user's four-dot EMP observation); headset before/after verification remains
+required before calling that presentation gap fixed.
