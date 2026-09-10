@@ -151,6 +151,15 @@ dev_params! {
     /// affects physical gun recoil and optional weight; Agility affects recoil.
     GUN_STRENGTH_OVERRIDE = float("gun_strength_override", "Gun STR ovrd", 0.0, 0.0, 6.0, 1.0),
     GUN_AGILITY_OVERRIDE = float("gun_agility_override", "Gun AGI ovrd", 0.0, 0.0, 6.0, 1.0),
+    /// Per-axis gain for new physical gun recoil impulses (baseline and extra
+    /// one-hand spring). 1 preserves the profile; 0 disables new kick on that
+    /// axis. Existing displacement caps and recovery rates remain unchanged.
+    GUN_KICKBACK_SCALE = float("gun_kickback_scale", "Back scale", 1.0, 0.0, 3.0, 0.1),
+    GUN_PITCH_SCALE = float("gun_pitch_scale", "Pitch scale", 1.0, 0.0, 3.0, 0.1),
+    GUN_YAW_SCALE = float("gun_yaw_scale", "Yaw scale", 1.0, 0.0, 3.0, 0.1),
+    /// Additional one-handed recoil only; support already removes this spring.
+    /// Applied alongside per-axis gains after Strength, without changing weight.
+    GUN_ONE_HAND_SCALE = float("gun_one_hand_scale", "1-hand scale", 1.0, 0.0, 3.0, 0.1),
     /// Ceiling on how fast a physically simulated held melee weapon may be
     /// driven onto its tracked-hand target, in world units per second.
     ///

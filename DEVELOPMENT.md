@@ -248,6 +248,20 @@ movement, or your saved character sheet. They remain active across scene/load
 changes in the running process and reset on app restart. Hand-motion inertia
 is not implemented yet.
 
+**Back scale**, **Pitch scale**, and **Yaw scale** independently
+multiply new recoil impulses on each axis, for both one-handed and supported
+shots. Each ranges from `0` to `3`, defaults to `1`, and uses `0.1` steps. `0`
+disables new recoil on that axis; existing recoil settles normally. Authored
+travel limits and recovery rates still apply, so high gains can reach the caps.
+These scales do not change downward weight or restore pitch/yaw suppressed by
+Agility or Still Hand. For a first balance experiment, try back `0.3`, pitch `1.5`,
+yaw `1`, with STR `1` and AGI `1`; these are test values, not new defaults.
+**1-hand scale** multiplies only the extra one-handed recoil after Strength:
+`0` removes that penalty, `1` keeps the current amount, and up to `3` increases
+it. The axis gains still apply to both baseline and extra recoil; supported
+shots retain baseline recoil regardless of this setting. Downward weight is
+separate. Return all four scales to `1` to restore the profiles.
+
 Quest enables physical held guns, downward gun weight, and particles by default.
 Desktop/debug VR testing needs
 `--vr --experimental physical_held_items,physical_gun_weight`. Automated tests

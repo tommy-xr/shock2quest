@@ -948,3 +948,17 @@ startup, and explicitly keeps `render_particles` on for projectile orbs/trails.
 No launch-file or feature-flag edit is needed: use the Developer scene list to
 enter `debug_weapons`, then change the handling stat overrides as described
 above. Desktop/debug runtime experimental defaults remain unchanged.
+
+
+### Live per-axis recoil tuning
+
+Developer parameters `gun_kickback_scale`, `gun_pitch_scale`, and `gun_yaw_scale`
+multiply new baseline and extra one-hand impulses independently (0–3, step0.1,
+default1). Zero disables new kick on that axis. Existing spring motion, recovery
+rates, authored caps, downward weight, and character stats are unchanged.
+Use the [headset test recipe](../DEVELOPMENT.md#testing-vr-weapon-handling-at-different-stats)
+to rebalance excessive backward travel against muzzle rise; tuning does not
+bypass Agility/Still Hand suppression. `gun_one_hand_scale` (**1-hand scale**, same range/default) additionally scales
+only the extra one-handed spring after Strength. Zero removes the penalty;
+support and baseline recoil are unchanged, and per-axis gains still apply.
+Values are process-local like other dev parameters; restart resets them.
