@@ -16,8 +16,8 @@ import { ammoOf, cycleToWeapon, muzzleFrameOf } from "./helpers/weapon.js";
 for (const [name, template, profiled, setting] of [
   ["pistol", -17, true, 0],
   ["AR", -18, true, 0],
-  ["shotgun", -19, false, 0],
-  ["shotgun-triple", -19, false, 1],
+  ["shotgun", -19, true, 0],
+  ["shotgun-triple", -19, true, 1],
 ] as const) {
   test(
     `${name} recoil decreases with Strength and genuine support removes the extra spring`,

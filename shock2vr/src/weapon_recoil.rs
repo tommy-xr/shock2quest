@@ -131,7 +131,7 @@ pub fn shot_impulse(world: &World, gun: EntityId) -> Option<(RecoilImpulse, Reco
     let model = world.borrow::<View<PropModelName>>().ok()?;
     let extra = one_hand_impulse(
         authored,
-        &model.get(gun).ok()?.0,
+        handling_profile(&model.get(gun).ok()?.0, setting),
         agility,
         still_hand,
         aiming,
@@ -147,10 +147,15 @@ struct HandlingProfile {
     sag: f32,
 }
 
-fn handling_profile(model: &str) -> Option<HandlingProfile> {
-    let (pitch, yaw, rate, sag) = match model.to_ascii_lowercase().trim_end_matches(".bin") {
-        "atek_h" => (2.0, 0.75, 2.0, 1.0),
-        "ar15_h" => (8.0, 2.0, 1.0, 8.0),
+fn handling_profile(model: &str, setting: i32) -> Option<HandlingProfile> {
+    let model = model.to_ascii_lowercase();
+    let (pitch, yaw, rate, sag) = match (model.trim_end_matches(".bin"), setting) {
+        ("atek_h", _) => (2.0, 0.75, 2.0, 1.0),
+        ("ar15_h", _) => (8.0, 2.0, 1.0, 8.0),
+        // Shotgun modes preserve their heavy backward kick, but add explicit
+        // angular handling independent of Agility's vertical suppression.
+        ("sg_h", 1) => (24.0, 4.5, 0.5, 0.0),
+        ("sg_h", _) => (12.0, 3.0, 0.5, 0.0),
         _ => return None,
     };
     Some(HandlingProfile {
@@ -161,12 +166,12 @@ fn handling_profile(model: &str) -> Option<HandlingProfile> {
     })
 }
 
-/// Deliberate VR tuning: forward-heavy rifles need more angular correction
+/// Deliberate VR tuning: forward-heavy long guns need more angular correction
 /// one-handed. This replaces the generic extra angular kick for these models;
 /// authored two-hand kick and the existing extra backward kick are preserved.
 fn one_hand_impulse<R: Rng + ?Sized>(
     authored: RecoilImpulse,
-    model: &str,
+    profile: Option<HandlingProfile>,
     agility: i32,
     still_hand: bool,
     aiming: bool,
@@ -174,7 +179,7 @@ fn one_hand_impulse<R: Rng + ?Sized>(
 ) -> RecoilImpulse {
     let Some(HandlingProfile {
         pitch, yaw, rate, ..
-    }) = handling_profile(model)
+    }) = profile
     else {
         return authored;
     };
@@ -296,7 +301,7 @@ pub fn gun_weight_target(
 ) -> Option<GunWeightTarget> {
     crate::mission::mission_core::held_item_collision_group(world, gun)?;
     let models = world.borrow::<View<PropModelName>>().ok()?;
-    let profile = handling_profile(&models.get(gun).ok()?.0)?;
+    let profile = handling_profile(&models.get(gun).ok()?.0, 0)?;
     Some(GunWeightTarget {
         anchor,
         forward: crate::weapon_muzzle::resolve(world, gun).axis,
@@ -471,13 +476,53 @@ mod tests {
         let extra = |model, agility, still| {
             one_hand_impulse(
                 authored,
-                model,
+                handling_profile(model, 0),
                 agility,
                 still,
                 false,
                 &mut StdRng::seed_from_u64(7),
             )
         };
+        let shotgun = |setting, agility, still, aiming| {
+            one_hand_impulse(
+                authored,
+                handling_profile("sg_h", setting),
+                agility,
+                still,
+                aiming,
+                &mut StdRng::seed_from_u64(7),
+            )
+        };
+        let normal = shotgun(0, 1, false, false);
+        let triple = shotgun(1, 1, false, false);
+        assert!((triple.pitch / normal.pitch - 2.0).abs() < 0.01);
+        assert!((triple.heading / normal.heading - 1.5).abs() < 0.01);
+        for setting in [0, 1] {
+            let low = shotgun(setting, 1, false, false);
+            let agile = shotgun(setting, 6, false, false);
+            assert_eq!(low.pitch, agile.pitch);
+            assert_eq!(agile.heading, 0.0);
+            assert!(low.heading.abs() > 0.0);
+            assert_eq!(low.back, authored.back);
+            assert_eq!(low.back_limit, authored.back_limit);
+            assert_eq!(low.back_rate, authored.back_rate);
+            let still = shotgun(setting, 1, true, false);
+            assert_eq!((still.pitch, still.heading), (0.0, 0.0));
+            assert!(shotgun(setting, 1, false, true).pitch < low.pitch);
+            let (_, stronger) = vr_impulses(authored, low, 6, false);
+            assert!(stronger.unwrap().pitch < low.pitch);
+            let (supported, extra) = vr_impulses(authored, low, 1, true);
+            assert!(extra.is_none());
+            assert_eq!(supported.pitch, authored.pitch);
+            assert_eq!(supported.back, authored.back);
+            let mut spring = RecoilState::default();
+            for _ in 0..300 {
+                spring.kick(low);
+                spring.step(1.0 / 60.0);
+                assert!(spring.pitch.position.abs() <= low.pitch_limit);
+                assert!(spring.heading.position.abs() <= low.heading_limit);
+            }
+        }
         let pistol = extra("atek_h", 1, false);
         let ar = extra("ar15_h", 1, false);
         assert!(ar.pitch > pistol.pitch * 3.9);
@@ -498,7 +543,7 @@ mod tests {
         let low = vr_impulses(authored, ar, 1, false).1.unwrap();
         let high = vr_impulses(authored, ar, 6, false).1.unwrap();
         assert!(high.pitch < low.pitch && high.heading.abs() < low.heading.abs());
-        assert_eq!(extra("sg_h", 1, false).pitch, authored.pitch);
+        assert_eq!(extra("fsn_h", 1, false).pitch, authored.pitch);
         let mut state = RecoilState::default();
         for _ in 0..200 {
             state.kick(ar);
