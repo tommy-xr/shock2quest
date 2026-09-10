@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { GameServer } from "../src/index.js";
 import {
   aimVrHandAt,
@@ -9,7 +11,7 @@ import {
   sub,
   type Quat,
 } from "./helpers/vr-hand.js";
-import { ammoOf, cycleToWeapon } from "./helpers/weapon.js";
+import { ammoOf, cycleToWeapon, muzzleFrameOf } from "./helpers/weapon.js";
 
 for (const [name, template] of [
   ["pistol", -17],
@@ -80,6 +82,7 @@ for (const [name, template] of [
         supported: boolean;
         back: number;
         curve: number[];
+        muzzle: (ReturnType<typeof muzzleFrameOf> & { frame: number })[];
       }[] = [];
       for (const strength of [1, 3, 6]) {
         await game.player.setStats({ strength });
@@ -87,7 +90,10 @@ for (const [name, template] of [
           await support(supported);
           await game.step({ frames: 180 });
           const initial = await body();
-          const ammo = ammoOf(await game.entities.detail(gun.id));
+          const initialDetail = await game.entities.detail(gun.id);
+          const ammo = ammoOf(initialDetail);
+          const initialMuzzle = muzzleFrameOf(initialDetail);
+          const muzzle = [{ frame: 0, ...initialMuzzle }];
           await game.input.set("right_hand.trigger", 1);
           let peakBack = 0;
           const curve: number[] = [];
@@ -97,11 +103,51 @@ for (const [name, template] of [
             const back = (await body()).position[0] - initial.position[0];
             curve.push(back);
             peakBack = Math.max(peakBack, back);
+            muzzle.push({
+              frame: frame + 1,
+              ...muzzleFrameOf(await game.entities.detail(gun.id)),
+            });
           }
           assert.equal(ammoOf(await game.entities.detail(gun.id)), ammo - 1);
           assert.deepEqual((await game.info()).player.camera_rotation, head);
-          measurements.push({ strength, supported, back: peakBack, curve });
-          await game.step({ frames: 180 });
+          assert.ok(
+            muzzle.some(
+              (sample) =>
+                sample.position[1] > initialMuzzle.position[1] + 0.005,
+            ),
+            "authored pitch raises the live muzzle endpoint",
+          );
+          assert.ok(
+            muzzle.some(
+              (sample) => sample.forward[1] > initialMuzzle.forward[1] + 0.005,
+            ),
+            "subsequent shots aim along the recoiling barrel",
+          );
+          for (let frame = 26; frame <= 200; frame += 6) {
+            await game.step({ frames: 6 });
+            muzzle.push({
+              frame,
+              ...muzzleFrameOf(await game.entities.detail(gun.id)),
+            });
+          }
+          const settledMuzzle = muzzle.at(-1)!;
+          assert.ok(
+            Math.hypot(...sub(settledMuzzle.position, initialMuzzle.position)) <
+              0.005,
+            "muzzle endpoint recovers with the gun",
+          );
+          assert.ok(
+            Math.hypot(...sub(settledMuzzle.forward, initialMuzzle.forward)) <
+              0.002,
+            "muzzle aim recovers with the gun",
+          );
+          measurements.push({
+            strength,
+            supported,
+            back: peakBack,
+            curve,
+            muzzle,
+          });
           const settled = await body();
           assert.ok(
             Math.hypot(...sub(settled.position, initial.position)) < 0.005,
@@ -126,8 +172,22 @@ for (const [name, template] of [
         }
       }
       context.diagnostic(
-        JSON.stringify(measurements.map(({ curve, ...result }) => result)),
+        JSON.stringify(
+          measurements.map(({ curve, muzzle, ...result }) => result),
+        ),
       );
+      const output = process.env.WEAPON_RECOIL_OUTPUT;
+      if (output) {
+        await mkdir(output, { recursive: true });
+        await writeFile(
+          join(output, `${name.toLowerCase()}.json`),
+          JSON.stringify(
+            { weapon: name, agility: 1, standard: 6, hz: 60, measurements },
+            null,
+            2,
+          ) + "\n",
+        );
+      }
       const value = (s: number, supported: boolean) =>
         measurements.find((m) => m.strength === s && m.supported === supported)!
           .back;

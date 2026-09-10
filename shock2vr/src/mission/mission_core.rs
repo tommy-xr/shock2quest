@@ -13346,6 +13346,24 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
         // Looked up outside the main run: the closure below is at shipyard's
         // view-count limit.
+        // The shared firing frame, after held-body recoil and item scaling.
+        // Expose it to automation without recreating attachment math in tests.
+        let weapon_muzzle = self.world.run(
+            |guns: View<dark::properties::PropPlayerGun>,
+             transforms: View<RuntimePropTransform>| {
+                guns.get(id).ok()?;
+                let frame = crate::weapon_muzzle::resolve(&self.world, id)
+                    .shot_frame(transforms.get(id).ok()?.0);
+                Some(
+                    serde_json::json!({
+                        "position": [frame.w.x, frame.w.y, frame.w.z],
+                        "forward": [frame.z.x, frame.z.y, frame.z.z],
+                    })
+                    .to_string(),
+                )
+            },
+        );
+
         let hearing_rating = self
             .world
             .run(|v_hearing: View<dark::properties::PropAIHearing>| {
@@ -13564,6 +13582,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "ObjectState".to_string(),
                         value: format!("{state:?}"),
+                    });
+                }
+
+                if let Some(muzzle) = weapon_muzzle {
+                    properties.push(DebugPropertyInfo {
+                        name: "WeaponMuzzle".to_string(),
+                        value: muzzle,
                     });
                 }
 
