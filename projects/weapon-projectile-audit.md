@@ -230,3 +230,16 @@ This layer does not implement gun-wide accuracy, Sharpshooter/stat modifiers,
 recoil, or change the separate AI projectile launch path. Remaining impact and
 explosion lifecycles, burst cadence and accuracy/stat parity precede the planned
 Strength-based VR spring recoil augmentation.
+
+
+## Weapon accuracy follow-up
+
+The layer after pellet spread applies authored skill-dependent weapon error
+once per shell, then independent projectile spread. Stock `SKILLPARAM` authors
+zero, so fixed-aim pistol/AR comparisons must stay centered across eligible
+skills and Strength values. A labelled nonzero-data fixture verifies narrower
+pistol bounds at higher Standard Weapons skill. AR attempts below Standard 6
+remain refused. Strength and Sharpshooter are not accuracy multipliers.
+See the [accuracy evaluation](weapon-feel-workstream.md#authored-weapon-accuracy-and-the-stat-comparison)
+for source evidence, test setup and the distinction from pending recoil and
+skill/trait damage work.

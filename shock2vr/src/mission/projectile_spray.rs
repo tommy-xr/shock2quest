@@ -47,36 +47,39 @@ pub(crate) fn expand(spray: PropProjectile, launch: Effect, rng: &mut impl Rng) 
     }
     Effect::Multiple(
         (0..spray.count)
-            .map(|_| {
-                let mut pellet = launch.clone();
-                if let Effect::CreateEntity { root_transform, .. } = &mut pellet {
-                    if spray.spread != 0 {
-                        let forward = root_transform
-                            .transform_vector(vec3(0.0, 0.0, 1.0))
-                            .normalize();
-                        // Dark independently perturbs global heading and pitch by
-                        // uniform integer angles, not a uniform disk/cone. Gun roll
-                        // does not rotate this square angular distribution.
-                        let angle = i32::from(spray.spread);
-                        let radians = std::f32::consts::TAU / 65536.0;
-                        let heading = forward.x.atan2(forward.z)
-                            + rng.gen_range(-angle..=angle) as f32 * radians;
-                        let pitch = forward.y.clamp(-1.0, 1.0).asin()
-                            + rng.gen_range(-angle..=angle) as f32 * radians;
-                        let direction = vec3(
-                            heading.sin() * pitch.cos(),
-                            pitch.sin(),
-                            heading.cos() * pitch.cos(),
-                        );
-                        let origin = root_transform.transform_point(point3(0.0, 0.0, 0.0));
-                        *root_transform = Matrix4::from_translation(origin.to_vec())
-                            * Matrix4::from(get_rotation_from_forward_vector(direction));
-                    }
-                }
-                pellet
-            })
+            .map(|_| deviate(launch.clone(), spray.spread, rng))
             .collect(),
     )
+}
+
+/// Apply a single global heading/pitch error before any per-pellet spray.
+/// Dark uses the same randomization routine for weapon error and pellet spread.
+/// Zero error must not consume RNG or alter the resolved launch transform.
+pub(crate) fn deviate(mut launch: Effect, spread: u16, rng: &mut impl Rng) -> Effect {
+    if spread == 0 {
+        return launch;
+    }
+    if let Effect::CreateEntity { root_transform, .. } = &mut launch {
+        let forward = root_transform
+            .transform_vector(vec3(0.0, 0.0, 1.0))
+            .normalize();
+        // Independent global heading/pitch angles, not a circular cone; gun
+        // roll does not rotate the distribution.
+        let angle = i32::from(spread);
+        let radians = std::f32::consts::TAU / 65536.0;
+        let heading = forward.x.atan2(forward.z) + rng.gen_range(-angle..=angle) as f32 * radians;
+        let pitch =
+            forward.y.clamp(-1.0, 1.0).asin() + rng.gen_range(-angle..=angle) as f32 * radians;
+        let direction = vec3(
+            heading.sin() * pitch.cos(),
+            pitch.sin(),
+            heading.cos() * pitch.cos(),
+        );
+        let origin = root_transform.transform_point(point3(0.0, 0.0, 0.0));
+        *root_transform = Matrix4::from_translation(origin.to_vec())
+            * Matrix4::from(get_rotation_from_forward_vector(direction));
+    }
+    launch
 }
 
 #[cfg(test)]
@@ -97,6 +100,46 @@ mod tests {
                 projectile_raycast_origin: Some(point3(1.0, 3.0, 4.0)),
                 ..Default::default()
             },
+        }
+    }
+
+    #[test]
+    fn weapon_error_is_sampled_once_before_pellets_and_zero_preserves_rng() {
+        let mut rng = StdRng::seed_from_u64(81);
+        let unchanged = deviate(launch(), 0, &mut rng);
+        assert!(matches!(unchanged, Effect::CreateEntity { .. }));
+        let mut untouched_rng = StdRng::seed_from_u64(81);
+        assert_eq!(rng.r#gen::<u32>(), untouched_rng.r#gen::<u32>());
+        let aimed = deviate(launch(), 640, &mut rng);
+        let Effect::CreateEntity {
+            root_transform: expected,
+            ..
+        } = &aimed
+        else {
+            panic!("launch")
+        };
+        assert_ne!(
+            expected.transform_vector(vec3(0.0, 0.0, 1.0)),
+            vec3(0.0, 0.0, 1.0)
+        );
+        let expected = *expected;
+        let pellets = Effect::flatten(vec![expand(
+            PropProjectile {
+                count: 6,
+                spread: 0,
+            },
+            aimed,
+            &mut rng,
+        )]);
+        assert_eq!(pellets.len(), 6);
+        for pellet in pellets {
+            let Effect::CreateEntity { root_transform, .. } = pellet else {
+                panic!("pellet")
+            };
+            assert_eq!(
+                root_transform, expected,
+                "one common shell error, then independent pellet spread"
+            );
         }
     }
 

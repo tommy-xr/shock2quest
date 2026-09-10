@@ -59,7 +59,8 @@ headset comfort.
   not a claim about original System Shock 2. Preserve the original Agility,
   Still Hand and aiming-implant behavior when establishing parity; tune how
   Strength combines with it after that baseline is measurable.
-- Weapon skill governs authored inaccuracy. Preserve Sharpshooter's original
+- Weapon skill governs authored inaccuracy, but shipped `SKILLPARAM` sets that
+  inaccuracy to zero. Strength does not enter this calculation. Preserve Sharpshooter's original
   ranged-damage benefit; an accuracy bonus is not part of the accepted baseline.
 - Begin failed-fire feedback with a brief message above the firing glove, e.g.
   `Requires Standard Weapons 6 · You have 4`. Do not force a vertical grip.
@@ -526,3 +527,66 @@ per shell. See the [pellet audit](weapon-projectile-audit.md#shotgun-pellet-coun
 for source records, mode differences, flat/VR tests and matched near/far media.
 Gun accuracy/stat hooks and Strength-based VR spring recoil remain subsequent
 increments, separate from this projectile-authored spread.
+
+
+### Authored weapon accuracy and the stat comparison
+
+The layer above #1468 wires `CalcRandAngle` into the shared player projectile
+launch: `SKILLPARAM.inaccuracy * max(6 - effective weapon skill, 0)`. One random
+heading/pitch offset is sampled per shell, before the independent pellet spread.
+The effective skill comes from the same trained/factory skill helper as weapon
+eligibility. A zero angle preserves both launch transform and RNG state.
+
+**The shipped parameter is zero.** At fixed aim, pistol shots at Standard 1/3/6
+and Strength 1/6 therefore have no random weapon aim error. The AR requires
+Standard 6: lower-skill attempts are refusals, not samples of a wider pattern.
+At Standard 6 it also has zero weapon aim error. This does not claim that the
+original game has no recoil: angular kick, its recovery, Agility/Still Hand and
+aiming-implant hooks remain a separate implementation slice.
+
+For a measurable nonzero test, a private gamesys fixture changes only the first
+`u16` in `SKILLPARAM` from 0 to 128 (0.703125° per missing skill level). Its pistol
+bounds per axis are ±3.515625° at Standard 1, ±2.109375° at Standard 3, and 0° at
+Standard 6. Strength 1 and 6 use the same bounds; their sampled points need not
+match because they are separate random draws. Before this layer even this
+nonzero fixture shoots straight, proving the missing launch hook.
+
+Source evidence: `darkengine/src/shock/shkplgun.cpp:627–645` (`CalcRandAngle`)
+and `shkproj.cpp:483,495–514` (global error precedes individual pellet error).
+`shkparam.cpp` labels inaccuracy outdated, consistent with the shipped zero.
+Sharpshooter is a launch-time stimulus/damage multiplier at `shkplgun.cpp:766`,
+not an accuracy bonus. Strength-based recoil remains the intentional VR
+augmentation already accepted above; this layer does not invent a Strength
+accuracy multiplier or implement the separate pending skill/trait damage work.
+
+The durable scenario is `tools/shock2-sdk/test/weapon-accuracy.e2e.test.ts`.
+It uses MedSci1, where stats start low enough to establish the requested values,
+a fixed 12m corridor wall, and an excluded setup shot that removes intervening
+glass. Each eligible weapon/stat group fires 8 measured shots; stock and custom
+fixtures are separate test cases. The custom cases require
+`SHOCK2_ACCURACY_FIXTURE=/path/to/private/nonzero-data-install`; otherwise they
+are explicitly skipped. Unit tests exercise nonzero bounds, Strength and
+Sharpshooter independence, zero-RNG behavior and one shared error before pellets
+on every run. Existing shotgun, contact-damage and stasis scenarios guard the
+stock launch paths in flat and VR.
+
+The private fixture used for evaluation is `/tmp/weapon-accuracy-fixture` on the
+capture machine. It is an APFS copy-on-write clone of `sshock2.kpf` with only
+`data/shock2.gam` overridden; other install files are symlinked. The original
+install is unchanged and game assets are not checked in. To reproduce on another
+machine, clone a personal install, replace that packed field with little-endian
+128, and supply the resulting install root to the environment variable above.
+
+
+Measured plots and [raw capture data](https://gist.github.com/tommy-xr/8adecab028e128f1e6490a24fd241c0b)
+use six shots per illustrated group (the automated scenarios use eight). The
+animated plots reveal recorded impacts sequentially; they are data animations,
+not recordings of gameplay timing. Coincident impacts are not visually jittered.
+
+![Stock accuracy comparison](https://gist.githubusercontent.com/tommy-xr/8adecab028e128f1e6490a24fd241c0b/raw/stock-comparison.png)
+
+![Synthetic nonzero accuracy comparison](https://gist.githubusercontent.com/tommy-xr/8adecab028e128f1e6490a24fd241c0b/raw/synthetic-comparison.png)
+
+[AR eligibility/results](https://gist.githubusercontent.com/tommy-xr/8adecab028e128f1e6490a24fd241c0b/raw/ar-results.png) and
+[matched runtime screenshots](https://gist.githubusercontent.com/tommy-xr/8adecab028e128f1e6490a24fd241c0b/raw/runtime-comparison.png)
+complete the evaluation.

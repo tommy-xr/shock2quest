@@ -316,7 +316,8 @@ impl PlayerStats {
     /// Per-shot deviation from the aim direction for a weapon fired at
     /// `skill_level`, in degrees: the gamesys inaccuracy angle
     /// (`SkillParams::inaccuracy_degrees`) scaled by how far the skill falls
-    /// short of [`SKILL_CAP`]. A maxed skill shoots dead straight.
+    /// short of [`SKILL_CAP`]. A maxed skill adds no weapon aim error; authored
+    /// pellet spread and recoil are separate. Stock gamesys inaccuracy is zero.
     pub fn shot_deviation_degrees(inaccuracy_degrees: f32, skill_level: i32) -> f32 {
         inaccuracy_degrees * (SKILL_CAP - skill_level).max(0) as f32
     }

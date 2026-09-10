@@ -174,6 +174,22 @@ fn weapon_skill_level(world: &World, entity_id: EntityId) -> i32 {
     crate::scripts::script_util::player_skill_level(world, skill)
 }
 
+/// Dark CalcRandAngle: authored error per missing weapon-skill level. Stock
+/// SKILLPARAM sets this to zero. Strength and Sharpshooter do not enter this
+/// calculation (Sharpshooter is a stimulus multiplier in the original).
+fn weapon_inaccuracy(world: &World, entity_id: EntityId) -> u16 {
+    let per_level = world
+        .borrow::<UniqueView<GlobalSkillParams>>()
+        .ok()
+        .and_then(|params| params.0.as_ref().map(|p| p.inaccuracy_degrees))
+        .unwrap_or(0.0);
+    let degrees = crate::player_stats::PlayerStats::shot_deviation_degrees(
+        per_level,
+        weapon_skill_level(world, entity_id),
+    );
+    (degrees * (65536.0 / 360.0)) as u16
+}
+
 /// The chance, 0..1, that the shot about to be fired breaks the gun. Zero at
 /// or above the reliability's break threshold: a gun in good condition cannot
 /// break at all. Below the threshold the authored min/max percentages are
@@ -774,11 +790,13 @@ pub(super) fn create_projectile(
         .ok()
         .and_then(|sprays| sprays.0.get(&projectile_template_id).copied())
         .unwrap_or_default();
-    crate::mission::projectile_spray::expand(
-        spray,
+    let mut rng = rand::thread_rng();
+    let launch = crate::mission::projectile_spray::deviate(
         create_projectile_launch(world, entity_id, projectile_template_id, modifiers),
-        &mut rand::thread_rng(),
-    )
+        weapon_inaccuracy(world, entity_id),
+        &mut rng,
+    );
+    crate::mission::projectile_spray::expand(spray, launch, &mut rng)
 }
 
 fn create_projectile_launch(
@@ -851,6 +869,56 @@ fn create_projectile_launch(
 #[cfg(test)]
 mod tests {
     use cgmath::Rotation;
+
+    #[test]
+    fn authored_accuracy_uses_weapon_skill_not_strength_or_sharpshooter() {
+        use crate::{mission::mission_core::GlobalSkillParams, quest_info::QuestInfo};
+        use shipyard::UniqueViewMut;
+        let mut world = World::new();
+        let gun = world.add_entity(PropWeaponType(0));
+        world.add_unique(QuestInfo::new());
+        world.add_unique(GlobalSkillParams(Some(dark::gamesys::SkillParams {
+            inaccuracy_degrees: 0.703125, // 128 Dark angle units; synthetic fixture
+            weapon_break_factor: 0.0,
+            research_factor: 0.0,
+            damage_modifier: 0.0,
+            organ_damage: 0.0,
+        })));
+        for strength in [1, 6] {
+            for (skill, expected) in [(1, 640), (3, 384), (6, 0)] {
+                {
+                    let mut quests = world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                    let stats = quests.player_stats_mut();
+                    stats.strength = strength;
+                    stats.skills.standard_weapons = skill;
+                }
+                assert_eq!(weapon_inaccuracy(&world, gun), expected);
+                world
+                    .borrow::<UniqueViewMut<QuestInfo>>()
+                    .unwrap()
+                    .player_stats_mut()
+                    .add_os_trait(5);
+                assert_eq!(weapon_inaccuracy(&world, gun), expected);
+            }
+        }
+        // The stock record explicitly disables random weapon aim error, even
+        // at minimum skill. This must not invent a cone for the shipping game.
+        world
+            .borrow::<UniqueViewMut<GlobalSkillParams>>()
+            .unwrap()
+            .0
+            .as_mut()
+            .unwrap()
+            .inaccuracy_degrees = 0.0;
+        world
+            .borrow::<UniqueViewMut<QuestInfo>>()
+            .unwrap()
+            .player_stats_mut()
+            .skills
+            .standard_weapons = 1;
+        assert_eq!(weapon_inaccuracy(&world, gun), 0);
+    }
+
     #[test]
     fn flash_cone_points_out_of_held_and_world_barrels() {
         for (name, axis) in [
