@@ -17,6 +17,7 @@ const PAGE_LINES: usize = 16;
 enum Control {
     Inspect,
     Research,
+    Map,
     Close,
     Previous,
     Next,
@@ -26,6 +27,7 @@ enum Control {
 pub(crate) struct MfdUtilities {
     inspecting: bool,
     research: bool,
+    map_requested: bool,
     research_catalog: super::research_overview::ResearchCatalog,
     selected: Option<EntityId>,
     title: String,
@@ -44,6 +46,12 @@ impl MfdUtilities {
             self.research_catalog.select_project(id);
         }
     }
+    pub(crate) fn is_open(&self) -> bool {
+        self.inspecting || self.selected.is_some() || self.research
+    }
+    pub(crate) fn take_map_request(&mut self) -> bool {
+        std::mem::take(&mut self.map_requested)
+    }
     pub(crate) fn is_inspecting(&self) -> bool {
         self.inspecting
     }
@@ -56,6 +64,7 @@ impl MfdUtilities {
             Rect::new(488.0, 382.0, 36.0, 26.0),
             "RES",
         ));
+        controls.push((Control::Map, Rect::new(526.0, 382.0, 36.0, 26.0), "MAP"));
         if self.inspecting || self.selected.is_some() {
             controls.push((Control::Close, Rect::new(570.0, 346.0, 60.0, 20.0), "CLOSE"));
             if self.page > 0 {
@@ -96,6 +105,10 @@ impl MfdUtilities {
                     Control::Research => {
                         *self = Self::default();
                         self.research = true;
+                    }
+                    Control::Map => {
+                        *self = Self::default();
+                        self.map_requested = true;
                     }
                     Control::Close => *self = Self::default(),
                     Control::Previous => self.page = self.page.saturating_sub(1),
@@ -206,6 +219,7 @@ impl MfdUtilities {
                     match control {
                         Control::Inspect => "inspect",
                         Control::Research => "research_overview",
+                        Control::Map => "map",
                         Control::Close => "utility_close",
                         Control::Previous => "utility_previous",
                         Control::Next => "utility_next",

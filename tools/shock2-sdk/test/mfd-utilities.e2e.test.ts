@@ -192,3 +192,40 @@ for (const vr of [false,true]) {
     await capture("completed-list");
   });
 }
+
+for (const vr of [false,true]) {
+  test(`MAP utility opens the real mission automap and preserves inventory (${vr ? "VR" : "flat"})`, {
+    skip: process.env.SHOCK2_E2E !== "1", timeout:180_000,
+  }, async()=>{
+    await using game=await GameServer.launch({mission:"medsci1.mis",debugFlags:vr?["--vr"]:[]});
+    await game.step({frames:30});
+    await game.player.spawnItem(-52);
+    await game.input.trigger("ToggleUseMode");await game.step({frames:5});
+    const inventory=await game.player.inventory();
+    const click=async(e:UiElement)=>{
+      if(vr)await clickCanvasWithRay(game,requirePanelPose(await game.ui.state()),canvasCenter(e));
+      else await clickUiElement(game,e);
+    };
+    const mapControl=async()=>{const e=(await game.ui.state()).strip!.elements.find(e=>e.label==="map");assert.ok(e);return e;};
+    const capture=async(name:string)=>{
+      const out=process.env.ASTRA_MAP_CAPTURE;if(!out)return;await mkdir(out,{recursive:true});
+      const path=`${out}/${vr?"vr":"flat"}-${name}`;await game.screenshot(path+".png",1600);
+      await writeFile(path+".json",JSON.stringify({ui:await game.ui.state(),info:await game.info(),inventory:await game.player.inventory()},null,2));
+    };
+    await capture("idle");
+    await click(await mapControl());
+    const panel=(await game.ui.state()).active_panel;assert.ok(panel);
+    for(const texture of ["mapback.pcx","page001.pcx","plrpip.pcx"]){assert.ok(panel.elements.some(e=>e.texture?.toLowerCase().endsWith(texture)),texture);}
+    assert.ok(panel.elements.some(e=>/p001r\d{3}\.pcx$/i.test(e.texture??"")),"current explored room decal");
+    for(const e of panel.elements){const [x,y,w,h]=e.rect;assert.ok(x>=0&&x+w<=640.01&&y>=0&&y+h<=480.01,`${e.label??e.texture} remains in canvas`);}
+    await capture("open");
+    await click(await mapControl());
+    assert.equal((await game.ui.state()).active_panel,null,"MAP toggles closed");
+    await capture("closed");
+    await click(await mapControl());
+    const close=(await game.ui.state()).active_panel!.elements.find(e=>e.label==="close");assert.ok(close,"map has close control");
+    await click(close);
+    assert.equal((await game.ui.state()).active_panel,null,"map close control works");
+    assert.deepEqual(await game.player.inventory(),inventory);
+  });
+}

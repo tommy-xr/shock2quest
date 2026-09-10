@@ -55,6 +55,18 @@ explicitly from `fonts/` and tinted cyan; the alternate `iface/fonts` copy is
 not suitable. Specimens currently use their inventory artwork in the preview;
 a rotating 3D specimen is still a separate rendering increment.
 
+### Map control
+
+MAP toggles the existing automap in the cyber interface through `ToggleMap`.
+Both presentations use its mission map art, explored regions and player pip.
+The wide panel scales uniformly to clear the utility row/HUD and keep CLOSE
+inside the canvas. VR's map is a synthetic cyber-panel host, never an extra
+world quad even with the legacy experimental GUI enabled. Opening MAP closes
+the utility reader; clicking it again or using the map's close button dismisses
+the map. The VR shortcut only acts while the cyber interface is active.
+
+Two different guns; gun plus psi amp; swapped hands; one support grip; no weapon; dropping/swapping a weapon between drawing and clicking its control. Research active, chemical-paused and completed after the item is gone. Inspect a hypo without consumption, a gun without firing, and an ordinary object without research data. Use the same rendered/hit-test rectangles in flat and VR, and retain press-edge protection when opening or switching panels.
+
 
 ### Mirrored arm layout prototype
 
