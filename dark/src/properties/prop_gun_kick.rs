@@ -15,17 +15,14 @@ const SETTING_SIZE: u64 = 32;
 
 /// One fire setting's authored recoil.
 ///
-/// Six fields are 16-bit turns, decoded here to degrees; the rest are the raw
-/// authored scalars. The *magnitudes* are what the data verifies - whether a
-/// field is applied per shot or per second is not settled by the data, and the
-/// shotgun's 22.5 deg kick / the 65.9 deg jolt on template -26 are too large to
-/// be instantaneous angles, so the first consumer must decide that, not these
-/// names. Angles are read unsigned: no shipped record exceeds 12000 units
-/// (65.9 deg), so whether the top half of the range is meant as negative is
-/// untested.
+/// Six fields are 16-bit turns, decoded here to degrees; the rest are raw
+/// authored scalars. Dark's `ApplyKick` adds kick angles/displacement per shot,
+/// clamps pitch/back, and uses the return rates per second. `CalcKickAngle`
+/// applies Agility, Still Hand, aiming implant and direction/random flags.
+/// Player jolt is separate and must not be applied to the tracked VR head.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct GunKickSetting {
-    /// Fraction of the kick applied before the shot leaves the barrel.
+    /// Historical pre-shot fraction; the original firing path ignores it.
     pub pre_kick_pct: f32,
     /// Pitch the shot adds to the gun, in degrees.
     pub kick_pitch_degrees: f32,
@@ -33,7 +30,7 @@ pub struct GunKickSetting {
     pub kick_pitch_max_degrees: f32,
     /// Heading the shot adds to the gun, in degrees.
     pub kick_heading_degrees: f32,
-    /// How fast the accumulated kick angles return to rest, in degrees.
+    /// How fast the accumulated kick angles return to rest, in degrees per second.
     pub kick_angular_return_rate_degrees: f32,
     /// Displacement the shot adds to the gun (negative drives it towards the
     /// player).

@@ -235,6 +235,10 @@ pub struct PropExp(pub i32);
 #[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
 pub struct PropWeaponType(pub i32);
 
+/// `P$ImplantDe`: original ImplantDesc enum; 6 is the aiming implant.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropImplantDesc(pub i32);
+
 /// The count of a stackable object (e.g. how many cyber modules an EXP-cookie
 /// pile is worth - the retail engine stores an EXP cookie's module value as its
 /// stack count, `P$StackCoun`). A 4-byte signed int.
@@ -1487,6 +1491,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ExP",
             |reader, _len| read_i32(reader),
             PropExp,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$ImplantDe",
+            |reader, _len| read_i32(reader),
+            PropImplantDesc,
             accumulator::latest,
         ),
         define_prop(
