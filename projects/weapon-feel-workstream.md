@@ -765,7 +765,7 @@ Plot pitch and yaw separately from endpoint vertical and backward travel.
 Stock pistol and AR have zero authored heading kick: that is the current
 baseline, not evidence that horizontal handling has been implemented.
 
-## Next: weapon-specific one-handed handling
+## Handling design (implemented in the layers below)
 
 Keep the authored two-handed recoil baseline. Add an explicit VR one-handed
 angular handling profile: the AR should be harder to control than the pistol,
@@ -857,3 +857,34 @@ kicking backward. Actual support stays latched through the captured recoil and
 recovery; the tracked head remains fixed. [Comparison GIFs and raw muzzle
 measurements](https://gist.github.com/tommy-xr/bddb134ab070671f551e77acdf3a42df)
 separate pitch/yaw and endpoint motion from backward gun-body travel.
+
+
+## Optional downward gun weight
+
+Enable both experiments with
+`--experimental physical_held_items,physical_gun_weight` in VR. The weight flag
+is separate so headset testing can compare the same recoil with and without
+weight. At Strength 1, a horizontal one-handed AR has an 8-degree downward bias;
+the pistol has 1 degree. Multiply by `(6 - Strength) / 5` (Strength clamped 1–6),
+so Strength 3 gives 4.8 / 0.6 degrees and Strength 6 gives zero. Other weapons
+have no weight profile yet. Agility affects firing stability, not this bias.
+
+The spring target is world-down torque around the calibrated primary palm.
+Rolling the wrist does not turn gravity sideways; aiming vertically removes
+the horizontal lever arm. Three components of the world angular bias use the
+existing analytic spring, with a fixed 8-degree total bound. Strength changes
+and active support set a new equilibrium without resetting current displacement
+or velocity. A second hand removes the added load; the two-hand aiming system
+still determines the direction from the controllers.
+
+The weight rotation is applied to the physical held target around its scaled
+primary anchor before shot recoil and the existing translation sweep. The gun,
+gloves and live muzzle therefore share the result. Tracking inputs and the head
+are unchanged. As with the underlying held implementation, this does not add
+rotational collision sweeps. Weight is an intentional feel approximation, not
+real force feedback, fatigue, or a measured mass/centre-of-mass simulation.
+Transient spring state is recreated with the held body, including after load.
+
+Validation covers Strength 1/3/6, both AR hands, pistol, disabled flag, primary
+palm placement, smooth support/stat transitions, and shots returning to the
+weighted resting aim. Headset comfort and final angles remain device tuning.

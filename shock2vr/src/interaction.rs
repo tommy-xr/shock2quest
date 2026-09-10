@@ -116,6 +116,11 @@ pub trait PlayerInteraction {
         false
     }
 
+    /// Primary palm anchor in scaled held-model coordinates, when fitted.
+    fn held_grip_anchor(&self, _entity: EntityId) -> Option<Vector3<f32>> {
+        None
+    }
+
     /// Entities under the reticle/hands, for the hover-highlight overlay.
     fn highlighted_entities(&self) -> Vec<EntityId>;
 
@@ -284,6 +289,11 @@ struct HeldGrip {
 }
 
 impl HeldGrip {
+    fn primary_anchor(&self, palm: Vector3<f32>) -> Option<Vector3<f32>> {
+        let grip = self.resolved.as_ref()?;
+        Some(grip.rotation.conjugate().rotate_vector(palm - grip.offset))
+    }
+
     /// Resolve the physical weapon pose, undoing melee's contact-origin split.
     fn physical_model_pose(&self, world: &World) -> Option<GripPose> {
         use shipyard::{Get, View};
@@ -376,10 +386,7 @@ impl VrInteraction {
             let base_rotation = poses[primary].rotation.normalize() * grip.rotation;
             let primary_palm = poses[primary].point(rig[primary].palm);
             // Scaled model-space anchors, independent of the melee contact-origin split.
-            let primary_anchor = grip
-                .rotation
-                .conjugate()
-                .rotate_vector(rig[primary].palm - grip.offset);
+            let primary_anchor = held.primary_anchor(rig[primary].palm)?;
             let handedness = if primary == 0 {
                 Handedness::Left
             } else {
@@ -1167,6 +1174,19 @@ impl PlayerInteraction for VrInteraction {
 
         left_msgs.append(&mut right_msgs);
         left_msgs
+    }
+
+    fn held_grip_anchor(&self, entity: EntityId) -> Option<Vector3<f32>> {
+        let rig = self.grip_kinematics.as_ref()?;
+        for (index, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
+            if hand.get_held_entity() == Some(entity) {
+                let held = self.fitted_grips[index].as_ref()?;
+                return (held.entity == entity)
+                    .then(|| held.primary_anchor(rig[index].palm))
+                    .flatten();
+            }
+        }
+        None
     }
 
     fn is_supported(&self, entity: EntityId) -> bool {
