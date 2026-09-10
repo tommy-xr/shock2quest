@@ -58,10 +58,11 @@ for (const [name, template, profiled, setting, overrides] of [
       const ammoUsage = setting ? 3 : 1;
       const ensureShotAmmo = async () => {
         if (ammoOf(await game.entities.detail(gun.id)) >= ammoUsage) return;
-        // The shotgun's three-shell matrix exceeds one magazine. Supply both
-        // authored clip types and reload through the normal selected-ammo path.
-        await game.player.spawnItem(-42);
-        await game.player.spawnItem(-43);
+        // Longer matrices exceed one magazine. Supply authored clip types
+        // and reload through the normal selected-ammo path.
+        for (const clip of template === -17 ? [-31, -32, -307] : [-42, -43]) {
+          await game.player.spawnItem(clip);
+        }
         await game.input.trigger("Reload");
         await game.step({ frames: 180 });
         assert.ok(ammoOf(await game.entities.detail(gun.id)) >= ammoUsage);
@@ -332,6 +333,101 @@ for (const [name, template, profiled, setting, overrides] of [
         );
         assert.deepEqual((await game.info()).player.camera_rotation, head);
         await game.step({ frames: 300 });
+      }
+      if (overrides) {
+        await support(false);
+        await game.devParams.set("gun_strength_override", 1);
+        await game.devParams.set("gun_agility_override", 1);
+        for (const [
+          backScale,
+          pitchScale,
+          yawScale,
+          penaltyScale,
+          supported,
+        ] of [
+          [0.3, 0, 0, 1, false],
+          [0, 1.5, 0, 1, false],
+          [0, 0, 1.5, 1, false],
+          [1, 0, 0, 0, false],
+          [1, 0, 0, 0.5, false],
+          [1, 0, 0, 0, true],
+          [1, 0, 0, 3, true],
+        ] as const) {
+          await support(supported);
+          await game.step({ frames: 300 });
+          await game.devParams.set("gun_kickback_scale", backScale);
+          await game.devParams.set("gun_pitch_scale", pitchScale);
+          await game.devParams.set("gun_yaw_scale", yawScale);
+          await game.devParams.set("gun_one_hand_scale", penaltyScale);
+          await ensureShotAmmo();
+          const initial = await body();
+          const muzzle = muzzleFrameOf(await game.entities.detail(gun.id));
+          const ammo = ammoOf(await game.entities.detail(gun.id));
+          await game.input.set("right_hand.trigger", 1);
+          let back = 0,
+            pitch = 0,
+            yaw = 0;
+          for (let frame = 0; frame < 30; frame++) {
+            await game.step({ frames: 1 });
+            if (frame === 0) await game.input.set("right_hand.trigger", 0);
+            const current = muzzleFrameOf(await game.entities.detail(gun.id));
+            back = Math.max(
+              back,
+              Math.abs((await body()).position[0] - initial.position[0]),
+            );
+            pitch = Math.max(
+              pitch,
+              Math.abs(current.forward[1] - muzzle.forward[1]),
+            );
+            yaw = Math.max(
+              yaw,
+              Math.abs(
+                current.forward[0] * muzzle.forward[2] -
+                  current.forward[2] * muzzle.forward[0],
+              ),
+            );
+          }
+          assert.equal(ammoOf(await game.entities.detail(gun.id)), ammo - 1);
+          assert.ok(
+            pitchScale ? pitch > 0.002 : pitch < 0.0001,
+            `pitch scale ${pitchScale}: ${pitch}`,
+          );
+          assert.ok(
+            yawScale ? yaw > 0.001 : yaw < 0.0001,
+            `yaw scale ${yawScale}: ${yaw}`,
+          );
+          assert.ok(
+            Math.abs(
+              back -
+                value(1, true) *
+                  (1 + (supported ? 0 : penaltyScale)) *
+                  backScale,
+            ) < 0.003,
+            `back scale ${backScale}: ${back}`,
+          );
+          assert.deepEqual((await game.info()).player.stats, character);
+          assert.deepEqual((await game.info()).player.camera_rotation, head);
+          context.diagnostic(
+            JSON.stringify({
+              backScale,
+              pitchScale,
+              yawScale,
+              penaltyScale,
+              supported,
+              back,
+              pitch,
+              yaw,
+            }),
+          );
+        }
+        for (const key of [
+          "gun_kickback_scale",
+          "gun_pitch_scale",
+          "gun_yaw_scale",
+          "gun_one_hand_scale",
+        ]) {
+          assert.equal((await game.devParams.reset(key)).value, 1);
+        }
       }
     },
   );

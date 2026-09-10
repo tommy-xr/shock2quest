@@ -33,14 +33,20 @@ pub fn vr_impulses(
 ) -> (RecoilImpulse, Option<RecoilImpulse>) {
     let above_minimum = (strength.clamp(1, 6) - 1) as f32;
     let scaled = |impulse: RecoilImpulse, scale| RecoilImpulse {
-        pitch: impulse.pitch * scale,
-        heading: impulse.heading * scale,
-        back: impulse.back * scale,
+        pitch: impulse.pitch * scale * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE),
+        heading: impulse.heading * scale * crate::dev_params::get(crate::dev_params::GUN_YAW_SCALE),
+        back: impulse.back * scale * crate::dev_params::get(crate::dev_params::GUN_KICKBACK_SCALE),
         ..impulse
     };
     (
         scaled(impulse, 1.0 / (1.0 + 0.1 * above_minimum)),
-        (!supported).then(|| scaled(one_hand, 1.0 / (1.0 + 0.3 * above_minimum))),
+        (!supported).then(|| {
+            scaled(
+                one_hand,
+                crate::dev_params::get(crate::dev_params::GUN_ONE_HAND_SCALE)
+                    / (1.0 + 0.3 * above_minimum),
+            )
+        }),
     )
 }
 
