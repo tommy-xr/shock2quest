@@ -22,7 +22,7 @@ pub mod util;
 pub use crate::builtin_font::{BuiltinFont, shared_builtin_font};
 pub use crate::engine::Engine;
 pub use crate::engine::EngineRenderContext;
-pub use crate::font::{Font, FontCharacterInfo, ellipsize, measure_text_width};
+pub use crate::font::{Font, FontCharacterInfo, ellipsize, measure_text_width, wrap_text_to_width};
 
 pub fn opengl() -> Box<dyn Engine> {
     let engine = gl_engine::init_gl();

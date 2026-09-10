@@ -67,13 +67,25 @@ pub use pointer_visual::{PointerVisuals, pointer_beams};
 /// font and is unaffected.
 pub const BUILTIN_FONT: &str = "@builtin";
 
+/// Retail MFDs use MAINAA with the cyan text palette (shkutils.cpp).
+pub const MFD_FONT: &str = "@shock-mfd";
+
 /// The font for a `UiElement::Text`, whichever kind it is.
 ///
 /// Both presentations and the layout pass go through here, so the two cannot
 /// disagree about which font measured the text and which font draws it.
-fn resolve_font(asset_cache: &mut AssetCache, font: &str) -> Rc<Box<dyn engine::Font>> {
+pub(crate) fn resolve_font(asset_cache: &mut AssetCache, font: &str) -> Rc<Box<dyn engine::Font>> {
     if font == BUILTIN_FONT {
         return engine::shared_builtin_font();
+    }
+    if font == MFD_FONT {
+        // Family mounts strip their prefix. The bare key resolves the canonical
+        // fonts family; "fonts/mainaa.fon" instead names iface's stripped copy.
+        return asset_cache.get_ext(
+            &dark::importers::TINTED_FONT_IMPORTER,
+            "mainaa.fon",
+            &[0, 255, 190],
+        );
     }
     asset_cache.get(&FONT_IMPORTER, font).clone()
 }

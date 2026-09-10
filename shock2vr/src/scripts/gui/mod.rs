@@ -8,7 +8,7 @@ mod map;
 mod media;
 mod psi_powers;
 mod replicator;
-mod research;
+pub(crate) mod research;
 mod trainer;
 mod traits;
 mod weapon_settings;

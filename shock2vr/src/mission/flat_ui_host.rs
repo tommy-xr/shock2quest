@@ -641,6 +641,9 @@ impl FlatUiHost {
     /// Bind the MFD to `entity` (the original's `gOverlayObj`). Opening a
     /// second panel replaces the first - one panel per (left) slot.
     pub fn open(&mut self, entity: EntityId) {
+        if self.utilities.is_research() {
+            self.utilities = Default::default();
+        }
         if self.active_panel != Some(entity) {
             self.components.clear();
             self.panel_size_px = None;
@@ -906,6 +909,9 @@ impl FlatUiHost {
                 .utilities
                 .update(canvas_pos, pressed_edge || grab_edge, candidate)
             {
+                if self.utilities.is_research() {
+                    self.close();
+                }
                 self.hover_close = false;
                 return (Vec::new(), Vec::new());
             }

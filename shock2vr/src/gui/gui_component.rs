@@ -16,6 +16,11 @@ impl<TEvent> GuiComponent<TEvent>
 where
     TEvent: Clone,
 {
+    pub fn with_rect(self, rect: Rect) -> Self {
+        self.with_position(vec2(rect.x, rect.y))
+            .with_size(vec2(rect.w, rect.h))
+    }
+
     pub fn with_position(self, new_position: Vector2<f32>) -> GuiComponent<TEvent> {
         match self {
             Self::Image {

@@ -16,6 +16,7 @@ const PAGE_LINES: usize = 16;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Control {
     Inspect,
+    Research,
     Close,
     Previous,
     Next,
@@ -24,6 +25,8 @@ enum Control {
 #[derive(Default)]
 pub(crate) struct MfdUtilities {
     inspecting: bool,
+    research: bool,
+    research_catalog: super::research_overview::ResearchCatalog,
     selected: Option<EntityId>,
     title: String,
     lines: Vec<String>,
@@ -31,6 +34,16 @@ pub(crate) struct MfdUtilities {
 }
 
 impl MfdUtilities {
+    pub(crate) fn is_research(&self) -> bool {
+        self.research
+    }
+    pub(crate) fn open_research(&mut self, template: Option<i32>) {
+        *self = Self::default();
+        self.research = true;
+        if let Some(id) = template {
+            self.research_catalog.select_project(id);
+        }
+    }
     pub(crate) fn is_inspecting(&self) -> bool {
         self.inspecting
     }
@@ -38,6 +51,11 @@ impl MfdUtilities {
         // Dedicated utility row below the reserved right MFD slot, clear of
         // the bottom ammo readout. New utilities fill the row incrementally.
         let mut controls = vec![(Control::Inspect, Rect::new(450.0, 382.0, 36.0, 26.0), "?")];
+        controls.push((
+            Control::Research,
+            Rect::new(488.0, 382.0, 36.0, 26.0),
+            "RES",
+        ));
         if self.inspecting || self.selected.is_some() {
             controls.push((Control::Close, Rect::new(570.0, 346.0, 60.0, 20.0), "CLOSE"));
             if self.page > 0 {
@@ -69,10 +87,15 @@ impl MfdUtilities {
                         if self.inspecting {
                             *self = Self::default();
                         } else {
+                            self.research = false;
                             self.inspecting = true;
                             self.selected = None;
                             self.set_content("Item information".into(), "Select an inventory or held item to inspect. Select ? again to cancel.".into());
                         }
+                    }
+                    Control::Research => {
+                        *self = Self::default();
+                        self.research = true;
                     }
                     Control::Close => *self = Self::default(),
                     Control::Previous => self.page = self.page.saturating_sub(1),
@@ -80,6 +103,13 @@ impl MfdUtilities {
                 }
             }
             return true;
+        }
+        if self.research {
+            let consumed = self.research_catalog.contains(point);
+            if self.research_catalog.update(point, pressed) {
+                *self = Self::default();
+            }
+            return consumed;
         }
         if self.inspecting {
             if pressed && let Some(entity) = candidate {
@@ -89,7 +119,7 @@ impl MfdUtilities {
             }
             return true;
         }
-        self.selected.is_some() && PANEL.contains(point)
+        (self.selected.is_some() || self.research) && PANEL.contains(point)
     }
 
     fn set_content(&mut self, title: String, body: String) {
@@ -103,7 +133,16 @@ impl MfdUtilities {
         }
     }
 
-    pub(crate) fn refresh(&mut self, world: &World, assets: &mut AssetCache) {
+    pub(crate) fn refresh(
+        &mut self,
+        world: &World,
+        assets: &mut AssetCache,
+        info: &dark::ss2_entity_info::SystemShock2EntityInfo,
+    ) {
+        if self.research {
+            self.research_catalog.refresh(world, assets, info);
+            return;
+        }
         let Some(entity) = self.selected else {
             return;
         };
@@ -121,6 +160,9 @@ impl MfdUtilities {
     }
 
     pub(crate) fn draw(&self, canvas: &mut UiCanvas) {
+        if self.research {
+            self.research_catalog.draw(canvas);
+        }
         if self.inspecting || self.selected.is_some() {
             canvas.image(PANEL, "IFBTN00.PCX");
             canvas.text_native_fit(
@@ -131,6 +173,10 @@ impl MfdUtilities {
                 VAlign::Middle,
             );
             for (rect, line) in self.visible_lines() {
+                // Paragraph gaps occupy a line but have no glyph mesh.
+                if line.trim().is_empty() {
+                    continue;
+                }
                 canvas.text_native_fit(rect, line, FONT, HAlign::Left, VAlign::Middle);
             }
         }
@@ -159,6 +205,7 @@ impl MfdUtilities {
                 label: Some(
                     match control {
                         Control::Inspect => "inspect",
+                        Control::Research => "research_overview",
                         Control::Close => "utility_close",
                         Control::Previous => "utility_previous",
                         Control::Next => "utility_next",
@@ -168,6 +215,11 @@ impl MfdUtilities {
                 entity_id: None,
                 rect: [r.x, r.y, r.w, r.h],
                 screen_rect: [r.x, r.y, r.w, r.h],
+            })
+            .chain(if self.research {
+                self.research_catalog.elements()
+            } else {
+                Vec::new()
             })
             .chain(self.visible_lines().map(|(rect, line)| {
                 let r = [rect.x, rect.y, rect.w, rect.h];
@@ -211,6 +263,18 @@ fn item_description(
 mod tests {
     use super::*;
     use cgmath::vec2;
+
+    #[test]
+    fn paragraph_spacing_does_not_emit_empty_text_meshes() {
+        let mut ui = MfdUtilities::default();
+        ui.inspecting = true;
+        ui.set_content("Title".into(), "First\n\nSecond".into());
+        let mut canvas = UiCanvas::new(Vector2::new(640.0, 480.0));
+        ui.draw(&mut canvas);
+        assert!(canvas.elements().iter().all(|element| !matches!(element, crate::ui::UiElement::Text { text, .. } if text.trim().is_empty())));
+        let lines: Vec<_> = ui.visible_lines().collect();
+        assert_eq!(lines[2].0.y - lines[0].0.y, 22.0);
+    }
 
     #[test]
     fn pages_cover_every_line_and_clamp_when_content_shrinks() {

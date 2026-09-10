@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { GameServer } from "../src/index.js";
 import type { UiElement } from "../src/types.js";
+import { clickUiElement, clickCanvasWithRay, canvasCenter, requirePanelPose } from "./helpers/ui.js";
 import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
 for (const vr of [false, true]) {
@@ -28,22 +29,9 @@ for (const vr of [false, true]) {
       assert.ok(element, `${label} exists`);
       return element;
     };
-    // Reuse the common VR canvas aim; flat screen_rect follows the existing loot tests.
     const click = async (element: UiElement) => {
-      if (vr) {
-        const ui = await game.ui.state();
-        const [x,y,w,h] = element.rect;
-        await aimVrHandAtCanvas(game, ui.panel_pose!, [x+w/2,y+h/2], {hand:"right",squeeze:0});
-        await game.input.set("right_hand.trigger",1);
-      } else {
-        const [x,y,w,h] = element.screen_rect;
-        await game.input.set("pointer.position",[x+w/2,y+h/2]);
-        await game.step({frames:2});
-        await game.input.set("pointer.pressed",1);
-      }
-      await game.step({frames:2});
-      await game.input.set(vr ? "right_hand.trigger" : "pointer.pressed",0);
-      await game.step({frames:2});
+      if (vr) await clickCanvasWithRay(game, requirePanelPose(await game.ui.state()), canvasCenter(element));
+      else await clickUiElement(game, element);
     };
     const before = await game.player.inventory();
     const cursor = (await game.ui.state()).cursor;
@@ -122,3 +110,85 @@ test("VR inspection reserves an off-panel held hypo trigger through cancel until
   await game.step({frames:3});
   assert.equal((await game.info()).player.right_hand_entity_id,hypo.id,"releasing reserved trigger does not consume hypo");
 });
+
+
+for (const vr of [false,true]) {
+  test(`Research overview reads existing projects without starting research (${vr ? "VR" : "flat"})`, {
+    skip: process.env.SHOCK2_E2E !== "1", timeout:180_000,
+  }, async(t)=>{
+    await using game = await GameServer.launch({mission:"debug_interactions",debugFlags:vr?["--vr"]:[]});
+    t.after(async()=>{await writeFile(`/tmp/astra-mfd-research-${vr?"vr":"flat"}-runtime.log`,game.logs().join("\n"));});
+    await game.step({frames:30});
+    await game.player.setStats({skills:{research:6}});
+    const toxin=await game.player.spawnItem(-1341);
+    await game.input.trigger("ToggleUseMode");await game.step({frames:5});
+    const elements=async()=>(await game.ui.state()).strip!.elements;
+    const text=async()=>(await elements()).filter(e=>e.label === "utility_text").map(e=>e.text).join(" ");
+    const click=async(e:UiElement)=>{
+      if(vr) await clickCanvasWithRay(game,requirePanelPose(await game.ui.state()),canvasCenter(e));
+      else await clickUiElement(game,e);
+    };
+    const control=async(label:string)=>{const e=(await elements()).find(e=>e.label===label);assert.ok(e,label);return e;};
+    const capture=async(name:string)=>{
+      const output=process.env.ASTRA_RESEARCH_CAPTURE;if(!output)return;
+      await mkdir(output,{recursive:true});const path=`${output}/${vr?"vr":"flat"}-${name}`;
+      await game.screenshot(`${path}.png`,1600);await writeFile(`${path}.json`,JSON.stringify({ui:await game.ui.state(),inventory:await game.player.inventory(),info:await game.info()},null,2));
+    };
+    const inventory=await game.player.inventory();
+    await capture("idle");
+    await click(await control("research_overview"));
+    assert.match(await text(),/No research projects yet/);
+    await capture("empty");
+    await game.step({frames:75});
+    assert.match(await text(),/No research projects yet/,"overview must not start research on carried Toxin-A");
+    assert.deepEqual(await game.player.inventory(),inventory);
+    await click(await control("utility_close"));
+    const item=(await elements()).find(e=>e.entity_id===toxin.entity_id&&e.kind==="button");assert.ok(item);
+    await click(item);await click(item);await game.step({frames:75});
+    const active=(await game.ui.state()).active_panel;assert.ok(active,"real item use opens research MFD");
+    assert.ok(active.elements.some(e=>e.text?.includes("Antimony")),"real research reaches authored chemical gate");
+    const reports=active.elements.find(e=>e.label==="Research reports");assert.ok(reports);
+    // The flat case covers the actual Reports button; VR enters through RES.
+    // Legacy world-panel proxy targeting is not asserted by this scenario.
+    await click(vr ? await control("research_overview") : reports);
+    await capture("reports-button-result");
+    assert.ok((await elements()).some(e=>e.texture?.toLowerCase()==="iface/pda.pcx"));
+    await capture("journal-list");
+    await click(await control("research_entry:0"));
+    assert.ok((await elements()).some(e=>e.texture?.toLowerCase()==="iface/research.pcx"));
+    const gate=await text();assert.match(gate,/chemical/i);assert.match(gate,/Antimony/);assert.match(gate,/5\.0 %/,"authored progress retains its percent glyph");
+    await capture("chemical-gate");
+    await game.step({frames:60});assert.equal(await text(),gate,"read-only journal leaves chemically blocked progress unchanged");
+    assert.deepEqual(await game.player.inventory(),inventory,"journal never consumes research specimen");
+    await click(await control("research_back"));
+    assert.ok((await elements()).some(e=>e.label==="research_entry:0"));
+    await click(await control("utility_close"));
+    // Real research progress, accelerated only through the supported skill debug setting.
+    const brain=await game.player.spawnItem(-148);
+    const brainButton=(await elements()).find(e=>e.entity_id===brain.entity_id&&e.kind==="button");assert.ok(brainButton);
+    await click(brainButton);await click(brainButton);await game.step({frames:1000});
+    assert.ok((await game.ui.state()).active_panel!.elements.some(e=>e.text?.includes("Fermium")),"Monkey Brain reaches its authored Fermium gate");
+    const fermium=await game.player.spawnItem(-20);
+    const chemical=(await elements()).find(e=>e.entity_id===fermium.entity_id&&e.kind==="button");assert.ok(chemical);
+    await click(chemical);await click(chemical);await game.step({frames:3600});
+    assert.ok(!(await game.player.inventory()).items.some(e=>e.entity_id===fermium.entity_id),"real research consumes required Fermium");
+    assert.ok((await game.ui.state()).active_panel!.elements.some(e=>e.text?.includes("Research complete")),"Monkey Brain research completes");
+    await click(await control("research_overview"));
+    await capture("completed-list");
+    const rows=(await elements()).filter(e=>e.label?.startsWith("research_entry:"));
+    assert.equal(rows.length,2,"suspended toxin and completed brain report");
+    const row=rows[1]!;
+    await click(row);
+    assert.ok((await elements()).some(e=>e.texture?.toLowerCase()==="iface/resrep.pcx"),"completed selection uses retail report artwork");
+    assert.ok((await elements()).filter(e=>/^(mport|resicon)\.pcx$/i.test(e.texture??"")).length>=2,"portrait and specimen icon");
+    const completedInventory=await game.player.inventory();
+    const first=await text();assert.doesNotMatch(first,/No written report/);assert.match(first,/25%/,"authored report bonus retains percent");assert.doesNotMatch(first,/\.\.\.|…/,"wrapped report must not discard text through ellipsis");
+    await capture("completed-report");
+    await click(await control("utility_next"));
+    assert.notEqual(await text(),first);await capture("completed-page-2");
+    await click(await control("utility_previous"));assert.equal(await text(),first);
+    assert.deepEqual(await game.player.inventory(),completedInventory,"reading report does not mutate inventory");
+    await click(await control("research_back"));
+    await capture("completed-list");
+  });
+}
