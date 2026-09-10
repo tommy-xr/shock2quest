@@ -923,3 +923,19 @@ coefficients change in this increment. Runtime coverage adds both shotgun
 hands, Strength transitions, support acquisition/release, firing/recovery,
 palm anchoring, fixed head, and a disabled-weight control. Final comfort and
 angle tuning remain a headset validation task.
+
+
+### Live weapon-handling stat overrides
+
+The Developer panel now exposes `gun_strength_override` (**Gun STR ovrd**) and
+`gun_agility_override` (**Gun AGI ovrd**). Zero follows the character sheet;
+1–6 selects a live handling-only test level, including lowering a max-stat
+`debug_weapons` character. Strength feeds both recoil and optional downward
+weight; Agility feeds the existing physical gun angular recoil path. The same
+shared registry supplies the flat/VR panel and debug HTTP API.
+
+Overrides never mutate character stats or saves and do not change proficiency,
+spread, movement, or backpack capacity. They persist only for the running
+process, including across mission/save loads; return both to zero when done.
+See [the headset test recipe](../DEVELOPMENT.md#testing-vr-weapon-handling-at-different-stats).
+Agility-driven lag during rapid hand rotation remains a separate future feature.

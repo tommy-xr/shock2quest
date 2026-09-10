@@ -13,21 +13,22 @@ import {
 } from "./helpers/vr-hand.js";
 import { ammoOf, cycleToWeapon, muzzleFrameOf } from "./helpers/weapon.js";
 
-for (const [name, template, sag, enabled, hand] of [
-  ["pistol", -17, 1, true, "right"],
-  ["shotgun", -19, 8, true, "right"],
-  ["shotgun left hand", -19, 8, true, "left"],
-  ["shotgun without weight flag", -19, 0, false, "right"],
-  ["AR", -18, 8, true, "right"],
-  ["AR left hand", -18, 8, true, "left"],
-  ["AR without weight flag", -18, 0, false, "right"],
+for (const [name, template, sag, enabled, hand, overrides] of [
+  ["pistol", -17, 1, true, "right", false],
+  ["shotgun", -19, 8, true, "right", false],
+  ["shotgun left hand", -19, 8, true, "left", false],
+  ["shotgun without weight flag", -19, 0, false, "right", false],
+  ["AR", -18, 8, true, "right", false],
+  ["AR left hand", -18, 8, true, "left", false],
+  ["AR without weight flag", -18, 0, false, "right", false],
+  ["shotgun overrides", -19, 8, true, "right", true],
 ] as const) {
   test(
     `${name}: Strength and support remove downward weight around the palm`,
     { skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000 },
     async (context) => {
       await using game = await GameServer.launch({
-        mission: "medsci1.mis",
+        mission: overrides ? "debug_weapons" : "medsci1.mis",
         debugFlags: [
           "--vr",
           "--experimental",
@@ -38,6 +39,8 @@ for (const [name, template, sag, enabled, hand] of [
       });
       await game.step({ frames: 10 });
       await game.player.setStats({ skills: { standard_weapons: 6 } });
+      const character = (await game.info()).player.stats;
+      if (overrides) assert.equal(character?.strength, 6);
       const gun = await cycleToWeapon(game, (e) => e.template_id === template, {
         settleFrames: 90,
       });
@@ -77,9 +80,13 @@ for (const [name, template, sag, enabled, hand] of [
         );
         assert.deepEqual((await game.info()).player.camera_rotation, head);
       };
-      for (const strength of [1, 3, 6]) {
+      for (const testLevel of overrides ? [0, 1, 3, 6, 1, 0] : [1, 3, 6]) {
+        const strength = testLevel || character!.strength;
         const previous = await pitch();
-        await game.player.setStats({ strength });
+        if (overrides) {
+          await game.devParams.set("gun_strength_override", testLevel);
+          assert.deepEqual((await game.info()).player.stats, character);
+        } else await game.player.setStats({ strength });
         await game.step({ frames: 1 });
         assert.ok(
           Math.abs((await pitch()) - previous) < 0.5,
@@ -95,7 +102,7 @@ for (const [name, template, sag, enabled, hand] of [
         context.diagnostic(
           JSON.stringify({ name, strength, pitch: await pitch() }),
         );
-        if (strength !== 1 || !enabled) continue;
+        if (strength !== 1 || !enabled || overrides) continue;
 
         // Acquire the actual lowered fore-end first, then lift it to level.
         // On long guns the neutral socket is outside the sagged socket's grab
