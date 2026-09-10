@@ -69,6 +69,17 @@ impl GlobalContactStims {
 /// emitter carries are summed; a victim with no receptron for a stim simply
 /// feels nothing from it.
 pub fn contact_stim_damage(world: &World, emitter_template: i32, victim: EntityId) -> f32 {
+    contact_stim_damage_scaled(world, emitter_template, victim, 1.0)
+}
+
+/// Launch modifiers scale source intensity before the receiver's response,
+/// matching Dark's source-scale property. Flat damage responses stay flat.
+pub fn contact_stim_damage_scaled(
+    world: &World,
+    emitter_template: i32,
+    victim: EntityId,
+    intensity_scale: f32,
+) -> f32 {
     let Ok(contact_stims) = world.borrow::<UniqueView<GlobalContactStims>>() else {
         return 0.0;
     };
@@ -80,7 +91,7 @@ pub fn contact_stim_damage(world: &World, emitter_template: i32, victim: EntityI
     stims
         .iter()
         .filter_map(|(stim_template_id, intensity)| {
-            resolve_stim_damage(&receptrons, *stim_template_id, *intensity)
+            resolve_stim_damage(&receptrons, *stim_template_id, *intensity * intensity_scale)
         })
         .filter(|damage| *damage > 0.0)
         .sum()
@@ -419,6 +430,35 @@ mod tests {
         );
 
         assert_eq!(contact_stim_damage(&world, LEAD_PIPE, victim), 0.0);
+    }
+
+    #[test]
+    fn launch_scale_precedes_responses_and_does_not_scale_flat_damage() {
+        let (world, victim) = world_with_victim(
+            GlobalContactStims(HashMap::from([(LEAD_PIPE, vec![(WEAPON_BASH, 10.0)])])),
+            vec![
+                (WEAPON_BASH, damage(1, 2.0)),
+                (
+                    WEAPON_BASH,
+                    receptron(2, ReceptronEffect::Amplify { factor: 0.5 }),
+                ),
+                (
+                    WEAPON_BASH,
+                    receptron(
+                        3,
+                        ReceptronEffect::Damage {
+                            multiplier: 7.0,
+                            use_intensity: false,
+                        },
+                    ),
+                ),
+            ],
+        );
+        assert_eq!(
+            contact_stim_damage_scaled(&world, LEAD_PIPE, victim, 1.5),
+            22.0
+        );
+        assert_eq!(contact_stim_damage(&world, LEAD_PIPE, victim), 17.0);
     }
 
     #[test]

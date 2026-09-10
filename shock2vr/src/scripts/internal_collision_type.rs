@@ -5,23 +5,23 @@ use shipyard::{EntityId, Get, View, World};
 use crate::{
     mission::entity_creator::CreateEntityOptions,
     physics::PhysicsWorld,
-    scripts::script_util::choose_impact_spang,
+    scripts::script_util::{choose_impact_spang, projectile_contact_damage},
     util::{get_position_from_transform, get_rotation_from_forward_vector},
 };
 
-use super::{Effect, Message, MessagePayload, Script, script_util::play_impact_sound};
+use super::{Effect, MessagePayload, Script, script_util::play_impact_sound};
 
 // Script to handle collision type
 pub struct InternalCollisionType {
     collision_flags: CollisionType,
-    spang_spawned: bool,
+    impact_handled: bool,
 }
 
 impl InternalCollisionType {
     pub fn new() -> InternalCollisionType {
         InternalCollisionType {
             collision_flags: CollisionType::empty(),
-            spang_spawned: false,
+            impact_handled: false,
         }
     }
 }
@@ -45,7 +45,7 @@ impl Script for InternalCollisionType {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::Collided { with, .. } => {
+            MessagePayload::Collided { with, contact } => {
                 // Only impact-payload entities (projectiles / fragile props
                 // flagged to slay or destroy themselves on contact) deal
                 // collision damage. A plain BOUNCE creature must not: any two
@@ -56,32 +56,30 @@ impl Script for InternalCollisionType {
                 let is_impact = self
                     .collision_flags
                     .intersects(CollisionType::SLAY_ON_IMPACT | CollisionType::DESTROY_ON_IMPACT);
-                if !is_impact {
+                if !is_impact || self.impact_handled {
                     return Effect::NoEffect;
                 }
 
+                // A capsule and limb (or two world faces) can enqueue contact
+                // messages before destruction is applied. One projectile has
+                // one terminal impact, including damage, sound and spang.
+                self.impact_handled = true;
                 let initial_effect = if self.collision_flags.contains(CollisionType::SLAY_ON_IMPACT)
                 {
                     Effect::SlayEntity { entity_id }
                 } else {
                     Effect::DestroyEntity { entity_id }
                 };
-                let damage_effect = Effect::Send {
-                    msg: Message {
-                        to: *with,
-                        // TODO: Resolve damage from the projectile's authored
-                        // data - shared follow-up with the fast (raycast)
-                        // projectile path's hardcoded 6.0 in
-                        // internal_fast_projectile.rs.
-                        payload: MessagePayload::Damage {
-                            amount: crate::runtime_props::RuntimePropShotModifiers::of(
-                                world, entity_id,
-                            )
-                            .stim,
-                            impact: None,
-                        },
-                    },
-                };
+                let damage_effect = projectile_contact_damage(
+                    world,
+                    entity_id,
+                    *with,
+                    contact.map(|contact| crate::scripts::DamageImpact {
+                        direction: contact.normal,
+                        point: contact.point,
+                        bone: None,
+                    }),
+                );
                 let mut effects = vec![initial_effect, damage_effect];
 
                 let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
@@ -95,10 +93,7 @@ impl Script for InternalCollisionType {
                 // colliders at once (a corner, a creature capsule + its
                 // hitbox proxy) queues multiple Collided messages before the
                 // slay/destroy effect lands.
-                if !self.spang_spawned
-                    && let Some(template_id) = choose_impact_spang(world, entity_id, *with)
-                {
-                    self.spang_spawned = true;
+                if let Some(template_id) = choose_impact_spang(world, entity_id, *with) {
                     // The physics collision event carries no contact normal,
                     // and spang orientation is minor cosmetics, so
                     // approximate the impact facing with the reversed
@@ -143,5 +138,38 @@ impl Script for InternalCollisionType {
             }
             _ => Effect::NoEffect,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_terminal_impact_is_handled_once_even_before_destruction_is_applied() {
+        let mut world = World::new();
+        let projectile = world.add_entity(PropCollisionType {
+            collision_type: CollisionType::DESTROY_ON_IMPACT | CollisionType::NO_COLLISION_SOUND,
+        });
+        world.add_component(
+            projectile,
+            crate::runtime_props::RuntimePropTransform(Matrix4::identity()),
+        );
+        let victim = world.add_entity(());
+        let physics = PhysicsWorld::new();
+        let mut script = InternalCollisionType::new();
+        script.initialize(projectile, &world);
+        let message = MessagePayload::Collided {
+            with: victim,
+            contact: None,
+        };
+        assert!(matches!(
+            script.handle_message(projectile, &world, &physics, &message),
+            Effect::Multiple(_)
+        ));
+        assert!(matches!(
+            script.handle_message(projectile, &world, &physics, &message),
+            Effect::NoEffect
+        ));
     }
 }

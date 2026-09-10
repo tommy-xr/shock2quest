@@ -170,3 +170,21 @@ mask 3), hit it, and remove the rocket and its flight riders. Visible impact
 particles expire, but three secondary effect entities persist after 26 seconds;
 cleanup remains open. See [the workstream](weapon-feel-workstream.md#annelid-homing)
 for source references and intentional VR adaptations.
+
+
+## Contact damage followup
+
+Fast rays and physical projectiles now resolve authored contact stimulus damage
+through the receiving object's receptrons, replacing fixed 6/1 damage. The shared
+source multiplier applies before responses, and hitbox forwarding retains limb
+scaling. Immune or non-damage contacts emit no Damage message. Physical terminal
+contacts are handled once even when multiple collision messages are queued.
+
+Pistol, laser and stasis actual-shot regressions fail on the parent and pass on
+this layer. Stasis no longer removes an erroneous hit point; **Freeze and
+add_metaprop reactions remain pending**, including duration, reapplication and
+save/load. This is the next item before pellet spread. Full act/react ordering,
+remaining non-damage reactions, special-effect entity cleanup and complete
+weapon/target damage-matrix verification remain open. See the workstream's
+[contact damage section](weapon-feel-workstream.md#authored-projectile-contact-damage)
+for observed values, source evidence and the known baseline test failure.
