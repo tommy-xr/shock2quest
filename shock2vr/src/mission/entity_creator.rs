@@ -1999,8 +1999,8 @@ mod tests {
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: Vector3::zero(),
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
         ));
 
@@ -2051,8 +2051,8 @@ mod tests {
             offset0: vec3(9.0, 8.0, 7.0),
             offset1: vec3(-6.0, -5.0, -4.0),
             size: Vector3::zero(),
-            unk1: 0,
-            unk2: 0,
+            point_vs_terrain: 0,
+            point_vs_not_special: 0,
         }
     }
 
@@ -2410,8 +2410,8 @@ mod tests {
                 offset0: vec3(0.0, 0.36, 0.0),
                 offset1: Vector3::zero(),
                 size: Vector3::zero(),
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
         ));
 
@@ -2467,8 +2467,8 @@ mod tests {
                 offset0: offset,
                 offset1: Vector3::zero(),
                 size: Vector3::zero(),
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
         ));
 
@@ -2579,8 +2579,8 @@ mod tests {
                     offset0: offset,
                     offset1: Vector3::zero(),
                     size,
-                    unk1: 0,
-                    unk2: 0,
+                    point_vs_terrain: 0,
+                    point_vs_not_special: 0,
                 },
             ));
             if immobile {
@@ -2669,8 +2669,8 @@ mod tests {
                     offset0: Vector3::zero(),
                     offset1: Vector3::zero(),
                     size,
-                    unk1: 0,
-                    unk2: 0,
+                    point_vs_terrain: 0,
+                    point_vs_not_special: 0,
                 },
             ));
 
@@ -2854,8 +2854,8 @@ mod tests {
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: authored_size,
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
             PropScale(vec3(-0.888_888_9, 1.333_333_4, 16.0)),
             PropImmobile(true),
@@ -2996,8 +2996,8 @@ mod tests {
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: vec3(2.4, 0.4, 2.4),
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
         ));
         let child = world.add_entity((
@@ -3018,8 +3018,8 @@ mod tests {
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: Vector3::zero(),
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
             Links {
                 to_links: vec![ToLink {
@@ -3106,8 +3106,8 @@ mod tests {
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: vec3(2.4, 3.2, 0.2),
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
             dark::properties::PropTranslatingDoor {
                 door_type: 1,

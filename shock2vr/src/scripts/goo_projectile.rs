@@ -1,4 +1,4 @@
-use dark::properties::PropTemplateId;
+use dark::properties::{PropPhysDimensions, PropPhysType};
 use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
@@ -36,13 +36,12 @@ impl Script for GooProjectile {
         let MessagePayload::Collided { with, contact } = msg else {
             return Effect::NoEffect;
         };
-        // Globs from one volley pass through each other. The emitter fires
-        // all four straight up from a single point 100 ms apart, so a fresh
-        // one overlaps the previous one still leaving the muzzle; without
-        // this the volley annihilates itself at the pod and no venom ever
-        // reaches the player. Deliberately narrow - only another glob, not
-        // every projectile in the air.
-        if is_same_archetype(world, entity_id, *with) {
+        // The original's point-vs-not-special rule: two models that both set
+        // `point_vs_not_special` and are both non-special never collide with
+        // each other. The Projectile archetype sets both bits, which is what
+        // stops a stream of emitted globs from detonating on one another
+        // before it has cleared the muzzle.
+        if passes_through(world, entity_id, *with) {
             return Effect::NoEffect;
         }
         // One splat per glob: a single contact can queue several messages
@@ -55,12 +54,22 @@ impl Script for GooProjectile {
     }
 }
 
-/// Whether two entities were created from the same template - i.e. `other` is
-/// another glob from this same volley.
-fn is_same_archetype(world: &World, entity_id: EntityId, other: EntityId) -> bool {
-    let templates = world.borrow::<View<PropTemplateId>>().unwrap();
-    match (templates.get(entity_id), templates.get(other)) {
-        (Ok(mine), Ok(theirs)) => mine.template_id == theirs.template_id,
-        _ => false,
-    }
+/// The original's point-vs-not-special collision filter, for one pair.
+fn passes_through(world: &World, entity_id: EntityId, other: EntityId) -> bool {
+    let dimensions = world.borrow::<View<PropPhysDimensions>>().unwrap();
+    let phys_types = world.borrow::<View<PropPhysType>>().unwrap();
+    let point_vs_not_special = |entity| {
+        dimensions
+            .get(entity)
+            .is_ok_and(|dimensions| dimensions.point_vs_not_special != 0)
+    };
+    let special = |entity| {
+        phys_types
+            .get(entity)
+            .is_ok_and(|phys_type| phys_type.is_special)
+    };
+    point_vs_not_special(entity_id)
+        && point_vs_not_special(other)
+        && !special(entity_id)
+        && !special(other)
 }

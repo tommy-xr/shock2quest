@@ -8336,8 +8336,30 @@ impl MissionCore {
                         orientation,
                         options,
                     ) {
+                        // Retail's launchProjectile composes two terms: the
+                        // emitted archetype's OWN authored initial velocity,
+                        // rotated into the launcher's frame, plus the caller's
+                        // velocity as an addition. Dropping the first term is
+                        // what flattened an emitted volley into a single
+                        // straight column - the goo pod's globs carry a
+                        // horizontal component that the spinning emitter aims
+                        // somewhere new on every emission.
+                        let archetype_velocity = self
+                            .world
+                            .borrow::<View<PropPhysInitialVelocity>>()
+                            .ok()
+                            .and_then(|velocities| {
+                                velocities.get(created.entity_id).ok().map(|velocity| {
+                                    // Same re-permutation as the GunFlash
+                                    // casing path: the parser's runtime vector
+                                    // back into a +Z-forward launch frame.
+                                    orientation * vec3(velocity.0.z, velocity.0.y, -velocity.0.x)
+                                        / SCALE_FACTOR
+                                })
+                            })
+                            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
                         self.physics
-                            .set_velocity(created.entity_id, initial_velocity);
+                            .set_velocity(created.entity_id, archetype_velocity + initial_velocity);
                     } else {
                         warn!(
                             "{:?} could not resolve authored template {:?}",
@@ -9965,6 +9987,17 @@ impl MissionCore {
                     if let Some(rigid_body_handle) = self.id_to_physics.get(&entity_id) {
                         self.physics.set_rotation(*rigid_body_handle, rotation);
                     };
+                    // Also the authored property, which is where a rotate tweq
+                    // reads the pose it advances from. Without this the spin is
+                    // inert on anything with no rigid body to hold it - the
+                    // Tweq emitters are NoRender and physics-less, so their
+                    // facing never moved and every volley left in one
+                    // direction.
+                    if let Ok(mut positions) = self.world.borrow::<ViewMut<PropPosition>>() {
+                        if let Ok(position) = (&mut positions).get(entity_id) {
+                            position.rotation = rotation;
+                        }
+                    }
                 }
                 Effect::PositionInventory { position, rotation } => {
                     PlayerInventoryEntity::set_position_rotation(
@@ -12610,8 +12643,8 @@ fn create_room_entities(
             PropPhysDimensions {
                 radius0: 0.0,
                 radius1: 1.0,
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: (room.bounding_box.max - room.bounding_box.min),

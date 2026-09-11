@@ -184,8 +184,8 @@ mod tests {
             offset0: vec3(0.0, 0.0, 0.0),
             offset1: vec3(0.0, 0.0, 0.0),
             size: vec3(0.0, 0.0, 0.0),
-            unk1: 1,
-            unk2: 1,
+            point_vs_terrain: 1,
+            point_vs_not_special: 1,
         }
     }
 
