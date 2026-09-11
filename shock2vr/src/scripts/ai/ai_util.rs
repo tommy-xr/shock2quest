@@ -575,8 +575,6 @@ pub fn fire_ranged_projectile(
 
         let transform = root_transform.0;
         let position = joint_transform.transform_point(point3(0.0, 0.0, 0.0));
-        let muzzle_transform = transform * Matrix4::from_translation((position + forward).to_vec());
-        let muzzle_position = muzzle_transform.transform_point(point3(0.0, 0.0, 0.0));
         let Some((target_entity, target_position)) = world
             .borrow::<UniqueView<PlayerInfo>>()
             .ok()
@@ -584,6 +582,19 @@ pub fn fire_ranged_projectile(
         else {
             return Effect::NoEffect;
         };
+
+        // The muzzle stands a unit ahead of the firing joint so the shot
+        // clears the shooter's own body. An AI with no melee weapon fires
+        // right down to contact range, where that unit can reach PAST the
+        // target - spawning the shot behind it, aimed back at the shooter,
+        // and a contact-fused grenade at the thrower's own feet. Keep the
+        // muzzle short of the target instead.
+        let joint_position = transform.transform_point(position);
+        let distance_to_target = (target_position - joint_position.to_vec()).magnitude();
+        let muzzle_offset = muzzle_offset_for_distance(distance_to_target);
+        let muzzle_transform =
+            transform * Matrix4::from_translation((position + forward * muzzle_offset).to_vec());
+        let muzzle_position = muzzle_transform.transform_point(point3(0.0, 0.0, 0.0));
         if !has_line_of_fire_from(
             entity_id,
             muzzle_position,
@@ -651,6 +662,22 @@ pub const MONSTER_FOV_HALF_ANGLE: f32 = 60.0;
 /// whether to keep swinging, and a swing may only connect inside it.
 pub const MELEE_ATTACK_RANGE: f32 = 8.0 / SCALE_FACTOR;
 
+/// How far ahead of the firing joint an AI's muzzle sits, so a shot clears
+/// the shooter's own body.
+const MUZZLE_CLEARANCE: f32 = 1.0;
+
+/// The muzzle is pulled back to at least this far short of the target, so a
+/// point-blank shot still spawns between shooter and target rather than
+/// behind it.
+const MUZZLE_TARGET_MARGIN: f32 = 0.25;
+
+/// How far ahead of the firing joint to put the muzzle when the target is
+/// `distance_to_target` away: the full clearance normally, pulled in to stay
+/// short of the target at point-blank range, and never behind the shooter.
+fn muzzle_offset_for_distance(distance_to_target: f32) -> f32 {
+    MUZZLE_CLEARANCE.min((distance_to_target - MUZZLE_TARGET_MARGIN).max(0.0))
+}
+
 ///
 /// Melee Contact
 ///
@@ -697,12 +724,7 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
         return Effect::NoEffect;
     }
 
-    let Some((weapon_template_id, _)) =
-        get_first_link_with_template_and_data(world, entity_id, |link| match link {
-            Link::Weapon => Some(()),
-            _ => None,
-        })
-    else {
+    let Some(weapon_template_id) = melee_weapon_template(world, entity_id) else {
         return Effect::NoEffect;
     };
 
@@ -970,6 +992,17 @@ pub fn is_self_destructing(world: &World, entity_id: EntityId) -> bool {
     v_ai.get(entity_id)
         .map(|prop_ai| prop_ai.0.eq_ignore_ascii_case("protocol"))
         .unwrap_or(false)
+}
+
+/// The melee weapon archetype this AI strikes with, if it has one. Melee
+/// damage is the weapon's contact stims, so an AI with no `Weapon` link
+/// cannot land a blow at all.
+pub fn melee_weapon_template(world: &World, entity_id: EntityId) -> Option<i32> {
+    get_first_link_with_template_and_data(world, entity_id, |link| match link {
+        Link::Weapon => Some(()),
+        _ => None,
+    })
+    .map(|(template_id, _)| template_id)
 }
 
 /// Check if an entity has a ranged weapon capability
@@ -2026,5 +2059,39 @@ mod sight_occlusion_tests {
             player_is_visible(&scene),
             "moving the door collider to its open pose must restore sight"
         );
+    }
+}
+
+#[cfg(test)]
+mod muzzle_tests {
+    use super::*;
+
+    /// At ordinary firing range the muzzle keeps its full clearance, so the
+    /// shot still leaves from in front of the shooter's own body.
+    #[test]
+    fn a_distant_target_gets_the_full_muzzle_clearance() {
+        assert_eq!(muzzle_offset_for_distance(10.0), MUZZLE_CLEARANCE);
+    }
+
+    /// A melee-less gun AI fires at contact range. The muzzle must stay
+    /// SHORT of the target - past it, the shot spawns behind the target
+    /// aimed back at the shooter (a contact grenade at its own feet).
+    #[test]
+    fn a_point_blank_target_pulls_the_muzzle_in_short_of_it() {
+        let distance = 0.8;
+        let offset = muzzle_offset_for_distance(distance);
+        assert!(
+            offset < distance,
+            "muzzle {offset} reached past target at {distance}"
+        );
+        assert_eq!(offset, distance - MUZZLE_TARGET_MARGIN);
+    }
+
+    /// Closer than the margin the muzzle collapses onto the joint rather
+    /// than reversing behind the shooter.
+    #[test]
+    fn a_target_inside_the_margin_never_puts_the_muzzle_behind_the_shooter() {
+        assert_eq!(muzzle_offset_for_distance(0.1), 0.0);
+        assert_eq!(muzzle_offset_for_distance(0.0), 0.0);
     }
 }
