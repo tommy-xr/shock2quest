@@ -579,6 +579,12 @@ pub enum Effect {
         position: Point3<f32>,
         orientation: Quaternion<f32>,
         initial_velocity: Vector3<f32>,
+        /// How the fresh entity is built. A Tweq emitter passes
+        /// `launch_projectile` because Dark hands its emissions to
+        /// `launchProjectile`; a payload that is a creature must not, or the
+        /// authored projectile sphere replaces its selection collider (the
+        /// Swarm's is zero-radius, leaving nothing to shoot at).
+        options: CreateEntityOptions,
     },
 
     /// Deploy the authored proximity sensor and link its lifetime to the mine.

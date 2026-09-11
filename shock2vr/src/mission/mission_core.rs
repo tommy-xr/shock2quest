@@ -8327,22 +8327,20 @@ impl MissionCore {
                     position,
                     orientation,
                     initial_velocity,
+                    options,
                 } => {
                     if let Some(created) = self.create_entity_by_template_name_with_options(
                         asset_cache,
                         &template_name,
                         position,
                         orientation,
-                        CreateEntityOptions {
-                            launch_projectile: true,
-                            ..CreateEntityOptions::default()
-                        },
+                        options,
                     ) {
                         self.physics
                             .set_velocity(created.entity_id, initial_velocity);
                     } else {
                         warn!(
-                            "Tweq emitter {:?} could not resolve authored template {:?}",
+                            "{:?} could not resolve authored template {:?}",
                             source_entity_id, template_name
                         );
                     }
