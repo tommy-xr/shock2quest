@@ -10,7 +10,12 @@ use dark::{
 };
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, UniqueViewMut, View, ViewMut};
 
-use crate::{mission::EffectQueue, scripts::Effect, time::Time, util::vec3_to_point3};
+use crate::{
+    mission::{EffectQueue, entity_creator::CreateEntityOptions},
+    scripts::Effect,
+    time::Time,
+    util::vec3_to_point3,
+};
 
 ///
 /// run_tweq
@@ -74,6 +79,10 @@ pub fn run_tweq(
                     position: vec3_to_point3(position.position),
                     orientation: position.rotation,
                     initial_velocity: authored_velocity / SCALE_FACTOR,
+                    options: CreateEntityOptions {
+                        launch_projectile: true,
+                        ..CreateEntityOptions::default()
+                    },
                 });
             }
 

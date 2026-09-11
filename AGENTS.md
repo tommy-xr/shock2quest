@@ -507,6 +507,7 @@ For debugging visual/rendering changes without a full interactive session:
    | `debug_minimal`          | Bare minimum scene for basic testing         |
    | `debug_weapons`          | Flat weapon viewmodel + aim (wall ahead; cycle weapons with `DebugCycleWeapon`) |
    | `debug_psi`              | Psi amp casting (auto-equips the amp; select powers with `CyclePsiPower`) |
+   | `debug_annelid`          | Annelid egg pods (goo / grub / swarmer), one per station; walk up to hatch one |
 
    ```bash
    # Use with debug runtime for programmatic control

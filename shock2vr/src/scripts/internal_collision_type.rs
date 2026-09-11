@@ -64,81 +64,104 @@ impl Script for InternalCollisionType {
                 // messages before destruction is applied. One projectile has
                 // one terminal impact, including damage, sound and spang.
                 self.impact_handled = true;
-                let initial_effect = if self.collision_flags.contains(CollisionType::SLAY_ON_IMPACT)
-                {
-                    Effect::SlayEntity { entity_id }
-                } else {
-                    Effect::DestroyEntity { entity_id }
-                };
-                let damage_effect = projectile_contact_effects(
+                // NO_COLLISION_SOUND is the authored opt-out.
+                // FULL_COLLISION_SOUND needs no special handling: impact
+                // sounds always play at full volume here (no velocity
+                // scaling).
+                terminal_impact_effects(
                     world,
+                    physics,
                     entity_id,
                     *with,
-                    contact.map(|contact| crate::scripts::DamageImpact {
-                        direction: contact.normal,
-                        point: contact.point,
-                        bone: None,
-                    }),
-                );
-                let mut effects = vec![initial_effect, damage_effect];
-
-                let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
-
-                // Impact effect, from the projectile's authored spang links
-                // (HitSpang matched by victim class, MissSpang fallback) -
-                // the same selection as the fast (raycast) projectile path.
-                // This is what makes slow projectiles (laser/fusion bolts,
-                // grenades) show their authored impact FX. At most one spang
-                // per projectile: an impact starting contact with several
-                // colliders at once (a corner, a creature capsule + its
-                // hitbox proxy) queues multiple Collided messages before the
-                // slay/destroy effect lands.
-                if let Some(template_id) = choose_impact_spang(world, entity_id, *with) {
-                    // The physics collision event carries no contact normal,
-                    // and spang orientation is minor cosmetics, so
-                    // approximate the impact facing with the reversed
-                    // velocity. This is read post-solve, so it may already be
-                    // deflected by the contact; if the solver stopped the
-                    // projectile outright, fall back to straight up.
-                    let facing = physics
-                        .get_velocity(entity_id)
-                        .filter(|v| v.magnitude2() > 1e-6)
-                        .map(|v| -v.normalize())
-                        .unwrap_or(vec3(0.0, 1.0, 0.0));
-                    effects.push(Effect::CreateEntity {
-                        template_id,
-                        position,
-                        orientation: get_rotation_from_forward_vector(facing)
-                            * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0)),
-                        root_transform: Matrix4::identity(),
-                        options: CreateEntityOptions {
-                            transient_fx: true,
-                            ..CreateEntityOptions::default()
-                        },
-                    });
-                }
-
-                // Impact sound (material-tagged collision schema), unless the
-                // collision type opts out. FULL_COLLISION_SOUND needs no
-                // special handling: impact sounds always play at full volume
-                // here (no velocity scaling).
-                if !self
-                    .collision_flags
-                    .contains(CollisionType::NO_COLLISION_SOUND)
-                {
-                    effects.push(play_impact_sound(
-                        world,
-                        entity_id,
-                        *with,
-                        position.to_vec(),
-                    ));
-                }
-
-                Effect::Multiple(effects)
+                    *contact,
+                    self.collision_flags.contains(CollisionType::SLAY_ON_IMPACT),
+                    !self
+                        .collision_flags
+                        .contains(CollisionType::NO_COLLISION_SOUND),
+                )
             }
             _ => Effect::NoEffect,
         }
     }
+}
+
+/// The one terminal impact a projectile has: slay-or-destroy, contact-stim
+/// damage, the authored spang, and the material impact sound.
+///
+/// Shared with `GooProjectile`, whose retail script applies its Slay Result on
+/// collision instead of declaring it in `PropCollisionType` - so the goo shot
+/// needs this behavior with `slay` and `play_sound` supplied by the script
+/// rather than read off the authored flags. Callers own the once-per-
+/// projectile latch.
+pub(super) fn terminal_impact_effects(
+    world: &World,
+    physics: &PhysicsWorld,
+    entity_id: EntityId,
+    with: EntityId,
+    contact: Option<crate::physics::CollisionContact>,
+    slay: bool,
+    play_sound: bool,
+) -> Effect {
+    let initial_effect = if slay {
+        Effect::SlayEntity { entity_id }
+    } else {
+        Effect::DestroyEntity { entity_id }
+    };
+    let damage_effect = projectile_contact_effects(
+        world,
+        entity_id,
+        with,
+        contact.map(|contact| crate::scripts::DamageImpact {
+            direction: contact.normal,
+            point: contact.point,
+            bone: None,
+        }),
+    );
+    let mut effects = vec![initial_effect, damage_effect];
+
+    let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
+
+    // Impact effect, from the projectile's authored spang links
+    // (HitSpang matched by victim class, MissSpang fallback) -
+    // the same selection as the fast (raycast) projectile path.
+    // This is what makes slow projectiles (laser/fusion bolts,
+    // grenades) show their authored impact FX. At most one spang
+    // per projectile: an impact starting contact with several
+    // colliders at once (a corner, a creature capsule + its
+    // hitbox proxy) queues multiple Collided messages before the
+    // slay/destroy effect lands.
+    if let Some(template_id) = choose_impact_spang(world, entity_id, with) {
+        // The physics collision event carries no contact normal,
+        // and spang orientation is minor cosmetics, so
+        // approximate the impact facing with the reversed
+        // velocity. This is read post-solve, so it may already be
+        // deflected by the contact; if the solver stopped the
+        // projectile outright, fall back to straight up.
+        let facing = physics
+            .get_velocity(entity_id)
+            .filter(|v| v.magnitude2() > 1e-6)
+            .map(|v| -v.normalize())
+            .unwrap_or(vec3(0.0, 1.0, 0.0));
+        effects.push(Effect::CreateEntity {
+            template_id,
+            position,
+            orientation: get_rotation_from_forward_vector(facing)
+                * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0)),
+            root_transform: Matrix4::identity(),
+            options: CreateEntityOptions {
+                transient_fx: true,
+                ..CreateEntityOptions::default()
+            },
+        });
+    }
+
+    // Impact sound (material-tagged collision schema); whether it plays at all
+    // is the caller's decision.
+    if play_sound {
+        effects.push(play_impact_sound(world, entity_id, with, position.to_vec()));
+    }
+
+    Effect::Multiple(effects)
 }
 
 #[cfg(test)]

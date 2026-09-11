@@ -21,6 +21,7 @@ use crate::{
 
 pub mod cutscene_player;
 pub mod cutscene_skip;
+pub mod debug_annelid;
 pub mod debug_camera;
 pub mod debug_common;
 pub mod debug_gloves;
@@ -48,6 +49,7 @@ pub mod main_menu;
 pub mod no_assets;
 
 pub use cutscene_player::CutscenePlayerScene;
+pub use debug_annelid::create_debug_annelid_scene;
 pub use debug_camera::DebugCameraScene;
 pub use debug_gloves::DebugGlovesScene;
 pub use debug_hand_poses::DebugHandPosesScene;
@@ -175,6 +177,7 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     ),
     ("debug_ladder", create_debug_ladder_scene),
     ("debug_psi", create_debug_psi_scene),
+    ("debug_annelid", create_debug_annelid_scene),
     ("debug_teleport", |global, options, assets, audio| {
         Box::new(DebugTeleportScene::create(global, options, assets, audio))
     }),

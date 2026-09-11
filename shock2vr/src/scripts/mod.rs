@@ -8,6 +8,7 @@ pub mod stasis;
 mod apparition;
 mod auto_install_soft;
 mod base_button;
+mod base_egg;
 mod base_elevator;
 mod base_light;
 mod base_monster;
@@ -29,6 +30,7 @@ mod energy_station;
 mod energy_weapon;
 mod exp_cookie;
 mod frob_qb;
+mod goo_projectile;
 pub mod gui;
 pub mod healing_item;
 mod homing;
@@ -150,6 +152,7 @@ use self::trap_signal::TrapSignal;
 use self::{
     auto_install_soft::AutoInstallSoft,
     base_button::BaseButton,
+    base_egg::{BaseEgg, EggPayload},
     base_elevator::BaseElevator,
     base_light::BaseLight,
     base_monster::BaseMonster,
@@ -167,6 +170,7 @@ use self::{
     energy_weapon::EnergyWeapon,
     exp_cookie::ExpCookie,
     frob_qb::FrobQB,
+    goo_projectile::GooProjectile,
     impact_sound::HeldItemImpactSound,
     internal_collision_type::InternalCollisionType,
     internal_explosion::InternalExplosion,
@@ -955,9 +959,16 @@ impl ScriptWorld {
 
             // AI stuff
             "trapsignal" => Box::new(TrapSignal::new()),
-            "gooegg" => Box::new(Tweqable::new()),
-            "grubegg" => Box::new(Tweqable::new()),
-            "swarmeregg" => Box::new(Tweqable::new()),
+            "gooegg" => Box::new(BaseEgg::new(EggPayload::Goo)),
+            "grubegg" => Box::new(BaseEgg::new(EggPayload::Grub)),
+            "swarmeregg" => Box::new(BaseEgg::new(EggPayload::Swarmer)),
+            "gooprojectile" => Box::new(GooProjectile::new()),
+            // The flying annelid a swarmer pod hatches. Its retail script owns
+            // the swarm's flocking; the port's `swarmer` AI is still a stub, so
+            // a hatched swarm is a damageable particle cloud that does not yet
+            // chase. Mapped explicitly so the pod can hatch at all - the
+            // fallback would panic on load.
+            "swarm" => Box::new(NoopScript::new()),
             "containerscript" => gui_script(Box::new(ContainerGui::loot_container())),
 
             "lootable" => Box::new(NoopScript::new()),
