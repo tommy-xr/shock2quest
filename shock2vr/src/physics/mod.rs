@@ -6721,6 +6721,12 @@ impl PhysicsWorld {
         }
     }
 
+    /// An effectively unbounded probe: casts a fixed **100 world units**.
+    ///
+    /// `direction` is normalized before the cast, so scaling it does NOT bound
+    /// the reach - pass the distance to [`Self::ray_cast2`]'s `max_toi` when a
+    /// ray is meant to stop short (issue #1327: a flat melee swing scaled its
+    /// direction by `MELEE_RANGE` and reached across the room).
     pub fn ray_cast(
         &self,
         start_point: Point3<f32>,
