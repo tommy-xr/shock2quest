@@ -31,6 +31,7 @@ use shipyard::EntityId;
 
 use crate::vr_config::Handedness;
 
+pub mod cheats_panel;
 pub mod dev_params_panel;
 pub mod entry_ramp;
 mod frontend_menu;

@@ -1016,6 +1016,13 @@ pub enum Effect {
         auto_wield: bool,
     },
 
+    /// Developer cheat: rain a spread of template instances down around the
+    /// player, one per id, so they fall and settle as ordinary world pickups.
+    /// Player position is resolved by the effect handler.
+    RainItems {
+        template_ids: Vec<i32>,
+    },
+
     /// Debug: spawn the next player weapon in front of the player and wield it
     /// as the flat viewmodel (holstering the previously wielded one). Cycles
     /// the SS2 weapon roster for aim/viewmodel testing.

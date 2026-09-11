@@ -126,6 +126,19 @@ pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 /// trimesh (see `spawn_ragdoll`).
 const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
 
+/// Where `Effect::RainItems` puts its spawns, relative to the player's body
+/// ORIGIN (the capsule centre, three feet off the floor - not the feet).
+/// Written in SS2 feet over `SCALE_FACTOR`, like the spawn handlers beside it,
+/// because the profile these clear is authored in feet: the standing capsule's
+/// crown is 3 ft above the origin and its radius is 1.2 ft.
+///
+/// So the ring drops items from just over head height, at arm's length: high
+/// enough to fall visibly and to miss the player, low enough to stay under a
+/// corridor ceiling (at 6.25 ft the rain landed on top of the ceiling geometry
+/// instead of reaching the player).
+const RAIN_RADIUS: f32 = 2.0 / SCALE_FACTOR;
+const RAIN_HEIGHT: f32 = 3.5 / SCALE_FACTOR;
+
 /// Resolve optional media-reader portrait/icon art before it becomes a shared
 /// UI image. STR tables author extension-less PCX-era names, while replacement
 /// layers may provide the same art under a modern encoding (SCP's Earth
@@ -10061,6 +10074,34 @@ impl MissionCore {
                     {
                         let msgs = self.interaction.wield(info.entity_id);
                         effects.extend(self.process_virtual_hand_effects(asset_cache, msgs));
+                    }
+                }
+                Effect::RainItems { template_ids } => {
+                    let (pos, rot) = {
+                        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                        (vec3_to_point3(player.pos), player.rotation)
+                    };
+                    // A ring above head height, one item per slot: spread out
+                    // so the spawns do not interpenetrate on the first step
+                    // (which would fling them apart), and high enough that
+                    // they visibly fall. Deterministic, not random - a capture
+                    // or an e2e assertion must be able to repeat the layout.
+                    let count = template_ids.len() as f32;
+                    for (index, template_id) in template_ids.iter().enumerate() {
+                        let angle = std::f32::consts::TAU * index as f32 / count;
+                        let offset = vec3(
+                            RAIN_RADIUS * angle.cos(),
+                            RAIN_HEIGHT,
+                            RAIN_RADIUS * angle.sin(),
+                        );
+                        self.create_entity_with_position(
+                            asset_cache,
+                            *template_id,
+                            pos + offset,
+                            rot,
+                            Matrix4::identity(),
+                            CreateEntityOptions::default(),
+                        );
                     }
                 }
                 Effect::DebugCycleWeapon { head_rotation } => {
