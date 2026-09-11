@@ -225,17 +225,30 @@ fn row_rects(rects: PanelRects, index: usize) -> RowRects {
     }
 }
 
+/// This page's list geometry - the paging and the gutter rocker every other
+/// frontend list uses, at the parameter rows' own pitch. The rows themselves
+/// are built by [`row_rects`] rather than the shared `row_rect`, because a
+/// parameter row is not one target but four columns (label, `<`, value, `>`).
+fn list(rects: PanelRects) -> list_scroll::ListGeometry {
+    list_scroll::ListGeometry {
+        pane: rects.list,
+        bottom_limit: FIELD_TOP_Y,
+        row_h: ROW_PITCH,
+        text_inset: TEXT_INSET,
+    }
+}
+
 /// How many rows fit in the pane above the backdrop's painted field - the
 /// size of one page of the list, however long the registry is.
 fn rows_per_page(rects: PanelRects) -> usize {
-    list_scroll::rows_per_page(rects.list, FIELD_TOP_Y, ROW_PITCH)
+    list(rects).rows_per_page()
 }
 
 /// The furthest the list can scroll: the first-row index that puts the tail
 /// of the registry against the bottom of the pane. Zero when everything fits
 /// at once, which is also what hides the scroll rocker.
 fn max_scroll(rects: PanelRects) -> usize {
-    list_scroll::max_scroll(dev_params::PARAMS.len(), rows_per_page(rects))
+    list(rects).max_scroll(dev_params::PARAMS.len())
 }
 
 /// The registry indices on screen at `scroll`, with `scroll` clamped to what
@@ -246,7 +259,7 @@ fn max_scroll(rects: PanelRects) -> usize {
 /// *step* another's - the failure a positional row index invites the moment
 /// the list scrolls.
 fn visible_rows(rects: PanelRects, scroll: usize) -> Range<usize> {
-    list_scroll::visible_rows(dev_params::PARAMS.len(), rows_per_page(rects), scroll)
+    list(rects).visible_rows(dev_params::PARAMS.len(), scroll)
 }
 
 /// The scroll rocker's two halves - up and down arrows - in a gutter down the
@@ -259,7 +272,7 @@ fn visible_rows(rects: PanelRects, scroll: usize) -> Range<usize> {
 /// anyway - a scrollbar's place is beside what it scrolls, not across the
 /// screen from it.
 fn rocker(rects: PanelRects) -> Option<list_scroll::Rocker> {
-    list_scroll::rocker(rects.list, FIELD_TOP_Y, max_scroll(rects) > 0)
+    list(rects).rocker(dev_params::PARAMS.len())
 }
 
 #[cfg(test)]
