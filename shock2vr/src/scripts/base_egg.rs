@@ -47,6 +47,22 @@ impl EggPayload {
             EggPayload::Swarmer => &["Swarm"],
         }
     }
+
+    /// How far above the pod's origin the payload is created, along the POD's
+    /// own up (the wall-mounted variants run these same scripts, so a
+    /// world-space offset would push their payload into the wall).
+    ///
+    /// The goo emitter needs real clearance - it fires from where it stands,
+    /// and inside the shell its globs splash on the pod instead of on the
+    /// player. A creature only needs to clear the shell's mouth: nothing
+    /// grounds it until its own locomotion runs, so a larger offset leaves it
+    /// visibly hovering and a smaller one hides it inside the pod.
+    fn lift(&self) -> f32 {
+        match self {
+            EggPayload::Goo => GOO_MUZZLE_CLEARANCE,
+            EggPayload::Grub | EggPayload::Swarmer => SHELL_MOUTH,
+        }
+    }
 }
 
 /// An annelid egg pod: retail `BaseEgg` plus one of its three payload
@@ -100,17 +116,13 @@ impl Script for BaseEgg {
         };
         self.hatched = true;
 
+        let lift = self.payload.lift();
         let mut effects = vec![change_to_last_model(world, entity_id)];
         effects.extend(self.payload.template_names().iter().map(|template_name| {
             Effect::CreateEntityByTemplateName {
                 source_entity_id: entity_id,
                 template_name: (*template_name).to_owned(),
-                // Lifted clear of the shell along the POD's own up, not the
-                // world's: the wall-mounted variants run these same scripts,
-                // and a world-space lift would push their payload into the
-                // wall. Inside the shell a goo shot splashes on the pod
-                // instead of on the player.
-                position: vec3_to_point3(position + rotation * vec3(0.0, PAYLOAD_LIFT, 0.0)),
+                position: vec3_to_point3(position + rotation * vec3(0.0, lift, 0.0)),
                 // The pod's own facing: a wall pod hatches out of the wall.
                 orientation: rotation,
                 // The payloads carry their own motion: the emitter's tweq
@@ -151,6 +163,11 @@ impl Script for BaseEgg {
     }
 }
 
-/// Height above the pod's origin the payload is created at, in world units
-/// (one unit is 0.76 m) - just above the shell's own sphere.
-const PAYLOAD_LIFT: f32 = 1.2;
+/// How far above a goo pod's origin its emitter stands, in world units (one
+/// unit is 0.76 m) - clear of the shell's own sphere, so the globs leave the
+/// muzzle instead of splashing on the pod that fired them.
+const GOO_MUZZLE_CLEARANCE: f32 = 1.2;
+
+/// The lip of an open pod, measured off the shell's own bounds (its top sits
+/// 0.78 above the origin), so a hatched creature sits in the shell's mouth.
+const SHELL_MOUTH: f32 = 0.8;
