@@ -1232,12 +1232,6 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
     // Links
     let links = vec![
         define_link("L$AIRangedW", |_| Link::AIRangedWeapon),
-        // TODO: Why is the data not available for some of these links?
-        define_link("L$Corpse", |_| {
-            Link::Corpse(CorpseOptions {
-                propagate_scale: false,
-            })
-        }),
         define_link("L$LandingPo", |_| Link::LandingPoint),
         define_link("L$Replicato", |_| Link::Replicator),
         define_link("L$SpawnPoin", |_| Link::SpawnPoint),
@@ -1257,7 +1251,11 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
 
     // Links with data
     let links_with_data = vec![
-        // define_link_with_data("L$Corpse", "LD$Corpse", CorpseOptions::read, Link::Corpse),
+        // Sparse in the shipped data (the gamesys authors 9 records for 71
+        // links; shodan has 44 links and none), and an unauthored
+        // `propagate_scale` is false - exactly what the hardcoded stand-in
+        // this replaces assumed for every link.
+        define_link_with_optional_data("L$Corpse", "LD$Corpse", CorpseOptions::read, Link::Corpse),
         define_link_with_data(
             "L$AIWatchOb",
             "LD$AIWatchO",
@@ -2427,6 +2425,13 @@ pub trait LinkDefinitionWithData: Send + Sync {
     fn link_data_chunk_name(&self) -> String;
     fn link_data_framing(&self) -> LinkDataFraming;
 
+    /// Whether a link of this flavor with no LD$ record of its own keeps the
+    /// link with a zero-filled record, instead of being dropped. Opt-in: it is
+    /// only correct where the reader parses all-zeroes as "unspecified", which
+    /// is per-flavor - a zeroed `LD$PhysAtta` offset means "welded to the
+    /// parent's origin", not "no offset authored".
+    fn defaults_missing_records(&self) -> bool;
+
     fn convert(&self, data: Vec<u8>, prop_len: u32, link: ToTemplateLinkInfo) -> ToTemplateLink;
 }
 
@@ -2434,6 +2439,7 @@ struct LinkDefinitionWithDataStruct<TData> {
     link_name: String,
     link_data_name: String,
     framing: LinkDataFraming,
+    defaults_missing_records: bool,
     converter: Converter<TData, Link>,
     reader: Reader<Box<dyn ReadAndSeek>, TData>,
 }
@@ -2452,6 +2458,10 @@ impl<TData> LinkDefinitionWithData for LinkDefinitionWithDataStruct<TData> {
 
     fn link_data_framing(&self) -> LinkDataFraming {
         self.framing
+    }
+
+    fn defaults_missing_records(&self) -> bool {
+        self.defaults_missing_records
     }
 
     fn convert(
@@ -2597,6 +2607,27 @@ pub fn define_link_with_data<TData: 'static + fmt::Debug + Send + Sync + Clone>(
         link_name: link_name.to_string(),
         link_data_name: link_data_name.to_string(),
         framing: LinkDataFraming::HeaderDeclared,
+        defaults_missing_records: false,
+        reader,
+        converter,
+    })
+}
+
+/// Like `define_link_with_data`, but for a flavor whose LD$ chunk is sparse and
+/// whose reader parses all-zeroes as "unspecified": a link with no record of
+/// its own keeps the link with a zero-filled record instead of being dropped.
+/// Check the reader before using this - see `defaults_missing_records`.
+pub fn define_link_with_optional_data<TData: 'static + fmt::Debug + Send + Sync + Clone>(
+    link_name: &str,
+    link_data_name: &str,
+    reader: Reader<Box<dyn ReadAndSeek>, TData>,
+    converter: Converter<TData, Link>,
+) -> Box<dyn LinkDefinitionWithData> {
+    Box::new(LinkDefinitionWithDataStruct {
+        link_name: link_name.to_string(),
+        link_data_name: link_data_name.to_string(),
+        framing: LinkDataFraming::HeaderDeclared,
+        defaults_missing_records: true,
         reader,
         converter,
     })
@@ -2614,6 +2645,7 @@ pub fn define_link_with_versioned_data<TData: 'static + fmt::Debug + Send + Sync
         link_name: link_name.to_string(),
         link_data_name: link_data_name.to_string(),
         framing: LinkDataFraming::VersionHeader,
+        defaults_missing_records: false,
         reader,
         converter,
     })
