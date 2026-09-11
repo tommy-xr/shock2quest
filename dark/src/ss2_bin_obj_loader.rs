@@ -8,7 +8,7 @@ use std::{
 };
 
 use cgmath::{Matrix4, Vector2, Vector3, Vector4, vec4};
-use cgmath::{Point3, point3, prelude::*, vec3};
+use cgmath::{Point3, point3, prelude::*};
 use collision::Aabb3;
 use engine::{
     assets::asset_cache::AssetCache,
@@ -127,7 +127,7 @@ pub fn to_scene_objects(
     let skeleton = obj_skeleton(mesh);
     let is_skinned = skeleton.bone_count() > 1;
 
-    let mut mesh_objects = vertices
+    let mesh_objects = vertices
         .into_iter()
         .filter_map(|(slot, verts)| {
             if verts.is_empty() {
@@ -233,21 +233,9 @@ pub fn to_scene_objects(
         })
         .collect::<Vec<SceneObject>>();
 
-    let vhots = &mesh.vhots;
-    let mut vhot_objs = vhots
-        .iter()
-        .map(|vhot| {
-            let geometry = engine::scene::cube::create();
-            let material = RefCell::new(engine::scene::color_material::create(vec3(0.0, 0.0, 1.0)));
-            let mut scene_obj = SceneObject::create(material, Rc::new(Box::new(geometry)));
-            scene_obj.set_local_transform(
-                Matrix4::from_translation(vhot.point.to_vec()) * Matrix4::from_scale(0.025),
-            );
-            scene_obj
-        })
-        .collect::<Vec<SceneObject>>();
-
-    mesh_objects.append(&mut vhot_objs);
+    // Vhots are attachment points (muzzle, light, particle origins), not
+    // geometry - they are read off `mesh.vhots` by whoever attaches to them.
+    // The viewer tools draw their own markers (`--debug-articulation`).
     (mesh_objects, skeleton)
 }
 
@@ -1217,6 +1205,7 @@ fn convert_skinned_vertices_to_static_vertices(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::vec3;
     use std::io::Cursor;
 
     /// S_HIVOLT.BIN contains two coplanar, opposite-wound faces with inverse U

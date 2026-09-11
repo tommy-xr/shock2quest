@@ -39,8 +39,6 @@ pub fn articulation_overlay(model: &Model) -> Vec<SceneObject> {
         })
         .collect::<Vec<SceneObject>>();
 
-    // These coincide with the small blue cubes the LGMD loader itself bakes in
-    // at every vhot (`ss2_bin_obj_loader::to_scene_objects`) - see issue #1208.
     objects.extend(model.vhots().iter().map(|vhot| {
         let at = Matrix4::from_translation(vhot.point.to_vec());
         marker(VHOT_COLOR, at, VHOT_MARKER_SIZE)
