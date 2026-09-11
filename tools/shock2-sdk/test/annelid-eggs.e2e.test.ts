@@ -92,3 +92,41 @@ test(
     );
   },
 );
+
+test(
+  "an emitted volley fans out as its emitter spins",
+  { skip: process.env.SHOCK2_E2E !== "1", timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_annelid" });
+    await game.step({ frames: 30 });
+    const [pod] = await game.entities.byTemplate(-1476);
+    assert.ok(pod);
+    await game.entities.sendMessage(pod.id, { type: "TurnOn" });
+    // Long enough for all four to be away (100 ms apart) and still airborne.
+    await game.step({ frames: 26 });
+
+    const shots = await game.entities.byTemplate(-1557);
+    assert.equal(shots.length, 4);
+    const bodies = await Promise.all(
+      shots.map(async (shot) => (await game.physics.bodies({ entityId: shot.id })).bodies[0]),
+    );
+
+    // Each glob carries the archetype's own authored horizontal velocity,
+    // aimed by the emitter's facing at the moment it left. The emitter spins
+    // at its authored 50 deg/s, so the four headings must differ - taking only
+    // the tweq's straight-up emit velocity would give one shared heading.
+    const headings = bodies.map((body) => {
+      assert.ok(body);
+      return (Math.atan2(body.velocity[2]!, body.velocity[0]!) * 180) / Math.PI;
+    });
+    const spread = Math.max(...headings) - Math.min(...headings);
+    assert.ok(
+      spread > 5,
+      `the volley should fan as the emitter turns, got ${spread.toFixed(1)} deg from ${headings.map((h) => h.toFixed(1)).join(", ")}`,
+    );
+    assert.ok(
+      bodies.every((body) => Math.hypot(body!.velocity[0]!, body!.velocity[2]!) > 0.1),
+      "every glob should carry a horizontal component",
+    );
+  },
+);

@@ -74,6 +74,72 @@ impl PropTweqRotateState {
     }
 }
 
+/// One axis of a rotate tweq: how fast it turns and between which angles.
+///
+/// The original stores this as a `rate-low-high` triple per axis, in degrees
+/// (rate is degrees per second).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+pub struct TweqAxisLimits {
+    pub rate: f32,
+    pub low: f32,
+    pub high: f32,
+}
+
+/// `P$CfgTweqRo` - the authored spin of a rotate tweq.
+///
+/// Laid out as the original's vector-tweq config: the shared 8-byte base
+/// config, then a `rate-low-high` triple for each of the three axes, then the
+/// primary axis index and padding (48 bytes total). Without it every rotating
+/// object in the port turns at one hardcoded rate, which is wrong for anything
+/// whose spin has an observable consequence - a Tweq emitter's facing sets the
+/// direction its emissions are launched in.
+#[derive(Debug, Component, Clone, Deserialize, Serialize)]
+pub struct PropTweqRotateConfig {
+    pub animation_config: TweqAnimationConfig,
+    pub halt: TweqHalt,
+    /// Per-axis spin, in the original's axis order.
+    pub axes: [TweqAxisLimits; 3],
+    /// Index into [`Self::axes`] of the axis the original treats as primary.
+    pub primary_axis: u8,
+}
+
+impl PropTweqRotateConfig {
+    pub fn read<T: io::Seek + io::Read>(reader: &mut T, _len: u32) -> PropTweqRotateConfig {
+        let _tweq_type = read_u8(reader);
+        let _curve = read_u8(reader);
+        let animation_config_bits = read_u8(reader);
+        let animation_config =
+            TweqAnimationConfig::from_bits(animation_config_bits.into()).unwrap();
+        let halt_bits = read_u8(reader);
+        let halt: TweqHalt = num_traits::FromPrimitive::from_u8(halt_bits).unwrap();
+        let _misc = read_u16(reader);
+        let _rate = read_u16(reader);
+
+        let mut axes = [TweqAxisLimits {
+            rate: 0.0,
+            low: 0.0,
+            high: 0.0,
+        }; 3];
+        for axis in axes.iter_mut() {
+            axis.rate = read_single(reader);
+            axis.low = read_single(reader);
+            axis.high = read_single(reader);
+        }
+        let primary_axis = read_u8(reader);
+        // pad[3] - the original pads the struct back to a 4-byte boundary.
+        for _ in 0..3 {
+            let _pad = read_u8(reader);
+        }
+
+        PropTweqRotateConfig {
+            animation_config,
+            halt,
+            axes,
+            primary_axis,
+        }
+    }
+}
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropTweqModelState {
     pub animation_state: TweqAnimationState,
@@ -264,7 +330,10 @@ impl PropTweqDeleteConfig {
 mod tests {
     use std::io::Cursor;
 
-    use super::{PropTweqEmitterConfig, PropTweqModelState, TweqAnimationState};
+    use super::{
+        PropTweqEmitterConfig, PropTweqModelState, PropTweqRotateConfig, TweqAnimationState,
+        TweqAxisLimits,
+    };
 
     #[test]
     fn model_state_reads_the_authored_frame_number() {
@@ -279,6 +348,44 @@ mod tests {
 
         assert!(state.animation_state.contains(TweqAnimationState::REVERSE));
         assert_eq!(state.frame, 4);
+    }
+
+    #[test]
+    fn rotate_config_reads_the_per_axis_rate_limits_and_primary_axis() {
+        // sTweqVectorConfig: an 8-byte base config, three (rate, low, high)
+        // float triples, then primary_axis + 3 pad = 48 bytes.
+        let mut raw = vec![
+            0x00, // type
+            0x00, // curve
+            0x00, // anim config
+            0x00, // halt action
+            0x00, 0x00, // misc
+            0x00, 0x00, // rate
+        ];
+        for (rate, low, high) in [
+            (0.0f32, 0.0f32, 0.0f32),
+            (0.0, 0.0, 0.0),
+            (50.0, 0.0, 360.0),
+        ] {
+            raw.extend_from_slice(&rate.to_le_bytes());
+            raw.extend_from_slice(&low.to_le_bytes());
+            raw.extend_from_slice(&high.to_le_bytes());
+        }
+        raw.push(2); // primary_axis
+        raw.extend_from_slice(&[0, 0, 0]); // pad
+        assert_eq!(raw.len(), 48);
+
+        let config = PropTweqRotateConfig::read(&mut Cursor::new(raw), 48);
+        assert_eq!(config.primary_axis, 2);
+        assert_eq!(
+            config.axes[2],
+            TweqAxisLimits {
+                rate: 50.0,
+                low: 0.0,
+                high: 360.0
+            }
+        );
+        assert_eq!(config.axes[0].rate, 0.0);
     }
 
     #[test]

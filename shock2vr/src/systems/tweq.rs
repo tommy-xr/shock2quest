@@ -5,9 +5,18 @@ use dark::{
     SCALE_FACTOR,
     properties::{
         PropPosition, PropTweqDeleteConfig, PropTweqDeleteState, PropTweqEmitterConfig,
-        PropTweqEmitterState, PropTweqRotateState, TweqAnimationState, TweqHalt,
+        PropTweqEmitterState, PropTweqRotateConfig, PropTweqRotateState, TweqAnimationState,
+        TweqHalt,
     },
 };
+
+/// The rotate tweq axis the port spins: the original's third axis is heading,
+/// which its up axis maps onto our Y.
+const HEADING_AXIS: usize = 2;
+
+/// Spin rate for a rotating object with no authored rotate config, preserving
+/// the rate the port used before the config was parsed.
+const DEFAULT_SPIN_DEGREES_PER_SECOND: f32 = 20.0;
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, UniqueViewMut, View, ViewMut};
 
 use crate::{
@@ -26,6 +35,7 @@ pub fn run_tweq(
     u_time: UniqueView<Time>,
     v_prop_position: View<PropPosition>,
     v_tweq_rotate_state: View<PropTweqRotateState>,
+    v_tweq_rotate_config: View<PropTweqRotateConfig>,
     mut v_tweq_emit_state: ViewMut<PropTweqEmitterState>,
     mut v_tweq_emit_config: ViewMut<PropTweqEmitterConfig>,
     mut v_tweq_delete_state: ViewMut<PropTweqDeleteState>,
@@ -34,12 +44,22 @@ pub fn run_tweq(
 ) {
     for (id, (tweq, position)) in (&v_tweq_rotate_state, &v_prop_position).iter().with_id() {
         if tweq.animation_state.contains(TweqAnimationState::ON) {
+            // Authored degrees per second for the heading axis when the object
+            // carries a rotate config. The rate matters wherever the spin has
+            // a consequence beyond looks: a Tweq emitter's facing aims what it
+            // launches, so the wrong rate collapses an emitted volley's fan.
+            // Objects with no authored config keep the previous fixed rate.
+            let degrees_per_second = v_tweq_rotate_config
+                .get(id)
+                .map(|config| config.axes[HEADING_AXIS].rate)
+                .unwrap_or(DEFAULT_SPIN_DEGREES_PER_SECOND);
             effects.push(Effect::SetRotation {
                 entity_id: id,
                 // Advance from the current pose; absolute world-time yaw erased
                 // authored pitch/roll (including a sideways ejected casing).
-                rotation: Quaternion::from_angle_y(Deg(u_time.elapsed.as_secs_f32() * 20.0))
-                    * position.rotation,
+                rotation: Quaternion::from_angle_y(Deg(
+                    u_time.elapsed.as_secs_f32() * degrees_per_second
+                )) * position.rotation,
             });
         }
     }

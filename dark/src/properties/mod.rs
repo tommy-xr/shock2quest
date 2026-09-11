@@ -516,8 +516,14 @@ pub struct PropPhysDimensions {
     pub offset0: Vector3<f32>,
     pub offset1: Vector3<f32>,
     pub size: Vector3<f32>,
-    pub unk1: u32,
-    pub unk2: u32,
+    /// Treat this model as a point when tested against world terrain.
+    pub point_vs_terrain: u32,
+    /// Treat this model as a point against anything that is not "special".
+    ///
+    /// The original also uses it as a collision *filter*: two models that both
+    /// set it and are both non-special never collide with each other, which is
+    /// what keeps a stream of projectiles from detonating on one another.
+    pub point_vs_not_special: u32,
 }
 
 /// `P$MovingTer` - marks a physical object as authored moving terrain.
@@ -2136,6 +2142,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$CfgTweqRo",
+            PropTweqRotateConfig::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$StTweqRot",
             PropTweqRotateState::read,
             identity,
@@ -2253,8 +2265,8 @@ fn read_prop_phys_dimensions<T: io::Read + io::Seek>(
     let offset0 = read_vec3(reader) / SCALE_FACTOR;
     let offset1 = read_vec3(reader) / SCALE_FACTOR;
     let size = read_vec3(reader) / SCALE_FACTOR;
-    let unk1 = read_u32(reader);
-    let unk2 = read_u32(reader);
+    let point_vs_terrain = read_u32(reader);
+    let point_vs_not_special = read_u32(reader);
 
     PropPhysDimensions {
         radius0,
@@ -2262,8 +2274,8 @@ fn read_prop_phys_dimensions<T: io::Read + io::Seek>(
         offset0,
         offset1,
         size,
-        unk1,
-        unk2,
+        point_vs_terrain,
+        point_vs_not_special,
     }
 }
 
