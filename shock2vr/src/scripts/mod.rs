@@ -23,6 +23,7 @@ mod core_room;
 mod create_sound;
 mod cs9;
 mod dead_power_cell;
+mod delay_grenade;
 mod destroy_all_by_name;
 mod die_shodan_die;
 mod energy_station;
@@ -124,6 +125,7 @@ use self::chemical::ChemicalScript;
 use self::choose_mission::ChooseMissionScript;
 use self::choose_service::ChooseServiceScript;
 use self::comestible::Comestible;
+use self::delay_grenade::DelayGrenade;
 /// Preloaded elevator floor labels (from MISC.STR) + current mission, added as
 /// a world unique at mission load so the (`AssetCache`-less) `ElevatorGui` can
 /// read them at draw time.
@@ -1137,7 +1139,7 @@ impl ScriptWorld {
             "twostatebutton" => Box::new(BaseButton::new()),
 
             // weapons:
-            "delaygrenade" => Box::new(UnimplementedScript::new(&script_name)),
+            "delaygrenade" => Box::new(DelayGrenade::new()),
             "annelidmodify" => Box::new(UnimplementedScript::new(&script_name)),
             "empmodify" => Box::new(NoopScript::new()),
             "lasermodify" => Box::new(NoopScript::new()),
