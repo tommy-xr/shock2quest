@@ -46,6 +46,13 @@ async function count(game: GameServer, filter: string): Promise<number> {
   return entities.length;
 }
 
+/** Every matching entity's world position, rounded so float noise cannot
+ *  make two coincident spawns read as distinct. */
+async function positions(game: GameServer, filter: string): Promise<string[]> {
+  const { entities } = await game.entities.list({ filter, limit: 200 });
+  return entities.map((e) => e.position.map((v) => v.toFixed(2)).join(","));
+}
+
 test(
   "the pause overlay's Cheats page rains items into the running mission",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 600_000 },
@@ -75,6 +82,24 @@ test(
     assert.ok(
       (await count(game, "Wrench")) > wrenchesBefore,
       "Rain weapons must add a wrench to the world",
+    );
+
+    // Pressing the SAME cheat again must not drop items onto the slots the
+    // first press is still occupying - coincident bodies get flung apart by
+    // the solver on resume instead of falling. Each rain phases its ring off
+    // the last (`RAIN_PHASE_STEP`).
+    const afterOne = await positions(game, "Wrench");
+    await click(game, RAIN_WEAPONS);
+    const afterTwo = await positions(game, "Wrench");
+    assert.equal(
+      afterTwo.length,
+      afterOne.length + 1,
+      "a second Rain weapons must add another wrench",
+    );
+    assert.equal(
+      new Set(afterTwo).size,
+      afterTwo.length,
+      "no two rained wrenches may share a spawn point",
     );
 
     await click(game, RAIN_MODULES);

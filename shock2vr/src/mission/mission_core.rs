@@ -139,6 +139,13 @@ const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
 const RAIN_RADIUS: f32 = 2.0 / SCALE_FACTOR;
 const RAIN_HEIGHT: f32 = 3.5 / SCALE_FACTOR;
 
+/// How far each rain rotates the next one's ring. The golden angle, so
+/// consecutive rains interleave instead of stacking: two presses in a row
+/// (easy, since the overlay stays up) would otherwise drop every item onto
+/// the slot an earlier one is still occupying, and the solver flings the
+/// coincident bodies apart on resume rather than letting them fall.
+const RAIN_PHASE_STEP: f32 = 2.399_963_2;
+
 /// Resolve optional media-reader portrait/icon art before it becomes a shared
 /// UI image. STR tables author extension-less PCX-era names, while replacement
 /// layers may provide the same art under a modern encoding (SCP's Earth
@@ -2023,6 +2030,10 @@ pub struct MissionCore {
     /// `P$SymName`, indexed by lowercased name - the fallback an ecology spawn
     /// uses when the gamesys has no archetype under the authored name.
     mission_object_name_to_id: HashMap<String, i32>,
+    /// How many `Effect::RainItems` have landed, to phase each ring off the
+    /// last (see [`RAIN_PHASE_STEP`]). Cosmetic and cheat-only, so it is not
+    /// saved.
+    rains_landed: u32,
     pub obj_map: HashMap<i32, String>,
     pub world: World,
     pub player_handle: PlayerHandle,
@@ -3061,6 +3072,7 @@ impl MissionCore {
             id_to_particle_system: HashMap::new(),
             template_name_to_template_id,
             mission_object_name_to_id,
+            rains_landed: 0,
             scene_objects: scene,
             animated_lightmaps,
             physics,
@@ -10087,8 +10099,10 @@ impl MissionCore {
                     // they visibly fall. Deterministic, not random - a capture
                     // or an e2e assertion must be able to repeat the layout.
                     let count = template_ids.len() as f32;
+                    let phase = RAIN_PHASE_STEP * self.rains_landed as f32;
+                    self.rains_landed = self.rains_landed.wrapping_add(1);
                     for (index, template_id) in template_ids.iter().enumerate() {
-                        let angle = std::f32::consts::TAU * index as f32 / count;
+                        let angle = phase + std::f32::consts::TAU * index as f32 / count;
                         let offset = vec3(
                             RAIN_RADIUS * angle.cos(),
                             RAIN_HEIGHT,
