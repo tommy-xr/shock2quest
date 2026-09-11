@@ -7,6 +7,7 @@ mod prop_ai_camera;
 mod prop_ai_device;
 mod prop_ai_hearing;
 mod prop_ai_mode;
+mod prop_ai_ranged_combat;
 mod prop_ambient_hacked;
 mod prop_anim_light;
 mod prop_anim_tex;
@@ -56,6 +57,7 @@ pub use prop_ai_camera::*;
 pub use prop_ai_device::*;
 pub use prop_ai_hearing::*;
 pub use prop_ai_mode::*;
+pub use prop_ai_ranged_combat::*;
 pub use prop_ambient_hacked::*;
 pub use prop_anim_light::*;
 pub use prop_anim_tex::*;
@@ -1595,6 +1597,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$GunState",
             PropGunState::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AIRCProp",
+            PropAIRangedCombat::read,
             identity,
             accumulator::latest,
         ),
