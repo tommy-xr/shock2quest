@@ -23,11 +23,37 @@ const PAUSE_DEVELOPER = pauseEntry(3);
 const PAUSE_CONTINUE = pauseEntry(0);
 
 // The rows run down the developer frame's list pane (GAMELODR.BIN rect 1:
-// 261,54 202x290) at the shared name-list pitch. The two shipped cheats fit
-// one page, so there is no scroll gutter and a row spans the full pane width.
+// 261,54 202x290) at the shared name-list pitch. The pane holds 14 rows, so
+// the shipped cheats fit one page: no scroll gutter, and a row spans the full
+// pane width.
 const row = (index: number): [number, number] => [261 + 202 / 2, 54 + index * 19 + 19 / 2];
 const RAIN_WEAPONS = row(0);
 const RAIN_MODULES = row(1);
+const HUNT_ME = row(2);
+const CALM_ALL = row(4);
+
+/**
+ * Open the Cheats page from a running mission, click one row, close back out
+ * and let the sim run - then read whatever the caller is watching. The AI rows
+ * land through the script world, so their effect is only observable once the
+ * scene updates again.
+ */
+async function clickCheatAndResume<T>(
+  game: GameServer,
+  cheat: [number, number],
+  read: () => Promise<T>,
+): Promise<T> {
+  await game.input.trigger("TogglePauseMenu");
+  await game.step({ frames: 10 });
+  await click(game, PAUSE_DEVELOPER);
+  await click(game, DEV_ACTION);
+  await click(game, cheat);
+  await click(game, DEV_DONE);
+  await click(game, DEV_DONE);
+  await click(game, PAUSE_CONTINUE);
+  await game.step({ frames: 60 });
+  return read();
+}
 
 async function count(game: GameServer, filter: string): Promise<number> {
   const { entities } = await game.entities.list({ filter, limit: 200 });
@@ -117,6 +143,29 @@ test(
     assert.ok(
       (await count(game, "Wrench")) > wrenchesBefore,
       "the rained items must survive the unpause",
+    );
+
+    // The AI rows reach the same `SetAllAIAlertness` the desktop's Alt+G /
+    // Alt+C reach - which on a headset, with no keyboard, is the only way to
+    // reach them at all. The effect dispatches a message the AI scripts read
+    // on their next update, so the level only moves once the scene is running
+    // again: each row is clicked, the overlay closed, and the sim stepped.
+    const hybrids = (await game.entities.list({ filter: "OG-", limit: 20 })).entities.filter(
+      (e) => e.name.startsWith("OG-"),
+    );
+    assert.ok(hybrids.length >= 1, `expected hybrids in medsci1, got ${hybrids.length}`);
+    const alertness = async (): Promise<string | undefined> => {
+      const detail = await game.entities.detail(hybrids[0].id);
+      return detail.properties.find((p) => p.name === "AIAlertness")?.value;
+    };
+
+    const calmed = await clickCheatAndResume(game, CALM_ALL, alertness);
+    const hunting = await clickCheatAndResume(game, HUNT_ME, alertness);
+    assert.notEqual(hunting, calmed, `"Hunt me" must raise alertness from ${calmed}`);
+    assert.equal(
+      await clickCheatAndResume(game, CALM_ALL, alertness),
+      calmed,
+      '"Calm all" must put it back',
     );
   },
 );

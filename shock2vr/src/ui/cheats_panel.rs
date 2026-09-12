@@ -22,6 +22,8 @@ use cgmath::Vector2;
 #[cfg(test)]
 use cgmath::vec2;
 
+use dark::properties::AIAlertLevel;
+
 use super::{
     HAlign, UiCanvas, VAlign,
     dev_params_panel::{FIELD_TOP_Y, PanelRects},
@@ -44,16 +46,29 @@ const HOVER_OPACITY: f32 = 1.0;
 pub const HEADER_LABEL: &str = "Cheats";
 pub const OPEN_LABEL: &str = "Cheats";
 
-/// One entry in the list: the row's label and the templates it rains.
+/// What a cheat row does when it is clicked. Deliberately a description
+/// rather than an [`Effect`](crate::scripts::Effect): the `ui` modules
+/// describe the screen, and the host turns the description into the effect it
+/// applies - the same split `dev_params_panel` keeps between a clicked row
+/// and the registry write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheatAction {
+    /// Rain these templates around the player, one per ring slot.
+    Rain(&'static [i32]),
+    /// Set every AI's alertness. `pin` holds it there instead of letting it
+    /// decay, so the level is a floor rather than a nudge.
+    Alertness { level: AIAlertLevel, pin: bool },
+}
+
+/// One entry in the list: the row's label and what clicking it does.
 pub struct Cheat {
     label: &'static str,
-    templates: &'static [i32],
+    action: CheatAction,
 }
 
 impl Cheat {
-    /// The template ids this row rains, in the order they ring the player.
-    pub fn templates(&self) -> &'static [i32] {
-        self.templates
+    pub fn action(&self) -> CheatAction {
+        self.action
     }
 }
 
@@ -63,7 +78,7 @@ pub static CHEATS: &[Cheat] = &[
     Cheat {
         label: "Rain weapons",
         // The four workhorse weapons, plus a clip for each gun that takes one.
-        templates: &[
+        action: CheatAction::Rain(&[
             -928,  // Wrench
             -17,   // Pistol
             -19,   // Shotgun
@@ -72,17 +87,45 @@ pub static CHEATS: &[Cheat] = &[
             -1358, // Small Standard Clip
             -1360, // Small AP Clip
             -42,   // Pellet Shot Box (shotgun shells)
-        ],
+        ]),
     },
     Cheat {
         label: "Rain modules + nanites",
         // The two things a test situation is usually short of.
-        templates: &[
+        action: CheatAction::Rain(&[
             -938, // EXP Cookies (cyber modules)
             -938, -938, -938, //
             -89,  // 20 Nanites
             -89, -89, -89,
-        ],
+        ]),
+    },
+    // The AI alertness trio, already reachable on the desktop as Alt+G /
+    // Alt+C. A headset has no keyboard, so this page is the only way to reach
+    // them on the Quest.
+    Cheat {
+        label: "Hunt me (all AI)",
+        // Pinned: the level never decays, so every AI keeps hunting the
+        // player's live position until "Calm all" clears it. `High` maps to
+        // attack behaviors, which assume the player is already in range.
+        action: CheatAction::Alertness {
+            level: AIAlertLevel::Moderate,
+            pin: true,
+        },
+    },
+    Cheat {
+        label: "Alert all AI",
+        // The same level unpinned: a nudge that decays again on its own.
+        action: CheatAction::Alertness {
+            level: AIAlertLevel::Moderate,
+            pin: false,
+        },
+    },
+    Cheat {
+        label: "Calm all AI",
+        action: CheatAction::Alertness {
+            level: AIAlertLevel::Lowest,
+            pin: false,
+        },
     },
 ];
 
@@ -90,7 +133,7 @@ pub static CHEATS: &[Cheat] = &[
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheatsEvent {
     /// The index into [`CHEATS`] scrolled into the clicked row.
-    Rain(usize),
+    Row(usize),
     Scroll(ScrollHalf),
     /// Leave the page, back to the parameter rows.
     Done,
@@ -112,7 +155,7 @@ pub fn hit(rects: PanelRects, scroll: usize, point: Vector2<f32>) -> Option<Chea
     // slot; a rocker half that cannot move is inert. Both rules live in
     // `list_scroll`, so every list obeys the same ones.
     match list(rects).hit(CHEATS.len(), scroll, point)? {
-        ListHit::Row(index) => Some(CheatsEvent::Rain(index)),
+        ListHit::Row(index) => Some(CheatsEvent::Row(index)),
         ListHit::Scroll(half) => Some(CheatsEvent::Scroll(half)),
     }
 }
@@ -158,7 +201,7 @@ pub fn draw(
                 HAlign::Left,
                 VAlign::Middle,
             )
-            .opacity(opacity(CheatsEvent::Rain(index)));
+            .opacity(opacity(CheatsEvent::Row(index)));
     }
 
     if let Some(rocker) = geometry.rocker(len) {
@@ -192,8 +235,8 @@ pub fn draw(
 /// [`dev_params_panel::activate`]: super::dev_params_panel::activate
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheatsOutcome {
-    /// Rain this entry's templates around the player.
-    Rain(&'static [i32]),
+    /// Carry out this row's action.
+    Act(CheatAction),
     /// Leave the page.
     Done,
 }
@@ -206,7 +249,7 @@ pub fn activate(
     scroll: &mut usize,
 ) -> Option<CheatsOutcome> {
     match event {
-        CheatsEvent::Rain(index) => Some(CheatsOutcome::Rain(CHEATS[index].templates)),
+        CheatsEvent::Row(index) => Some(CheatsOutcome::Act(CHEATS[index].action)),
         CheatsEvent::Scroll(half) => {
             list_scroll::apply(half, scroll, list(rects).max_scroll(CHEATS.len()));
             None
@@ -219,10 +262,10 @@ pub fn activate(
 mod tests {
     use super::{super::UiElement, *};
 
-    /// Every shipped cheat is reachable by scrolling, and each row rains its
-    /// own templates - the seam a positional row index would break.
+    /// Every shipped cheat is reachable by scrolling, and each row carries its
+    /// OWN action - the seam a positional row index would break.
     #[test]
-    fn every_cheat_is_reachable_and_rains_its_own_templates() {
+    fn every_cheat_is_reachable_and_carries_its_own_action() {
         let rects = PanelRects::default();
         let geometry = list(rects);
         let max = geometry.max_scroll(CHEATS.len());
@@ -233,15 +276,15 @@ mod tests {
             let point = geometry.row_rect(CHEATS.len(), slot).center();
             assert_eq!(
                 hit(rects, scroll, point),
-                Some(CheatsEvent::Rain(index)),
+                Some(CheatsEvent::Row(index)),
                 "cheat {index} ({}) must be clickable at scroll {scroll}",
                 CHEATS[index].label
             );
 
             let mut scroll = scroll;
             assert_eq!(
-                activate(rects, CheatsEvent::Rain(index), &mut scroll),
-                Some(CheatsOutcome::Rain(CHEATS[index].templates)),
+                activate(rects, CheatsEvent::Row(index), &mut scroll),
+                Some(CheatsOutcome::Act(CHEATS[index].action)),
             );
         }
     }

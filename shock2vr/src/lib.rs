@@ -183,6 +183,7 @@ use crate::{
     mission::{GlobalContext, Mission, PlayerInfo, PlayerLifeState},
     pause_menu::PauseAction,
     scripts::Effect,
+    ui::cheats_panel::CheatAction,
 };
 use zip_asset_path::ZipAssetPath;
 
@@ -1743,13 +1744,18 @@ impl Game {
                 self.handle_global_effect(GlobalEffect::ShowMainMenu);
             }
             // A cheat acts on the paused scene and leaves the overlay up, so
-            // several can be fired before resuming. Effects reach a scene
-            // through `handle_effects`, which stays callable while the scene's
-            // `update` is skipped.
-            Some(PauseAction::RainItems { template_ids }) => {
-                self.apply_scene_effects(vec![Effect::RainItems {
-                    template_ids: template_ids.to_vec(),
-                }]);
+            // several can be fired before resuming. The page describes what a
+            // row does; turning that into an effect is the host's job.
+            Some(PauseAction::Cheat(action)) => {
+                let effect = match action {
+                    CheatAction::Rain(template_ids) => Effect::RainItems {
+                        template_ids: template_ids.to_vec(),
+                    },
+                    CheatAction::Alertness { level, pin } => {
+                        Effect::SetAllAIAlertness { level, pin }
+                    }
+                };
+                self.apply_scene_effects(vec![effect]);
             }
             None => {}
         }

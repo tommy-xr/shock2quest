@@ -108,9 +108,9 @@ pub enum PauseAction {
     Resume,
     /// Abandon the run and go back to the main menu.
     QuitToMainMenu,
-    /// Developer cheat: rain these templates around the player. The overlay
-    /// stays up - a cheat sets a situation up, it does not resume the game.
-    RainItems { template_ids: &'static [i32] },
+    /// Carry out a developer cheat. The overlay stays up - a cheat sets a
+    /// situation up, it does not resume the game.
+    Cheat(cheats_panel::CheatAction),
 }
 
 /// Which page of the overlay is showing. The Developer page is a page of the
@@ -561,9 +561,7 @@ impl PauseMenu {
         event: Option<cheats_panel::CheatsEvent>,
     ) -> Option<PauseAction> {
         match cheats_panel::activate(self.panel_rects, event?, &mut self.cheats_scroll)? {
-            cheats_panel::CheatsOutcome::Rain(template_ids) => {
-                Some(PauseAction::RainItems { template_ids })
-            }
+            cheats_panel::CheatsOutcome::Act(action) => Some(PauseAction::Cheat(action)),
             cheats_panel::CheatsOutcome::Done => {
                 self.page = PauseMenuPage::Developer;
                 None
@@ -899,13 +897,11 @@ mod tests {
         menu.page = PauseMenuPage::Cheats;
 
         for (index, cheat) in cheats_panel::CHEATS.iter().enumerate() {
-            let action = menu.handle_cheats_event(Some(cheats_panel::CheatsEvent::Rain(index)));
+            let action = menu.handle_cheats_event(Some(cheats_panel::CheatsEvent::Row(index)));
             assert_eq!(
                 action,
-                Some(PauseAction::RainItems {
-                    template_ids: cheat.templates(),
-                }),
-                "cheat {index} must rain its own templates",
+                Some(PauseAction::Cheat(cheat.action())),
+                "cheat {index} must carry out its own action",
             );
             assert_eq!(menu.page, PauseMenuPage::Cheats);
             assert!(menu.is_open());
