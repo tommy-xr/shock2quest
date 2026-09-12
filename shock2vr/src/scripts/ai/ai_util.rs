@@ -83,7 +83,25 @@ fn creature_definition(
 pub fn creature_height(world: &World, entity_id: EntityId) -> f32 {
     creature_definition(world, entity_id)
         .map(|definition| definition.bounding_size.y)
+        .or_else(|| object_actor_radius(world, entity_id).map(|radius| radius * 2.0))
         .unwrap_or(CREATURE_DEFAULT_HEIGHT)
+}
+
+fn object_actor_radius(world: &World, entity: EntityId) -> Option<f32> {
+    if !world
+        .borrow::<View<dark::properties::PropAI>>()
+        .ok()?
+        .get(entity)
+        .ok()?
+        .0
+        .eq_ignore_ascii_case("grub")
+    {
+        return None;
+    }
+    let dimensions = world.borrow::<View<PropPhysDimensions>>().ok()?;
+    let dimensions = dimensions.get(entity).ok()?;
+    let radius = dimensions.radius0.abs().max(dimensions.radius1.abs());
+    (radius > 0.0 && radius.is_finite()).then_some(radius)
 }
 
 /// The radius of the capsule this creature actually collides with - the same
@@ -92,7 +110,7 @@ pub fn creature_height(world: &World, entity_id: EntityId) -> f32 {
 /// bounding box it may be much narrower than.
 pub fn creature_radius(world: &World, entity_id: EntityId) -> f32 {
     let Some(definition) = creature_definition(world, entity_id) else {
-        return CREATURE_DEFAULT_RADIUS;
+        return object_actor_radius(world, entity_id).unwrap_or(CREATURE_DEFAULT_RADIUS);
     };
     let v_phys_type = world.borrow::<View<PropPhysType>>().ok();
     let v_dimensions = world.borrow::<View<PropPhysDimensions>>().ok();
@@ -1198,8 +1216,17 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
     let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
 
     if let Ok(ent_pos) = v_current_pos.get(from_entity) {
-        let start_point =
-            point3(0.0, 0.0, 0.0) + ent_pos.position + creature::sense_offset(world, from_entity);
+        // Object-model crawlers can have their origin below the collider's
+        // support plane. Sense from the actual live sphere, including the
+        // model-dependent offset resolved by entity creation.
+        let start_point = if object_actor_radius(world, from_entity).is_some() {
+            physics
+                .actor_sphere(from_entity)
+                .map(|(center, _)| Point3::from_vec(center))
+                .unwrap_or_else(|| Point3::from_vec(ent_pos.position))
+        } else {
+            Point3::from_vec(ent_pos.position + creature::sense_offset(world, from_entity))
+        };
         let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
         return has_clear_sight_between(
             from_entity,

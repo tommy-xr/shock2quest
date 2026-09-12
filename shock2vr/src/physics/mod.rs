@@ -4212,6 +4212,49 @@ impl PhysicsWorld {
         })
     }
 
+    /// A resting actor can be supported by a curved prop even when a ray
+    /// through its centre misses the contact. Use the solver's normal.
+    pub fn actor_has_support(&self, entity: EntityId) -> bool {
+        let Some(body) = self
+            .entity_id_to_body
+            .get(&entity)
+            .and_then(|h| self.rigid_body_set.get(*h))
+        else {
+            return false;
+        };
+        body.colliders().iter().any(|own| {
+            self.narrow_phase.contact_pairs_with(*own).any(|pair| {
+                pair.has_any_active_contact
+                    && pair.manifolds.iter().any(|manifold| {
+                        let normal = manifold.data.normal;
+                        let support_y = if pair.collider1 == *own {
+                            -normal.y
+                        } else {
+                            normal.y
+                        };
+                        support_y > 0.55 && !manifold.data.solver_contacts.is_empty()
+                    })
+            })
+        })
+    }
+
+    /// World-space support geometry of an object's live sphere, including
+    /// model-dependent offsets applied at creation. Sensors are not support.
+    pub fn actor_sphere(&self, entity: EntityId) -> Option<(Vector3<f32>, f32)> {
+        let body = self
+            .rigid_body_set
+            .get(*self.entity_id_to_body.get(&entity)?)?;
+        body.colliders().iter().find_map(|handle| {
+            let collider = self.collider_set.get(*handle)?;
+            if collider.is_sensor() {
+                return None;
+            }
+            let radius = collider.shape().as_ball()?.radius;
+            let center = collider.position().translation.vector;
+            Some((vec3(center.x, center.y, center.z), radius))
+        })
+    }
+
     pub fn get_velocity(&self, entity_id: EntityId) -> Option<Vector3<f32>> {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
             let maybe_rigid_body = self.rigid_body_set.get(*handle);
@@ -8491,6 +8534,43 @@ mod tests {
         for _ in 0..frames {
             world.update(Vector3::new(0.0, 0.0, 0.0), player);
         }
+    }
+
+    #[test]
+    fn object_actor_support_uses_the_live_offset_and_rejects_airborne_contacts() {
+        let (mut world, mut player) = world_with_floor();
+        let actor = EntityId::from_inner(42).unwrap();
+        world.add_dynamic(
+            actor,
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.148, 0.0),
+            PhysicsShape::Sphere(0.2),
+            CollisionGroup::actor(),
+            false,
+            DynamicPhysicsOptions {
+                restitution: 0.0,
+                ..DynamicPhysicsOptions::default()
+            },
+        );
+        world.set_enabled_rotations(actor, false, false, false);
+        assert!(!world.actor_has_support(actor));
+        step(&mut world, &mut player, 120);
+        assert!(world.actor_has_support(actor));
+        let (center, radius) = world.actor_sphere(actor).unwrap();
+        assert!((center.y - radius).abs() < 0.01);
+        let origin = world
+            .get_position(*world.entity_id_to_body.get(&actor).unwrap())
+            .unwrap();
+        assert!((origin.y - 0.052).abs() < 0.01);
+        world.set_velocity(actor, vec3(2.0, 4.0, 0.0));
+        step(&mut world, &mut player, 10);
+        assert!(!world.actor_has_support(actor));
+        assert!(
+            world.get_velocity(actor).unwrap().x > 1.9,
+            "airborne launch is preserved"
+        );
+        assert_eq!(world.get_rotation2(actor).unwrap(), identity_quat());
     }
 
     fn add_ramp(world: &mut PhysicsWorld, start: (f32, f32), end: (f32, f32), half_width: f32) {

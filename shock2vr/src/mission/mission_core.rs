@@ -5737,7 +5737,16 @@ impl MissionCore {
                         .borrow::<View<RuntimePropLaunchedProjectile>>()
                         .unwrap()
                         .contains(*id);
-                if !holds_terminal_death_pose && !launched_with_no_root_motion {
+                // Object-model AI owns its velocity even though its jointed
+                // render model has an AnimationPlayer for the tweq pose.
+                let physics_driven_ai = self
+                    .world
+                    .borrow::<View<dark::properties::PropAI>>()
+                    .unwrap()
+                    .get(*id)
+                    .is_ok_and(|ai| ai.0.eq_ignore_ascii_case("grub"));
+                if !holds_terminal_death_pose && !launched_with_no_root_motion && !physics_driven_ai
+                {
                     self.physics.set_velocity(*id, scaled);
                 }
             }
