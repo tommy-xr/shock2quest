@@ -81,7 +81,7 @@ RadLevel ownership.
 
 ## Presentation
 
-One 128×66 pixel canvas supplies flat HUD, cyber interface and left wrist:
+A shared emitter supplies the 128×66 pixel flat/cyber and wrist canvases:
 original radiation art (`radback`, `radmeter`, `radicon`/`radgray`) and toxin pips
 (`poisicon`, native 25×32, stride 22). More than five pips show an overflow marker.
 The cyber interface always displays status; runtime readouts appear during
@@ -89,10 +89,18 @@ exposure or contamination. Active ambient exposure is latched for rendering,
 so transient stimulus refresh does not incorrectly display residual radiation.
 Flat use mode emits the widget only through the cyber canvas.
 
-VR mounts the same canvas below the existing left glove bio bracelet, at 0.16 m
+VR mounts the hazard canvas above the existing left glove bio bracelet, at 0.16 m
 width, deliberately larger than the 8.5 cm bio bracelet so the original toxin
 pips and radiation art can be inspected. That size and the extra hologram depth
-are provisional, not a validated comfort choice. It remains available when the hand's glove mesh is hidden by a held item.
+remain pending a headset comfort check; the user approved the rendered size.
+The hazard panel hinges 45° outward around its lower edge, lifting its top
+away from the glove while the health bracelet stays flush.
+The named wrist layout conversion centers toxin pips, frames them with the
+original meter edge pixels, and hides inactive hazard rows. A lone toxin row
+uses the lower slot so it remains close to health. Flat and cyber preserve
+their authored layout. The conversion is covered by a layout test and
+three-state rendered comparisons (toxin only, radiation only, both).
+It remains available when the hand's glove mesh is hidden by a held item.
 Radiation damage uses the existing peripheral damage-feedback layer tinted green,
 with the authored `raddmg` sound. This adapts the original full-screen green fade
 without adding a separate full-field VR flash. Visual review flags the saturated

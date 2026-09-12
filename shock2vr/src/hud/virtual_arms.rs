@@ -22,6 +22,7 @@ pub fn create_wrist_hud_panels(
         return Vec::new();
     }
     let bio = readouts::BioReadout::from_world(world);
+    let hazards = super::hazards::HazardReadout::from_world(world);
     let mut objects = Vec::new();
     for (i, hand) in [Handedness::Left, Handedness::Right]
         .into_iter()
@@ -34,18 +35,20 @@ pub fn create_wrist_hud_panels(
             * Matrix4::from(poses[i].rotation)
             * wrist_frames[i];
         if hand == Handedness::Left {
-            let canvas =
-                super::hazards::wrist_canvas(&super::hazards::HazardReadout::from_world(world));
+            let canvas = super::hazards::wrist_canvas(&hazards);
             if canvas.element_count() > 0 {
                 // Hologram anchored above the calibrated glove, independent of
-                // weapon hand meshes. Pixel placement remains in hazards::emit.
+                // weapon hand meshes. +Y points toward the fingers: placing
+                // this above the bio bracelet leaves both readouts visible.
+                // Pixel placement remains in hazards::wrist_canvas.
+                let height = 0.16 * canvas.size().y / canvas.size().x;
+                // Hinge at the lower edge. Positive X rotation lifts the top
+                // (+Y) out along the glove normal (+Z), like a projected panel.
                 let transform = root
-                    * Matrix4::from_translation(vec3(0.0, -0.06, 0.08))
-                    * Matrix4::from_nonuniform_scale(
-                        0.16,
-                        0.16 * canvas.size().y / canvas.size().x,
-                        1.0,
-                    );
+                    * Matrix4::from_translation(vec3(0.0, 0.065 - height * 0.5, 0.08))
+                    * Matrix4::from_angle_x(Deg(45.0))
+                    * Matrix4::from_translation(vec3(0.0, height * 0.5, 0.0))
+                    * Matrix4::from_nonuniform_scale(0.16, height, 1.0);
                 objects.extend(canvas.render_world_space(
                     asset_cache,
                     transform,
@@ -62,8 +65,15 @@ pub fn create_wrist_hud_panels(
             // Same pixel layout as the flat status line. Only the panel's
             // world placement differs: above this glove.
             let width = 0.32;
+            // Leave the full hazard panel unobscured when a left-hand weapon
+            // also needs to explain a skill refusal.
+            let notice_y = if hand == Handedness::Left && hazards.active() {
+                0.17
+            } else {
+                0.06
+            };
             let transform = root
-                * Matrix4::from_translation(vec3(0.0, 0.06, 0.10))
+                * Matrix4::from_translation(vec3(0.0, notice_y, 0.10))
                 * Matrix4::from_nonuniform_scale(
                     width,
                     width * canvas.size().y / canvas.size().x,
