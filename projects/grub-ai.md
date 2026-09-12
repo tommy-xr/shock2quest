@@ -104,3 +104,25 @@ Reference implementations examined:
 [joint tweqs](https://github.com/DeathEngine2/LookingGlass-DarkEngine/blob/main/thief_2_service_release/rdrive/prj/thief2/src/ENGFEAT/TWEQCTRL.CPP),
 [object articulation](https://github.com/DeathEngine2/LookingGlass-DarkEngine/blob/main/DarkEngine/LIBSRC/MD/RENDER.C),
 and [AI velocity control](https://github.com/DeathEngine2/LookingGlass-DarkEngine/blob/main/thief_2_service_release/rdrive/prj/thief2/src/AI/AIUTILS.CPP).
+
+## Pod emergence and hatch audio
+
+`BaseEgg` gives a newly hatched grub an initial world-space velocity toward
+its opener: 2.4 units/s horizontally and 3 units/s upward (an unobstructed
+rise of about .46 units). GrubAI preserves the ballistic launch until support
+is acquired, then resumes ordinary movement. Direct actor senders are honored;
+mission tripwires/relays identify themselves in `TurnOn`, so those use the live
+player position. Without a target, the pod's horizontal facing is used.
+
+These launch constants are a deliberate gameplay fallback, not claimed retail
+parity. The [script reference](https://thiefmissions.com/telliamed/allscripts.html)
+identifies GrubEgg's payload but does not specify its launch vector. The shipped
+Grub template has no initial-velocity property, and the available engine source
+does not include the egg script implementation. We did not establish the vector
+from the shipped, stripped `allobjs.osm` either. Previously, the rec1 elevator
+pod's grub dropped into its shell and waited for an AI hop to escape.
+
+Every egg plays the authored `pod_exp` schema once, spatially at its shell.
+The schema maps to the available `eggopen1` / `eggopen2` samples. The existing
+saved hatch latch suppresses repeated payload creation and audio. Goo emission
+and swarmer flight retain their existing velocity behavior.
