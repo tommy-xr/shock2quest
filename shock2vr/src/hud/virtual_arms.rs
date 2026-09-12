@@ -22,6 +22,8 @@ pub fn create_wrist_hud_panels(
         return Vec::new();
     }
     let bio = readouts::BioReadout::from_world(world);
+    let hazards = super::hazards::HazardReadout::from_world(world);
+    let alarm = crate::security_alarm::status(world).hud_seconds();
     let mut objects = Vec::new();
     for (i, hand) in [Handedness::Left, Handedness::Right]
         .into_iter()
@@ -34,21 +36,19 @@ pub fn create_wrist_hud_panels(
             * Matrix4::from(poses[i].rotation)
             * wrist_frames[i];
         if hand == Handedness::Left {
-            let canvas =
-                super::hazards::wrist_canvas(&super::hazards::HazardReadout::from_world(world));
-            if canvas.element_count() > 0 {
-                // Hologram anchored above the calibrated glove, independent of
-                // weapon hand meshes. Pixel placement remains in hazards::emit.
-                let transform = root
-                    * Matrix4::from_translation(vec3(0.0, -0.06, 0.08))
-                    * Matrix4::from_nonuniform_scale(
-                        0.16,
-                        0.16 * canvas.size().y / canvas.size().x,
-                        1.0,
-                    );
+            let alarm_canvas = alarm
+                .map(super::alarm_panel::build_panel_canvas)
+                .unwrap_or_else(|| crate::ui::UiCanvas::new(super::alarm_panel::PANEL));
+            for (canvas, offset_x) in [
+                (super::hazards::wrist_canvas(&hazards), 0.0),
+                (alarm_canvas, if hazards.active() { 0.13 } else { 0.0 }),
+            ] {
+                if canvas.element_count() == 0 {
+                    continue;
+                }
                 objects.extend(canvas.render_world_space(
                     asset_cache,
-                    transform,
+                    wrist_hologram_transform(root, canvas.size(), offset_x),
                     None,
                     None,
                     0.001,
@@ -62,8 +62,15 @@ pub fn create_wrist_hud_panels(
             // Same pixel layout as the flat status line. Only the panel's
             // world placement differs: above this glove.
             let width = 0.32;
+            // Leave the full hazard panel unobscured when a left-hand weapon
+            // also needs to explain a skill refusal.
+            let notice_y = if hand == Handedness::Left && (hazards.active() || alarm.is_some()) {
+                0.17
+            } else {
+                0.06
+            };
             let transform = root
-                * Matrix4::from_translation(vec3(0.0, 0.06, 0.10))
+                * Matrix4::from_translation(vec3(0.0, notice_y, 0.10))
                 * Matrix4::from_nonuniform_scale(
                     width,
                     width * canvas.size().y / canvas.size().x,
@@ -104,6 +111,22 @@ pub fn create_wrist_hud_panels(
     }
     crate::util::tag_render_source(&mut objects, crate::util::render_source::PLAYER_HANDS);
     objects
+}
+
+/// Shared lower-edge hinge for the hazard and alarm canvases. A canvas pixel
+/// occupies 1.25 mm, preserving the approved 16 cm hazard width. Positive X
+/// tilt lifts the top away from the glove; health/psi remain on the bracelet.
+fn wrist_hologram_transform(
+    root: Matrix4<f32>,
+    size: cgmath::Vector2<f32>,
+    offset_x: f32,
+) -> Matrix4<f32> {
+    let scale = 0.16 / 128.0;
+    let height = size.y * scale;
+    root * Matrix4::from_translation(vec3(offset_x, 0.02375, 0.08))
+        * Matrix4::from_angle_x(Deg(45.0))
+        * Matrix4::from_translation(vec3(0.0, height * 0.5, 0.0))
+        * Matrix4::from_nonuniform_scale(size.x * scale, height, 1.0)
 }
 
 /// Wrist-frame +Z points out of the glove's back; +Y points toward its fingers.
@@ -291,6 +314,23 @@ pub(crate) fn get_wielded_gun_setting(world: &World) -> Option<(i32, Option<Stri
 mod tests {
     use super::*;
     use cgmath::{InnerSpace, SquareMatrix};
+
+    #[test]
+    fn holograms_share_a_lower_hinge_and_lift_at_45_degrees() {
+        for size in [
+            super::super::hazards::SIZE,
+            super::super::alarm_panel::PANEL,
+        ] {
+            let transform = wrist_hologram_transform(Matrix4::identity(), size, 0.0);
+            let lower = transform * cgmath::vec4(0.0, -0.5, 0.0, 1.0);
+            let upper = transform * cgmath::vec4(0.0, 0.5, 0.0, 1.0);
+            assert!((lower.y - 0.02375).abs() < 0.00001);
+            assert!((lower.z - 0.08).abs() < 0.00001);
+            assert!(upper.z > lower.z);
+            assert!(((upper.y - lower.y) - (upper.z - lower.z)).abs() < 0.00001);
+            assert!(transform.determinant() > 0.0);
+        }
+    }
 
     #[test]
     fn glove_readouts_are_outward_and_text_is_never_mirrored() {

@@ -13,6 +13,9 @@ use crate::scripts::SavedScriptState;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct EntitySaveData {
+    /// Mission-local alarm bookkeeping; carried inventory never owns it.
+    #[serde(default)]
+    pub security_alarm: Option<crate::security_alarm::SecurityAlarmStatus>,
     pub all_entities: Vec<u64>,
     pub template_id_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub properties:
@@ -63,6 +66,7 @@ pub struct EntitySaveData {
 impl EntitySaveData {
     pub fn empty() -> EntitySaveData {
         EntitySaveData {
+            security_alarm: None,
             all_entities: Vec::new(),
             template_id_to_entity_id: HashMap::new(),
             properties: HashMap::new(),
@@ -83,6 +87,9 @@ impl EntitySaveData {
         &self,
         world: &mut World,
     ) -> (HashMap<i32, WrappedEntityId>, HashMap<EntityId, EntityId>) {
+        if let Some(alarm) = self.security_alarm {
+            world.add_unique(alarm);
+        }
         let original_template_to_entity_id = self.template_id_to_entity_id.clone();
 
         let mut old_entity_id_to_new_entity_id = HashMap::new();

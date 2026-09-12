@@ -97,7 +97,7 @@ mod trap_unlock;
 mod trigger_collide;
 mod trigger_damage;
 mod trigger_destroy;
-mod trigger_ecology;
+pub(crate) mod trigger_ecology;
 mod trigger_multi;
 mod tweq_depressable;
 mod tweqable;
@@ -1152,7 +1152,7 @@ impl ScriptWorld {
             // partially implemented:
             "keypadunhackable" => gui_script(Box::new(KeyPadGui)),
             "keypad" => gui_script(Box::new(KeyPadGui)),
-            "securitycomputer" => Box::new(UnimplementedScript::new(&script_name)),
+            "securitycomputer" => gui_script(Box::new(ComputerGui { security: true })),
             "resurrectmachine" => Box::new(BaseButton {}),
             "twostatebutton" => Box::new(BaseButton::new()),
 
@@ -1202,7 +1202,7 @@ impl ScriptWorld {
             "medpatchscript" => Box::new(HealingItemScript::new(HealingItemKind::MedPatch)),
             "psikitscript" => Box::new(PsiKitScript::new()),
             "psimine" => Box::new(PsiMine::new()),
-            "computer" => gui_script(Box::new(ComputerGui)),
+            "computer" => gui_script(Box::new(ComputerGui::default())),
             "lightsoundon" => Box::new(NoopScript::new()),
             "hackablecrate" => gui_script(Box::new(HackableCrateGui::new())),
             "turret" => Box::new(UnimplementedScript::new(&script_name)),

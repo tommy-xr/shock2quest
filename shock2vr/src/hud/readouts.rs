@@ -167,6 +167,7 @@ pub(crate) struct UseModeReadouts {
     /// Spendable nanites and cyber modules, in the order of the native wells.
     pub resources: [i32; 2],
     pub hazards: Option<super::hazards::HazardReadout>,
+    pub alarm_seconds: Option<f32>,
 }
 
 impl UseModeReadouts {
@@ -177,6 +178,7 @@ impl UseModeReadouts {
         Self {
             weapon,
             hazards: Some(super::hazards::HazardReadout::from_world(world)),
+            alarm_seconds: crate::security_alarm::status(world).hud_seconds(),
             bio: BioReadout::from_world(world),
             ammo: AmmoReadout::for_weapon(world, weapon, true),
             resources: [
@@ -193,6 +195,9 @@ impl UseModeReadouts {
 /// Emit the expanded bio + ammo readouts along the bottom of the shared
 /// 640x480 interface canvas.
 pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
+    if let Some(seconds) = readouts.alarm_seconds {
+        super::alarm_panel::emit(canvas, super::alarm_panel::FLAT_ORIGIN, seconds);
+    }
     if let Some(hazards) = &readouts.hazards {
         super::hazards::emit(canvas, super::hazards::SCREEN_ORIGIN, hazards, true);
     }
@@ -260,6 +265,7 @@ mod tests {
             weapon: None,
             resources: [0; 2],
             hazards: Default::default(),
+            alarm_seconds: None,
             bio: BioReadout {
                 health_fraction: 1.0,
                 psi_fraction: 0.75,

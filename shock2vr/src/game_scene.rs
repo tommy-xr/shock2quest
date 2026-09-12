@@ -643,6 +643,18 @@ pub struct DebugUiState {
     /// The HUD status-message lines showing right now, oldest first (the
     /// channel `TrapMessage` and friends write to). Empty when none are up.
     pub messages: Vec<String>,
+    /// The station security alarm - `Some` exactly while one is up, which is
+    /// when the HUD shows its badge and countdown.
+    pub security_alarm: Option<DebugSecurityAlarm>,
+}
+
+/// The station security alarm as the HUD presents it (`GET /v1/ui`).
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugSecurityAlarm {
+    /// Alarms raised since the last station stand-down.
+    pub count: u32,
+    /// Seconds left on the alarm's deadline, floored at zero.
+    pub seconds_remaining: f32,
 }
 
 /// One frame of pointing at the shared UI canvas.
@@ -997,6 +1009,7 @@ pub trait DebuggableScene {
             pointer: None,
             panel_pose: None,
             messages: Vec::new(),
+            security_alarm: None,
         }
     }
 

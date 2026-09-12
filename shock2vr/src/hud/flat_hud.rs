@@ -165,6 +165,12 @@ pub(crate) fn create_flat_hud(
             false,
         );
     }
+    if let Some(seconds) = crate::security_alarm::status(world)
+        .hud_seconds()
+        .filter(|_| !use_mode)
+    {
+        super::alarm_panel::emit(&mut canvas, super::alarm_panel::FLAT_ORIGIN, seconds);
+    }
     // Keep the crosshair square and bars undistorted on non-4:3 windows.
     canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
 }

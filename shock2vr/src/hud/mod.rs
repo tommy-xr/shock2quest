@@ -10,6 +10,7 @@ pub use item_outline::*;
 pub(crate) mod virtual_arms;
 pub use virtual_arms::*;
 
+pub(crate) mod alarm_panel;
 pub(crate) mod ammo_panel;
 pub(crate) mod readouts;
 

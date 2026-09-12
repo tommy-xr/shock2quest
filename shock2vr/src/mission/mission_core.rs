@@ -2215,6 +2215,8 @@ pub struct MissionCore {
     pub pathfinding_service: Option<Arc<PathfindingService>>,
     pub path_visualization: PathVisualizationSystem,
     pub pathfinding_test: crate::mission::pathfinding_test::PathfindingTest,
+    /// Station security alarm bookkeeping, persisted with this mission.
+    pub security_alarm: crate::security_alarm::SecurityAlarm,
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
     /// the next animation deterministically (debug hitbox inspection).
     pub debug_pose_index: u32,
@@ -3227,6 +3229,8 @@ impl MissionCore {
             controller.flush();
         }
 
+        let security_alarm =
+            crate::security_alarm::SecurityAlarm::restore(crate::security_alarm::status(&world));
         let mut mission_core = MissionCore {
             interaction,
             level_name: mission,
@@ -3263,6 +3267,7 @@ impl MissionCore {
             pathfinding_service,
             path_visualization: PathVisualizationSystem::new(),
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
+            security_alarm,
             debug_pose_index: 0,
             debug_weapon_index: 0,
             player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),
@@ -3739,6 +3744,12 @@ impl MissionCore {
         {
             effects.push(drain);
         }
+        // Run the station security alarm's deadline down; when it expires the
+        // alarm stands security down on its own.
+        effects.extend(self.security_alarm.update(&self.world, time));
+        // Both HUD paths (the flat overlay and the VR forearm) read the alarm
+        // from the world, so neither presentation owns it.
+        self.security_alarm.publish(&self.world);
         effects.extend(command_effects);
 
         let player = {
@@ -9805,6 +9816,18 @@ impl MissionCore {
                     crate::audio_log::record_stop(handle.id());
                     engine::audio::stop_audio(audio_context, handle);
                 }
+                Effect::RaiseSecurityAlarm { seconds } => {
+                    for effect in self.security_alarm.add(&self.world, seconds) {
+                        effects.push_back(effect);
+                    }
+                    self.security_alarm.publish(&self.world);
+                }
+                Effect::ClearSecurityAlarm { from } => {
+                    for effect in self.security_alarm.disable(&self.world, Some(from)) {
+                        effects.push_back(effect);
+                    }
+                    self.security_alarm.publish(&self.world);
+                }
                 Effect::DestroyEntity { entity_id } => {
                     info!("!!!Destroying entity: {:?}", entity_id);
                     self.destroy_entity(entity_id);
@@ -14803,6 +14826,15 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 }
             }),
             messages: self.hud_messages(),
+            security_alarm: {
+                let alarm = crate::security_alarm::status(&self.world);
+                alarm
+                    .hud_seconds()
+                    .map(|seconds| crate::game_scene::DebugSecurityAlarm {
+                        count: alarm.count,
+                        seconds_remaining: seconds,
+                    })
+            },
         }
     }
 
