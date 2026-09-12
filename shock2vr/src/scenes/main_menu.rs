@@ -3,12 +3,12 @@
 //! A minimal `GameScene` that draws the original `MAIN.PCX` backdrop with the
 //! six mouse-clickable menu entries, described on the shared [`UiCanvas`]. It
 //! reads `InputContext::pointer` (normalized screen coords) and emits a
-//! `GlobalEffect` on click: New Game -> `TransitionLevel` into the first
-//! mission, Quit -> `Quit`. Entries the port does not implement yet are drawn
+//! `GlobalEffect` on click. New Game opens a difficulty selection page, then
+//! starts a fresh campaign; Quit emits `Quit`. Unimplemented entries are drawn
 //! dimmed and ignore clicks.
 //!
-//! Everything the screen needs is read from the shipped data rather than
-//! hardcoded: labels from `MAIN.STR`, button rects from `MAINR.BIN`. That
+//! Main-menu labels come from `MAIN.STR` and button rects from `MAINR.BIN`.
+//! The difficulty page reuses those rects with the retail difficulty labels. That
 //! matters beyond fidelity - the community mod layers (SCP) ship a redrawn
 //! backdrop *with a retuned `*R.BIN`*, so a hardcoded rect is wrong on a
 //! modded install.
@@ -49,11 +49,11 @@ use crate::{
 use std::collections::HashMap;
 
 /// Mission loaded when the player chooses "New Game".
-const NEW_GAME_MISSION: &str = "earth.mis";
+pub(crate) const NEW_GAME_MISSION: &str = "earth.mis";
 /// The intro movie the original played on New Game, before the first level.
 /// Only this button gets it - the developer launcher boots the same level with
 /// no cutscene, and a load resumes straight into the save.
-const NEW_GAME_CUTSCENE: &str = "cs1.avi";
+pub(crate) const NEW_GAME_CUTSCENE: &str = "cs1.avi";
 
 /// The menu is authored on the original 640x480 `MAIN.PCX` canvas.
 const CANVAS_W: f32 = 640.0;
@@ -87,6 +87,9 @@ const FALLBACK_BUTTON_PITCH: f32 = 76.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
     NewGame,
+    ChooseDifficulty(dark::gamesys::Difficulty),
+    StartCampaign,
+    Back,
     LoadGame,
     Developer,
     Quit,
@@ -213,6 +216,15 @@ fn resolve_click_at(
 
 /// The menu entry at a canvas point, if any. Shared by the click and the
 /// rollover sound so the two can never disagree about where an entry is.
+fn difficulty_hit(point: Vector2<f32>, rects: &[Rect]) -> Option<MenuAction> {
+    let index = rects.iter().take(6).position(|rect| rect.contains(point))?;
+    Some(match index {
+        0..=3 => MenuAction::ChooseDifficulty(dark::gamesys::Difficulty::ALL[index]),
+        4 => MenuAction::StartCampaign,
+        _ => MenuAction::Back,
+    })
+}
+
 fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<MenuAction> {
     hit_menu_item(point, MENU_ITEMS, rects, |_| true)
 }
@@ -241,6 +253,8 @@ pub struct MainMenuScene {
     world: World,
     scene_name: String,
     menu: FrontendMenu<MenuAction>,
+    choosing_difficulty: bool,
+    difficulty: dark::gamesys::Difficulty,
 }
 
 impl MainMenuScene {
@@ -250,6 +264,8 @@ impl MainMenuScene {
         Self {
             world,
             scene_name: "main_menu".to_owned(),
+            choosing_difficulty: false,
+            difficulty: dark::gamesys::Difficulty::Normal,
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
         }
     }
@@ -276,6 +292,45 @@ impl MainMenuScene {
         // Button rects come from the original `MAINR.BIN` layout and labels
         // from `MAIN.STR` (both cached by the asset cache after first load).
         let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
+        if self.choosing_difficulty {
+            canvas.text_native(
+                Rect::new(20.0, 190.0, 280.0, 35.0),
+                "Choose difficulty",
+                MENU_FONT,
+                HAlign::Center,
+                VAlign::Middle,
+            );
+            canvas.text(
+                Rect::new(20.0, 232.0, 280.0, 35.0),
+                "Fixed for this campaign",
+                MENU_FONT,
+                16.0,
+                HAlign::Center,
+                VAlign::Middle,
+            );
+            let labels: Vec<String> = dark::gamesys::Difficulty::ALL
+                .into_iter()
+                .map(|d| {
+                    if d == self.difficulty {
+                        format!("> {} <", d.label())
+                    } else {
+                        d.label().to_owned()
+                    }
+                })
+                .chain(["Start Game".to_owned(), "Back".to_owned()])
+                .collect();
+            for (rect, label) in rects.iter().zip(labels) {
+                let opacity = if pointer_canvas.is_some_and(|point| rect.contains(point)) {
+                    HOVER_OPACITY
+                } else {
+                    IDLE_OPACITY
+                };
+                canvas
+                    .text_native(*rect, &label, MENU_FONT, HAlign::Center, VAlign::Middle)
+                    .opacity(opacity);
+            }
+            return canvas;
+        }
         let labels = self.menu.labels(asset_cache, LABELS_FILE, MENU_ITEMS);
         for ((item, rect), label) in MENU_ITEMS.iter().zip(&rects).zip(&labels) {
             let opacity = if item.action.is_none() {
@@ -317,16 +372,40 @@ impl GameScene for MainMenuScene {
             time.elapsed,
             input_context,
             game_options.presentation_mode,
-            |point| hit(point, &rects),
-            |point| hit(point, &rects),
+            |point| {
+                if self.choosing_difficulty {
+                    difficulty_hit(point, &rects)
+                } else {
+                    hit(point, &rects)
+                }
+            },
+            |point| {
+                if self.choosing_difficulty {
+                    difficulty_hit(point, &rects)
+                } else {
+                    hit(point, &rects)
+                }
+            },
         );
 
         match action {
             Some(MenuAction::NewGame) => {
-                vec![Effect::GlobalEffect(
-                    GlobalEffect::new_game_transition(NEW_GAME_MISSION.to_owned())
-                        .after_cutscene(NEW_GAME_CUTSCENE),
-                )]
+                self.choosing_difficulty = true;
+                self.difficulty = dark::gamesys::Difficulty::Normal;
+                Vec::new()
+            }
+            Some(MenuAction::ChooseDifficulty(difficulty)) => {
+                self.difficulty = difficulty;
+                Vec::new()
+            }
+            Some(MenuAction::Back) => {
+                self.choosing_difficulty = false;
+                Vec::new()
+            }
+            Some(MenuAction::StartCampaign) => {
+                vec![Effect::GlobalEffect(GlobalEffect::StartNewCampaign {
+                    difficulty: self.difficulty,
+                })]
             }
             Some(MenuAction::LoadGame) => {
                 vec![Effect::GlobalEffect(GlobalEffect::ShowLoadGame)]
@@ -419,6 +498,30 @@ mod tests {
     // The runtimes render at a 4:3 resolution, so PreserveAspect == stretch and
     // normalized coords map straight to the 640x480 canvas.
     const SCREEN: Vector2<f32> = Vector2 { x: 800.0, y: 600.0 };
+
+    #[test]
+    fn difficulty_page_maps_four_choices_start_and_back_to_shared_rects() {
+        for (index, difficulty) in dark::gamesys::Difficulty::ALL.into_iter().enumerate() {
+            let rect = FALLBACK_RECTS[index];
+            assert_eq!(
+                difficulty_hit(
+                    vec2(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0),
+                    &FALLBACK_RECTS
+                ),
+                Some(MenuAction::ChooseDifficulty(difficulty))
+            );
+        }
+        for (index, action) in [(4, MenuAction::StartCampaign), (5, MenuAction::Back)] {
+            let rect = FALLBACK_RECTS[index];
+            assert_eq!(
+                difficulty_hit(
+                    vec2(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0),
+                    &FALLBACK_RECTS
+                ),
+                Some(action)
+            );
+        }
+    }
 
     #[test]
     fn rising_edge_over_new_game_activates_it() {

@@ -2074,6 +2074,26 @@ impl Game {
                 self.pending_transition = None;
                 self.set_active_scene(Box::new(LoadGameScene::new()));
             }
+            GlobalEffect::StartNewCampaign { difficulty } => {
+                self.pending_transition = None;
+                self.campaign_completed = false;
+                self.mission_to_save_data.clear();
+                // Seed the movie's carried state explicitly: the previous
+                // campaign and the cutscene's empty world must both be irrelevant.
+                self.preserved_scene_state = Some(PreservedSceneState {
+                    quest_info: QuestInfo::with_difficulty(difficulty),
+                    held_data: HeldItemSaveData::empty(),
+                    player_vitals: None,
+                    hazards: Default::default(),
+                    active_psi: Default::default(),
+                });
+                self.handle_global_effect(
+                    GlobalEffect::new_game_transition(
+                        scenes::main_menu::NEW_GAME_MISSION.to_owned(),
+                    )
+                    .after_cutscene(scenes::main_menu::NEW_GAME_CUTSCENE),
+                );
+            }
             GlobalEffect::ShowMainMenu => {
                 self.pending_transition = None;
                 // The flag means "the finale is on screen", so reaching the menu

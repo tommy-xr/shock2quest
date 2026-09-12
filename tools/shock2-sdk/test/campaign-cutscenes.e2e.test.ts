@@ -33,6 +33,7 @@ test(
     await game.step({ frames: 10 });
 
     await clickMenuEntry(game, NEW_GAME_ENTRY);
+    await clickMenuEntry(game, 4); // Start Game, accepting Normal.
 
     // The intro runs for minutes, so this stops at "the movie is what is on
     // screen, and earth.mis is not loaded yet" rather than playing it out.
