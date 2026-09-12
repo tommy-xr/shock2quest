@@ -90,10 +90,16 @@ so transient stimulus refresh does not incorrectly display residual radiation.
 Flat use mode emits the widget only through the cyber canvas.
 
 VR mounts the same canvas below the existing left glove bio bracelet, at 0.16 m
-width. It remains available when the hand's glove mesh is hidden by a held item.
+width, deliberately larger than the 8.5 cm bio bracelet so the original toxin
+pips and radiation art can be inspected. That size and the extra hologram depth
+are provisional, not a validated comfort choice. It remains available when the hand's glove mesh is hidden by a held item.
 Radiation damage uses the existing peripheral damage-feedback layer tinted green,
 with the authored `raddmg` sound. This adapts the original full-screen green fade
-without adding a separate full-field VR flash.
+without adding a separate full-field VR flash. Visual review flags the saturated
+green tint and its contrast against green HUD art for the headset tuning pass.
+The sound database also contains environmental Geiger schemas (`ms_geigerf`,
+`eng_geigers`, etc.) using `geigerF1/F2`, `geigerS1/S2` and `geigerB1/B2`;
+this change confirms player damage audio, not every mission ambient sound.
 
 Deterministic flat, wrist and cyber PNG/GIF comparisons have been captured and
 inspected. A separate END1 scenario at frame 360 confirms HP 30→12, radiation
@@ -110,7 +116,11 @@ clocks and serialization phase. Runtime scenarios exercise actual player damage,
 Endurance, patch consumption and suit mitigation, plus the existing authored
 medsci2 Rad Barrel/Rad Patch scenario. Save/load verifies contamination and
 suit protection across entity remapping. A psi-amp cast verifies Toxin Shield
-protection and expiry. The full SDK suite is run before landing.
+protection and expiry. All 275 SDK test files were exercised across the initial
+batch, clean retries and remaining batch. The remaining 201-file batch finished
+with 524 passing tests, 24 failures and 10 skips. Every failure was compared
+with the unchanged base; the baseline cases are listed below. Core unit tests
+finish with 1,702 passed and 2 ignored. Strict core/runtime checks and PR CI pass.
 
 Cross-engine review findings fixed: duplicate implant parser, lost radiate
 multiplier, unresearched WormHeart activation, Worm Skin script wiring, missing
@@ -135,6 +145,24 @@ unchanged `ae2eaf5a`, as well as this branch:
 - `medsci-saved-vr-melee.e2e`: the fresh-control monkey reaches 0 HP rather
   than the expected 1, before its save/transition portion.
 - `melee-hitbox.e2e`: the same extra target entry is reported on both branches.
+- `psi.e2e`: tries to lower PSI from 6 to 2 through raise-only provisioning.
+- `ranged-hitbox.e2e`: its centered shot produces no creature damage.
+- `shodan-live-assassin-support.e2e`: cannot find the expected mission object 649.
+- `sound-awareness.e2e`: the expected alertness remains Lowest.
+- `trap-unlock.e2e`: the locked Engineering button does not emit the expected
+  refusal sound.
+- `vr-body-calibration.e2e`: exact thigh-position equality fails on tiny drift.
+- `vr-cyber-interface-deposit.e2e`: the expected cell rectangle uses an older scale.
+- `vr-cyber-interface-pointer.e2e`: its backpack lookup includes the held-item readout.
+- `vr-gun-support.e2e`: both pistol-hand support cases fail at the same assertion.
+- `vr-gun-weight.e2e`: both AR hands fail to acquire the lowered support socket.
+- `vr-held-model.e2e`: the expected full pistol mesh count and left/right melee
+  contact-volume equality fail identically on the base.
+- `vr-interface-readouts.e2e`: its expected-control list omits Logs.
+- `vr-strength-recoil.e2e`: the AR support-grip assertion fails.
+- `vr-support-region.e2e`: both wrench support-grip assertions fail.
+- `vr-weapon-handedness.e2e`: the forearm readout emits 5 elements, expected 4.
+- `weapon-selection.e2e`: spawning template -28 fails during setup.
 
 These are recorded separately from the hazard scenarios; this feature does not
 change their expected behavior. All 23 authored mission-load checks pass.
