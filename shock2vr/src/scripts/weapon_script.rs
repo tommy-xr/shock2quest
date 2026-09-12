@@ -29,8 +29,17 @@ use crate::{
 /// of spawning inside it. World units.
 const FLAT_MUZZLE_CLEARANCE: f32 = SCALE_FACTOR;
 
-/// Reach of a flat melee swing (raycast along the crosshair ray), in world units.
-const MELEE_RANGE: f32 = 1.2;
+/// Reach of a flat melee swing (raycast along the crosshair ray), in world
+/// units - the same retail-derived distance as a frob.
+///
+/// The ray starts at the *eye*, 2.24 world units above the floor, so the reach
+/// has to cover the hypotenuse down to a low target: a Baby Arachnid you are
+/// standing on top of is still ~2.05 units away. The 1.2 this replaces could
+/// never hit one - it was a magic number that, until #1327, bounded nothing
+/// and so was never exercised. The game authors no melee reach of its own
+/// (`P$Melee Typ` is a type index), so borrow the one distance that IS
+/// retail-derived: if the player can frob it, the swing can reach it.
+const MELEE_RANGE: f32 = crate::virtual_hand::FROB_REACH;
 /// Damage dealt by a flat melee hit. TODO: derive from the weapon's `Melee Typ`.
 const MELEE_DAMAGE: f32 = 6.0;
 
@@ -655,12 +664,18 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
 /// distance along the current crosshair ray and damage the hit entity (hitbox
 /// proxies resolve to their parent).
 fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World) -> Effect {
-    let hit = physics.ray_cast(
+    // `ray_cast` normalizes its direction and casts a fixed 100 units, so the
+    // reach has to be passed as `ray_cast2`'s max_toi - scaling the direction
+    // bounds nothing.
+    let hit = physics.ray_cast2(
         aim.origin,
-        aim.forward.normalize() * MELEE_RANGE,
+        aim.forward.normalize(),
+        MELEE_RANGE,
         InternalCollisionGroups::ENTITIES
             | InternalCollisionGroups::HITBOX
             | InternalCollisionGroups::SELECTABLE,
+        None,
+        true,
     );
     if let Some(RayCastResult {
         maybe_entity_id: Some(target),
@@ -1479,6 +1494,109 @@ mod tests {
                 .iter()
                 .any(|effect| matches!(effect, Effect::AdjustAmmo { .. })),
             "and the round is not spent"
+        );
+    }
+
+    /// `PhysicsWorld::ray_cast` normalizes its direction and casts a fixed 100
+    /// world units, so scaling the direction by `MELEE_RANGE` bounded nothing -
+    /// a flat swing connected with anything on the crosshair across the room.
+    /// A target well past the swing's reach must take no damage.
+    #[test]
+    fn a_flat_swing_does_not_reach_past_melee_range() {
+        use crate::physics::{CollisionGroup, PhysicsWorld};
+        use cgmath::vec3;
+
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+
+        let far = world.add_entity(PropWeaponType(0));
+        let far_z = -(MELEE_RANGE * 8.0);
+        physics.add_kinematic(
+            far,
+            vec3(0.0, 0.0, far_z),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.2, 0.2, 0.2),
+            CollisionGroup::selectable(),
+            false,
+        );
+
+        let mut player = physics.create_player(
+            vec3(100.0, 100.0, 100.0),
+            EntityId::from_inner(1000).unwrap(),
+        );
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+        let aim = RuntimePropFlatAim {
+            origin: point3(0.0, 0.0, 0.0),
+            forward: vec3(0.0, 0.0, -1.0),
+        };
+
+        // Guard the fixture: the unbounded 100-unit ray DOES reach it, so a
+        // miss below is the bound doing its job, not an unreachable target.
+        assert!(far_z.abs() < 100.0);
+        assert!(
+            physics
+                .ray_cast(
+                    aim.origin,
+                    aim.forward,
+                    InternalCollisionGroups::ENTITIES
+                        | InternalCollisionGroups::HITBOX
+                        | InternalCollisionGroups::SELECTABLE,
+                )
+                .and_then(|hit| hit.maybe_entity_id)
+                == Some(far),
+            "fixture must be visible to an unbounded ray for this test to mean anything"
+        );
+
+        assert!(
+            matches!(flat_melee_hit(&physics, aim, &world), Effect::NoEffect),
+            "a target 8x past MELEE_RANGE must not be hit"
+        );
+    }
+
+    /// The other half of the bound: a target inside the swing's reach still
+    /// takes its damage, so the fix cannot pass by never connecting at all.
+    #[test]
+    fn a_flat_swing_still_hits_within_melee_range() {
+        use crate::physics::{CollisionGroup, PhysicsWorld};
+        use cgmath::vec3;
+
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+
+        let near = world.add_entity(PropWeaponType(0));
+        physics.add_kinematic(
+            near,
+            vec3(0.0, 0.0, -MELEE_RANGE / 2.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.2, 0.2, 0.2),
+            CollisionGroup::selectable(),
+            false,
+        );
+        let mut player = physics.create_player(
+            vec3(100.0, 100.0, 100.0),
+            EntityId::from_inner(1000).unwrap(),
+        );
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+        let aim = RuntimePropFlatAim {
+            origin: point3(0.0, 0.0, 0.0),
+            forward: vec3(0.0, 0.0, -1.0),
+        };
+
+        assert!(
+            matches!(
+                flat_melee_hit(&physics, aim, &world),
+                Effect::Send {
+                    msg: Message {
+                        to,
+                        payload: MessagePayload::Damage { .. },
+                    },
+                } if to == near
+            ),
+            "a target inside MELEE_RANGE must still take the swing"
         );
     }
 }
