@@ -135,10 +135,106 @@ pub fn hit(
 }
 
 /// Move `scroll` by one row, stopping at either end.
+///
+/// The offset is clamped into range *before* it moves, so an offset left over
+/// from a longer list (or a taller pane) does not need several dead `Up`
+/// clicks to unstick: the display already clamps via [`visible_rows`], and
+/// this keeps the stored offset agreeing with what is drawn.
 pub fn apply(half: ScrollHalf, scroll: &mut usize, max_scroll: usize) {
+    *scroll = (*scroll).min(max_scroll);
     match half {
         ScrollHalf::Up => *scroll = scroll.saturating_sub(1),
         ScrollHalf::Down => *scroll = (*scroll + 1).min(max_scroll),
+    }
+}
+
+/// What a point on a list pane landed on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListHit {
+    /// The item index scrolled into the row under the point - never the row's
+    /// own slot, which would act on whatever *used* to sit there.
+    Row(usize),
+    Scroll(ScrollHalf),
+}
+
+/// One list pane's geometry: everything a screen needs to turn "a pane, a row
+/// height and a number of items" into rows, a rocker and a hit test.
+///
+/// The primitives above are shared; this is the *composition* of them, which
+/// was written out once per screen until three lists had their own copy. A
+/// screen now states its pane and its pitch and gets the same paging, the same
+/// gutter, and the same slot-to-index mapping as every other list.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ListGeometry {
+    /// The pane the rows live in, from the backdrop's authored layout.
+    pub pane: Rect,
+    /// The y the rows must stop at - where the backdrop starts painting
+    /// something they have to clear.
+    pub bottom_limit: f32,
+    /// Distance between row tops, and each row's height.
+    pub row_h: f32,
+    /// Horizontal inset of a row's text from the row.
+    pub text_inset: f32,
+}
+
+impl ListGeometry {
+    pub fn rows_per_page(&self) -> usize {
+        rows_per_page(self.pane, self.bottom_limit, self.row_h)
+    }
+
+    pub fn max_scroll(&self, len: usize) -> usize {
+        max_scroll(len, self.rows_per_page())
+    }
+
+    pub fn visible_rows(&self, len: usize, scroll: usize) -> Range<usize> {
+        visible_rows(len, self.rows_per_page(), scroll)
+    }
+
+    pub fn rocker(&self, len: usize) -> Option<Rocker> {
+        rocker(self.pane, self.bottom_limit, self.max_scroll(len) > 0)
+    }
+
+    /// The `slot`-th visible row. Rows stop short of the scroll gutter exactly
+    /// when [`Self::rocker`] is `Some` - the same expression decides both, so a
+    /// row and the rocker can never claim the same point.
+    pub fn row_rect(&self, len: usize, slot: usize) -> Rect {
+        let gutter = if self.max_scroll(len) > 0 {
+            GUTTER_W
+        } else {
+            0.0
+        };
+        Rect::new(
+            self.pane.x,
+            self.pane.y + slot as f32 * self.row_h,
+            (self.pane.w - gutter).max(0.0),
+            self.row_h,
+        )
+    }
+
+    /// The rect a row's text is drawn in: the row, inset on both edges.
+    pub fn text_rect(&self, len: usize, slot: usize) -> Rect {
+        let row = self.row_rect(len, slot);
+        Rect::new(
+            row.x + self.text_inset,
+            row.y,
+            (row.w - 2.0 * self.text_inset).max(0.0),
+            row.h,
+        )
+    }
+
+    /// What is at a canvas point: a row's item index, a live rocker half, or
+    /// nothing. The rocker is tested first, and a half that cannot move is
+    /// inert rather than falling through to the row beneath it.
+    pub fn hit(&self, len: usize, scroll: usize, point: Vector2<f32>) -> Option<ListHit> {
+        let rows = self.visible_rows(len, scroll);
+        if let Some(rocker) = self.rocker(len) {
+            if let Some(half) = hit(&rocker, rows.start, self.max_scroll(len), point) {
+                return Some(ListHit::Scroll(half));
+            }
+        }
+        (0..rows.len())
+            .find(|slot| self.row_rect(len, *slot).contains(point))
+            .map(|slot| ListHit::Row(rows.start + slot))
     }
 }
 
@@ -241,6 +337,74 @@ mod tests {
         assert_eq!(art_for(&UP_ART, false, false), "BUP_DOWN.PCX");
         assert_eq!(art_for(&UP_ART, false, true), "BUP_DOWN.PCX");
         assert_eq!(art_for(&DOWN_ART, false, true), "BDN_DOWN.PCX");
+    }
+
+    const GEOMETRY: ListGeometry = ListGeometry {
+        pane: LIST,
+        bottom_limit: FIELD_TOP_Y,
+        row_h: 19.0,
+        text_inset: 8.0,
+    };
+
+    /// The composition every list shares: rows page, the gutter appears with
+    /// the rocker, and a row reports the item scrolled into it.
+    #[test]
+    fn the_geometry_maps_slots_to_the_scrolled_item() {
+        let short = GEOMETRY.rows_per_page() - 1;
+        let long = GEOMETRY.rows_per_page() + 5;
+
+        // A list that fits: no rocker, and rows span the full pane.
+        assert!(GEOMETRY.rocker(short).is_none());
+        assert_eq!(GEOMETRY.row_rect(short, 0).w, LIST.w);
+        assert_eq!(
+            GEOMETRY.hit(short, 0, GEOMETRY.row_rect(short, 0).center()),
+            Some(ListHit::Row(0))
+        );
+
+        // A list that does not: the rows make room for the gutter...
+        assert!(GEOMETRY.rocker(long).is_some());
+        assert_eq!(GEOMETRY.row_rect(long, 0).w, LIST.w - GUTTER_W);
+        // ...the top row follows the offset...
+        assert_eq!(
+            GEOMETRY.hit(long, 3, GEOMETRY.row_rect(long, 0).center()),
+            Some(ListHit::Row(3))
+        );
+        // ...an over-scroll clamps rather than walking off the end...
+        assert_eq!(
+            GEOMETRY.hit(long, 99, GEOMETRY.row_rect(long, 0).center()),
+            Some(ListHit::Row(GEOMETRY.max_scroll(long)))
+        );
+        // ...and the rocker takes its own gutter, with inert ends.
+        let rocker = GEOMETRY.rocker(long).unwrap();
+        assert_eq!(
+            GEOMETRY.hit(long, 0, rocker.down.center()),
+            Some(ListHit::Scroll(ScrollHalf::Down))
+        );
+        assert_eq!(GEOMETRY.hit(long, 0, rocker.up.center()), None);
+    }
+
+    /// Every row of a full page clears the painted field, not just the pane.
+    #[test]
+    fn a_full_page_of_rows_stays_above_the_field() {
+        let len = GEOMETRY.rows_per_page() + 5;
+        for slot in 0..GEOMETRY.rows_per_page() {
+            let row = GEOMETRY.row_rect(len, slot);
+            assert!(row.y >= LIST.y, "{row:?}");
+            assert!(row.y + row.h <= FIELD_TOP_Y, "slot {slot}: {row:?}");
+        }
+    }
+
+    /// An offset stranded past the end (a shorter list, a shallower pane)
+    /// must not need dead clicks to unstick.
+    #[test]
+    fn an_over_scroll_is_clamped_before_it_moves() {
+        let mut scroll = 40;
+        apply(ScrollHalf::Up, &mut scroll, 5);
+        assert_eq!(scroll, 4, "one Up from a stranded offset must move a row");
+
+        let mut scroll = 40;
+        apply(ScrollHalf::Down, &mut scroll, 5);
+        assert_eq!(scroll, 5);
     }
 
     #[test]
