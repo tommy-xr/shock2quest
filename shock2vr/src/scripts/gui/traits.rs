@@ -48,6 +48,7 @@ pub const OS_TRAITS: [(u8, &str); 16] = [
 ];
 
 /// Retail trait ids with live gameplay effects here (see the effect handler).
+pub const TRAIT_STRONG_METABOLISM: u8 = 1;
 pub const TRAIT_NATURALLY_ABLE: u8 = 6;
 pub const TRAIT_PACK_RAT: u8 = 3;
 pub const TRAIT_PHARMO_FRIENDLY: u8 = 2;
@@ -401,6 +402,7 @@ fn hovered_trait(cursor: cgmath::Point2<f32>) -> Option<u8> {
 /// One-line note of a trait's live effect, if implemented (for logs).
 pub fn live_effect_note(trait_id: u8) -> Option<&'static str> {
     match trait_id {
+        TRAIT_STRONG_METABOLISM => Some("25% less radiation damage, 50% less toxin damage"),
         TRAIT_TANK => Some("+5 max hit points"),
         TRAIT_NATURALLY_ABLE => Some("+8 cyber modules"),
         TRAIT_PACK_RAT => Some("+3 pack slots, +1 VR holster"),

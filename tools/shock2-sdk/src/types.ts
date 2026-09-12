@@ -130,6 +130,7 @@ export interface PathfindingTestStatus {
  * Mirrors the engine's `DebugEntityMessage`; the `type` field is the serde tag.
  */
 export type DebugEntityMessage =
+  | { type: "Hazard"; toxin: boolean; amount: number }
   | {
       type: "Damage";
       amount: number;
@@ -633,6 +634,7 @@ export interface PlayerSnapshot {
   max_psi_points: number | null;
   /** Accumulated retail radiation level (zero when clear). */
   radiation_level: number;
+  toxin_level: number;
   /** The gamesys name of the selected psi power (what the psi amp casts),
    * e.g. "Cryokinesis". Cycle with the CyclePsiPower input action. */
   selected_psi_power: string | null;

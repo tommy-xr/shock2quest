@@ -25,6 +25,11 @@ impl Script for PlayerScript {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
+            MessagePayload::Hazard { toxin, amount } => Effect::ApplyHazard {
+                entity_id,
+                toxin: *toxin,
+                amount: *amount,
+            },
             MessagePayload::Damage { amount, .. } => {
                 // A dead player takes no further hits (death handling itself
                 // is not implemented yet - see #561 follow-ups).

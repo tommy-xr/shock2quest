@@ -350,6 +350,18 @@ pub struct PropRadiationAbsorb(pub f32);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropRadiationDrain(pub f32);
 
+/// Authored room radiation ceiling (also used on radiating objects).
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropRadiationLevel(pub f32);
+
+/// Retail armor layout: toxic, radiation, combat percentages.
+#[derive(Debug, Component, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct PropArmor {
+    pub toxic: f32,
+    pub radiation: f32,
+    pub combat: f32,
+}
+
 /// A container's inventory grid, in cells. The `Contains` link's ordinal is
 /// `y * width + x` against *this* width, so it is what makes a stored cell
 /// mean anything.
@@ -1896,6 +1908,22 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$RenderAlp",
             |reader, _len| read_single(reader),
             PropRenderAlpha,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RadLevel",
+            |reader, _| read_single(reader),
+            PropRadiationLevel,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Armor",
+            |reader, _| PropArmor {
+                toxic: read_single(reader),
+                radiation: read_single(reader),
+                combat: read_single(reader),
+            },
+            identity,
             accumulator::latest,
         ),
         define_prop(

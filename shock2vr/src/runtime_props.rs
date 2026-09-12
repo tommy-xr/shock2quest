@@ -436,3 +436,7 @@ pub struct RuntimePropHolstered {
 /// 0 is left, 1 is right. Inventory membership gates recall availability.
 #[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct RuntimePropShoulderWeapon(pub u8);
+
+/// Explicitly worn armor; saved with its item and effective only while carried.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropHazardEquipment;

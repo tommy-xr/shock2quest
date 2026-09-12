@@ -1178,6 +1178,10 @@ pub struct DebugPathfindingStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DebugEntityMessage {
+    Hazard {
+        toxin: bool,
+        amount: f32,
+    },
     /// Deal `amount` damage (drives `InternalSimpleHealth` / AI health).
     /// `direction` (world-space, need not be normalized) and `point` optionally
     /// describe the blow so a death ragdoll reacts to it - same data a real
@@ -1198,7 +1202,9 @@ pub enum DebugEntityMessage {
     /// Frob (use) the entity.
     Frob,
     /// Send a named AI signal.
-    Signal { name: String },
+    Signal {
+        name: String,
+    },
     /// Force an AI's alertness level (clamped by its alert cap).
     SetAlertness {
         level: dark::properties::AIAlertLevel,
@@ -1210,7 +1216,9 @@ pub enum DebugEntityMessage {
     /// Set a gun's condition (`P$GunState`, 0..100). Not a script message:
     /// it writes the property directly, so a test can put a gun at the wear
     /// it wants without firing hundreds of rounds into it.
-    SetGunCondition { condition: f32 },
+    SetGunCondition {
+        condition: f32,
+    },
     /// Set an object's `P$ObjState` (Normal, Broken, ...) directly - e.g. to
     /// break a gun outright rather than waiting on its break roll.
     SetObjectState {

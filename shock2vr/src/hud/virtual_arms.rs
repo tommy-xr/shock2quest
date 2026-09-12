@@ -33,6 +33,28 @@ pub fn create_wrist_hud_panels(
         let root = Matrix4::from_translation(poses[i].position)
             * Matrix4::from(poses[i].rotation)
             * wrist_frames[i];
+        if hand == Handedness::Left {
+            let canvas =
+                super::hazards::wrist_canvas(&super::hazards::HazardReadout::from_world(world));
+            if canvas.element_count() > 0 {
+                // Hologram anchored above the calibrated glove, independent of
+                // weapon hand meshes. Pixel placement remains in hazards::emit.
+                let transform = root
+                    * Matrix4::from_translation(vec3(0.0, -0.06, 0.08))
+                    * Matrix4::from_nonuniform_scale(
+                        0.16,
+                        0.16 * canvas.size().y / canvas.size().x,
+                        1.0,
+                    );
+                objects.extend(canvas.render_world_space(
+                    asset_cache,
+                    transform,
+                    None,
+                    None,
+                    0.001,
+                ));
+            }
+        }
         if let Some(notice) = crate::wielded_weapon::held_by_hand(world, hand).and_then(|weapon| {
             crate::weapon_requirements::active_weapon_skill_notice(world, weapon)
         }) {

@@ -68,6 +68,17 @@ pub(crate) fn projectile_contact_effects(
     } else {
         Effect::NoEffect
     };
+    let hazard = crate::mission::stim_response::contact_hazard_effects(
+        world,
+        template,
+        receiver,
+        crate::runtime_props::RuntimePropShotModifiers::of(world, projectile).stim,
+    );
+    let damage = if matches!(hazard, Effect::NoEffect) {
+        damage
+    } else {
+        Effect::combine(vec![damage, hazard])
+    };
     if let Some(duration_seconds) = crate::mission::stim_response::contact_stim_freeze(
         world,
         template,

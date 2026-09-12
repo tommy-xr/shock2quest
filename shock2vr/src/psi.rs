@@ -346,7 +346,7 @@ fn learned_bit_set(dword1: u32, dword2: u32, power_id: i32) -> bool {
 }
 
 /// One currently-active sustained psi power on the player.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ActivePsiPower {
     pub template_id: i32,
     /// The gamesys symbolic name (e.g. "Inviso").
@@ -356,9 +356,8 @@ pub struct ActivePsiPower {
 
 /// The player's active sustained psi powers, ticked down each frame by
 /// `MissionCore::update` and removed on expiry. Re-casting an active power
-/// refreshes its duration. (Not yet persisted across save/load or level
-/// transitions - like the psi pool and selection.)
-#[derive(Unique, Clone, Default)]
+/// refreshes its duration. Saved with the player across load and deck changes.
+#[derive(Unique, Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ActivePsiPowers(pub Vec<ActivePsiPower>);
 
 impl ActivePsiPowers {

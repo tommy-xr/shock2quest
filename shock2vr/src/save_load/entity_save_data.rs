@@ -25,6 +25,9 @@ pub struct EntitySaveData {
     /// the field and load with no generated terminal poses.
     #[serde(default)]
     pub death_poses: HashMap<u64, RuntimePropDeathPose>,
+    /// Equipped hazard armor/implant identities; remapped with carried entities.
+    #[serde(default)]
+    pub hazard_equipment: Vec<u64>,
     /// Selected projectile-link index for weapons whose ammo type has been
     /// changed. Persisted separately because runtime components are not part of
     /// the Dark property registry.
@@ -65,6 +68,7 @@ impl EntitySaveData {
             properties: HashMap::new(),
             links: HashMap::new(),
             death_poses: HashMap::new(),
+            hazard_equipment: Vec::new(),
             selected_ammo: HashMap::new(),
             holstered: HashMap::new(),
             shoulder_weapons: HashMap::new(),
@@ -117,6 +121,13 @@ impl EntitySaveData {
             }
         }
 
+        for id in &self.hazard_equipment {
+            if let Some(old) = EntityId::from_inner(*id) {
+                if let Some(new) = old_entity_id_to_new_entity_id.get(&old) {
+                    world.add_component(*new, crate::runtime_props::RuntimePropHazardEquipment);
+                }
+            }
+        }
         for (old_entity_id, death_pose) in &self.death_poses {
             let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
             if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {

@@ -552,3 +552,66 @@ mod tests {
         assert_eq!(contact_stim_damage(&world, LEAD_PIPE, victim), 0.0);
     }
 }
+
+/// Status responses travel beside HP damage so mixed toxin/melee attacks keep both.
+pub fn contact_hazard_effects(
+    world: &World,
+    emitter: i32,
+    victim: EntityId,
+    scale: f32,
+) -> crate::scripts::Effect {
+    let Ok(sources) = world.borrow::<UniqueView<GlobalContactStims>>() else {
+        return crate::scripts::Effect::NoEffect;
+    };
+    let Some(stims) = sources.0.get(&emitter) else {
+        return crate::scripts::Effect::NoEffect;
+    };
+    let receptrons = victim_receptrons(world, victim);
+    let effects: Vec<_> = stims
+        .iter()
+        .flat_map(|(stim, amount)| hazard_effects(&receptrons, *stim, amount * scale, victim))
+        .collect();
+    if effects.is_empty() {
+        crate::scripts::Effect::NoEffect
+    } else {
+        crate::scripts::Effect::combine(effects)
+    }
+}
+
+pub fn hazard_effects(
+    receptrons: &[(i32, ReceptronOptions)],
+    stim: i32,
+    intensity: f32,
+    victim: EntityId,
+) -> Vec<crate::scripts::Effect> {
+    let mut amplify = 1.0;
+    let mut toxin = false;
+    for (_, response) in receptrons.iter().filter(|(id, _)| *id == stim) {
+        match &response.effect {
+            ReceptronEffect::Abort => return vec![],
+            ReceptronEffect::Amplify { factor } => amplify *= factor,
+            ReceptronEffect::Unhandled(name) if name.eq_ignore_ascii_case("toxin") => toxin = true,
+            _ => {}
+        }
+    }
+    let amount = intensity * amplify;
+    if !amount.is_finite() || amount <= 0.0 {
+        return vec![];
+    }
+    let mut effects = Vec::new();
+    if toxin {
+        effects.push(crate::scripts::Effect::ApplyHazard {
+            entity_id: victim,
+            toxin: true,
+            amount,
+        });
+    }
+    if let Some(amount) = resolve_stim_radiation(receptrons, stim, intensity) {
+        effects.push(crate::scripts::Effect::ApplyHazard {
+            entity_id: victim,
+            toxin: false,
+            amount,
+        });
+    }
+    effects
+}

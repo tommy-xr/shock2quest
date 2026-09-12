@@ -204,6 +204,14 @@ pub fn to_save_data_with_scripts(
         }
     }
 
+    let (held_hazard_equipment, world_hazard_equipment): (Vec<_>, Vec<_>) = world
+        .borrow::<View<crate::runtime_props::RuntimePropHazardEquipment>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .map(|(id, _)| id.inner())
+        .filter(|id| !entities_to_filter.contains(id))
+        .partition(|id| held_entities.contains(id));
     let raw_selected_ammo: HashMap<u64, usize> = v_selected_ammo
         .iter()
         .with_id()
@@ -279,6 +287,7 @@ pub fn to_save_data_with_scripts(
         all_entities: all_world_entities,
         death_poses: world_death_poses,
         selected_ammo: world_selected_ammo,
+        hazard_equipment: world_hazard_equipment,
         holstered: world_holstered,
         shoulder_weapons: world_shoulders,
         canonical_template_ids: world_canonical_templates,
@@ -295,6 +304,7 @@ pub fn to_save_data_with_scripts(
         properties: held_serialized_properties,
         death_poses: held_death_poses,
         selected_ammo: held_selected_ammo,
+        hazard_equipment: held_hazard_equipment,
         holstered: held_holstered,
         shoulder_weapons: held_shoulders,
         canonical_template_ids: held_canonical_templates,

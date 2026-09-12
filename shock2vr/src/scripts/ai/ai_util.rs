@@ -729,19 +729,28 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
         weapon_template_id,
         player_entity_id,
     );
+    let hazard = crate::mission::stim_response::contact_hazard_effects(
+        world,
+        weapon_template_id,
+        player_entity_id,
+        1.0,
+    );
     if damage <= 0.0 {
-        return Effect::NoEffect;
+        return hazard;
     }
 
-    Effect::Send {
-        msg: crate::scripts::Message {
-            to: player_entity_id,
-            payload: crate::scripts::MessagePayload::Damage {
-                amount: damage,
-                impact: None,
+    Effect::combine(vec![
+        hazard,
+        Effect::Send {
+            msg: crate::scripts::Message {
+                to: player_entity_id,
+                payload: crate::scripts::MessagePayload::Damage {
+                    amount: damage,
+                    impact: None,
+                },
             },
         },
-    }
+    ])
 }
 
 /// Where this AI should chase: its last-known target position when it has

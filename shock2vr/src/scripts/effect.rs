@@ -32,6 +32,9 @@ pub enum PlayerVitalsTransition {
 
 #[derive(Clone, Debug)]
 pub enum GlobalEffect {
+    PlayerRadiationHit {
+        damage: f32,
+    },
     // Save the game state to the given file_name
     Save {
         file_name: String,
@@ -177,6 +180,26 @@ pub enum AIPropertyUpdate {
 #[derive(Clone, Debug)]
 pub enum Effect {
     NoEffect,
+    ApplyHazard {
+        entity_id: EntityId,
+        toxin: bool,
+        amount: f32,
+    },
+    RadiationRoom {
+        entity_id: EntityId,
+        entered: bool,
+    },
+    ClearHazard {
+        toxin: bool,
+    },
+    ClearEnvironmentalRadiation,
+    UseToxinPatch {
+        entity_id: EntityId,
+        amount: f32,
+    },
+    ToggleHazardArmor {
+        entity_id: EntityId,
+    },
 
     AwardXP {
         amount: i32,
