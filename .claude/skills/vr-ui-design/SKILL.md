@@ -173,6 +173,24 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
     gun/psi-amp combinations. Preserve the complete authored UI canvas when
     mounting it on a glove; avoid arbitrary cropping to make it fit.
 
+## Glove readout implementation notes
+
+- `hand_glove::GloveRenderer::wrist_frame` provides the calibrated mount:
+  local +Y runs from wrist toward fingers and +Z points out of the glove's
+  back. `hud/virtual_arms.rs::wrist_panel_transform` places the bio readout at
+  the wrist facing dorsally. The held weapon's ammo/psi readout caps the cuff
+  opening where the arm enters, facing back along the forearm (local -Y),
+  with text up toward local +Z. Treat offsets as glove-specific fit values, not a
+  general UI spacing rule.
+- `interaction.rs` passes the final visible hand poses into
+  `create_wrist_hud_panels`; preserve this attachment so weapon physics and
+  support grips move glove and readout together. Mirrored hands already have
+  readable bases from `wrist_frame`; do not mirror the text a second time.
+- For a flush mount, inspect the cuff opening end-on for legibility and an
+  oblique view for clipping or a floating gap, with a weapon actually held. Check both
+  hands. Keep the shared canvas layout intact while adjusting its mount;
+  verify comfort and glance readability in-headset before calling the fit final.
+
 ## Evidence for physical interactions
 
 20. **Pair pictures with state assertions.** Before/after screenshots can show a

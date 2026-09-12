@@ -10,7 +10,7 @@ use crate::{
 };
 
 /// Compact readouts ride the calibrated visible glove, not the raw controller.
-/// Both wrists show health/psi dorsally; each underside shows only its own weapon.
+/// Both wrists show health/psi; each cuff opening shows only its own weapon.
 pub fn create_wrist_hud_panels(
     asset_cache: &mut AssetCache,
     world: &World,
@@ -57,7 +57,7 @@ pub fn create_wrist_hud_panels(
         ) {
             continue;
         }
-        for (under, canvas) in [
+        for (ammo, canvas) in [
             (false, readouts::build_watch_canvas(&bio)),
             (
                 true,
@@ -73,7 +73,7 @@ pub fn create_wrist_hud_panels(
             }
             objects.extend(canvas.render_world_space(
                 asset_cache,
-                wrist_panel_transform(root, canvas.size(), under, hand),
+                wrist_panel_transform(root, canvas.size(), ammo),
                 None,
                 None,
                 0.001,
@@ -85,27 +85,20 @@ pub fn create_wrist_hud_panels(
 }
 
 /// Wrist-frame +Z points out of the glove's back; +Y points toward its fingers.
-/// The underside turns around +Y so glyphs remain readable, never mirrored.
+/// Bio faces dorsally. Ammo caps the cuff opening and faces back along the
+/// forearm, with the top of its text toward the back of the hand.
 fn wrist_panel_transform(
     root: Matrix4<f32>,
     canvas_size: cgmath::Vector2<f32>,
-    under: bool,
-    hand: Handedness,
+    ammo: bool,
 ) -> Matrix4<f32> {
     const WIDTH: f32 = 0.085;
-    // The bio face runs around the wrist like a bracelet. Keep the ammo
-    // face oriented for an across-body underside glance.
-    let roll = if !under {
-        0.0
-    } else if hand == Handedness::Right {
-        -90.0
+    let mount = if ammo {
+        Matrix4::from_translation(vec3(0.0, -0.033, 0.0)) * Matrix4::from_angle_x(Deg(90.0))
     } else {
-        90.0
+        Matrix4::from_translation(vec3(0.0, -0.015, 0.04))
     };
-    root * Matrix4::from_translation(vec3(0.0, -0.015, if under { -0.06 } else { 0.04 }))
-        * Matrix4::from_angle_y(Deg(if under { 180.0 } else { 0.0 }))
-        * Matrix4::from_angle_z(Deg(roll))
-        * Matrix4::from_nonuniform_scale(WIDTH, WIDTH * canvas_size.y / canvas_size.x, 1.0)
+    root * mount * Matrix4::from_nonuniform_scale(WIDTH, WIDTH * canvas_size.y / canvas_size.x, 1.0)
 }
 
 /// Get player health percentage (0.0 to 1.0)
@@ -276,15 +269,10 @@ mod tests {
     use cgmath::{InnerSpace, SquareMatrix};
 
     #[test]
-    fn opposite_watch_faces_are_outward_and_text_is_never_mirrored() {
-        for (under, hand) in [
-            (false, Handedness::Left),
-            (true, Handedness::Left),
-            (false, Handedness::Right),
-            (true, Handedness::Right),
-        ] {
+    fn glove_readouts_are_outward_and_text_is_never_mirrored() {
+        for ammo in [false, true] {
             let transform =
-                wrist_panel_transform(Matrix4::identity(), cgmath::vec2(128.0, 44.0), under, hand);
+                wrist_panel_transform(Matrix4::identity(), cgmath::vec2(128.0, 44.0), ammo);
             let normal = transform.z.truncate();
             assert!(normal.dot(transform.w.truncate()) > 0.0);
             assert!(transform.determinant() > 0.0);
