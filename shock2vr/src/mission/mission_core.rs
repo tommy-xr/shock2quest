@@ -8483,6 +8483,23 @@ impl MissionCore {
                 } => {
                     effects.extend(self.grab_entity_into_hand(asset_cache, entity_id, hand));
                 }
+                Effect::SetObjectParameters {
+                    entity_id,
+                    parameters,
+                } => {
+                    if let (Some(model), Some(player)) = (
+                        self.id_to_model.get(&entity_id),
+                        self.id_to_animation_player.get_mut(&entity_id),
+                    ) {
+                        if let Some(rig) = model.object_articulation() {
+                            for (joint, transform) in rig.joint_transforms(&parameters) {
+                                *player = AnimationPlayer::set_additional_joint_transform(
+                                    player, joint, transform,
+                                );
+                            }
+                        }
+                    }
+                }
                 Effect::SetJointTransform {
                     entity_id,
                     joint_id,
@@ -9062,6 +9079,16 @@ impl MissionCore {
                                 );
                             }
                         }
+                        self.world
+                            .remove::<crate::runtime_props::RuntimePropObjectArticulation>(
+                                entity_id,
+                            );
+                        if let Some(rig) = new_model.object_articulation() {
+                            self.world.add_component(
+                                entity_id,
+                                crate::runtime_props::RuntimePropObjectArticulation(rig.clone()),
+                            );
+                        }
                         self.id_to_model.insert(entity_id, new_model);
                         self.world
                             .add_component(entity_id, PropModelName(model_name));
@@ -9081,6 +9108,7 @@ impl MissionCore {
                     self.world.remove::<(
                         PropModelName,
                         RuntimePropVhots,
+                        crate::runtime_props::RuntimePropObjectArticulation,
                         crate::weapon_muzzle::MuzzleFallback,
                         crate::runtime_props::RuntimePropGloveWeapon,
                     )>(entity_id);

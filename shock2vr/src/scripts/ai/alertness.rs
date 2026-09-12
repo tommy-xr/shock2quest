@@ -28,7 +28,7 @@ use shipyard::EntityId;
 use crate::scripts::{AIPropertyUpdate, Effect};
 
 /// Tracks the current alertness state for an AI entity.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AlertnessState {
     /// Current alertness level
     pub current_level: AIAlertLevel,

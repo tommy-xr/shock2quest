@@ -728,6 +728,16 @@ fn create_model(
         let model = maybe_model.unwrap();
         let model_ref = model.as_ref();
 
+        let mut rv_articulation = world
+            .borrow::<ViewMut<RuntimePropObjectArticulation>>()
+            .unwrap();
+        if let Some(rig) = model.object_articulation() {
+            entities.add_component(
+                entity_id,
+                &mut rv_articulation,
+                RuntimePropObjectArticulation(rig.clone()),
+            );
+        }
         let vhots = model.vhots();
         entities.add_component(entity_id, &mut rv_vhots, RuntimePropVhots(vhots));
         if let Some(muzzle) = crate::weapon_muzzle::load_fallback(asset_cache, &model_name) {

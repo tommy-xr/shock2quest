@@ -1136,6 +1136,10 @@ impl Links {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPickBias(pub f32);
 
+/// AI movement turn rate, in degrees per second.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropAITurnRate(pub f32);
+
 /// Renderer\Transparency (alpha): 0.0 = invisible, 1.0 = opaque. Authored on
 /// holo/ghost entities (e.g. the CS9 cutscene exhibits) and animated by the
 /// Transluce script family.
@@ -1876,6 +1880,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ParticleG",
             PropParticleGroup::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_TurnR",
+            |reader, _len| read_single(reader),
+            PropAITurnRate,
             accumulator::latest,
         ),
         define_prop(
