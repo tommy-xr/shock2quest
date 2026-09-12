@@ -180,8 +180,14 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
   back. `hud/virtual_arms.rs::wrist_panel_transform` places the bio readout at
   the wrist facing dorsally. The held weapon's ammo/psi readout caps the cuff
   opening where the arm enters, facing back along the forearm (local -Y),
-  with text up toward local +Z. Treat offsets as glove-specific fit values, not a
-  general UI spacing rule.
+  rotated 90 degrees counterclockwise as viewed face-on and sized inside the
+  cuff rim. Apply this roll in the panel plane after the cuff-facing rotation.
+  Treat offsets and size as glove-specific fit values, not a general UI spacing rule.
+- The compact gun layout lives in `hud/ammo_panel.rs::emit`, shared by the
+  flat HUD and glove: bold centered count, ammo icon left, condition badge
+  upper right, and ammo type/current fire mode below. The expanded interface
+  reserves room for its clickable controls. Bound type and mode separately so
+  long authored tags cannot displace the mode; resolve both from that hand's gun.
 - `interaction.rs` passes the final visible hand poses into
   `create_wrist_hud_panels`; preserve this attachment so weapon physics and
   support grips move glove and readout together. Mirrored hands already have

@@ -793,6 +793,19 @@ where
         self.push_text(rect, text, font, 0.0, h, v, true)
     }
 
+    /// Explicitly sized text, ellipsized by the shared layout pass to its rect.
+    pub fn text_fit(
+        &mut self,
+        rect: Rect,
+        text: &str,
+        font: &str,
+        size: f32,
+        h: HAlign,
+        v: VAlign,
+    ) -> &mut Self {
+        self.push_text(rect, text, font, size, h, v, true)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn push_text(
         &mut self,
