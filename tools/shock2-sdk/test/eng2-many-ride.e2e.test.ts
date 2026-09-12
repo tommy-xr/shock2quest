@@ -15,6 +15,7 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const TRIPWIRE = 833;
 const SEAT_1 = 870;
 const CAGE_PLATFORM = 976;
+const WRENCH = -928;
 
 async function only(game: GameServer, objectId: number): Promise<EntitySummary> {
   const found = await game.entities.byTemplate(objectId);
@@ -146,6 +147,97 @@ test(
     assert.ok(
       distance(releaseRelativeAfter, releaseRelativeBefore) > 1,
       `StandUpAgain should restore movement after WhiteOut 2; before=${JSON.stringify(releaseRelativeBefore)} after=${JSON.stringify(releaseRelativeAfter)}`,
+    );
+  },
+);
+
+test(
+  "eng2 VR: the Many ride carries an already-held weapon with the player",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "eng2.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8159),
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 2 });
+
+    // Provision the retail Wrench into the backpack, then equip it through the
+    // production carried-weapon action while the actual VR grip stays closed.
+    // This establishes the same VirtualHand ownership the Many ride disrupted
+    // in the campaign; direct entity messages cannot prove that state.
+    const wrench = await game.player.spawnItem(WRENCH);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.input.trigger("EquipWrench");
+    await game.step({ frames: 3 });
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      wrench.entity_id,
+      "the forced-VR regression must begin with the Wrench physically held",
+    );
+
+    const tripwire = await only(game, TRIPWIRE);
+    const [tx, ty, tz] = tripwire.position;
+    await game.player.teleport({ x: tx, y: ty + 0.5, z: tz + 4.8 });
+    await game.step({ frames: 2 });
+    await game.player.teleport({ x: tx, y: ty + 0.5, z: tz });
+
+    // WhiteOut 1 seats and paralyzes the player after two seconds. Suppressing
+    // controls must not turn the held squeeze into a synthetic release, and
+    // the held entity must follow the long scripted relocation to Seat1.
+    await game.step({ frames: 180 });
+    const [player, heldWrench] = await Promise.all([
+      game.player.position(),
+      game.entities.detail(wrench.entity_id),
+    ]);
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      wrench.entity_id,
+      "the Many ride must not release a weapon merely because controls are paralyzed",
+    );
+    assert.ok(
+      distance(player, heldWrench.position) < 3,
+      `held Wrench should travel to Seat1 with the player; player=${JSON.stringify(player)} wrench=${JSON.stringify(heldWrench.position)}`,
+    );
+  },
+);
+
+test(
+  "eng2: StandUp returns the player from the temporary Many-ride seat",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "eng2.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8160),
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 2 });
+
+    const tripwire = await only(game, TRIPWIRE);
+    const [tx, ty, tz] = tripwire.position;
+    await game.player.teleport({ x: tx, y: ty + 0.5, z: tz + 4.8 });
+    await game.step({ frames: 2 });
+    await game.player.teleport({ x: tx, y: ty + 0.5, z: tz });
+    const preSeatPosition = await game.player.position();
+
+    // Advance past the 80-second second-whiteout branch, its two-second
+    // fade-in, the 200 ms StandUp delay, and the final fade reveal.
+    await game.step({ frames: 5_100 });
+    const returned = await game.player.position();
+    assert.ok(
+      distance(returned, preSeatPosition) < 2,
+      `StandUp should restore the pre-seat Engineering pose; before=${JSON.stringify(preSeatPosition)} after=${JSON.stringify(returned)}`,
+    );
+
+    // The restored pose is ordinary level geometry and controls are live: a
+    // full strafe must move the player instead of leaving them on the isolated
+    // continuously-moving cutscene cage.
+    await game.input.set("right_hand.thumbstick", [1, 0]);
+    await game.step({ frames: 60 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    assert.ok(
+      distance(await game.player.position(), returned) > 1,
+      "StandUp should restore controls on the normal Engineering route",
     );
   },
 );

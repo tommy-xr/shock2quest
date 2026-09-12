@@ -5,18 +5,20 @@
 //! `ParalyzePlayers`, and the continuously-moving cage platform. A second
 //! white-out releases the player at the end.
 
+use cgmath::{Quaternion, Vector3};
 use dark::properties::{PropDelayTime, PropPosition};
 use serde::{Deserialize, Serialize};
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
-use crate::{physics::PhysicsWorld, time::Time};
+use crate::{mission::PlayerInfo, physics::PhysicsWorld, time::Time};
 
 use super::{
-    Effect, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError,
+    Effect, Message, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError,
     script_util::{get_first_entity_by_name, send_to_all_switch_links},
 };
 
 const WHITE_OUT_STATE_KEY: &str = "shock2vr.many_ride.white_out";
+const SIT_DOWN_STATE_KEY: &str = "shock2vr.many_ride.sit_down";
 const PARALYZE_STATE_KEY: &str = "shock2vr.many_ride.paralyze_players";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
@@ -148,13 +150,30 @@ impl Script for WhiteOut {
     }
 }
 
-/// Seat the single supported player at the retail `Seat1` marker and suppress
-/// movement while the adjacent paralyze relay catches up.
-pub struct SitDownRightNow;
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+struct PlayerPose {
+    position: Vector3<f32>,
+    rotation: Quaternion<f32>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SitDownState {
+    return_pose: Option<PlayerPose>,
+}
+
+/// Temporarily seat the single supported player at retail's `Seat1` marker.
+///
+/// The original sends `GotoSeat` to PlayerScript and later pairs it with
+/// `StandUp`, returning the player from the hallucination to their pre-seat
+/// pose. The port moves the physical pawn to render the ride, so retain that
+/// exact pose here (including across save/load).
+pub struct SitDownRightNow {
+    return_pose: Option<PlayerPose>,
+}
 
 impl SitDownRightNow {
     pub fn new() -> Self {
-        Self
+        Self { return_pose: None }
     }
 }
 
@@ -166,29 +185,81 @@ impl Script for SitDownRightNow {
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
-        if !matches!(msg, MessagePayload::TurnOn { .. }) {
-            return Effect::NoEffect;
+        match msg {
+            MessagePayload::TurnOn { .. } => {
+                let Some(seat) = get_first_entity_by_name(world, "Seat1") else {
+                    return Effect::NoEffect;
+                };
+                let positions = world.borrow::<View<PropPosition>>().unwrap();
+                let Ok(seat_position) = positions.get(seat) else {
+                    return Effect::NoEffect;
+                };
+
+                if self.return_pose.is_none() {
+                    self.return_pose =
+                        world
+                            .borrow::<UniqueView<PlayerInfo>>()
+                            .ok()
+                            .map(|player| PlayerPose {
+                                position: player.pos,
+                                rotation: player.rotation,
+                            });
+                }
+
+                Effect::combine(vec![
+                    Effect::SetPlayerPosition {
+                        position: seat_position.position,
+                        is_teleport: true,
+                        source: dark::properties::TeleportSource::ScriptedTrap,
+                    },
+                    Effect::SetPlayerRotation {
+                        rotation: seat_position.rotation,
+                    },
+                    Effect::SetPlayerControlsEnabled { enabled: false },
+                ])
+            }
+            MessagePayload::StandUp => {
+                let Some(return_pose) = self.return_pose.take() else {
+                    return Effect::SetPlayerControlsEnabled { enabled: true };
+                };
+                Effect::combine(vec![
+                    Effect::SetPlayerPosition {
+                        position: return_pose.position,
+                        is_teleport: true,
+                        source: dark::properties::TeleportSource::ScriptedTrap,
+                    },
+                    Effect::SetPlayerRotation {
+                        rotation: return_pose.rotation,
+                    },
+                    Effect::SetPlayerControlsEnabled { enabled: true },
+                ])
+            }
+            _ => Effect::NoEffect,
         }
+    }
 
-        let Some(seat) = get_first_entity_by_name(world, "Seat1") else {
-            return Effect::NoEffect;
-        };
-        let positions = world.borrow::<View<PropPosition>>().unwrap();
-        let Ok(seat_position) = positions.get(seat) else {
-            return Effect::NoEffect;
-        };
+    fn script_state_key(&self) -> Option<&'static str> {
+        Some(SIT_DOWN_STATE_KEY)
+    }
 
-        Effect::combine(vec![
-            Effect::SetPlayerPosition {
-                position: seat_position.position,
-                is_teleport: true,
-                source: dark::properties::TeleportSource::ScriptedTrap,
+    fn save_state(&self) -> Result<ScriptState, ScriptStateError> {
+        ScriptState::encode(
+            1,
+            &SitDownState {
+                return_pose: self.return_pose,
             },
-            Effect::SetPlayerRotation {
-                rotation: seat_position.rotation,
-            },
-            Effect::SetPlayerControlsEnabled { enabled: false },
-        ])
+            SIT_DOWN_STATE_KEY,
+        )
+    }
+
+    fn restore_state(
+        &mut self,
+        state: &ScriptState,
+        _context: &ScriptRestoreContext<'_>,
+    ) -> Result<(), ScriptStateError> {
+        let restored: SitDownState = state.decode(1, SIT_DOWN_STATE_KEY)?;
+        self.return_pose = restored.return_pose;
+        Ok(())
     }
 }
 
@@ -283,21 +354,31 @@ impl Script for StandUpAgain {
     fn handle_message(
         &mut self,
         _entity_id: EntityId,
-        _world: &World,
+        world: &World,
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
-        if matches!(msg, MessagePayload::TurnOn { .. }) {
-            Effect::SetPlayerControlsEnabled { enabled: true }
-        } else {
-            Effect::NoEffect
+        if !matches!(msg, MessagePayload::TurnOn { .. }) {
+            return Effect::NoEffect;
         }
+
+        // Retail sends StandUp to PlayerScript, which owns the matching
+        // GotoSeat state. Our single-player equivalent keeps that state on the
+        // unique SitDownNow1 script instance.
+        get_first_entity_by_name(world, "SitDownNow1")
+            .map(|sit_down| Effect::Send {
+                msg: Message {
+                    payload: MessagePayload::StandUp,
+                    to: sit_down,
+                },
+            })
+            .unwrap_or(Effect::SetPlayerControlsEnabled { enabled: true })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{collections::HashMap, time::Duration};
 
     use cgmath::{Quaternion, vec3};
     use dark::properties::{Link, Links, PropSymName, ToLink, WrappedEntityId};
@@ -365,6 +446,17 @@ mod tests {
     #[test]
     fn sit_down_uses_the_single_player_seat_marker() {
         let mut world = World::new();
+        let player_entity = world.add_entity(());
+        let inventory_entity = world.add_entity(());
+        let return_rotation = Quaternion::new(0.5, 0.0, 0.5, 0.0);
+        world.add_unique(PlayerInfo {
+            pos: vec3(1.0, 2.0, 3.0),
+            rotation: return_rotation,
+            entity_id: player_entity,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory_entity,
+        });
         world.add_entity((
             PropSymName("Seat1".to_owned()),
             PropPosition {
@@ -393,6 +485,33 @@ mod tests {
                 effect,
                 Effect::SetPlayerControlsEnabled { enabled: false }
             ))
+        );
+
+        // The pre-seat pose is script-private, versioned state: a save/load
+        // during the ride must still let the paired StandUp return safely.
+        let saved = script.save_state().unwrap();
+        let remap = HashMap::new();
+        let context = ScriptRestoreContext::new(&remap);
+        let mut restored = SitDownRightNow::new();
+        restored.restore_state(&saved, &context).unwrap();
+        let stand_up = Effect::flatten(vec![restored.handle_message(
+            EntityId::dead(),
+            &world,
+            &physics,
+            &MessagePayload::StandUp,
+        )]);
+        assert!(stand_up.iter().any(|effect| matches!(
+            effect,
+            Effect::SetPlayerPosition { position, .. } if *position == vec3(1.0, 2.0, 3.0)
+        )));
+        assert!(stand_up.iter().any(|effect| matches!(
+            effect,
+            Effect::SetPlayerRotation { rotation } if *rotation == return_rotation
+        )));
+        assert!(
+            stand_up
+                .iter()
+                .any(|effect| matches!(effect, Effect::SetPlayerControlsEnabled { enabled: true }))
         );
     }
 }

@@ -3606,20 +3606,32 @@ impl MissionCore {
         life_state_effects.append(&mut self.update_player_life_state(time.elapsed.as_secs_f32()));
         self.advance_death_camera(time.elapsed.as_secs_f32());
 
-        // A dead player's physical head can still look around in VR, but all
-        // actionable movement, hand, trigger, crouch, and pointer channels are
-        // neutral until reconstruction. Discrete quick-load remains available
-        // because it arrives separately in `command_effects`.
-        let suppressed_input = InputContext::default();
-        let input_context = if self.player_is_alive() && self.player_controls_enabled {
-            input_context
+        // A dead player's actionable channels are neutral until
+        // reconstruction. A scripted control lock is subtler: tracked poses
+        // keep updating, and an item already owned by a VR hand must keep its
+        // grip latch. Otherwise a zeroed squeeze is interpreted as an explicit
+        // DropItem (the eng2 Many ride used to strand the weapon at its
+        // entrance). Empty hands remain neutral and cannot acquire anything.
+        // Discrete quick-load remains available because it arrives separately
+        // in `command_effects`.
+        let suppressed_input = if !self.player_is_alive() {
+            Some(InputContext::default())
+        } else if !self.player_controls_enabled {
+            let (left_held, right_held) = self.interaction.held_entities();
+            Some(
+                input_context
+                    .with_player_controls_suppressed(left_held.is_some(), right_held.is_some()),
+            )
         } else {
-            // The discrete jump is latched separately from the context, so it
-            // has to be dropped here too - otherwise a face button pressed as
-            // the player died would hop the corpse.
-            self.button_jump = false;
-            &suppressed_input
+            None
         };
+        // The discrete jump is latched separately from the context, so it
+        // has to be dropped here too - otherwise a face button pressed as
+        // the player died would hop the corpse.
+        if suppressed_input.is_some() {
+            self.button_jump = false;
+        }
+        let input_context = suppressed_input.as_ref().unwrap_or(input_context);
         // Refill the per-frame AI pathfind budget - only on advancing frames,
         // so paused zero-dt ticks (debug runtime introspection) can't grant
         // extra query slots between stepped frames
