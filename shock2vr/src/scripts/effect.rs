@@ -576,6 +576,8 @@ pub enum Effect {
     /// Radiation sources refresh this every frame while their player is in
     /// range; the player status integrates the ambient exposure separately.
     RadiusStim {
+        /// False for authored constant-intensity clouds; true for existing blasts/hazards.
+        linear_falloff: bool,
         source_entity_id: Option<EntityId>,
         center: Vector3<f32>,
         radius: f32,

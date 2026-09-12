@@ -28,6 +28,7 @@ mod dead_power_cell;
 mod delay_grenade;
 mod destroy_all_by_name;
 mod die_shodan_die;
+mod egg_goo_cloud;
 mod energy_station;
 mod energy_weapon;
 mod exp_cookie;
@@ -1054,6 +1055,7 @@ impl ScriptWorld {
             "internal_psi_powers" => gui_script(Box::new(PsiPowersGui)),
             // "internal_inventory" => Box::new(PanicOnLoadScript::new("internal_inventory")),
             "internal_explosion" => Box::new(InternalExplosion::new()),
+            "internal_egg_goo_cloud" => Box::new(egg_goo_cloud::EggGooCloud::default()),
             "internal_radiation_source" => Box::new(InternalRadiationSource),
             "internal_frob_move" => Box::new(InternalFrobMove::new()),
             "internal_keycard" => Box::new(KeyCardScript::new()),

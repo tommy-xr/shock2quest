@@ -5887,6 +5887,7 @@ impl MissionCore {
         stim_template_id: i32,
     ) {
         self.apply_radius_stimulus(
+            true,
             Some(source_entity_id),
             center,
             radius,
@@ -5906,6 +5907,7 @@ impl MissionCore {
     /// the explosion-only physical impulse and without a source to exclude.
     fn apply_radius_stimulus(
         &mut self,
+        linear_falloff: bool,
         source_entity_id: Option<EntityId>,
         center: Vector3<f32>,
         radius: f32,
@@ -5929,7 +5931,11 @@ impl MissionCore {
                 let position = crate::util::point3_to_vec3(position);
                 let distance = (position - center).magnitude();
                 if distance < radius {
-                    let falloff = 1.0 - distance / radius;
+                    let falloff = if linear_falloff {
+                        1.0 - distance / radius
+                    } else {
+                        1.0
+                    };
                     let exposure = blast_exposure(
                         &self.physics,
                         source_entity_id,
@@ -5960,7 +5966,13 @@ impl MissionCore {
                 );
                 in_range.push((
                     player.entity_id,
-                    intensity * (1.0 - distance / radius) * exposure,
+                    intensity
+                        * if linear_falloff {
+                            1.0 - distance / radius
+                        } else {
+                            1.0
+                        }
+                        * exposure,
                 ));
             }
         }
@@ -7749,6 +7761,7 @@ impl MissionCore {
                 }
 
                 Effect::RadiusStim {
+                    linear_falloff,
                     source_entity_id,
                     center,
                     radius,
@@ -7756,6 +7769,7 @@ impl MissionCore {
                     stim_template_id,
                 } => {
                     self.apply_radius_stimulus(
+                        linear_falloff,
                         source_entity_id,
                         center,
                         radius,
