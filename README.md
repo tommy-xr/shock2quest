@@ -67,6 +67,11 @@ However, you can play with a keyboard and a mouse, using the following hard-code
   insert is the only way to change ammo type in the headset, so the types you
   can select are the ones you are carrying clips for. There is no reload or
   ammo-swap button on the controllers; the gesture is the control.
+- Quest VR: rearrange inventory by gripping an item, pointing at its new
+  location, and releasing. Tall items slide up to fit the chosen column.
+  The ghost footprint previews the destination: green for placement or merging,
+  amber for automatic placement elsewhere, and red when the pack has no room
+  and releasing will drop the item into the world.
 - Quest VR: with that hand free, press an upper face button (left `Y` / right
   `B`) to open the newest unread audio log. Press it again to close it; after
   every log is read, it replays the most recently collected log. Holding a

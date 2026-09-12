@@ -36,17 +36,19 @@ const BELOW_STRIP_CANVAS: [number, number] = [320, 400];
 const STRIP_ANCHOR: [number, number] = [2, 0];
 const BACKPACK_GRID_ORIGIN: [number, number] = [4, 17];
 const SLOT_PITCH: [number, number] = [35, 34];
+// The strip makes room for the mirrored 37px arm readout.
+const STRIP_SCALE = 635 / (635 + 37);
 
 function cellTopLeft(cellX: number, cellY: number): [number, number] {
   return [
-    STRIP_ANCHOR[0] + BACKPACK_GRID_ORIGIN[0] + SLOT_PITCH[0] * cellX,
-    STRIP_ANCHOR[1] + BACKPACK_GRID_ORIGIN[1] + SLOT_PITCH[1] * cellY,
+    STRIP_ANCHOR[0] + (BACKPACK_GRID_ORIGIN[0] + SLOT_PITCH[0] * cellX) * STRIP_SCALE,
+    STRIP_ANCHOR[1] + (BACKPACK_GRID_ORIGIN[1] + SLOT_PITCH[1] * cellY) * STRIP_SCALE,
   ];
 }
 
 function cellCenter(cellX: number, cellY: number): [number, number] {
   const [x, y] = cellTopLeft(cellX, cellY);
-  return [x + SLOT_PITCH[0] / 2, y + SLOT_PITCH[1] / 2];
+  return [x + SLOT_PITCH[0] * STRIP_SCALE / 2, y + SLOT_PITCH[1] * STRIP_SCALE / 2];
 }
 
 async function launchWithHeldClip(port: number): Promise<{
@@ -326,10 +328,53 @@ test(
     );
     assert.ok(slot, `the deposited clip must have a strip slot: ${JSON.stringify(strip?.elements)}`);
     const [expectedX, expectedY] = cellTopLeft(...targetCell);
-    assert.deepEqual(
-      [slot.rect[0], slot.rect[1]],
-      [expectedX, expectedY],
+    assert.ok(
+      Math.abs(slot.rect[0] - expectedX) < 0.01 && Math.abs(slot.rect[1] - expectedY) < 0.01,
       `the clip must land at cell (${targetCell.join(",")}) = (${expectedX}, ${expectedY}), got rect ${JSON.stringify(slot.rect)}`,
     );
+  },
+);
+
+
+test(
+  "a wrench gripped out of inventory previews and lands in the column pointed at in any row",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    const wrench = await game.player.spawnItem("Wrench");
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    const initial = (await game.ui.state()).strip!.elements.find(e => e.entity_id === wrench.entity_id)!;
+    const pose = (await game.ui.state()).panel_pose!;
+    await aimVrHandAtCanvas(game, pose, [320, 240], { hand: "left", facing: "away" });
+    // Derive the rendered pitch from this authored 1x3 item, so the test
+    // remains valid when the shared strip is scaled to accommodate hand UI.
+    const pitchX = initial.rect[2];
+    const pitchY = initial.rect[3] / 3;
+    for (const [column, row] of [[5, 1], [3, 2], [1, 0]]) {
+      const slot = (await game.ui.state()).strip!.elements.find(e => e.entity_id === wrench.entity_id)!;
+      const source: [number, number] = [slot.rect[0] + pitchX / 2, slot.rect[1] + pitchY * 1.5];
+      await aimVrHandAtCanvas(game, pose, source, { squeeze: 0 });
+      await game.step({ frames: 3 });
+      await aimVrHandAtCanvas(game, pose, source, { squeeze: 1 });
+      await game.step({ frames: 5 });
+      assert.equal((await game.info()).player.right_hand_entity_id, wrench.entity_id);
+      const target: [number, number] = [initial.rect[0] + (column + 0.5) * pitchX, initial.rect[1] + (row + 0.5) * pitchY];
+      await aimVrHandAtCanvas(game, pose, target, { squeeze: 1 });
+      await game.step({ frames: 5 });
+      const preview = (await game.ui.state()).strip!.elements.find(e => e.label === "RELEASE TO PLACE");
+      assert.ok(preview, "a valid held placement must be previewed before release");
+      assert.ok(Math.abs(preview.rect[0] - (initial.rect[0] + column * pitchX)) < 0.01);
+      assert.ok(Math.abs(preview.rect[1] - initial.rect[1]) < 0.01);
+      assert.ok(Math.abs(preview.rect[3] - initial.rect[3]) < 0.01);
+      await game.input.set("right_hand.squeeze", 0);
+      await game.step({ frames: 10 });
+      assert.equal((await game.info()).player.right_hand_entity_id, null);
+      const after = (await game.ui.state()).strip!.elements.find(e => e.entity_id === wrench.entity_id)!;
+      for (let i = 0; i < 4; i++) assert.ok(Math.abs(after.rect[i] - preview.rect[i]) < 0.01, "release must match preview");
+      assert.equal((await game.physics.bodies({ entityId: wrench.entity_id })).bodies.length, 0);
+      assert.ok(!(await game.ui.state()).strip!.elements.some(e => e.label === "RELEASE TO PLACE"));
+    }
   },
 );

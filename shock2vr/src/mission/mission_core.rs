@@ -1,3 +1,4 @@
+use super::flat_ui_host::PlacementStatus;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::Path,
@@ -743,25 +744,103 @@ fn move_live_entity_into_container_at_cell(
     dropped_entity_id: EntityId,
     target_cell: (usize, usize),
 ) -> bool {
+    let Some((slot, _)) =
+        container_deposit_slot(world, container_entity_id, dropped_entity_id, target_cell)
+    else {
+        return false;
+    };
+    move_live_entity_into_container_at_slot(
+        world,
+        container_entity_id,
+        dropped_entity_id,
+        Some(slot),
+    )
+}
+
+/// Resolve both the release and its preview. The flag identifies first-free
+/// fallback so the UI can distinguish placement here from automatic placement.
+fn container_deposit_slot(
+    world: &World,
+    container_entity_id: EntityId,
+    dropped_entity_id: EntityId,
+    target_cell: (usize, usize),
+) -> Option<(u32, bool)> {
     let grid = crate::inventory::grid_for(world, container_entity_id);
     let mut occupied =
         crate::inventory::Inventory::from_container(world, container_entity_id, grid);
-    // See `move_live_entity_into_container_at_slot`: a re-grab can still show
-    // the dropped entity occupying its own old cell here.
     occupied.remove_entity(dropped_entity_id);
     let dims = world
         .borrow::<View<dark::properties::PropInventoryDimensions>>()
         .ok()
-        .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
+        .and_then(|v| {
+            v.get(dropped_entity_id)
+                .ok()
+                .map(|d| (d.width as usize, d.height as usize))
+        })
         .unwrap_or((1, 1));
-    let fits = occupied.has_capacity(
-        target_cell.0,
-        target_cell.1,
-        dims.0 as usize,
-        dims.1 as usize,
-    );
-    let slot = fits.then(|| occupied.slot_at(target_cell.0, target_cell.1));
-    move_live_entity_into_container_at_slot(world, container_entity_id, dropped_entity_id, slot)
+    if let Some((x, y)) = occupied.placement_at(target_cell, dims) {
+        return Some((occupied.slot_at(x, y), false));
+    }
+    occupied
+        .first_free_slot(dims.0, dims.1)
+        .map(|slot| (slot, true))
+}
+
+/// Preview the same stack/placement/fallback order used by the release handler.
+fn container_deposit_preview(
+    world: &World,
+    container: EntityId,
+    item: EntityId,
+    target: (usize, usize),
+) -> (EntityId, (usize, usize), (usize, usize), PlacementStatus) {
+    let grid = crate::inventory::grid_for(world, container);
+    let inventory = crate::inventory::Inventory::from_container(world, container, grid);
+    let merge = matching_stack_at_cell(world, container, item, target);
+    let placement = container_deposit_slot(world, container, item, target);
+    let merge = merge.or_else(|| {
+        placement
+            .is_none()
+            .then(|| find_mergeable_stack_anywhere(world, container, item))
+            .flatten()
+    });
+    if let Some(merge) = merge {
+        if let Some(occupant) = inventory.all_items().find(|entry| entry.entity == merge) {
+            return (
+                item,
+                (occupant.x, occupant.y),
+                (occupant.width, occupant.height),
+                PlacementStatus::Merge,
+            );
+        }
+    }
+    if let Some((slot, fallback)) = placement {
+        let cell = inventory.cell_of(slot).unwrap();
+        let dims = world
+            .borrow::<View<dark::properties::PropInventoryDimensions>>()
+            .ok()
+            .and_then(|v| {
+                v.get(item)
+                    .ok()
+                    .map(|d| (d.width as usize, d.height as usize))
+            })
+            .unwrap_or((1, 1));
+        return (
+            item,
+            cell,
+            dims,
+            if fallback {
+                PlacementStatus::AutoPlace
+            } else {
+                PlacementStatus::Place
+            },
+        );
+    }
+    (
+        item,
+        (target.0.min(grid.0 - 1), target.1.min(grid.1 - 1)),
+        (1, 1),
+        PlacementStatus::NoRoom,
+    )
 }
 
 /// The occupant of `target_cell` in `container_entity_id`'s grid, if that
@@ -1329,6 +1408,62 @@ mod cell_deposit_tests {
         );
     }
 
+    #[test]
+    fn preview_distinguishes_fallback_merge_and_full_inventory() {
+        let (mut world, container) = container_with_item_at(Some((2, 2)));
+        let item = world.add_entity((
+            PropHasRefs(false),
+            PropInventoryDimensions {
+                width: 1,
+                height: 3,
+            },
+        ));
+        let preview = container_deposit_preview(&world, container, item, (2, 2));
+        assert_eq!(preview.3, PlacementStatus::AutoPlace);
+        assert!(move_live_entity_into_container_at_cell(
+            &mut world,
+            container,
+            item,
+            (2, 2)
+        ));
+        assert_eq!(
+            contains_slot(&world, container, item),
+            (preview.1.1 * 4 + preview.1.0) as u32
+        );
+
+        let (world, container, _, item) = stack_world(42);
+        assert_eq!(
+            container_deposit_preview(&world, container, item, (0, 0)).3,
+            PlacementStatus::Merge
+        );
+
+        let (mut world, container) = container_with_item_at(None);
+        let occupying = world.add_entity((
+            PropHasRefs(false),
+            PropInventoryDimensions {
+                width: 4,
+                height: 4,
+            },
+        ));
+        assert!(move_live_entity_into_container_at_cell(
+            &mut world,
+            container,
+            occupying,
+            (0, 0)
+        ));
+        let item = world.add_entity(PropHasRefs(false));
+        assert_eq!(
+            container_deposit_preview(&world, container, item, (2, 2)).3,
+            PlacementStatus::NoRoom
+        );
+        assert!(!move_live_entity_into_container_at_cell(
+            &mut world,
+            container,
+            item,
+            (2, 2)
+        ));
+    }
+
     /// A target cell holding a same-template stack is a merge candidate, not
     /// a claim - `MissionCore::drop_entity_into_container_at_cell` sums the
     /// counts and destroys the dropped entity instead of placing it.
@@ -1355,10 +1490,9 @@ mod cell_deposit_tests {
         );
     }
 
-    /// A multi-cell item's target still respects capacity: a target cell that
-    /// cannot fit the item's authored footprint is not claimed, even empty.
+    /// A tall item stays in the pointed column when its origin must slide up.
     #[test]
-    fn a_target_cell_too_small_for_the_items_footprint_falls_back() {
+    fn a_tall_item_slides_up_to_fit_the_pointed_column() {
         let (mut world, container) = container_with_item_at(None);
         let item = world.add_entity((
             PropHasRefs(false),
@@ -1368,19 +1502,18 @@ mod cell_deposit_tests {
             },
         ));
 
-        // (0, 3) is the last row of a 4-tall grid - a 1x3 item cannot fit
-        // starting there.
+        // The last row cannot be the origin of a 1x3 item; use row 1.
         assert!(move_live_entity_into_container_at_cell(
             &mut world,
             container,
             item,
-            (0, 3),
+            (2, 3),
         ));
 
         assert_eq!(
             contains_slot(&world, container, item),
-            0,
-            "falls back to the first free cell, (0,0)"
+            6,
+            "slides up to (2,1), keeping the pointed column"
         );
     }
 }
@@ -4825,6 +4958,33 @@ impl MissionCore {
         }
         self.flat_ui
             .set_hand_items(&self.world, asset_cache, hand_items);
+        let placement_preview = self.vr_use_mode_pointer.as_ref().and_then(|pass| {
+            // Use the same per-hand rays as release detection, including a
+            // carrying hand when the other controller owns the UI cursor.
+            pass.active_ray()
+                .into_iter()
+                .chain(pass.rays.iter())
+                .find_map(|ray| {
+                    let item = hand_items[hand_slot(ray.handedness)]?;
+                    let point = ray.canvas_hit?;
+                    if !self.flat_ui.strip_contains(point) {
+                        return None;
+                    }
+                    let container = self.flat_ui.strip_entity()?;
+                    let cell = self
+                        .flat_ui
+                        .strip_cell_at(point, &self.world)
+                        .unwrap_or((usize::MAX, usize::MAX));
+                    Some(container_deposit_preview(
+                        &self.world,
+                        container,
+                        item,
+                        cell,
+                    ))
+                })
+        });
+        self.flat_ui
+            .set_placement_preview(&self.world, placement_preview);
         self.refresh_readouts();
         if self
             .weapon_settings_gun
