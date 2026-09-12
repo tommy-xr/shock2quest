@@ -12,17 +12,9 @@ import { stepPastCutscenes } from "./helpers/cutscenes.js";
 //
 // The career is chosen by *playing the recruitment intro* (earth.mis): three
 // ChooseService markers there carry a P$Service value (0=Marine, 1=Navy, 2=OSA)
-// and a transition to the recruit station. TurnOn'ing one (as its tripwire does
-// when the player walks through that career door) persists the chosen career as
-// a quest bit and ships the player to the station; the career loadout is then
-// applied to the player on every subsequent mission load. Marines arrive tanky
-// (45 HP / 20 psi), Navy balanced (35 / 35), OSA psionic (30 / 60).
-//
-// Negative-first: with the loadout neutralized (or the career never registered),
-// all three branches deploy with the identical default player-template
-// attributes (30 HP, 40/50 psi) and the "should differ" asserts fail. The test
-// also guards that selection is the *station flow*, not the removed debug
-// SelectCareer* input actions.
+// and a transition to the recruit station. Career selection alone does not
+// grant different health/psi pools: those follow difficulty and earned stats.
+// Training rewards change the pools when the corresponding stats are awarded.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 // The ChooseService career markers in earth.mis, keyed by their P$Service value,
@@ -104,28 +96,16 @@ async function playCareer(
 }
 
 test(
-  "career: branches chosen at the recruitment intro deploy with distinct attributes",
+  "career: choosing a branch alone preserves stat-derived player pools",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     const marine = await playCareer("marine");
     const navy = await playCareer("navy");
     const osa = await playCareer("osa");
 
-    // Hit points differ across all three branches (Marines tankiest, OSA least).
-    assert.notEqual(marine.maxHp, navy.maxHp, "Marine vs Navy HP should differ");
-    assert.notEqual(navy.maxHp, osa.maxHp, "Navy vs OSA HP should differ");
-    assert.notEqual(marine.maxHp, osa.maxHp, "Marine vs OSA HP should differ");
-    assert.ok(
-      marine.maxHp > osa.maxHp,
-      `Marines should be tankier than OSA (got ${marine.maxHp} vs ${osa.maxHp})`,
-    );
-
-    // Psi points differ too (OSA the strongest psion, Marines the weakest).
-    assert.notEqual(marine.maxPsi, navy.maxPsi, "Marine vs Navy psi should differ");
-    assert.notEqual(navy.maxPsi, osa.maxPsi, "Navy vs OSA psi should differ");
-    assert.ok(
-      osa.maxPsi > marine.maxPsi,
-      `OSA should out-psi Marines (got ${osa.maxPsi} vs ${marine.maxPsi})`,
-    );
+    for (const pools of [marine, navy, osa]) {
+      assert.deepEqual(pools, { maxHp: 35, maxPsi: 15 },
+        "Normal starting stats determine pools independently of career name");
+    }
   },
 );

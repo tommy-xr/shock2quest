@@ -193,3 +193,72 @@ mod tests {
         assert!(serde_json::from_str::<Difficulty>("\"multiplayer\"").is_err());
     }
 }
+
+/// The first four STATPARAM fields, used when a DIFFPARAM coefficient is zero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlayerPoolParams {
+    pub base_hp: i32,
+    pub hp_per_endurance: i32,
+    pub base_psi: i32,
+    pub psi_per_psionics: i32,
+}
+impl Default for PlayerPoolParams {
+    fn default() -> Self {
+        // Retail STATPARAM defaults, used only by synthetic/missing-data worlds.
+        Self {
+            base_hp: 30,
+            hp_per_endurance: 5,
+            base_psi: 20,
+            psi_per_psionics: 5,
+        }
+    }
+}
+impl PlayerPoolParams {
+    pub fn read<T: Read + Seek>(toc: &ChunkFileTableOfContents, reader: &mut T) -> Option<Self> {
+        let chunk = toc.get_chunk("STATPARAM".to_owned())?;
+        if chunk.length < 16 {
+            return None;
+        }
+        reader.seek(io::SeekFrom::Start(chunk.offset)).ok()?;
+        let mut values = [0; 4];
+        reader.read_i32_into::<LittleEndian>(&mut values).ok()?;
+        Some(Self {
+            base_hp: values[0],
+            hp_per_endurance: values[1],
+            base_psi: values[2],
+            psi_per_psionics: values[3],
+        })
+    }
+}
+
+#[cfg(test)]
+mod pool_param_tests {
+    use super::*;
+    #[test]
+    fn difficulty_pool_fallback_reads_statparam_header_not_hazard_floats() {
+        let mut bytes = vec![0; 424];
+        bytes[..4].copy_from_slice(&400_u32.to_le_bytes());
+        bytes[400..404].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[404..413].copy_from_slice(b"STATPARAM");
+        bytes[416..420].copy_from_slice(&280_u32.to_le_bytes());
+        bytes[420..424].copy_from_slice(&56_u32.to_le_bytes());
+        for (i, v) in [40_i32, 7, 12, 9].into_iter().enumerate() {
+            bytes[304 + 4 * i..308 + 4 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        let mut reader = io::Cursor::new(bytes.clone());
+        let toc = crate::ss2_chunk_file_reader::read_table_of_contents(&mut reader);
+        assert_eq!(
+            PlayerPoolParams::read(&toc, &mut reader),
+            Some(PlayerPoolParams {
+                base_hp: 40,
+                hp_per_endurance: 7,
+                base_psi: 12,
+                psi_per_psionics: 9,
+            })
+        );
+        bytes[420..424].copy_from_slice(&15_u32.to_le_bytes());
+        let mut reader = io::Cursor::new(bytes);
+        let toc = crate::ss2_chunk_file_reader::read_table_of_contents(&mut reader);
+        assert!(PlayerPoolParams::read(&toc, &mut reader).is_none());
+    }
+}

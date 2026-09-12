@@ -1726,60 +1726,6 @@ fn apply_comestible_use(
     ComestibleUseOutcome::Consumed
 }
 
-/// Raise only the live maximum HP pool. Buying Endurance is not healing: the
-/// original stat promises more maximum hit points, while Tank's separate O/S
-/// effect deliberately raises both current and maximum HP.
-fn increase_player_max_hit_points(world: &World, player: EntityId, amount: u32) -> bool {
-    let mut maximums = world
-        .borrow::<ViewMut<dark::properties::PropMaxHitPoints>>()
-        .unwrap();
-    if let Ok(maximum) = (&mut maximums).get(player) {
-        maximum.hit_points = maximum.hit_points.saturating_add(amount);
-        true
-    } else {
-        false
-    }
-}
-
-#[cfg(test)]
-mod endurance_upgrade_tests {
-    use super::*;
-
-    #[test]
-    fn endurance_raises_maximum_hp_without_healing() {
-        let mut world = World::new();
-        let player = world.add_entity((
-            PropHitPoints { hit_points: 25 },
-            dark::properties::PropMaxHitPoints { hit_points: 30 },
-        ));
-
-        assert!(increase_player_max_hit_points(
-            &world,
-            player,
-            crate::scripts::gui::ENDURANCE_HP_PER_LEVEL,
-        ));
-        assert_eq!(
-            world
-                .borrow::<View<dark::properties::PropMaxHitPoints>>()
-                .unwrap()
-                .get(player)
-                .unwrap()
-                .hit_points,
-            35
-        );
-        assert_eq!(
-            world
-                .borrow::<View<PropHitPoints>>()
-                .unwrap()
-                .get(player)
-                .unwrap()
-                .hit_points,
-            25,
-            "an Endurance upgrade must not double as a heal"
-        );
-    }
-}
-
 /// First-person player-melee idle clip (motiondb ActorType 1, `+plyrmelee:0`),
 /// used to pose the flat melee viewmodel in its ready stance.
 const MELEE_IDLE_CLIP: &str = "ph212203";
@@ -2495,11 +2441,9 @@ impl MissionCore {
         // Create player
         let player_entity = world.add_entity((PropLocalPlayer {}, RuntimePropDoNotSerialize {}));
 
-        // Seed the player's psi pool and hit points from `The Player`
-        // template, where the gamesys authors the starting/maximum values
-        // (P$PsiState, P$HitPoints/P$MAX_HP). The HP pool is what psi
-        // burnout (and later, real damage handling) drains; nothing yet
-        // reacts to it reaching zero.
+        // Instantiate the player's pool components from The Player. Once the
+        // character sheet is installed below, authored difficulty/stat parameters
+        // derive the maxima. Save/transition restoration then replaces current pools.
         {
             use crate::scripts::script_util::hydrate_template_component;
             if let Some(psi_state) = hydrate_template_component::<dark::properties::PropPsiState>(
@@ -2610,58 +2554,12 @@ impl MissionCore {
             mission.starts_with("debug_"),
         );
 
-        // Apply the career (Marine/Navy/OSA) chosen at the station recruit deck.
-        // The choice is persisted as a quest bit, so it re-applies on every
-        // deployment; with no career selected the player template defaults
-        // (30 HP, 40/50 psi) stand. Absolute values keep re-application
-        // idempotent across level loads. These are the deliberate first-career
-        // and legacy-save defaults; ordinary transitions and current-format
-        // saves restore their exact persisted pools after mission construction.
+        // Career powers remain authored separately; HP/psi maxima are derived
+        // from the character sheet and campaign difficulty below.
         if let Some(career) = crate::career::Career::from_quest_info(&quest_info) {
-            let loadout = career.loadout();
-            world.run(
-                |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
-                 mut v_max_hp: ViewMut<dark::properties::PropMaxHitPoints>,
-                 mut v_psi: ViewMut<dark::properties::PropPsiState>| {
-                    if let Ok(hp) = (&mut v_hp).get(player_entity) {
-                        hp.hit_points = loadout.max_hit_points;
-                    }
-                    if let Ok(max_hp) = (&mut v_max_hp).get(player_entity) {
-                        max_hp.hit_points = loadout.max_hit_points as u32;
-                    }
-                    if let Ok(psi) = (&mut v_psi).get(player_entity) {
-                        psi.psi_points = loadout.max_psi_points;
-                        psi.max_psi_points = loadout.max_psi_points;
-                    }
-                },
-            );
-            if let Some(power) = loadout.extra_psi_power {
+            if let Some(power) = career.loadout().extra_psi_power {
                 known_powers.0.insert(power);
             }
-            info!("Applied {:?} career loadout to player", career);
-        }
-
-        // O/S trait bonuses re-derive on every load, like the career loadout
-        // (the player entity is rebuilt each mission load; the traits
-        // themselves persist on the character sheet in QuestInfo). Applied
-        // after the career block so Tank adds on top of the career pool.
-        if quest_info
-            .player_stats()
-            .has_os_trait(crate::scripts::gui::TRAIT_TANK)
-        {
-            use crate::scripts::gui::TANK_HP_BONUS;
-            world.run(
-                |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
-                 mut v_max_hp: ViewMut<dark::properties::PropMaxHitPoints>| {
-                    if let Ok(hp) = (&mut v_hp).get(player_entity) {
-                        hp.hit_points += TANK_HP_BONUS;
-                    }
-                    if let Ok(max_hp) = (&mut v_max_hp).get(player_entity) {
-                        max_hp.hit_points += TANK_HP_BONUS as u32;
-                    }
-                },
-            );
-            info!("Applied Tank O/S trait: +{} max hit points", TANK_HP_BONUS);
         }
 
         let default_browsed_tier = psi_powers
@@ -2995,6 +2893,10 @@ impl MissionCore {
         world.add_unique(PlayerLifeState::Alive);
 
         world.add_unique(quest_info);
+        world.add_unique(crate::difficulty::GlobalDifficultyParams::from_gamesys(
+            game_entity_info,
+        ));
+        crate::difficulty::refresh_player_pools(&world, true);
         world.add_unique(crate::haptics::HapticFeedback::default());
 
         // Current saves record the width that encoded their backpack link
@@ -10023,6 +9925,7 @@ impl MissionCore {
                     drop(quests);
                     if applied {
                         self.resize_player_backpack(old_width, new_width);
+                        crate::difficulty::refresh_player_pools(&self.world, false);
                     }
                 }
 
@@ -10088,13 +9991,7 @@ impl MissionCore {
                         };
                         if purchased {
                             self.resize_player_backpack(old_width, new_width);
-                        }
-                        if purchased && endurance_target {
-                            increase_player_max_hit_points(
-                                &self.world,
-                                player_entity,
-                                crate::scripts::gui::ENDURANCE_HP_PER_LEVEL,
-                            );
+                            crate::difficulty::refresh_player_pools(&self.world, false);
                         }
                     } else {
                         warn!("TrainerPurchase dropped: gamesys has no cost tables");
@@ -10159,8 +10056,8 @@ impl MissionCore {
 
                 Effect::AcquireOsTrait { trait_id, machine } => {
                     use crate::scripts::gui::{
-                        NATURALLY_ABLE_MODULES, TANK_HP_BONUS, TRAIT_NATURALLY_ABLE, TRAIT_TANK,
-                        live_effect_note, trait_name, used_bit_name,
+                        NATURALLY_ABLE_MODULES, TRAIT_NATURALLY_ABLE, live_effect_note, trait_name,
+                        used_bit_name,
                     };
                     // The machine's stable mission object id keys its used bit.
                     let machine_template_id = self
@@ -10204,35 +10101,7 @@ impl MissionCore {
 
                     if acquired {
                         self.resize_player_backpack(old_width, new_width);
-                        if trait_id == TRAIT_TANK {
-                            // Tank (Trait8): the original raises the ceiling
-                            // AND current HP by the bonus. Loads first re-derive
-                            // the trait-adjusted default, so this live grant
-                            // cannot double-apply.
-                            let player_entity = self
-                                .world
-                                .borrow::<UniqueView<PlayerInfo>>()
-                                .unwrap()
-                                .entity_id;
-                            self.world.run(
-                                |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
-                                 mut v_max: ViewMut<dark::properties::PropMaxHitPoints>| {
-                                    let new_max = (&mut v_max)
-                                        .get(player_entity)
-                                        .map(|max| {
-                                            max.hit_points += TANK_HP_BONUS as u32;
-                                            max.hit_points
-                                        })
-                                        .ok();
-                                    if let Ok(hp) = (&mut v_hp).get(player_entity) {
-                                        hp.hit_points += TANK_HP_BONUS;
-                                        if let Some(new_max) = new_max {
-                                            hp.hit_points = hp.hit_points.min(new_max as i32);
-                                        }
-                                    }
-                                },
-                            );
-                        }
+                        crate::difficulty::refresh_player_pools(&self.world, false);
                         info!(
                             "O/S trait acquired: {} ({}){}",
                             trait_id,
@@ -15040,6 +14909,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         let result = stats.clone();
         drop(quests);
         self.resize_player_backpack(old_backpack_width, new_backpack_width);
+        crate::difficulty::refresh_player_pools(&self.world, false);
         info!("Debug provisioning set player stats: {:?}", result);
         Ok(result)
     }
