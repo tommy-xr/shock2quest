@@ -53,6 +53,8 @@ pub struct VirtualHand {
     rotation: Quaternion<f32>,
     trigger_value: f32,
     squeeze_value: f32,
+    // A restored hold has no physical squeeze yet. Arm release after the first squeeze.
+    restored_grip_pending: bool,
     raytrace_hit: Option<RayCastResult>,
 
     // Keep track of last frobbed entity so frobbing is 'semi-auto'
@@ -155,6 +157,7 @@ impl VirtualHand {
             },
             trigger_value: 0.0,
             squeeze_value: 0.0,
+            restored_grip_pending: false,
             raytrace_hit: None,
             last_frobbed_entity: None,
             hand_state: HandState::Empty,
@@ -162,6 +165,10 @@ impl VirtualHand {
             feedback: HandFeedback::default(),
         }
     }
+    pub(crate) fn preserve_restored_grip(&mut self) {
+        self.restored_grip_pending = self.get_held_entity().is_some();
+    }
+
     pub fn destroy_entity(&self, entity_to_destroy_id: EntityId) -> VirtualHand {
         match self.hand_state {
             // Nothing to do here!
@@ -241,6 +248,7 @@ impl VirtualHand {
 
         VirtualHand {
             hand_state: HandState::Grabbing { entity_id },
+            restored_grip_pending: false,
             feedback: HandFeedback::default(),
             ..self.clone()
         }
@@ -298,7 +306,7 @@ impl VirtualHand {
                 let mut msgs = Vec::new();
 
                 // If we're holding onto something, but not grabbing, we can drop it
-                if input_hand.squeeze_value < 0.5 {
+                if input_hand.squeeze_value < 0.5 && !prev.restored_grip_pending {
                     let mut msgs = vec![VirtualHandEffect::DropItem { entity_id }];
 
                     // Releasing a tool against the weapon in the other hand is
@@ -336,6 +344,7 @@ impl VirtualHand {
                         rotation: hand_rotation,
                         trigger_value: input_hand.trigger_value,
                         squeeze_value: input_hand.squeeze_value,
+                        restored_grip_pending: false,
                         raytrace_hit: None,
                         last_frobbed_entity: None,
                         hand_state: HandState::Empty,
@@ -388,6 +397,8 @@ impl VirtualHand {
                         rotation: hand_rotation,
                         trigger_value: input_hand.trigger_value,
                         squeeze_value: input_hand.squeeze_value,
+                        restored_grip_pending: prev.restored_grip_pending
+                            && input_hand.squeeze_value < 0.5,
                         raytrace_hit: None,
                         last_frobbed_entity: None,
                         hand_state: next_hand_state,
@@ -641,6 +652,7 @@ fn handle_empty_hand_state(
         rotation: hand_rotation,
         trigger_value: input_hand.trigger_value,
         squeeze_value: input_hand.squeeze_value,
+        restored_grip_pending: false,
         raytrace_hit: result,
         last_frobbed_entity,
         hand_state: next_hand_state,
