@@ -405,7 +405,7 @@ test(
       11,
       "Medical Kit must continue in exact 5-HP pulses",
     );
-    await game.step({ frames: 405 });
+    await game.step({ frames: 600 }); // Allow enough pulses for the stat-derived maximum.
     const healed = await game.info();
     assert.equal(hp(healed), maxHp);
     assert.equal(healed.player.max_hit_points, maxHp);

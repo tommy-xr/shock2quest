@@ -301,7 +301,7 @@ test(
     await game.step({ frames: 61 });
     assert.equal(
       psiPoints(await game.info()),
-      24,
+      psiPoints(afterUse) - 1,
       "the held Psi Amp must preserve TriggerPull and spend one PSI on Cryokinesis",
     );
     assert.ok(
