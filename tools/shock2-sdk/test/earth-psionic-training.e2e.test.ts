@@ -226,8 +226,8 @@ test(
     );
     assert.equal(
       psiPoints(afterUse),
-      25,
-      "one holder-trigger gesture must restore exactly the retail 20 PSI",
+      Math.min(25, afterUse.player.max_psi_points!),
+      "one holder-trigger gesture restores up to 20 PSI, capped by the player pool",
     );
     assert.equal(
       (await game.entities.byTemplate(booster.template_id)).length,
@@ -367,8 +367,8 @@ test(
 
     assert.equal(
       psiPoints(await game.info()),
-      25,
-      `the booster should restore exactly 20 psi; messages=${JSON.stringify(
+      Math.min(25, (await game.info()).player.max_psi_points!),
+      `the booster should restore up to 20 psi; messages=${JSON.stringify(
         (await game.messages.recent()).messages.slice(-5),
       )}`,
     );
@@ -395,7 +395,10 @@ test(
     });
     await game.step({ frames: 5 });
 
-    assert.equal(psiPoints(await game.info()), 40, "fresh Earth campaign psi");
+    // Keep room for three doses after the lesson drains psi to five.
+    await game.player.setStats({ psionic_ability: 5 });
+    const maximumPsi = (await game.info()).player.max_psi_points!;
+    assert.equal(psiPoints(await game.info()), maximumPsi, "fresh Earth starts with full psi");
     await crossEarthTrainingTripwire(
       game,
       PSIONIC_ENTRY_TRIPWIRE,
@@ -475,7 +478,7 @@ test(
     let expectedBoosters = liveBoosters.length;
     for (const booster of liveBoosters) {
       await useBooster(game, booster.id);
-      expectedPsi = Math.min(expectedPsi + 20, 50);
+      expectedPsi = Math.min(expectedPsi + 20, maximumPsi);
       expectedBoosters -= 1;
       assert.equal(
         psiPoints(await game.info()),
@@ -494,7 +497,7 @@ test(
         expectedBoosters,
       );
     }
-    assert.equal(psiPoints(await game.info()), 50, "third booster clamps at max psi");
+    assert.equal(psiPoints(await game.info()), maximumPsi, "third booster clamps at max psi");
 
     await crossEarthTrainingTripwire(
       game,

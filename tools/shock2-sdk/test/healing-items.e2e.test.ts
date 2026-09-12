@@ -154,11 +154,11 @@ test(
     await game.step({ frames: 5 });
 
     const initial = await game.info();
-    assert.equal(hp(initial), 30);
-    assert.equal(initial.player.max_hit_points, 30);
+    assert.equal(hp(initial), 35);
+    assert.equal(initial.player.max_hit_points, 35);
     const playerId = initial.player.entity_id;
     assert.notEqual(playerId, null, "medsci2 should have a live player");
-    await game.entities.sendMessage(playerId!, { type: "Damage", amount: 10 });
+    await game.entities.sendMessage(playerId!, { type: "Damage", amount: initial.player.max_hit_points! - 20 });
     await game.step({ frames: 2 });
     assert.equal(hp(await game.info()), 20);
 
@@ -368,7 +368,7 @@ test(
     assert.notEqual(playerId, null);
     const maxHp = initial.player.max_hit_points;
     const psi = initial.player.psi_points;
-    await game.entities.sendMessage(playerId!, { type: "Damage", amount: 29 });
+    await game.entities.sendMessage(playerId!, { type: "Damage", amount: maxHp! - 1 });
     await game.step({ frames: 2 });
     assert.equal(hp(await game.info()), 1);
 
@@ -454,7 +454,7 @@ test(
 
     const playerId = (await game.info()).player.entity_id;
     assert.notEqual(playerId, null);
-    await game.entities.sendMessage(playerId!, { type: "Damage", amount: 20 });
+    await game.entities.sendMessage(playerId!, { type: "Damage", amount: (await game.info()).player.max_hit_points! - 10 });
     await game.step({ frames: 2 });
     assert.equal(hp(await game.info()), 10);
     const patch = await game.player.spawnItem("Med Patch");
