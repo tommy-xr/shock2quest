@@ -582,6 +582,29 @@ fn wrist_and_fingertip(points: &[Point3<f32>]) -> Option<(Point3<f32>, Point3<f3
     }
 }
 
+/// Preserve the LGMD parameter-to-part mapping independently of file order.
+pub fn object_articulation(
+    mesh: &SystemShock2ObjectMesh,
+) -> crate::object_articulation::ObjectArticulation {
+    use crate::object_articulation::{ObjectArticulation, ObjectJoint};
+    ObjectArticulation {
+        skeleton: obj_skeleton(mesh),
+        joints: mesh
+            .sub_objects
+            .iter()
+            .enumerate()
+            .map(|(index, part)| ObjectJoint {
+                index: index as u32,
+                parameter: part.parameter,
+                motion_type: part.motion_type,
+                vhot_range: part.vhot_start as usize
+                    ..(part.vhot_start as usize + part.vhot_count as usize),
+            })
+            .collect(),
+        vhots: mesh.vhots.clone(),
+    }
+}
+
 /// The model-space transform of every sub-object, paired with its name - the
 /// placement the artist authored for that part.
 ///
@@ -1007,8 +1030,8 @@ fn read_vertices<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<V
 pub struct SubObjectHeader {
     #[allow(dead_code)]
     idx: u32,
-    #[allow(dead_code)]
-    parent_idx: i32,
+    pub parameter: i32,
+    pub motion_type: u8,
     pub name: String,
     transform: Matrix4<f32>,
     #[allow(dead_code)]
@@ -1019,6 +1042,8 @@ pub struct SubObjectHeader {
     next_sub_obj_idx: i16,
     point_start: u16,
     point_stop: u16,
+    vhot_start: u16,
+    vhot_count: u16,
 }
 
 fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<SubObjectHeader> {
@@ -1031,8 +1056,8 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
     let mut objs = Vec::new();
     for i in 0..header.num_objs {
         let name = read_string_with_size(reader, 8);
-        let _obj_type = read_u8(reader);
-        let parent_idx = read_i32(reader);
+        let motion_type = read_u8(reader);
+        let parameter = read_i32(reader);
         let min_range = read_single(reader);
         let max_range = read_single(reader);
 
@@ -1043,8 +1068,8 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
 
         let child_sub_obj_idx = read_i16(reader);
         let next_sub_obj_idx = read_i16(reader);
-        let _vhot_start = read_i16(reader);
-        let _num_vhots = read_i16(reader);
+        let vhot_start = read_u16(reader);
+        let vhot_count = read_u16(reader);
         let point_start = read_u16(reader);
         let sub_num_points = read_u16(reader);
 
@@ -1053,7 +1078,8 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
 
         let soh = SubObjectHeader {
             idx: i as u32,
-            parent_idx,
+            parameter,
+            motion_type,
             child_sub_obj_idx,
             next_sub_obj_idx,
             min_range,
@@ -1062,6 +1088,8 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
             transform,
             point_start,
             point_stop: point_start + sub_num_points,
+            vhot_start,
+            vhot_count,
         };
         objs.push(soh);
     }
@@ -1208,6 +1236,31 @@ mod tests {
     use cgmath::vec3;
     use std::io::Cursor;
 
+    #[test]
+    fn subobject_parser_preserves_parameter_and_attachment_ownership() {
+        // A 93-byte LGMD record, with a deliberately unrelated file index,
+        // parameter ID and attachment ID. The old loader called parm a parent.
+        let mut bytes = vec![0u8; 93];
+        bytes[..8].copy_from_slice(b"@s07gun\0");
+        bytes[8] = 1;
+        bytes[9..13].copy_from_slice(&7i32.to_le_bytes());
+        bytes[13..17].copy_from_slice(&(-6.2f32).to_le_bytes());
+        bytes[69..71].copy_from_slice(&(-1i16).to_le_bytes());
+        bytes[71..73].copy_from_slice(&(-1i16).to_le_bytes());
+        bytes[73..75].copy_from_slice(&3u16.to_le_bytes());
+        bytes[75..77].copy_from_slice(&2u16.to_le_bytes());
+        let mut header = header_with_mat_extra(0);
+        header.num_objs = 1;
+        header.offset_objs = 0;
+        header.offset_mats = 93;
+        let objects = read_sub_objects(&header, &mut Cursor::new(bytes));
+        assert_eq!(objects[0].parameter, 7);
+        assert_eq!(objects[0].motion_type, 1);
+        assert_eq!(objects[0].vhot_start, 3);
+        assert_eq!(objects[0].vhot_count, 2);
+        assert_eq!(objects[0].min_range, -6.2);
+    }
+
     /// S_HIVOLT.BIN contains two coplanar, opposite-wound faces with inverse U
     /// mappings. Only its authored clockwise face reads left-to-right from the
     /// affected command1 placement; rendering both lets the mirrored face win
@@ -1283,7 +1336,8 @@ mod tests {
     fn sub_object(name: &str, local: Vector3<f32>, child: i16, next: i16) -> SubObjectHeader {
         SubObjectHeader {
             idx: 0,
-            parent_idx: -1,
+            parameter: -1,
+            motion_type: 0,
             name: name.to_owned(),
             transform: Matrix4::from_translation(local),
             min_range: 0.0,
@@ -1292,6 +1346,8 @@ mod tests {
             next_sub_obj_idx: next,
             point_start: 0,
             point_stop: 0,
+            vhot_start: 0,
+            vhot_count: 0,
         }
     }
 

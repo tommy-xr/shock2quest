@@ -769,6 +769,11 @@ pub enum Effect {
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
     },
+    /// LGMD parameter IDs, in degrees or Dark feet according to the model.
+    SetObjectParameters {
+        entity_id: EntityId,
+        parameters: Vec<(i32, f32)>,
+    },
     SetJointTransform {
         entity_id: EntityId,
         joint_id: u32,

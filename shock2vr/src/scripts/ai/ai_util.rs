@@ -416,7 +416,11 @@ pub(crate) fn is_entity_door(world: &shipyard::World, entity_id: shipyard::Entit
 /// Handles firing a projectile through the AIRangedWeapon link, which is a proxy between the main entity link
 /// Used primarily by turrets
 ///
-pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaternion<f32>) -> Effect {
+pub fn fire_ranged_weapon(
+    world: &World,
+    entity_id: EntityId,
+    muzzle_transform: Matrix4<f32>,
+) -> Effect {
     // First, let's find the link
     let maybe_ranged_weapon = get_first_link_with_template_and_data(world, entity_id, |link| {
         if matches!(link, Link::AIRangedWeapon) {
@@ -436,27 +440,19 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
 
     let maybe_ranged_weapon_entity_id = find_first_entity_by_template_id(world, ranged_weapon);
 
-    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
-    let root_transform = v_transform.get(entity_id).unwrap();
-    let forward_offset = 3.0 / SCALE_FACTOR;
-    let up_offset = 0.5 / SCALE_FACTOR;
-    let right_offset = 0.5 / SCALE_FACTOR;
-    let forward = vec3(right_offset, up_offset, 1.0 * forward_offset);
-    let firing_transform = root_transform.0 * Matrix4::from(rotation);
-    let muzzle_transform = firing_transform * Matrix4::from_translation(forward);
     let position = muzzle_transform.transform_point(point3(0.0, 0.0, 0.0));
 
     if maybe_ranged_weapon_entity_id.is_none() {
         // Let's create the proxy entity...
         Effect::CreateEntity {
             template_id: ranged_weapon,
-            position: point3(0.0, 0.0, 0.0) + forward,
+            position: point3(0.0, 0.0, 0.0),
             orientation: Quaternion::from_angle_y(Deg(90.0)),
-            root_transform: firing_transform,
+            root_transform: muzzle_transform,
             options: CreateEntityOptions::default(),
         }
     } else {
-        let transformed_forward = firing_transform.transform_vector(forward);
+        let transformed_forward = muzzle_transform.transform_vector(vec3(0.0, 0.0, 1.0));
         let debug_effect = Effect::DrawDebugLines {
             lines: vec![(
                 position,
@@ -513,9 +509,9 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
         if let Some((muzzle_flash_template_id, _muzzle_flash_options)) = maybe_muzzle_flash {
             fire_effects.push(Effect::CreateEntity {
                 template_id: muzzle_flash_template_id,
-                position: point3(0.0, 0.0, 0.0) + forward,
+                position: point3(0.0, 0.0, 0.0),
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
-                root_transform: firing_transform,
+                root_transform: muzzle_transform,
                 options: CreateEntityOptions::default(),
             })
         }
@@ -1345,8 +1341,8 @@ fn ai_team(world: &World, entity_id: EntityId) -> AITeam {
 ///   `pose.rotation` already contains the full orientation.
 /// - **Cameras**: Pass `Deg(view_angle + 90.0)` - rotation is via joint transforms,
 ///   not entity rotation. The +90 offset aligns with the joint coordinate system.
-/// - **Turrets**: Pass `-current_heading` - similar to cameras but with negated heading
-///   due to how the turret joint rotation is calculated.
+/// - **Turrets**: Pass `90 - joint_parameter_degrees`: LGMD models face -X,
+///   and the joint parameter rotates that authored direction around +Y.
 ///
 /// # Returns
 /// `true` if the player is within the FOV cone AND there's line-of-sight

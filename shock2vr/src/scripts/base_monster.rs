@@ -12,12 +12,20 @@ use super::{
 pub struct BaseMonster {
     ai: Box<dyn Script>,
     stasis: Option<super::stasis::StasisState>,
+    restored_turret: bool,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BaseMonsterState {
+    stasis: Option<super::stasis::StasisState>,
+    turret: Option<super::ScriptState>,
+}
+
 impl BaseMonster {
     pub fn new() -> BaseMonster {
         BaseMonster {
             ai: Box::new(NoopScript {}),
             stasis: None,
+            restored_turret: false,
         }
     }
 }
@@ -30,14 +38,33 @@ impl Script for BaseMonster {
         Some("shock2vr.ai_stasis")
     }
     fn save_state(&self) -> Result<super::ScriptState, super::ScriptStateError> {
-        super::ScriptState::encode(1, &self.stasis, "shock2vr.ai_stasis")
+        let turret = if self.ai.script_state_key() == Some("shock2vr.turret") {
+            Some(self.ai.save_state()?)
+        } else {
+            None
+        };
+        super::ScriptState::encode(
+            2,
+            &BaseMonsterState {
+                stasis: self.stasis.clone(),
+                turret,
+            },
+            "shock2vr.ai_stasis",
+        )
     }
     fn restore_state(
         &mut self,
         state: &super::ScriptState,
-        _context: &super::ScriptRestoreContext<'_>,
+        context: &super::ScriptRestoreContext<'_>,
     ) -> Result<(), super::ScriptStateError> {
-        self.stasis = state.decode(1, "shock2vr.ai_stasis")?;
+        let restored: BaseMonsterState = state.decode(2, "shock2vr.ai_stasis")?;
+        self.stasis = restored.stasis;
+        if let Some(turret) = restored.turret {
+            let mut ai = TurretAI::new();
+            ai.restore_state(&turret, context)?;
+            self.ai = Box::new(ai);
+            self.restored_turret = true;
+        }
         // Reject malformed state through the same typed decoder error path.
         if self.stasis.as_ref().is_some_and(|state| !state.valid()) {
             return Err(super::ScriptStateError::InvalidPayload {
@@ -53,8 +80,7 @@ impl Script for BaseMonster {
         world: &World,
         _hydrated: bool,
     ) -> Effect {
-        // Only stasis is hydrated; the native AI must still be constructed.
-        // initialize() deliberately leaves the restored freeze state intact.
+        // initialize() preserves hydrated native turret state and stasis.
         self.initialize(entity, world)
     }
 
@@ -103,7 +129,9 @@ impl Script for BaseMonster {
                 }
             };
 
-        self.ai = ai;
+        if !self.restored_turret {
+            self.ai = ai;
+        }
 
         self.ai.initialize(entity_id, world)
     }
@@ -197,6 +225,7 @@ mod tests {
         let count = Rc::new(Cell::new(0));
         let mut script = BaseMonster {
             ai: Box::new(Counter(count.clone())),
+            restored_turret: false,
             stasis: None,
         };
         let physics = PhysicsWorld::new();

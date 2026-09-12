@@ -119,6 +119,11 @@ pub struct RuntimeBitmapAnimationFrameCount(pub u32);
 #[derive(Component, Debug)]
 pub struct RuntimePropVhots(pub Vec<Vhot>);
 
+#[derive(Component, Clone, Debug)]
+pub struct RuntimePropObjectArticulation(
+    pub std::sync::Arc<dark::object_articulation::ObjectArticulation>,
+);
+
 // RuntimePropDoNotSerialize - runtime prop to signal that this prop should not be serialized
 #[derive(Component)]
 pub struct RuntimePropDoNotSerialize;

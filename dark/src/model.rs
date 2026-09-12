@@ -85,6 +85,7 @@ pub struct AnimatedModel {
     /// there is no record of the pose the model is actually drawn in, and a
     /// corpse lying flat would be bounded by the standing rest skeleton.
     posed_bounds: Option<Aabb3<f32>>,
+    object_articulation: Option<std::sync::Arc<crate::object_articulation::ObjectArticulation>>,
 }
 
 /// Build the render palette, undoing the bind pose first when the geometry needs
@@ -204,6 +205,7 @@ impl AnimatedModel {
             vhots: self.vhots.clone(),
             sub_objects: self.sub_objects.clone(),
             bind: self.bind.clone(),
+            object_articulation: self.object_articulation.clone(),
             posed_bounds: joint_box_bounds(&animated_skeleton.get_transforms(), &self.hit_boxes),
         }
     }
@@ -229,6 +231,7 @@ impl AnimatedModel {
             sub_objects: model.sub_objects.clone(),
             bind: model.bind.clone(),
             posed_bounds: model.posed_bounds,
+            object_articulation: model.object_articulation.clone(),
         }
     }
 
@@ -285,6 +288,9 @@ impl Model {
                     sub_objects,
                     bind: None,
                     posed_bounds: None,
+                    object_articulation: Some(std::sync::Arc::new(
+                        ss2_bin_obj_loader::object_articulation(&static_mesh),
+                    )),
                 }),
             }
         } else {
@@ -355,6 +361,7 @@ impl Model {
                 sub_objects: vec![],
                 bind,
                 posed_bounds: None,
+                object_articulation: None,
             }),
         }
     }
@@ -382,6 +389,7 @@ impl Model {
                     sub_objects: vec![],
                     bind: None,
                     posed_bounds: None,
+                    object_articulation: None,
                 }),
             }
         } else {
@@ -442,8 +450,17 @@ impl Model {
         }
     }
 
-    /// The LGMD sub-object pivots (see [`SubObject`]). Empty unless this model
-    /// came from an object `.bin`.
+    /// Authored LGMD parameter mapping and attachment ownership.
+    pub fn object_articulation(
+        &self,
+    ) -> Option<&std::sync::Arc<crate::object_articulation::ObjectArticulation>> {
+        match &self.inner {
+            InnerModel::Animated(model) => model.object_articulation.as_ref(),
+            InnerModel::Static(_) => None,
+        }
+    }
+
+    /// The LGMD sub-object pivots (see [`SubObject`]). Empty for other formats.
     pub fn sub_objects(&self) -> &[SubObject] {
         match &self.inner {
             InnerModel::Animated(animated_model) => &animated_model.sub_objects,
@@ -703,6 +720,7 @@ mod tests {
                 sub_objects: Vec::new(),
                 bind: None,
                 posed_bounds,
+                object_articulation: None,
             }),
         }
     }
