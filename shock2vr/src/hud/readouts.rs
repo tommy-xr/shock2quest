@@ -166,6 +166,7 @@ pub(crate) struct UseModeReadouts {
     pub weapon: Option<shipyard::EntityId>,
     /// Spendable nanites and cyber modules, in the order of the native wells.
     pub resources: [i32; 2],
+    pub hazards: Option<super::hazards::HazardReadout>,
 }
 
 impl UseModeReadouts {
@@ -175,6 +176,7 @@ impl UseModeReadouts {
     pub(crate) fn from_world(world: &World, weapon: Option<shipyard::EntityId>) -> Self {
         Self {
             weapon,
+            hazards: Some(super::hazards::HazardReadout::from_world(world)),
             bio: BioReadout::from_world(world),
             ammo: AmmoReadout::for_weapon(world, weapon, true),
             resources: [
@@ -191,6 +193,9 @@ impl UseModeReadouts {
 /// Emit the expanded bio + ammo readouts along the bottom of the shared
 /// 640x480 interface canvas.
 pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
+    if let Some(hazards) = &readouts.hazards {
+        super::hazards::emit(canvas, super::hazards::SCREEN_ORIGIN, hazards, true);
+    }
     emit_bio(
         canvas,
         BIO_ORIGIN,
@@ -254,6 +259,7 @@ mod tests {
         UseModeReadouts {
             weapon: None,
             resources: [0; 2],
+            hazards: Default::default(),
             bio: BioReadout {
                 health_fraction: 1.0,
                 psi_fraction: 0.75,

@@ -147,7 +147,7 @@ pub(crate) fn create_flat_hud(
     use_mode: bool,
     messages: &[String],
 ) -> Vec<SceneObject> {
-    let canvas = build_flat_hud_canvas(
+    let mut canvas = build_flat_hud_canvas(
         use_mode,
         get_health_percentage(world),
         get_psi_percentage(world),
@@ -157,6 +157,14 @@ pub(crate) fn create_flat_hud(
         &AmmoReadout::from_world(world, false),
         messages,
     );
+    if !use_mode {
+        super::hazards::emit(
+            &mut canvas,
+            super::hazards::SCREEN_ORIGIN,
+            &super::hazards::HazardReadout::from_world(world),
+            false,
+        );
+    }
     // Keep the crosshair square and bars undistorted on non-4:3 windows.
     canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
 }

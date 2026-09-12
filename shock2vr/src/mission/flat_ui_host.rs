@@ -3062,6 +3062,7 @@ mod tests {
         UseModeReadouts {
             weapon: None,
             resources: [0; 2],
+            hazards: Default::default(),
             bio: Default::default(),
             ammo: crate::hud::ammo_panel::AmmoReadout {
                 ammo: Some(12),
@@ -3195,6 +3196,7 @@ mod tests {
         host.set_readouts(Some(UseModeReadouts {
             weapon: None,
             resources: [0; 2],
+            hazards: Default::default(),
             bio: Default::default(),
             ammo: Default::default(),
         }));

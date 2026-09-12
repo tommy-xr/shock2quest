@@ -140,3 +140,5 @@ pub(crate) fn hud_strings(world: &World) -> HudStrings {
         .map(|s| s.clone())
         .unwrap_or_default()
 }
+
+pub(crate) mod hazards;
