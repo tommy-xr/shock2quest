@@ -177,6 +177,24 @@ pub struct ListGeometry {
     pub text_inset: f32,
 }
 
+/// Row pitch and text inset of a list of NAMES on the developer frame -
+/// scene names, cheat labels. Pulled out of the screens that had each written
+/// the same two numbers, so "these lists are the same list" is a fact rather
+/// than a coincidence.
+pub const NAME_ROW_H: f32 = 19.0;
+pub const NAME_TEXT_INSET: f32 = 8.0;
+
+/// A name list in `pane`, stopping at `bottom_limit` (where the backdrop
+/// starts painting something the rows must clear).
+pub fn name_list(pane: Rect, bottom_limit: f32) -> ListGeometry {
+    ListGeometry {
+        pane,
+        bottom_limit,
+        row_h: NAME_ROW_H,
+        text_inset: NAME_TEXT_INSET,
+    }
+}
+
 impl ListGeometry {
     pub fn rows_per_page(&self) -> usize {
         rows_per_page(self.pane, self.bottom_limit, self.row_h)

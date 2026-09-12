@@ -3,7 +3,16 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { SceneObjectSummary } from "../src/types.js";
-import { AIM_AT_PANEL, menuEntry, norm, panelPoint } from "./helpers/frontend-menu.js";
+import {
+  AIM_AT_PANEL,
+  DEV_ACTION,
+  DEV_DONE,
+  clickCanvas as click,
+  menuEntry,
+  norm,
+  panelPoint,
+  pauseEntry,
+} from "./helpers/frontend-menu.js";
 
 // The Developer screen: the shared dev-params row panel, hosted by a frontend
 // scene reached from the main menu's repurposed Options slot, and by a second
@@ -36,12 +45,10 @@ const ROW0_DECREMENT: [number, number] = [
   463 - 8 - SCROLL_GUTTER - 20 - 48 - 10,
   54 + 12,
 ];
-const DONE: [number, number] = [527 + 95 / 2, 405 + 62 / 2];
 
 // The upper framed button (`GAMELODR.BIN` rect 2 - the load screen's "Load"
 // frame): the debug-scene launcher's door on the parameters page, and the
 // launch itself on the launcher page.
-const ACTION: [number, number] = [527 + 96 / 2, 161 + 62 / 2];
 /**
  * The launcher's tabs ride the header line (GAMELODR.BIN rect 0: 261,31
  * 202x20), split in half: Missions on the left, Debug Scenes on the right.
@@ -62,22 +69,8 @@ const sceneRow = (index: number): [number, number] => [330, 54 + index * 19 + 9]
 const DEBUG_MINIMAL_ROW = 2;
 const MEDSCI1_ROW = 9;
 
-/** SIMR.BIN pause entries: five 179x76 buttons at x=400, top 20, 92px pitch. */
-const pauseEntry = (index: number): [number, number] =>
-  norm(400 + 179 / 2, 20 + index * 92 + 76 / 2);
 const PAUSE_DEVELOPER = pauseEntry(3);
 const PAUSE_CONTINUE = pauseEntry(0);
-
-/** Click a canvas point with the flat pointer, as a real rising edge. */
-async function click(game: GameServer, [x, y]: [number, number]): Promise<void> {
-  await game.input.set("pointer.position", norm(x, y));
-  await game.input.set("pointer.pressed", 0);
-  await game.step({ frames: 3 });
-  await game.input.set("pointer.pressed", 1);
-  await game.step({ frames: 3 });
-  await game.input.set("pointer.pressed", 0);
-  await game.step({ frames: 3 });
-}
 
 async function paramValue(game: GameServer, key: string): Promise<number> {
   const { params } = await game.devParams.list();
@@ -127,7 +120,7 @@ test(
     await game.screenshot("dev-menu-flat.png");
 
     // Done returns to the main menu.
-    await click(game, DONE);
+    await click(game, DEV_DONE);
     assert.equal((await game.info()).mission, "main_menu");
   },
 );
@@ -202,7 +195,7 @@ test(
     assert.ok(Math.abs(restored - 2.0) < 0.05, `expected 2.0, got ${restored}`);
 
     // Done returns to the main menu.
-    await vrClick(game, DONE);
+    await vrClick(game, DEV_DONE);
     assert.equal((await game.info()).mission, "main_menu");
   },
 );
@@ -220,13 +213,7 @@ test(
 
     // The repurposed Options slot turns the overlay's page - the mission
     // stays loaded and paused underneath.
-    await game.input.set("pointer.position", PAUSE_DEVELOPER);
-    await game.input.set("pointer.pressed", 0);
-    await game.step({ frames: 3 });
-    await game.input.set("pointer.pressed", 1);
-    await game.step({ frames: 3 });
-    await game.input.set("pointer.pressed", 0);
-    await game.step({ frames: 3 });
+    await click(game, PAUSE_DEVELOPER);
     assert.equal((await game.info()).paused, true, "the page turn must not resume");
     assert.equal((await game.info()).mission, "medsci1.mis", "no scene swap");
 
@@ -241,15 +228,9 @@ test(
     await click(game, ROW0_DECREMENT);
 
     // Done returns to the root page (still paused), where Continue resumes.
-    await click(game, DONE);
+    await click(game, DEV_DONE);
     assert.equal((await game.info()).paused, true, "Done turns the page, not the sim");
-    await game.input.set("pointer.position", PAUSE_CONTINUE);
-    await game.input.set("pointer.pressed", 0);
-    await game.step({ frames: 3 });
-    await game.input.set("pointer.pressed", 1);
-    await game.step({ frames: 3 });
-    await game.input.set("pointer.pressed", 0);
-    await game.step({ frames: 5 });
+    await click(game, PAUSE_CONTINUE);
     assert.equal((await game.info()).paused, false, "Continue on the root resumes");
   },
 );
@@ -273,12 +254,12 @@ test(
     assert.equal((await game.info()).mission, "developer");
 
     // The upper framed button turns the page - it does not swap the scene.
-    await click(game, ACTION);
+    await click(game, DEV_ACTION);
     assert.equal((await game.info()).mission, "developer");
     await game.screenshot("dev-scenes-flat.png");
 
     // "Done" on the launcher goes back to the parameters, not to the menu...
-    await click(game, DONE);
+    await click(game, DEV_DONE);
     assert.equal((await game.info()).mission, "developer");
     // ...and the parameter rows really are back: `>` steps a value again.
     const before = await paramValue(game, "panel_distance");
@@ -287,13 +268,14 @@ test(
       Math.abs((await paramValue(game, "panel_distance")) - (before + 0.1)) < 1e-4,
       "Done on the launcher must return to the parameter rows",
     );
+
     await click(game, ROW0_DECREMENT);
 
     // Select a scene on the Debug Scenes tab and launch it.
-    await click(game, ACTION);
+    await click(game, DEV_ACTION);
     await click(game, TAB_DEBUG_SCENES);
     await click(game, sceneRow(DEBUG_MINIMAL_ROW));
-    await click(game, ACTION);
+    await click(game, DEV_ACTION);
     assert.equal(
       (await game.info()).mission,
       "debug_minimal",
@@ -313,11 +295,11 @@ test(
 
     // The launcher opens on the Missions tab; tab over to Debug Scenes and
     // back, so the round trip is exercised end to end, then pick a row.
-    await click(game, ACTION);
+    await click(game, DEV_ACTION);
     await click(game, TAB_DEBUG_SCENES);
     await click(game, TAB_MISSIONS);
     await click(game, sceneRow(MEDSCI1_ROW));
-    await click(game, ACTION);
+    await click(game, DEV_ACTION);
     // Row 9 is medsci1.mis on the canonical 23-mission install (the same
     // assumption missions.e2e.test.ts hardcodes). Asserting the exact name
     // proves the row CLICK picked the mission - the preselected row 0 would
@@ -348,14 +330,14 @@ test(
     assert.equal((await game.info()).mission, "developer");
 
     // The same canvas points as the flat run, reached by the ray.
-    await vrClick(game, ACTION);
+    await vrClick(game, DEV_ACTION);
     assert.equal((await game.info()).mission, "developer");
     await game.step({ frames: 5 });
     await game.screenshot("dev-scenes-vr.png");
 
     await vrClick(game, TAB_DEBUG_SCENES);
     await vrClick(game, sceneRow(DEBUG_MINIMAL_ROW));
-    await vrClick(game, ACTION);
+    await vrClick(game, DEV_ACTION);
     assert.equal((await game.info()).mission, "debug_minimal");
   },
 );

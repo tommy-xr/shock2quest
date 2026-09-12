@@ -34,7 +34,7 @@ use crate::{
     input_context::InputContext,
     ui::{
         FrontendCanvasPresenter, FrontendMenu, FrontendMenuItem, HAlign, Rect, ScaleMode, UiCanvas,
-        VAlign, dev_params_panel, hit_menu_item,
+        VAlign, cheats_panel, dev_params_panel, hit_menu_item,
     },
 };
 
@@ -108,6 +108,9 @@ pub enum PauseAction {
     Resume,
     /// Abandon the run and go back to the main menu.
     QuitToMainMenu,
+    /// Carry out a developer cheat. The overlay stays up - a cheat sets a
+    /// situation up, it does not resume the game.
+    Cheat(cheats_panel::CheatAction),
 }
 
 /// Which page of the overlay is showing. The Developer page is a page of the
@@ -117,6 +120,10 @@ pub enum PauseAction {
 enum PauseMenuPage {
     Root,
     Developer,
+    /// The Developer screen's [`cheats_panel`] page. It lives here rather than
+    /// on the main menu's Developer scene because a cheat acts on the running
+    /// mission, so there is nothing for it to do before one is loaded.
+    Cheats,
 }
 
 /// What a click on a root-page entry means: either something [`PauseAction`]
@@ -132,6 +139,10 @@ enum PauseMenuEntry {
 enum PauseMenuTarget {
     Root(PauseMenuEntry),
     Developer(dev_params_panel::DevParamsEvent),
+    /// The Developer page's upper framed button - the slot the main menu's
+    /// Developer scene fills with its scene launcher.
+    OpenCheats,
+    Cheats(cheats_panel::CheatsEvent),
 }
 
 // `SIM.PCX` (native 640x480) has a vertical stack of five buttons down the
@@ -243,13 +254,20 @@ fn target_at(
     page: PauseMenuPage,
     panel_rects: dev_params_panel::PanelRects,
     panel_scroll: usize,
+    cheats_scroll: usize,
     rects: &[Rect],
     point: Vector2<f32>,
 ) -> Option<PauseMenuTarget> {
     match page {
         PauseMenuPage::Root => hit(point, rects).map(PauseMenuTarget::Root),
         PauseMenuPage::Developer => {
+            if panel_rects.action_rect().contains(point) {
+                return Some(PauseMenuTarget::OpenCheats);
+            }
             dev_params_panel::hit(panel_rects, panel_scroll, point).map(PauseMenuTarget::Developer)
+        }
+        PauseMenuPage::Cheats => {
+            cheats_panel::hit(panel_rects, cheats_scroll, point).map(PauseMenuTarget::Cheats)
         }
     }
 }
@@ -307,6 +325,9 @@ pub struct PauseMenu {
     /// panel is stateless, so its scroll position lives here and is handed to
     /// the hit test and the render alike.
     panel_scroll: usize,
+    /// Index of the cheat in the Cheats page's top row - the same stateless
+    /// arrangement as `panel_scroll`.
+    cheats_scroll: usize,
 }
 
 impl Default for PauseMenu {
@@ -328,6 +349,7 @@ impl PauseMenu {
             closed_under_a_held_press: false,
             panel_rects: dev_params_panel::PanelRects::default(),
             panel_scroll: 0,
+            cheats_scroll: 0,
         }
     }
 
@@ -429,12 +451,31 @@ impl PauseMenu {
         let page = self.page;
         let panel_rects = self.panel_rects;
         let panel_scroll = self.panel_scroll;
+        let cheats_scroll = self.cheats_scroll;
         let target = self.menu.update(
             elapsed,
             input_context,
             options.presentation_mode,
-            |point| target_at(page, panel_rects, panel_scroll, &rects, point),
-            |point| target_at(page, panel_rects, panel_scroll, &rects, point),
+            |point| {
+                target_at(
+                    page,
+                    panel_rects,
+                    panel_scroll,
+                    cheats_scroll,
+                    &rects,
+                    point,
+                )
+            },
+            |point| {
+                target_at(
+                    page,
+                    panel_rects,
+                    panel_scroll,
+                    cheats_scroll,
+                    &rects,
+                    point,
+                )
+            },
         );
         self.handle_target(target)
     }
@@ -459,11 +500,12 @@ impl PauseMenu {
         let page = self.page;
         let panel_rects = self.panel_rects;
         let panel_scroll = self.panel_scroll;
+        let cheats_scroll = self.cheats_scroll;
         let target = self.menu.resolve_pointer(
             point,
             pressed,
-            |point| target_at(page, panel_rects, panel_scroll, rects, point),
-            |point| target_at(page, panel_rects, panel_scroll, rects, point),
+            |point| target_at(page, panel_rects, panel_scroll, cheats_scroll, rects, point),
+            |point| target_at(page, panel_rects, panel_scroll, cheats_scroll, rects, point),
         );
         self.handle_target(target)
     }
@@ -472,6 +514,12 @@ impl PauseMenu {
         match target {
             Some(PauseMenuTarget::Root(entry)) => self.handle_root_entry(Some(entry)),
             Some(PauseMenuTarget::Developer(event)) => self.handle_developer_event(Some(event)),
+            Some(PauseMenuTarget::OpenCheats) => {
+                self.page = PauseMenuPage::Cheats;
+                self.cheats_scroll = 0;
+                None
+            }
+            Some(PauseMenuTarget::Cheats(event)) => self.handle_cheats_event(Some(event)),
             None => None,
         }
     }
@@ -502,6 +550,23 @@ impl PauseMenu {
             }
         }
         None
+    }
+
+    /// Route a clicked Cheats-page event: scrolling is absorbed by the panel,
+    /// "Done" returns to the parameter rows, and a cheat row becomes the one
+    /// thing `Game` must act on - the overlay stays up either way, so several
+    /// cheats can be fired before resuming.
+    fn handle_cheats_event(
+        &mut self,
+        event: Option<cheats_panel::CheatsEvent>,
+    ) -> Option<PauseAction> {
+        match cheats_panel::activate(self.panel_rects, event?, &mut self.cheats_scroll)? {
+            cheats_panel::CheatsOutcome::Act(action) => Some(PauseAction::Cheat(action)),
+            cheats_panel::CheatsOutcome::Done => {
+                self.page = PauseMenuPage::Developer;
+                None
+            }
+        }
     }
 
     /// World-space presentation: the canvas on a panel in front of the player.
@@ -601,21 +666,57 @@ impl PauseMenu {
     ) -> UiCanvas {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
 
-        if self.page == PauseMenuPage::Developer {
-            // The Developer page: the shared parameter panel on its own
-            // backdrop. Everything about the page - rows, arrows, "Done" -
-            // is described by `dev_params_panel`, so this page and the
-            // standalone Developer scene cannot drift apart.
+        if matches!(self.page, PauseMenuPage::Developer | PauseMenuPage::Cheats) {
+            // The Developer screen: a shared panel on its own backdrop.
+            // Everything about either page - rows, arrows, "Done" - is
+            // described by the panel module, so these pages and the standalone
+            // Developer scene cannot drift apart.
             canvas.image(
                 Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H),
                 DEVELOPER_BACKDROP_TEXTURE,
             );
-            dev_params_panel::draw(
-                &mut canvas,
-                self.panel_rects,
-                self.panel_scroll,
-                pointer_canvas,
-            );
+            match self.page {
+                PauseMenuPage::Cheats => cheats_panel::draw(
+                    &mut canvas,
+                    self.panel_rects,
+                    self.cheats_scroll,
+                    pointer_canvas,
+                ),
+                _ => {
+                    dev_params_panel::draw(
+                        &mut canvas,
+                        self.panel_rects,
+                        self.panel_scroll,
+                        pointer_canvas,
+                    );
+                    // The upper framed button: the Cheats page's door. It is
+                    // this host's rather than the panel's because the main
+                    // menu's Developer scene fills the same slot with its
+                    // scene launcher - a cheat needs a running mission, a
+                    // launcher needs there not to be one.
+                    canvas
+                        .text_native(
+                            self.panel_rects.action_rect(),
+                            cheats_panel::OPEN_LABEL,
+                            MENU_FONT,
+                            HAlign::Center,
+                            VAlign::Middle,
+                        )
+                        // The action rect is the only thing `target_at` gives
+                        // precedence over the panel on this page, so the
+                        // highlight is that same test rather than a routed
+                        // event - and cannot disagree with the click.
+                        .opacity(
+                            if pointer_canvas
+                                .is_some_and(|point| self.panel_rects.action_rect().contains(point))
+                            {
+                                HOVER_OPACITY
+                            } else {
+                                IDLE_OPACITY
+                            },
+                        );
+                }
+            }
             return canvas;
         }
 
@@ -762,6 +863,96 @@ mod tests {
         );
         assert_eq!(menu.page, PauseMenuPage::Root);
         assert!(menu.is_open());
+    }
+
+    /// The Developer page's upper framed button opens the Cheats page. It is
+    /// the slot the main menu's Developer scene fills with its scene launcher,
+    /// so the two hosts must not both claim it.
+    #[test]
+    fn the_upper_framed_button_opens_the_cheats_page() {
+        let panel = dev_params_panel::PanelRects::default();
+        let point = panel.action_rect().center();
+
+        assert_eq!(
+            target_at(PauseMenuPage::Developer, panel, 0, 0, &[], point),
+            Some(PauseMenuTarget::OpenCheats),
+        );
+
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.handle_root_entry(Some(PauseMenuEntry::Developer));
+        // Turning the page never reaches `Game`, and never closes the menu.
+        assert_eq!(menu.handle_target(Some(PauseMenuTarget::OpenCheats)), None);
+        assert_eq!(menu.page, PauseMenuPage::Cheats);
+        assert!(menu.is_open());
+    }
+
+    /// Every shipped cheat row reaches `Game` with its own templates, and the
+    /// overlay stays up on its page - a cheat sets a situation up, it does not
+    /// resume the game.
+    #[test]
+    fn a_cheat_row_reaches_game_and_leaves_the_overlay_up() {
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.page = PauseMenuPage::Cheats;
+
+        for (index, cheat) in cheats_panel::CHEATS.iter().enumerate() {
+            let action = menu.handle_cheats_event(Some(cheats_panel::CheatsEvent::Row(index)));
+            assert_eq!(
+                action,
+                Some(PauseAction::Cheat(cheat.action())),
+                "cheat {index} must carry out its own action",
+            );
+            assert_eq!(menu.page, PauseMenuPage::Cheats);
+            assert!(menu.is_open());
+        }
+
+        // A frame with no click changes nothing.
+        assert_eq!(menu.handle_cheats_event(None), None);
+        assert_eq!(menu.page, PauseMenuPage::Cheats);
+    }
+
+    /// "Done" on the Cheats page goes back to the parameters it was opened
+    /// from, not to the root - the page is a sub-page of the Developer screen.
+    #[test]
+    fn done_on_the_cheats_page_returns_to_the_parameters() {
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.page = PauseMenuPage::Cheats;
+
+        assert_eq!(
+            menu.handle_cheats_event(Some(cheats_panel::CheatsEvent::Done)),
+            None
+        );
+        assert_eq!(menu.page, PauseMenuPage::Developer);
+        assert!(menu.is_open());
+    }
+
+    /// The same fall-through hazard the Developer page's "Done" has: the
+    /// Cheats page shares that rect, so a press held through it must not land
+    /// on the root page's "Quit to Main Menu" the next frame.
+    #[test]
+    fn a_press_held_through_the_cheats_done_cannot_fall_through_onto_quit() {
+        let rects = menu_rects(None);
+        let panel = dev_params_panel::PanelRects::default();
+        let done = panel.done_center();
+        assert!(
+            rects[QUIT_INDEX].contains(done),
+            "Done must sit over Quit for this test to mean anything"
+        );
+
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.page = PauseMenuPage::Cheats;
+        menu.menu.set_last_pressed(false);
+
+        // Frame 1: press on "Done" - back to the parameter rows.
+        assert_eq!(menu.consume_pointer(Some(done), true, &rects), None);
+        assert_eq!(menu.page, PauseMenuPage::Developer);
+        // Frame 2: the press is still held over the very same point, which is
+        // now the parameter page's own "Done". The spent edge must hold.
+        assert_eq!(menu.consume_pointer(Some(done), true, &rects), None);
+        assert_eq!(menu.page, PauseMenuPage::Developer);
     }
 
     /// The overlay's most dangerous interaction: the Developer page's "Done"

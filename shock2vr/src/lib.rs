@@ -183,6 +183,7 @@ use crate::{
     mission::{GlobalContext, Mission, PlayerInfo, PlayerLifeState},
     pause_menu::PauseAction,
     scripts::Effect,
+    ui::cheats_panel::CheatAction,
 };
 use zip_asset_path::ZipAssetPath;
 
@@ -1593,18 +1594,7 @@ impl Game {
             |entity_id| util::get_entity_position(world, entity_id),
         );
 
-        // Handle global effects
-        let global_effects = self.active_game_scene.handle_effects(
-            effects,
-            &self.global_context,
-            &self.options,
-            &mut self.asset_cache,
-            &mut self.audio_context,
-        );
-
-        for effect in global_effects {
-            self.handle_global_effect(effect);
-        }
+        self.apply_scene_effects(effects);
     }
 
     /// The clock the active scene sees: wall time with every suspended frame
@@ -1753,6 +1743,20 @@ impl Game {
                 self.close_pause_menu(true);
                 self.handle_global_effect(GlobalEffect::ShowMainMenu);
             }
+            // A cheat acts on the paused scene and leaves the overlay up, so
+            // several can be fired before resuming. The page describes what a
+            // row does; turning that into an effect is the host's job.
+            Some(PauseAction::Cheat(action)) => {
+                let effect = match action {
+                    CheatAction::Rain(template_ids) => Effect::RainItems {
+                        template_ids: template_ids.to_vec(),
+                    },
+                    CheatAction::Alertness { level, pin } => {
+                        Effect::SetAllAIAlertness { level, pin }
+                    }
+                };
+                self.apply_scene_effects(vec![effect]);
+            }
             None => {}
         }
     }
@@ -1769,10 +1773,18 @@ impl Game {
     fn open_pause_menu(&mut self) {
         // Taking over the screen suspends the flat metagame (Tab/MFD) mode, so
         // the player is not left with a cursor-driven overlay under the pause
-        // panel. Effects reach a scene through `handle_effects`, which stays
-        // callable while the scene's `update` is skipped.
+        // panel.
+        self.apply_scene_effects(vec![Effect::CloseUseMode]);
+        self.pause_menu.open();
+    }
+
+    /// Hand effects to the active scene, forwarding whatever global effects
+    /// come back. Used by the ordinary update and by the pause overlay alike:
+    /// `handle_effects` stays callable while the scene's `update` is skipped,
+    /// which is what lets the overlay act on the scene underneath it.
+    fn apply_scene_effects(&mut self, effects: Vec<Effect>) {
         let global_effects = self.active_game_scene.handle_effects(
-            vec![Effect::CloseUseMode],
+            effects,
             &self.global_context,
             &self.options,
             &mut self.asset_cache,
@@ -1781,7 +1793,6 @@ impl Game {
         for effect in global_effects {
             self.handle_global_effect(effect);
         }
-        self.pause_menu.open();
     }
 
     fn save_to_file(&self, file_name: String) -> Result<(), SaveGameError> {

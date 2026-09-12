@@ -126,6 +126,41 @@ pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 /// trimesh (see `spawn_ragdoll`).
 const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
 
+/// Where `Effect::RainItems` puts its spawns, relative to the player's body
+/// ORIGIN (the capsule centre, three feet off the floor - not the feet).
+/// Written in SS2 feet over `SCALE_FACTOR`, like the spawn handlers beside it,
+/// because the profile these clear is authored in feet: the standing capsule's
+/// crown is 3 ft above the origin and its radius is 1.2 ft.
+///
+/// So the ring drops items from just over head height, at arm's length: high
+/// enough to fall visibly and to miss the player, low enough to stay under a
+/// corridor ceiling (at 6.25 ft the rain landed on top of the ceiling geometry
+/// instead of reaching the player).
+const RAIN_RADIUS: f32 = 2.0 / SCALE_FACTOR;
+const RAIN_HEIGHT: f32 = 3.5 / SCALE_FACTOR;
+
+/// How far each rain rotates the next one's ring. The golden angle, so
+/// consecutive rains interleave instead of stacking: two presses in a row
+/// (easy, since the overlay stays up) would otherwise drop every item onto
+/// the slot an earlier one is still occupying, and the solver flings the
+/// coincident bodies apart on resume rather than letting them fall.
+const RAIN_PHASE_STEP: f32 = 2.399_963_2;
+
+/// Minimum arc between neighbouring slots, so the ring grows with the cheat
+/// rather than packing its items tighter. At the fixed 2 ft radius the
+/// eight-item weapon spread put neighbours ~1.5 ft apart - shorter than the
+/// Assault Rifle it spawns, so they started the frame interpenetrating.
+const RAIN_MIN_SPACING: f32 = 2.5 / SCALE_FACTOR;
+
+/// How far short of a wall a slot is pulled. The ring is placed around the
+/// player without regard for the room, so a player standing closer to a wall
+/// than the radius would otherwise drop items straight through it.
+const RAIN_WALL_MARGIN: f32 = 0.5 / SCALE_FACTOR;
+
+/// Extra lift per slot, so items pulled to the same place by neighbouring
+/// walls still fall as a stack rather than starting inside one another.
+const RAIN_SLOT_LIFT: f32 = 0.35 / SCALE_FACTOR;
+
 /// Resolve optional media-reader portrait/icon art before it becomes a shared
 /// UI image. STR tables author extension-less PCX-era names, while replacement
 /// layers may provide the same art under a modern encoding (SCP's Earth
@@ -2010,6 +2045,10 @@ pub struct MissionCore {
     /// `P$SymName`, indexed by lowercased name - the fallback an ecology spawn
     /// uses when the gamesys has no archetype under the authored name.
     mission_object_name_to_id: HashMap<String, i32>,
+    /// How many `Effect::RainItems` have landed, to phase each ring off the
+    /// last (see [`RAIN_PHASE_STEP`]). Cosmetic and cheat-only, so it is not
+    /// saved.
+    rains_landed: u32,
     pub obj_map: HashMap<i32, String>,
     pub world: World,
     pub player_handle: PlayerHandle,
@@ -3048,6 +3087,7 @@ impl MissionCore {
             id_to_particle_system: HashMap::new(),
             template_name_to_template_id,
             mission_object_name_to_id,
+            rains_landed: 0,
             scene_objects: scene,
             animated_lightmaps,
             physics,
@@ -10061,6 +10101,56 @@ impl MissionCore {
                     {
                         let msgs = self.interaction.wield(info.entity_id);
                         effects.extend(self.process_virtual_hand_effects(asset_cache, msgs));
+                    }
+                }
+                Effect::RainItems { template_ids } => {
+                    let (pos, rot) = {
+                        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                        (vec3_to_point3(player.pos), player.rotation)
+                    };
+                    // A ring above head height, one item per slot: spread out
+                    // so the spawns do not interpenetrate on the first step
+                    // (which would fling them apart), and high enough that
+                    // they visibly fall. Deterministic, not random - a capture
+                    // or an e2e assertion must be able to repeat the layout.
+                    let count = template_ids.len() as f32;
+                    // Grow the ring with the cheat instead of packing a longer
+                    // list into the same circle.
+                    let radius = RAIN_RADIUS.max(count * RAIN_MIN_SPACING / std::f32::consts::TAU);
+                    let phase = RAIN_PHASE_STEP * self.rains_landed as f32;
+                    self.rains_landed = self.rains_landed.wrapping_add(1);
+                    for (index, template_id) in template_ids.iter().enumerate() {
+                        let angle = phase + std::f32::consts::TAU * index as f32 / count;
+                        let direction = vec3(angle.cos(), 0.0, angle.sin());
+                        // Keep the slot on the player's side of the walls: the
+                        // ring knows nothing about the room, so in a duct or
+                        // against a wall the naive point is through it.
+                        let reach = match self.physics.ray_cast2(
+                            pos,
+                            direction,
+                            radius,
+                            crate::physics::InternalCollisionGroups::WORLD,
+                            None,
+                            true,
+                        ) {
+                            Some(hit) => {
+                                ((hit.hit_point - pos).magnitude() - RAIN_WALL_MARGIN).max(0.0)
+                            }
+                            None => radius,
+                        };
+                        let offset = vec3(
+                            direction.x * reach,
+                            RAIN_HEIGHT + index as f32 * RAIN_SLOT_LIFT,
+                            direction.z * reach,
+                        );
+                        self.create_entity_with_position(
+                            asset_cache,
+                            *template_id,
+                            pos + offset,
+                            rot,
+                            Matrix4::identity(),
+                            CreateEntityOptions::default(),
+                        );
                     }
                 }
                 Effect::DebugCycleWeapon { head_rotation } => {
