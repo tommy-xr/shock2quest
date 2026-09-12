@@ -29,6 +29,29 @@ fn flip_winding(winding: FrontFaceWinding) -> FrontFaceWinding {
 pub struct SubObject {
     pub name: String,
     pub transform: Matrix4<f32>,
+    pub articulation: u8,
+    pub parameter: i32,
+}
+
+impl SubObject {
+    /// LGMD articulates around/along local Dark X after the authored pivot
+    /// transform. Dark X maps to -X in the runtime. Parameters are degrees
+    /// for hinges and Dark distance units for sliders.
+    pub fn parameter_transform(&self, values: &[f32]) -> Option<Matrix4<f32>> {
+        let value = *values.get(usize::try_from(self.parameter).ok()?)?;
+        if !value.is_finite() {
+            return None;
+        }
+        match self.articulation {
+            1 => Some(Matrix4::from_angle_x(cgmath::Deg(-value))),
+            2 => Some(Matrix4::from_translation(cgmath::vec3(
+                -value / crate::SCALE_FACTOR,
+                0.0,
+                0.0,
+            ))),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -86,6 +109,8 @@ pub struct AnimatedModel {
     /// corpse lying flat would be bounded by the standing rest skeleton.
     posed_bounds: Option<Aabb3<f32>>,
     object_articulation: Option<std::sync::Arc<crate::object_articulation::ObjectArticulation>>,
+    /// Authored LGMD rest bounds, kept separate from posed skeletal bounds.
+    object_bounds: Option<Aabb3<f32>>,
 }
 
 /// Build the render palette, undoing the bind pose first when the geometry needs
@@ -207,6 +232,7 @@ impl AnimatedModel {
             bind: self.bind.clone(),
             object_articulation: self.object_articulation.clone(),
             posed_bounds: joint_box_bounds(&animated_skeleton.get_transforms(), &self.hit_boxes),
+            object_bounds: self.object_bounds,
         }
     }
 
@@ -232,6 +258,7 @@ impl AnimatedModel {
             bind: model.bind.clone(),
             posed_bounds: model.posed_bounds,
             object_articulation: model.object_articulation.clone(),
+            object_bounds: model.object_bounds,
         }
     }
 
@@ -272,6 +299,8 @@ impl Model {
             .map(|(index, sub_object)| SubObject {
                 name: sub_object.name.clone(),
                 transform: skeleton.global_transform(&(index as u32)),
+                articulation: sub_object.articulation,
+                parameter: sub_object.parameter,
             })
             .collect::<Vec<SubObject>>();
 
@@ -291,6 +320,7 @@ impl Model {
                     object_articulation: Some(std::sync::Arc::new(
                         ss2_bin_obj_loader::object_articulation(&static_mesh),
                     )),
+                    object_bounds: Some(bounding_box),
                 }),
             }
         } else {
@@ -362,6 +392,7 @@ impl Model {
                 bind,
                 posed_bounds: None,
                 object_articulation: None,
+                object_bounds: None,
             }),
         }
     }
@@ -390,6 +421,7 @@ impl Model {
                     bind: None,
                     posed_bounds: None,
                     object_articulation: None,
+                    object_bounds: None,
                 }),
             }
         } else {
@@ -504,6 +536,15 @@ impl Model {
         match &self.inner {
             InnerModel::Animated(model) => model.to_posed_scene_objects(pose),
             InnerModel::Static(model) => model.to_scene_objects().clone(),
+        }
+    }
+
+    /// Rest bounds for physical support of articulated object actors. This
+    /// does not change the legacy interaction bounds of other jointed props.
+    pub fn object_model_bounds(&self) -> Option<Aabb3<f32>> {
+        match &self.inner {
+            InnerModel::Static(model) => Some(model.bounding_box),
+            InnerModel::Animated(model) => model.object_bounds,
         }
     }
 
@@ -721,6 +762,7 @@ mod tests {
                 bind: None,
                 posed_bounds,
                 object_articulation: None,
+                object_bounds: None,
             }),
         }
     }
@@ -824,5 +866,25 @@ mod tests {
         model.apply_local_transform(Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0));
         model.apply_local_transform(Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0));
         assert_eq!(winding(&model), Some(FrontFaceWinding::Clockwise));
+    }
+}
+
+#[cfg(test)]
+mod object_parameter_tests {
+    use super::*;
+    use cgmath::{SquareMatrix, Transform};
+    #[test]
+    fn object_parameters_are_not_sub_object_indices_and_rotate_about_dark_x() {
+        let part = SubObject {
+            name: "hinge".into(),
+            transform: Matrix4::identity(),
+            articulation: 1,
+            parameter: 2,
+        };
+        let transform = part.parameter_transform(&[0.0, 0.0, 90.0]).unwrap();
+        let point = transform.transform_point(cgmath::point3(0.0, 1.0, 0.0));
+        assert!(point.y.abs() < 0.0001);
+        assert!((point.z + 1.0).abs() < 0.0001);
+        assert!(part.parameter_transform(&[0.0]).is_none());
     }
 }

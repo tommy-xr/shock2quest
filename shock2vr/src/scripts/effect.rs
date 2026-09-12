@@ -799,7 +799,7 @@ pub enum Effect {
         entity_id: EntityId,
         rotation: Quaternion<f32>,
     },
-    /// Change a live projectile's flight velocity without changing its pose.
+    /// Set a physics-driven actor or projectile's velocity without changing its pose.
     SetLinearVelocity {
         entity_id: EntityId,
         velocity: Vector3<f32>,
@@ -818,6 +818,12 @@ pub enum Effect {
         entity_id: EntityId,
         joint_id: u32,
         transform: Matrix4<f32>,
+    },
+    /// LGMD parameter indices are independent of the sub-object hierarchy.
+    /// The model maps these authored joint values onto its render joints.
+    SetObjectJointParameters {
+        entity_id: EntityId,
+        values: [f32; 6],
     },
     SetPlayerPosition {
         position: Vector3<f32>,

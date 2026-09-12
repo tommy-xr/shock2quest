@@ -412,3 +412,116 @@ mod tests {
         assert_eq!(config.velocity, cgmath::vec3(25.0, 0.0, 0.0));
     }
 }
+
+/// One articulated object parameter. Joint tweq rates are units per 100 ms,
+/// unlike the rotate-tweq heading rate. See Dark processTweqAxis.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TweqJoint {
+    pub curve: u8,
+    pub animation_config: TweqAnimationConfig,
+    pub limits: TweqAxisLimits,
+}
+
+#[derive(Debug, Component, Clone, Deserialize, Serialize)]
+pub struct PropTweqJointsConfig {
+    pub halt: TweqHalt,
+    pub joints: [TweqJoint; 6],
+    /// One-based master parameter; zero means all parameters run independently.
+    pub primary_joint: u8,
+}
+
+impl PropTweqJointsConfig {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> Self {
+        let _type = read_u8(reader);
+        let _curve = read_u8(reader);
+        let _anim = read_u8(reader);
+        let halt = num_traits::FromPrimitive::from_u8(read_u8(reader)).unwrap();
+        let _misc = read_u16(reader);
+        let _rate = read_u16(reader);
+        let joints = std::array::from_fn(|_| {
+            let _type = read_u8(reader);
+            let curve = read_u8(reader);
+            let animation_config = TweqAnimationConfig::from_bits_truncate(read_u8(reader).into());
+            let _halt = read_u8(reader);
+            let _misc = read_u16(reader);
+            let _rate = read_u16(reader);
+            TweqJoint {
+                curve,
+                animation_config,
+                limits: TweqAxisLimits {
+                    rate: read_single(reader),
+                    low: read_single(reader),
+                    high: read_single(reader),
+                },
+            }
+        });
+        let primary_joint = read_u8(reader);
+        for _ in 0..3 {
+            let _pad = read_u8(reader);
+        }
+        Self {
+            halt,
+            joints,
+            primary_joint,
+        }
+    }
+}
+
+#[derive(Debug, Component, Clone, Deserialize, Serialize)]
+pub struct PropTweqJointsState {
+    pub animation_state: TweqAnimationState,
+    pub joints: [TweqAnimationState; 6],
+}
+
+impl PropTweqJointsState {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> Self {
+        let mut state = || {
+            let flags = TweqAnimationState::from_bits_truncate(read_u16(reader).into());
+            let _misc = read_u16(reader);
+            flags
+        };
+        Self {
+            animation_state: state(),
+            joints: std::array::from_fn(|_| state()),
+        }
+    }
+}
+
+#[derive(Debug, Component, Clone, Deserialize, Serialize)]
+pub struct PropJointPositions(pub [f32; 6]);
+impl PropJointPositions {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> Self {
+        Self(std::array::from_fn(|_| read_single(reader)))
+    }
+}
+
+#[cfg(test)]
+mod joint_tests {
+    use super::*;
+    #[test]
+    fn joint_config_and_state_keep_six_distinct_parameter_slots() {
+        let mut bytes = vec![0, 0, 0, 3, 0, 0, 0, 0];
+        for i in 0..6 {
+            bytes.extend([0, 0, 0, 3, 0, 0, 0, 0]);
+            for value in [10.0 + i as f32, -30.0, 30.0] {
+                bytes.extend(value.to_le_bytes());
+            }
+        }
+        bytes.extend([3, 0, 0, 0]);
+        let mut reader = std::io::Cursor::new(bytes);
+        let config = PropTweqJointsConfig::read(&mut reader, 132);
+        assert_eq!(reader.position(), 132);
+        assert_eq!(config.primary_joint, 3);
+        assert_eq!(config.joints[5].limits.rate, 15.0);
+        let mut reader = std::io::Cursor::new(
+            [1u32, 1, 3, 1, 0, 0, 0]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+        let state = PropTweqJointsState::read(&mut reader, 28);
+        assert_eq!(reader.position(), 28);
+        assert!(state.joints[1].contains(TweqAnimationState::REVERSE));
+        assert!(!state.joints[2].contains(TweqAnimationState::REVERSE));
+    }
+}
