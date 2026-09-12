@@ -31,9 +31,14 @@ impl JointTweq {
         }
     }
     pub fn pose(&self, entity_id: EntityId) -> Effect {
-        Effect::SetObjectJointParameters {
+        Effect::SetObjectParameters {
             entity_id,
-            values: self.values,
+            parameters: self
+                .values
+                .iter()
+                .enumerate()
+                .map(|(i, &value)| (i as i32, value))
+                .collect(),
         }
     }
     pub fn update(&mut self, entity_id: EntityId, world: &World, seconds: f32) -> Effect {

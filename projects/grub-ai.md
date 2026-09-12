@@ -15,7 +15,7 @@ ground movement or skeletal motion clips.
   A failed/pending real route never falls back to chasing through a wall.
   Debug scenes without navigation can chase a visible target directly.
 - `P$AI_MoveSp` is the Dark move-speed input; the motor applies the original
-  `SetObjImpulse` factor of 7.5. `P$AI_TurnRa` is degrees per second.
+  `SetObjImpulse` factor of 7.5. `P$AI_TurnR` is degrees per second.
 - `P$AI_Grub_C` supplies leap range, speed limits and cooldown. The retail
   template has zero bite distance/intensity and an empty bite stimulus; its
   authored Anti-Human contact stim supplies damage. Contact is spent once per
@@ -34,7 +34,7 @@ values. The Grub enables three linear, bouncing parameters, each from -30 to
 +30 degrees at 10 degrees per 100 milliseconds.
 
 LGMD's field previously labeled `parent_idx` is actually the parameter index.
-The child/next links encode hierarchy. `SetObjectJointParameters` maps each
+The child/next links encode hierarchy. `SetObjectParameters` maps each
 parameter onto the appropriate sub-object, including parts sharing a parameter.
 Rotation occurs about local Dark X (runtime -X), after the authored pivot;
 sliding uses the same axis. This preserves the existing per-joint transform

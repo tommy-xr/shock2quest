@@ -819,12 +819,6 @@ pub enum Effect {
         joint_id: u32,
         transform: Matrix4<f32>,
     },
-    /// LGMD parameter indices are independent of the sub-object hierarchy.
-    /// The model maps these authored joint values onto its render joints.
-    SetObjectJointParameters {
-        entity_id: EntityId,
-        values: [f32; 6],
-    },
     SetPlayerPosition {
         position: Vector3<f32>,
         is_teleport: bool,

@@ -37,14 +37,6 @@ impl PropAIMoveSpeed {
         Self(read_single(reader) / SCALE_FACTOR)
     }
 }
-#[derive(Clone, Debug, Component, Serialize, Deserialize)]
-pub struct PropAITurnRate(pub f32);
-impl PropAITurnRate {
-    pub fn read<T: Read + Seek>(reader: &mut T, _len: u32) -> Self {
-        Self(read_single(reader))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

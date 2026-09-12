@@ -203,6 +203,17 @@ impl TurretAI {
 }
 
 impl Script for TurretAI {
+    fn initialize_after_hydration(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        _hydrated: bool,
+    ) -> Effect {
+        // Rebuild authored configuration and reapply the restored pose;
+        // initialize preserves alertness and activation when `restored` is set.
+        self.initialize(entity_id, world)
+    }
+
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
         self.config = Self::build_config(world, entity_id);
         if !self.restored {
@@ -455,10 +466,8 @@ mod tests {
         turret.alertness.hidden_time = 1.25;
         let saved = turret.save_state().unwrap();
         let outer = super::super::super::ScriptState::encode(
-            2,
-            &serde_json::json!({
-                "stasis": null, "turret": saved
-            }),
+            3,
+            &serde_json::json!([null, ["shock2vr.turret", saved]]),
             "shock2vr.ai_stasis",
         )
         .unwrap();

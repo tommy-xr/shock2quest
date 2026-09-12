@@ -2227,12 +2227,6 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             identity,
             accumulator::latest,
         ),
-        define_prop(
-            "P$AI_TurnRa",
-            PropAITurnRate::read,
-            identity,
-            accumulator::latest,
-        ),
         // Internal properties
         // These are not properties that are provided by shock2 game,
         // but are used internally for save/restore.
