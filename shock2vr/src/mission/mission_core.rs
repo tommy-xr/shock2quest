@@ -5744,7 +5744,9 @@ impl MissionCore {
                     .borrow::<View<dark::properties::PropAI>>()
                     .unwrap()
                     .get(*id)
-                    .is_ok_and(|ai| ai.0.eq_ignore_ascii_case("grub"));
+                    .is_ok_and(|ai| {
+                        matches!(ai.0.to_ascii_lowercase().as_str(), "grub" | "swarmer")
+                    });
                 if !holds_terminal_death_pose && !launched_with_no_root_motion && !physics_driven_ai
                 {
                     self.physics.set_velocity(*id, scaled);
@@ -7747,12 +7749,19 @@ impl MissionCore {
                 }
 
                 Effect::RadiusStim {
+                    source_entity_id,
                     center,
                     radius,
                     intensity,
                     stim_template_id,
                 } => {
-                    self.apply_radius_stimulus(None, center, radius, intensity, stim_template_id);
+                    self.apply_radius_stimulus(
+                        source_entity_id,
+                        center,
+                        radius,
+                        intensity,
+                        stim_template_id,
+                    );
                 }
 
                 Effect::RaiseNoise { origin, radius } => {

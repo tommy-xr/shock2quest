@@ -88,14 +88,12 @@ pub fn creature_height(world: &World, entity_id: EntityId) -> f32 {
 }
 
 fn object_actor_radius(world: &World, entity: EntityId) -> Option<f32> {
-    if !world
-        .borrow::<View<dark::properties::PropAI>>()
-        .ok()?
-        .get(entity)
-        .ok()?
-        .0
-        .eq_ignore_ascii_case("grub")
-    {
+    let ai = world.borrow::<View<dark::properties::PropAI>>().ok()?;
+    let ai = &ai.get(entity).ok()?.0;
+    if ai.eq_ignore_ascii_case("swarmer") {
+        return Some(super::SWARM_CORE_RADIUS);
+    }
+    if !ai.eq_ignore_ascii_case("grub") {
         return None;
     }
     let dimensions = world.borrow::<View<PropPhysDimensions>>().ok()?;

@@ -576,6 +576,7 @@ pub enum Effect {
     /// Radiation sources refresh this every frame while their player is in
     /// range; the player status integrates the ambient exposure separately.
     RadiusStim {
+        source_entity_id: Option<EntityId>,
         center: Vector3<f32>,
         radius: f32,
         intensity: f32,

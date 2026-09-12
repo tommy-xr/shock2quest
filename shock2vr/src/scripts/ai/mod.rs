@@ -17,3 +17,6 @@ pub use grub_ai::*;
 pub use turret_ai::*;
 
 use super::{Effect, Message, MessagePayload, Script};
+
+mod swarmer_ai;
+pub use swarmer_ai::{SWARM_CORE_RADIUS, SwarmerAI};

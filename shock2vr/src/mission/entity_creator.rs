@@ -1214,6 +1214,36 @@ fn create_physics_representation_with_options(
         }
     }
 
+    // Retail swarms author a zero-radius point body and render a particle
+    // cloud. Give Rapier a finite core for collision/aiming, before inherited
+    // FrobInfo can turn the cloud into a stationary fixture.
+    if world
+        .borrow::<View<PropAI>>()
+        .unwrap()
+        .get(entity_id)
+        .is_ok_and(|ai| ai.0.eq_ignore_ascii_case("swarmer"))
+        && !launched_object_is_immobile
+    {
+        if let Ok(pos) = v_pos.get(entity_id) {
+            let body = physics.add_dynamic(
+                entity_id,
+                pos.position,
+                pos.rotation,
+                vec3(0.0, 0.0, 0.0),
+                PhysicsShape::Sphere(crate::scripts::ai::SWARM_CORE_RADIUS),
+                CollisionGroup::actor(),
+                false,
+                DynamicPhysicsOptions {
+                    gravity_scale: 0.0,
+                    restitution: 0.0,
+                    ..dynamics_options
+                },
+            );
+            physics.set_enabled_rotations(entity_id, false, false, false);
+            return Some(body);
+        }
+    }
+
     // Dark's Tweq emitter hands the fresh object to launchProjectile. Preserve
     // that explicit creation mode here: frobbable emitted objects (Ops4's Grub
     // is one) would otherwise take the selectable-fixture branch below and
