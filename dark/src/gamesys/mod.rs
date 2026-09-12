@@ -1,3 +1,5 @@
+pub mod difficulty;
+pub use difficulty::*;
 pub mod env_map;
 pub mod env_sound_query;
 pub mod gamesys;

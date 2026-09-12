@@ -92,6 +92,10 @@ struct Args {
     #[arg(short, long, default_value = "main_menu")]
     mission: String,
 
+    /// Difficulty of a fresh campaign (saved campaigns retain their selection).
+    #[arg(long, default_value = "normal")]
+    difficulty: dark::gamesys::Difficulty,
+
     /// Port to bind the HTTP server to. Bound exactly as given: a taken port
     /// is a hard, loud failure rather than a silent move to another port,
     /// because a caller that then talks to the old port would be driving
@@ -588,6 +592,7 @@ fn run_game_blocking(
 
     let options = GameOptions {
         mission: mission.clone(),
+        difficulty: args.difficulty,
         presentation_mode,
         spawn_location,
         save_file: args.save_file,
@@ -1387,9 +1392,13 @@ fn process_command(
             }
         }
         RuntimeCommand::SetQuestBit { name, value, reply } => {
-            let result = match game.debug_scene_mut() {
-                Some(scene) => scene.set_quest_bit(&name, &value),
-                None => Err("no debuggable scene available".to_string()),
+            let result = if name.eq_ignore_ascii_case("difficulty") {
+                Err("difficulty is fixed when the campaign starts".to_string())
+            } else {
+                match game.debug_scene_mut() {
+                    Some(scene) => scene.set_quest_bit(&name, &value),
+                    None => Err("no debuggable scene available".to_string()),
+                }
             };
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send set-quest-bit result - receiver dropped");
@@ -2394,6 +2403,7 @@ fn capture_frame_snapshot(
             // held/wielded entities), or zeros when the scene has no player.
             let state = game.player_state();
             PlayerInfo {
+                difficulty: state.as_ref().map(|s| s.difficulty),
                 entity_id: state.as_ref().map(|s| s.entity_id),
                 inventory_entity_id: state.as_ref().map(|s| s.inventory_entity_id),
                 position: state

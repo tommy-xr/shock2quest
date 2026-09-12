@@ -14682,6 +14682,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     }
 
     fn set_quest_bit(&mut self, name: &str, value: &str) -> Result<(), String> {
+        if name.eq_ignore_ascii_case("difficulty") {
+            return Err("difficulty is fixed when the campaign starts".to_string());
+        }
         use dark::properties::QuestBitValue;
         let quest_value = match value.to_ascii_lowercase().as_str() {
             "unknown" => QuestBitValue::UNKNOWN,
