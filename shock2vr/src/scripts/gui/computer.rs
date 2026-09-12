@@ -119,7 +119,10 @@ pub(crate) fn restore_authored_computer_data(
     }
 }
 
-pub struct ComputerGui;
+#[derive(Default)]
+pub struct ComputerGui {
+    pub security: bool,
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct ComputerState {
@@ -136,6 +139,10 @@ fn can_hack(world: &World, entity_id: EntityId) -> bool {
         object_state(world, entity_id),
         ObjectState::Broken | ObjectState::Destroyed | ObjectState::Hacked
     ) && hack_diff(world, entity_id).is_some()
+}
+
+fn security_hack_success(entity_id: EntityId, _world: &World) -> Effect {
+    Effect::ClearSecurityAlarm { from: entity_id }
 }
 
 fn computer_hack_success(entity_id: EntityId, world: &World) -> Effect {
@@ -259,7 +266,11 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
             msg,
             diff,
             HackOutcomeEffects {
-                success: computer_hack_success,
+                success: if self.security {
+                    security_hack_success
+                } else {
+                    computer_hack_success
+                },
                 critical_failure: computer_hack_critical_failure,
             },
         );
@@ -363,7 +374,7 @@ mod tests {
 
     #[test]
     fn broken_and_hacked_computers_do_not_reopen() {
-        let gui = ComputerGui;
+        let gui = ComputerGui::default();
         for state in [ObjectState::Broken, ObjectState::Hacked] {
             let mut world = World::new();
             let computer = world.add_entity((
@@ -388,7 +399,7 @@ mod tests {
 
     #[test]
     fn reopening_preserves_only_an_in_progress_hack() {
-        let gui = ComputerGui;
+        let gui = ComputerGui::default();
         let mut state = ComputerState {
             hack: HackState {
                 phase: HackPhase::Playing,

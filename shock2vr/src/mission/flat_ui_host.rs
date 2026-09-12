@@ -3190,6 +3190,7 @@ mod tests {
             weapon: None,
             resources: [0; 2],
             hazards: Default::default(),
+            alarm_seconds: None,
             bio: Default::default(),
             ammo: crate::hud::ammo_panel::AmmoReadout {
                 ammo: Some(12),
@@ -3324,6 +3325,7 @@ mod tests {
             weapon: None,
             resources: [0; 2],
             hazards: Default::default(),
+            alarm_seconds: None,
             bio: Default::default(),
             ammo: Default::default(),
         }));

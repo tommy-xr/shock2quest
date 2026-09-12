@@ -66,7 +66,6 @@ mod reroute_elevator_button;
 mod researchable;
 mod room_trigger;
 pub mod script_util;
-mod security_computer;
 mod setup_initial_debrief;
 mod std_door;
 pub(crate) use std_door::player_door_frob_blocked;
@@ -189,7 +188,6 @@ use self::{
     once_room::OnceRoom,
     once_router::OnceRouter,
     room_trigger::RoomTrigger,
-    security_computer::SecurityComputer,
     std_door::StdDoor,
     tool_consumable::ToolConsumable,
     transluce::TransluceInOutHolo,
@@ -1154,7 +1152,7 @@ impl ScriptWorld {
             // partially implemented:
             "keypadunhackable" => gui_script(Box::new(KeyPadGui)),
             "keypad" => gui_script(Box::new(KeyPadGui)),
-            "securitycomputer" => Box::new(SecurityComputer::new()),
+            "securitycomputer" => gui_script(Box::new(ComputerGui { security: true })),
             "resurrectmachine" => Box::new(BaseButton {}),
             "twostatebutton" => Box::new(BaseButton::new()),
 
@@ -1204,7 +1202,7 @@ impl ScriptWorld {
             "medpatchscript" => Box::new(HealingItemScript::new(HealingItemKind::MedPatch)),
             "psikitscript" => Box::new(PsiKitScript::new()),
             "psimine" => Box::new(PsiMine::new()),
-            "computer" => gui_script(Box::new(ComputerGui)),
+            "computer" => gui_script(Box::new(ComputerGui::default())),
             "lightsoundon" => Box::new(NoopScript::new()),
             "hackablecrate" => gui_script(Box::new(HackableCrateGui::new())),
             "turret" => Box::new(UnimplementedScript::new(&script_name)),

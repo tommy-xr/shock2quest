@@ -2215,9 +2215,7 @@ pub struct MissionCore {
     pub pathfinding_service: Option<Arc<PathfindingService>>,
     pub path_visualization: PathVisualizationSystem,
     pub pathfinding_test: crate::mission::pathfinding_test::PathfindingTest,
-    /// The refcounted station security alarm behind the HUD badge and its
-    /// countdown. The durable state is the ecologies' alert tier, so this is
-    /// not saved.
+    /// Station security alarm bookkeeping, persisted with this mission.
     pub security_alarm: crate::security_alarm::SecurityAlarm,
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
     /// the next animation deterministically (debug hitbox inspection).
@@ -3231,6 +3229,8 @@ impl MissionCore {
             controller.flush();
         }
 
+        let security_alarm =
+            crate::security_alarm::SecurityAlarm::restore(crate::security_alarm::status(&world));
         let mut mission_core = MissionCore {
             interaction,
             level_name: mission,
@@ -3267,7 +3267,7 @@ impl MissionCore {
             pathfinding_service,
             path_visualization: PathVisualizationSystem::new(),
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
-            security_alarm: crate::security_alarm::SecurityAlarm::default(),
+            security_alarm,
             debug_pose_index: 0,
             debug_weapon_index: 0,
             player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),

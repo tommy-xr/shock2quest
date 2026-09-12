@@ -281,6 +281,7 @@ pub fn to_save_data_with_scripts(
         .filter(|(id, _)| !entities_to_filter.contains(id))
         .partition(|(id, _)| held_entities.contains(id));
     let world_entity_data = EntitySaveData {
+        security_alarm: Some(crate::security_alarm::status(world)),
         properties: world_serialized_properties,
         template_id_to_entity_id: template_id_to_entity_id.0.clone(),
         links: world_serialized_links,
@@ -298,6 +299,7 @@ pub fn to_save_data_with_scripts(
     };
 
     let held_entity_data = EntitySaveData {
+        security_alarm: None,
         all_entities: all_held_entities,
         template_id_to_entity_id: HashMap::new(),
         links: held_serialized_links,

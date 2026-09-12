@@ -1023,8 +1023,7 @@ export interface UiState {
 
 /** The station security alarm as the HUD presents it. */
 export interface UiSecurityAlarm {
-  /** Outstanding alarms; overlapping alarms are refcounted, and the badge
-   * shows until the last one is gone. */
+  /** Alarms raised since the last station stand-down. */
   count: number;
   /** Seconds left on the alarm's deadline, floored at zero. */
   seconds_remaining: number;

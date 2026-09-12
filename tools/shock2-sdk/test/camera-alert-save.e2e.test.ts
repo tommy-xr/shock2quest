@@ -38,6 +38,7 @@ test(
   async () => {
     const saveName = `camera_alert_e2e_${Date.now()}`;
 
+    let savedAlarmSeconds = 0;
     // --- Session 1: let the camera see the player, then save while it is red.
     {
       await using game = await GameServer.launch({
@@ -67,6 +68,10 @@ test(
       const detail = await game.entities.detail(cam.id);
       assert.equal(prop(detail, "AIAlertness"), "High");
 
+      await game.step({ frames: 2 });
+      const alert = (await game.ui.state()).security_alarm;
+      assert.ok(alert, "alert camera must publish security countdown");
+      savedAlarmSeconds = alert.seconds_remaining;
       const saveResult = await game.save(saveName);
       assert.equal(saveResult.success, true, "save should report success");
     }
@@ -87,6 +92,9 @@ test(
       // would have taken the game loop with it).
       assert.equal((await game.info()).mission, "medsci1.mis");
 
+      const restoredAlarm = (await game.ui.state()).security_alarm;
+      assert.ok(restoredAlarm, "cold load must restore active alarm badge");
+      assert.ok(Math.abs(restoredAlarm.seconds_remaining - savedAlarmSeconds) < 0.2);
       const cam = await camera(game);
       const detail = await game.entities.detail(cam.id);
       assert.equal(

@@ -651,8 +651,7 @@ pub struct DebugUiState {
 /// The station security alarm as the HUD presents it (`GET /v1/ui`).
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugSecurityAlarm {
-    /// Outstanding alarms; overlapping alarms are refcounted, and the badge
-    /// shows until the last one is gone.
+    /// Alarms raised since the last station stand-down.
     pub count: u32,
     /// Seconds left on the alarm's deadline, floored at zero.
     pub seconds_remaining: f32,

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { clickUiElement } from "./helpers/ui.js";
+import { carriedNaniteTotal } from "./helpers/nanites.js";
 import type { EntityDetailResult, EntitySummary } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
@@ -39,6 +41,8 @@ test(
   async () => {
     await using game = await GameServer.launch({ mission: "debug_camera" });
     await game.step({ frames: 10 });
+    await game.player.setStats({ skills: { hack: 6 }, cyber_affinity: 6 });
+    await game.player.spawnItem("20 Nanites");
 
     const camera = await only(game, CAMERA, "security camera");
     const ecology = await only(game, ECOLOGY, "security ecology");
@@ -93,12 +97,40 @@ test(
       `countdown should be running, ${raised.seconds_remaining} -> ${ticked.seconds_remaining}`,
     );
 
-    // Using the security computer stands the whole station down well before
-    // the deadline: the alarm clears and the ecology is reset out of its alert
-    // tier, which in turn clears the camera that raised it.
+    const scanPosition = (await game.info()).player.position;
+    await game.player.teleport({ x: console_.position[0], y: console_.position[1], z: console_.position[2] - 2 });
+    // Opening the console must not bypass its paid hacking interaction.
     await game.entities.sendMessage(console_.id, { type: "Frob" });
     await game.step({ frames: 10 });
-    assert.equal(await alarm(game), null, "the console should stand security down");
+    assert.ok(await alarm(game), "merely opening security must not clear an alarm");
+    const unpaid = (await game.ui.state()).active_panel;
+    assert.ok(unpaid, "security computer should open the existing HRM panel");
+    const start = unpaid.elements.find((e) => e.label === "start-hack");
+    assert.ok(start);
+    const nanitesBefore = await carriedNaniteTotal(game);
+    await clickUiElement(game, start);
+    assert.ok(await carriedNaniteTotal(game) < nanitesBefore, "HRM must charge nanites");
+    // Exercise real node clicks. High provisioned skill removes mines; misses
+    // can block a node, so explore remaining rows rather than inject success.
+    for (let attempt = 0; attempt < 5 && await alarm(game); attempt++) {
+      if (attempt > 0) {
+        const panel = (await game.ui.state()).active_panel;
+        const reset = panel?.elements.find((e) => e.label === "reset-hack");
+        assert.ok(reset, "failed HRM should offer reset");
+        await clickUiElement(game, reset);
+        const startAgain = (await game.ui.state()).active_panel?.elements.find((e) => e.label === "start-hack");
+        if (startAgain) await clickUiElement(game, startAgain);
+      }
+      for (let y = 0; y < 4 && await alarm(game); y++) {
+        for (let x = 0; x < 5 && await alarm(game); x++) {
+          const panel = (await game.ui.state()).active_panel;
+          const node = panel?.elements.find((e) => e.label === `node-${x}-${y}`);
+          if (node) await clickUiElement(game, node);
+        }
+      }
+    }
+    await game.step({ frames: 2 });
+    assert.equal(await alarm(game), null, "a successful hack should stand security down");
     assert.equal(
       property(await game.entities.detail(ecology.id), "EcologyState"),
       "Normal",
@@ -110,6 +142,9 @@ test(
       "the ecology's reset should clear the camera that alarmed",
     );
 
+    const close = (await game.ui.state()).active_panel?.elements.find((e) => e.label === "close");
+    if (close) await clickUiElement(game, close);
+    await game.player.teleport({ x: scanPosition[0], y: scanPosition[1], z: scanPosition[2] });
     // The camera re-arms: seeing the player again raises a fresh alarm.
     for (
       let attempt = 0;

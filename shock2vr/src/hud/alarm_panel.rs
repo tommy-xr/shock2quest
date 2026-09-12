@@ -19,6 +19,7 @@ pub(crate) const BADGE: Rect = Rect::new(0.0, 0.0, 64.0, 64.0);
 /// pixels under the badge and centered on it.
 pub(crate) const COUNTDOWN: Rect = Rect::new(BADGE.x, BADGE.y + BADGE.h + 2.0, BADGE.w, 14.0);
 /// The whole readout's footprint, panel-local.
+pub(crate) const FLAT_ORIGIN: Vector2<f32> = vec2(10.0, 260.0);
 pub(crate) const PANEL: Vector2<f32> = vec2(BADGE.w, COUNTDOWN.y + COUNTDOWN.h);
 
 /// The original draws the badge at 75/255 alpha, so the world reads through it.
@@ -38,7 +39,7 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, seconds: f32) {
         .text_native(
             at(origin, COUNTDOWN),
             &format!("{:.1}", seconds.max(0.0)),
-            "mainfont.fon",
+            crate::ui::MFD_FONT,
             HAlign::Center,
             VAlign::Middle,
         );
