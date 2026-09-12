@@ -1345,6 +1345,7 @@ fn process_command(
                         pointer: ui.pointer,
                         panel_pose: ui.panel_pose,
                         messages: ui.messages,
+                        security_alarm: ui.security_alarm,
                     }
                 })
                 .unwrap_or(commands::UiStateResult {
@@ -1358,6 +1359,7 @@ fn process_command(
                     pointer: None,
                     panel_pose: None,
                     messages: Vec::new(),
+                    security_alarm: None,
                 });
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send ui state - receiver dropped");

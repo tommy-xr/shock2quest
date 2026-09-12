@@ -1014,6 +1014,20 @@ export interface UiState {
    * seconds after it was added.
    */
   messages: string[];
+  /**
+   * The station security alarm - present exactly while one is up, which is
+   * when the HUD shows its badge and countdown.
+   */
+  security_alarm: UiSecurityAlarm | null;
+}
+
+/** The station security alarm as the HUD presents it. */
+export interface UiSecurityAlarm {
+  /** Outstanding alarms; overlapping alarms are refcounted, and the badge
+   * shows until the last one is gone. */
+  count: number;
+  /** Seconds left on the alarm's deadline, floored at zero. */
+  seconds_remaining: number;
 }
 
 /** One frame of pointing at the shared UI canvas. */

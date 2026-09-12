@@ -774,6 +774,16 @@ pub enum Effect {
     StopSound {
         handle: AudioHandle,
     },
+    /// Raise the station security alarm for `seconds` (the alarm is
+    /// refcounted, so overlapping alarms stack). See `security_alarm`.
+    RaiseSecurityAlarm {
+        seconds: f32,
+    },
+    /// Stand station security down: clear every outstanding alarm and reset
+    /// the alerted ecologies. `from` is the object that did it.
+    ClearSecurityAlarm {
+        from: EntityId,
+    },
     SetPosition {
         entity_id: EntityId,
         position: Vector3<f32>,

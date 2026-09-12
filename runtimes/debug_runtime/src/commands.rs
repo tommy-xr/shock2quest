@@ -667,6 +667,9 @@ pub struct UiStateResult {
     pub panel_pose: Option<shock2vr::game_scene::DebugUiPanelPose>,
     /// The HUD status-message lines showing right now, oldest first.
     pub messages: Vec<String>,
+    /// The station security alarm; `Some` exactly while one is up, which is
+    /// when the HUD shows its badge and countdown.
+    pub security_alarm: Option<shock2vr::game_scene::DebugSecurityAlarm>,
 }
 
 /// A single carried item.

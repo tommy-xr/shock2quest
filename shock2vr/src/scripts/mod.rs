@@ -66,6 +66,7 @@ mod reroute_elevator_button;
 mod researchable;
 mod room_trigger;
 pub mod script_util;
+mod security_computer;
 mod setup_initial_debrief;
 mod std_door;
 pub(crate) use std_door::player_door_frob_blocked;
@@ -97,7 +98,7 @@ mod trap_unlock;
 mod trigger_collide;
 mod trigger_damage;
 mod trigger_destroy;
-mod trigger_ecology;
+pub(crate) mod trigger_ecology;
 mod trigger_multi;
 mod tweq_depressable;
 mod tweqable;
@@ -188,6 +189,7 @@ use self::{
     once_room::OnceRoom,
     once_router::OnceRouter,
     room_trigger::RoomTrigger,
+    security_computer::SecurityComputer,
     std_door::StdDoor,
     tool_consumable::ToolConsumable,
     transluce::TransluceInOutHolo,
@@ -1152,7 +1154,7 @@ impl ScriptWorld {
             // partially implemented:
             "keypadunhackable" => gui_script(Box::new(KeyPadGui)),
             "keypad" => gui_script(Box::new(KeyPadGui)),
-            "securitycomputer" => Box::new(UnimplementedScript::new(&script_name)),
+            "securitycomputer" => Box::new(SecurityComputer::new()),
             "resurrectmachine" => Box::new(BaseButton {}),
             "twostatebutton" => Box::new(BaseButton::new()),
 
