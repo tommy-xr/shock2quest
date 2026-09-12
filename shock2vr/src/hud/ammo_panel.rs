@@ -204,6 +204,8 @@ pub(crate) struct AmmoReadout {
     pub psi_power: Option<(String, i32)>,
     /// Rounds in the wielded weapon's clip.
     pub ammo: Option<i32>,
+    /// Progress of this weapon hand's eject hold.
+    pub eject_progress: Option<f32>,
     /// The selected ammo type's object-icon bitmap.
     pub ammo_icon: Option<String>,
     /// The selected ammo type's class tag ("std", "he", "ap").
@@ -254,6 +256,8 @@ impl AmmoReadout {
         show_buttons: bool,
     ) -> Self {
         Self {
+            eject_progress: weapon
+                .and_then(|w| crate::weapon_button_hold::EjectProgress::for_weapon(world, w)),
             gun_condition: weapon.and_then(|w| wielded_gun_condition(world, w)),
             psi_power: super::get_weapon_psi_power(world, weapon),
             ammo: weapon
@@ -397,7 +401,16 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoRe
         if let Some(badge) = readout.gun_condition {
             canvas.image(at(origin, CONDITION), badge);
         }
-        if compact {
+        if compact && readout.eject_progress.is_some() {
+            canvas.text_fit(
+                at(origin, COMPACT_DETAIL),
+                "EJECT",
+                FONT,
+                10.0,
+                HAlign::Center,
+                VAlign::Middle,
+            );
+        } else if compact {
             // Keep each label's space independent: a long authored ammo tag
             // must not push the current fire mode off the meter.
             let paired = readout.ammo_type.is_some() && readout.gun_setting_header.is_some();
@@ -427,6 +440,20 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoRe
         }
     } else {
         return;
+    }
+
+    if let Some(progress) = readout.eject_progress {
+        // One thin line along the gauge's bottom, filling left to right.
+        // Sample only a plain center texel so the health-bar art does not stretch.
+        let width = 76.0 * progress.clamp(0.0, 1.0);
+        if width > 0.0 {
+            canvas.cropped_image(
+                at(origin, Rect::new(175.0, 56.0, width, 1.0)),
+                "HPBAR.PCX",
+                Rect::new(40.0, 7.0, 1.0, 1.0),
+                vec2(80.0, 14.0),
+            );
+        }
     }
 
     for button in buttons(readout) {
@@ -476,24 +503,29 @@ mod tests {
 
     #[test]
     fn wrist_preserves_the_complete_compact_panel_and_shared_overlay_layout() {
-        let readout = full_gun();
-        let wrist = build_wrist_canvas(&readout);
-        assert_eq!(wrist.size(), vec2(94.0, 64.0));
-        assert!(
-            matches!(&wrist.elements()[0], crate::ui::UiElement::Image { texture, kind: crate::ui::ImageKind::Ui, .. } if texture == "AMMOBACK.PCX")
-        );
-        let passive = AmmoReadout {
-            show_buttons: false,
-            ..readout
-        };
-        let panel = build_readout_canvas(&passive);
-        assert_eq!(wrist.element_count(), panel.element_count() + 1);
-        for (cropped, full) in wrist.elements()[1..].iter().zip(panel.elements()) {
-            let (a, b) = (cropped.rect(), full.rect());
-            assert_eq!(
-                (a.x + WRIST_CROP.x, a.y + WRIST_CROP.y, a.w, a.h),
-                (b.x, b.y, b.w, b.h)
+        for eject_progress in [None, Some(0.0), Some(0.4), Some(0.8), Some(1.0)] {
+            let readout = AmmoReadout {
+                eject_progress,
+                ..full_gun()
+            };
+            let wrist = build_wrist_canvas(&readout);
+            assert_eq!(wrist.size(), vec2(94.0, 64.0));
+            assert!(
+                matches!(&wrist.elements()[0], crate::ui::UiElement::Image { texture, kind: crate::ui::ImageKind::Ui, .. } if texture == "AMMOBACK.PCX")
             );
+            let passive = AmmoReadout {
+                show_buttons: false,
+                ..readout
+            };
+            let panel = build_readout_canvas(&passive);
+            assert_eq!(wrist.element_count(), panel.element_count() + 1);
+            for (cropped, full) in wrist.elements()[1..].iter().zip(panel.elements()) {
+                let (a, b) = (cropped.rect(), full.rect());
+                assert_eq!(
+                    (a.x + WRIST_CROP.x, a.y + WRIST_CROP.y, a.w, a.h),
+                    (b.x, b.y, b.w, b.h)
+                );
+            }
         }
         assert_eq!(
             build_wrist_canvas(&AmmoReadout::default()).element_count(),

@@ -14,6 +14,7 @@ pub mod save_load;
 pub mod scenes;
 pub mod teleport;
 pub mod time;
+mod weapon_button_hold;
 
 pub mod career;
 pub mod creature;
@@ -626,6 +627,7 @@ pub struct Game {
     /// same reason: it decides `Game`'s own overlay, and must keep running on
     /// a frame the scene is not updated at all.
     menu_hold: input::MenuHold,
+    weapon_buttons: weapon_button_hold::WeaponButtons,
     menu_hold_ring: scenes::cutscene_skip::RingArt,
 
     /// Wall-clock time spent with the simulation suspended, subtracted from the
@@ -1428,6 +1430,7 @@ impl Game {
             campaign_completed: false,
             pause_menu: pause_menu::PauseMenu::new(),
             menu_hold: input::MenuHold::default(),
+            weapon_buttons: Default::default(),
             menu_hold_ring: scenes::cutscene_skip::RingArt::default(),
             time_suspended: std::time::Duration::ZERO,
             hit_feedback: hit_feedback::HitFeedback::new(),
@@ -1520,6 +1523,7 @@ impl Game {
         // close the menu again.
         self.update_pause_menu(time, input_context, actions);
         if self.pause_menu.suspends_scene() {
+            self.weapon_buttons.cancel(self.active_game_scene.world());
             // Paused: the scene is not updated (nothing simulates, and
             // `VirtualHand` is never advanced, so hands are inert but keep
             // whatever they were holding). It is still *rendered* every frame
@@ -1540,7 +1544,15 @@ impl Game {
         // Convert triggered actions into effects; triggered actions are
         // consumed here so injected actions (e.g. from the debug runtime)
         // apply exactly once.
-        let action_effects = input::ActionDispatcher::dispatch(actions, input_context);
+        let allowed = self.pause_is_allowed() && !self.active_game_scene.wants_pointer();
+        let mut action_effects = self.weapon_buttons.update(
+            self.active_game_scene.world(),
+            actions,
+            time.elapsed,
+            allowed,
+            free_camera::FreeCamera::is_enabled(),
+        );
+        action_effects.extend(input::ActionDispatcher::dispatch(actions, input_context));
         actions.clear_triggered();
 
         // Fly the detached camera, then withhold the channels it consumed from
@@ -1737,6 +1749,7 @@ impl Game {
     /// instead would mint the short press nobody made.
     pub fn cancel_menu_hold(&mut self) {
         self.menu_hold.cancel();
+        self.weapon_buttons.cancel(self.active_game_scene.world());
     }
 
     /// Apply the pause toggle and, while open, drive the overlay.
@@ -2153,6 +2166,7 @@ impl Game {
     /// what it owns beyond its own frame (see [`GameScene::on_exit`]). Every
     /// scene swap goes through here so that hook cannot be forgotten.
     fn set_active_scene(&mut self, scene: Box<dyn GameScene>) {
+        self.weapon_buttons.cancel(self.active_game_scene.world());
         self.active_game_scene.on_exit(&mut self.audio_context);
         self.audio_context.stop_ambient_sounds();
         self.last_env_sound = None;

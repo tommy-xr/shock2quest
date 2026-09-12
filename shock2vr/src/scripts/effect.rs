@@ -372,6 +372,13 @@ pub enum Effect {
     /// rotation sampled at the input edge.
     ReadLastUnreadLog,
 
+    /// Apply a completed tap/hold only while this exact gun remains in this hand.
+    HeldGunButton {
+        hand: Handedness,
+        weapon: EntityId,
+        long_press: bool,
+    },
+
     /// Return a gun's loaded magazine to the backpack reserve, as clips of the
     /// ammo type the rounds already are (`reload::unload_to_reserve`). No
     /// physical clip is dropped into the world.

@@ -487,6 +487,117 @@ pub(crate) fn unload_to_reserve(world: &World, weapon: EntityId) -> UnloadOutcom
     }
 }
 
+/// A physical ejection is an offer until the caller successfully spawns it.
+pub(crate) fn world_clip_offer(world: &World, weapon: EntityId) -> Option<(i32, i32)> {
+    let rounds = world
+        .borrow::<View<PropGunState>>()
+        .ok()?
+        .get(weapon)
+        .ok()?
+        .ammo;
+    if rounds <= 0 {
+        return None;
+    }
+    let templates = selected_clip_templates(world, weapon)?;
+    let clips = world.borrow::<UniqueView<GlobalProjectileClips>>().ok()?;
+    Some((
+        mint_clip_template(&templates, &clips.clip_sizes, rounds),
+        rounds,
+    ))
+}
+
+/// Next stocked type fitting the same gun. The held clip determines the start,
+/// independently of what that gun currently has loaded.
+pub(crate) fn next_carried_clip(
+    world: &World,
+    weapon: EntityId,
+    held: EntityId,
+) -> Option<EntityId> {
+    let projectiles = crate::scripts::script_util::ordered_projectile_links(world, weapon)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect::<Vec<_>>();
+    next_carried_clip_in_family(world, held, &projectiles)
+}
+
+fn next_carried_clip_in_family(
+    world: &World,
+    held: EntityId,
+    projectiles: &[i32],
+) -> Option<EntityId> {
+    let class = crate::scripts::script_util::entity_class_template_id(world, held)?;
+    let hierarchy = world
+        .borrow::<UniqueView<crate::mission::GlobalTemplateHierarchy>>()
+        .ok()?;
+    let current = projectiles.iter().position(|projectile| {
+        clip_templates_for_projectile(world, *projectile).is_some_and(|templates| {
+            templates
+                .iter()
+                .any(|t| hierarchy.is_or_descends_from(class, *t))
+        })
+    })?;
+    for offset in 1..projectiles.len() {
+        let index = (current + offset) % projectiles.len();
+        let Some(templates) = clip_templates_for_projectile(world, projectiles[index]) else {
+            continue;
+        };
+        if let Some(item) = compatible_reserve_items(world, &templates)
+            .into_iter()
+            .find(|item| {
+                *item != held
+                    && crate::scripts::script_util::entity_class_template_id(world, *item)
+                        .is_some_and(|class| {
+                            !clip_templates_for_projectile(world, projectiles[current])
+                                .unwrap_or_default()
+                                .iter()
+                                .any(|t| hierarchy.is_or_descends_from(class, *t))
+                        })
+            })
+        {
+            return Some(item);
+        }
+    }
+    None
+}
+
+/// Ammo can be switched with no gun in hand or inventory. Infer its family
+/// from authored weapon projectile relations, never from arbitrary clip names.
+pub(crate) fn next_carried_clip_without_gun(
+    world: &World,
+    held: EntityId,
+    info: &SystemShock2EntityInfo,
+) -> Option<EntityId> {
+    let mut templates = info.template_to_links.iter().collect::<Vec<_>>();
+    templates.sort_by_key(|(id, _)| **id);
+    for (_, links) in templates {
+        for setting in 0..2 {
+            let mut projectiles = links
+                .to_links
+                .iter()
+                .filter_map(|link| match &link.link {
+                    Link::Projectile(options)
+                        if options.setting < 0 || options.setting == setting =>
+                    {
+                        Some((options.order, link.to_template_id))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            projectiles.sort_by_key(|(order, _)| *order);
+            let family = projectiles
+                .into_iter()
+                .map(|(_, id)| id)
+                .collect::<Vec<_>>();
+            if family.len() > 1
+                && let Some(next) = next_carried_clip_in_family(world, held, &family)
+            {
+                return Some(next);
+            }
+        }
+    }
+    None
+}
+
 /// The clip archetype to mint for `rounds` ejected rounds: the smallest
 /// authored box that holds them all, so the label matches the contents - an
 /// assault rifle's 30 rounds must not come back as a "Small Standard Clip"
@@ -585,6 +696,61 @@ mod tests {
         world: World,
         weapon: EntityId,
         inventory: EntityId,
+    }
+
+    #[test]
+    fn physical_ejection_offers_exact_rounds_without_touching_reserve() {
+        let mut f = Fixture::new(5, 1);
+        let reserve = f.reserve(HE_CLIP, 9);
+        assert_eq!(world_clip_offer(&f.world, f.weapon), Some((HE_CLIP, 5)));
+        assert_eq!(f.ammo(), 5);
+        assert_eq!(f.rounds(reserve), 9);
+        empty_magazine(&f.world, f.weapon);
+        assert_eq!(world_clip_offer(&f.world, f.weapon), None);
+    }
+
+    #[test]
+    fn ammo_family_without_a_gun_includes_all_setting_links() {
+        let mut f = Fixture::new(0, 0);
+        let held = f.held_clip(HE_CLIP, 3);
+        let reserve = f.reserve(STD_CLIP, 7);
+        let mut info = SystemShock2EntityInfo::empty();
+        info.template_to_links.insert(
+            PISTOL,
+            dark::properties::TemplateLinks {
+                to_links: [STD_PROJECTILE, HE_PROJECTILE]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(order, projectile)| dark::properties::ToTemplateLink {
+                        to_template_id: projectile,
+                        link: Link::Projectile(ProjectileOptions {
+                            order: order as i32,
+                            setting: -1,
+                        }),
+                    })
+                    .collect(),
+            },
+        );
+        assert_eq!(
+            next_carried_clip_without_gun(&f.world, held, &info),
+            Some(reserve)
+        );
+        assert_eq!(f.rounds(held), 3);
+        assert_eq!(f.rounds(reserve), 7);
+    }
+
+    #[test]
+    fn held_ammo_cycles_real_stock_relative_to_clip_not_loaded_type() {
+        let mut f = Fixture::new(5, 1);
+        let held = f.held_clip(STD_CLIP, 3);
+        f.reserve(STD_CLIP, 17);
+        f.reserve(HE_CLIP, 0);
+        assert_eq!(next_carried_clip(&f.world, f.weapon, held), None);
+        let alternate = f.reserve(HE_CLIP, 7);
+        assert_eq!(next_carried_clip(&f.world, f.weapon, held), Some(alternate));
+        assert_eq!(f.rounds(held), 3);
+        assert_eq!(f.rounds(alternate), 7);
+        assert_eq!(f.ammo(), 5);
     }
 
     impl Fixture {
