@@ -8,7 +8,7 @@
 //! dimmed and ignore clicks.
 //!
 //! Main-menu labels come from `MAIN.STR` and button rects from `MAINR.BIN`.
-//! The difficulty page reuses those rects with the retail difficulty labels. That
+//! The difficulty page uses `NEWGAME.PCX`, `NEWGAME.STR` and `NEWGAMER.BIN`. That
 //! matters beyond fidelity - the community mod layers (SCP) ship a redrawn
 //! backdrop *with a retuned `*R.BIN`*, so a hardcoded rect is wrong on a
 //! modded install.
@@ -76,6 +76,22 @@ const IDLE_OPACITY: f32 = 0.6;
 /// Opacity for the entry under the pointer.
 const HOVER_OPACITY: f32 = 1.0;
 
+const NEW_GAME_LAYOUT_FILE: &str = "NEWGAMER.BIN";
+const NEW_GAME_LABELS_FILE: &str = "NEWGAME.STR";
+// Raw NEWGAMER.BIN order: title, four difficulty buttons, Start, Options,
+// Cancel. Retail drkpanl.cpp remaps raw indices through rect_newgame before
+// using shkmenu.cpp's enum; this port keeps the file order directly.
+const NEW_GAME_RECTS: [Rect; 8] = [
+    Rect::new(257.0, 21.0, 126.0, 25.0),
+    Rect::new(4.0, 66.0, 152.0, 60.0),
+    Rect::new(164.0, 66.0, 152.0, 60.0),
+    Rect::new(324.0, 66.0, 152.0, 60.0),
+    Rect::new(484.0, 66.0, 152.0, 60.0),
+    Rect::new(305.0, 264.0, 143.0, 64.0),
+    Rect::new(305.0, 332.0, 143.0, 64.0),
+    Rect::new(305.0, 400.0, 143.0, 64.0),
+];
+
 // Fallback button geometry, used only when `MAINR.BIN` is missing: the decoded
 // vanilla values - a column of six 179x60 buttons at x=400 on a 76px pitch.
 const FALLBACK_BUTTON_X: f32 = 400.0;
@@ -94,6 +110,65 @@ enum MenuAction {
     Developer,
     Quit,
 }
+
+const NEW_GAME_ITEMS: &[FrontendMenuItem<MenuAction>] = &[
+    FrontendMenuItem {
+        string_key: "difficulty",
+        fallback_label: "Difficulty:",
+        action: None,
+        label_override: None,
+    },
+    FrontendMenuItem {
+        string_key: "diff_0",
+        fallback_label: "Easy",
+        action: Some(MenuAction::ChooseDifficulty(
+            dark::gamesys::Difficulty::Easy,
+        )),
+        label_override: None,
+    },
+    FrontendMenuItem {
+        string_key: "diff_1",
+        fallback_label: "Normal",
+        action: Some(MenuAction::ChooseDifficulty(
+            dark::gamesys::Difficulty::Normal,
+        )),
+        label_override: None,
+    },
+    FrontendMenuItem {
+        string_key: "diff_2",
+        fallback_label: "Hard",
+        action: Some(MenuAction::ChooseDifficulty(
+            dark::gamesys::Difficulty::Hard,
+        )),
+        label_override: None,
+    },
+    FrontendMenuItem {
+        string_key: "diff_3",
+        fallback_label: "Impossible",
+        action: Some(MenuAction::ChooseDifficulty(
+            dark::gamesys::Difficulty::Impossible,
+        )),
+        label_override: None,
+    },
+    FrontendMenuItem {
+        string_key: "start",
+        fallback_label: "Start Game",
+        action: Some(MenuAction::StartCampaign),
+        label_override: None,
+    },
+    FrontendMenuItem {
+        string_key: "options",
+        fallback_label: "Options",
+        action: None,
+        label_override: None,
+    },
+    FrontendMenuItem {
+        string_key: "cancel",
+        fallback_label: "Cancel",
+        action: Some(MenuAction::Back),
+        label_override: None,
+    },
+];
 
 // MAIN.PCX (native 640x480) has a vertical stack of six buttons down the right
 // side. This list is in screen order, top to bottom, so an item's index is also
@@ -217,12 +292,7 @@ fn resolve_click_at(
 /// The menu entry at a canvas point, if any. Shared by the click and the
 /// rollover sound so the two can never disagree about where an entry is.
 fn difficulty_hit(point: Vector2<f32>, rects: &[Rect]) -> Option<MenuAction> {
-    let index = rects.iter().take(6).position(|rect| rect.contains(point))?;
-    Some(match index {
-        0..=3 => MenuAction::ChooseDifficulty(dark::gamesys::Difficulty::ALL[index]),
-        4 => MenuAction::StartCampaign,
-        _ => MenuAction::Back,
-    })
+    hit_menu_item(point, NEW_GAME_ITEMS, rects, |_| true)
 }
 
 fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<MenuAction> {
@@ -285,52 +355,50 @@ impl MainMenuScene {
     ) -> UiCanvas {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
 
-        // Full-screen backdrop.
-        canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), "MAIN.PCX");
-
-        // Menu items, centered in their button and brighter when hovered.
-        // Button rects come from the original `MAINR.BIN` layout and labels
-        // from `MAIN.STR` (both cached by the asset cache after first load).
-        let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
         if self.choosing_difficulty {
-            canvas.text_native(
-                Rect::new(20.0, 190.0, 280.0, 35.0),
-                "Choose difficulty",
-                MENU_FONT,
-                HAlign::Center,
-                VAlign::Middle,
-            );
+            canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), "NEWGAME.PCX");
+            let rects = self
+                .menu
+                .rects(asset_cache, NEW_GAME_LAYOUT_FILE, &NEW_GAME_RECTS);
+            let labels = self
+                .menu
+                .labels(asset_cache, NEW_GAME_LABELS_FILE, NEW_GAME_ITEMS);
+            for (index, ((item, rect), label)) in
+                NEW_GAME_ITEMS.iter().zip(&rects).zip(labels).enumerate()
+            {
+                let selected = item.action == Some(MenuAction::ChooseDifficulty(self.difficulty));
+                let label = if selected {
+                    format!("> {} <", label)
+                } else {
+                    label
+                };
+                let opacity = if index == 0 || selected {
+                    HOVER_OPACITY
+                } else if item.action.is_none() {
+                    // Retail's Options slot is visible but unavailable until a
+                    // real options screen exists; it cannot discard this selection.
+                    DISABLED_OPACITY
+                } else if pointer_canvas.is_some_and(|point| rect.contains(point)) {
+                    HOVER_OPACITY
+                } else {
+                    IDLE_OPACITY
+                };
+                canvas
+                    .text_native_fit(*rect, &label, MENU_FONT, HAlign::Center, VAlign::Middle)
+                    .opacity(opacity);
+            }
             canvas.text(
-                Rect::new(20.0, 232.0, 280.0, 35.0),
+                Rect::new(4.0, 130.0, 632.0, 25.0),
                 "Fixed for this campaign",
                 MENU_FONT,
                 16.0,
                 HAlign::Center,
                 VAlign::Middle,
             );
-            let labels: Vec<String> = dark::gamesys::Difficulty::ALL
-                .into_iter()
-                .map(|d| {
-                    if d == self.difficulty {
-                        format!("> {} <", d.label())
-                    } else {
-                        d.label().to_owned()
-                    }
-                })
-                .chain(["Start Game".to_owned(), "Back".to_owned()])
-                .collect();
-            for (rect, label) in rects.iter().zip(labels) {
-                let opacity = if pointer_canvas.is_some_and(|point| rect.contains(point)) {
-                    HOVER_OPACITY
-                } else {
-                    IDLE_OPACITY
-                };
-                canvas
-                    .text_native(*rect, &label, MENU_FONT, HAlign::Center, VAlign::Middle)
-                    .opacity(opacity);
-            }
             return canvas;
         }
+        canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), "MAIN.PCX");
+        let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
         let labels = self.menu.labels(asset_cache, LABELS_FILE, MENU_ITEMS);
         for ((item, rect), label) in MENU_ITEMS.iter().zip(&rects).zip(&labels) {
             let opacity = if item.action.is_none() {
@@ -367,7 +435,12 @@ impl GameScene for MainMenuScene {
             *world_time = time.clone();
         }
 
-        let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
+        let rects = if self.choosing_difficulty {
+            self.menu
+                .rects(asset_cache, NEW_GAME_LAYOUT_FILE, &NEW_GAME_RECTS)
+        } else {
+            self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS)
+        };
         let action = self.menu.update(
             time.elapsed,
             input_context,
@@ -500,27 +573,52 @@ mod tests {
     const SCREEN: Vector2<f32> = Vector2 { x: 800.0, y: 600.0 };
 
     #[test]
-    fn difficulty_page_maps_four_choices_start_and_back_to_shared_rects() {
+    fn difficulty_page_maps_four_choices_start_and_cancel_to_retail_rects() {
+        let center = |index: usize| {
+            let rect = NEW_GAME_RECTS[index];
+            vec2(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)
+        };
         for (index, difficulty) in dark::gamesys::Difficulty::ALL.into_iter().enumerate() {
-            let rect = FALLBACK_RECTS[index];
             assert_eq!(
-                difficulty_hit(
-                    vec2(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0),
-                    &FALLBACK_RECTS
-                ),
+                difficulty_hit(center(index + 1), &NEW_GAME_RECTS),
                 Some(MenuAction::ChooseDifficulty(difficulty))
             );
         }
-        for (index, action) in [(4, MenuAction::StartCampaign), (5, MenuAction::Back)] {
-            let rect = FALLBACK_RECTS[index];
-            assert_eq!(
-                difficulty_hit(
-                    vec2(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0),
-                    &FALLBACK_RECTS
-                ),
-                Some(action)
-            );
-        }
+        assert_eq!(
+            difficulty_hit(center(5), &NEW_GAME_RECTS),
+            Some(MenuAction::StartCampaign)
+        );
+        assert_eq!(
+            difficulty_hit(center(7), &NEW_GAME_RECTS),
+            Some(MenuAction::Back)
+        );
+        assert_eq!(
+            difficulty_hit(center(0), &NEW_GAME_RECTS),
+            None,
+            "the heading is not a button"
+        );
+        assert_eq!(
+            difficulty_hit(center(6), &NEW_GAME_RECTS),
+            None,
+            "unimplemented Options is disabled"
+        );
+    }
+
+    #[test]
+    fn difficulty_labels_use_the_newgame_string_keys_and_localized_values() {
+        let strings = HashMap::from([
+            ("difficulty".to_owned(), "Schwierigkeit:".to_owned()),
+            ("diff_0".to_owned(), "Leicht".to_owned()),
+            ("cancel".to_owned(), "Abbrechen".to_owned()),
+        ]);
+        let labels = resolve_menu_labels(Some(&strings), NEW_GAME_ITEMS);
+        assert_eq!(labels[0], "Schwierigkeit:");
+        assert_eq!(labels[1], "Leicht");
+        assert_eq!(labels[7], "Abbrechen");
+        assert_eq!(
+            labels[2], "Normal",
+            "missing strings have readable fallbacks"
+        );
     }
 
     #[test]

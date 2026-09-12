@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
 import { isCutsceneScene, stepPastCutscenes } from "./helpers/cutscenes.js";
-import { clickMenuEntry } from "./helpers/frontend-menu.js";
+import { clickMenuEntry, clickCanvas, newGameEntry } from "./helpers/frontend-menu.js";
 
 // The authored campaign moments play their movie before the level they lead to.
 // Negative-first: before the wiring each of these transitions swapped straight
@@ -33,7 +33,8 @@ test(
     await game.step({ frames: 10 });
 
     await clickMenuEntry(game, NEW_GAME_ENTRY);
-    await clickMenuEntry(game, 4); // Start Game, accepting Normal.
+    const [u,v] = newGameEntry("start");
+    await clickCanvas(game, [u*640,v*480]); // Start Game, accepting Normal.
 
     // The intro runs for minutes, so this stops at "the movie is what is on
     // screen, and earth.mis is not loaded yet" rather than playing it out.
