@@ -905,6 +905,7 @@ pub struct PlayerInfo {
     pub max_psi_points: Option<i32>,
     /// Accumulated retail radiation level (0 when clear).
     pub radiation_level: f32,
+    pub toxin_level: f32,
     /// The gamesys name of the selected psi power (what the psi amp casts),
     /// e.g. "Cryokinesis". Cycle with the `CyclePsiPower` input action.
     pub selected_psi_power: Option<String>,

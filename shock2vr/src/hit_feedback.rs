@@ -171,6 +171,7 @@ pub fn hurt_schema(damage: f32) -> &'static str {
 /// and asked for its current strength, and knows nothing about rendering.
 #[derive(Debug, Default)]
 pub struct HitFeedback {
+    radiation: bool,
     /// Strength the current hit started at.
     peak: f32,
     /// Total and remaining lifetime of the current hit, in seconds.
@@ -192,12 +193,19 @@ impl HitFeedback {
     /// the peak and the lifetime are the larger of the incoming hit and what
     /// is already on screen.
     pub fn trigger(&mut self, damage: f32) {
+        self.radiation = false;
         if damage <= 0.0 {
             return;
         }
         self.peak = peak_opacity(damage).max(self.intensity());
         self.duration = duration_secs(damage).max(self.remaining);
         self.remaining = self.duration;
+    }
+
+    /// Radiation uses the same comfortable rim geometry, tinted green.
+    pub fn trigger_radiation(&mut self, damage: f32) {
+        self.trigger(damage);
+        self.radiation = true;
     }
 
     /// Advance the decay by `delta_time_secs`.
@@ -237,6 +245,16 @@ impl HitFeedback {
         let intensity = self.intensity();
         if intensity <= 0.0 {
             return None;
+        }
+        if self.radiation {
+            return Some(vignette_layer(
+                view_extents,
+                eye_position,
+                eye_forward,
+                vec3(0.0, 1.0, 0.0),
+                intensity,
+                crate::util::render_source::HIT_FEEDBACK,
+            ));
         }
         Some(hit_layer(
             view_extents,

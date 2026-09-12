@@ -1,6 +1,6 @@
 use dark::properties::{PropRadiationAbsorb, PropRadiationRecovery, ReceptronOptions};
 use serde::{Deserialize, Serialize};
-use shipyard::{Get, Unique, UniqueView, View, World};
+use shipyard::{EntityId, Get, Unique, UniqueView, UniqueViewMut, View, World};
 
 use crate::{mission::PlayerInfo, physics::PhysicsWorld, quest_info::QuestInfo};
 
@@ -14,13 +14,15 @@ pub const RAD_PATCH_CLEAR_AMOUNT: f32 = 6.0;
 pub const RAD_PATCH_PHARMO_CLEAR_AMOUNT: f32 = 7.2;
 
 /// Retail schedules `RadDamage` every 6000 ms. The shipped implementation
-/// converts the stored level to damage with a 0.25 multiplier before the
-/// normal-difficulty scalar (shock2quest currently has no difficulty option).
-pub const RADIATION_DAMAGE_INTERVAL_SECS: f32 = 6.0;
-pub const RADIATION_CHECK_INTERVAL_SECS: f32 = 0.1;
-const RADIATION_DAMAGE_PER_LEVEL: f32 = 0.25;
+/// multiplies stored level by the Endurance table and Metabolism modifier
+/// before truncating to whole HP (allobjs 0x1001690d–0x100169c8).
+pub const RADIATION_DAMAGE_INTERVAL_SECS: f64 = 6.0;
+pub const RADIATION_CHECK_INTERVAL_SECS: f64 = 0.1;
+const RADIATION_DAMAGE_PER_LEVEL: f32 = 1.0;
 const DEFAULT_RADIATION_ABSORB: f32 = 0.05;
 const DEFAULT_RADIATION_RECOVERY: f32 = 3.0;
+const TOXIN_SHIELD_TEMPLATE_ID: i32 = -1113;
+const RAD_SHIELD_TEMPLATE_ID: i32 = -1114;
 
 /// Retail `RadPatch`: clear part of the player's accumulated radiation and
 /// consume one patch only when radiation is actually present.
@@ -55,11 +57,15 @@ impl Script for RadPatchScript {
     }
 }
 
-fn default_damage_timer() -> f32 {
+fn default_toxin_timer() -> f64 {
+    10.0
+}
+
+fn default_damage_timer() -> f64 {
     RADIATION_DAMAGE_INTERVAL_SECS
 }
 
-fn default_check_timer() -> f32 {
+fn default_check_timer() -> f64 {
     RADIATION_CHECK_INTERVAL_SECS
 }
 
@@ -70,21 +76,33 @@ fn default_check_timer() -> f32 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Unique)]
 pub struct ActiveRadiation {
     level: f32,
+    #[serde(default)]
+    toxin: f32,
+    #[serde(skip)]
+    last_radiation_damage: i32,
+    #[serde(skip)]
+    exposed_last_tick: bool,
+    #[serde(default = "default_toxin_timer")]
+    seconds_until_toxin: f64,
     #[serde(default, skip)]
     ambient_level: f32,
     #[serde(default = "default_check_timer")]
-    seconds_until_check: f32,
+    seconds_until_check: f64,
     #[serde(default = "default_damage_timer")]
-    seconds_until_damage: f32,
+    seconds_until_damage: f64,
 }
 
 impl Default for ActiveRadiation {
     fn default() -> Self {
         Self {
             level: 0.0,
+            toxin: 0.0,
+            last_radiation_damage: 0,
+            exposed_last_tick: false,
+            seconds_until_toxin: 10.0,
             ambient_level: 0.0,
-            seconds_until_check: RADIATION_CHECK_INTERVAL_SECS,
-            seconds_until_damage: RADIATION_DAMAGE_INTERVAL_SECS,
+            seconds_until_check: default_check_timer(),
+            seconds_until_damage: default_damage_timer(),
         }
     }
 }
@@ -92,6 +110,40 @@ impl Default for ActiveRadiation {
 impl ActiveRadiation {
     pub fn level(&self) -> f32 {
         self.level
+    }
+
+    pub fn toxin_level(&self) -> f32 {
+        self.toxin
+    }
+    pub fn is_exposed(&self) -> bool {
+        self.ambient_level > 0.0 || self.exposed_last_tick
+    }
+
+    /// Environmental ownership is recomputed on scene changes and reactor cleanup.
+    pub fn reset_ambient(&mut self) {
+        self.exposed_last_tick = false;
+        self.ambient_level = 0.0;
+    }
+
+    /// Contact reactions replace weaker contamination; they are not ambient sources.
+    pub fn expose(&mut self, toxin: bool, amount: f32) {
+        if !amount.is_finite() || amount <= 0.0 {
+            return;
+        }
+        let level = if toxin {
+            &mut self.toxin
+        } else {
+            &mut self.level
+        };
+        *level = level.max(amount);
+    }
+
+    pub fn clear_toxin(&mut self, amount: f32) -> bool {
+        if !amount.is_finite() || amount <= 0.0 || self.toxin <= 0.0 {
+            return false;
+        }
+        self.toxin = (self.toxin - amount).max(0.0);
+        true
     }
 
     /// Refresh the final act/react ambient intensity after
@@ -125,6 +177,17 @@ impl ActiveRadiation {
         absorb_per_check: f32,
         recovery_per_tick: f32,
     ) -> i32 {
+        self.advance_resisted(elapsed_secs, absorb_per_check, recovery_per_tick, 1.0, 1.0)
+    }
+
+    fn advance_resisted(
+        &mut self,
+        elapsed_secs: f32,
+        absorb_per_check: f32,
+        recovery_per_tick: f32,
+        resistance: f32,
+        toxin_resistance: f32,
+    ) -> i32 {
         if !elapsed_secs.is_finite() || elapsed_secs <= 0.0 {
             return 0;
         }
@@ -135,50 +198,80 @@ impl ActiveRadiation {
             self.ambient_level = 0.0;
         }
         if !self.seconds_until_check.is_finite()
-            || self.seconds_until_check < -RADIATION_CHECK_INTERVAL_SECS
+            || self.seconds_until_check <= 0.0
+            || self.seconds_until_check > default_check_timer()
         {
-            self.seconds_until_check = RADIATION_CHECK_INTERVAL_SECS;
+            self.seconds_until_check = default_check_timer();
         }
         if !self.seconds_until_damage.is_finite()
-            || self.seconds_until_damage < -RADIATION_DAMAGE_INTERVAL_SECS
+            || self.seconds_until_damage <= 0.0
+            || self.seconds_until_damage > default_damage_timer()
         {
-            self.seconds_until_damage = RADIATION_DAMAGE_INTERVAL_SECS;
+            self.seconds_until_damage = default_damage_timer();
         }
-        let absorb = if absorb_per_check.is_finite() && absorb_per_check > 0.0 {
+        let absorb = if absorb_per_check.is_finite() && absorb_per_check >= 0.0 {
             absorb_per_check
         } else {
             DEFAULT_RADIATION_ABSORB
         };
-        let recovery = if recovery_per_tick.is_finite() && recovery_per_tick > 0.0 {
+        let recovery = if recovery_per_tick.is_finite() && recovery_per_tick >= 0.0 {
             recovery_per_tick
         } else {
             DEFAULT_RADIATION_RECOVERY
         };
 
-        self.seconds_until_check -= elapsed_secs;
-        while self.seconds_until_check <= 0.0 {
-            if self.ambient_level > self.level {
-                self.level += absorb.min(self.ambient_level - self.level);
-            }
-            self.seconds_until_check += RADIATION_CHECK_INTERVAL_SECS;
-        }
-
-        self.seconds_until_damage -= elapsed_secs;
+        // Advance in chronological order: a large step must not apply all
+        // absorption before the first damage pulse (or differ from 60 Hz).
+        self.last_radiation_damage = 0;
+        let mut remaining = f64::from(elapsed_secs);
         let mut damage = 0_i32;
-        while self.seconds_until_damage <= 0.0 {
-            if self.level >= 1.0 {
-                let pulse = (self.level * RADIATION_DAMAGE_PER_LEVEL)
-                    .trunc()
-                    .clamp(0.0, i32::MAX as f32) as i32;
-                damage = damage.saturating_add(pulse);
+        while remaining > 0.0 {
+            let step = remaining
+                .min(self.seconds_until_check.max(0.0))
+                .min(self.seconds_until_damage.max(0.0));
+            self.seconds_until_check -= step;
+            self.seconds_until_damage -= step;
+            remaining -= step;
+            if self.seconds_until_check <= 0.000001 {
+                if self.ambient_level > self.level {
+                    self.level += absorb.min(self.ambient_level - self.level);
+                }
+                self.seconds_until_check = default_check_timer();
             }
-            if self.ambient_level <= 0.0 {
-                self.level = (self.level - recovery).max(0.0);
+            if self.seconds_until_damage <= 0.000001 {
+                if self.level >= 1.0 {
+                    let pulse =
+                        (self.level * RADIATION_DAMAGE_PER_LEVEL * resistance).trunc() as i32;
+                    damage = damage.saturating_add(pulse);
+                    self.last_radiation_damage = self.last_radiation_damage.saturating_add(pulse);
+                }
+                if self.ambient_level <= 0.0 {
+                    self.level = (self.level - recovery).max(0.0);
+                    if self.level < 1.0 {
+                        self.level = 0.0;
+                    }
+                }
+                self.seconds_until_damage = default_damage_timer();
             }
-            self.seconds_until_damage += RADIATION_DAMAGE_INTERVAL_SECS;
         }
-        // Radius sources refresh this after the effect pass. Clearing it here
-        // lets the following frame faithfully represent leaving the source.
+        if !self.toxin.is_finite() || self.toxin < 0.0 {
+            self.toxin = 0.0;
+        }
+        if !self.seconds_until_toxin.is_finite()
+            || self.seconds_until_toxin <= 0.0
+            || self.seconds_until_toxin > 10.0
+        {
+            self.seconds_until_toxin = 10.0;
+        }
+        self.seconds_until_toxin -= f64::from(elapsed_secs);
+        while self.seconds_until_toxin <= 0.000001 {
+            if self.toxin > 0.0 && toxin_resistance > 0.0 {
+                damage =
+                    damage.saturating_add((self.toxin * toxin_resistance).max(1.0).trunc() as i32);
+            }
+            self.seconds_until_toxin += 10.0;
+        }
+        self.exposed_last_tick = self.ambient_level > 0.0;
         self.ambient_level = 0.0;
         damage
     }
@@ -212,6 +305,13 @@ pub fn apply_player_stimulus(
         .is_ok_and(|mut radiation| radiation.observe_ambient(amount))
 }
 
+/// Membership is rebuilt by room sensors, not serialized as stale entity IDs.
+#[derive(Unique, Default)]
+pub struct RadiationRooms(pub std::collections::HashMap<EntityId, (f32, f32)>);
+
+#[derive(Unique)]
+pub struct HazardResistance(pub [f32; 8]);
+
 pub fn tick_player_radiation(world: &World, elapsed_secs: f32) -> Option<Effect> {
     let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?.entity_id;
     let recovery = world
@@ -224,15 +324,105 @@ pub fn tick_player_radiation(world: &World, elapsed_secs: f32) -> Option<Effect>
         .ok()
         .and_then(|values| values.get(player).ok().map(|value| value.0))
         .unwrap_or(DEFAULT_RADIATION_ABSORB);
+    if world
+        .borrow::<View<dark::properties::PropHitPoints>>()
+        .ok()
+        .and_then(|hp| hp.get(player).ok().map(|v| v.hit_points <= 0))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let (endurance, metabolism) = world
+        .borrow::<UniqueView<QuestInfo>>()
+        .map(|q| {
+            (
+                q.player_stats().endurance.clamp(1, 8) as usize,
+                q.player_stats()
+                    .has_os_trait(crate::scripts::gui::TRAIT_STRONG_METABOLISM),
+            )
+        })
+        .unwrap_or((1, false));
+    let resistance = world
+        .borrow::<UniqueView<HazardResistance>>()
+        .map(|r| r.0[endurance - 1])
+        .unwrap_or(1.0);
+    let room = world
+        .borrow::<UniqueView<RadiationRooms>>()
+        .ok()
+        .and_then(|rooms| {
+            rooms
+                .0
+                .values()
+                .copied()
+                .max_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)))
+        });
+    let mut absorb = absorb;
+    if let Some((ambient, rate)) = room {
+        if let Ok(mut radiation) = world.borrow::<UniqueViewMut<ActiveRadiation>>() {
+            radiation.observe_ambient(ambient);
+        }
+        absorb = rate;
+    }
+    let wormheart = super::script_util::player_carried_items(world)
+        .into_iter()
+        .any(|id| {
+            world
+                .borrow::<View<crate::runtime_props::RuntimePropHazardEquipment>>()
+                .is_ok_and(|v| v.get(id).is_ok())
+                && world
+                    .borrow::<View<dark::properties::PropImplantDesc>>()
+                    .is_ok_and(|v| v.get(id).is_ok_and(|v| v.0 == 12))
+        });
+    let protection = hazard_protection(world);
+    // Retail armor slows accumulation; it does not lower the room ceiling.
+    absorb *= 1.0 - protection.radiation / 100.0;
+    let psi_armor = psi_hazard_protection(world);
+    if psi_armor.radiation > 0.0 {
+        // RadShield authors a divisor (retail 5), unlike percentage suit armor.
+        absorb /= psi_armor.radiation;
+    }
     let damage = world
         .borrow::<shipyard::UniqueViewMut<ActiveRadiation>>()
         .ok()
-        .map(|mut radiation| radiation.advance(elapsed_secs, absorb, recovery))
+        .map(|mut radiation| {
+            radiation.advance_resisted(
+                elapsed_secs,
+                absorb,
+                recovery,
+                resistance * if metabolism { 0.75 } else { 1.0 },
+                if wormheart {
+                    0.0
+                } else {
+                    resistance * if metabolism { 0.5 } else { 1.0 }
+                },
+            )
+        })
         .unwrap_or(0);
-    (damage > 0).then_some(Effect::AdjustHitPoints {
+    if damage <= 0 {
+        return None;
+    }
+    let rad_damage = world
+        .borrow::<UniqueView<ActiveRadiation>>()
+        .map(|s| s.last_radiation_damage)
+        .unwrap_or(0);
+    let mut effects = vec![Effect::AdjustHitPoints {
         entity_id: player,
         delta: -damage,
-    })
+    }];
+    if rad_damage > 0 {
+        effects.push(Effect::GlobalEffect(
+            super::GlobalEffect::PlayerRadiationHit {
+                damage: rad_damage as f32,
+            },
+        ));
+        effects.push(Effect::PlaySound {
+            handle: engine::audio::AudioHandle::new(),
+            name: "raddmg".to_owned(),
+            source: Some(player),
+            spatial: false,
+        });
+    }
+    Some(Effect::combine(effects))
 }
 
 #[cfg(test)]
@@ -317,9 +507,9 @@ mod tests {
         assert!(radiation.observe_ambient(8.0));
         assert_eq!(radiation.advance(5.89, 0.05, 3.0), 0);
         assert!(radiation.observe_ambient(8.0));
-        assert_eq!(radiation.advance(0.02, 0.05, 3.0), 2);
+        assert_eq!(radiation.advance(0.02, 0.05, 3.0), 8);
         assert_eq!(radiation.level(), 8.0, "active exposure delays recovery");
-        assert_eq!(radiation.advance(6.0, 0.05, 3.0), 2);
+        assert_eq!(radiation.advance(6.0, 0.05, 3.0), 8);
         assert_eq!(radiation.level(), 5.0);
     }
 
@@ -388,5 +578,185 @@ mod tests {
                 .level(),
             0.05
         );
+    }
+}
+
+/// Protection is evaluated at use time, so removing armor or expiring psi
+/// immediately changes subsequent exposure without curing existing status.
+pub fn hazard_protection(world: &World) -> dark::properties::PropArmor {
+    let mut result = dark::properties::PropArmor::default();
+    let carried = super::script_util::player_carried_items(world);
+    if let Ok(armor) = world.borrow::<View<dark::properties::PropArmor>>() {
+        if let Ok(equipped) =
+            world.borrow::<View<crate::runtime_props::RuntimePropHazardEquipment>>()
+        {
+            for entity in carried {
+                if equipped.get(entity).is_ok() {
+                    if let Ok(value) = armor.get(entity) {
+                        result = *value;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    result.radiation = result.radiation.clamp(0.0, 100.0);
+    result.toxic = result.toxic.clamp(0.0, 100.0);
+    result
+}
+
+fn psi_hazard_protection(world: &World) -> dark::properties::PropArmor {
+    let mut armor = dark::properties::PropArmor::default();
+    let Ok(active) = world.borrow::<UniqueView<crate::psi::ActivePsiPowers>>() else {
+        return armor;
+    };
+    let Ok(registry) = world.borrow::<UniqueView<crate::psi::GlobalPsiPowers>>() else {
+        return armor;
+    };
+    let psi = world
+        .borrow::<UniqueView<QuestInfo>>()
+        .map(|q| q.player_stats().psionic_ability)
+        .unwrap_or(1);
+    for power in registry
+        .0
+        .iter()
+        .filter(|p| active.is_active(p.template_id))
+    {
+        let value = power.power.data[0] + power.power.data[1] * (psi - 1).max(0) as f32;
+        match power.template_id {
+            RAD_SHIELD_TEMPLATE_ID => armor.radiation = value,
+            TOXIN_SHIELD_TEMPLATE_ID => armor.toxic = value,
+            _ => {}
+        }
+    }
+    armor
+}
+
+// shkreact.cpp applies player armor as a percentage here, including RadShield's
+// value 5. The room RadCheck division above is a distinct retail script path.
+pub fn protected_exposure(world: &World, toxin: bool, amount: f32) -> f32 {
+    let armor = hazard_protection(world);
+    let psi = psi_hazard_protection(world);
+    let percentages = if toxin {
+        [armor.toxic, psi.toxic]
+    } else {
+        [armor.radiation, psi.radiation]
+    };
+    percentages.into_iter().fold(amount, |value, pct| {
+        value * (1.0 - pct.clamp(0.0, 100.0) / 100.0)
+    })
+}
+
+#[cfg(test)]
+mod hazard_regressions {
+    use super::*;
+
+    #[test]
+    fn overlapping_rooms_choose_strongest_rate_and_exit_stops_exposure() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        let inventory = world.add_entity(());
+        let slow_room = world.add_entity(());
+        let fast_room = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+        world.add_unique(ActiveRadiation::default());
+        world.add_unique(RadiationRooms(std::collections::HashMap::from([
+            (slow_room, (35.0, 0.05)),
+            (fast_room, (35.0, 0.1)),
+        ])));
+        assert!(tick_player_radiation(&world, 1.0).is_none());
+        let level = world
+            .borrow::<UniqueView<ActiveRadiation>>()
+            .unwrap()
+            .level();
+        assert!((level - 1.0).abs() < 0.0001);
+        assert!(
+            world
+                .borrow::<UniqueView<ActiveRadiation>>()
+                .unwrap()
+                .is_exposed()
+        );
+        world
+            .borrow::<UniqueViewMut<RadiationRooms>>()
+            .unwrap()
+            .0
+            .clear();
+        assert!(tick_player_radiation(&world, 1.0).is_none());
+        let status = world.borrow::<UniqueView<ActiveRadiation>>().unwrap();
+        assert_eq!(status.level(), level);
+        assert!(!status.is_exposed());
+    }
+
+    #[test]
+    fn toxin_persists_and_weaker_attacks_do_not_stack() {
+        let mut status = ActiveRadiation::default();
+        status.expose(true, 4.0);
+        status.expose(true, 2.0);
+        assert_eq!(status.toxin_level(), 4.0);
+        assert_eq!(status.advance(9.0, 0.05, 3.0), 0);
+        assert_eq!(status.advance(1.0, 0.05, 3.0), 4);
+        assert_eq!(status.advance(10.0, 0.05, 3.0), 4);
+        assert_eq!(status.toxin_level(), 4.0);
+        assert!(status.clear_toxin(2.0));
+        assert_eq!(status.toxin_level(), 2.0);
+        assert!(status.clear_toxin(2.4));
+        assert_eq!(status.toxin_level(), 0.0);
+        assert!(!status.clear_toxin(2.0));
+    }
+
+    #[test]
+    fn toxin_minimum_damage_does_not_turn_endurance_into_immunity() {
+        let mut status = ActiveRadiation::default();
+        status.expose(true, 1.0);
+        assert_eq!(status.advance_resisted(10.0, 0.05, 3.0, 0.01, 0.01), 1);
+        // WormHeart suppresses damage while equipped, without removing poison.
+        assert_eq!(status.advance_resisted(10.0, 0.05, 3.0, 0.01, 0.0), 0);
+        assert_eq!(status.toxin_level(), 1.0);
+    }
+
+    #[test]
+    fn radiation_checks_and_damage_are_independent_of_step_partition() {
+        let mut large = ActiveRadiation::default();
+        large.observe_ambient(35.0);
+        let large_damage = large.advance(30.0, 0.05, 3.0);
+        let mut small = ActiveRadiation::default();
+        let mut small_damage = 0;
+        for _ in 0..1800 {
+            small.observe_ambient(35.0);
+            small_damage += small.advance(1.0 / 60.0, 0.05, 3.0);
+        }
+        assert_eq!(large_damage, small_damage);
+        assert!((large.level() - small.level()).abs() < 0.001);
+    }
+
+    #[test]
+    fn pause_and_save_restore_preserve_tick_phase() {
+        let mut status = ActiveRadiation::default();
+        status.expose(true, 3.0);
+        status.advance(9.0, 0.05, 3.0);
+        let saved = serde_json::to_string(&status).unwrap();
+        assert_eq!(status.advance(0.0, 0.05, 3.0), 0);
+        assert_eq!(serde_json::to_string(&status).unwrap(), saved);
+        let mut restored: ActiveRadiation = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.advance(1.0, 0.05, 3.0), 3);
+        assert_eq!(restored.toxin_level(), 3.0);
+    }
+
+    #[test]
+    fn full_protection_and_zero_recovery_are_respected() {
+        let mut status = ActiveRadiation::default();
+        status.observe_ambient(35.0);
+        assert_eq!(status.advance(6.0, 0.0, 0.0), 0);
+        assert_eq!(status.level(), 0.0);
+        status.expose(false, 12.0);
+        assert_eq!(status.advance_resisted(6.0, 0.0, 0.0, 0.5, 1.0), 6);
+        assert_eq!(status.level(), 12.0);
     }
 }

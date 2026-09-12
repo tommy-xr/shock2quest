@@ -56,6 +56,8 @@ pub struct GlobalData {
     /// Accumulated player radiation and its retail damage/recovery clock.
     #[serde(default)]
     pub active_radiation: ActiveRadiation,
+    #[serde(default)]
+    pub active_psi: crate::psi::ActivePsiPowers,
     pub active_mission: String,
     /// Whether the player was crouched at save time. Defaults false for
     /// saves that predate crouch.
@@ -78,6 +80,7 @@ mod tests {
             player_vitals,
             active_healing: ActiveHealing::default(),
             active_radiation: ActiveRadiation::default(),
+            active_psi: Default::default(),
             active_mission: "earth.mis".to_owned(),
             is_crouched: false,
         }
@@ -144,6 +147,11 @@ mod tests {
         assert_eq!(original.active_radiation.advance(0.1, 8.0, 3.0), 0);
         let encoded = serde_json::to_value(&original).unwrap();
         let decoded: GlobalData = serde_json::from_value(encoded.clone()).unwrap();
+        assert!(
+            !decoded.active_radiation.is_exposed(),
+            "ambient ownership is rebuilt after load"
+        );
+        original.active_radiation.reset_ambient();
         assert_eq!(decoded.active_radiation, original.active_radiation);
 
         let mut legacy = encoded;

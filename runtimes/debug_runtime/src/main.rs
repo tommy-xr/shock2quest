@@ -2446,6 +2446,7 @@ fn capture_frame_snapshot(
                     .as_ref()
                     .and_then(|s| s.psi_points.map(|(_, max)| max)),
                 radiation_level: state.as_ref().map(|s| s.radiation_level).unwrap_or(0.0),
+                toxin_level: state.as_ref().map(|s| s.toxin_level).unwrap_or(0.0),
                 selected_psi_power: state.as_ref().and_then(|s| s.selected_psi_power.clone()),
                 psi_charge: state.as_ref().and_then(|s| s.psi_charge.map(|(f, _)| f)),
                 psi_charge_phase: state

@@ -988,6 +988,15 @@ fn apply_radiation_patch_use(
     entity_id: EntityId,
     amount: f32,
 ) -> RadiationPatchUseOutcome {
+    apply_hazard_patch_use(world, entity_id, amount, false)
+}
+
+fn apply_hazard_patch_use(
+    world: &World,
+    entity_id: EntityId,
+    amount: f32,
+    toxin: bool,
+) -> RadiationPatchUseOutcome {
     let is_alive = world
         .borrow::<EntitiesView>()
         .is_ok_and(|entities| entities.is_alive(entity_id));
@@ -1004,7 +1013,13 @@ fn apply_radiation_patch_use(
 
     let cleared = world
         .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
-        .is_ok_and(|mut radiation| radiation.clear(amount));
+        .is_ok_and(|mut radiation| {
+            if toxin {
+                radiation.clear_toxin(amount)
+            } else {
+                radiation.clear(amount)
+            }
+        });
     if !cleared {
         return RadiationPatchUseOutcome::NotUsed;
     }
@@ -2489,6 +2504,13 @@ impl MissionCore {
         world.add_unique(crate::psi::ActivePsiPowers::default());
         world.add_unique(crate::scripts::healing_item::ActiveHealing::default());
         world.add_unique(crate::scripts::radiation::ActiveRadiation::default());
+        world.add_unique(crate::scripts::radiation::RadiationRooms::default());
+        world.add_unique(crate::scripts::radiation::HazardResistance(
+            game_entity_info
+                .hazard_params()
+                .map(|p| p.0)
+                .unwrap_or([1.0; 8]),
+        ));
         world.add_unique(DamageFlash::default());
         world.add_unique(crate::hud::HudMessages::default());
 
@@ -3139,6 +3161,12 @@ impl MissionCore {
             return Vec::new();
         }
 
+        if let Ok(mut status) = self
+            .world
+            .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+        {
+            *status = Default::default();
+        }
         let paid_respawn = active_resurrection_target(&self.world).and_then(|target| {
             crate::scripts::script_util::debit_player_nanites(
                 &self.world,
@@ -3529,7 +3557,7 @@ impl MissionCore {
             &self.world,
             time.elapsed.as_secs_f32(),
         ) {
-            effects.push(radiation);
+            effects.extend(Effect::flatten(vec![radiation]));
         }
         // Runs before the sustained-power countdown below, which is the
         // decrement the drain's per-second accounting predicts.
@@ -5726,13 +5754,31 @@ impl MissionCore {
                 stim_template_id,
                 felt_intensity,
             );
-            crate::scripts::radiation::apply_player_stimulus(
-                &self.world,
-                entity_id,
+            if source_entity_id.is_none() {
+                crate::scripts::radiation::apply_player_stimulus(
+                    &self.world,
+                    entity_id,
+                    &receptrons,
+                    stim_template_id,
+                    felt_intensity,
+                );
+            }
+            for effect in crate::mission::stim_response::hazard_effects(
                 &receptrons,
                 stim_template_id,
                 felt_intensity,
-            );
+                entity_id,
+            ) {
+                if let Effect::ApplyHazard { toxin, amount, .. } = effect {
+                    if !toxin && source_entity_id.is_none() {
+                        continue;
+                    }
+                    self.script_world.dispatch(Message {
+                        to: entity_id,
+                        payload: MessagePayload::Hazard { toxin, amount },
+                    });
+                }
+            }
             if let Some(duration_seconds) = crate::mission::stim_response::resolve_stim_freeze(
                 &receptrons,
                 stim_template_id,
@@ -7189,7 +7235,140 @@ impl MissionCore {
         let mut player_grunted = false;
         let mut effects = VecDeque::from(effects);
         while let Some(effect) = effects.pop_front() {
+            let toxin_patch = matches!(&effect, Effect::UseToxinPatch { .. });
             match effect {
+                Effect::ApplyHazard {
+                    entity_id,
+                    toxin,
+                    amount,
+                } => {
+                    if entity_id != player_entity || !self.player_is_alive() {
+                        continue;
+                    }
+                    let amount =
+                        crate::scripts::radiation::protected_exposure(&self.world, toxin, amount);
+                    if let Ok(mut status) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+                    {
+                        status.expose(toxin, amount);
+                    }
+                }
+                Effect::RadiationRoom { entity_id, entered } => {
+                    let level = self
+                        .world
+                        .borrow::<View<dark::properties::PropRadiationLevel>>()
+                        .ok()
+                        .and_then(|v| v.get(entity_id).ok().map(|v| v.0))
+                        .unwrap_or(0.0);
+                    let absorb = self
+                        .world
+                        .borrow::<View<dark::properties::PropRadiationAbsorb>>()
+                        .ok()
+                        .and_then(|v| v.get(entity_id).ok().map(|v| v.0))
+                        .unwrap_or(0.05);
+                    if let Ok(mut rooms) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::scripts::radiation::RadiationRooms>>()
+                    {
+                        if entered && level.is_finite() && level > 0.0 {
+                            rooms.0.insert(entity_id, (level, absorb));
+                        } else {
+                            rooms.0.remove(&entity_id);
+                        }
+                    }
+                }
+                Effect::ClearHazard { toxin } => {
+                    if let Ok(mut status) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+                    {
+                        if toxin {
+                            status.clear_toxin(f32::MAX);
+                        } else {
+                            status.clear(f32::MAX);
+                        }
+                    }
+                }
+                Effect::ClearEnvironmentalRadiation => {
+                    if let Ok(mut status) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+                    {
+                        status.reset_ambient();
+                    }
+                    if let Ok(mut levels) = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropRadiationLevel>>()
+                    {
+                        for (entity, level) in (&mut levels).iter().with_id() {
+                            if entity != player_entity {
+                                level.0 = 0.0;
+                            }
+                        }
+                    }
+                    if let Ok(mut rooms) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::scripts::radiation::RadiationRooms>>()
+                    {
+                        rooms.0.clear();
+                    }
+                }
+                Effect::ToggleHazardArmor { entity_id } => {
+                    if self.world.borrow::<View<PropObjState>>().is_ok_and(|v| {
+                        v.get(entity_id)
+                            .is_ok_and(|s| s.0 == dark::properties::ObjectState::Unresearched)
+                    }) {
+                        continue;
+                    }
+                    if !crate::scripts::script_util::player_carried_items(&self.world)
+                        .contains(&entity_id)
+                    {
+                        continue;
+                    }
+                    let armor = self
+                        .world
+                        .borrow::<View<dark::properties::PropArmor>>()
+                        .is_ok_and(|v| v.get(entity_id).is_ok());
+                    let implant = self
+                        .world
+                        .borrow::<View<dark::properties::PropImplantDesc>>()
+                        .is_ok_and(|v| v.get(entity_id).is_ok_and(|v| v.0 == 12));
+                    if !armor && !implant {
+                        continue;
+                    }
+                    let mut equipped = self
+                        .world
+                        .borrow::<ViewMut<crate::runtime_props::RuntimePropHazardEquipment>>()
+                        .unwrap();
+                    let was_equipped = equipped.get(entity_id).is_ok();
+                    let armors = self
+                        .world
+                        .borrow::<View<dark::properties::PropArmor>>()
+                        .unwrap();
+                    let to_remove: Vec<_> = (&equipped)
+                        .iter()
+                        .with_id()
+                        .filter_map(|(id, _)| (armors.get(id).is_ok() == armor).then_some(id))
+                        .collect();
+                    for id in to_remove {
+                        equipped.remove(id);
+                    }
+                    drop(armors);
+                    drop(equipped);
+                    if !was_equipped {
+                        self.world.add_component(
+                            entity_id,
+                            crate::runtime_props::RuntimePropHazardEquipment,
+                        );
+                    }
+                    game_log!(
+                        INFO,
+                        "Equipment {}",
+                        if was_equipped { "removed" } else { "equipped" }
+                    );
+                }
+
                 Effect::AcquireKeyCard { key_card } => {
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                     quests.add_key_card(key_card);
@@ -8147,10 +8326,15 @@ impl MissionCore {
                     }
                 }
 
-                Effect::UseRadiationPatch { entity_id, amount } => {
-                    let outcome = apply_radiation_patch_use(&self.world, entity_id, amount);
+                Effect::UseRadiationPatch { entity_id, amount }
+                | Effect::UseToxinPatch { entity_id, amount } => {
+                    let outcome = if toxin_patch {
+                        apply_hazard_patch_use(&self.world, entity_id, amount, true)
+                    } else {
+                        apply_radiation_patch_use(&self.world, entity_id, amount)
+                    };
                     if outcome == RadiationPatchUseOutcome::NotUsed {
-                        game_log!(INFO, "No current radiation to remove.");
+                        game_log!(INFO, "No contamination to remove.");
                         continue;
                     }
 
@@ -14749,6 +14933,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     })
                 }),
             },
+            DebugEntityMessage::Hazard { toxin, amount } => {
+                MessagePayload::Hazard { toxin, amount }
+            }
             DebugEntityMessage::Frob => MessagePayload::Frob,
             DebugEntityMessage::Signal { name } => MessagePayload::Signal { name },
             DebugEntityMessage::SetAlertness { level } => {

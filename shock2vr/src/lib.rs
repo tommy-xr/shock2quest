@@ -516,6 +516,8 @@ struct PendingTransition {
     quest_info: QuestInfo,
     held_data: HeldItemSaveData,
     player_vitals: Option<PlayerVitals>,
+    hazards: crate::scripts::radiation::ActiveRadiation,
+    active_psi: crate::psi::ActivePsiPowers,
     /// The CPU parse running on a worker thread. While this is in flight the loading
     /// screen renders (and animates) every frame; once it finishes, the main thread runs
     /// the GPU `build` and swaps to the mission.
@@ -577,6 +579,8 @@ struct PreservedSceneState {
     quest_info: QuestInfo,
     held_data: HeldItemSaveData,
     player_vitals: Option<PlayerVitals>,
+    hazards: crate::scripts::radiation::ActiveRadiation,
+    active_psi: crate::psi::ActivePsiPowers,
 }
 
 pub struct Game {
@@ -721,6 +725,7 @@ pub struct PlayerStateSnapshot {
     /// Accumulated retail `RadLevel` after ambient absorption. Zero when the
     /// player has no active radiation status.
     pub radiation_level: f32,
+    pub toxin_level: f32,
     /// The gamesys name of the currently selected psi power (what the psi amp
     /// casts), e.g. "Cryokinesis".
     pub selected_psi_power: Option<String>,
@@ -873,6 +878,10 @@ impl Game {
                         .ok()
                         .map(|p| (p.psi_points, p.max_psi_points))
                 }),
+            toxin_level: world
+                .borrow::<shipyard::UniqueView<crate::scripts::radiation::ActiveRadiation>>()
+                .map(|state| state.toxin_level())
+                .unwrap_or(0.0),
             radiation_level: world
                 .borrow::<shipyard::UniqueView<crate::scripts::radiation::ActiveRadiation>>()
                 .map(|radiation| radiation.level())
@@ -954,6 +963,18 @@ impl Game {
             quest_info: current_quest_info,
             held_data,
             player_vitals,
+            active_psi: self
+                .active_game_scene
+                .world()
+                .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
+                .map(|v| (*v).clone())
+                .unwrap_or_default(),
+            hazards: self
+                .active_game_scene
+                .world()
+                .borrow::<UniqueView<crate::scripts::radiation::ActiveRadiation>>()
+                .map(|v| (*v).clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -992,12 +1013,16 @@ impl Game {
             quest_info,
             held_data,
             mut player_vitals,
+            mut hazards,
+            mut active_psi,
         } = match preserved {
             Some(preserved) => preserved,
             None => self.save_active_scene(),
         };
         if vitals_transition == PlayerVitalsTransition::InitializeFromDestination {
             player_vitals = None;
+            hazards = Default::default();
+            active_psi = Default::default();
         }
 
         // Spawn the GL-free parse off-thread. It owns `Arc`s of the asset-path layer and
@@ -1024,6 +1049,8 @@ impl Game {
             quest_info,
             held_data,
             player_vitals,
+            hazards,
+            active_psi,
             parse_handle,
             frames_shown: 0,
             parse_done_frame: None,
@@ -1066,6 +1093,21 @@ impl Game {
             &self.options,
         );
         save_load::restore_player_vitals(&mission.mission_core.world, pending.player_vitals);
+        if let Ok(mut psi) = mission
+            .mission_core
+            .world
+            .borrow::<shipyard::UniqueViewMut<crate::psi::ActivePsiPowers>>()
+        {
+            *psi = pending.active_psi;
+        }
+        if let Ok(mut status) = mission
+            .mission_core
+            .world
+            .borrow::<shipyard::UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+        {
+            *status = pending.hazards;
+            status.reset_ambient();
+        }
         self.set_active_scene(Box::new(mission));
         self.campaign_completed = false;
 
@@ -1924,6 +1966,12 @@ impl Game {
                 .borrow::<UniqueView<crate::scripts::healing_item::ActiveHealing>>()
                 .map(|active| active.clone())
                 .unwrap_or_default(),
+            active_psi: self
+                .active_game_scene
+                .world()
+                .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
+                .map(|v| (*v).clone())
+                .unwrap_or_default(),
             active_radiation: self
                 .active_game_scene
                 .world()
@@ -2037,6 +2085,9 @@ impl Game {
                     Some(scene) => self.set_active_scene(scene),
                     None => warn!("Unknown debug scene '{}'", name),
                 }
+            }
+            GlobalEffect::PlayerRadiationHit { damage } => {
+                self.hit_feedback.trigger_radiation(damage);
             }
             GlobalEffect::PlayerHit { damage } => {
                 self.hit_feedback.trigger(damage);

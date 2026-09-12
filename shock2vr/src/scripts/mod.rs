@@ -30,6 +30,7 @@ mod energy_weapon;
 mod exp_cookie;
 mod frob_qb;
 pub mod gui;
+mod hazard_objects;
 pub mod healing_item;
 mod homing;
 mod impact_sound;
@@ -232,6 +233,10 @@ pub struct DamageImpact {
 
 #[derive(Clone, Debug)]
 pub enum MessagePayload {
+    Hazard {
+        toxin: bool,
+        amount: f32,
+    },
     Frob,
 
     /// This entity's MFD panel was opened. Frobbing used to be the only way in,
@@ -988,8 +993,8 @@ impl ScriptWorld {
             // TODO: Necessary
             "changeinterface" => Box::new(NoopScript::new()),
             "reducehp" => Box::new(NoopScript::new()),
-            "engineremoverad" => Box::new(NoopScript::new()),
-            "radroom" => Box::new(NoopScript::new()),
+            "engineremoverad" => Box::new(hazard_objects::HazardObject::EngineCleanup),
+            "radroom" => Box::new(hazard_objects::HazardObject::Room),
             // SHODAN's ordinary creature/base-monster scripts own combat and
             // death state. Keep the retail finale hook inert until its ending
             // sequence is implemented; TrapSpawn must still be able to create
@@ -1010,8 +1015,8 @@ impl ScriptWorld {
             "triggerdamage" => Box::new(TriggerDamage::new()),
             // many.micontain
             "brain" => Box::new(NoopScript::new()),
-            "wormheartimplant" => Box::new(NoopScript::new()),
-            "wormskin" => Box::new(NoopScript::new()),
+            "wormheartimplant" => Box::new(hazard_objects::HazardObject::Armor),
+            "wormskin" => Box::new(hazard_objects::HazardObject::Armor),
             // shodan.mis
             "toggleshodantexture" => Box::new(NoopScript::new()),
             "changedelay" => Box::new(NoopScript::new()), //?
@@ -1117,7 +1122,9 @@ impl ScriptWorld {
             "freezefx" => Box::new(UnimplementedScript::new(&script_name)), // command1
             "torpedolift" => Box::new(UnimplementedScript::new(&script_name)), // rick1
             "torpedohack" => Box::new(UnimplementedScript::new(&script_name)), // rick1
-            "eraseradiation" => Box::new(UnimplementedScript::new(&script_name)), // rick1
+            "flushradiation" | "eraseradiation" => {
+                Box::new(hazard_objects::HazardObject::Environment)
+            } // rick1
 
             // station:
             "oldstylebaseelevator" => Box::new(UnimplementedScript::new(&script_name)),
@@ -1200,8 +1207,9 @@ impl ScriptWorld {
             "minigamecart" => Box::new(NoopScript::new()),
             "forcedoor" => Box::new(UnimplementedScript::new(&script_name)),
             "wormpilescript" => Box::new(UnimplementedScript::new(&script_name)),
-            "trapradcleanse" => Box::new(UnimplementedScript::new(&script_name)),
-            "armorscript" => Box::new(NoopScript::new()),
+            "traptoxincleanse" => Box::new(hazard_objects::HazardObject::Cleanse(true)),
+            "trapradcleanse" => Box::new(hazard_objects::HazardObject::Cleanse(false)),
+            "armorscript" => Box::new(hazard_objects::HazardObject::Armor),
             "battery" => Box::new(UnimplementedScript::new(&script_name)),
             "healingstation" => Box::new(UnimplementedScript::new(&script_name)),
             "brokenhealingstation" => Box::new(UnimplementedScript::new(&script_name)),
@@ -1287,7 +1295,7 @@ impl ScriptWorld {
             "setupinitialdebrief" => {
                 Box::new(setup_initial_debrief::SetupInitialDebriefScript::new())
             }
-            "toxinpatch" => Box::new(UnimplementedScript::new(&script_name)),
+            "toxinpatch" => Box::new(hazard_objects::HazardObject::ToxinPatch),
             "triggerecology" => Box::new(TriggerEcology::new()),
             // Retail's difficulty variant applies shock.cfg/difficulty
             // population adjustments before entering this same state machine.
