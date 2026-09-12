@@ -14,6 +14,19 @@ test("a hatched grub animates, leaves its pod and pursues upright", {
   const [grub] = await game.entities.byTemplate(-182);
   assert.ok(grub, "approaching the pod must hatch a grub");
   const start = await game.entities.detail(grub.id);
+  const segments = start.aim_points ?? [];
+  assert.equal(segments.length, 4, "head, chest, abdomen and tail must have damage proxies");
+  for (const segment of segments) {
+    const body = await game.physics.body(segment.body_id);
+    assert.ok(body.collision_groups.includes("hitbox"));
+    assert.equal(body.blocks_actor, false, "damage proxies must not push the actor");
+    const hit = await game.raycast({
+      start: [segment.position[0]!, segment.position[1]! + 0.5, segment.position[2]!],
+      end: segment.position,
+      collision_groups: ["hitbox"],
+    });
+    assert.ok(segments.some(p => p.proxy_entity_id === hit.entity_id), "segment geometry must be ray-hittable");
+  }
   const before = await game.entities.animation(grub.id);
   assert.ok(before, "the object model must have a joint pose");
   await game.step({ frames: 10 });
@@ -37,9 +50,16 @@ test("a hatched grub animates, leaves its pod and pursues upright", {
     moved ||= Math.hypot(body.position[0]! - start.position[0]!, body.position[2]! - start.position[2]!) > 0.5;
   }
   assert.ok(moved, "the grub must leave its pod and pursue without an injected alert or impulse");
-  await game.entities.sendMessage(grub.id, { type: "Damage", amount: 100 });
+  const current = await game.entities.detail(grub.id);
+  const proxy = current.aim_points?.[0];
+  assert.ok(proxy);
+  await game.entities.sendMessage(proxy.proxy_entity_id, { type: "Damage", amount: 5 });
   await game.step({ frames: 3 });
   assert.equal((await game.entities.byTemplate(-182)).length, 0, "death must remove the live actor");
+  for (const segment of segments) {
+    assert.equal((await game.physics.bodies({ entityId: segment.proxy_entity_id })).bodies.length, 0,
+      "death must remove the joint collision proxies");
+  }
   assert.equal((await game.entities.byTemplate(-2666)).length, 1, "death must use the authored grub flinders");
 });
 

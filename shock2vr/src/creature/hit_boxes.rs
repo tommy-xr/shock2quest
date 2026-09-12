@@ -45,8 +45,17 @@ pub(crate) fn is_hit_box(world: &World, entity_id: EntityId) -> bool {
 /// on the animal would make whole bands of it unshootable. That creature keeps
 /// its capsule; widening its definition is what would let it join the rule.
 pub(crate) fn hit_boxes_cover_body(world: &World, entity_id: EntityId) -> bool {
-    crate::creature::get_entity_creature(world, entity_id)
-        .is_some_and(|creature| creature.hit_boxes.len() > 1)
+    is_grub(world, entity_id)
+        || crate::creature::get_entity_creature(world, entity_id)
+            .is_some_and(|creature| creature.hit_boxes.len() > 1)
+}
+
+fn is_grub(world: &World, entity: EntityId) -> bool {
+    world
+        .borrow::<View<dark::properties::PropAI>>()
+        .unwrap()
+        .get(entity)
+        .is_ok_and(|ai| ai.0.eq_ignore_ascii_case("grub"))
 }
 
 /// Whether an entity is a creature with live hitbox proxies - i.e. whether a
@@ -249,7 +258,8 @@ impl HitBoxManager {
                     .with_id()
             {
                 let maybe_creature_type = get_entity_creature(world, parent_entity_id);
-                if maybe_creature_type.is_none() {
+                let object_grub = is_grub(world, parent_entity_id);
+                if maybe_creature_type.is_none() && !object_grub {
                     continue;
                 }
 
@@ -265,14 +275,24 @@ impl HitBoxManager {
                 // the authoritative key set for which joints get a proxy.
                 let fitted_shapes = maybe_model.unwrap().hit_box_shapes();
                 let joint_aabbs = maybe_model.unwrap().get_hit_boxes();
-                let creature_type = maybe_creature_type.unwrap();
+                // Every grub segment deals normal body damage: the padding
+                // makes small moving targets forgiving without a tail penalty.
+                let hitbox_type_for = |joint| {
+                    if object_grub {
+                        Some(HitBoxType::Body)
+                    } else {
+                        maybe_creature_type
+                            .as_ref()
+                            .and_then(|c| c.get_hitbox_type(joint))
+                    }
+                };
 
                 let mut built_hit_boxes = false;
                 let hit_box_map = self.hit_boxes.entry(parent_entity_id).or_insert_with(|| {
                     let mut out_hit_boxes = HashMap::new();
 
                     for joint_id in joint_aabbs.keys() {
-                        let maybe_hitbox_type = creature_type.get_hitbox_type(*joint_id);
+                        let maybe_hitbox_type = hitbox_type_for(*joint_id);
                         if maybe_hitbox_type.is_none() {
                             continue;
                         }
@@ -332,7 +352,7 @@ impl HitBoxManager {
 
                 let mut joint_index = 0;
                 for joint_xform in joint_xforms.0 {
-                    let maybe_hitbox_type = creature_type.get_hitbox_type(joint_index);
+                    let maybe_hitbox_type = hitbox_type_for(joint_index);
 
                     if maybe_hitbox_type.is_none() {
                         joint_index += 1;

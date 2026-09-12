@@ -319,6 +319,65 @@ mod tests {
     use dark::properties::PropCreature;
     use shipyard::{EntityId, World};
 
+    #[test]
+    fn grub_shots_hit_segments_beyond_support_and_miss_empty_support_volume() {
+        use crate::physics::CollisionGroup;
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let grub = world.add_entity((
+            dark::properties::PropAI("Grub".into()),
+            crate::creature::RuntimePropHasHitBoxes,
+        ));
+        physics.add_kinematic(
+            grub,
+            vec3(0.0, 0.2, 1.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.4, 0.4, 0.4),
+            CollisionGroup::actor(),
+            false,
+        );
+        let segment = world.add_entity(RuntimePropHitBox {
+            parent_entity_id: grub,
+            hit_box_type: HitBoxType::Body,
+            joint_id: 1,
+        });
+        physics.add_kinematic_shared_shape(
+            segment,
+            vec3(0.0, 0.0, 1.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            rapier3d::prelude::SharedShape::capsule_x(0.45, 0.075),
+            vec3(0.0, 0.0, 0.0),
+            CollisionGroup::hitbox(),
+            false,
+        );
+        let mut player =
+            physics.create_player(vec3(10.0, 10.0, 10.0), EntityId::from_inner(1000).unwrap());
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let cast = |x, y| {
+            projectile_ray_cast(
+                point3(x, y, 0.0),
+                vec3(0.0, 0.0, 1.0),
+                &physics,
+                2.0,
+                &world,
+                false,
+            )
+            .and_then(|hit| hit.maybe_entity_id)
+        };
+        assert_eq!(
+            cast(0.4, 0.0),
+            Some(segment),
+            "tail outside sphere is hittable"
+        );
+        assert_eq!(
+            cast(0.0, 0.3),
+            None,
+            "empty upper sphere cannot absorb a shot"
+        );
+        assert_eq!(cast(0.4, 0.12), None, "padding must remain bounded");
+    }
+
     fn shooter_and_target_fixture() -> (PhysicsWorld, World, EntityId, EntityId) {
         let mut physics = PhysicsWorld::new();
         // Put the player's capsule between the ray origin and the target so

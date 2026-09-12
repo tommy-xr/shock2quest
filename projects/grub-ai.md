@@ -60,11 +60,20 @@ contacts handle curved pod surfaces that a vertical probe can miss.
 
 ## Damage volume
 
-The live sphere is also the damage target: radius .2 world units, with five
-authored hit points. There are no per-segment hitboxes. Its height is forgiving
-relative to the thin mesh, but the head and tail extend beyond its horizontal
-footprint. The lifecycle test injects damage directly; aimed weapon accuracy
-and shots-to-kill have not been playtested in this pass.
+Damage follows four padded capsules fitted to the joint-local geometry of the
+head, chest, abdomen and tail. Each capsule encloses its section along its longest
+axis with an extra .025 model units of radial padding and rounded ends. The
+existing hitbox manager places these non-solid proxies using the same animated
+joint transforms as the rendered mesh. All four count as normal body damage.
+The support sphere remains for movement and ordinary physical contacts; shot
+ray refinement, flat melee and held VR melee use the segment proxies when present.
+Slow physical projectiles retain the existing engine contact behavior.
+
+The grub retains five authored hit points. Tests verify hits beyond the old
+sphere, misses through its empty upper volume, proxy damage forwarding and
+cleanup on death. Weapon balance/skill-dependent shots-to-kill have not been
+playtested in this pass. Proxies are rebuilt after save/load, like skeletal
+creature hitboxes.
 
 ## Deliberate limits of this first controller
 
@@ -85,7 +94,7 @@ the existing path follower provides stall recovery.
 - Real `rec1.mis` pod 131 near the elevator: hatch, upright landing, natural
   pursuit/hop and player damage.
 - `grub-ai.e2e.test.ts`: joint animation without a skeletal clip, natural pursuit,
-  bounded upright hops, contact/death lifecycle and isolated floor placement.
+  bounded upright hops, segment ray hits, proxy death/cleanup and isolated floor placement.
 - Existing annelid egg/goo volley and ops4 emitter/save tests.
 - Unit coverage for binary layouts, parameter mapping, animation phase restore,
   support geometry, body creation, alert caps and committed leap state.

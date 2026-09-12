@@ -817,6 +817,17 @@ fn create_model(
             }
         };
 
+        if world
+            .borrow::<View<PropAI>>()
+            .unwrap()
+            .get(entity_id)
+            .is_ok_and(|ai| ai.0.eq_ignore_ascii_case("grub"))
+        {
+            // Small forgiving margin around each animated segment, independent
+            // of the sphere that supports and moves the grub.
+            model.enable_object_joint_hit_boxes(0.025);
+        }
+
         // The raw, signed scale - matching `RuntimePropTransform`, which is what
         // the renderer composes the local offset with (note the model bake
         // above deliberately uses the absolute value instead).
