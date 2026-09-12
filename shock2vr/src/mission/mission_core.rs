@@ -2275,10 +2275,10 @@ fn restore_held_item_interaction(
 ) -> Vec<VirtualHandEffect> {
     let mut effects = Vec::new();
     if let Some(entity_id) = left_hand_entity {
-        effects.extend(interaction.grab(world, entity_id, vr_config::Handedness::Left));
+        effects.extend(interaction.restore_held(world, entity_id, vr_config::Handedness::Left));
     }
     if let Some(entity_id) = right_hand_entity {
-        effects.extend(interaction.grab(world, entity_id, vr_config::Handedness::Right));
+        effects.extend(interaction.restore_held(world, entity_id, vr_config::Handedness::Right));
     }
     effects
 }
@@ -15048,6 +15048,61 @@ mod saved_script_namespace_tests {
 #[cfg(test)]
 mod held_item_restore_tests {
     use super::*;
+
+    #[test]
+    fn vr_restored_hands_survive_neutral_then_release_once_after_squeeze() {
+        let mut world = World::new();
+        let left = world.add_entity((PropModelName("test_item".into()),));
+        let right = world.add_entity((PropModelName("test_item".into()),));
+        let mut interaction = VrInteraction::new();
+        restore_held_item_interaction(&mut interaction, &world, Some(left), Some(right));
+        let physics = PhysicsWorld::new();
+        let mut input = InputContext::default();
+        for squeeze in [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0] {
+            input.left_hand.squeeze_value = squeeze;
+            input.right_hand.squeeze_value = squeeze;
+            let effects = interaction.update(&InteractionContext {
+                physics: &physics,
+                world: &world,
+                input: &input,
+                player_pos: vec3(0.0, 0.0, 0.0),
+                player_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                eye_height: 1.04,
+                step_dt: 1.0 / 60.0,
+                support_enabled: false,
+            });
+            assert_eq!(interaction.held_entities(), (Some(left), Some(right)));
+            assert!(
+                !effects
+                    .iter()
+                    .any(|e| matches!(e, VirtualHandEffect::DropItem { .. }))
+            );
+        }
+        input.left_hand.squeeze_value = 0.0;
+        input.right_hand.squeeze_value = 0.0;
+        for expected_drops in [2, 0] {
+            let effects = interaction.update(&InteractionContext {
+                physics: &physics,
+                world: &world,
+                input: &input,
+                player_pos: vec3(0.0, 0.0, 0.0),
+                player_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                eye_height: 1.04,
+                step_dt: 1.0 / 60.0,
+                support_enabled: false,
+            });
+            assert_eq!(
+                effects
+                    .iter()
+                    .filter(|e| matches!(e, VirtualHandEffect::DropItem { .. }))
+                    .count(),
+                expected_drops
+            );
+            assert_eq!(interaction.held_entities(), (None, None));
+        }
+    }
 
     /// #787: flat mode only has one wield slot, so restoring a VR save with
     /// two held items must retain the first grab's displacement effects. The

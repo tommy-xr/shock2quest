@@ -164,6 +164,16 @@ pub trait PlayerInteraction {
         hand: Handedness,
     ) -> Vec<VirtualHandEffect>;
 
+    /// Restore saved ownership without treating neutral startup input as a release.
+    fn restore_held(
+        &mut self,
+        world: &World,
+        entity_id: EntityId,
+        hand: Handedness,
+    ) -> Vec<VirtualHandEffect> {
+        self.grab(world, entity_id, hand)
+    }
+
     /// A held entity was recreated as `new`; track the new id.
     fn replace_entity(&mut self, old: EntityId, new: EntityId, rigid_body: RigidBodyHandle);
 
@@ -1443,6 +1453,24 @@ impl PlayerInteraction for VrInteraction {
             self.right_hand = self.right_hand.grab_entity(world, entity_id);
         }
         Vec::new()
+    }
+
+    fn restore_held(
+        &mut self,
+        world: &World,
+        entity_id: EntityId,
+        hand: Handedness,
+    ) -> Vec<VirtualHandEffect> {
+        let effects = self.grab(world, entity_id, hand);
+        let restored_hand = if hand == Handedness::Left {
+            &mut self.left_hand
+        } else {
+            &mut self.right_hand
+        };
+        if restored_hand.is_holding(entity_id) {
+            restored_hand.preserve_restored_grip();
+        }
+        effects
     }
 
     fn replace_entity(&mut self, old: EntityId, new: EntityId, rigid_body: RigidBodyHandle) {
