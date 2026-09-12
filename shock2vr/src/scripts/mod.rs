@@ -4,6 +4,7 @@ pub(crate) mod proximity_grenade;
 pub mod speech_registry;
 pub mod speech_util;
 pub mod stasis;
+mod swarm;
 
 mod apparition;
 mod auto_install_soft;
@@ -970,12 +971,7 @@ impl ScriptWorld {
             "grubegg" => Box::new(BaseEgg::new(EggPayload::Grub)),
             "swarmeregg" => Box::new(BaseEgg::new(EggPayload::Swarmer)),
             "gooprojectile" => Box::new(GooProjectile::new()),
-            // The flying annelid a swarmer pod hatches. Its retail script owns
-            // the swarm's flocking; the port's `swarmer` AI is still a stub, so
-            // a hatched swarm is a damageable particle cloud that does not yet
-            // chase. Mapped explicitly so the pod can hatch at all - the
-            // fallback would panic on load.
-            "swarm" => Box::new(NoopScript::new()),
+            "swarm" => Box::new(swarm::Swarm::new()),
             "containerscript" => gui_script(Box::new(ContainerGui::loot_container())),
 
             "lootable" => Box::new(NoopScript::new()),
