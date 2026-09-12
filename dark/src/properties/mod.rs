@@ -482,6 +482,22 @@ pub struct PropPhysState {
     pub rot_velocity: Vector3<f32>,
 }
 
+/// Retail masks use the gamesys difficulty index: Easy is bit 1, not bit 0.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropDifficultyDestroy(pub u32);
+impl PropDifficultyDestroy {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> Self {
+        Self(read_u32(reader))
+    }
+}
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropDifficultyPermit(pub u32);
+impl PropDifficultyPermit {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> Self {
+        Self(read_u32(reader))
+    }
+}
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropLocked(pub bool);
 
@@ -1684,6 +1700,18 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$KeypadCod",
             |reader, _len| read_u32(reader),
             PropKeypadCode,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$DiffDestr",
+            PropDifficultyDestroy::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$DiffPermi",
+            PropDifficultyPermit::read,
+            identity,
             accumulator::latest,
         ),
         define_prop("P$Locked", PropLocked::read, identity, accumulator::latest),
