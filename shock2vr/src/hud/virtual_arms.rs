@@ -86,19 +86,21 @@ pub fn create_wrist_hud_panels(
 
 /// Wrist-frame +Z points out of the glove's back; +Y points toward its fingers.
 /// Bio faces dorsally. Ammo caps the cuff opening and faces back along the
-/// forearm, with the top of its text toward the back of the hand.
+/// forearm, rotated counterclockwise in its face plane to fit inside the rim.
 fn wrist_panel_transform(
     root: Matrix4<f32>,
     canvas_size: cgmath::Vector2<f32>,
     ammo: bool,
 ) -> Matrix4<f32> {
-    const WIDTH: f32 = 0.085;
+    let width = if ammo { 0.058 } else { 0.085 };
     let mount = if ammo {
-        Matrix4::from_translation(vec3(0.0, -0.033, 0.0)) * Matrix4::from_angle_x(Deg(90.0))
+        Matrix4::from_translation(vec3(0.0, -0.033, -0.005))
+            * Matrix4::from_angle_x(Deg(90.0))
+            * Matrix4::from_angle_z(Deg(90.0))
     } else {
         Matrix4::from_translation(vec3(0.0, -0.015, 0.04))
     };
-    root * mount * Matrix4::from_nonuniform_scale(WIDTH, WIDTH * canvas_size.y / canvas_size.x, 1.0)
+    root * mount * Matrix4::from_nonuniform_scale(width, width * canvas_size.y / canvas_size.x, 1.0)
 }
 
 /// Get player health percentage (0.0 to 1.0)
