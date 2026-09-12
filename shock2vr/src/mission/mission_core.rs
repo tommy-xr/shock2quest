@@ -9952,12 +9952,7 @@ impl MissionCore {
                         );
                         continue;
                     }
-                    let costs = self
-                        .world
-                        .borrow::<UniqueView<GlobalTrainerCosts>>()
-                        .unwrap()
-                        .0
-                        .clone();
+                    let costs = crate::difficulty::trainer_costs(&self.world);
                     if let Some(costs) = costs {
                         let (purchased, old_width, new_width) = {
                             let mut quests =
@@ -9999,6 +9994,8 @@ impl MissionCore {
                 }
 
                 Effect::ReplicatorPurchase {
+                    replicator,
+                    slot,
                     cost,
                     template_name,
                     position,
@@ -10009,7 +10006,12 @@ impl MissionCore {
                     let template_exists = self
                         .template_name_to_template_id
                         .contains_key(&template_name.to_ascii_lowercase());
-                    if cost <= 0 || !template_exists {
+                    let current_quote =
+                        crate::scripts::gui::replicator_quote(&self.world, replicator, slot);
+                    if current_quote != Some((template_name.clone(), cost))
+                        || cost <= 0
+                        || !template_exists
+                    {
                         info!(
                             "Replicator purchase refused: invalid request for {} at cost {}",
                             template_name, cost

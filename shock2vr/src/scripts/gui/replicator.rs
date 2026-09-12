@@ -374,6 +374,8 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                 };
 
                 let purchase = Effect::ReplicatorPurchase {
+                    replicator: entity_id,
+                    slot: *slot,
                     cost,
                     template_name: item.clone(),
                     position: get_position_from_transform(world, link, vec3(0.0, 0.0, 0.0)),
@@ -437,19 +439,36 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
     }
 }
 
-/// Retail's Replicator Expert trait applies an integer 20% discount. Resolve
-/// this from the persistent character sheet for both rendering and purchase
-/// handling so the quoted and charged prices cannot diverge.
-fn effective_replicator_cost(world: &World, authored_cost: i32) -> i32 {
-    let has_expert = world
-        .borrow::<UniqueView<QuestInfo>>()
-        .map(|quests| quests.player_stats().has_os_trait(TRAIT_REPLICATOR_EXPERT))
-        .unwrap_or(false);
-    if has_expert {
-        ((i64::from(authored_cost) * 8) / 10) as i32
-    } else {
-        authored_cost
+/// Requote the selected normal/hacked inventory at effect-application time.
+pub(crate) fn replicator_quote(
+    world: &World,
+    entity: EntityId,
+    slot: usize,
+) -> Option<(String, i32)> {
+    let contents = active_inventory(world, entity)?;
+    let name = contents.object_names.get(slot)?;
+    let base = *contents.costs.get(slot)?;
+    if name.is_empty() || base <= 0 {
+        return None;
     }
+    Some((name.clone(), effective_replicator_cost(world, base)))
+}
+
+/// Shared by display, click feedback and authoritative purchase validation.
+fn effective_replicator_cost(world: &World, authored_cost: i32) -> i32 {
+    let quests = world.borrow::<UniqueView<QuestInfo>>().ok();
+    let expert = quests
+        .as_ref()
+        .is_some_and(|q| q.player_stats().has_os_trait(TRAIT_REPLICATOR_EXPERT));
+    let difficulty = quests.as_ref().map(|q| q.difficulty()).unwrap_or_default();
+    let params = world
+        .borrow::<UniqueView<crate::difficulty::GlobalDifficultyParams>>()
+        .ok();
+    params
+        .as_deref()
+        .cloned()
+        .unwrap_or_default()
+        .replicator_cost(authored_cost, expert, difficulty)
 }
 
 #[cfg(test)]

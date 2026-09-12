@@ -15,6 +15,47 @@ impl GlobalDifficultyParams {
             player_pools: gamesys.player_pool_params().copied().unwrap_or_default(),
         }
     }
+    pub fn trainer_costs(
+        &self,
+        authored: &dark::gamesys::TrainerCostTables,
+        difficulty: Difficulty,
+    ) -> dark::gamesys::TrainerCostTables {
+        let mut costs = authored.clone();
+        let multiplier = self
+            .difficulty
+            .as_ref()
+            .map(|p| p.trainer_multiplier[difficulty.retail_index()])
+            .unwrap_or(0.0);
+        // ShockPlayerGetTrainCost treats a zero multiplier as unscaled.
+        if multiplier != 0.0 {
+            for cost in costs
+                .stat_cost
+                .iter_mut()
+                .flatten()
+                .chain(costs.tech_cost.iter_mut().flatten())
+                .chain(costs.weapon_cost.iter_mut().flatten())
+                .chain(costs.psi_cost.iter_mut().flatten())
+            {
+                *cost = (*cost as f32 * multiplier) as i32;
+            }
+        }
+        costs
+    }
+    pub fn replicator_cost(&self, base: i32, expert: bool, difficulty: Difficulty) -> i32 {
+        // The integer trait discount precedes the floating-point difficulty
+        // multiplier; rounding in the opposite order changes small prices.
+        let discounted = if expert {
+            (i64::from(base) * 8 / 10) as i32
+        } else {
+            base
+        };
+        self.difficulty
+            .as_ref()
+            .map(|p| {
+                (discounted as f32 * p.replicator_multiplier[difficulty.retail_index()]) as i32
+            })
+            .unwrap_or(discounted)
+    }
     pub fn coefficients(&self, difficulty: Difficulty) -> PlayerPoolParams {
         let Some(p) = &self.difficulty else {
             return self.player_pools;
@@ -56,6 +97,27 @@ impl GlobalDifficultyParams {
             .max(0);
         (hp, psi)
     }
+}
+
+/// Resolve from the campaign at each quote, including seeded debug scenes.
+pub fn trainer_costs(world: &World) -> Option<dark::gamesys::TrainerCostTables> {
+    let authored = world
+        .borrow::<UniqueView<crate::mission::GlobalTrainerCosts>>()
+        .ok()?
+        .0
+        .clone()?;
+    let difficulty = world
+        .borrow::<UniqueView<QuestInfo>>()
+        .ok()
+        .map(|q| q.difficulty())
+        .unwrap_or_default();
+    Some(
+        world
+            .borrow::<UniqueView<GlobalDifficultyParams>>()
+            .ok()
+            .map(|p| p.trainer_costs(&authored, difficulty))
+            .unwrap_or(authored),
+    )
 }
 
 /// Recompute after a stat/tier/trait change, preserving the deficit from the old
@@ -121,6 +183,40 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+    #[test]
+    fn difficulty_prices_truncate_and_apply_trait_first() {
+        let mut params = retail();
+        let authored = dark::gamesys::TrainerCostTables {
+            stat_cost: [[3; 5]; 5],
+            tech_cost: [[3; 6]; 5],
+            weapon_cost: [[3; 6]; 4],
+            psi_cost: [[3; 8]; 5],
+        };
+        for ((difficulty, trainer), replicator) in Difficulty::ALL
+            .into_iter()
+            .zip([2, 3, 4, 5])
+            .zip([2, 3, 3, 6])
+        {
+            let scaled = params.trainer_costs(&authored, difficulty);
+            assert_eq!(scaled.stat_cost[0][0], trainer);
+            assert_eq!(scaled.tech_cost[0][0], trainer);
+            assert_eq!(scaled.weapon_cost[0][0], trainer);
+            assert_eq!(scaled.psi_cost[0][0], trainer);
+            assert_eq!(params.replicator_cost(3, false, difficulty), replicator);
+        }
+        assert_eq!(params.replicator_cost(3, true, Difficulty::Impossible), 4);
+        assert_eq!(params.replicator_cost(3, true, Difficulty::Easy), 1);
+        assert_eq!(params.replicator_cost(1, true, Difficulty::Impossible), 0);
+        params.difficulty.as_mut().unwrap().trainer_multiplier[2] = 0.0;
+        assert_eq!(
+            params.trainer_costs(&authored, Difficulty::Normal),
+            authored
+        );
+        assert_eq!(
+            GlobalDifficultyParams::default().replicator_cost(3, true, Difficulty::Normal),
+            2
+        );
     }
     #[test]
     fn difficulty_pools_follow_stats_traits_and_unlocked_tiers() {

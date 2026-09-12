@@ -283,10 +283,7 @@ impl Gui<TrainerGuiState, TrainerGuiMsg> for TrainerGui {
             return components;
         };
         let stats = quests.player_stats().clone();
-        let costs = world
-            .borrow::<UniqueView<crate::mission::GlobalTrainerCosts>>()
-            .ok()
-            .and_then(|c| c.0.clone());
+        let costs = crate::difficulty::trainer_costs(world);
         drop(quests);
 
         for (i, row) in self.mode.rows(world).iter().enumerate() {
@@ -366,10 +363,7 @@ impl Gui<TrainerGuiState, TrainerGuiMsg> for TrainerGui {
         // re-validates and applies atomically (handle_msg must not mutate).
         let quests = world.borrow::<UniqueView<QuestInfo>>().unwrap();
         let stats = quests.player_stats();
-        let costs = world
-            .borrow::<UniqueView<crate::mission::GlobalTrainerCosts>>()
-            .ok()
-            .and_then(|c| c.0.clone());
+        let costs = crate::difficulty::trainer_costs(world);
         let Some(costs) = costs else {
             return (
                 TrainerGuiState {
