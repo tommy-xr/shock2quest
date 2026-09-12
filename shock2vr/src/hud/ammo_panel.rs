@@ -43,6 +43,14 @@ pub(crate) const CONDITION: Rect = Rect::new(235.0, 14.0, 14.0, 14.0);
 /// Ammo-type label (std/he/ap), across the bottom of the gauge well.
 pub(crate) const TYPE_LABEL: Rect = Rect::new(198.0, 42.0, 51.0, 13.0);
 
+// The passive compact meter can use the space occupied by the cycle control
+// in use mode. Flat HUD and glove emit this same layout, in panel pixels.
+const COMPACT_ICON: Rect = Rect::new(177.0, 24.0, 16.0, 16.0);
+const COMPACT_COUNT: Rect = Rect::new(194.0, 15.0, 39.0, 28.0);
+const COMPACT_TYPE: Rect = Rect::new(177.0, 43.0, 29.0, 12.0);
+const COMPACT_MODE: Rect = Rect::new(208.0, 43.0, 41.0, 12.0);
+const COMPACT_DETAIL: Rect = Rect::new(177.0, 43.0, 72.0, 12.0);
+
 /// The ammo-type cycle button (the original's `ammoarw` hotspot, 12x41 art).
 pub(crate) const CYCLE_BUTTON: Rect = Rect::new(186.0, 15.0, 12.0, 41.0);
 /// The fire-mode SETTING button. Its label is the gun's current mode header
@@ -204,7 +212,7 @@ pub(crate) struct AmmoReadout {
     /// condition to wear down (the psi amp, a melee weapon).
     pub gun_condition: Option<&'static str>,
     /// The wielded gun's current fire-mode header ("NORM"/"BURST"/"AUTO") -
-    /// the SETTING button's label. Absent when the gun names no header.
+    /// the compact mode indicator and SETTING button label. Absent when unnamed.
     pub gun_setting_header: Option<String>,
     /// The weapon offers a different projectile type to switch to.
     pub can_cycle_ammo: bool,
@@ -374,22 +382,41 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoRe
                 VAlign::Middle,
             );
     } else if let Some(rounds) = readout.ammo {
-        canvas.text_native(
-            at(origin, COUNT),
+        let compact = !readout.show_buttons;
+        canvas.text(
+            at(origin, if compact { COMPACT_COUNT } else { COUNT }),
             &format!("{rounds}"),
-            FONT,
+            if compact { "bignum.fon" } else { FONT },
+            if compact { 24.0 } else { 0.0 },
             HAlign::Center,
             VAlign::Middle,
         );
         if let Some(icon) = &readout.ammo_icon {
-            canvas.image(at(origin, ICON), icon);
+            canvas.image(at(origin, if compact { COMPACT_ICON } else { ICON }), icon);
         }
         if let Some(badge) = readout.gun_condition {
             canvas.image(at(origin, CONDITION), badge);
         }
-        if let Some(ammo_type) = &readout.ammo_type {
-            // Ellipsized: the class tag is data ("std", but also "lasershot"),
-            // and an over-wide label would spill out of the gauge well.
+        if compact {
+            // Keep each label's space independent: a long authored ammo tag
+            // must not push the current fire mode off the meter.
+            let paired = readout.ammo_type.is_some() && readout.gun_setting_header.is_some();
+            for (label, rect) in [
+                (&readout.ammo_type, COMPACT_TYPE),
+                (&readout.gun_setting_header, COMPACT_MODE),
+            ] {
+                if let Some(label) = label {
+                    canvas.text_fit(
+                        at(origin, if paired { rect } else { COMPACT_DETAIL }),
+                        &label.to_ascii_uppercase(),
+                        FONT,
+                        10.0,
+                        HAlign::Center,
+                        VAlign::Middle,
+                    );
+                }
+            }
+        } else if let Some(ammo_type) = &readout.ammo_type {
             canvas.text_native_fit(
                 at(origin, TYPE_LABEL),
                 &ammo_type.to_ascii_uppercase(),
@@ -631,7 +658,7 @@ mod tests {
                 .iter()
                 .find_map(|element| match element {
                     crate::ui::UiElement::Text { text, position, .. }
-                        if *position == vec2(COUNT.x, COUNT.y) =>
+                        if *position == vec2(COMPACT_COUNT.x, COMPACT_COUNT.y) =>
                     {
                         Some(text.clone())
                     }
@@ -697,6 +724,44 @@ mod tests {
     }
 
     #[test]
+    fn compact_meter_keeps_type_and_live_mode_below_the_bold_count() {
+        let mut readout = AmmoReadout {
+            show_buttons: false,
+            ..full_gun()
+        };
+        for mode in ["NORM", "BURST", "OVERLOAD"] {
+            readout.gun_setting_header = Some(mode.to_string());
+            let canvas = build_readout_canvas(&readout);
+            let labels: Vec<_> = canvas
+                .elements()
+                .iter()
+                .filter_map(|element| match element {
+                    crate::ui::UiElement::Text {
+                        text,
+                        position,
+                        font,
+                        font_size,
+                        ..
+                    } => Some((text.as_str(), *position, font.as_str(), *font_size)),
+                    _ => None,
+                })
+                .collect();
+            assert!(labels.contains(&(
+                "12",
+                vec2(COMPACT_COUNT.x, COMPACT_COUNT.y),
+                "bignum.fon",
+                24.0
+            )));
+            assert!(labels.contains(&("STD", vec2(COMPACT_TYPE.x, COMPACT_TYPE.y), FONT, 10.0)));
+            assert!(labels.contains(&(mode, vec2(COMPACT_MODE.x, COMPACT_MODE.y), FONT, 10.0)));
+        }
+        assert!(COMPACT_COUNT.y + COMPACT_COUNT.h <= COMPACT_TYPE.y);
+        assert!(COMPACT_ICON.x + COMPACT_ICON.w <= COMPACT_COUNT.x);
+        assert!(COMPACT_COUNT.x + COMPACT_COUNT.w <= CONDITION.x);
+        assert!(COMPACT_TYPE.x + COMPACT_TYPE.w <= COMPACT_MODE.x);
+    }
+
+    #[test]
     fn the_psi_amp_shows_its_discipline_on_the_forearm_too() {
         // Tier badge + discipline name = 2, and the amp's meaningless clip is
         // suppressed exactly as in flat.
@@ -716,6 +781,10 @@ mod tests {
             COUNT,
             ICON,
             TYPE_LABEL,
+            COMPACT_COUNT,
+            COMPACT_ICON,
+            COMPACT_TYPE,
+            COMPACT_MODE,
             CONDITION,
             CYCLE_BUTTON,
             SETTING_BUTTON,
@@ -752,6 +821,10 @@ mod tests {
             COUNT,
             ICON,
             TYPE_LABEL,
+            COMPACT_COUNT,
+            COMPACT_ICON,
+            COMPACT_TYPE,
+            COMPACT_MODE,
             CONDITION,
             PSI_TIER_BADGE,
             PSI_POWER_NAME,
