@@ -20,6 +20,7 @@ pub struct Gamesys {
     hrm_params: Option<HrmParams>,
     /// Skill-system tuning (`SKILLPARAM` file-var chunk).
     skill_params: Option<SkillParams>,
+    hazard_params: Option<crate::gamesys::HazardParams>,
 }
 
 impl Gamesys {
@@ -69,6 +70,10 @@ impl Gamesys {
         self.hrm_params.as_ref()
     }
 
+    pub fn hazard_params(&self) -> Option<&crate::gamesys::HazardParams> {
+        self.hazard_params.as_ref()
+    }
+
     pub fn skill_params(&self) -> Option<&SkillParams> {
         self.skill_params.as_ref()
     }
@@ -97,6 +102,7 @@ pub fn read<T: io::Read + io::Seek>(
     let trainer_costs = TrainerCostTables::read(&table_of_contents, reader);
     let hrm_params = HrmParams::read(&table_of_contents, reader);
     let skill_params = SkillParams::read(&table_of_contents, reader);
+    let hazard_params = crate::gamesys::HazardParams::read(&table_of_contents, reader);
 
     // Uncomment to output debug info for voices:
     // debug_print_voices(&sound_schema, &speech_db);
@@ -110,5 +116,6 @@ pub fn read<T: io::Read + io::Seek>(
         trainer_costs,
         hrm_params,
         skill_params,
+        hazard_params,
     }
 }

@@ -202,3 +202,59 @@ mod tests {
         assert_eq!(parsed.inaccuracy_degrees, 11.25);
     }
 }
+
+/// Endurance damage multipliers from STATPARAM (six header fields, eight floats).
+#[derive(Debug, Clone)]
+pub struct HazardParams(pub [f32; 8]);
+impl HazardParams {
+    pub fn read<T: io::Read + io::Seek>(
+        toc: &ChunkFileTableOfContents,
+        reader: &mut T,
+    ) -> Option<Self> {
+        let chunk = toc.get_chunk("STATPARAM".to_owned())?;
+        if chunk.length < 56 {
+            return None;
+        }
+        reader.seek(io::SeekFrom::Start(chunk.offset + 24)).ok()?;
+        let mut values = [0.0; 8];
+        for value in &mut values {
+            *value = reader.read_f32::<LittleEndian>().ok()?;
+            if !value.is_finite() || *value < 0.0 {
+                return None;
+            }
+        }
+        Some(Self(values))
+    }
+}
+
+#[cfg(test)]
+mod hazard_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn hazard_table_follows_six_stat_fields_and_respects_chunk_bounds() {
+        // Minimal chunk file. sStatParams is four ints, two floats, eight
+        // hazard floats; the extra 24 bytes here are NOT a chunk header.
+        let mut bytes = vec![0_u8; 512];
+        bytes[..4].copy_from_slice(&400_u32.to_le_bytes());
+        bytes[400..404].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[404..413].copy_from_slice(b"STATPARAM");
+        bytes[416..420].copy_from_slice(&280_u32.to_le_bytes());
+        bytes[420..424].copy_from_slice(&56_u32.to_le_bytes());
+        for (i, value) in [30_i32, 5, 20, 5, 0, 0].into_iter().enumerate() {
+            bytes[304 + 4 * i..308 + 4 * i].copy_from_slice(&value.to_le_bytes());
+        }
+        let expected = [1.0_f32, 0.94, 0.85, 0.73, 0.58, 0.4, 0.2, 0.01];
+        for (i, value) in expected.iter().enumerate() {
+            bytes[328 + 4 * i..332 + 4 * i].copy_from_slice(&value.to_le_bytes());
+        }
+        let mut reader = Cursor::new(bytes.clone());
+        let toc = crate::ss2_chunk_file_reader::read_table_of_contents(&mut reader);
+        assert_eq!(HazardParams::read(&toc, &mut reader).unwrap().0, expected);
+        bytes[420..424].copy_from_slice(&52_u32.to_le_bytes());
+        let mut reader = Cursor::new(bytes);
+        let toc = crate::ss2_chunk_file_reader::read_table_of_contents(&mut reader);
+        assert!(HazardParams::read(&toc, &mut reader).is_none());
+    }
+}
