@@ -63,10 +63,10 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - Quest VR: reload by hand. Pull a clip out of the cyber interface's inventory
   strip with your free hand and bring it to the gun the other hand is holding -
   the clip goes in and the weapon is loaded. A clip of a different ammo type
-  swaps the type over, returning the rounds already loaded to your pack - that
-  insert is the only way to change ammo type in the headset, so the types you
-  can select are the ones you are carrying clips for. There is no reload or
-  ammo-swap button on the controllers; the gesture is the control.
+  swaps the type over, returning the rounds already loaded to your pack.
+  While holding a clip, tap that hand's upper button (`Y` / `B`) to exchange it
+  for the next compatible ammo type in your backpack; the original clip returns
+  to the pack with its rounds intact. Insert the new clip to load that type.
 - Quest VR: rearrange inventory by gripping an item, pointing at its new
   location, and releasing. Tall items slide up to fit the chosen column.
   The ghost footprint previews the destination: green for placement or merging,
@@ -75,8 +75,11 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - Quest VR: with that hand free, press an upper face button (left `Y` / right
   `B`) to open the newest unread audio log. Press it again to close it; after
   every log is read, it replays the most recently collected log. Holding a
-  weapon, that hand's upper button is the weapon's instead: a gun's fire mode,
-  the psi amp's power selector.
+  weapon, that hand's upper button is the weapon's instead: tap and release to
+  switch a gun's fire mode, or hold for half a second to drop its loaded clip
+  into the world. The cuff ammo meter fills a border and shows `EJECT` during
+  the hold. A completed hold does not also switch modes. The psi amp keeps
+  its power selector.
 - Directly equip a matching carried weapon with the original number-row bindings:
   `1` Wrench, `2` Pistol, `3` Shotgun, `4` Assault Rifle, `5` Laser Pistol,
   `6` EMP Rifle, `7` Electro Shock, `8` Grenade Launcher, `9` Stasis Field

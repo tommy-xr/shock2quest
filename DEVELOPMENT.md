@@ -166,14 +166,23 @@ that hand holds (`shock2vr/src/hand_buttons.rs`):
 | that hand holds | lower (`X`/`A`) | upper (`Y`/`B`) |
 | --- | --- | --- |
 | nothing, a melee weapon, or any other item | `Jump` | `ReadLastUnreadLog` |
-| a gun | `Jump` | `CycleGunSetting` - that hand's gun, so dual wielding switches the one pressed; a gun with one mode is a no-op |
+| a gun | `Jump` | tap/release switches that gun's fire mode; hold ~0.5 s drops its loaded clip, with progress on its cuff meter |
+| an ammo clip | `Jump` | swap with the next compatible carried ammo type, returning the original clip to the backpack |
 | the psi amp | `Jump` | `SelectPsiPower` - the power selection MFD, in the cyber interface |
 
 The lower button is jump unconditionally: it is the one control a player reaches
 for with both hands full, so a held weapon must not take it away. Only the upper
-button is contextual. `EjectClip` and `CyclePsiPower` therefore have no button
-any more - the settings MFD's UNLOAD and the psi MFD's stick navigation cover
-them - though both actions keep their flat keys and HTTP/SDK paths.
+button is contextual. The settings MFD's UNLOAD and `EjectClip` still return rounds to the backpack;
+upper-button holding drops a physical clip instead. `CyclePsiPower` stays on
+the psi MFD's stick navigation. Both actions keep their flat keys and HTTP/SDK paths.
+
+Gun taps fire on release, and a completed hold fires once and swallows release.
+Changing weapons, entering a panel, pausing, death, or a session interruption
+cancels a pending hold. Empty and energy weapons eject nothing. Ammo swaps
+preserve the actual clip entities and counts, skip unavailable or unrelated
+ammo, and refuse if the outgoing clip cannot fit in the backpack. The other
+hand's gun determines compatibility first, then carried guns, then authored
+ammo families when no gun is carried.
 
 Mode first: while the cyber interface is up the lower button keeps its close
 (rather than jumping) and the upper one the log reader, on both hands whatever

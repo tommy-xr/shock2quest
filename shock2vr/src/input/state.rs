@@ -42,6 +42,11 @@ impl InputActionState {
         self.triggered.clear();
     }
 
+    /// Consume an edge while retaining the runtime-owned held state.
+    pub fn consume_trigger(&mut self, action: InputAction) {
+        self.triggered.remove(&action);
+    }
+
     /// Release a held action
     pub fn release(&mut self, action: InputAction) {
         self.held.remove(&action);

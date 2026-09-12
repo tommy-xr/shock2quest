@@ -7648,6 +7648,34 @@ impl MissionCore {
                 // and the physics controller wants a rising edge, not a level.
                 Effect::Jump => self.button_jump = true,
 
+                Effect::HeldGunButton {
+                    hand,
+                    weapon,
+                    long_press,
+                } => {
+                    let held = self.interaction.held_entities();
+                    let in_hand = if hand == crate::Handedness::Left {
+                        held.0
+                    } else {
+                        held.1
+                    };
+                    if !self.use_mode && in_hand == Some(weapon) {
+                        if long_press {
+                            if let Some(cue) = self.drop_loaded_clip(asset_cache, weapon) {
+                                effects.push_back(cue);
+                            }
+                        } else {
+                            let current = crate::scripts::script_util::current_gun_setting(
+                                &self.world,
+                                weapon,
+                            );
+                            effects.push_front(Effect::SetGunSetting {
+                                entity_id: weapon,
+                                setting: i32::from(current == 0),
+                            });
+                        }
+                    }
+                }
                 Effect::EjectClip { hand } => {
                     if let Some(weapon) =
                         crate::wielded_weapon::hand_weapon_target(&self.world, hand)
@@ -7684,6 +7712,9 @@ impl MissionCore {
                         // dual-wielding player switches the mode they meant.
                         Some(crate::input::InputAction::CycleGunSetting) => {
                             effects.push_front(Effect::CycleGunSetting { hand: Some(hand) })
+                        }
+                        Some(crate::input::InputAction::CycleAmmo) => {
+                            effects.extend(self.cycle_held_ammo(asset_cache, hand));
                         }
                         // The amp hand's upper button opens the selection MFD.
                         // It names no hand - there is one psi selection
@@ -10815,6 +10846,126 @@ impl MissionCore {
             name: "bset".to_owned(),
             spatial: false,
         })
+    }
+
+    /// Spawn the actual loaded rounds at the gun's magazine, retaining their type.
+    fn drop_loaded_clip(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        weapon: EntityId,
+    ) -> Option<Effect> {
+        let (template, rounds) = super::reload::world_clip_offer(&self.world, weapon)?;
+        let position = self.magazine_anchor_world(weapon)?;
+        let rotation = self
+            .world
+            .borrow::<View<PropPosition>>()
+            .ok()?
+            .get(weapon)
+            .ok()?
+            .rotation;
+        let clip = self
+            .create_entity_with_position(
+                asset_cache,
+                template,
+                vec3_to_point3(position),
+                rotation,
+                Matrix4::identity(),
+                CreateEntityOptions::default(),
+            )
+            .entity_id;
+        self.world
+            .add_component(clip, dark::properties::PropStackCount(rounds));
+        self.make_physical(clip);
+        super::reload::empty_magazine(&self.world, weapon);
+        Some(crate::scripts::script_util::play_environmental_sound(
+            &self.world,
+            weapon,
+            "reload",
+            vec![],
+            AudioHandle::new(),
+        ))
+    }
+
+    /// Swap actual clips, reserving the outgoing clip's space before changing hands.
+    fn cycle_held_ammo(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        hand: crate::Handedness,
+    ) -> Vec<Effect> {
+        let Some(held) = crate::wielded_weapon::held_by_hand(&self.world, hand) else {
+            return vec![];
+        };
+        if self.interaction.holding_hand(held) != Some(hand)
+            || !super::reload::is_ammo_clip(&self.world, held)
+        {
+            return vec![];
+        }
+        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+        let inventory = player.inventory_entity_id;
+        let other = if hand == crate::Handedness::Left {
+            player.right_hand_entity_id
+        } else {
+            player.left_hand_entity_id
+        };
+        drop(player);
+        let carried =
+            crate::scripts::script_util::get_all_links_with_data(&self.world, inventory, |link| {
+                matches!(link, Link::Contains(_)).then_some(())
+            })
+            .into_iter()
+            .map(|(entity, ())| entity);
+        let candidate = other
+            .into_iter()
+            .chain(carried)
+            .find_map(|gun| super::reload::next_carried_clip(&self.world, gun, held));
+        let candidate = candidate.or_else(|| {
+            super::reload::next_carried_clip_without_gun(&self.world, held, &self.entity_info)
+        });
+        let Some(next) = candidate else {
+            return vec![];
+        };
+        // Removing the incoming clip frees its slot even in a full backpack.
+        // Candidates come only from this inventory, so these are the complete
+        // containment links to restore if the outgoing shape cannot fit.
+        let original_links = self
+            .world
+            .borrow::<View<Links>>()
+            .unwrap()
+            .get(inventory)
+            .unwrap()
+            .clone();
+        self.detach_from_containers(next);
+        if !move_live_entity_into_container(&mut self.world, inventory, held) {
+            self.world.add_component(inventory, original_links);
+            return vec![backpack_full_feedback(held)];
+        }
+        self.interaction.on_entity_destroyed(held);
+        self.make_un_physical(held);
+        self.script_world.dispatch(Message {
+            to: held,
+            payload: MessagePayload::Drop,
+        });
+        let effects = self.grab_entity_into_hand(asset_cache, next, hand);
+        if self.interaction.holding_hand(next) != Some(hand) {
+            self.world.add_component(inventory, original_links);
+            let mut rollback = effects;
+            rollback.extend(self.grab_entity_into_hand(asset_cache, held, hand));
+            return rollback;
+        }
+        let (left, right) = self.interaction.held_entities();
+        {
+            let mut player = self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
+            player.left_hand_entity_id = left;
+            player.right_hand_entity_id = right;
+        }
+        let mut effects = effects;
+        effects.push(Effect::PlaySound {
+            handle: AudioHandle::new(),
+            source: None,
+            name: "bset".to_owned(),
+            spatial: false,
+        });
+        effects
     }
 
     /// Return `weapon`'s loaded rounds to the backpack as clips of the ammo

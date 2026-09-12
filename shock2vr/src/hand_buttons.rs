@@ -18,7 +18,9 @@
 //!
 //! Resolution is pure ([`resolve_hand_button`]) and the world lookup that
 //! feeds it is one function ([`held_kind_in_hand`]), so the whole table is
-//! host-testable. This is contextual input - it reads game state - so it lives
+//! host-testable. Gun taps are delayed until release by `weapon_button_hold`;
+//! its long press ejects instead, before this instantaneous table is dispatched.
+//! This is contextual input - it reads game state - so it lives
 //! beside `VirtualHand` rather than in `ActionDispatcher`, which only handles
 //! actions whose meaning never changes.
 
@@ -46,8 +48,10 @@ pub enum HeldKind {
     Gun,
     /// The psi amp, which owns its hand's buttons for power selection.
     PsiAmp,
-    /// Anything else carried: a clip, a log disc, a medkit.
+    /// Anything else carried: a log disc or a medkit.
     Other,
+    /// A physical ammunition clip.
+    Ammo,
 }
 
 /// Whether the player-owned interface (the cyber interface / use mode) is up.
@@ -65,7 +69,8 @@ pub enum HandButtonMode {
 /// | hand holds | lower (X/A) | upper (Y/B) |
 /// |---|---|---|
 /// | nothing, melee, or any other item | `Jump` | `ReadLastUnreadLog` |
-/// | a gun | `Jump` | `CycleGunSetting` (that hand's gun) |
+/// | a gun | `Jump` | `CycleGunSetting` (tap/release on that hand's gun) |
+/// | an ammo clip | `Jump` | `CycleAmmo` (swap carried clips) |
 /// | the psi amp | `Jump` | `SelectPsiPower` (the selection MFD) |
 ///
 /// **Lower is jump, on both hands, whatever they hold.** Jumping is the one
@@ -103,6 +108,7 @@ pub fn resolve_hand_button(
             HeldKind::Empty | HeldKind::Melee | HeldKind::Other => InputAction::ReadLastUnreadLog,
             // The gun hand's own handling control: its fire mode.
             HeldKind::Gun => InputAction::CycleGunSetting,
+            HeldKind::Ammo => InputAction::CycleAmmo,
             // The amp hand's own control: the power selection MFD, where a
             // power is *chosen* from a described grid. It names no hand -
             // there is one psi selection, not one per amp.
@@ -132,6 +138,8 @@ pub fn held_kind_in_hand(world: &World, hand: Handedness) -> HeldKind {
         .is_ok_and(|guns| guns.get(held).is_ok())
     {
         HeldKind::Gun
+    } else if crate::mission::reload::is_ammo_clip(world, held) {
+        HeldKind::Ammo
     } else {
         HeldKind::Other
     }
@@ -142,12 +150,13 @@ mod tests {
     use super::*;
 
     const HANDS: [Handedness; 2] = [Handedness::Left, Handedness::Right];
-    const HELD: [HeldKind; 5] = [
+    const HELD: [HeldKind; 6] = [
         HeldKind::Empty,
         HeldKind::Melee,
         HeldKind::Gun,
         HeldKind::PsiAmp,
         HeldKind::Other,
+        HeldKind::Ammo,
     ];
 
     fn resolve(held: HeldKind, hand: Handedness, button: HandButton) -> Option<InputAction> {
@@ -193,6 +202,16 @@ mod tests {
                 resolve(HeldKind::Gun, hand, HandButton::Upper),
                 Some(InputAction::CycleGunSetting),
                 "{hand:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ammo_upper_button_cycles_ammo_on_either_hand() {
+        for hand in HANDS {
+            assert_eq!(
+                resolve(HeldKind::Ammo, hand, HandButton::Upper),
+                Some(InputAction::CycleAmmo)
             );
         }
     }
