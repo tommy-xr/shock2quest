@@ -677,16 +677,6 @@ impl PauseMenu {
                 Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H),
                 DEVELOPER_BACKDROP_TEXTURE,
             );
-            let hovered = pointer_canvas.and_then(|point| {
-                target_at(
-                    self.page,
-                    self.panel_rects,
-                    self.panel_scroll,
-                    self.cheats_scroll,
-                    &[],
-                    point,
-                )
-            });
             match self.page {
                 PauseMenuPage::Cheats => cheats_panel::draw(
                     &mut canvas,
@@ -714,11 +704,19 @@ impl PauseMenu {
                             HAlign::Center,
                             VAlign::Middle,
                         )
-                        .opacity(if hovered == Some(PauseMenuTarget::OpenCheats) {
-                            HOVER_OPACITY
-                        } else {
-                            IDLE_OPACITY
-                        });
+                        // The action rect is the only thing `target_at` gives
+                        // precedence over the panel on this page, so the
+                        // highlight is that same test rather than a routed
+                        // event - and cannot disagree with the click.
+                        .opacity(
+                            if pointer_canvas
+                                .is_some_and(|point| self.panel_rects.action_rect().contains(point))
+                            {
+                                HOVER_OPACITY
+                            } else {
+                                IDLE_OPACITY
+                            },
+                        );
                 }
             }
             return canvas;

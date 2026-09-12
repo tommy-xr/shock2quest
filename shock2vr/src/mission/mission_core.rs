@@ -146,6 +146,21 @@ const RAIN_HEIGHT: f32 = 3.5 / SCALE_FACTOR;
 /// coincident bodies apart on resume rather than letting them fall.
 const RAIN_PHASE_STEP: f32 = 2.399_963_2;
 
+/// Minimum arc between neighbouring slots, so the ring grows with the cheat
+/// rather than packing its items tighter. At the fixed 2 ft radius the
+/// eight-item weapon spread put neighbours ~1.5 ft apart - shorter than the
+/// Assault Rifle it spawns, so they started the frame interpenetrating.
+const RAIN_MIN_SPACING: f32 = 2.5 / SCALE_FACTOR;
+
+/// How far short of a wall a slot is pulled. The ring is placed around the
+/// player without regard for the room, so a player standing closer to a wall
+/// than the radius would otherwise drop items straight through it.
+const RAIN_WALL_MARGIN: f32 = 0.5 / SCALE_FACTOR;
+
+/// Extra lift per slot, so items pulled to the same place by neighbouring
+/// walls still fall as a stack rather than starting inside one another.
+const RAIN_SLOT_LIFT: f32 = 0.35 / SCALE_FACTOR;
+
 /// Resolve optional media-reader portrait/icon art before it becomes a shared
 /// UI image. STR tables author extension-less PCX-era names, while replacement
 /// layers may provide the same art under a modern encoding (SCP's Earth
@@ -10099,14 +10114,34 @@ impl MissionCore {
                     // they visibly fall. Deterministic, not random - a capture
                     // or an e2e assertion must be able to repeat the layout.
                     let count = template_ids.len() as f32;
+                    // Grow the ring with the cheat instead of packing a longer
+                    // list into the same circle.
+                    let radius = RAIN_RADIUS.max(count * RAIN_MIN_SPACING / std::f32::consts::TAU);
                     let phase = RAIN_PHASE_STEP * self.rains_landed as f32;
                     self.rains_landed = self.rains_landed.wrapping_add(1);
                     for (index, template_id) in template_ids.iter().enumerate() {
                         let angle = phase + std::f32::consts::TAU * index as f32 / count;
+                        let direction = vec3(angle.cos(), 0.0, angle.sin());
+                        // Keep the slot on the player's side of the walls: the
+                        // ring knows nothing about the room, so in a duct or
+                        // against a wall the naive point is through it.
+                        let reach = match self.physics.ray_cast2(
+                            pos,
+                            direction,
+                            radius,
+                            crate::physics::InternalCollisionGroups::WORLD,
+                            None,
+                            true,
+                        ) {
+                            Some(hit) => {
+                                ((hit.hit_point - pos).magnitude() - RAIN_WALL_MARGIN).max(0.0)
+                            }
+                            None => radius,
+                        };
                         let offset = vec3(
-                            RAIN_RADIUS * angle.cos(),
-                            RAIN_HEIGHT,
-                            RAIN_RADIUS * angle.sin(),
+                            direction.x * reach,
+                            RAIN_HEIGHT + index as f32 * RAIN_SLOT_LIFT,
+                            direction.z * reach,
                         );
                         self.create_entity_with_position(
                             asset_cache,

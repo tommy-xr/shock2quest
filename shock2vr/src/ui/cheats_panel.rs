@@ -28,19 +28,10 @@ use super::{
     list_scroll::{self, ListGeometry, ListHit, ScrollHalf},
 };
 
-/// The frontend screens are authored on the original 640x480 canvas.
-const CANVAS_W: f32 = 640.0;
-const CANVAS_H: f32 = 480.0;
-
 /// Display font for the header and "Done"; the small data font for the rows
 /// that read as data - the pairing every list on this frame uses.
 const MENU_FONT: &str = "metafont.fon";
 const ROW_FONT: &str = "mainfont.fon";
-
-/// Row pitch and text inset of the debug-scene launcher's list, so a cheat row
-/// and a scene row are the same row.
-const ROW_H: f32 = 19.0;
-const TEXT_INSET: f32 = 8.0;
 
 /// Opacity for a widget the pointer is not over, and for the one it is -
 /// [`dev_params_panel`](super::dev_params_panel)'s pair, so the two developer
@@ -105,14 +96,10 @@ pub enum CheatsEvent {
     Done,
 }
 
-/// The list's geometry, shared with every other frontend list.
+/// The list's geometry: the same name list the debug-scene launcher uses, so
+/// a cheat row and a scene row really are the same row.
 fn list(rects: PanelRects) -> ListGeometry {
-    ListGeometry {
-        pane: rects.list_rect(),
-        bottom_limit: FIELD_TOP_Y,
-        row_h: ROW_H,
-        text_inset: TEXT_INSET,
-    }
+    list_scroll::name_list(rects.list_rect(), FIELD_TOP_Y)
 }
 
 /// The event at a canvas point, if any. Shared by the click and the hover
@@ -228,23 +215,6 @@ pub fn activate(
     }
 }
 
-/// The whole page, as a standalone canvas. Used by the tests; the pause
-/// overlay draws into its own canvas via [`draw`].
-#[cfg(test)]
-fn build_canvas(
-    rects: PanelRects,
-    scroll: usize,
-    pointer_canvas: Option<Vector2<f32>>,
-) -> UiCanvas {
-    let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
-    canvas.image(
-        super::Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H),
-        super::dev_params_panel::BACKDROP_TEXTURE,
-    );
-    draw(&mut canvas, rects, scroll, pointer_canvas);
-    canvas
-}
-
 #[cfg(test)]
 mod tests {
     use super::{super::UiElement, *};
@@ -319,13 +289,15 @@ mod tests {
     #[test]
     fn clicking_bare_backdrop_does_nothing() {
         let rects = PanelRects::default();
-        assert_eq!(hit(rects, 0, vec2(5.0, CANVAS_H - 5.0)), None);
+        // Bottom-left of the frame: outside the pane, the rocker and Done.
+        assert_eq!(hit(rects, 0, vec2(5.0, 475.0)), None);
     }
 
     /// The page renders on the developer frame, with a row per cheat.
     #[test]
     fn the_page_draws_a_row_per_cheat() {
-        let canvas = build_canvas(PanelRects::default(), 0, None);
+        let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
+        draw(&mut canvas, PanelRects::default(), 0, None);
         let drawn: Vec<&str> = canvas
             .elements()
             .iter()

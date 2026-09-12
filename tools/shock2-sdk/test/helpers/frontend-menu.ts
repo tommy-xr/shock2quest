@@ -29,6 +29,46 @@ export async function clickMenuEntry(game: GameServer, index: number): Promise<v
   await game.step({ frames: 5 });
 }
 
+/**
+ * The pause overlay's entries, in CANVAS pixels. SIMR.BIN stacks five 179x76
+ * buttons at x=400, top 20, on a 92px pitch, in screen order: 0 "Continue",
+ * 1 "Save", 2 "Load", 3 the repurposed Options/Developer slot, 4 "Quit".
+ *
+ * Canvas pixels, not normalized, so it composes with `clickCanvas` like every
+ * other point constant - the two copies this replaced had diverged on exactly
+ * that, one normalized and one not, under the same name.
+ */
+export const pauseEntry = (index: number): [number, number] => [
+  400 + 179 / 2,
+  20 + index * 92 + 76 / 2,
+];
+
+/**
+ * The developer frame's two framed buttons (GAMELODR.BIN rects 2 and 3), in
+ * canvas pixels: the upper one opens a sub-page (the scene launcher on the
+ * main menu, the Cheats page in-game), "Done" leaves.
+ */
+export const DEV_ACTION: [number, number] = [527 + 96 / 2, 161 + 62 / 2];
+export const DEV_DONE: [number, number] = [527 + 95 / 2, 405 + 62 / 2];
+
+/**
+ * Click a point given in CANVAS pixels with the flat pointer. Clicks are
+ * rising-edge, so the press has to start on a frame where the previous one
+ * was unpressed.
+ */
+export async function clickCanvas(
+  game: GameServer,
+  [x, y]: [number, number],
+): Promise<void> {
+  await game.input.set("pointer.position", norm(x, y));
+  await game.input.set("pointer.pressed", 0);
+  await game.step({ frames: 3 });
+  await game.input.set("pointer.pressed", 1);
+  await game.step({ frames: 3 });
+  await game.input.set("pointer.pressed", 0);
+  await game.step({ frames: 3 });
+}
+
 // The VR menu is the same canvas on a world-space panel, driven by a controller
 // ray instead of a cursor. The runtime's VR head yaw is +90 degrees (the camera
 // looks along -X), so the panel hangs at x=-2 facing back at the head: canvas +x

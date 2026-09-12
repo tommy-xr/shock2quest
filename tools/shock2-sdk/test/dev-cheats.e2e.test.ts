@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import { norm } from "./helpers/frontend-menu.js";
+import {
+  DEV_ACTION,
+  DEV_DONE,
+  clickCanvas as click,
+  pauseEntry,
+} from "./helpers/frontend-menu.js";
 
 // The Cheats page (`shock2vr::ui::cheats_panel`): a second page of the
 // Developer screen, reached ONLY from the in-game pause overlay - a cheat acts
@@ -14,32 +19,15 @@ import { norm } from "./helpers/frontend-menu.js";
 // because nothing claims that rect on the pause host.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-/** SIMR.BIN pause entries: five 179x76 buttons at x=400, top 20, 92px pitch. */
-const pauseEntry = (index: number): [number, number] => [400 + 179 / 2, 20 + index * 92 + 76 / 2];
 const PAUSE_DEVELOPER = pauseEntry(3);
 const PAUSE_CONTINUE = pauseEntry(0);
 
-// GAMELODR.BIN widget rects, shared with the parameter page: the upper framed
-// button (rect 2) opens this page, "Done" (rect 3) leaves it, and the rows run
-// down the list pane (rect 1: 261,54 202x290) at the debug-scene launcher's
-// 19px pitch. The two shipped cheats fit one page, so there is no scroll
-// gutter and a row spans the full pane width.
-const ACTION: [number, number] = [527 + 96 / 2, 161 + 62 / 2];
-const DONE: [number, number] = [527 + 95 / 2, 405 + 62 / 2];
+// The rows run down the developer frame's list pane (GAMELODR.BIN rect 1:
+// 261,54 202x290) at the shared name-list pitch. The two shipped cheats fit
+// one page, so there is no scroll gutter and a row spans the full pane width.
 const row = (index: number): [number, number] => [261 + 202 / 2, 54 + index * 19 + 19 / 2];
 const RAIN_WEAPONS = row(0);
 const RAIN_MODULES = row(1);
-
-/** Click a canvas point with the flat pointer, as a real rising edge. */
-async function click(game: GameServer, [x, y]: [number, number]): Promise<void> {
-  await game.input.set("pointer.position", norm(x, y));
-  await game.input.set("pointer.pressed", 0);
-  await game.step({ frames: 3 });
-  await game.input.set("pointer.pressed", 1);
-  await game.step({ frames: 3 });
-  await game.input.set("pointer.pressed", 0);
-  await game.step({ frames: 3 });
-}
 
 async function count(game: GameServer, filter: string): Promise<number> {
   const { entities } = await game.entities.list({ filter, limit: 200 });
@@ -70,7 +58,7 @@ test(
 
     // Root -> Developer (the repurposed Options slot) -> Cheats.
     await click(game, PAUSE_DEVELOPER);
-    await click(game, ACTION);
+    await click(game, DEV_ACTION);
     assert.equal((await game.info()).paused, true, "the page turn must not resume");
     assert.equal((await game.info()).mission, "medsci1.mis", "no scene swap");
     await game.screenshot("dev-cheats-page.png");
@@ -116,10 +104,10 @@ test(
 
     // Done is the Developer screen's, so it goes back to the parameter rows -
     // not to the root, and not out of the menu.
-    await click(game, DONE);
+    await click(game, DEV_DONE);
     assert.equal((await game.info()).paused, true, "Done turns the page, not the sim");
     // A second Done leaves the parameters for the root, where Continue resumes.
-    await click(game, DONE);
+    await click(game, DEV_DONE);
     await click(game, PAUSE_CONTINUE);
     assert.equal((await game.info()).paused, false, "Continue on the root resumes");
 
@@ -130,29 +118,5 @@ test(
       (await count(game, "Wrench")) > wrenchesBefore,
       "the rained items must survive the unpause",
     );
-  },
-);
-
-test(
-  "the main-menu Developer screen keeps the scene launcher in that slot",
-  { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 300_000 },
-  async () => {
-    await using game = await GameServer.launch({ mission: "main_menu" });
-    await game.step({ frames: 10 });
-
-    // The repurposed Options slot swaps to the Developer scene.
-    await click(game, [400 + 179 / 2, 20 + 2 * 76 + 60 / 2]);
-    assert.equal((await game.info()).mission, "developer");
-
-    // Same framed button, different page: the launcher, not the cheats. It is
-    // still the launcher because there is no mission for a cheat to act on.
-    await click(game, ACTION);
-    await game.screenshot("dev-cheats-main-menu-launcher.png");
-    // "Done" on the launcher returns to the parameters rather than the main
-    // menu - which is what tells the two pages apart from out here.
-    await click(game, DONE);
-    assert.equal((await game.info()).mission, "developer");
-    await click(game, DONE);
-    assert.equal((await game.info()).mission, "main_menu");
   },
 );

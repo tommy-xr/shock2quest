@@ -1593,18 +1593,7 @@ impl Game {
             |entity_id| util::get_entity_position(world, entity_id),
         );
 
-        // Handle global effects
-        let global_effects = self.active_game_scene.handle_effects(
-            effects,
-            &self.global_context,
-            &self.options,
-            &mut self.asset_cache,
-            &mut self.audio_context,
-        );
-
-        for effect in global_effects {
-            self.handle_global_effect(effect);
-        }
+        self.apply_scene_effects(effects);
     }
 
     /// The clock the active scene sees: wall time with every suspended frame
@@ -1783,10 +1772,10 @@ impl Game {
         self.pause_menu.open();
     }
 
-    /// Hand effects to the active scene while it is suspended, forwarding
-    /// whatever global effects come back. `handle_effects` stays callable
-    /// while the scene's `update` is skipped, which is what lets the pause
-    /// overlay act on the scene underneath it.
+    /// Hand effects to the active scene, forwarding whatever global effects
+    /// come back. Used by the ordinary update and by the pause overlay alike:
+    /// `handle_effects` stays callable while the scene's `update` is skipped,
+    /// which is what lets the overlay act on the scene underneath it.
     fn apply_scene_effects(&mut self, effects: Vec<Effect>) {
         let global_effects = self.active_game_scene.handle_effects(
             effects,

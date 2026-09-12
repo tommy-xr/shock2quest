@@ -76,14 +76,6 @@ const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 const MENU_FONT: &str = "metafont.fon";
 const LIST_FONT: &str = "mainfont.fon";
 
-/// Row pitch of the launcher's list, matching the load screen's save rows -
-/// the same art, the same font, the same rows.
-const SCENE_ROW_H: f32 = 19.0;
-/// Horizontal inset for a scene name, on both edges of the row so the text
-/// clears the pane's border. Hit-testing uses the whole row, so it costs no
-/// click.
-const SCENE_TEXT_INSET: f32 = 8.0;
-
 /// Opacity for a button that cannot be acted on, one that can, and the
 /// selected row / hovered button - the load screen's three levels.
 const DISABLED_OPACITY: f32 = 0.3;
@@ -181,14 +173,9 @@ fn scene_count() -> usize {
 }
 
 /// The launcher list's geometry - paging, the gutter rocker and the
-/// slot-to-entry mapping - shared with every other frontend list.
+/// slot-to-entry mapping - shared with every other frontend name list.
 fn scene_list(rects: PanelRects) -> list_scroll::ListGeometry {
-    list_scroll::ListGeometry {
-        pane: rects.list_rect(),
-        bottom_limit: FIELD_TOP_Y,
-        row_h: SCENE_ROW_H,
-        text_inset: SCENE_TEXT_INSET,
-    }
+    list_scroll::name_list(rects.list_rect(), FIELD_TOP_Y)
 }
 
 fn scene_visible_rows(
