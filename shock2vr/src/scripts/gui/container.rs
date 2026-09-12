@@ -116,6 +116,19 @@ const LOOT_GRID_TOP_MARGIN: f32 = 34.0;
 /// paperdoll owns everything right of x = 527.
 const BACKPACK_GRID_ORIGIN: Vector2<f32> = Vector2::new(4.0, 17.0);
 
+/// The same cell pitch and origin used by the backpack's item icons.
+pub fn backpack_footprint_rect(
+    cell: (usize, usize),
+    dimensions: (usize, usize),
+) -> crate::ui::Rect {
+    crate::ui::Rect::new(
+        BACKPACK_GRID_ORIGIN.x + SLOT_PITCH.x * cell.0 as f32,
+        BACKPACK_GRID_ORIGIN.y + SLOT_PITCH.y * cell.1 as f32,
+        SLOT_PITCH.x * dimensions.0 as f32,
+        SLOT_PITCH.y * dimensions.1 as f32,
+    )
+}
+
 /// `res/iface/BLOCK.PCX` is authored to cover one cell's 34x32 interior,
 /// leaving the separators in `INVBACK.PCX` visible around it.
 const BLOCK_SIZE: Vector2<f32> = Vector2::new(34.0, 32.0);

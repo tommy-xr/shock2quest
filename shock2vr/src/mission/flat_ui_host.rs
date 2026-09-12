@@ -238,6 +238,8 @@ pub struct FlatUiHost {
     /// The item lifted onto the cursor (the original's "cursor IS the item"
     /// drag, §2.4). `Some` between a lift and the place/throw that clears it.
     cursor_item: Option<CursorItem>,
+    /// Resolved inventory destination, drawn by the shared canvas in both presentations.
+    placement_preview: Option<PlacementPreview>,
     /// The most recent lift, for double-click (wield) detection. Counts down
     /// each frame and clears when the window elapses.
     last_lift: Option<LiftMark>,
@@ -293,6 +295,39 @@ struct StripSlot {
     components: Vec<GuiComponentRenderInfo>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PlacementStatus {
+    Place,
+    Merge,
+    AutoPlace,
+    NoRoom,
+}
+
+impl PlacementStatus {
+    pub(super) fn text(self) -> &'static str {
+        match self {
+            Self::Place => "RELEASE TO PLACE",
+            Self::Merge => "RELEASE TO MERGE",
+            Self::AutoPlace => "AUTO-PLACE ON RELEASE",
+            Self::NoRoom => "NO ROOM - RELEASE DROPS ITEM",
+        }
+    }
+
+    fn outline_texture(self) -> &'static str {
+        match self {
+            Self::Place | Self::Merge => "iface/resprog.pcx",
+            Self::AutoPlace => "HPBAR1.PCX",
+            Self::NoRoom => "HPBAR0.PCX",
+        }
+    }
+}
+
+struct PlacementPreview {
+    rect: Rect,
+    icon: Option<String>,
+    status: PlacementStatus,
+}
+
 impl FlatUiHost {
     pub fn new() -> FlatUiHost {
         FlatUiHost {
@@ -301,6 +336,7 @@ impl FlatUiHost {
             components: Vec::new(),
             strip: None,
             cursor_item: None,
+            placement_preview: None,
             last_lift: None,
             readouts: None,
             sticky_panel: false,
@@ -362,6 +398,30 @@ impl FlatUiHost {
         );
         let grid = crate::inventory::grid_for(world, strip.entity);
         crate::scripts::gui::backpack_cell_at(panel_pos, grid)
+    }
+
+    pub(super) fn set_placement_preview(
+        &mut self,
+        world: &World,
+        preview: Option<(EntityId, (usize, usize), (usize, usize), PlacementStatus)>,
+    ) {
+        self.placement_preview = preview.and_then(|(entity, cell, dimensions, status)| {
+            let strip = self.strip.as_ref()?;
+            let rect = self.strip_rect()?;
+            let size = strip.size_px?;
+            let footprint = crate::scripts::gui::backpack_footprint_rect(cell, dimensions);
+            let footprint = Rect::new(
+                rect.x + footprint.x * rect.w / size.x,
+                rect.y + footprint.y * rect.h / size.y,
+                footprint.w * rect.w / size.x,
+                footprint.h * rect.h / size.y,
+            );
+            Some(PlacementPreview {
+                rect: footprint,
+                icon: make_cursor_item(world, entity).icon,
+                status,
+            })
+        });
     }
 
     /// The item currently held on the cursor mid-drag (for `/v1/ui` `cursor`).
@@ -517,7 +577,10 @@ impl FlatUiHost {
 
     /// The mini-frame's current name line, for `GET /v1/ui`.
     pub fn name_strip_debug(&self) -> Option<String> {
-        self.name_strip.clone()
+        self.placement_preview
+            .as_ref()
+            .map(|preview| preview.status.text().to_owned())
+            .or_else(|| self.name_strip.clone())
     }
 
     /// Swallow a button that is already held as the host takes over input, so
@@ -676,6 +739,7 @@ impl FlatUiHost {
     /// strip just stashes and re-anchors it.
     pub fn set_strip(&mut self, entity: Option<EntityId>) {
         self.utilities = Default::default();
+        self.placement_preview = None;
         // The readout belongs to the bar: leaving use mode must not leave a
         // stale name behind for `/v1/ui` (the mission's per-frame update runs
         // before the effect that unbinds the strip).
@@ -1336,7 +1400,15 @@ impl FlatUiHost {
             // pixels - both presentations map this rect (AGENTS.md 3).
             let (frame, text) = name_strip_rects(rect);
             canvas.image(frame, "frame.pcx");
-            if let Some(name) = self.name_strip.as_deref() {
+            if let Some(preview) = self.placement_preview.as_ref() {
+                canvas.text_native_fit(
+                    text,
+                    preview.status.text(),
+                    NAME_STRIP_FONT,
+                    HAlign::Left,
+                    VAlign::Middle,
+                );
+            } else if let Some(name) = self.name_strip.as_deref() {
                 canvas.text_native_fit(text, name, NAME_STRIP_FONT, HAlign::Left, VAlign::Middle);
             } else if self.shoulder_weapons.iter().any(Option::is_some) {
                 canvas.text_native_fit(
@@ -1358,6 +1430,24 @@ impl FlatUiHost {
                     "closeoff.pcx"
                 },
             );
+        }
+        if strip_rect.is_some() {
+            if let Some(preview) = self.placement_preview.as_ref() {
+                let rect = preview.rect;
+                if let Some(icon) = &preview.icon {
+                    canvas.fitted_object_icon(rect, icon).opacity(0.45);
+                }
+                // Four explicit edges keep the full destination visible without
+                // stretching the frame art over the item's silhouette.
+                for edge in [
+                    Rect::new(rect.x, rect.y, rect.w, 2.0),
+                    Rect::new(rect.x, rect.y + rect.h - 2.0, rect.w, 2.0),
+                    Rect::new(rect.x, rect.y, 2.0, rect.h),
+                    Rect::new(rect.x + rect.w - 2.0, rect.y, 2.0, rect.h),
+                ] {
+                    canvas.image(edge, preview.status.outline_texture());
+                }
+            }
         }
         if let Some(cursor) = self.cursor_canvas {
             // The cursor IS the lifted item: draw its icon in place of the
@@ -1447,6 +1537,18 @@ impl FlatUiHost {
             (Some(strip), Some(rect)) => {
                 let mut elements =
                     self.elements_for(world, &strip.components, rect, self.held_entity());
+                if let Some(preview) = self.placement_preview.as_ref() {
+                    let footprint = preview.rect;
+                    elements.push(crate::game_scene::DebugUiElement {
+                        kind: "image".to_owned(),
+                        texture: Some(preview.status.outline_texture().to_owned()),
+                        text: None,
+                        label: Some(preview.status.text().to_owned()),
+                        entity_id: None,
+                        rect: [footprint.x, footprint.y, footprint.w, footprint.h],
+                        screen_rect: self.to_screen_rect(footprint),
+                    });
+                }
                 elements.extend(
                     self.utilities
                         .debug_elements()
@@ -2508,6 +2610,31 @@ mod tests {
             &[strip_item(wrench, 0)],
         );
         (world, host, wrench, inventory)
+    }
+
+    #[test]
+    fn placement_preview_uses_shared_canvas_and_clears_with_strip() {
+        let (mut world, mut host, wrench, inventory) = drag_world();
+        world.add_component(inventory, crate::inventory::PlayerInventoryEntity {});
+        host.set_placement_preview(
+            &world,
+            Some((wrench, (5, 0), (1, 3), PlacementStatus::Place)),
+        );
+        let preview = host
+            .strip_debug_elements(&world)
+            .into_iter()
+            .find(|element| element.label.as_deref() == Some("RELEASE TO PLACE"))
+            .unwrap();
+        let canvas = host.build_canvas().unwrap();
+        assert!(canvas.elements().iter().any(|element| matches!(element,
+            UiElement::Text { text, .. } if text == "RELEASE TO PLACE"
+        )));
+        assert_eq!(host.name_strip_debug().as_deref(), Some("RELEASE TO PLACE"));
+        let cell = host.strip_cell_at(vec2(preview.rect[0] + 1.0, preview.rect[1] + 1.0), &world);
+        assert_eq!(cell, Some((5, 0)));
+        host.set_strip(None);
+        assert!(host.placement_preview.is_none());
+        assert!(host.name_strip_debug().is_none());
     }
 
     #[test]

@@ -248,6 +248,23 @@ impl Inventory {
         true
     }
 
+    /// Keep a pointed-at item's footprint inside the grid. Near the bottom or
+    /// right edge, slide its origin back just enough to fit; never move over
+    /// another item or treat an off-grid pointer as a valid target.
+    pub fn placement_at(
+        &self,
+        target: (usize, usize),
+        dimensions: (usize, usize),
+    ) -> Option<(usize, usize)> {
+        let (width, height) = dimensions;
+        if target.0 >= self.width || target.1 >= self.height || width == 0 || height == 0 {
+            return None;
+        }
+        let x = target.0.min(self.width.checked_sub(width)?);
+        let y = target.1.min(self.height.checked_sub(height)?);
+        self.has_capacity(x, y, width, height).then_some((x, y))
+    }
+
     pub fn all_items(&self) -> impl Iterator<Item = &ContainedEntityInfo> {
         self.items.iter()
     }
@@ -432,6 +449,22 @@ mod tests {
             .find(|i| i.entity == entity)
             .map(|i| (i.x, i.y))
             .expect("item should be laid out")
+    }
+
+    #[test]
+    fn pointed_footprints_slide_inside_edges_without_crossing_occupants() {
+        let mut inventory = Inventory::new(8, 3);
+        for row in 0..3 {
+            assert_eq!(inventory.placement_at((5, row), (1, 3)), Some((5, 0)));
+        }
+        assert_eq!(inventory.placement_at((7, 2), (2, 2)), Some((6, 1)));
+        assert_eq!(inventory.placement_at((8, 1), (1, 1)), None);
+        assert_eq!(inventory.placement_at((2, 1), (1, 4)), None);
+        assert_eq!(inventory.placement_at((2, 1), (0, 1)), None);
+        let item = entities(1)[0];
+        inventory.insert_if_fits(item, 5, 0, 1, 1);
+        assert_eq!(inventory.placement_at((5, 1), (1, 3)), None);
+        assert_eq!(inventory.placement_at((4, 1), (1, 3)), Some((4, 0)));
     }
 
     /// An item keeps the cell stored on its containment link - it is not
