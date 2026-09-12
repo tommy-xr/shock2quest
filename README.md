@@ -77,8 +77,9 @@ However, you can play with a keyboard and a mouse, using the following hard-code
   every log is read, it replays the most recently collected log. Holding a
   weapon, that hand's upper button is the weapon's instead: tap and release to
   switch a gun's fire mode, or hold for half a second to drop its loaded clip
-  into the world. The cuff ammo meter fills a border and shows `EJECT` during
-  the hold. A completed hold does not also switch modes. The psi amp keeps
+  into the world. A thin line fills left to right along the bottom of the cuff
+  ammo meter, which shows `EJECT` during the hold. A completed hold does not
+  also switch modes. The psi amp keeps
   its power selector.
 - Directly equip a matching carried weapon with the original number-row bindings:
   `1` Wrench, `2` Pistol, `3` Shotgun, `4` Assault Rifle, `5` Laser Pistol,

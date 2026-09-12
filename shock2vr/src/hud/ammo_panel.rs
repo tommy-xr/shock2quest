@@ -443,48 +443,16 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoRe
     }
 
     if let Some(progress) = readout.eject_progress {
-        // Shared canvas pixels: a clockwise border fills around the gauge.
-        let mut remaining = progress.clamp(0.0, 1.0) * 242.0;
-        for (edge, rect) in [
-            Rect::new(175.0, 11.0, 76.0, 2.0),
-            Rect::new(249.0, 13.0, 2.0, 45.0),
-            Rect::new(175.0, 56.0, 76.0, 2.0),
-            Rect::new(175.0, 11.0, 2.0, 45.0),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let length = if rect.w > rect.h { rect.w } else { rect.h };
-            let fraction = (remaining / length).clamp(0.0, 1.0);
-            remaining -= length;
-            if fraction > 0.0 {
-                let filled = if rect.w > rect.h {
-                    Rect::new(
-                        rect.x
-                            + if edge == 2 {
-                                rect.w * (1.0 - fraction)
-                            } else {
-                                0.0
-                            },
-                        rect.y,
-                        rect.w * fraction,
-                        rect.h,
-                    )
-                } else {
-                    Rect::new(
-                        rect.x,
-                        rect.y
-                            + if edge == 3 {
-                                rect.h * (1.0 - fraction)
-                            } else {
-                                0.0
-                            },
-                        rect.w,
-                        rect.h * fraction,
-                    )
-                };
-                canvas.image(at(origin, filled), "HPBAR.PCX");
-            }
+        // One thin line along the gauge's bottom, filling left to right.
+        // Sample only a plain center texel so the health-bar art does not stretch.
+        let width = 76.0 * progress.clamp(0.0, 1.0);
+        if width > 0.0 {
+            canvas.cropped_image(
+                at(origin, Rect::new(175.0, 56.0, width, 1.0)),
+                "HPBAR.PCX",
+                Rect::new(40.0, 7.0, 1.0, 1.0),
+                vec2(80.0, 14.0),
+            );
         }
     }
 
