@@ -1308,11 +1308,7 @@ impl ScriptWorld {
             }
             "toxinpatch" => Box::new(hazard_objects::HazardObject::ToxinPatch),
             "triggerecology" => Box::new(TriggerEcology::new()),
-            // Retail's difficulty variant applies shock.cfg/difficulty
-            // population adjustments before entering this same state machine.
-            // The port has neither setting yet, so its authored baseline is
-            // identical to TriggerEcology.
-            "triggerecologydiff" => Box::new(TriggerEcology::new()),
+            "triggerecologydiff" => Box::new(TriggerEcology::new_diff()),
             "unhackhack" => Box::new(UnimplementedScript::new(&script_name)),
             _ => Box::new(PanicOnLoadScript { name: script_name }),
         }

@@ -28,6 +28,7 @@ struct TriggerEcologyState {
 /// A security `Alarm` switches to the alert-column population profile until
 /// the authored recovery window expires or a `Reset` arrives.
 pub struct TriggerEcology {
+    difficulty_aware: bool,
     seconds_until_poll: f32,
     recovery_seconds_remaining: Option<f32>,
 }
@@ -35,8 +36,44 @@ pub struct TriggerEcology {
 impl TriggerEcology {
     pub fn new() -> Self {
         Self {
+            difficulty_aware: false,
             seconds_until_poll: 0.0,
             recovery_seconds_remaining: None,
+        }
+    }
+
+    pub fn new_diff() -> Self {
+        Self {
+            difficulty_aware: true,
+            ..Self::new()
+        }
+    }
+
+    fn is_easy(&self, world: &World) -> bool {
+        self.difficulty_aware
+            && world
+                .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+                .ok()
+                .is_some_and(|q| q.difficulty() == dark::gamesys::Difficulty::Easy)
+    }
+    fn period(&self, world: &World, authored: f32) -> f32 {
+        authored.max(0.0) * if self.is_easy(world) { 2.0 } else { 1.0 }
+    }
+    fn population_params(
+        &self,
+        world: &World,
+        minimum: i32,
+        maximum: i32,
+        random: i32,
+    ) -> (i32, i32, i32) {
+        if self.is_easy(world) {
+            (
+                if minimum > 1 { minimum - 1 } else { minimum },
+                if maximum > 1 { maximum - 1 } else { maximum },
+                random.saturating_mul(2),
+            )
+        } else {
+            (minimum, maximum, random)
         }
     }
 
@@ -133,9 +170,12 @@ impl TriggerEcology {
             ECOLOGY_STATE_ALERT => ECOLOGY_STATE_ALERT as usize,
             _ => return Effect::NoEffect,
         };
-        let minimum = ecology.min_count[state_index];
-        let maximum = ecology.max_count[state_index];
-        let random_chance = ecology.random_chance[state_index];
+        let (minimum, maximum, random_chance) = self.population_params(
+            world,
+            ecology.min_count[state_index],
+            ecology.max_count[state_index],
+            ecology.random_chance[state_index],
+        );
         let population = Self::population(world, ecology_type.0) as i32;
         let random_hit = random_chance > 0 && rand::thread_rng().gen_range(0..random_chance) == 0;
         if Self::should_spawn(population, minimum, maximum, random_hit) {
@@ -151,7 +191,7 @@ impl Script for TriggerEcology {
         let ecologies = world.borrow::<View<PropEcology>>().unwrap();
         self.seconds_until_poll = ecologies
             .get(entity_id)
-            .map(|ecology| ecology.period_seconds.max(0.0))
+            .map(|ecology| self.period(world, ecology.period_seconds))
             .unwrap_or(0.0);
         drop(ecologies);
         // Legacy saves persist the alerted `P$EcoState` but carry no private
@@ -180,7 +220,7 @@ impl Script for TriggerEcology {
                 ecologies
                     .get(entity_id)
                     .ok()
-                    .map(|ecology| ecology.period_seconds.max(0.0))
+                    .map(|ecology| self.period(world, ecology.period_seconds))
             });
         let Some(period_seconds) = period_seconds else {
             return Effect::NoEffect;
@@ -302,6 +342,54 @@ mod tests {
 
     use super::*;
     use crate::runtime_props::RuntimePropCanonicalTemplateId;
+
+    #[test]
+    fn easy_diff_ecology_scales_derived_values_without_mutating_authored_data() {
+        for difficulty in dark::gamesys::Difficulty::ALL {
+            let world = World::new();
+            world.add_unique(crate::quest_info::QuestInfo::with_difficulty(difficulty));
+            let diff = TriggerEcology::new_diff();
+            let plain = TriggerEcology::new();
+            let easy = difficulty == dark::gamesys::Difficulty::Easy;
+            assert_eq!(diff.period(&world, 15.0), if easy { 30.0 } else { 15.0 });
+            assert_eq!(
+                diff.population_params(&world, 2, 4, 3),
+                if easy { (1, 3, 6) } else { (2, 4, 3) }
+            );
+            assert_eq!(diff.population_params(&world, 0, 1, 0), (0, 1, 0));
+            assert_eq!(plain.period(&world, 15.0), 15.0);
+            assert_eq!(plain.population_params(&world, 2, 4, 3), (2, 4, 3));
+        }
+    }
+    #[test]
+    fn easy_diff_ecology_initializes_and_rearms_with_doubled_period() {
+        let mut world = World::new();
+        world.add_unique(crate::quest_info::QuestInfo::with_difficulty(
+            dark::gamesys::Difficulty::Easy,
+        ));
+        let entity = world.add_entity((
+            ecology_props([0; 3], [0; 3], [0.0; 3], [0; 3]),
+            PropEcoType(1),
+        ));
+        let mut script = TriggerEcology::new_diff();
+        script.initialize(entity, &world);
+        assert_eq!(script.seconds_until_poll, 30.0);
+        step(&mut script, entity, &world, 15);
+        assert_eq!(script.seconds_until_poll, 15.0);
+        let saved = script.save_state().unwrap();
+        let mut restored = TriggerEcology::new_diff();
+        restored
+            .restore_state(&saved, &ScriptRestoreContext::new(&HashMap::new()))
+            .unwrap();
+        assert_eq!(
+            restored.seconds_until_poll, 15.0,
+            "restore retains the remaining time without rescaling"
+        );
+        assert!(restored.difficulty_aware);
+        script = restored;
+        step(&mut script, entity, &world, 15);
+        assert_eq!(script.seconds_until_poll, 30.0);
+    }
 
     fn ecology_props(
         min_count: [i32; 3],
