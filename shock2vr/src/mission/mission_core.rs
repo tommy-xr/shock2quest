@@ -12516,7 +12516,7 @@ impl MissionCore {
                 // origin. Expose the actual belt distance, not that asset origin.
                 let belt_center = player.pos
                     + player.rotation.rotate_vector(body.front(
-                        0.55,
+                        crate::dev_params::get(crate::dev_params::VR_BELT_DROP),
                         crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) - 0.30,
                     ));
                 let pouch_center = self.ammo_pouch.world_center(player.pos, player.rotation);

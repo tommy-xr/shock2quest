@@ -31,12 +31,14 @@ Use `cargo dbgr --mission debug_interactions --vr`. Developer parameters:
   range 0.55–1.10 m. Reduce this when testing seated reach.
 - `vr_holster_side`: lateral offset, default 0.23 m, range 0.16–0.40 m.
 - `vr_holster_forward`: forward/back offset, default 0.04 m, range −0.20–0.30 m.
+- `vr_belt_drop`: belt height below the eyes, default 0.55 m, range 0.30–0.90 m
+  in 1 cm steps. The belt mesh, personal card, pouch and their grab targets move together.
 - `vr_belt_distance`: distance to the front of the belt, default 0.20 m,
   range 0.10–0.45 m. The ammo pouch and its target follow the belt, 5 cm farther
   forward. This compensates for the belt mesh's authored 30 cm offset.
 
 All placement settings take effect live, in metres, without changing hand poses
-or holstered weapon scale. Belt distance and thigh placement are independent.
+or holstered weapon scale. Belt height/distance and thigh placement are independent.
 If calibration overlaps the pouch and a holster, an empty hand with a gun in the
 opposite hand uses the pouch there; one squeeze cannot draw both objects.
 Where both leg regions overlap, the nearest unlocked/occupied slot wins. A
