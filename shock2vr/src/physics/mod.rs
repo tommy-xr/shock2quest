@@ -4319,6 +4319,49 @@ impl PhysicsWorld {
         self.body_velocity_at_point(handle, point)
     }
 
+    /// Capture incoming motion before the contact solver removes impact speed.
+    pub(crate) fn snapshot_body_motion(&self) -> HashMap<EntityId, crate::throwing::BodyMotion> {
+        self.entity_id_to_body
+            .iter()
+            .filter_map(|(entity, handle)| {
+                let body = self.rigid_body_set.get(*handle)?;
+                Some((
+                    *entity,
+                    crate::throwing::BodyMotion {
+                        center: vec3(
+                            body.center_of_mass().x,
+                            body.center_of_mass().y,
+                            body.center_of_mass().z,
+                        ),
+                        linear: nvec_to_cgmath(*body.linvel()),
+                        angular: nvec_to_cgmath(*body.angvel()),
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    pub(crate) fn release_motion(
+        &mut self,
+        entity: EntityId,
+        motion: crate::throwing::ReleaseMotion,
+    ) -> bool {
+        let Some(body) = self
+            .entity_id_to_body
+            .get(&entity)
+            .and_then(|h| self.rigid_body_set.get_mut(*h))
+        else {
+            return false;
+        };
+        if !body.is_dynamic() {
+            return false;
+        }
+        body.set_linvel(vec_to_nvec(motion.linear), true);
+        body.set_angvel(vec_to_nvec(motion.angular), true);
+        body.enable_ccd(true);
+        true
+    }
+
     pub fn set_velocity(&mut self, entity_id: EntityId, velocity: Vector3<f32>) {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
             let maybe_rigid_body = self.rigid_body_set.get_mut(*handle);

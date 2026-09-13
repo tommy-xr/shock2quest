@@ -60,6 +60,11 @@ However, you can play with a keyboard and a mouse, using the following hard-code
   or release is needed to finish the pull. If the deck blocks your
   pull, the held hand keeps supporting you until you open it; relax or adjust
   the pull to continue.
+- Quest VR: throw a held object by moving your hand and releasing the grip.
+  It inherits your hand's velocity and spin; Strength gives a modest speed
+  bonus and helps with heavier objects. Fast impacts deal at most 2 damage to
+  flesh targets or 1 to other materials, once per throw. Releasing a still hand
+  drops the item normally.
 - Quest VR: reload by hand. Pull a clip out of the cyber interface's inventory
   strip with your free hand and bring it to the gun the other hand is holding -
   the clip goes in and the weapon is loaded. A clip of a different ammo type
