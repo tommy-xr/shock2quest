@@ -614,7 +614,7 @@ also use this sound path while retaining their existing speed/damage behavior.
 
 During pursuit/search, mobile monsters can also pick up the player's recent
 scent after reaching their current seen/heard destination. A mission-local buffer
-holds at most 40 grounded positions, sampled every 0.5 simulation seconds with
+holds at most 200 grounded positions, sampled every 0.1 simulation seconds with
 nearby samples merged. Scent lasts 20 seconds; pickup range fades from 2.5 to
 0.75 world units. A solid-cover ray must be clear. Idle monsters do not acquire
 scent, and scent does not interrupt travel toward a thrown distraction.

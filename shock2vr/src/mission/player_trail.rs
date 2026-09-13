@@ -6,9 +6,11 @@ use cgmath::{MetricSpace, Vector3};
 use serde::{Deserialize, Serialize};
 use shipyard::Unique;
 
-const MAX_POINTS: usize = 40;
+const MAX_POINTS: usize = 200;
 const LIFETIME: f32 = 20.0;
-const SAMPLE_SECONDS: f32 = 0.5;
+// At the debug/player maximum ordinary speed (10 units/s), samples stay
+// one unit apart so local pickup can follow them without remote knowledge.
+const SAMPLE_SECONDS: f32 = 0.1;
 const SAMPLE_DISTANCE: f32 = 0.75;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -157,12 +159,25 @@ mod tests {
     }
 
     #[test]
+    fn full_speed_movement_leaves_a_locally_followable_trail() {
+        let mut trail = PlayerTrail::default();
+        for frame in 0..600 {
+            trail.update(1.0 / 60.0, Some(vec3(frame as f32 * 10.0 / 60.0, 0.0, 0.0)));
+        }
+        let points: Vec<_> = trail.points.iter().collect();
+        assert!(points.len() >= 80);
+        for pair in points.windows(2) {
+            assert!(pair[0].position.distance(pair[1].position) < 1.2);
+        }
+    }
+
+    #[test]
     fn bounded_sampling_pause_and_save_round_trip() {
         let mut trail = PlayerTrail::default();
         trail.update(0.0, Some(vec3(0.0, 0.0, 0.0)));
         assert!(trail.points.is_empty());
-        for x in 0..100 {
-            trail.update(0.5, Some(vec3(x as f32, 0.0, 0.0)));
+        for x in 0..300 {
+            trail.update(0.1, Some(vec3(x as f32, 0.0, 0.0)));
         }
         assert_eq!(trail.points.len(), MAX_POINTS);
         let saved = serde_json::to_string(&trail).unwrap();

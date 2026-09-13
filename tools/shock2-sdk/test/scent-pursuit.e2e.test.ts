@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 
-for (const expired of [false, true]) {
-  test(`a hybrid ${expired ? "cannot follow an expired" : "follows a recent"} unseen player scent trail`, {
+for (const { name, expired, speed, samples, frames } of [
+  { name: "follows a recent", expired: false, speed: 0.3, samples: 6, frames: 30 },
+  { name: "cannot follow an expired", expired: true, speed: 0.3, samples: 6, frames: 30 },
+  { name: "follows a recent full-speed", expired: false, speed: 1, samples: 9, frames: 6 },
+]) {
+  test(`a hybrid ${name} unseen player scent trail`, {
     skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000,
   }, async () => {
     await using game = await GameServer.launch({ mission: "debug_interactions" });
@@ -11,10 +15,10 @@ for (const expired of [false, true]) {
     await game.player.teleport({ x: 0, y: 1.244, z: 4 });
     await game.step({ frames: 30 });
     // Lay the trail using ordinary grounded locomotion while no hybrid exists.
-    await game.input.set("right_hand.thumbstick", [0, 0.3]);
+    await game.input.set("right_hand.thumbstick", [0, speed]);
     const trail: number[][] = [];
-    for (let sample = 0; sample < 6; sample++) {
-      await game.step({ frames: 30 });
+    for (let sample = 0; sample < samples; sample++) {
+      await game.step({ frames });
       trail.push((await game.info()).player.position);
     }
     await game.input.set("right_hand.thumbstick", [0, 0]);
