@@ -5,19 +5,14 @@ use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
     Effect, MessagePayload, NoopScript, Script,
-    ai::{AnimatedMonsterAI, CameraAI, TurretAI},
+    ai::{AnimatedMonsterAI, CameraAI, GrubAI, TurretAI},
     script_util,
 };
 
 pub struct BaseMonster {
     ai: Box<dyn Script>,
     stasis: Option<super::stasis::StasisState>,
-    restored_turret: bool,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-struct BaseMonsterState {
-    stasis: Option<super::stasis::StasisState>,
-    turret: Option<super::ScriptState>,
+    hydrated_ai: bool,
 }
 
 impl BaseMonster {
@@ -25,7 +20,7 @@ impl BaseMonster {
         BaseMonster {
             ai: Box::new(NoopScript {}),
             stasis: None,
-            restored_turret: false,
+            hydrated_ai: false,
         }
     }
 }
@@ -38,32 +33,37 @@ impl Script for BaseMonster {
         Some("shock2vr.ai_stasis")
     }
     fn save_state(&self) -> Result<super::ScriptState, super::ScriptStateError> {
-        let turret = if self.ai.script_state_key() == Some("shock2vr.turret") {
-            Some(self.ai.save_state()?)
-        } else {
-            None
-        };
-        super::ScriptState::encode(
-            2,
-            &BaseMonsterState {
-                stasis: self.stasis.clone(),
-                turret,
-            },
-            "shock2vr.ai_stasis",
-        )
+        let child = self
+            .ai
+            .script_state_key()
+            .map(|key| self.ai.save_state().map(|state| (key.to_owned(), state)))
+            .transpose()?;
+        super::ScriptState::encode(3, &(&self.stasis, child), "shock2vr.ai_stasis")
     }
     fn restore_state(
         &mut self,
         state: &super::ScriptState,
         context: &super::ScriptRestoreContext<'_>,
     ) -> Result<(), super::ScriptStateError> {
-        let restored: BaseMonsterState = state.decode(2, "shock2vr.ai_stasis")?;
-        self.stasis = restored.stasis;
-        if let Some(turret) = restored.turret {
-            let mut ai = TurretAI::new();
-            ai.restore_state(&turret, context)?;
-            self.ai = Box::new(ai);
-            self.restored_turret = true;
+        let (stasis, child): (
+            Option<super::stasis::StasisState>,
+            Option<(String, super::ScriptState)>,
+        ) = state.decode(3, "shock2vr.ai_stasis")?;
+        self.stasis = stasis;
+        self.hydrated_ai = false;
+        if let Some((key, saved)) = child {
+            self.ai = match key.as_str() {
+                "shock2vr.grub_ai" => Box::new(GrubAI::new()),
+                "shock2vr.turret" => Box::new(TurretAI::new()),
+                _ => {
+                    return Err(super::ScriptStateError::InvalidPayload {
+                        script_key: "shock2vr.ai_stasis".into(),
+                        message: format!("unknown AI state {key}"),
+                    });
+                }
+            };
+            self.ai.restore_state(&saved, context)?;
+            self.hydrated_ai = true;
         }
         // Reject malformed state through the same typed decoder error path.
         if self.stasis.as_ref().is_some_and(|state| !state.valid()) {
@@ -80,8 +80,11 @@ impl Script for BaseMonster {
         world: &World,
         _hydrated: bool,
     ) -> Effect {
-        // initialize() preserves hydrated native turret state and stasis.
-        self.initialize(entity, world)
+        if self.hydrated_ai {
+            self.ai.initialize_after_hydration(entity, world, true)
+        } else {
+            self.initialize(entity, world)
+        }
     }
 
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
@@ -121,15 +124,15 @@ impl Script for BaseMonster {
                     "protocol" => Box::new(AnimatedMonsterAI::new()),
                     "shockdefault" => Box::new(AnimatedMonsterAI::new()),
                     "turret" => Box::new(TurretAI::new()),
-                    //TODO:
-                    "grub" => Box::new(NoopScript {}),
+                    "grub" => Box::new(GrubAI::new()),
+                    // TODO: flying object-model controller.
                     "swarmer" => Box::new(NoopScript {}),
 
                     _ => Box::new(AnimatedMonsterAI::idle()),
                 }
             };
 
-        if !self.restored_turret {
+        if !self.hydrated_ai {
             self.ai = ai;
         }
 
@@ -185,7 +188,12 @@ impl Script for BaseMonster {
         // Dropping a queued completion strands PlayOnce actions; delaying it
         // can apply an old completion to a newer scripted behavior. Animation
         // advancement remains paused centrally, and attack flags are suppressed.
-        if self.stasis.is_some() && matches!(msg, MessagePayload::AnimationFlagTriggered { .. }) {
+        if self.stasis.is_some()
+            && matches!(
+                msg,
+                MessagePayload::AnimationFlagTriggered { .. } | MessagePayload::Collided { .. }
+            )
+        {
             return Effect::NoEffect;
         }
         self.ai.handle_message(entity_id, world, physics, msg)
@@ -225,8 +233,8 @@ mod tests {
         let count = Rc::new(Cell::new(0));
         let mut script = BaseMonster {
             ai: Box::new(Counter(count.clone())),
-            restored_turret: false,
             stasis: None,
+            hydrated_ai: false,
         };
         let physics = PhysicsWorld::new();
         script.handle_message(
@@ -247,6 +255,16 @@ mod tests {
             },
         );
         assert_eq!(count.get(), 0);
+        script.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::Collided {
+                with: entity,
+                contact: None,
+            },
+        );
+        assert_eq!(count.get(), 0, "frozen actors cannot deal contact attacks");
         assert_eq!(script.stasis().unwrap().remaining_seconds, 5.0);
         // A shorter replacement is intentionally shorter, never max/add.
         script.handle_message(

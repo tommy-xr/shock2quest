@@ -817,6 +817,17 @@ fn create_model(
             }
         };
 
+        if world
+            .borrow::<View<PropAI>>()
+            .unwrap()
+            .get(entity_id)
+            .is_ok_and(|ai| ai.0.eq_ignore_ascii_case("grub"))
+        {
+            // Small forgiving margin around each animated segment, independent
+            // of the sphere that supports and moves the grub.
+            model.enable_object_joint_hit_boxes(0.025);
+        }
+
         // The raw, signed scale - matching `RuntimePropTransform`, which is what
         // the renderer composes the local offset with (note the model bake
         // above deliberately uses the absolute value instead).
@@ -1207,6 +1218,44 @@ fn create_physics_representation_with_options(
     // that explicit creation mode here: frobbable emitted objects (Ops4's Grub
     // is one) would otherwise take the selectable-fixture branch below and
     // replace their authored moving sphere with a kinematic model-bounds box.
+    // Grubs are object models, not skeletal PropCreature actors. FrobInfo
+    // would make a hatched grub a kinematic fixture, while the launch path
+    // would make an emitted one a freely tumbling prop. Both are live actors:
+    // use the authored sphere and let the AI, not contact torque, own facing.
+    let is_grub = world
+        .borrow::<View<PropAI>>()
+        .unwrap()
+        .get(entity_id)
+        .is_ok_and(|ai| ai.0.eq_ignore_ascii_case("grub"));
+    if is_grub && !launched_object_is_immobile {
+        if let (Ok(pos), Ok(dimensions)) = (v_pos.get(entity_id), v_phys_dimensions.get(entity_id))
+        {
+            let radius = dimensions.radius0.abs().max(dimensions.radius1.abs());
+            // The 25AE object model lies around its origin, while the legacy
+            // PhysDims centre is raised .36 above it. Match the sphere's
+            // support plane to the loaded art rather than burying the mesh.
+            let mut offset = dimensions.offset0;
+            if let Some(bounds) = maybe_model
+                .as_ref()
+                .and_then(|model| model.object_model_bounds())
+            {
+                offset.y = bounds.min.y * model_scale.y + radius;
+            }
+            let body = physics.add_dynamic(
+                entity_id,
+                pos.position,
+                pos.rotation,
+                offset,
+                PhysicsShape::Sphere(radius),
+                CollisionGroup::actor(),
+                false,
+                dynamics_options,
+            );
+            physics.set_enabled_rotations(entity_id, false, false, false);
+            return Some(body);
+        }
+    }
+
     let launched_projectile = launch_projectile
         || world
             .borrow::<View<RuntimePropLaunchedProjectile>>()
@@ -2036,6 +2085,50 @@ mod tests {
         assert_eq!(body.body_type, "dynamic");
         assert!(body.blocks_player && body.blocks_actor);
         assert!(body.collision_groups.iter().any(|group| group == "actor"));
+    }
+
+    #[test]
+    fn hatched_and_emitted_grubs_use_the_same_live_actor_body() {
+        for launched in [false, true] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity = world.add_entity((
+                PropAI("grub".into()),
+                PropPosition {
+                    position: vec3(0.0, 2.0, 0.0),
+                    rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                    cell: 0,
+                },
+                PropFrobInfo {
+                    world_action: FrobFlag::SCRIPT,
+                    inventory_action: FrobFlag::empty(),
+                    tool_action: FrobFlag::empty(),
+                },
+                PropPhysDimensions {
+                    radius0: 0.2,
+                    radius1: 0.0,
+                    offset0: vec3(0.0, 0.36, 0.0),
+                    offset1: Vector3::zero(),
+                    size: Vector3::zero(),
+                    point_vs_terrain: 0,
+                    point_vs_not_special: 0,
+                },
+            ));
+            create_physics_representation_with_options(
+                &mut world,
+                &mut physics,
+                &None,
+                entity,
+                launched,
+                false,
+            )
+            .unwrap();
+            let body = physics.debug_list_bodies().remove(0);
+            assert_eq!(body.body_type, "dynamic");
+            assert!(body.blocks_actor && body.blocks_player);
+            assert!(body.collision_groups.iter().any(|g| g == "actor"));
+            assert_eq!(physics.actor_sphere(entity).unwrap().1, 0.2);
+        }
     }
 
     fn capsule(shape: PhysicsShape) -> (f32, f32) {

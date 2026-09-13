@@ -22,6 +22,33 @@ fn flip_winding(winding: FrontFaceWinding) -> FrontFaceWinding {
     }
 }
 
+/// Enclose the joint's geometry with a cylinder and rounded ends. The long
+/// axis comes from the mesh, so this also handles terminal parts without a child.
+fn object_part_capsule(bounds: Aabb3<f32>, padding: f32) -> HitBoxShape {
+    use cgmath::EuclideanSpace;
+    let half = bounds.dim() * 0.5;
+    let axis = if half.x >= half.y && half.x >= half.z {
+        0
+    } else if half.y >= half.z {
+        1
+    } else {
+        2
+    };
+    let mut a = bounds.center().to_vec();
+    let mut b = a;
+    a[axis] -= half[axis];
+    b[axis] += half[axis];
+    let radial_sq: f32 = (0..3)
+        .filter(|&i| i != axis)
+        .map(|i| half[i] * half[i])
+        .sum();
+    HitBoxShape::Capsule {
+        a,
+        b,
+        radius: radial_sq.sqrt() + padding.max(0.0),
+    }
+}
+
 /// One LGMD sub-object: a named part of a static `.bin` (the pieces an in-game
 /// tweq rotates or translates - a gun slide, a door leaf) and its pivot in
 /// model space. Empty for LGMM/AI and GLB models, which articulate via joints.
@@ -29,6 +56,8 @@ fn flip_winding(winding: FrontFaceWinding) -> FrontFaceWinding {
 pub struct SubObject {
     pub name: String,
     pub transform: Matrix4<f32>,
+    /// Geometry bounds in this joint's local frame; absent for empty pivots.
+    pub local_bounds: Option<Aabb3<f32>>,
 }
 
 #[derive(Clone)]
@@ -85,6 +114,8 @@ pub struct AnimatedModel {
     /// there is no record of the pose the model is actually drawn in, and a
     /// corpse lying flat would be bounded by the standing rest skeleton.
     posed_bounds: Option<Aabb3<f32>>,
+    /// Authored LGMD rest bounds, kept separate from posed skeletal bounds.
+    object_bounds: Option<Aabb3<f32>>,
     object_articulation: Option<std::sync::Arc<crate::object_articulation::ObjectArticulation>>,
 }
 
@@ -207,6 +238,7 @@ impl AnimatedModel {
             bind: self.bind.clone(),
             object_articulation: self.object_articulation.clone(),
             posed_bounds: joint_box_bounds(&animated_skeleton.get_transforms(), &self.hit_boxes),
+            object_bounds: self.object_bounds,
         }
     }
 
@@ -231,6 +263,7 @@ impl AnimatedModel {
             sub_objects: model.sub_objects.clone(),
             bind: model.bind.clone(),
             posed_bounds: model.posed_bounds,
+            object_bounds: model.object_bounds,
             object_articulation: model.object_articulation.clone(),
         }
     }
@@ -265,6 +298,10 @@ impl Model {
         // built from the sub-object tree is exactly that hierarchy resolved.
         // Same pairs as `ss2_bin_obj_loader::sub_object_transforms` - keep them
         // in step.
+        let local_bounds = ss2_bin_obj_loader::sub_object_bounds(
+            &static_mesh,
+            &[Matrix4::identity(); MAX_SKINNED_JOINTS],
+        );
         let sub_objects = static_mesh
             .sub_objects
             .iter()
@@ -272,6 +309,7 @@ impl Model {
             .map(|(index, sub_object)| SubObject {
                 name: sub_object.name.clone(),
                 transform: skeleton.global_transform(&(index as u32)),
+                local_bounds: local_bounds[index].1,
             })
             .collect::<Vec<SubObject>>();
 
@@ -288,6 +326,7 @@ impl Model {
                     sub_objects,
                     bind: None,
                     posed_bounds: None,
+                    object_bounds: Some(bounding_box),
                     object_articulation: Some(std::sync::Arc::new(
                         ss2_bin_obj_loader::object_articulation(&static_mesh),
                     )),
@@ -361,6 +400,7 @@ impl Model {
                 sub_objects: vec![],
                 bind,
                 posed_bounds: None,
+                object_bounds: None,
                 object_articulation: None,
             }),
         }
@@ -389,6 +429,7 @@ impl Model {
                     sub_objects: vec![],
                     bind: None,
                     posed_bounds: None,
+                    object_bounds: None,
                     object_articulation: None,
                 }),
             }
@@ -469,13 +510,37 @@ impl Model {
     }
 
     /// Per-joint fitted collision shapes (capsule-toward-child / box), the shared
-    /// source of truth for the ragdoll and damage hitboxes. Empty for static or
-    /// non-AI-bin models.
+    /// source of truth for the ragdoll and damage hitboxes. Articulated object
+    /// models opt in through `enable_object_joint_hit_boxes`; static models are empty.
     pub fn hit_box_shapes(&self) -> Rc<HashMap<u32, HitBoxShape>> {
         match &self.inner {
             InnerModel::Animated(animated_model) => animated_model.hit_box_shapes.clone(),
             InnerModel::Static(_) => Rc::new(HashMap::new()),
         }
+    }
+
+    /// Opt an articulated object into per-part damage geometry. Physics support
+    /// remains separate. Empty pivots receive no collider.
+    pub fn enable_object_joint_hit_boxes(&mut self, padding: f32) {
+        let InnerModel::Animated(model) = &mut self.inner else {
+            return;
+        };
+        if model.object_bounds.is_none() {
+            return;
+        }
+        let bounds: HashMap<_, _> = model
+            .sub_objects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, part)| part.local_bounds.map(|bounds| (i as u32, bounds)))
+            .collect();
+        model.hit_box_shapes = Rc::new(
+            bounds
+                .iter()
+                .map(|(&i, bounds)| (i, object_part_capsule(*bounds, padding)))
+                .collect(),
+        );
+        model.hit_boxes = Rc::new(bounds);
     }
 
     pub fn get_hit_boxes(&self) -> Rc<HashMap<u32, Aabb3<f32>>> {
@@ -504,6 +569,15 @@ impl Model {
         match &self.inner {
             InnerModel::Animated(model) => model.to_posed_scene_objects(pose),
             InnerModel::Static(model) => model.to_scene_objects().clone(),
+        }
+    }
+
+    /// Rest bounds for physical support of articulated object actors. This
+    /// does not change the legacy interaction bounds of other jointed props.
+    pub fn object_model_bounds(&self) -> Option<Aabb3<f32>> {
+        match &self.inner {
+            InnerModel::Static(model) => Some(model.bounding_box),
+            InnerModel::Animated(model) => model.object_bounds,
         }
     }
 
@@ -720,6 +794,7 @@ mod tests {
                 sub_objects: Vec::new(),
                 bind: None,
                 posed_bounds,
+                object_bounds: None,
                 object_articulation: None,
             }),
         }
@@ -824,5 +899,25 @@ mod tests {
         model.apply_local_transform(Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0));
         model.apply_local_transform(Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0));
         assert_eq!(winding(&model), Some(FrontFaceWinding::Clockwise));
+    }
+}
+
+#[cfg(test)]
+mod object_parameter_tests {
+    use super::*;
+    #[test]
+    fn object_capsule_covers_segment_ends_and_adds_radial_padding() {
+        use cgmath::point3;
+        let HitBoxShape::Capsule { a, b, radius } = object_part_capsule(
+            Aabb3::new(point3(-0.4, -0.03, -0.04), point3(0.2, 0.03, 0.04)),
+            0.025,
+        ) else {
+            panic!("joint parts must use capsules")
+        };
+        assert!((a.x + 0.4).abs() < 1e-6);
+        assert!((b.x - 0.2).abs() < 1e-6);
+        assert!((radius - 0.075).abs() < 1e-6);
+        assert_eq!(a.y, 0.0);
+        assert_eq!(b.z, 0.0);
     }
 }

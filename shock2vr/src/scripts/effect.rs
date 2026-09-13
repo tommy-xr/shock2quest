@@ -799,7 +799,7 @@ pub enum Effect {
         entity_id: EntityId,
         rotation: Quaternion<f32>,
     },
-    /// Change a live projectile's flight velocity without changing its pose.
+    /// Set a physics-driven actor or projectile's velocity without changing its pose.
     SetLinearVelocity {
         entity_id: EntityId,
         velocity: Vector3<f32>,

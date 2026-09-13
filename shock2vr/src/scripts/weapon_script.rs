@@ -667,7 +667,7 @@ fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World
     // `ray_cast` normalizes its direction and casts a fixed 100 units, so the
     // reach has to be passed as `ray_cast2`'s max_toi - scaling the direction
     // bounds nothing.
-    let hit = physics.ray_cast2(
+    let hit = physics.ray_cast2_with_entity_filter(
         aim.origin,
         aim.forward.normalize(),
         MELEE_RANGE,
@@ -676,6 +676,10 @@ fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World
             | InternalCollisionGroups::SELECTABLE,
         None,
         true,
+        &|entity| {
+            !(crate::creature::has_live_hit_boxes(world, entity)
+                && crate::creature::hit_boxes_cover_body(world, entity))
+        },
     );
     if let Some(RayCastResult {
         maybe_entity_id: Some(target),
@@ -1023,6 +1027,61 @@ mod tests {
     use crate::physics::{CollisionGroup, PhysicsWorld};
 
     use super::*;
+
+    #[test]
+    fn flat_melee_uses_grub_segments_instead_of_the_support_body() {
+        use crate::creature::{HitBoxType, RuntimePropHasHitBoxes, RuntimePropHitBox};
+        use crate::physics::CollisionGroup;
+        use crate::runtime_props::RuntimePropProxyEntity;
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let grub = world.add_entity((
+            dark::properties::PropAI("Grub".into()),
+            RuntimePropHasHitBoxes,
+        ));
+        let z = -MELEE_RANGE * 0.5;
+        physics.add_kinematic(
+            grub,
+            vec3(0.0, 0.2, z),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.4, 0.4, 0.4),
+            CollisionGroup::actor(),
+            false,
+        );
+        let segment = world.add_entity((
+            RuntimePropHitBox {
+                parent_entity_id: grub,
+                hit_box_type: HitBoxType::Body,
+                joint_id: 1,
+            },
+            RuntimePropProxyEntity(grub),
+        ));
+        physics.add_kinematic_shared_shape(
+            segment,
+            vec3(0.0, 0.0, z),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            rapier3d::prelude::SharedShape::capsule_x(0.45, 0.075),
+            vec3(0.0, 0.0, 0.0),
+            CollisionGroup::hitbox(),
+            false,
+        );
+        let mut player =
+            physics.create_player(vec3(10.0, 10.0, 10.0), EntityId::from_inner(1000).unwrap());
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let strike = |x, y| {
+            flat_melee_hit(
+                &physics,
+                RuntimePropFlatAim {
+                    origin: point3(x, y, 0.0),
+                    forward: vec3(0.0, 0.0, -1.0),
+                },
+                &world,
+            )
+        };
+        assert!(matches!(strike(0.0, 0.3), Effect::NoEffect));
+        assert!(matches!(strike(0.4, 0.0), Effect::Send { msg: Message { to, .. } } if to == grub));
+    }
 
     fn flat_melee_fixture() -> (World, PhysicsWorld, EntityId, EntityId) {
         let mut world = World::new();
