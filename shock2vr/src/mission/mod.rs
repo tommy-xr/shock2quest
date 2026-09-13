@@ -3,6 +3,7 @@ use tracing::info;
 mod ammo_pouch;
 mod body_gear_feedback;
 mod body_inventory;
+mod character_sheet;
 pub mod entity_populator;
 pub mod flat_ui_host;
 mod holsters;

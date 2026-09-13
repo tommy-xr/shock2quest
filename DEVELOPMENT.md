@@ -156,6 +156,22 @@ VR use mode the same bio and ammo readings appear both on the arms and on the
 interface - deliberately left alone for now (issue #1268), unlike flat, which
 does drop its compact pair.
 
+#### Character MFD and access cards
+
+The card icon beside the log button opens the collected access-card reader.
+It lists the keyring's named access regions; the cards are credentials, not
+inventory items. The adjacent **MFD** button opens the character sheet, with
+**STATS**, **TECH**, **CMBT**, and **PSI** tabs in the original right-hand panel.
+Stats and skills use arrow meters; Tech also shows installed software versions.
+Point at a stat, skill, software icon, trait, or psi discipline for its authored
+description. The Psi tab browses all five tiers and distinguishes trained powers
+using the same icon grid as the amp selector. Character-sheet browsing is
+read-only and does not change the amp's selected power or browsed tier.
+
+These controls share their layout in flat and VR. `GET /v1/ui` exposes their
+buttons and current contents in `utilities`, including `access_cards`,
+`character_stats`, `character_tab_0` through `character_tab_3`, and `psi_tier_N`.
+
 #### Quest face buttons are per-hand and contextual
 
 The four face buttons are bound raw, by hand and position - lower is left `X` /

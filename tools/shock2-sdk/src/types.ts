@@ -1001,6 +1001,8 @@ export interface UiState {
    * carries the same readouts the flat cursor clicks.
    */
   readout_elements: UiElement[];
+  /** Utility buttons and character/access panel contents, empty outside use mode. */
+  utilities: UiElement[];
   /**
    * Where the pointer last landed on the shared canvas: the mouse on flat, the
    * controller ray on the VR cyber-interface panel. null when nothing is
