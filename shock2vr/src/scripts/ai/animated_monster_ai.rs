@@ -2027,17 +2027,21 @@ impl Script for AnimatedMonsterAI {
                 // the death is processed - don't let it fire or connect.
                 let can_act = !(self.is_dead || is_killed(entity_id, world));
 
-                let acted = if motion_flags.contains(MotionFlags::FIRE) && can_act {
+                let fired = if motion_flags.contains(MotionFlags::FIRE) && can_act {
                     fire_ranged_projectile(world, physics, entity_id)
-                } else if motion_flags.contains(MotionFlags::MELEE_CONTACT_START) && can_act {
-                    // The swing reached its authored contact frame - resolve
-                    // the hit through the attacker's melee weapon archetype.
-                    super::ai_util::melee_contact_attack(world, entity_id, physics)
                 } else {
                     Effect::NoEffect
                 };
+                let connected =
+                    if motion_flags.contains(MotionFlags::MELEE_CONTACT_START) && can_act {
+                        // The swing reached its authored contact frame - resolve
+                        // the hit through the attacker's melee weapon archetype.
+                        super::ai_util::melee_contact_attack(world, entity_id, physics)
+                    } else {
+                        Effect::NoEffect
+                    };
 
-                Effect::combine(vec![acted, footstep])
+                Effect::combine(vec![fired, connected, footstep])
             }
             _ => Effect::NoEffect,
         }
@@ -3625,6 +3629,112 @@ mod tests {
                 motion_flags: flags,
             },
         )
+    }
+
+    /// Exercise the real handler with both weapon links and a live victim:
+    /// the union must retain the projectile, contact damage, and foot plant.
+    #[test]
+    fn combined_attack_flags_preserve_both_attacks_and_death_guard() {
+        use dark::properties::{
+            AIProjectileOptions, AITargetMethod, Link, Links, PropCreature, PropLocalPlayer,
+            ReceptronEffect, ReceptronOptions, ToLink,
+        };
+        let (mut world, entity) =
+            world_with_creature_and_player(Deg(0.0), "creaturetype oncegrunt");
+        let player = world.add_entity((
+            PropLocalPlayer {},
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: -20,
+                    to_entity_id: None,
+                    link: Link::Receptron(ReceptronOptions {
+                        order: 0,
+                        effect: ReceptronEffect::Damage {
+                            multiplier: 1.0,
+                            use_intensity: true,
+                        },
+                    }),
+                }],
+            },
+        ));
+        world.add_unique(crate::mission::stim_response::GlobalContactStims(
+            std::collections::HashMap::from([(-10, vec![(-20, 5.0)])]),
+        ));
+        {
+            let mut info = world
+                .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+                .unwrap();
+            info.entity_id = player;
+            info.pos = vec3(0.0, 0.0, 1.0);
+        }
+        world.add_component(
+            entity,
+            (
+                PropCreature(0),
+                Links {
+                    to_links: vec![
+                        ToLink {
+                            to_template_id: -10,
+                            to_entity_id: None,
+                            link: Link::Weapon,
+                        },
+                        ToLink {
+                            to_template_id: -30,
+                            to_entity_id: None,
+                            link: Link::AIProjectile(AIProjectileOptions {
+                                targeting_method: AITargetMethod::StraightLine,
+                                delay: 0.0,
+                                should_lead_target: false,
+                                ammo: 0,
+                                accuracy: 0,
+                                select_time: 0.0,
+                                joint: 0,
+                                vhot: 0,
+                            }),
+                        },
+                    ],
+                },
+            ),
+        );
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        for dead in [false, true] {
+            monster.is_dead = dead;
+            let effect = monster.handle_message(
+                entity,
+                &world,
+                &physics,
+                &MessagePayload::AnimationFlagTriggered {
+                    motion_flags: MotionFlags::FIRE
+                        | MotionFlags::MELEE_CONTACT_START
+                        | MotionFlags::LEFT_FOOT_STEP,
+                },
+            );
+            let effects = Effect::flatten(vec![effect.clone()]);
+            assert_eq!(
+                effects
+                    .iter()
+                    .filter(|e| matches!(
+                        e,
+                        Effect::CreateEntity {
+                            template_id: -30,
+                            ..
+                        }
+                    ))
+                    .count(),
+                usize::from(!dead),
+                "one projectile while alive, none after death"
+            );
+            assert_eq!(effects.iter().filter(|e| matches!(e, Effect::Send { msg }
+                if msg.to == player && matches!(msg.payload, MessagePayload::Damage { amount: 5.0, .. }))).count(),
+                usize::from(!dead), "one melee hit while alive, none after death");
+            assert_eq!(
+                sound_queries(&effect).len(),
+                1,
+                "the foot plant survives both guards"
+            );
+        }
     }
 
     /// The shipped locomotion clips are per-half-step and author exactly one
