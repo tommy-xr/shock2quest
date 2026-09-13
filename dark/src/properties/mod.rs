@@ -8,6 +8,7 @@ mod prop_ai_device;
 mod prop_ai_grub;
 mod prop_ai_hearing;
 mod prop_ai_mode;
+mod prop_ai_ranged_combat;
 mod prop_ai_swarm;
 mod prop_ambient_hacked;
 mod prop_anim_light;
@@ -59,6 +60,7 @@ pub use prop_ai_device::*;
 pub use prop_ai_grub::*;
 pub use prop_ai_hearing::*;
 pub use prop_ai_mode::*;
+pub use prop_ai_ranged_combat::*;
 pub use prop_ai_swarm::*;
 pub use prop_ambient_hacked::*;
 pub use prop_anim_light::*;
@@ -2242,6 +2244,18 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$JointPos",
             PropJointPositions::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AIRCProp",
+            PropAIRangedCombat::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AIRCRange",
+            PropAIRangedRanges::read,
             identity,
             accumulator::latest,
         ),
