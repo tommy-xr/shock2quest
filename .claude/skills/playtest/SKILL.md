@@ -194,18 +194,27 @@ lands in `/v1/player/inventory` (a living AI's container stays closed until
 it's dead).
 
 **Navigate with `/v1/player/move`, not raw teleport.** It advances the player at
-most ~5 units toward the target and **shapecasts the player collider**, so it
-**cannot tunnel through walls or out of bounds** (returns `blocked:true`,
-`distance_moved < requested` when it hits geometry). So you walk to a place in
-short hops, checking screenshots — this is what makes it a real playtest instead
-of warping to arbitrary (often out-of-level) entity coordinates. Raw
-`/v1/player/teleport` is reserved for manager-driven setup/frontier-resume.
+most ~5 units toward the target through the real character controller, so it
+**cannot tunnel through walls or out of bounds**. Walk in short hops and check
+screenshots — this is what makes it a real playtest instead of warping to
+arbitrary (often out-of-level) entity coordinates. Raw `/v1/player/teleport` is
+reserved for manager-driven setup/frontier-resume.
 
 It **walks** the same way the player does — stairs, ramps and small ledges are
-traversed, and it climbs/descends them for you — so `blocked` means a real
-obstruction, not a step. Only the horizontal direction of the target is used;
-gravity decides the vertical, so aim at where you want to *stand*, not at a
-point in the air.
+traversed, and it climbs/descends them for you; an exposed walkable step should
+not block the hop. Only the horizontal direction of the target is used; gravity
+decides the vertical, so aim at where you want to *stand*, not at a point in the
+air.
+
+`/v1/player/move` is a **local fixed-heading walk, not a pathfinder or a
+reachability oracle**. `blocked:true` means that one bounded hop did not reach
+its requested endpoint; it does not mean there is no route around the obstacle.
+When a hop makes partial progress or stops at a visible corner, inspect the
+screenshot, try short lateral/waypoint hops, and use sustained thumbstick
+locomotion for steering-sensitive passages. Before filing an unreachable-area
+bug, corroborate the conclusion with plausible alternate lanes and available
+AIPATH data. Treat AIPATH as evidence rather than proof: it can be partitioned
+and does not account for every live door or mission object.
 
 **Ladders are not walked, they're climbed** — `/v1/player/move` never grips one.
 Aim the head with `{"head.look":[yaw_deg,pitch_deg]}` and hold
