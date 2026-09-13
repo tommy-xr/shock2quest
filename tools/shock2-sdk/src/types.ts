@@ -469,6 +469,10 @@ export interface SceneListResult {
 
 /** What every developer parameter reports, whatever its kind. */
 export interface DevParamCommon {
+  /** Display category; stable parameter keys are independent of navigation. */
+  category: string;
+  /** Hidden under Locked in the menu, still editable through this API. */
+  locked: boolean;
   key: string;
   label: string;
   /** Current value. Bools are 0 or 1, the registry's own representation. */
