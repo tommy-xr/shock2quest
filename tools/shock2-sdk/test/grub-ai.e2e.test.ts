@@ -75,21 +75,47 @@ test("a launched grub settles with its visible model above the floor", {
   await game.step({ frames: 30 });
   const [grub] = await game.entities.byTemplate(-182);
   assert.ok(grub);
-  // Hold calm to isolate physical landing from a new attack at the player.
+  // Keep the player out of perception range so a new attack cannot turn
+  // this landing assertion into a sample from the next hop. The hatch now
+  // supplies the launch itself; no extra debug impulse is necessary.
+  await game.player.teleport({ x: 30, y: 1, z: 30 });
   await game.entities.sendMessage(grub.id, { type: "SetAlertness", level: "Lowest" });
-  await game.step({ frames: 1 });
-  const [body] = (await game.physics.bodies({ entityId: grub.id })).bodies;
-  assert.ok(body && body.mass);
-  const response = await fetch(`${game.baseUrl}/v1/physics/bodies/${body.body_id}/impulse`, {
-    method: "POST", body: JSON.stringify({ impulse: [0, body.mass * 0.9, body.mass * 3] }),
-  });
-  assert.equal(response.ok, true);
   await game.step({ frames: 180 });
   const [landed] = (await game.physics.bodies({ entityId: grub.id })).bodies;
   assert.ok(landed);
-  assert.ok(Math.abs(landed.velocity[1]!) < 0.05, "the actor should have landed");
+  assert.ok(Math.abs(landed.velocity[1]!) < 0.05, `the actor should have landed: ${landed.position}, velocity ${landed.velocity}`);
   // This station's kerb is at y=.1; grub3's lower extent is -.052.
   assert.ok(landed.position[1]! > 0.14 && landed.position[1]! < 0.17,
     `the model must rest on the kerb, not below it: ${landed.position}`);
   assert.ok(landed.angular_velocity.every(v => Math.abs(v) < 0.001));
+});
+
+// Regression for rec1's elevator pod: the old hatch dropped the grub into
+// the shell, where it waited for AI locomotion to get it out.
+test("rec1 grub emergence immediately arcs toward the player and clears the shell", {
+  skip: !enabled, timeout: 300_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "rec1.mis" });
+  await game.step({ frames: 1 });
+  const [pod] = await game.entities.byTemplate(131);
+  assert.ok(pod);
+  await game.player.teleport({ x: 2.5, y: -4, z: -112 });
+  const before = new Set((await game.entities.byTemplate(-182)).map(e => e.id));
+  await game.entities.sendMessage(pod.id, { type: "TurnOn" });
+  await game.step({ frames: 3 });
+  const grub = (await game.entities.byTemplate(-182)).find(e => !before.has(e.id));
+  assert.ok(grub);
+  const [launched] = (await game.physics.bodies({ entityId: grub.id })).bodies;
+  assert.ok(launched);
+  assert.ok(launched.velocity[0]! > 1, "launch must aim toward the player on +X");
+  assert.ok(launched.velocity[1]! > 1, "hatch must lift the grub rather than drop it");
+  await game.entities.sendMessage(grub.id, { type: "SetAlertness", level: "Lowest" });
+  await game.step({ frames: 24 });
+  const [emerged] = (await game.physics.bodies({ entityId: grub.id })).bodies;
+  assert.ok(emerged);
+  assert.ok(emerged.position[0]! - launched.position[0]! > 0.6,
+    "the launch must carry the grub beyond the shell before ground locomotion");
+  await game.entities.sendMessage(pod.id, { type: "TurnOn" });
+  await game.step({ frames: 3 });
+  assert.equal((await game.entities.byTemplate(-182)).filter(e => !before.has(e.id)).length, 1);
 });

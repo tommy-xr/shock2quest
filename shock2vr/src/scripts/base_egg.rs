@@ -1,10 +1,13 @@
-use cgmath::vec3;
-use dark::properties::PropPosition;
+use cgmath::{InnerSpace, Quaternion, Vector3, vec3};
+use dark::properties::{PropAI, PropCreature, PropPosition};
+use engine::audio::AudioHandle;
 use serde::{Deserialize, Serialize};
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
-    mission::entity_creator::CreateEntityOptions, physics::PhysicsWorld, util::vec3_to_point3,
+    mission::{PlayerInfo, entity_creator::CreateEntityOptions},
+    physics::PhysicsWorld,
+    util::vec3_to_point3,
 };
 
 use super::{
@@ -95,9 +98,9 @@ impl Script for BaseEgg {
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
-        if !matches!(msg, MessagePayload::TurnOn { .. }) {
+        let MessagePayload::TurnOn { from } = msg else {
             return Effect::NoEffect;
-        }
+        };
         // A pod hatches once. Its tripwire is authored ONCE, but a pod can
         // also be reached by a relayed TurnOn, and a second clutch of grubs
         // from a shell that is already open is not a thing the game does.
@@ -117,7 +120,20 @@ impl Script for BaseEgg {
         self.hatched = true;
 
         let lift = self.payload.lift();
-        let mut effects = vec![change_to_last_model(world, entity_id)];
+        let initial_velocity = if matches!(self.payload, EggPayload::Grub) {
+            grub_emergence_velocity(position, rotation, opener_position(world, *from))
+        } else {
+            vec3(0.0, 0.0, 0.0)
+        };
+        let mut effects = vec![
+            change_to_last_model(world, entity_id),
+            Effect::PlaySound {
+                handle: AudioHandle::new(),
+                name: "pod_exp".into(),
+                source: Some(entity_id),
+                spatial: true,
+            },
+        ];
         effects.extend(self.payload.template_names().iter().map(|template_name| {
             Effect::CreateEntityByTemplateName {
                 source_entity_id: entity_id,
@@ -125,9 +141,9 @@ impl Script for BaseEgg {
                 position: vec3_to_point3(position + rotation * vec3(0.0, lift, 0.0)),
                 // The pod's own facing: a wall pod hatches out of the wall.
                 orientation: rotation,
-                // The payloads carry their own motion: the emitter's tweq
-                // launches the goo, and a creature walks or flies.
-                initial_velocity: vec3(0.0, 0.0, 0.0),
+                // GrubAI preserves this launch until landing. Goo and swarm
+                // motion remains owned by their emitter / flight controller.
+                initial_velocity,
                 // Ordinary creation, NOT the emitter's launched-projectile
                 // mode: that path installs the template's authored projectile
                 // sphere, and the Swarm's is zero-radius, so the visible
@@ -171,3 +187,147 @@ const GOO_MUZZLE_CLEARANCE: f32 = 1.2;
 /// The lip of an open pod, measured off the shell's own bounds (its top sits
 /// 0.78 above the origin), so a hatched creature sits in the shell's mouth.
 const SHELL_MOUTH: f32 = 0.8;
+
+/// TurnOn identifies the sender, which is usually a relay/tripwire rather
+/// than its activator. Honor a direct actor sender; use the live player for
+/// relayed mission triggers, whose messages do not preserve that provenance.
+fn opener_position(world: &World, from: EntityId) -> Option<Vector3<f32>> {
+    let player = world.borrow::<UniqueView<PlayerInfo>>().ok();
+    if let Some(player) = &player {
+        if from == player.entity_id {
+            return Some(player.pos);
+        }
+    }
+    let actor = world
+        .borrow::<View<PropAI>>()
+        .ok()
+        .is_some_and(|v| v.get(from).is_ok())
+        || world
+            .borrow::<View<PropCreature>>()
+            .ok()
+            .is_some_and(|v| v.get(from).is_ok());
+    if actor {
+        if let Some(position) = world
+            .borrow::<View<PropPosition>>()
+            .ok()
+            .and_then(|v| v.get(from).ok().map(|p| p.position))
+        {
+            return Some(position);
+        }
+    }
+    player.map(|p| p.pos)
+}
+
+/// Deliberate fallback, not a recovered retail constant: a short arc toward
+/// the opener clears the lip instead of dropping the grub inside the shell.
+/// Keep a world-up component even for wall pods; gravity is world-down.
+fn grub_emergence_velocity(
+    position: Vector3<f32>,
+    rotation: Quaternion<f32>,
+    target: Option<Vector3<f32>>,
+) -> Vector3<f32> {
+    let horizontal = |v: Vector3<f32>| vec3(v.x, 0.0, v.z);
+    let delta = target
+        .map(|p| horizontal(p - position))
+        .filter(|v| v.magnitude2() > 0.0001)
+        .unwrap_or_else(|| {
+            let forward = horizontal(rotation * Vector3::unit_z());
+            if forward.magnitude2() > 0.0001 {
+                forward
+            } else {
+                Vector3::unit_z()
+            }
+        });
+    delta.normalize() * 2.4 + Vector3::unit_y() * 3.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cgmath::{Deg, Rotation3};
+
+    fn position(at: Vector3<f32>) -> PropPosition {
+        PropPosition {
+            position: at,
+            cell: 0,
+            rotation: Quaternion::from_angle_y(Deg(0.0)),
+        }
+    }
+
+    #[test]
+    fn emergence_aims_horizontally_with_bounded_lift_even_for_wall_pods() {
+        for rotation in [
+            Quaternion::from_angle_y(Deg(90.0)),
+            Quaternion::from_angle_x(Deg(90.0)),
+        ] {
+            let v = grub_emergence_velocity(
+                Vector3::new(0.0, 0.0, 0.0),
+                rotation,
+                Some(vec3(-10.0, -30.0, 0.0)),
+            );
+            assert!((v.x + 2.4).abs() < 0.001);
+            assert!(v.z.abs() < 0.001);
+            assert_eq!(v.y, 3.0);
+            for target in [None, Some(vec3(0.0, 10.0, 0.0))] {
+                let fallback = grub_emergence_velocity(vec3(0.0, 0.0, 0.0), rotation, target);
+                assert!(fallback.magnitude().is_finite());
+                assert_eq!(fallback.y, 3.0);
+            }
+        }
+    }
+
+    #[test]
+    fn relays_aim_at_player_but_direct_actor_senders_are_honored() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        let relay = world.add_entity((position(vec3(-10.0, 0.0, 0.0)),));
+        let actor = world.add_entity((position(vec3(0.0, 0.0, -10.0)), PropAI("Grub".into())));
+        world.add_unique(PlayerInfo {
+            pos: vec3(10.0, 0.0, 0.0),
+            rotation: Quaternion::from_angle_y(Deg(0.0)),
+            entity_id: player,
+            inventory_entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+        });
+        assert_eq!(opener_position(&world, relay), Some(vec3(10.0, 0.0, 0.0)));
+        assert_eq!(opener_position(&world, actor), Some(vec3(0.0, 0.0, -10.0)));
+        assert_eq!(opener_position(&world, player), Some(vec3(10.0, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn each_pod_plays_one_spatial_hatch_sound_and_only_grubs_launch() {
+        let mut world = World::new();
+        let pod = world.add_entity((position(vec3(0.0, 0.0, 0.0)),));
+        let physics = PhysicsWorld::new();
+        for payload in [EggPayload::Grub, EggPayload::Goo, EggPayload::Swarmer] {
+            let grub = matches!(payload, EggPayload::Grub);
+            let mut script = BaseEgg::new(payload);
+            let msg = MessagePayload::TurnOn { from: pod };
+            let Effect::Multiple(effects) = script.handle_message(pod, &world, &physics, &msg)
+            else {
+                panic!("hatch effects")
+            };
+            assert_eq!(effects.iter().filter(|e| matches!(e, Effect::PlaySound { name, spatial: true, source: Some(id), .. } if name == "pod_exp" && *id == pod)).count(), 1);
+            for effect in effects {
+                if let Effect::CreateEntityByTemplateName {
+                    initial_velocity, ..
+                } = effect
+                {
+                    assert_eq!(initial_velocity.magnitude2() > 0.0, grub);
+                }
+            }
+            assert!(matches!(
+                script.handle_message(pod, &world, &physics, &msg),
+                Effect::NoEffect
+            ));
+            let state = script.save_state().unwrap();
+            assert!(
+                state
+                    .decode::<BaseEggState>(1, SCRIPT_STATE_KEY)
+                    .unwrap()
+                    .hatched
+            );
+        }
+    }
+}
