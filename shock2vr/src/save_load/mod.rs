@@ -24,7 +24,8 @@ use crate::{
     mission::{GlobalTemplateIdMap, PlayerInfo},
     runtime_props::{
         RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropDoNotSerialize,
-        RuntimePropLaunchedProjectile, RuntimePropPlayerFiredProjectile, RuntimePropSelectedAmmo,
+        RuntimePropLaunchedProjectile, RuntimePropMetaProperties, RuntimePropPlayerFiredProjectile,
+        RuntimePropSelectedAmmo,
     },
     scripts::{ScriptWorld, script_util},
     util::partition_map,
@@ -143,6 +144,7 @@ pub fn to_save_data_with_scripts(
     let v_launched_projectiles = world
         .borrow::<View<RuntimePropLaunchedProjectile>>()
         .unwrap();
+    let v_meta_properties = world.borrow::<View<RuntimePropMetaProperties>>().unwrap();
     let v_entities = world.borrow::<EntitiesView>().unwrap();
 
     let (all_properties, _, _) = dark::properties::get::<File>();
@@ -280,6 +282,16 @@ pub fn to_save_data_with_scripts(
         .map(|(id, velocity)| (id.inner(), velocity.0))
         .filter(|(id, _)| !entities_to_filter.contains(id))
         .partition(|(id, _)| held_entities.contains(id));
+    let raw_meta_properties: HashMap<u64, RuntimePropMetaProperties> = v_meta_properties
+        .iter()
+        .with_id()
+        .filter(|(entity_id, _)| !entities_to_filter.contains(&entity_id.inner()))
+        .map(|(entity_id, state)| (entity_id.inner(), state.clone()))
+        .collect();
+    let (held_meta_properties, world_meta_properties) =
+        partition_map(raw_meta_properties, |entity_id| {
+            held_entities.contains(entity_id)
+        });
     let world_entity_data = EntitySaveData {
         security_alarm: Some(crate::security_alarm::status(world)),
         properties: world_serialized_properties,
@@ -295,6 +307,7 @@ pub fn to_save_data_with_scripts(
         launched_projectiles: world_launched_projectiles,
         player_fired_projectiles: world_player_fired_projectiles,
         projectile_velocities: world_velocities.into_iter().collect(),
+        meta_properties: world_meta_properties,
         script_states: world_script_states,
     };
 
@@ -313,6 +326,7 @@ pub fn to_save_data_with_scripts(
         launched_projectiles: held_launched_projectiles,
         player_fired_projectiles: held_player_fired_projectiles,
         projectile_velocities: held_velocities.into_iter().collect(),
+        meta_properties: held_meta_properties,
         script_states: held_script_states,
     };
 

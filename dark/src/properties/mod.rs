@@ -109,6 +109,7 @@ use serde::{
 };
 
 use std::{
+    any::TypeId,
     collections::HashMap,
     convert::identity,
     fmt,
@@ -2463,6 +2464,14 @@ where
     fn initialize(&self, world: &mut World, entity: EntityId) {
         world.add_component(entity, self.clone());
     }
+
+    fn component_type_id(&self) -> TypeId {
+        TypeId::of::<C>()
+    }
+
+    fn remove(&self, world: &mut World, entity: EntityId) {
+        world.delete_component::<C>(entity);
+    }
 }
 
 #[derive(Debug)]
@@ -2498,6 +2507,14 @@ where
         drop(view);
         world.add_component(entity, value_to_set);
     }
+
+    fn component_type_id(&self) -> TypeId {
+        TypeId::of::<C>()
+    }
+
+    fn remove(&self, world: &mut World, entity: EntityId) {
+        world.delete_component::<C>(entity);
+    }
 }
 
 // `Send + Sync` is required so the level parse (which builds `Vec<Arc<Box<dyn Property>>>`)
@@ -2505,6 +2522,8 @@ where
 // for free: both blanket impls below already require `C: Send + Sync`.
 pub trait Property: fmt::Debug + Send + Sync {
     fn initialize(&self, world: &mut World, entity: EntityId);
+    fn component_type_id(&self) -> TypeId;
+    fn remove(&self, world: &mut World, entity: EntityId);
 }
 
 // `Send + Sync` so the shared `GlobalContext` (which holds these definition objects)

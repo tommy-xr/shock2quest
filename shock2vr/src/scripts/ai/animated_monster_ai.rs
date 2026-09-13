@@ -1885,6 +1885,10 @@ impl Script for AnimatedMonsterAI {
                     Effect::NoEffect
                 }
             }
+            MessagePayload::RefreshAIProperties => {
+                self.config = Self::build_config(world, entity_id);
+                Effect::NoEffect
+            }
             MessagePayload::SetAlertness { level, pin } => {
                 // Dead AIs stay dead - a corpse keeps a live script, and the
                 // broadcast (DebugAlertAll) reaches every creature
