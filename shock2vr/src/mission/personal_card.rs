@@ -92,7 +92,7 @@ impl PersonalCard {
             // Another 8 mm clears the buckle's face. This is beside the pouch,
             // not at the belt origin (which is occupied by the ammo pouch).
             body.front(
-                0.55,
+                crate::dev_params::get(crate::dev_params::VR_BELT_DROP),
                 crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) + 0.024,
             ) - vec3(body.yaw.cos(), 0.0, body.yaw.sin()) * (0.115 / crate::METERS_PER_WORLD_UNIT)
         });

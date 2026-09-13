@@ -242,8 +242,9 @@ dev_params! {
     VR_AMMO_POUCH_ZONES = bool("vr_ammo_pouch_zones", "Ammo pouch zone", false),
     VR_HOLSTER_ZONES = bool("vr_holster_zones", "Holster zones", false),
     /// Actual front of the curved belt, including the asset's authored offset.
-    /// The ammo pouch follows this setting so its mesh and grab target stay together.
+    /// The pouch and personal card follow both belt settings with their grab targets.
     VR_BELT_DISTANCE = float("vr_belt_distance", "Belt forward (m)", 0.20, 0.10, 0.45, 0.01),
+    VR_BELT_DROP = float("vr_belt_drop", "Belt below eyes (m)", 0.55, 0.30, 0.90, 0.01),
     VR_HOLSTER_DROP = float("vr_holster_drop", "Holster below eyes (m)", 0.78, 0.55, 1.1, 0.02),
     VR_HOLSTER_SIDE = float("vr_holster_side", "Holster side (m)", 0.23, 0.16, 0.40, 0.01),
     VR_HOLSTER_FORWARD = float("vr_holster_forward", "Holster forward (m)", 0.04, -0.20, 0.30, 0.01),

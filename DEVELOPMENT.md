@@ -254,6 +254,11 @@ free-camera switches. Values are read every frame, so a change is live on the
 next one, and the same registry is exposed over HTTP by the debug runtime
 (`GET`/`POST /v1/dev-params`) for headless runs.
 
+To fit the VR battle belt, adjust **Belt below eyes (m)** (smaller raises it)
+and **Belt forward (m)** (larger brings it farther out). Both move the belt,
+personal card, ammo pouch and grab targets together; thigh holsters retain their
+separate controls. These developer values apply for the current session.
+
 #### Glove fit check (`debug_gloves`)
 
 Open `debug_gloves` from the Developer scene list. On Quest it requests room
@@ -312,6 +317,7 @@ and new units. Geometry divided by this factor and meters-per-unit multiplied
 by it cancel: it is an internal unit convention, not a physical-size slider.
 Glove size is deliberately an independent fit experiment and
 does not change the world, stereo separation, tracking conversion or saved grips.
+
 
 #### Testing VR weapon handling at different stats
 
