@@ -12,8 +12,8 @@ use crate::{
         Effect,
         ai::ai_util,
         ai::steering::{
-            self, CollisionAvoidanceSteeringStrategy, PathFollowSteeringStrategy, SteeringOutput,
-            SteeringStrategy,
+            self, CollisionAvoidanceSteeringStrategy, PathFollowSteeringStrategy, Steering,
+            SteeringOutput, SteeringStrategy,
         },
     },
     time::Time,
@@ -41,18 +41,27 @@ const SEARCH_MAX_SECONDS: f32 = 20.0;
 pub struct SearchBehavior {
     goal: Vector3<f32>,
     steering_strategy: Box<dyn SteeringStrategy>,
+    arrive_distance: f32,
     arrived: bool,
     scan_seconds: f32,
     total_seconds: f32,
 }
 
 impl SearchBehavior {
-    pub(super) fn at_goal(world: &World, entity_id: EntityId, goal: Vector3<f32>) -> bool {
+    pub(crate) fn at_goal(world: &World, entity_id: EntityId, goal: Vector3<f32>) -> bool {
+        Self::within_distance(world, entity_id, goal, SEARCH_ARRIVE_DISTANCE)
+    }
+
+    fn within_distance(
+        world: &World,
+        entity_id: EntityId,
+        goal: Vector3<f32>,
+        distance: f32,
+    ) -> bool {
         let (position, _) = ai_util::get_position_and_forward(world, entity_id);
         let dx = position.x - goal.x;
         let dz = position.z - goal.z;
-        (dx * dx + dz * dz).sqrt() < SEARCH_ARRIVE_DISTANCE
-            && (position.y - goal.y).abs() < SEARCH_ARRIVE_HEIGHT
+        (dx * dx + dz * dz).sqrt() < distance && (position.y - goal.y).abs() < SEARCH_ARRIVE_HEIGHT
     }
 
     pub fn new(goal: Vector3<f32>) -> SearchBehavior {
@@ -65,10 +74,19 @@ impl SearchBehavior {
                 Box::new(PathFollowSteeringStrategy::to_point(goal)),
                 Box::new(CollisionAvoidanceSteeringStrategy::conservative()),
             ]),
+            arrive_distance: SEARCH_ARRIVE_DISTANCE,
             arrived: false,
             scan_seconds: 0.0,
             total_seconds: 0.0,
         }
+    }
+
+    /// Scent has a short pickup range. Reaching the actual deposit avoids
+    /// stopping outside the next point's detection radius.
+    pub fn for_scent(goal: Vector3<f32>) -> Self {
+        let mut search = Self::new(goal);
+        search.arrive_distance = 0.35;
+        search
     }
 
     fn give_up(&self) -> bool {
@@ -78,6 +96,10 @@ impl SearchBehavior {
 }
 
 impl Behavior for SearchBehavior {
+    fn investigation_goal(&self) -> Option<Vector3<f32>> {
+        Some(self.goal)
+    }
+
     fn name(&self) -> &'static str {
         "Search"
     }
@@ -94,7 +116,7 @@ impl Behavior for SearchBehavior {
         self.total_seconds += dt;
 
         if !self.arrived {
-            self.arrived = Self::at_goal(world, entity_id, self.goal);
+            self.arrived = Self::within_distance(world, entity_id, self.goal, self.arrive_distance);
         }
 
         if self.arrived {
@@ -106,6 +128,16 @@ impl Behavior for SearchBehavior {
 
         self.steering_strategy
             .steer(current_heading, world, physics, entity_id, time)
+            .or_else(|| {
+                // Debug scenes and disconnected navigation can provide no
+                // route. Keep aiming at this fixed, perceived destination;
+                // retaining the previous heading walks away from the trail.
+                let (position, _) = ai_util::get_position_and_forward(world, entity_id);
+                Some((
+                    Steering::turn_to_point(position, crate::util::vec3_to_point3(self.goal)),
+                    Effect::NoEffect,
+                ))
+            })
     }
 
     fn animation(&self) -> Vec<MotionQueryItem> {

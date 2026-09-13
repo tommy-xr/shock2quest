@@ -16,6 +16,7 @@ pub struct EntitySaveData {
     /// Mission-local alarm bookkeeping; carried inventory never owns it.
     #[serde(default)]
     pub security_alarm: Option<crate::security_alarm::SecurityAlarmStatus>,
+    pub player_trail: Option<crate::mission::player_trail::PlayerTrail>,
     pub all_entities: Vec<u64>,
     pub template_id_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub properties:
@@ -74,6 +75,7 @@ impl EntitySaveData {
     pub fn empty() -> EntitySaveData {
         EntitySaveData {
             security_alarm: None,
+            player_trail: None,
             all_entities: Vec::new(),
             template_id_to_entity_id: HashMap::new(),
             properties: HashMap::new(),
@@ -96,6 +98,9 @@ impl EntitySaveData {
         &self,
         world: &mut World,
     ) -> (HashMap<i32, WrappedEntityId>, HashMap<EntityId, EntityId>) {
+        if let Some(trail) = &self.player_trail {
+            world.add_unique(trail.clone());
+        }
         if let Some(alarm) = self.security_alarm {
             world.add_unique(alarm);
         }
