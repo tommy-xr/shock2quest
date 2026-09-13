@@ -408,6 +408,9 @@ dev_params! {
     /// bug report needs are otherwise only reachable from a debug-runtime HTTP
     /// query, which a headset has no way to make.
     SHOW_POSITION = Visualizations::bool("show_position", "Show position", false),
+    /// Draw collider shapes, contacts and joint anchors live. The desktop and
+    /// debug runtime's `--debug-physics` flag seeds this switch before startup.
+    DEBUG_PHYSICS = Visualizations::bool("debug_physics", "Physics wireframe", false),
     /// How fast the free camera flies, in the player's own speed units - the
     /// default IS [`PLAYER_MOVE_SPEED`], so "walking pace" cannot drift from
     /// what walking actually is. These are pre-scale SS2 units, not world

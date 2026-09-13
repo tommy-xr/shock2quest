@@ -305,6 +305,12 @@ participates in All on / All off. VR places the shared readout on an upright
 panel with lazy recentering; it is hidden while the cyber interface, pause menu,
 or death camera owns the view. Values last until app restart.
 
+**Visualizations → Physics wireframe** (`debug_physics`) toggles collider,
+contact, and joint debug drawing without restarting the mission. It defaults
+off and participates in All on / All off. Desktop and debug runtime
+`--debug-physics` starts it on; menu and HTTP changes can still turn it off
+immediately. Like other live parameters, it lasts until app restart.
+
 **Locked** contains settled tuning, hidden from the ordinary categories but
 editable when opened. HTTP access is unchanged. Initially this includes global
 glove forward offset and melee drive limits, swing threshold, and model scale.
