@@ -38,6 +38,26 @@ const MARKER_START: i32 = 60_100;
 const ECOLOGY: i32 = 60_000;
 const STATE_KEY: &str = "shock2vr.earth_horde";
 const SEED: u64 = 0x4541525448;
+const FINAL_WAVE: u32 = 10;
+const WAVE_COUNTS: [u32; 10] = [6, 9, 12, 15, 18, 22, 26, 30, 34, 38];
+// Each unlocked archetype gets a guaranteed slot every wave. Pipe and shotgun
+// open every wave, so neither melee nor ranged pressure depends on RNG.
+const ENEMY_INTRODUCTIONS: &[(&str, u32)] = &[
+    ("OG-Pipe", 1),
+    ("OG-Shotgun", 1),
+    ("Maintenance", 2),
+    ("Protocol Droid", 2),
+    ("Midwife", 3),
+    ("Arachnid", 4),
+    ("Baby Arachnid", 5),
+    ("Security", 6),
+    ("Assassin", 7),
+    ("OG-Grenade", 7),
+    ("Rumbler", 8),
+    ("Overlord", 9),
+    ("Greater Over.", 10),
+    ("SHODAN", 10),
+];
 
 // Floor positions surveyed against Earth's actual collision geometry. The
 // subway is a separate AI arena: creatures cannot ride the player gravshafts.
@@ -61,7 +81,9 @@ pub(crate) fn asset_mission(name: &str) -> &str {
 }
 
 fn is_horde(name: &str) -> bool {
-    name.eq_ignore_ascii_case("earth_horde") || name.eq_ignore_ascii_case("earth_horde_test")
+    name.eq_ignore_ascii_case("earth_horde")
+        || name.eq_ignore_ascii_case("earth_horde_test")
+        || name.eq_ignore_ascii_case("earth_horde_final")
 }
 
 pub(crate) fn wrap_population(
@@ -74,6 +96,7 @@ pub(crate) fn wrap_population(
             inner,
             fresh,
             quick: name.eq_ignore_ascii_case("earth_horde_test"),
+            final_preview: name.eq_ignore_ascii_case("earth_horde_final"),
         })
     } else {
         inner
@@ -84,6 +107,7 @@ struct HordePopulation {
     inner: Box<dyn EntityPopulator>,
     fresh: Arc<AtomicBool>,
     quick: bool,
+    final_preview: bool,
 }
 
 impl EntityPopulator for HordePopulation {
@@ -275,7 +299,13 @@ impl EntityPopulator for HordePopulation {
                     scripts: vec!["EarthHorde".into()],
                     inherits: false,
                 },
-                PropEcoType(if self.quick { 1 } else { 0 }),
+                PropEcoType(if self.quick {
+                    1
+                } else if self.final_preview {
+                    2
+                } else {
+                    0
+                }),
             ),
         );
         for marker in markers {
@@ -332,6 +362,13 @@ impl EntityPopulator for HordePopulation {
 }
 
 pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
+    for (name, _) in ENEMY_INTRODUCTIONS {
+        assert!(
+            core.template_name_to_template_id
+                .contains_key(&name.to_ascii_lowercase()),
+            "unknown horde enemy: {name}"
+        );
+    }
     for contents in core
         .world
         .borrow::<View<PropReplicatorContents>>()
@@ -467,25 +504,68 @@ impl Default for HordeDirector {
 
 impl HordeDirector {
     fn final_wave(&self) -> u32 {
-        if self.quick { 3 } else { 8 }
+        if self.quick { 3 } else { FINAL_WAVE }
     }
     fn rest_seconds(&self) -> f32 {
         if self.quick { 8.0 } else { 60.0 }
     }
     fn quota(&self) -> u32 {
         if self.quick {
-            2 + self.wave
+            (2 + self.wave).max(self.enemy_roster().len() as u32)
         } else {
-            [6, 9, 13, 17, 22, 28, 34, 42][self.wave.saturating_sub(1).min(7) as usize]
-                + self.wave.saturating_sub(8).min(100) * 4
+            WAVE_COUNTS[self.wave.saturating_sub(1).min(FINAL_WAVE - 1) as usize]
+                .saturating_add(self.wave.saturating_sub(FINAL_WAVE).saturating_mul(6))
         }
     }
     fn assault_seconds(&self) -> f32 {
         if self.quick {
             12.0 + self.wave as f32 * 4.0
         } else {
-            60.0 + self.wave.saturating_sub(1).min(8) as f32 * 15.0
+            60.0 + self.wave.saturating_sub(1) as f32 * 8.0
         }
+    }
+    fn enemy_roster(&self) -> Vec<&'static str> {
+        let unlocked = ENEMY_INTRODUCTIONS
+            .iter()
+            .filter(|(_, debut)| *debut <= self.wave.max(1));
+        // New enemies arrive promptly after the opening pair; all returning
+        // types still appear before weighted reinforcements begin.
+        let mut roster = vec!["OG-Pipe", "OG-Shotgun"];
+        roster.extend(
+            unlocked
+                .clone()
+                .filter(|(_, debut)| *debut == self.wave && *debut > 1)
+                .map(|(name, _)| *name),
+        );
+        roster.extend(
+            unlocked
+                .filter(|(_, debut)| *debut > 1 && *debut != self.wave)
+                .map(|(name, _)| *name),
+        );
+        roster
+    }
+    fn next_enemy(&mut self) -> &'static str {
+        let roster = self.enemy_roster();
+        if let Some(name) = roster.get(self.spawned as usize) {
+            return name;
+        }
+        // Reinforcements favor ordinary enemies during the finite run.
+        // Endless progressively weights the late introductions more heavily;
+        // counts and assault duration keep growing without a gameplay cap.
+        let endless = self.wave.saturating_sub(FINAL_WAVE).min(32);
+        let weighted: Vec<_> = ENEMY_INTRODUCTIONS
+            .iter()
+            .filter(|(name, debut)| *debut <= self.wave.max(1) && *name != "SHODAN")
+            .map(|(name, debut)| (*name, if *debut >= 6 { 1 + endless as usize } else { 4 }))
+            .collect();
+        let mut choice = self.roll(weighted.iter().map(|(_, weight)| weight).sum());
+        for (name, weight) in weighted {
+            if choice < weight {
+                return name;
+            }
+            choice -= weight;
+        }
+        unreachable!("weighted enemy choice must resolve")
     }
     fn roll(&mut self, count: usize) -> usize {
         let mut rng = rand::rngs::StdRng::seed_from_u64(self.seed);
@@ -614,13 +694,7 @@ impl HordeDirector {
             return None;
         }
         let (_, marker, _) = sites[self.roll(sites.len())];
-        let pool: &[&str] = match self.wave {
-            0..=2 => &["OG-Pipe"],
-            3..=4 => &["OG-Pipe", "OG-Pipe", "OG-Shotgun"],
-            5..=6 => &["OG-Pipe", "OG-Shotgun", "Assassin"],
-            _ => &["OG-Shotgun", "OG-Grenade", "Assassin"],
-        };
-        let template_name = pool[self.roll(pool.len())].to_owned();
+        let template_name = self.next_enemy().to_owned();
         Some(Effect::SpawnEcologyEntity {
             template_name,
             spawn_point: marker,
@@ -645,11 +719,16 @@ impl Script for HordeDirector {
         let mut effects = Vec::new();
         if !self.initialized {
             self.initialized = true;
-            self.quick = world
+            let mode = world
                 .borrow::<View<PropEcoType>>()
                 .unwrap()
                 .get(entity)
-                .is_ok_and(|p| p.0 == 1);
+                .map(|p| p.0)
+                .unwrap_or(0);
+            self.quick = mode == 1;
+            if mode == 2 {
+                self.wave = FINAL_WAVE - 1;
+            }
             self.clock = self.rest_seconds();
             self.next_status = 5.0;
             effects.push(Effect::ShowMessage { text: "EARTH: CONTAINMENT | Pistol + psi amp in inventory | Shops ahead, trainers upstairs".into() });
@@ -868,17 +947,17 @@ mod tests {
         let world = World::new();
         let mut director = HordeDirector {
             initialized: true,
-            wave: 8,
+            wave: FINAL_WAVE,
             ..Default::default()
         };
         director.clear_wave();
         assert_eq!(director.phase, Phase::Victory);
         director.start_wave(&world);
-        assert_eq!(director.wave, 9);
+        assert_eq!(director.wave, FINAL_WAVE + 1);
         assert_eq!(director.phase, Phase::Assault);
         director.clear_wave();
         assert_eq!(director.phase, Phase::Rest);
-        assert!(director.quota() > 42);
+        assert!(director.quota() > WAVE_COUNTS[9]);
     }
 
     #[test]
@@ -935,14 +1014,102 @@ mod tests {
     }
 
     #[test]
-    fn full_run_has_about_twenty_three_minutes_of_minimum_scheduled_time() {
+    fn final_preview_initializes_once_and_uses_the_normal_final_wave() {
+        let mut world = World::new();
+        world.add_unique(PlayerLifeState::Alive);
+        let marker = world.add_entity((PropEcoType(2),));
         let mut director = HordeDirector::default();
-        let mut seconds = 8.0 * director.rest_seconds();
-        for wave in 1..=8 {
+        let physics = PhysicsWorld::new();
+        let time = Time {
+            elapsed: std::time::Duration::from_secs_f32(0.1),
+            total: std::time::Duration::from_secs_f32(0.1),
+        };
+        director.update(marker, &world, &physics, &time);
+        assert_eq!(director.wave, FINAL_WAVE - 1);
+        director.start_wave(&world);
+        let state = director.save_state().unwrap();
+        let restored: HordeDirector = state.decode(1, STATE_KEY).unwrap();
+        assert!(restored.initialized);
+        assert_eq!(restored.wave, FINAL_WAVE);
+        assert_eq!(restored.quota(), 38);
+        assert_eq!(asset_mission("earth_horde_final"), "earth.mis");
+    }
+
+    #[test]
+    fn every_wave_guarantees_returning_types_and_delays_small_spiders() {
+        let mut previous = Vec::new();
+        for wave in 1..=FINAL_WAVE + 2 {
+            let mut director = HordeDirector {
+                wave,
+                ..Default::default()
+            };
+            let roster = director.enemy_roster();
+            assert!(director.quota() as usize >= roster.len());
+            assert_eq!(&roster[..2], &["OG-Pipe", "OG-Shotgun"]);
+            for name in &previous {
+                assert!(roster.contains(name), "wave {wave} lost {name}");
+            }
+            assert_eq!(roster.contains(&"Baby Arachnid"), wave >= 5);
+            assert_eq!(roster.contains(&"Maintenance"), wave >= 2);
+            assert_eq!(roster.contains(&"Protocol Droid"), wave >= 2);
+            for (index, name) in roster.iter().enumerate() {
+                director.spawned = index as u32;
+                assert_eq!(director.next_enemy(), *name);
+            }
+            director.spawned = roster.len() as u32;
+            for _ in 0..100 {
+                assert!(roster.contains(&director.next_enemy()));
+            }
+            previous = roster;
+        }
+    }
+
+    #[test]
+    fn endless_keeps_growing_past_the_old_cap_and_favors_heavy_reinforcements() {
+        let mut prior = HordeDirector {
+            wave: FINAL_WAVE,
+            ..Default::default()
+        };
+        for wave in [11, 12, 108, 109, 110, 1000] {
+            let next = HordeDirector {
+                wave,
+                ..Default::default()
+            };
+            assert!(next.quota() > prior.quota());
+            assert!(next.assault_seconds() > prior.assault_seconds());
+            prior = next;
+        }
+        let heavy_count = |wave| {
+            let mut director = HordeDirector {
+                wave,
+                spawned: 100,
+                ..Default::default()
+            };
+            (0..2000)
+                .filter(|_| {
+                    let name = director.next_enemy();
+                    assert_ne!(
+                        name, "SHODAN",
+                        "avatar is a guaranteed encounter, not random filler"
+                    );
+                    ENEMY_INTRODUCTIONS
+                        .iter()
+                        .any(|(candidate, debut)| *candidate == name && *debut >= 6)
+                })
+                .count()
+        };
+        assert!(heavy_count(42) > heavy_count(10) * 2);
+    }
+
+    #[test]
+    fn full_run_has_twenty_six_minutes_of_minimum_scheduled_time() {
+        let mut director = HordeDirector::default();
+        let mut seconds = FINAL_WAVE as f32 * director.rest_seconds();
+        for wave in 1..=FINAL_WAVE {
             director.wave = wave;
             seconds += director.assault_seconds();
         }
-        assert!((1200.0..=1800.0).contains(&seconds));
+        assert_eq!(seconds, 26.0 * 60.0);
         assert_eq!(asset_mission("EARTH_HORDE"), "earth.mis");
         assert_eq!(asset_mission("medsci1.mis"), "medsci1.mis");
     }
