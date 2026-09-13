@@ -297,7 +297,7 @@ pub fn create_initial_scene(
         global_context,
         options.spawn_location.clone(),
         QuestInfo::with_difficulty(options.difficulty),
-        Box::new(MissionEntityPopulator::create()),
+        Box::new(MissionEntityPopulator::create(options.difficulty)),
         HeldItemSaveData::empty(),
         options,
     );
@@ -329,7 +329,9 @@ pub fn load_mission_from_save_data(
             let populator = SaveFileEntityPopulator::create(save_data_cloned);
             Box::new(populator)
         } else {
-            Box::new(MissionEntityPopulator::create())
+            Box::new(MissionEntityPopulator::create(
+                save_data.global_data.quest_info.difficulty(),
+            ))
         }
     };
 

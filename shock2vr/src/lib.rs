@@ -1086,7 +1086,9 @@ impl Game {
             {
                 Box::new(SaveFileEntityPopulator::create(save_data.clone()))
             } else {
-                Box::new(MissionEntityPopulator::create())
+                Box::new(MissionEntityPopulator::create(
+                    pending.quest_info.difficulty(),
+                ))
             }
         };
 
