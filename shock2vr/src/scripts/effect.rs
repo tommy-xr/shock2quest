@@ -66,6 +66,11 @@ pub enum GlobalEffect {
     /// Return to the main menu, replacing whatever scene is active.
     ShowMainMenu,
 
+    /// Begin a fresh campaign with a fixed difficulty, clearing the previous ledger.
+    StartNewCampaign {
+        difficulty: dark::gamesys::Difficulty,
+    },
+
     /// Open the pause menu over the active scene. The scene cannot open it
     /// itself - the overlay is `Game`'s, and a paused scene is not updated at
     /// all - so the cyber interface's system button asks for it this way.

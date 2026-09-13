@@ -230,16 +230,20 @@ Steps are edge-triggered, so a held stick moves one place, and they are the same
 `StepPsiSelection` the readout's four arrows emit - the selection applies live,
 and the panel pages to whatever tier it lands on.
 
-### Campaign difficulty in debug runs
+### Campaign difficulty
 
-Start a fresh mission with `cargo dbgr --mission medsci1.mis --difficulty hard`.
+New Game offers Easy, Normal (the default), Hard, and Impossible. Choose a level,
+then Start Game; the choice is fixed for that campaign. Starting another game
+creates a fresh character and fresh mission state.
+
+For debug runs, use `cargo dbgr --mission medsci1.mis --difficulty hard`.
 The choices are `easy`, `normal` (default), `hard`, and `impossible`; the SDK
 accepts the same strings as `GameServer.launch({ mission, difficulty })`.
 Difficulty is fixed for a campaign and reported by `/v1/info` as
 `player.difficulty`. Saves and deck transitions retain it, including when loading
 an existing campaign from a runtime launched with a different choice. The generic
-quest-bit API cannot change it. Gameplay consumers are being added in the
-subsequent difficulty stack layers.
+quest-bit API cannot change it. The choice drives authored player pools, trainer
+and replicator prices, mission object masks, and Easy ecology and hypo bonuses.
 
 ### Developer options
 

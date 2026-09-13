@@ -16,6 +16,15 @@ export const norm = (x: number, y: number): [number, number] => [x / CANVAS_W, y
 export const menuEntry = (index: number): [number, number] =>
   norm(400 + 179 / 2, 20 + index * 76 + 60 / 2);
 
+/** Normalized centers of the retail NEWGAMER.BIN controls. */
+export function newGameEntry(control: "easy" | "normal" | "hard" | "impossible" | "start" | "options" | "cancel"): [number, number] {
+  const centers: Record<typeof control, [number, number]> = {
+    easy: [80, 96], normal: [240, 96], hard: [400, 96], impossible: [560, 96],
+    start: [376.5, 296], options: [376.5, 364], cancel: [376.5, 432],
+  };
+  return norm(...centers[control]);
+}
+
 /**
  * Click one main-menu entry with the flat pointer. Clicks are rising-edge, so
  * the press has to start on a frame where the previous one was unpressed.
