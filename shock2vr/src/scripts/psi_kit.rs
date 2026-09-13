@@ -1,10 +1,10 @@
-use shipyard::{EntityId, World};
+use shipyard::{EntityId, UniqueView, World};
 
 use crate::physics::PhysicsWorld;
 
 use super::{Effect, MessagePayload, Script};
 
-/// The retail psi hypo (`PsiKitScript`): inventory use restores 20 psi and
+/// The retail psi hypo (`PsiKitScript`): inventory use restores 30 psi on Easy, 20 otherwise, and
 /// consumes one unit from its stack.
 ///
 /// At an already-full pool the original reports `misc\\PsiMaxed` and leaves
@@ -26,7 +26,7 @@ impl Script for PsiKitScript {
     fn handle_message(
         &mut self,
         entity_id: EntityId,
-        _world: &World,
+        world: &World,
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
@@ -36,7 +36,14 @@ impl Script for PsiKitScript {
 
         Effect::UsePsiKit {
             entity_id,
-            amount: Self::RESTORE_AMOUNT,
+            amount: if world
+                .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+                .is_ok_and(|q| q.difficulty() == dark::gamesys::Difficulty::Easy)
+            {
+                30
+            } else {
+                Self::RESTORE_AMOUNT
+            },
         }
     }
 }
@@ -56,6 +63,31 @@ mod tests {
         let mut world = World::new();
         let booster = world.add_entity(());
         (world, booster)
+    }
+
+    #[test]
+    fn easy_psi_hypo_requests_thirty_points_only_on_easy() {
+        for difficulty in dark::gamesys::Difficulty::ALL {
+            let (world, booster) = world_with_booster();
+            world.add_unique(crate::quest_info::QuestInfo::with_difficulty(difficulty));
+            let effect = PsiKitScript::new().handle_message(
+                booster,
+                &world,
+                &PhysicsWorld::new(),
+                &MessagePayload::Frob,
+            );
+            match effect {
+                Effect::UsePsiKit { amount, .. } => assert_eq!(
+                    amount,
+                    if difficulty == dark::gamesys::Difficulty::Easy {
+                        30
+                    } else {
+                        20
+                    }
+                ),
+                _ => panic!("expected psi kit use"),
+            }
+        }
     }
 
     #[test]

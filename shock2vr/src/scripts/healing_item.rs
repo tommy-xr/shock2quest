@@ -75,9 +75,19 @@ impl Script for HealingItemScript {
         }
 
         let pharmo_friendly = Self::pharmo_friendly(world);
+        let mut total = Self::retail_amount(self.kind.base_total(), pharmo_friendly);
+        // MedPatchScript boosts the total budget on Easy, after Pharmo-Friendly.
+        // Its pulse size/cadence and MedicalKit's budget are unchanged.
+        if self.kind == HealingItemKind::MedPatch
+            && world
+                .borrow::<UniqueView<QuestInfo>>()
+                .is_ok_and(|q| q.difficulty() == dark::gamesys::Difficulty::Easy)
+        {
+            total = total * 3 / 2;
+        }
         Effect::UseHealingItem {
             entity_id,
-            total: Self::retail_amount(self.kind.base_total(), pharmo_friendly),
+            total,
             pulse: Self::retail_amount(self.kind.base_pulse(), pharmo_friendly),
             first_pulse_secs: HEALING_FIRST_PULSE_SECS,
             pulse_interval_secs: HEALING_PULSE_INTERVAL_SECS,
@@ -199,6 +209,68 @@ mod tests {
         ActiveHealing, HEALING_FIRST_PULSE_SECS, HEALING_PULSE_INTERVAL_SECS, HealingItemKind,
         HealingItemScript,
     };
+
+    #[test]
+    fn easy_medpatch_budget_applies_after_trait_without_changing_pulses() {
+        for difficulty in dark::gamesys::Difficulty::ALL {
+            for pharmo in [false, true] {
+                let mut world = World::new();
+                let item = world.add_entity(());
+                let mut quests = QuestInfo::with_difficulty(difficulty);
+                if pharmo {
+                    quests
+                        .player_stats_mut()
+                        .add_os_trait(crate::scripts::gui::TRAIT_PHARMO_FRIENDLY);
+                }
+                world.add_unique(quests);
+                for kind in [HealingItemKind::MedPatch, HealingItemKind::MedicalKit] {
+                    let effect = HealingItemScript::new(kind).handle_message(
+                        item,
+                        &world,
+                        &PhysicsWorld::new(),
+                        &MessagePayload::Frob,
+                    );
+                    let mut expected = if kind == HealingItemKind::MedPatch {
+                        10
+                    } else {
+                        200
+                    };
+                    if pharmo {
+                        expected = expected * 6 / 5;
+                    }
+                    if kind == HealingItemKind::MedPatch
+                        && difficulty == dark::gamesys::Difficulty::Easy
+                    {
+                        expected = expected * 3 / 2;
+                    }
+                    match effect {
+                        Effect::UseHealingItem {
+                            total,
+                            pulse,
+                            first_pulse_secs,
+                            pulse_interval_secs,
+                            ..
+                        } => {
+                            assert_eq!(total, expected);
+                            assert_eq!(
+                                pulse,
+                                if kind == HealingItemKind::MedPatch {
+                                    2
+                                } else if pharmo {
+                                    6
+                                } else {
+                                    5
+                                }
+                            );
+                            assert_eq!(first_pulse_secs, 0.1);
+                            assert_eq!(pulse_interval_secs, 1.5);
+                        }
+                        _ => panic!("expected healing use"),
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn med_patch_frob_uses_retail_budget_and_cadence() {
