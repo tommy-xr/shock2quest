@@ -741,6 +741,9 @@ pub enum Effect {
     },
     /// One-shot controller feedback. Gameplay describes it; only the runtime
     /// talks to hardware. Transient output is never serialized into saves.
+    WeaponRecoil {
+        entity_id: EntityId,
+    },
     HandHaptic {
         hand: crate::Handedness,
         pulse: crate::haptics::HapticPulse,

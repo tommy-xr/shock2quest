@@ -614,6 +614,8 @@ fn main() {
     let mut requested_display_refresh_rate = None;
     let mut ready_reported = false;
     let mut session_focused = false;
+    let haptic_clock = Instant::now();
+    let mut haptic_mixer = shock2vr::haptics::HapticMixer::default();
     // Consecutive rejected frame submissions, and consecutive frames whose
     // views were not tracked. Both are logged once at the start of a burst and
     // once on recovery (with the length), so a long outage is still visible in
@@ -1060,6 +1062,7 @@ fn main() {
         game.update(&time_context, &input_context, &mut action_state);
         let pulses = game.take_haptics();
         if session_focused {
+            let pulses = haptic_mixer.select(haptic_clock.elapsed(), pulses);
             for (hand, action) in [&left_haptic, &right_haptic].into_iter().enumerate() {
                 if let Some(request) = pulses[hand] {
                     let pulse = xr::HapticVibration::new()

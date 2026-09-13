@@ -9465,6 +9465,17 @@ impl MissionCore {
                     }
                     drop(quests);
                 }
+                Effect::WeaponRecoil { entity_id } => {
+                    let hands = self.interaction.haptic_hands(entity_id);
+                    for (hand, pulse) in hands
+                        .into_iter()
+                        .zip([crate::haptics::GUN_RECOIL, crate::haptics::GUN_SUPPORT])
+                    {
+                        if let Some(hand) = hand {
+                            effects.push_back(Effect::HandHaptic { hand, pulse });
+                        }
+                    }
+                }
                 Effect::HandHaptic { hand, pulse } => {
                     self.world
                         .borrow::<UniqueViewMut<crate::haptics::HapticFeedback>>()

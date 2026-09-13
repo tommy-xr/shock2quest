@@ -21,7 +21,8 @@ for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as 
       const other = primary === "left" ? "right" : "left";
       const owner = primary === "left" ? "wielded_entity_id" : "right_hand_entity_id";
       const empty = primary === "left" ? "right_hand_entity_id" : "wielded_entity_id";
-      await game.input.set(`${primary}_hand.position`,[0,1,-.5]);
+      // Keep support acquisition clear of the enlarged body-inventory regions.
+      await game.input.set(`${primary}_hand.position`,[0,1,-1.2]);
       await game.input.set(`${primary}_hand.rotation`,[0,0,0,1]);
       await game.input.set(`${other}_hand.squeeze`,0);
       await game.step({frames:30});
@@ -67,9 +68,12 @@ for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as 
       }
       const ammo = ammoOf(await game.entities.detail(weapon.id));
       assert.ok(ammo > 0);
+      const pulses = async () => (await game.info()).player.hand_feedback!.haptics!;
+      const beforePulses = (await pulses()).sequence;
       await game.input.set(`${other}_hand.trigger`,1);
       await game.step({frames:2});
       assert.equal(ammoOf(await game.entities.detail(weapon.id)),ammo,"support trigger cannot fire");
+      assert.deepEqual((await pulses()).sequence, beforePulses);
       assert.equal((await grip()).support!.visual_trigger,1,"reserved support input remains available to finger animation");
       assert.equal((await game.info()).player[empty],null);
       // Pistol/shotgun rounds are fast raycast projectiles, not Rapier bodies.
@@ -77,6 +81,8 @@ for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as 
       await game.input.set(`${primary}_hand.trigger`,1);
       await game.step({frames:1});
       assert.equal(ammoOf(await game.entities.detail(weapon.id)),ammo-1,"primary trigger fires while supported");
+      const feedback = await pulses();
+      assert.deepEqual(feedback.sequence, beforePulses.map(n => n + 1));
       const fired = await grip();
       assert.equal(fired.support!.attached,true,"support latch survives actual firing");
       assert.equal(fired.visual_trigger,1);
