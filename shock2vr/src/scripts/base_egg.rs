@@ -1,5 +1,5 @@
-use cgmath::{InnerSpace, Quaternion, Vector3, vec3};
-use dark::properties::{PropAI, PropCreature, PropPosition};
+use cgmath::{Deg, InnerSpace, Quaternion, Rotation3, Vector3, vec3};
+use dark::properties::{PropAI, PropCreature, PropModelName, PropPosition};
 use engine::audio::AudioHandle;
 use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -49,15 +49,8 @@ impl EggPayload {
         }
     }
 
-    /// How far above the pod's origin the payload is created, along the POD's
-    /// own up (the wall-mounted variants run these same scripts, so a
-    /// world-space offset would push their payload into the wall).
-    ///
-    /// The goo emitter needs real clearance - it fires from where it stands,
-    /// and inside the shell its globs splash on the pod instead of on the
-    /// player. A creature only needs to clear the shell's mouth: nothing
-    /// grounds it until its own locomotion runs, so a larger offset leaves it
-    /// visibly hovering and a smaller one hides it inside the pod.
+    /// Clearance from the pod origin along its mouth direction. Goo needs
+    /// extra clearance so emitted globs do not immediately strike the shell.
     fn lift(&self) -> f32 {
         match self {
             EggPayload::Goo => GOO_MUZZLE_CLEARANCE,
@@ -117,9 +110,24 @@ impl Script for BaseEgg {
         };
         self.hatched = true;
 
-        let lift = self.payload.lift();
+        // The wall shell is different art, not a pitched floor shell: wpod
+        // opens along local -Z while eggcl opens along local +Y.
+        let wall_pod = world
+            .borrow::<View<PropModelName>>()
+            .ok()
+            .is_some_and(|models| {
+                models.get(entity_id).is_ok_and(|model| {
+                    model.0.eq_ignore_ascii_case("wpod") || model.0.eq_ignore_ascii_case("wpodopen")
+                })
+            });
+        let (offset, payload_rotation) = hatch_transform(&self.payload, rotation, wall_pod);
+        let fallback_rotation = if wall_pod {
+            rotation * Quaternion::from_angle_y(Deg(180.0))
+        } else {
+            rotation
+        };
         let initial_velocity = if matches!(self.payload, EggPayload::Grub) {
-            grub_emergence_velocity(position, rotation, opener_position(world, *from))
+            grub_emergence_velocity(position, fallback_rotation, opener_position(world, *from))
         } else {
             vec3(0.0, 0.0, 0.0)
         };
@@ -136,9 +144,8 @@ impl Script for BaseEgg {
             Effect::CreateEntityByTemplateName {
                 source_entity_id: entity_id,
                 template_name: (*template_name).to_owned(),
-                position: vec3_to_point3(position + rotation * vec3(0.0, lift, 0.0)),
-                // The pod's own facing: a wall pod hatches out of the wall.
-                orientation: rotation,
+                position: vec3_to_point3(position + offset),
+                orientation: payload_rotation,
                 // GrubAI preserves this launch until landing. Goo and swarm
                 // motion remains owned by their emitter / flight controller.
                 initial_velocity,
@@ -185,6 +192,27 @@ const GOO_MUZZLE_CLEARANCE: f32 = 1.2;
 /// The lip of an open pod, measured off the shell's own bounds (its top sits
 /// 0.78 above the origin), so a hatched creature sits in the shell's mouth.
 const SHELL_MOUTH: f32 = 0.8;
+
+/// Place payloads outside the actual model mouth, respecting mission yaw.
+/// Goo's projectile-local +Z launch frame must face out of the wall.
+/// Its Tweq's additional +Y velocity is authored world-relative and stays up.
+fn hatch_transform(
+    payload: &EggPayload,
+    rotation: Quaternion<f32>,
+    wall: bool,
+) -> (Vector3<f32>, Quaternion<f32>) {
+    let direction = if wall {
+        -Vector3::unit_z()
+    } else {
+        Vector3::unit_y()
+    };
+    let orientation = if wall && matches!(payload, EggPayload::Goo) {
+        rotation * Quaternion::from_angle_y(Deg(180.0))
+    } else {
+        rotation
+    };
+    (rotation * direction * payload.lift(), orientation)
+}
 
 /// TurnOn identifies the sender, which is usually a relay/tripwire rather
 /// than its activator. Honor a direct actor sender; use the live player for
@@ -249,6 +277,24 @@ mod tests {
             position: at,
             cell: 0,
             rotation: Quaternion::from_angle_y(Deg(0.0)),
+        }
+    }
+
+    #[test]
+    fn wall_mouth_and_goo_emission_follow_authored_model_axis_and_yaw() {
+        for yaw in [0.0, 90.0, 180.0] {
+            let rotation = Quaternion::from_angle_y(Deg(yaw));
+            let outward = rotation * -Vector3::unit_z();
+            for payload in [EggPayload::Grub, EggPayload::Goo, EggPayload::Swarmer] {
+                let (offset, facing) = hatch_transform(&payload, rotation, true);
+                assert!((offset - outward * payload.lift()).magnitude() < 0.0001);
+                if matches!(payload, EggPayload::Goo) {
+                    assert!((facing * Vector3::unit_z() - outward).magnitude() < 0.0001);
+                }
+                let (floor_offset, floor_facing) = hatch_transform(&payload, rotation, false);
+                assert!((floor_offset - Vector3::unit_y() * payload.lift()).magnitude() < 0.0001);
+                assert_eq!(floor_facing, rotation);
+            }
         }
     }
 
