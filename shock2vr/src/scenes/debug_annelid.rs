@@ -1,7 +1,7 @@
 //! Annelid egg pods, one station per authored kind, tripped by walking up to
 //! them.
 //!
-//! The three pods look identical and differ only in their script, so the bug
+//! The floor pods look identical and differ only in their script, so the bug
 //! "eggs spawn nothing" is invisible in a real level: a pod that opens and
 //! produces nothing is indistinguishable from one that was never near enough
 //! to hatch. Here each kind stands alone at a labeled station with a known
@@ -11,6 +11,7 @@
 //! - Goo pod (`GooEgg`)     - a toxic emitter lobbing venom-stimmed goo shots
 //! - Grub pod (`GrubEgg`)   - a crawling annelid
 //! - Swarmer pod (`SwarmerEgg`) - a flying annelid swarm
+//! - Wall grub pod - unmodified GrubEgg archetype, mounted against a wall
 //!
 //! Missions trip their pods with an authored "Floor Egg Tripwire" (a once,
 //! player-enter tripwire SwitchLinked to the pod). Runtime link authoring has
@@ -42,8 +43,7 @@ use super::debug_common::{
 
 struct EggStation {
     label: &'static str,
-    /// The floor variant of each pod: the wall variants differ only in model
-    /// orientation, and a floor pod sits where a walker can reach it.
+    /// Unmodified gamesys archetype, including a wall-mounted GrubEgg.
     template_id: i32,
     /// Station centre along +Z; every pod is the same distance ahead.
     z: f32,
@@ -64,6 +64,11 @@ const STATIONS: &[EggStation] = &[
         label: "Swarmer pod - flier",
         template_id: -1332,
         z: 6.0,
+    },
+    EggStation {
+        label: "Wall grub pod - approach from -Z",
+        template_id: -1333,
+        z: 12.0,
     },
 ];
 
@@ -96,6 +101,12 @@ pub fn create_debug_annelid_scene(
             vec3(2.0 * TRIP_RADIUS, 0.1, 2.0 * TRIP_RADIUS),
         ));
     }
+    // wpod's mouth faces local -Z; mount its back against this solid wall.
+    boxes.push((
+        vec3(0.25, 0.25, 0.30),
+        vec3(-STATION_DISTANCE, 2.0, 12.6),
+        vec3(5.0, 4.0, 0.4),
+    ));
     let (objects, collider) = boxes_to_geometry(&boxes);
 
     let mut builder = DebugSceneBuilder::new("debug_annelid")
@@ -112,13 +123,24 @@ pub fn create_debug_annelid_scene(
     for station in STATIONS {
         let mut label = SceneObject::world_space_text(station.label, font.clone(), 0.0);
         label.set_transform(
-            Matrix4::from_translation(vec3(-STATION_DISTANCE, 2.4, station.z))
-                * Matrix4::from_nonuniform_scale(
-                    0.10 * engine::measure_text_width(&**font, station.label, 1.0),
-                    0.10,
-                    1.0,
-                )
-                * Matrix4::from_angle_x(Deg(180.0)),
+            Matrix4::from_translation(vec3(
+                -STATION_DISTANCE,
+                if station.template_id == -1333 {
+                    3.3
+                } else {
+                    2.4
+                },
+                station.z,
+            )) * Matrix4::from_nonuniform_scale(
+                0.10 * engine::measure_text_width(&**font, station.label, 1.0),
+                0.10,
+                1.0,
+            ) * Matrix4::from_angle_x(Deg(180.0))
+                * Matrix4::from_angle_y(Deg(if station.template_id == -1333 {
+                    180.0
+                } else {
+                    0.0
+                })),
         );
         builder = builder.add_scene_object(label);
     }
@@ -129,11 +151,11 @@ pub fn create_debug_annelid_scene(
         asset_cache,
         audio_context,
     });
-    // A hatching pod is a fight; start the player able to survive all three.
+    // A hatching pod is a fight; start the player able to survive every station.
     max_player_stats(&mut core, "debug_annelid");
 
     println!(
-        "[debug_annelid] Three annelid egg pods stand {STATION_DISTANCE} units ahead, one per kind.\n\
+        "[debug_annelid] Four annelid egg pods stand {STATION_DISTANCE} units ahead, one per kind.\n\
          Walk within {TRIP_RADIUS} units of a pod (onto its kerb) to trip it, exactly as a\n\
          mission's Floor Egg Tripwire would. Goo = toxic projectiles, Grub = a crawler,\n\
          Swarmer = a flying swarm. Each pod trips once."
@@ -167,7 +189,15 @@ impl DebugSceneHooks for AnnelidHooks {
                 .map(|station| {
                     spawn_at(
                         station.template_id,
-                        Point3::new(-STATION_DISTANCE, 0.6, station.z),
+                        Point3::new(
+                            -STATION_DISTANCE,
+                            if station.template_id == -1333 {
+                                1.7
+                            } else {
+                                0.6
+                            },
+                            station.z,
+                        ),
                     )
                 })
                 .collect();

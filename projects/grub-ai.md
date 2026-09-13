@@ -126,3 +126,24 @@ Every egg plays the authored `pod_exp` schema once, spatially at its shell.
 The schema maps to the available `eggopen1` / `eggopen2` samples. The existing
 saved hatch latch suppresses repeated payload creation and audio. Goo emission
 and swarmer flight retain their existing velocity behavior.
+
+## Wall pod placement
+
+`wpod` / `wpodopen` are separate wall-shell models whose mouth faces local -Z;
+they are not pitched floor-shell models. Payload placement uses that mouth
+axis (with the mission rotation), while floor shells retain local +Y clearance.
+The open wall shell's bounds are x±0.8, y[-1.54,0.8], z±0.379. The same .8-unit
+creature clearance puts the grub outside its mouth, then the existing opener-
+directed launch takes over.
+
+Goo wall pods also aim their emitter's projectile-local +Z frame along the
+shell's outward -Z axis. The emitter's additional velocity is world-relative:
+its CfgTweqEm misc8 does not include TWEQ_MC_RELVEL256. Preserve that world-up
+component rather than pitching it or the projectile component into the ceiling.
+
+All four concrete mission instances inheriting Grub Wall Pod (-1333)—command1
+2348/2349 and rick2 751/752—override their scripts with GooEgg. The wall-grub
+station in debug_annelid therefore uses the unmodified gamesys archetype; the
+real command1 instance independently verifies mission overrides, yaw180,
+placement, and outward goo velocity. Unit tests cover yaw0/90/180 for all three
+payloads. Floor-pod behavior remains covered by the existing regression tests.
