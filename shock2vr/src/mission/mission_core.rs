@@ -47,7 +47,7 @@ use dark::{
         PropModelName, PropMotionActorTags, PropObjState, PropParticleGroup,
         PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
         PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts, PropSymName,
-        PropTeleported, PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState,
+        PropTeleported, PropTemplateId, PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState,
         PropTweqModelConfig, PropertyDefinition, RenderType, TeleportSource, ToLink, TripFlags,
         TweqAnimationState, WrappedEntityId,
     },
@@ -93,9 +93,9 @@ use crate::{
     runtime_props::{
         RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDeathPose,
         RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
-        RuntimePropLaunchedProjectile, RuntimePropReloading, RuntimePropSelectedAmmo,
-        RuntimePropShotCooldown, RuntimePropShotModifiers, RuntimePropTransform, RuntimePropVhots,
-        RuntimePropVrGripOffset,
+        RuntimePropLaunchedProjectile, RuntimePropMetaProperties, RuntimePropReloading,
+        RuntimePropSelectedAmmo, RuntimePropShotCooldown, RuntimePropShotModifiers,
+        RuntimePropTransform, RuntimePropVhots, RuntimePropVrGripOffset,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -2064,6 +2064,259 @@ impl GlobalTemplateHierarchy {
     /// Whether `template_id` is `class_template_id` or inherits from it.
     pub fn is_or_descends_from(&self, template_id: i32, class_template_id: i32) -> bool {
         template_is_or_descends_from(&self.0, template_id, class_template_id)
+    }
+}
+
+fn template_lineage_excluding(
+    hierarchy: &HashMap<i32, Vec<i32>>,
+    template_id: i32,
+    excluded: &HashSet<i32>,
+) -> Vec<i32> {
+    fn visit(
+        hierarchy: &HashMap<i32, Vec<i32>>,
+        parents: Option<&Vec<i32>>,
+        excluded: &HashSet<i32>,
+        visited: &mut HashSet<i32>,
+        out: &mut Vec<i32>,
+    ) {
+        let Some(parents) = parents else { return };
+        for parent in parents {
+            if !excluded.contains(parent) && visited.insert(*parent) {
+                out.push(*parent);
+            }
+        }
+        for parent in parents {
+            if !excluded.contains(parent) {
+                visit(hierarchy, hierarchy.get(parent), excluded, visited, out);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    visit(
+        hierarchy,
+        hierarchy.get(&template_id),
+        excluded,
+        &mut HashSet::new(),
+        &mut out,
+    );
+    out.dedup();
+    out.reverse();
+    out
+}
+
+/// Apply one runtime metaproperty relation change without rebuilding unrelated
+/// live state. Only component types contributed by the changed branch are
+/// removed and then recomposed from the remaining authored/dynamic ancestry.
+fn apply_meta_property_relation(
+    world: &mut World,
+    entity_info: &SystemShock2EntityInfo,
+    hierarchy: &HashMap<i32, Vec<i32>>,
+    entity_id: EntityId,
+    meta_template_id: i32,
+    add: bool,
+) -> bool {
+    let entity_template_id = world
+        .borrow::<View<PropTemplateId>>()
+        .ok()
+        .and_then(|templates| templates.get(entity_id).ok().map(|id| id.template_id));
+    let Some(entity_template_id) = entity_template_id else {
+        return false;
+    };
+
+    let mut state = world
+        .borrow::<View<RuntimePropMetaProperties>>()
+        .ok()
+        .and_then(|states| states.get(entity_id).ok().cloned())
+        .unwrap_or_default();
+    let statically_inherited = dark::ss2_entity_info::get_ancestors(hierarchy, &entity_template_id)
+        .contains(&meta_template_id);
+    let present = state.added.contains(&meta_template_id)
+        || (statically_inherited && !state.removed.contains(&meta_template_id));
+    // Adding an existing relation (or removing an absent one) is a no-op.
+    // Recomposition here would overwrite subsequent live property changes.
+    if add == present {
+        return true;
+    }
+    if add {
+        state.removed.retain(|id| *id != meta_template_id);
+        if !statically_inherited && !state.added.contains(&meta_template_id) {
+            state.added.push(meta_template_id);
+        }
+    } else {
+        state.added.retain(|id| *id != meta_template_id);
+        if !state.removed.contains(&meta_template_id) {
+            state.removed.push(meta_template_id);
+        }
+    }
+
+    let no_exclusions = HashSet::new();
+    let mut affected_templates =
+        template_lineage_excluding(hierarchy, meta_template_id, &no_exclusions);
+    affected_templates.push(meta_template_id);
+    let affected_properties = affected_templates
+        .iter()
+        .filter_map(|template| entity_info.entity_to_properties.get(template))
+        .flat_map(|properties| properties.iter().cloned())
+        .collect::<Vec<_>>();
+    let affected_types = affected_properties
+        .iter()
+        .map(|property| property.component_type_id())
+        .collect::<HashSet<_>>();
+
+    // Delete each affected component type once. The representative property
+    // knows its concrete Shipyard component despite this layer being erased.
+    let mut removed_types = HashSet::new();
+    for property in &affected_properties {
+        if removed_types.insert(property.component_type_id()) {
+            property.remove(world, entity_id);
+        }
+    }
+
+    let excluded = state.removed.iter().copied().collect::<HashSet<_>>();
+    let mut effective_templates =
+        template_lineage_excluding(hierarchy, entity_template_id, &excluded);
+    effective_templates.push(entity_template_id);
+    for added in &state.added {
+        for template in template_lineage_excluding(hierarchy, *added, &excluded) {
+            if !effective_templates.contains(&template) {
+                effective_templates.push(template);
+            }
+        }
+        if !effective_templates.contains(added) {
+            effective_templates.push(*added);
+        }
+    }
+
+    for template in effective_templates {
+        if let Some(properties) = entity_info.entity_to_properties.get(&template) {
+            for property in properties {
+                if affected_types.contains(&property.component_type_id()) {
+                    property.initialize(world, entity_id);
+                }
+            }
+        }
+    }
+    world.add_component(entity_id, state);
+    true
+}
+
+#[cfg(test)]
+mod meta_property_tests {
+    use super::*;
+    use dark::properties::{AIAlertLevel, PropAIAlertCap, Property};
+    use std::sync::Arc;
+
+    fn boxed_property<T: Property + 'static>(property: T) -> Arc<Box<dyn Property>> {
+        Arc::new(Box::new(property))
+    }
+
+    #[test]
+    fn removing_and_adding_meta_recomposes_only_its_component_types() {
+        const BASE: i32 = -10;
+        const DOCILE: i32 = -20;
+        const ENTITY_TEMPLATE: i32 = 30;
+        let ordinary_cap = PropAIAlertCap {
+            max_level: AIAlertLevel::High,
+            min_level: AIAlertLevel::Lowest,
+            min_relax: AIAlertLevel::Low,
+        };
+        let docile_cap = PropAIAlertCap {
+            max_level: AIAlertLevel::Lowest,
+            min_level: AIAlertLevel::Lowest,
+            min_relax: AIAlertLevel::Lowest,
+        };
+        // Dark stores direct parents derived-first; traversal reverses them to
+        // initialize base first and let Docile override its alert cap.
+        let hierarchy = HashMap::from([(ENTITY_TEMPLATE, vec![DOCILE, BASE])]);
+        let mut entity_info = SystemShock2EntityInfo::empty();
+        entity_info
+            .entity_to_properties
+            .insert(BASE, vec![boxed_property(ordinary_cap.clone())]);
+        entity_info
+            .entity_to_properties
+            .insert(DOCILE, vec![boxed_property(docile_cap.clone())]);
+
+        let mut world = World::new();
+        let entity = world.add_entity((
+            PropTemplateId {
+                template_id: ENTITY_TEMPLATE,
+            },
+            docile_cap,
+            PropHitPoints { hit_points: 73 },
+        ));
+
+        assert!(apply_meta_property_relation(
+            &mut world,
+            &entity_info,
+            &hierarchy,
+            entity,
+            DOCILE,
+            false,
+        ));
+        assert_eq!(
+            world
+                .borrow::<View<PropAIAlertCap>>()
+                .unwrap()
+                .get(entity)
+                .unwrap()
+                .max_level,
+            AIAlertLevel::High
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropHitPoints>>()
+                .unwrap()
+                .get(entity)
+                .unwrap()
+                .hit_points,
+            73,
+            "unrelated live state must not be rebuilt"
+        );
+
+        assert!(apply_meta_property_relation(
+            &mut world,
+            &entity_info,
+            &hierarchy,
+            entity,
+            DOCILE,
+            true,
+        ));
+        assert_eq!(
+            world
+                .borrow::<View<PropAIAlertCap>>()
+                .unwrap()
+                .get(entity)
+                .unwrap()
+                .max_level,
+            AIAlertLevel::Lowest
+        );
+        {
+            let states = world.borrow::<View<RuntimePropMetaProperties>>().unwrap();
+            let state = states.get(entity).unwrap();
+            assert!(state.added.is_empty());
+            assert!(state.removed.is_empty());
+        }
+        // Repeating Add must not undo an explicit live override made since
+        // the first Add (the relation itself has not changed).
+        world.add_component(entity, ordinary_cap);
+        assert!(apply_meta_property_relation(
+            &mut world,
+            &entity_info,
+            &hierarchy,
+            entity,
+            DOCILE,
+            true
+        ));
+        assert_eq!(
+            world
+                .borrow::<View<PropAIAlertCap>>()
+                .unwrap()
+                .get(entity)
+                .unwrap()
+                .max_level,
+            AIAlertLevel::High
+        );
     }
 }
 
@@ -10260,6 +10513,50 @@ impl MissionCore {
                                 );
                             }
                         }
+                    }
+                }
+
+                Effect::SetMetaProperty {
+                    entity_id,
+                    name,
+                    add,
+                } => {
+                    let template_id = self
+                        .template_name_to_template_id
+                        .get(&name.to_ascii_lowercase())
+                        .map(|metadata| metadata.template_id);
+                    let hierarchy = self
+                        .world
+                        .borrow::<UniqueView<GlobalTemplateHierarchy>>()
+                        .ok()
+                        .map(|hierarchy| hierarchy.0.clone());
+                    let applied =
+                        template_id
+                            .zip(hierarchy)
+                            .is_some_and(|(template_id, hierarchy)| {
+                                apply_meta_property_relation(
+                                    &mut self.world,
+                                    &self.entity_info,
+                                    &hierarchy,
+                                    entity_id,
+                                    template_id,
+                                    add,
+                                )
+                            });
+                    if applied {
+                        effects.push_front(Effect::Send {
+                            msg: Message {
+                                to: entity_id,
+                                payload: MessagePayload::RefreshAIProperties,
+                            },
+                        });
+                    } else {
+                        warn!(
+                            "scripted metaproperty {} '{}' could not be applied to {:?}",
+                            if add { "Add" } else { "Remove" },
+                            name,
+                            entity_id
+                        );
                     }
                 }
                 Effect::SetAICurrentPatrol { entity_id, target } => {
