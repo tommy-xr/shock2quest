@@ -92,7 +92,7 @@ test(
     await game.input.set("right_hand.position", await vrHandLocal(game, rightHold));
     await game.input.set("right_hand.squeeze", 1);
     await game.step({ frames: 1 });
-    const leftAtGrab = await vrHandLocal(game, leftHold);
+    const leftAtGrab = await vrHandLocal(game, leftHold, "left");
     await game.input.set("left_hand.position", leftAtGrab);
     await game.input.set("left_hand.squeeze", 1);
     await game.step({ frames: 1 });

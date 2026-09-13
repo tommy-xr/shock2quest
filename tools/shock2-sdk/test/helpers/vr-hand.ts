@@ -112,14 +112,15 @@ export async function aimVrHandAtCanvas(
 /** Aim one production VR hand's ray at a world point without direct entity
  * messages. Pass `squeeze = 1` to preserve an already-held item while aiming,
  * and `trigger = 1` to keep a pull in flight across the re-aim (releasing it
- * would end the gesture, which matters wherever a latch spans the movement). */
+ * would end the gesture, which matters wherever a latch spans the movement).
+ * Set `lookAtTarget: false` to reach without turning the head/body-slot frame. */
 export async function aimVrHandAt(
   game: GameServer,
   target: Vec3,
   standOff = 0.45,
   squeeze = 0,
   trigger = 0,
-  { hand = "right" }: { hand?: Hand } = {},
+  { hand = "right", lookAtTarget = true }: { hand?: Hand; lookAtTarget?: boolean } = {},
 ): Promise<{ start: Vec3; target: Vec3; local: Vec3 }> {
   const snapshot = await game.info();
   const pawn = snapshot.player.position;
@@ -137,9 +138,11 @@ export async function aimVrHandAt(
     quatMultiply(inversePawn, worldHandRotation),
   );
 
-  await game.input.lookAtWorldPoint(target, {
-    eyeHeight: snapshot.player.camera_offset[1],
-  });
+  if (lookAtTarget) {
+    await game.input.lookAtWorldPoint(target, {
+      eyeHeight: snapshot.player.camera_offset[1],
+    });
+  }
   await game.input.set(`${hand}_hand.position`, localHand);
   await game.input.set(`${hand}_hand.rotation`, localHandRotation);
   await game.input.set(`${hand}_hand.trigger`, trigger);

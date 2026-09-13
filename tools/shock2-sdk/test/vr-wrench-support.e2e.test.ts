@@ -12,13 +12,16 @@ for (const primary of ["right", "left"] as const) {
   test(`wrench support (${primary} primary): near grab, rigid steering, release and separation break`,
     { skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000 }, async () => {
       await using game = await GameServer.launch({mission:"debug_interactions", debugFlags:["--vr"]});
+      await game.input.set("head.rotation",[0,0,0,1]);
       await game.step({frames:90});
       const wrench = (await game.entities.list()).entities.find(e => e.template_id === -928)!;
       const other = primary === "right" ? "left" : "right";
       const owned = primary === "right" ? "right_hand_entity_id" : "wielded_entity_id";
       const empty = primary === "right" ? "wielded_entity_id" : "right_hand_entity_id";
       await game.player.teleport({x:wrench.position[0],y:1,z:0});
-      await aimVrHandAt(game, wrench.position, .2, 1, 0, {hand:primary});
+      // Keep the head facing forward: the pickup target is off to the side,
+      // and turning toward it puts the support fixture in a shoulder bag.
+      await aimVrHandAt(game, wrench.position, .2, 1, 0, {hand:primary, lookAtTarget:false});
       await game.input.set(`${primary}_hand.position`, [0,1,-.5]);
       await game.input.set(`${primary}_hand.rotation`, [0,0,0,1]);
       await game.input.set(`${other}_hand.squeeze`, 0);
@@ -106,11 +109,13 @@ test("physical wrench glove stays attached during walking and wall contact", {
   skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000,
 }, async () => {
   await using game = await GameServer.launch({mission:"debug_melee",debugFlags:["--vr"]});
+  await game.input.set("head.rotation",[0,0,0,1]);
   await game.step({frames:90});
   const wrench = (await game.entities.list()).entities.find(e => e.template_id === -928)!;
-  await aimVrHandAt(game,wrench.position,.2,1);
+  await aimVrHandAt(game,wrench.position,.2,1,0,{lookAtTarget:false});
   await game.player.teleport({x:-11,y:1,z:0});
-  await game.input.set("right_hand.position",[0,1,0]);
+  // Hold in front of the torso while sweeping into the wall along X.
+  await game.input.set("right_hand.position",[0,1,-.5]);
   await game.input.set("right_hand.rotation",[0,0,0,1]);
   await game.step({frames:90});
   const check = async () => {
@@ -127,7 +132,7 @@ test("physical wrench glove stays attached during walking and wall contact", {
   await game.step({frames:30});
   // The debug_melee back wall is x=-13. Sweep the held controller through it.
   for (let frame=0;frame<30;frame++) {
-    await game.input.set("right_hand.position",[-3*frame/29,1,0]);
+    await game.input.set("right_hand.position",[-3*frame/29,1,-.5]);
     await game.step({frames:1});
     await check();
   }
@@ -158,7 +163,7 @@ test("physical wrench glove stays attached during walking and wall contact", {
     const moving = await check();
     assert.equal(moving.support!.attached,true,"physical contact feedback is not a support-release gesture");
   }
-  await game.input.set("right_hand.position",[-2.98,1,0]);
+  await game.input.set("right_hand.position",[-2.98,1,-.5]);
   await game.step({frames:8});
   const shifted = await check();
   assert.equal(shifted.support!.attached,true);

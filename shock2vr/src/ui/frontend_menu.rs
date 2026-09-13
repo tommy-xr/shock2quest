@@ -300,6 +300,10 @@ impl<A: Copy + PartialEq> FrontendMenu<A> {
         })
     }
 
+    pub(crate) fn set_glove_fit(&mut self, fit: Option<crate::glove_fit::GloveFit>) {
+        self.vr_pointer_visuals.glove_fit = fit;
+    }
+
     pub fn panel(&self) -> WorldPanel {
         self.panel_anchor.panel()
     }

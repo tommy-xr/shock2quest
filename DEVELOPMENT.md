@@ -254,6 +254,65 @@ free-camera switches. Values are read every frame, so a change is live on the
 next one, and the same registry is exposed over HTTP by the debug runtime
 (`GET`/`POST /v1/dev-params`) for headless runs.
 
+#### Glove fit check (`debug_gloves`)
+
+Open `debug_gloves` from the Developer scene list. On Quest it requests room
+passthrough behind the controller-driven gloves. Desktop/debug use a black
+background and synthetic hand input (`cargo dbgr --mission debug_gloves --vr`).
+The old pose gallery is replaced by the production glove mesh and analog curls;
+`debug_hand_poses` remains available for authored-pose inspection.
+
+Hold Menu to open Pause, then Developer, to adjust these live parameters:
+
+| Label | HTTP key | Meaning |
+| --- | --- | --- |
+| Glove forward cm | `glove_forward_cm` | Default `−15`; applies globally to VR menus and gameplay. Negative pulls back, positive moves along hand-local -Z. Range ±20 cm, steps of 0.5 cm. |
+| Glove side cm | `glove_side_cm` | Default `0`; mirrored controller-local X (positive: right for right hand, left for left). ±10 cm in 0.5 cm steps. |
+| Glove up cm | `glove_up_cm` | Default `0`; controller-local +Y, rotating with your hand. ±10 cm in 0.5 cm steps. |
+| Glove size | `glove_fit_size` | Default `1`; scales the mesh about its hand origin, from 0.5–1.5. |
+| Fit gloves | `glove_fit_visible` | Hide/show the gloves to compare your real hand silhouette. |
+| Hand pose | `glove_fit_grip_pose` | Quest only: choose **Aim** (default, current gameplay reference) or **Grip** (experimental holding reference). HTTP stores Aim as `0`, Grip as `1`. |
+| Fit passthrough | `glove_fit_passthrough` | Quest only: toggle room/black background. Default on. |
+
+Forward applies to the shared VR hand frame everywhere: gloves, wrist UI, held
+items and interaction origins move together. Normal flatscreen gameplay is
+unchanged; the flat fit scene uses the same calibration as VR for comparison.
+The other six controls apply only to this scene, including its pause-menu
+gloves. All controls remain set across scene changes and reset to their defaults
+on app restart. Keep controllers in hand: passthrough shows your real
+hands, but this experiment does **not** implement optical hand tracking. First
+compare aim/grip with offset `0` and size `1`; then adjust one parameter at a
+time while holding still and looking at the wrist, palm and fingertips from
+several angles. Record pose mode, offset and size together. Grip and aim differ
+in rotation as well as position, so translation alone may not align every pose.
+
+Passthrough is optional: unsupported devices or creation failures retain a
+black background and emit `SHOCK2QUEST_PASSTHROUGH` diagnostics. Toggle it off
+and on to retry creation. Leaving the scene releases its passthrough objects.
+Local screenshots verify geometry and tuning, **not** real-hand registration;
+physical fit requires a wearer, and compositor/session recovery requires device checks.
+
+Quest 3 device checks confirmed stereo room passthrough and a successful
+suspend/return cycle. Repeated Home/reopen cycles can also stall at XR `IDLE`
+with loading dots; the same failure reproduces in `debug_minimal` without
+passthrough running. A fresh app launch recovers. Physical glove alignment
+was checked by a wearer: aim reference with forward **−15 cm** aligned well
+with palms facing each other, but gloves sat slightly below real hands with
+palms down. At the wearer’s request, −15 cm is now the global forward default;
+further orientation-dependent refinement remains open. Use the side
+and up controls to test the remaining error, keeping forward and size fixed;
+if the wrist aligns but the fingertips diverge, investigate rotation or size.
+Menu gloves use the same calibrated hand input as gameplay. Side/up/size
+previews only change the fit-scene mesh; beam, hit dot and click targeting
+continue to share one pointer pass.
+
+`dark::SCALE_FACTOR` stays constant. It scales loaded geometry, motion and
+physics data, and feeds `METERS_PER_WORLD_UNIT`; changing it live would mix old
+and new units. Geometry divided by this factor and meters-per-unit multiplied
+by it cancel: it is an internal unit convention, not a physical-size slider.
+Glove size is deliberately an independent fit experiment and
+does not change the world, stereo separation, tracking conversion or saved grips.
+
 #### Testing VR weapon handling at different stats
 
 Open `debug_weapons` from the Developer scene list and pick up a gun from the

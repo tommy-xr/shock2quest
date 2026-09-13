@@ -173,6 +173,38 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
     gun/psi-amp combinations. Preserve the complete authored UI canvas when
     mounting it on a glove; avoid arbitrary cropping to make it fit.
 
+## Physical glove fit
+
+- Use `debug_gloves` for the passthrough fit experiment; its controls and units
+  are in `DEVELOPMENT.md` under “Glove fit check”. Forward is global (default
+  −15 cm); side/up/size and pose-reference selection remain scene-only previews.
+- Trace the pose actually consumed. The Quest runtime binds both grip and aim,
+  but gameplay currently locates the **aim** spaces for hand transforms. A
+  binding declaration is not evidence that grip drives the glove. Compare both
+  in the fit scene; they can differ in orientation as well as translation.
+- Compare the physical wrist, palm and fingertips while holding controllers,
+  at several orientations, changing offset and size independently. Passthrough
+  visibility does not imply optical hand tracking. A translated silhouette in
+  a debug screenshot does not establish real-hand registration.
+- Fit controls must also reach the pause menu’s separate pointer gloves while
+  the fit scene is active. Share the visual calibration transform; keep the
+  tracked beam, hit dot and click arbitration coherent. Test leaving the scene
+  so preview settings cannot leak into normal menus.
+- Diagnose orientation-dependent error with controller-local side/up offsets
+  (mirror side for left/right), then inspect wrist versus fingertip alignment
+  before assuming translation alone is sufficient. The wearer reported aim
+  reference / forward −15 cm as a useful candidate, with residual palms-down
+  error. The user chose −15 cm as the global forward default; remaining axes
+  still require physical verification.
+- Keep `dark::SCALE_FACTOR` a load-time unit convention. It also feeds tracked
+  meter conversion; changing only some consumers mixes units. A glove-size
+  preview should scale about the hand origin without rescaling head/eye poses.
+  Keep rendered gloves, wrist mounts, held-item transforms and cached/baked
+  grip samples in the same corrected frame. Global forward is applied once to a
+  copy of tracked hand input before menu/gameplay routing (`glove_fit::calibrated_input`),
+  preserving the raw input and head/eye poses. Do not also shift the mesh or bake
+  a live dev parameter into grip/wrist caches.
+
 ## Glove readout implementation notes
 
 - `hand_glove::GloveRenderer::wrist_frame` provides the calibrated mount:

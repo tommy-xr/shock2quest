@@ -1038,7 +1038,10 @@ impl PlayerInteraction for VrInteraction {
                     "tracked_palm": self.grip_kinematics.as_ref().map(|rig| self.hand_poses()[1-i].point(rig[1-i].palm)),
                     "pressed": self.support_pressed, "blocked": self.support_blocked, "step_dt": self.step_dt,
                     "socket_position": c.model_pose.point(c.anchor),
-                    "controller_position": c.hand_pose.position,
+                    // The support solver returns a calibrated hand origin. Tools
+                    // placing raw tracked input need the inverse calibration.
+                    "controller_position": c.hand_pose.position - crate::glove_fit::forward_translation(
+                        c.hand_pose.rotation, crate::dev_params::get(crate::dev_params::GLOVE_FORWARD_CM)),
                     "controller_rotation": c.hand_pose.rotation,
                     "model_position": c.model_pose.position, "model_rotation": c.model_pose.rotation,
                     "primary_palm": c.primary_palm, "primary_anchor": c.primary_anchor,

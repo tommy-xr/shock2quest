@@ -36,7 +36,15 @@ impl Engine for OpenGLEngine {
             gl::Enable(gl::BLEND);
             // gl::Enable(gl::CULL_FACE);
             // gl::FrontFace(gl::CW);
-            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            // Shaders emit straight RGB; the framebuffer accumulates
+            // premultiplied RGB. Preserve coverage alpha for the Quest
+            // passthrough compositor instead of multiplying alpha by itself.
+            gl::BlendFuncSeparate(
+                gl::SRC_ALPHA,
+                gl::ONE_MINUS_SRC_ALPHA,
+                gl::ONE,
+                gl::ONE_MINUS_SRC_ALPHA,
+            );
             gl::ClearColor(0.0, 0.0, 0.0, 0.0);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 

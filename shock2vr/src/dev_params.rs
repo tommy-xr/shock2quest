@@ -48,6 +48,8 @@ pub struct DevParam {
     pub label: &'static str,
     pub kind: DevParamKind,
     pub default: f32,
+    /// Optional names for the false/true states of a two-choice control.
+    pub bool_labels: Option<[&'static str; 2]>,
 }
 
 /// Index into [`PARAMS`]; obtained from the generated consts or [`find`].
@@ -60,8 +62,15 @@ pub struct DevParamId(usize);
 /// table can mix kinds: the outer macro matches each line as
 /// `kind(args...)` and defers the shape of `args` to these arms.
 macro_rules! dev_param_entry {
+    (bool($key:literal, $label:literal, $default:expr, $off:literal, $on:literal)) => {
+        DevParam {
+            bool_labels: Some([$off, $on]),
+            ..dev_param_entry!(bool($key, $label, $default))
+        }
+    };
     (float($key:literal, $label:literal, $default:expr, $min:expr, $max:expr, $step:expr)) => {
         DevParam {
+            bool_labels: None,
             key: $key,
             label: $label,
             kind: DevParamKind::Float {
@@ -74,6 +83,7 @@ macro_rules! dev_param_entry {
     };
     (bool($key:literal, $label:literal, $default:expr)) => {
         DevParam {
+            bool_labels: None,
             key: $key,
             label: $label,
             kind: DevParamKind::Bool,
@@ -85,6 +95,9 @@ macro_rules! dev_param_entry {
 /// One declaration's default, as the `f32` the value table stores. A `bool`
 /// cannot be `as f32`, and this is the one place that conversion belongs.
 macro_rules! dev_param_default {
+    (bool($key:literal, $label:literal, $default:expr, $off:literal, $on:literal)) => {
+        dev_param_default!(bool($key, $label, $default))
+    };
     (float($key:literal, $label:literal, $default:expr, $min:expr, $max:expr, $step:expr)) => {
         ($default as f32)
     };
@@ -114,6 +127,21 @@ macro_rules! dev_params {
 }
 
 dev_params! {
+    /// Global VR hand-frame offset along controller-local -Z, in centimeters.
+    /// Includes menu gloves, wrist UI, held items and interactions; negative pulls back.
+    GLOVE_FORWARD_CM = float("glove_forward_cm", "Glove forward cm", -15.0, -20.0, 20.0, 0.5),
+    /// Mirrored local X offset: positive moves right for the right hand, left for the left.
+    GLOVE_SIDE_CM = float("glove_side_cm", "Glove side cm", 0.0, -10.0, 10.0, 0.5),
+    /// Controller-local +Y offset, rotating with the hand rather than world up.
+    GLOVE_UP_CM = float("glove_up_cm", "Glove up cm", 0.0, -10.0, 10.0, 0.5),
+    /// Fit-scene-only model size, about the hand origin; does not rescale tracking.
+    GLOVE_FIT_SIZE = float("glove_fit_size", "Glove size", 1.0, 0.5, 1.5, 0.01),
+    /// Hide the fit gloves to compare the real hand silhouette in passthrough.
+    GLOVE_FIT_VISIBLE = bool("glove_fit_visible", "Fit gloves", true),
+    /// Quest only: compare grip pose against gameplay's current aim pose.
+    GLOVE_FIT_GRIP_POSE = bool("glove_fit_grip_pose", "Hand pose", false, "Aim", "Grip"),
+    /// Quest only: show the room behind debug_gloves. Other scenes stay opaque.
+    GLOVE_FIT_PASSTHROUGH = bool("glove_fit_passthrough", "Fit passthrough", true),
     /// How far ahead of the head the VR frontend/pause panel hangs, in world
     /// units. Default matches the old `ui::FRONTEND_PANEL_DISTANCE` const.
     FRONTEND_PANEL_DISTANCE = float("panel_distance", "Panel distance", 2.0, 0.5, 6.0, 0.1),

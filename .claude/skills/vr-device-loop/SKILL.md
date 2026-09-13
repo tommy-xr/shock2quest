@@ -116,6 +116,45 @@ An `am start` success or a live PID does not prove XR is rendering. Require
 the first-frame marker, a focused XR state, a top-resumed activity, and
 advancing focused performance samples.
 
+## Passthrough glove fit experiment
+
+`debug_gloves` requests `XR_FB_passthrough` only while it is the active scene
+and `glove_fit_passthrough` is enabled. It submits a reconstruction underlay
+before the alpha-enabled projection layer, with environment blend mode
+`OPAQUE`, as required by [Meta's native passthrough documentation](https://developers.meta.com/horizon/documentation/native/android/mobile-passthrough/).
+The manifest declares `com.oculus.feature.PASSTHROUGH` optional, and extension
+and system capability checks permit a black-background fallback.
+
+The eye target clears to RGBA zero. Straight-alpha shader colors accumulate
+premultiplied RGB in that target; preserve coverage alpha with separate alpha
+factors `ONE, ONE_MINUS_SRC_ALPHA`. Applying `SRC_ALPHA` to alpha itself
+squares coverage and blends translucent UI incorrectly over the room. Rebuild
+passthrough resources after `STOPPING`, and destroy them explicitly before
+Android's `process::exit`, which skips Rust destructors.
+The debug runtime encodes screenshots as RGB, so matching those PNGs verifies
+color output but cannot establish that framebuffer alpha is correct.
+
+Expect `SHOCK2QUEST_PASSTHROUGH state=running|stopped|unsupported|failed`.
+`running` proves resource creation, not visible camera content. This integration
+must be checked on Quest: room visible, both gloves tracked, hide/show working,
+exit to a normal scene, re-entry, and suspend/resume. A local black-background
+PNG cannot verify compositor passthrough or physical fit. If the user defers
+device work (for example while charging), complete local checks and report the
+device checks as pending; do not wake/install/launch for that pass.
+
+The compositor owns the passthrough image; application swapchain captures do
+not contain it. Inspect device captures for actual room content before claiming
+mixed-reality evidence, and use the wearer’s observation if capture omits it.
+For physical fit, keep controllers held and record `glove_fit_grip_pose`,
+`glove_forward_cm`, `glove_side_cm`, `glove_up_cm` and `glove_fit_size` together (see `DEVELOPMENT.md`). These
+use a global forward default of −15 cm; the other fit controls remain scene-only
+previews. Passthrough does not add optical hand tracking.
+
+Dependency trap: the checked-in `openxr` 0.21.1 wrapper's `Passthrough::start`
+calls the pause function. The experiment uses `IS_RUNNING_AT_CREATION` and
+destroys layer before feature on exit; do not replace this with pause/start
+until the dependency implementation is verified or fixed.
+
 ## Capture device visuals every iteration
 
 Capture from the Quest for every implementation iteration, including failed
@@ -181,6 +220,12 @@ desynchronizes what a wearer sees from where the game thinks they are aiming
 (and `head.look`'s yaw/pitch is the flat camera convention, not the VR head
 frame). Prefer the hand channels for VR interaction.
 
+When testing scene reloads locally, include a run with `--defer-transitions`.
+The debug runtime's usual immediate-transition shortcut can bypass the shipping
+`Game` dispatch: Quest testing exposed `DebugReloadLevel` sending generated
+scene names to the `.mis` parser. It now reuses the debug-scene launcher; the
+SDK's `debug-reload.e2e.test.ts` covers repeated resets with shipping behavior.
+
 ## Toward a device debug runtime
 
 Prefer a thin loopback-only HTTP server reached through `adb forward`, sharing
@@ -207,6 +252,12 @@ than returning stale pixels.
   transitions, storage permission, and data sentinels.
 - **Home remains visible:** repeat proximity-close and start with `-S`; inspect
   the top-resumed activity with `dumpsys activity activities`.
+- **Loading dots after repeated Home/reopen:** record the latest XR state and
+  whether the frame counter advances. Quest 3 testing reproduced a persistent
+  `IDLE` state in both `debug_gloves` and `debug_minimal`, even with Android's
+  activity resumed; a fresh `launch` recovers. One successful resume does not
+  establish repeated-cycle reliability. Compare a scene without passthrough
+  before attributing this symptom to the passthrough lifecycle.
 - **Immediate native crash:** use
   `adb logcat RustStdoutStderr:V AndroidRuntime:E DEBUG:E '*:S'`.
 - **Bad performance:** confirm release packaging, stop broad logcat consumers,

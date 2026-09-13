@@ -282,10 +282,12 @@ fn scroll_rects(rects: PanelRects) -> Option<(Rect, Rect)> {
 
 /// The value readout: floats as `{:.2}`, the format the step grids are
 /// declared in.
-fn format_value(kind: &DevParamKind, value: f32) -> String {
+fn format_value(kind: &DevParamKind, value: f32, bool_labels: Option<[&str; 2]>) -> String {
     match kind {
         DevParamKind::Float { .. } => format!("{value:.2}"),
-        DevParamKind::Bool => if value != 0.0 { "On" } else { "Off" }.to_owned(),
+        DevParamKind::Bool => {
+            bool_labels.unwrap_or(["Off", "On"])[usize::from(value != 0.0)].to_owned()
+        }
     }
 }
 
@@ -382,7 +384,7 @@ pub fn draw(
         canvas
             .text_native(
                 row.value,
-                &format_value(&param.kind, dev_params::get(id)),
+                &format_value(&param.kind, dev_params::get(id), param.bool_labels),
                 ROW_FONT,
                 HAlign::Center,
                 VAlign::Middle,
@@ -751,15 +753,15 @@ mod tests {
             max: 1.0,
             step: 0.02,
         };
-        assert_eq!(format_value(&kind, 0.72), "0.72");
+        assert_eq!(format_value(&kind, 0.72, None), "0.72");
         // The snap grid's f32 wobble (0.71999997) must not leak into the UI.
-        assert_eq!(format_value(&kind, 0.719_999_97), "0.72");
-        assert_eq!(format_value(&kind, 2.0), "2.00");
+        assert_eq!(format_value(&kind, 0.719_999_97, None), "0.72");
+        assert_eq!(format_value(&kind, 2.0, None), "2.00");
     }
 
     #[test]
     fn bools_format_as_on_and_off() {
-        assert_eq!(format_value(&DevParamKind::Bool, 1.0), "On");
-        assert_eq!(format_value(&DevParamKind::Bool, 0.0), "Off");
+        assert_eq!(format_value(&DevParamKind::Bool, 1.0, None), "On");
+        assert_eq!(format_value(&DevParamKind::Bool, 0.0, None), "Off");
     }
 }

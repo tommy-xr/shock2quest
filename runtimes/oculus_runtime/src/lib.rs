@@ -23,6 +23,7 @@ use tracing;
 mod android_permissions;
 mod debug_input;
 mod frame_profiler;
+mod passthrough;
 mod quest_config;
 mod refresh_rate;
 
@@ -113,6 +114,7 @@ fn main() {
     let mut enabled_extensions = xr::ExtensionSet::default();
     enabled_extensions.khr_opengl_es_enable = true;
     enabled_extensions.fb_display_refresh_rate = true;
+    enabled_extensions.fb_passthrough = available_extensions.fb_passthrough;
     #[cfg(target_os = "android")]
     {
         enabled_extensions.khr_android_create_instance = true;
@@ -533,6 +535,14 @@ fn main() {
         .create_space(&session, xr::Path::NULL, xr::Posef::IDENTITY)
         .unwrap();
 
+    let right_grip_space = right_grip
+        .create_space(&session, xr::Path::NULL, xr::Posef::IDENTITY)
+        .unwrap();
+    let left_grip_space = left_grip
+        .create_space(&session, xr::Path::NULL, xr::Posef::IDENTITY)
+        .unwrap();
+    let mut fit_passthrough = passthrough::FitPassthrough::new(&xr_instance, system);
+
     // Main loop
     let mut swapchain = None;
     let mut event_storage = xr::EventDataBuffer::new();
@@ -722,6 +732,9 @@ fn main() {
                             game.cancel_menu_hold();
                         }
                         xr::SessionState::STOPPING => {
+                            // Re-create the feature on the next running fit
+                            // frame; do not assume it survives end/begin.
+                            fit_passthrough.update(&session, false);
                             session.end().unwrap();
                             session_running = false;
                             last_update_time = Instant::now();
@@ -812,11 +825,20 @@ fn main() {
         };
 
         session.sync_actions(&[(&action_set).into()]).unwrap();
+        // Gameplay currently uses aim poses. Compare grip poses only in the
+        // fit scene, before the shared tracking conversion and validity checks.
+        let use_grip = passthrough::is_fit_scene(&game)
+            && shock2vr::dev_params::get_bool(shock2vr::dev_params::GLOVE_FIT_GRIP_POSE);
+        let (left_hand_space, right_hand_space) = if use_grip {
+            (&left_grip_space, &right_grip_space)
+        } else {
+            (&left_aim_space, &right_aim_space)
+        };
         // Find where our controllers are located in the Stage space
-        let left_aim_location = left_aim_space
+        let left_hand_location = left_hand_space
             .locate(&stage, xr_frame_state.predicted_display_time)
             .unwrap();
-        let right_aim_location = right_aim_space
+        let right_hand_location = right_hand_space
             .locate(&stage, xr_frame_state.predicted_display_time)
             .unwrap();
         let head_location = head_space
@@ -920,7 +942,7 @@ fn main() {
 
         let _speed = 50.0;
 
-        // let forward_xr = right_aim_location.pose.orientation;
+        // let forward_xr = right_hand_location.pose.orientation;
         // //let forward_xr = views[0].pose.orientation;
         // let dir = cgmath::Quaternion::new(forward_xr.w, forward_xr.x, forward_xr.y, forward_xr.z);
 
@@ -931,10 +953,10 @@ fn main() {
         // and is the zero quaternion entirely when the controllers are not
         // tracked.
         let aim_rotation = cgmath::Quaternion::new(
-            right_aim_location.pose.orientation.w,
-            right_aim_location.pose.orientation.x,
-            right_aim_location.pose.orientation.y,
-            right_aim_location.pose.orientation.z,
+            right_hand_location.pose.orientation.w,
+            right_hand_location.pose.orientation.x,
+            right_hand_location.pose.orientation.y,
+            right_hand_location.pose.orientation.z,
         );
         // ...so the head gets the actual head. Before any view has been
         // located (frame 0) the HEAD SPACE pose - located above, this frame -
@@ -996,21 +1018,21 @@ fn main() {
             stage_offset_meters(),
         );
         let right_hand_position = tracking.stage_to_pawn(vec3(
-            right_aim_location.pose.position.x,
-            right_aim_location.pose.position.y,
-            right_aim_location.pose.position.z,
+            right_hand_location.pose.position.x,
+            right_hand_location.pose.position.y,
+            right_hand_location.pose.position.z,
         ));
 
         let left_hand_position = tracking.stage_to_pawn(vec3(
-            left_aim_location.pose.position.x,
-            left_aim_location.pose.position.y,
-            left_aim_location.pose.position.z,
+            left_hand_location.pose.position.x,
+            left_hand_location.pose.position.y,
+            left_hand_location.pose.position.z,
         ));
         let left_hand_rotation = cgmath::Quaternion::new(
-            left_aim_location.pose.orientation.w,
-            left_aim_location.pose.orientation.x,
-            left_aim_location.pose.orientation.y,
-            left_aim_location.pose.orientation.z,
+            left_hand_location.pose.orientation.w,
+            left_hand_location.pose.orientation.x,
+            left_hand_location.pose.orientation.y,
+            left_hand_location.pose.orientation.z,
         );
 
         let mut input_context = InputContext::default();
@@ -1024,10 +1046,10 @@ fn main() {
         input_context.pose_tracking = Some(shock2vr::input_context::PoseTracking {
             head: head_location.location_flags.contains(tracked_pose_flags),
             hands: [
-                left_aim_location
+                left_hand_location
                     .location_flags
                     .contains(tracked_pose_flags),
-                right_aim_location
+                right_hand_location
                     .location_flags
                     .contains(tracked_pose_flags),
             ],
@@ -1294,6 +1316,11 @@ fn main() {
             )
             .unwrap();
 
+        fit_passthrough.update(
+            &session,
+            passthrough::is_fit_scene(&game)
+                && shock2vr::dev_params::get_bool(shock2vr::dev_params::GLOVE_FIT_PASSTHROUGH),
+        );
         let scene_started = Instant::now();
         let (scene, camera_pos, camera_rot) = game.render();
         let scene_elapsed = scene_started.elapsed();
@@ -1363,39 +1390,74 @@ fn main() {
         // here kills the render thread, and with it the per-frame drain of
         // NativeActivity's lifecycle/input queues - which is what turns a
         // one-frame compositor complaint into an app-wide ANR.
+        // The TRACKED pose, even while the death camera is rendering
+        // from somewhere else entirely. This looks like a bug and is
+        // not: reprojection warps a submitted frame toward the real
+        // head pose at display time, so declaring "this frame was
+        // rendered from down on the floor, on its side" makes the
+        // compositor correct out precisely the displacement the death
+        // camera just introduced. Measured on a Quest 3: submitting the
+        // rendered pose drags the image out of the display frustum and
+        // the fraction of non-black pixels falls 0.83 -> 0.00 (left)
+        // and 0.13 (right) as the fall lands, then holds there for the
+        // whole death window - a black screen for the entire death.
+        // With the tracked pose the same death renders correctly
+        // (0.74-0.75, symmetric, holds to game-over).
+        //
+        // The cost is a small reprojection seam at the image edge
+        // during the 0.9 s fall, when rendered and tracked poses
+        // disagree most. That is the accepted trade: a fraction of a
+        // second of edge artifact, against a three-second blackout.
+        let projection_views = [
+            xr::CompositionLayerProjectionView::new()
+                .pose(views[0].pose)
+                .fov(views[0].fov)
+                .sub_image(sub1),
+            xr::CompositionLayerProjectionView::new()
+                .pose(views[1].pose)
+                .fov(views[1].fov)
+                .sub_image(sub2),
+        ];
+        // openxr 0.21.1 does not export its passthrough composition builder.
+        let underlay = fit_passthrough.layer().map(|layer| {
+            use xr::sys::Handle;
+            xr::sys::CompositionLayerPassthroughFB {
+                ty: xr::sys::CompositionLayerPassthroughFB::TYPE,
+                next: std::ptr::null(),
+                flags: xr::CompositionLayerFlags::EMPTY,
+                space: xr::sys::Space::NULL,
+                layer_handle: layer.as_raw(),
+            }
+        });
+        let projection = xr::CompositionLayerProjection::new()
+            .space(&stage)
+            .layer_flags(if underlay.is_some() {
+                xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA
+            } else {
+                xr::CompositionLayerFlags::EMPTY
+            })
+            .views(&projection_views);
+        let mut layers: Vec<&xr::CompositionLayerBase<'_, xr::OpenGlEs>> = Vec::with_capacity(2);
+        if let Some(underlay) = &underlay {
+            // SAFETY: OpenXR layers share the repr(C) base header, and the
+            // crate's CompositionLayerBase is repr(transparent) over it. The
+            // complete raw layer and its live handle both outlive frame.end.
+            layers.push(unsafe {
+                &*(underlay as *const xr::sys::CompositionLayerPassthroughFB
+                    as *const xr::CompositionLayerBase<'_, xr::OpenGlEs>)
+            });
+        }
+        layers.push(&projection);
         if let Err(error) = frame_stream.end(
             xr_frame_state.predicted_display_time,
-            environment_blend_mode,
-            &[
-                // The TRACKED pose, even while the death camera is rendering
-                // from somewhere else entirely. This looks like a bug and is
-                // not: reprojection warps a submitted frame toward the real
-                // head pose at display time, so declaring "this frame was
-                // rendered from down on the floor, on its side" makes the
-                // compositor correct out precisely the displacement the death
-                // camera just introduced. Measured on a Quest 3: submitting the
-                // rendered pose drags the image out of the display frustum and
-                // the fraction of non-black pixels falls 0.83 -> 0.00 (left)
-                // and 0.13 (right) as the fall lands, then holds there for the
-                // whole death window - a black screen for the entire death.
-                // With the tracked pose the same death renders correctly
-                // (0.74-0.75, symmetric, holds to game-over).
-                //
-                // The cost is a small reprojection seam at the image edge
-                // during the 0.9 s fall, when rendered and tracked poses
-                // disagree most. That is the accepted trade: a fraction of a
-                // second of edge artifact, against a three-second blackout.
-                &xr::CompositionLayerProjection::new().space(&stage).views(&[
-                    xr::CompositionLayerProjectionView::new()
-                        .pose(views[0].pose)
-                        .fov(views[0].fov)
-                        .sub_image(sub1),
-                    xr::CompositionLayerProjectionView::new()
-                        .pose(views[1].pose)
-                        .fov(views[1].fov)
-                        .sub_image(sub2),
-                ]),
-            ],
+            // Quest passthrough uses an explicit compositor layer, not the
+            // environment ALPHA_BLEND mode. The engine already clears RGBA=0.
+            if underlay.is_some() {
+                xr::EnvironmentBlendMode::OPAQUE
+            } else {
+                environment_blend_mode
+            },
+            &layers,
         ) {
             // Only the start of a burst is logged, so a persistently unhappy
             // compositor cannot flood logcat at 90 Hz.
@@ -1446,9 +1508,9 @@ fn main() {
         // if right_aim.is_active(&session, xr::Path::NULL).unwrap() {
         //     print!(
         //         "Right Hand: ({:0<12},{:0<12},{:0<12})",
-        //         right_aim_location.pose.position.x,
-        //         right_aim_location.pose.position.y,
-        //         right_aim_location.pose.position.z
+        //         right_hand_location.pose.position.x,
+        //         right_hand_location.pose.position.y,
+        //         right_hand_location.pose.position.z
         //     );
         //     printed = true;
         // }
@@ -1457,6 +1519,12 @@ fn main() {
         // }
         //render_time = Instant::now();
     }
+
+    // Android exits the process below without running destructors. Release
+    // fit resources while the session and activity are still available.
+    drop(fit_passthrough);
+    drop(left_grip_space);
+    drop(right_grip_space);
 
     // The session is over (EXITING / LOSS_PENDING, or an instance loss). Just
     // returning is not enough on Android: ndk-glue runs `main` on a thread it

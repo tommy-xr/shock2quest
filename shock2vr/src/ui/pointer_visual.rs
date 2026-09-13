@@ -223,6 +223,7 @@ fn beam_objects(start: Vector3<f32>, along: Vector3<f32>, length: f32) -> Vec<Sc
 pub struct PointerVisuals {
     /// `None` = not tried yet; `Some(None)` = tried and the model is missing.
     glove: Option<Option<GloveRenderer>>,
+    pub(crate) glove_fit: Option<crate::glove_fit::GloveFit>,
 }
 
 impl PointerVisuals {
@@ -250,7 +251,15 @@ impl PointerVisuals {
             .glove
             .get_or_insert_with(|| GloveRenderer::new(asset_cache))
             .as_mut();
-        let mut objects = render_pointer_rays(glove, true, pass, canvas_size, panel, panel_layers);
+        let mut objects = render_pointer_rays(
+            glove,
+            true,
+            pass,
+            canvas_size,
+            panel,
+            panel_layers,
+            self.glove_fit,
+        );
         // The one pair of hands a frontend screen shows. Labelled so a check
         // can assert *both* halves of issue #1018's fix: the scene's hands are
         // gone, and these are still there.
@@ -273,7 +282,8 @@ pub fn pointer_beams(
     panel: &WorldPanel,
     panel_layers: usize,
 ) -> Vec<SceneObject> {
-    let mut objects = render_pointer_rays(None, false, pass, canvas_size, panel, panel_layers);
+    let mut objects =
+        render_pointer_rays(None, false, pass, canvas_size, panel, panel_layers, None);
     crate::util::tag_render_source(&mut objects, crate::util::render_source::USE_MODE_POINTER);
     objects
 }
@@ -289,6 +299,7 @@ fn render_pointer_rays(
     canvas_size: Vector2<f32>,
     panel: &WorldPanel,
     panel_layers: usize,
+    glove_fit: Option<crate::glove_fit::GloveFit>,
 ) -> Vec<SceneObject> {
     let mut objects = Vec::new();
     for (index, ray) in pass.rays.iter().enumerate() {
@@ -305,6 +316,7 @@ fn render_pointer_rays(
             objects.extend(beam_objects(geometry.start, along, length));
         }
 
+        let hand_start = objects.len();
         match glove.as_deref_mut().filter(|_| draw_hand) {
             Some(glove) => objects.extend(glove.render_static_hand(
                 geometry.start,
@@ -321,6 +333,25 @@ fn render_pointer_rays(
                 CONTROLLER_COLOR,
             )),
             None => {}
+        }
+
+        if let Some(fit) = glove_fit {
+            // Calibrate only the mesh. Hover, clicks, beam and dot retain the
+            // single tracked aim pass, so tuning cannot move the menu target.
+            let pose = crate::vr_support::GripPose {
+                position: geometry.start,
+                rotation: ray.rotation,
+            };
+            let original = Matrix4::from_translation(pose.position) * Matrix4::from(pose.rotation);
+            let adjustment = fit.transform(pose, ray.handedness)
+                * cgmath::SquareMatrix::invert(&original).expect("tracked hand pose is invertible");
+            if fit.visible {
+                for object in &mut objects[hand_start..] {
+                    object.set_transform(adjustment * object.get_transform());
+                }
+            } else {
+                objects.truncate(hand_start);
+            }
         }
 
         if let Some(dot) = geometry.dot {
@@ -419,7 +450,9 @@ mod tests {
         };
         let pass = pass(untracked.clone(), untracked);
         assert!(pass.rays.is_empty());
-        assert!(render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS).is_empty());
+        assert!(
+            render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS, None).is_empty()
+        );
     }
 
     #[test]
@@ -442,9 +475,53 @@ mod tests {
         // Each hand: a proxy plus its beam segments; the right hand also the
         // one dot.
         assert_eq!(
-            render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS).len(),
+            render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS, None).len(),
             2 * (BEAM_SEGMENTS + 1) + 1
         );
+    }
+
+    #[test]
+    fn fit_moves_only_menu_hands_and_visibility_preserves_pointer_feedback() {
+        let pass = pass(
+            hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
+            hand_aimed_away(0.0),
+        );
+        let panel = test_panel();
+        let fit = crate::glove_fit::GloveFit {
+            side_cm: 2.0,
+            up_cm: 3.0,
+            size: 1.2,
+            visible: true,
+        };
+        let base = render_pointer_rays(None, true, &pass, CANVAS, &panel, LAYERS, None);
+        let adjusted = render_pointer_rays(None, true, &pass, CANVAS, &panel, LAYERS, Some(fit));
+        assert_eq!(base.len(), adjusted.len());
+        // All beam segments and the hit dot keep their exact transforms;
+        // exactly the two glove proxies change.
+        assert_eq!(
+            base.iter()
+                .zip(&adjusted)
+                .filter(|(a, b)| a.get_transform() != b.get_transform())
+                .count(),
+            2
+        );
+        let hidden = render_pointer_rays(
+            None,
+            true,
+            &pass,
+            CANVAS,
+            &panel,
+            LAYERS,
+            Some(crate::glove_fit::GloveFit {
+                visible: false,
+                ..fit
+            }),
+        );
+        let beams = render_pointer_rays(None, false, &pass, CANVAS, &panel, LAYERS, None);
+        assert_eq!(hidden.len(), beams.len());
+        for (actual, expected) in hidden.iter().zip(beams) {
+            assert_eq!(actual.get_transform(), expected.get_transform());
+        }
     }
 
     #[test]
@@ -478,7 +555,7 @@ mod tests {
             hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
             hand_aimed_away(0.0),
         );
-        let objects = render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS);
+        let objects = render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS, None);
         let translucent: Vec<_> = objects
             .iter()
             .filter(|object| object.effective_transparency().is_some_and(|t| t > 0.0))
@@ -516,7 +593,7 @@ mod tests {
                 ..Hand::default()
             },
         );
-        let objects = render_pointer_rays(None, true, &pass, CANVAS, &panel, LAYERS);
+        let objects = render_pointer_rays(None, true, &pass, CANVAS, &panel, LAYERS, None);
         assert!(
             objects
                 .iter()
