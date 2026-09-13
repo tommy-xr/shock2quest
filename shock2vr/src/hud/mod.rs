@@ -17,6 +17,9 @@ pub(crate) mod readouts;
 pub(crate) mod message_line;
 pub use message_line::HudMessages;
 
+mod debug_overlay;
+pub(crate) use debug_overlay::*;
+
 mod flat_hud;
 pub(crate) use flat_hud::*;
 

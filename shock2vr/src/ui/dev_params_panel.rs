@@ -696,6 +696,16 @@ mod tests {
         });
         assert_eq!(nav.bulk_members().len(), 7);
         assert!(!nav.bulk_members().contains(&dev_params::GLOVE_FIT_VISIBLE));
+        assert!(!nav.bulk_members().contains(&dev_params::SHOW_POSITION));
+        nav.enter(DevParamsLocation {
+            category: Some(DevCategory::Visualizations),
+            locked: false,
+        });
+        assert!(
+            nav.rows()
+                .contains(&DevParamsRow::Parameter(dev_params::SHOW_POSITION))
+        );
+        assert!(nav.bulk_members().contains(&dev_params::SHOW_POSITION));
     }
 
     #[test]
