@@ -1528,7 +1528,7 @@ impl Script for AnimatedMonsterAI {
             steering_output,
             time,
             entity_id,
-            door_wait_seconds.is_some(),
+            door_wait_seconds.is_some() || self.current_behavior.borrow().holds_position(),
             heading_held,
         );
 

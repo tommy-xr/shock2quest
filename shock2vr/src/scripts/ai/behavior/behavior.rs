@@ -93,6 +93,11 @@ pub trait Behavior {
         Effect::NoEffect
     }
 
+    /// Stop root-motion travel while retaining the current pose/heading.
+    fn holds_position(&self) -> bool {
+        false
+    }
+
     fn is_locomotion(&self) -> bool {
         false
     }

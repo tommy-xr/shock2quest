@@ -1,3 +1,4 @@
+mod back_off_behavior;
 mod behavior;
 mod chase_behavior;
 mod dead_behavior;
@@ -11,6 +12,7 @@ mod search_behavior;
 mod self_destruct_behavior;
 mod wander_behavior;
 
+pub use back_off_behavior::BackOffBehavior;
 pub use behavior::*;
 pub use chase_behavior::*;
 pub use dead_behavior::*;
@@ -40,6 +42,8 @@ use crate::{
 /// melee swing - the detonation IS its melee attack (see
 /// `SelfDestructBehavior`) - but named separately so tuning the blast's
 /// trigger doesn't move every creature's melee range.
+pub(super) const RANGED_MAX_ATTACK_DISTANCE: f32 = 40.0 / SCALE_FACTOR;
+
 pub const PROTOCOL_DETONATION_RANGE: f32 = crate::scripts::ai::ai_util::MELEE_ATTACK_RANGE;
 
 /// The attack behavior for the current distance to the player, or None when
@@ -60,7 +64,7 @@ pub fn attack_behavior_for_distance(
     let target = chase_target(world, entity_id)?;
     let distance = chase_target_distance(world, entity_id)?;
     let melee_attack_distance = 8.0 / SCALE_FACTOR;
-    let ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
+    let ranged_max_attack_distance = RANGED_MAX_ATTACK_DISTANCE;
 
     // Melee damage is the swing weapon's contact stims, so an AI with no
     // Weapon link cannot land a blow at all. The shotgun and grenade
@@ -89,6 +93,21 @@ pub fn attack_behavior_for_distance(
     // its self-destruct instead of a melee attack.
     if distance < PROTOCOL_DETONATION_RANGE && is_self_destructing(world, entity_id) {
         return Some(Box::new(RefCell::new(SelfDestructBehavior::new())));
+    }
+
+    // Standing distance is a movement preference, never a firing prohibition:
+    // a cornered gun-only creature must still shoot when it cannot retreat.
+    if (gives_up_melee || distance >= melee_attack_distance)
+        && has_ranged_weapon(world, entity_id)
+        && has_line_of_fire(entity_id, world, physics, target)
+    {
+        if let Some(stand_off) = back_off_behavior::authored_stand_off(world, entity_id) {
+            if distance < stand_off.trigger
+                && back_off_behavior::can_back_off(world, physics, entity_id)
+            {
+                return Some(Box::new(RefCell::new(BackOffBehavior::new(stand_off))));
+            }
+        }
     }
 
     // Only ranged-armed AIs stop to shoot; melee AIs must keep chasing or
