@@ -241,6 +241,8 @@ fn transfer_grip(
 }
 
 pub struct GripEditor {
+    pub belt_mode: bool,
+    pub belt_editor: crate::belt_card_editor::BeltCardEditor,
     support_editor: crate::support_grip_editor::SupportEditor,
     support_mode: bool,
     curl_editor: CurlPoseEditor,
@@ -289,6 +291,8 @@ impl GripEditor {
             default_library_path()
         };
         Self {
+            belt_mode: false,
+            belt_editor: crate::belt_card_editor::BeltCardEditor::new(None),
             support_editor: crate::support_grip_editor::SupportEditor::new(support_path),
             support_mode,
             curl_editor: CurlPoseEditor::default(),
@@ -316,6 +320,7 @@ impl GripEditor {
     }
 
     pub fn open_model(&mut self, key: &str) {
+        self.belt_mode = false;
         self.model = std::path::Path::new(key)
             .file_stem()
             .unwrap_or_default()
@@ -467,6 +472,9 @@ impl GripEditor {
     }
 
     pub fn error(&self) -> Option<&str> {
+        if self.belt_mode {
+            return self.belt_editor.error();
+        }
         if matches!(self.model.as_str(), "amp_h" | "amp_w") {
             return None;
         }
@@ -490,7 +498,7 @@ impl GripEditor {
         let busy = self.is_busy();
         let primary_dirty = self.document.as_ref().is_ok_and(|doc| doc.dirty());
         if !self.allow_close
-            && (primary_dirty || self.support_editor.dirty() || busy)
+            && (primary_dirty || self.support_editor.dirty() || self.belt_editor.dirty() || busy)
             && ctx.input(|i| i.viewport().close_requested())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -498,7 +506,7 @@ impl GripEditor {
         }
         if self.confirm_close {
             egui::Modal::new(egui::Id::new("unsaved_grips")).show(ctx, |ui| {
-                ui.heading("Unsaved grip edits");
+                ui.heading("Unsaved VR edits");
                 ui.label(if busy {
                     "Fitting is still running. Keep editing to wait, or discard and close."
                 } else {
@@ -516,7 +524,10 @@ impl GripEditor {
                             Ok(doc) if doc.dirty() => doc.save(),
                             _ => Ok(()),
                         };
-                        match primary_saved.and_then(|_| self.support_editor.save()) {
+                        match primary_saved
+                            .and_then(|_| self.support_editor.save())
+                            .and_then(|_| self.belt_editor.save())
+                        {
                             Ok(()) => self.allow_close = true,
                             Err(e) => self.message = e,
                         }
@@ -536,7 +547,16 @@ impl GripEditor {
     }
 
     pub fn show_list(&mut self, ui: &mut egui::Ui) {
-        ui.heading("VR Grips");
+        ui.heading("VR Setup");
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.belt_mode, false, "Hand grips");
+            ui.selectable_value(&mut self.belt_mode, true, "Belt card");
+        });
+        if self.belt_mode {
+            ui.label("Personal access card");
+            ui.label("Adjust its resting pose against the battle belt. Save the pose as an asset for gameplay.");
+            return;
+        }
         ui.label("Grip overrides · shared glove rig");
         let can_switch = !self.is_busy() && self.document.as_ref().is_ok_and(|doc| !doc.dirty());
         let mut switch = None;
@@ -608,6 +628,10 @@ impl GripEditor {
         frame: &mut eframe::Frame,
         preview: &mut ModelPreview,
     ) {
+        if self.belt_mode {
+            self.belt_editor.show(ui, frame, preview);
+            return;
+        }
         if matches!(self.model.as_str(), "amp_h" | "amp_w") {
             ui.heading("Psi amp — integrated forearm reference");
             ui.label("The psi amp retains its authored forearm and does not use a glove override.");

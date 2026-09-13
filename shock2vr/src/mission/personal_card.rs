@@ -32,6 +32,8 @@ pub(super) struct PersonalCard {
     pub center: Option<Vector3<f32>>,
     pub hand: Option<usize>,
     belt_yaw: f32,
+    rest_pose: crate::vr_belt::BeltCardPose,
+    pose_loaded: bool,
     bit_textures: OnceCell<[Rc<dyn engine::texture::TextureTrait>; 2]>,
     pub blocked: [bool; 2],
     pressed: [bool; 2],
@@ -51,6 +53,8 @@ impl Default for PersonalCard {
             center: None,
             hand: None,
             belt_yaw: 0.0,
+            rest_pose: Default::default(),
+            pose_loaded: false,
             bit_textures: OnceCell::new(),
             blocked: [false; 2],
             pressed: [true; 2],
@@ -67,6 +71,22 @@ impl Default for PersonalCard {
 }
 
 impl PersonalCard {
+    pub fn load_pose(&mut self, assets: &mut engine::assets::asset_cache::AssetCache) {
+        if self.pose_loaded {
+            return;
+        }
+        self.pose_loaded = true;
+        if let Some(text) = assets.get_opt(
+            &engine::assets::text_importer::TEXT_IMPORTER,
+            "vr-belt-card.json",
+        ) {
+            match crate::vr_belt::BeltCardPose::parse(&text) {
+                Ok(pose) => self.rest_pose = pose,
+                Err(error) => eprintln!("Invalid vr-belt-card.json; using default: {error}"),
+            }
+        }
+    }
+
     pub fn advance_downloads(&mut self, dt: f32) {
         for (_, age) in &mut self.downloads {
             *age += dt.max(0.0);
@@ -87,14 +107,13 @@ impl PersonalCard {
     ) {
         self.center = body.map(|body| {
             self.belt_yaw = body.yaw;
-            // Match the existing astra-vr-belt.glb buckle node: x=-115 mm,
-            // y=0, z=-316 mm relative to its front strap at z=-300 mm.
-            // Another 8 mm clears the buckle's face. This is beside the pouch,
-            // not at the belt origin (which is occupied by the ammo pouch).
             body.front(
                 crate::dev_params::get(crate::dev_params::VR_BELT_DROP),
-                crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) + 0.024,
-            ) - vec3(body.yaw.cos(), 0.0, body.yaw.sin()) * (0.115 / crate::METERS_PER_WORLD_UNIT)
+                crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) - 0.30,
+            ) + (Matrix4::from_angle_y(cgmath::Rad(-body.yaw))
+                * (Vector3::from(self.rest_pose.position_m) / crate::METERS_PER_WORLD_UNIT)
+                    .extend(0.0))
+            .truncate()
         });
         self.blocked = [false; 2];
         if !enabled {
@@ -204,9 +223,7 @@ impl PersonalCard {
                 Matrix4::from_translation(pawn + rotation.rotate_vector(center))
                     * Matrix4::from(rotation)
                     * Matrix4::from_angle_y(cgmath::Rad(-self.belt_yaw))
-                    * Matrix4::from_angle_x(cgmath::Deg(90.0))
-                    // scipass lies in X/Z; turn its long Z edge horizontal, face upright.
-                    * Matrix4::from_angle_y(cgmath::Deg(90.0))
+                    * self.rest_pose.rotation()
             })
         }
     }
@@ -228,20 +245,19 @@ impl PersonalCard {
         let Some(bounds) = model.bounding_box() else {
             return vec![];
         };
-        let size = bounds.max - bounds.min;
-        let scale =
-            (0.085 / crate::METERS_PER_WORLD_UNIT) / size.x.max(size.y).max(size.z).max(0.001);
-        let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
+        let scale = crate::vr_belt::card_model_scale(bounds.min.to_vec(), bounds.max.to_vec());
+        let centered_model =
+            crate::vr_belt::card_model_transform(bounds.min.to_vec(), bounds.max.to_vec());
         let model_transform = if self.hand.is_some() {
             if let Some(grip) = &self.grip {
                 let anchor = vec3(grip.anchor[0], grip.anchor[1], grip.anchor[2]);
                 Matrix4::from_translation(anchor * (grip.item_scale - scale))
                     * Matrix4::from_scale(scale)
             } else {
-                Matrix4::from_scale(scale) * Matrix4::from_translation(-center)
+                centered_model
             }
         } else {
-            Matrix4::from_scale(scale) * Matrix4::from_translation(-center)
+            centered_model
         };
         let mut scene: Vec<_> = model
             .clone_scene_objects()
@@ -364,6 +380,7 @@ fn download_bit_texture(one: bool) -> Rc<dyn engine::texture::TextureTrait> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::Rotation3;
     fn fixture() -> (PersonalCard, InputContext, BodyPose) {
         let mut input = InputContext::default();
         input.head.rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
@@ -398,6 +415,44 @@ mod tests {
         assert_eq!(
             card.hand, None,
             "a grip at the ammo pouch must not take the buckle card"
+        );
+    }
+
+    #[test]
+    fn authored_resting_pose_moves_visible_card_and_grab_target_together() {
+        let (mut card, mut input, mut body) = fixture();
+        body.yaw = 0.7;
+        card.rest_pose.position_m = [-0.16, 0.04, -0.36];
+        card.rest_pose.rotation_degrees = [85.0, 100.0, 10.0];
+        card.update(&input, Some(body), [true; 2], true);
+        let pawn = vec3(2.0, 0.5, -1.0);
+        let rotation = Quaternion::from_angle_y(cgmath::Deg(30.0));
+        let root = Matrix4::from_translation(
+            pawn + rotation.rotate_vector(body.front(
+                crate::dev_params::get(crate::dev_params::VR_BELT_DROP),
+                crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) - 0.30,
+            )),
+        ) * Matrix4::from(rotation)
+            * Matrix4::from_angle_y(cgmath::Rad(-body.yaw));
+        let expected = root * card.rest_pose.transform();
+        let actual = card.transform(pawn, rotation).unwrap();
+        for (a, b) in [actual.x, actual.y, actual.z, actual.w]
+            .into_iter()
+            .zip([expected.x, expected.y, expected.z, expected.w])
+        {
+            assert!(
+                (a - b).magnitude() < 0.00001,
+                "editor and runtime mounting frames must agree"
+            );
+        }
+        input.left_hand.position = card.center.unwrap();
+        card.update(&input, Some(body), [true; 2], true);
+        input.left_hand.squeeze_value = 1.0;
+        card.update(&input, Some(body), [true; 2], true);
+        assert_eq!(
+            card.hand,
+            Some(0),
+            "edited resting center remains grabbable"
         );
     }
 

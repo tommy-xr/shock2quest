@@ -45,6 +45,7 @@ pub fn init_raw_gl(cc: &eframe::CreationContext<'_>) {
 pub enum PreviewScene {
     /// The `.bin` model alone.
     Model,
+    BeltCard(shock2vr::vr_belt::BeltCardPose),
     /// Authored VR weapon reference, retaining its integrated hand.
     VrReference,
     Grip(
@@ -61,7 +62,10 @@ pub enum PreviewScene {
 impl PreviewScene {
     fn clip(&self) -> Option<&str> {
         match self {
-            PreviewScene::Model | PreviewScene::VrReference | PreviewScene::Grip(..) => None,
+            PreviewScene::Model
+            | PreviewScene::VrReference
+            | PreviewScene::Grip(..)
+            | PreviewScene::BeltCard(..) => None,
             PreviewScene::Clip(clip) | PreviewScene::Skeleton(clip) => Some(clip),
         }
     }
@@ -172,7 +176,10 @@ impl ModelPreview {
         ui.horizontal(|ui| {
             if !matches!(
                 scene,
-                PreviewScene::Skeleton(_) | PreviewScene::Grip(..) | PreviewScene::VrReference
+                PreviewScene::Skeleton(_)
+                    | PreviewScene::Grip(..)
+                    | PreviewScene::VrReference
+                    | PreviewScene::BeltCard(..)
             ) {
                 ui.checkbox(&mut self.debug_skeletons, "Skeleton");
                 ui.checkbox(&mut self.debug_hit_boxes, "Hitboxes");
@@ -300,6 +307,46 @@ impl ModelPreview {
         // bounding box for `frame_camera` to use.
         let mut pose_bounds = None;
         let built: Result<Box<dyn ToolScene>, String> = match scene {
+            PreviewScene::BeltCard(pose) => quiet_catch(|| {
+                use cgmath::EuclideanSpace;
+                let belt = self
+                    .asset_cache
+                    .get(&dark::importers::GLB_MODELS_IMPORTER, "astra-vr-belt.glb");
+                let pouch = self.asset_cache.get(
+                    &dark::importers::GLB_MODELS_IMPORTER,
+                    "astra-vr-ammo-pouch.glb",
+                );
+                let mut objects = Vec::new();
+                for (part, offset) in [(belt, vec3(0.0, 0.0, 0.0)), (pouch, vec3(0.0, 0.0, -0.35))]
+                {
+                    let root = Matrix4::from_translation(offset / shock2vr::METERS_PER_WORLD_UNIT)
+                        * Matrix4::from_scale(1.0 / shock2vr::METERS_PER_WORLD_UNIT);
+                    for mut object in part.clone_scene_objects() {
+                        object.set_transform(root);
+                        objects.push(object);
+                    }
+                }
+                let bounds = model.bounding_box().ok_or("Card model has no bounds")?;
+                let transform = pose.transform()
+                    * shock2vr::vr_belt::card_model_transform(
+                        bounds.min.to_vec(),
+                        bounds.max.to_vec(),
+                    );
+                for mut object in model.clone_scene_objects() {
+                    object.set_transform(transform);
+                    objects.push(object);
+                }
+                pose_bounds = Some((
+                    vec3(-0.08, 0.0, -0.30) / shock2vr::METERS_PER_WORLD_UNIT,
+                    0.35,
+                ));
+                Ok(
+                    Box::new(GripPreviewScene(engine::scene::Scene::from_objects(
+                        objects,
+                    ))) as Box<dyn ToolScene>,
+                )
+            })
+            .and_then(|r: Result<_, &str>| r.map_err(str::to_string)),
             PreviewScene::VrReference => Ok(Box::new(GripPreviewScene(
                 engine::scene::Scene::from_objects(model.clone_scene_objects()),
             ))),
@@ -562,6 +609,18 @@ impl ModelPreview {
     }
 
     /// Camera presets share the gallery's hand-local axes. Orbit remains free.
+    pub fn belt_camera(&mut self, view: &str) {
+        self.target = vec3(-0.08, 0.0, -0.30) / shock2vr::METERS_PER_WORLD_UNIT;
+        self.distance = 0.65;
+        (self.yaw, self.pitch) = match view {
+            "front" => (-90.0, 90.0),
+            "top" => (-90.0, 10.0),
+            "side" => (0.0, 90.0),
+            _ => (-125.0, 65.0),
+        };
+        self.needs_render = true;
+    }
+
     pub fn grip_camera(&mut self, view: &str, hand: Handedness) {
         if let Some((center, radius)) = self.grip_bounds {
             self.frame_bounds(center, radius, 0.25);

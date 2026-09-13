@@ -258,6 +258,31 @@ readout). The current key and controller bindings are listed in
 
 ## Tooling Notes
 
+### VR Pose Authoring (`dark_explorer`)
+
+Use **`dark_explorer` for persistent VR asset placement edits**, including hand
+poses and the personal access card's resting pose on the battle belt. Its
+**VR Setup** tab provides Hand grips and Belt card modes:
+
+```bash
+cargo dx ui --belt-card                 # card at rest, previewed against the belt
+cargo dx ui --grip scipass              # card held in a hand
+cargo dx ui --grip atek_h --grip-hand left
+```
+
+The Belt card editor saves position (centimetres in the UI) and rotation
+(degrees) to `assets/vr-belt-card.json`; gameplay loads it when the mission
+starts. Save, then restart the game; include the asset when deploying to
+Quest. `--belt-card-library <path>` opens another resource for editing or
+preview. Save As writes a separate file; copy it to the canonical asset path
+to use it in game. The preview and runtime share `shock2vr::vr_belt` transforms,
+so rendering and the resting grab target follow the same pose.
+
+Developer parameters such as belt height/distance are **session-only whole-belt
+fit controls**. They do not replace asset authoring when the request is to
+adjust the card *relative to the buckle*, or a hand *relative to an item*.
+Preserve that distinction when choosing or extending a calibration tool.
+
 ### Entity, Motion & Speech Queries (`dark_query`)
 
 `cargo dq` inspects gamesys/mission data without launching the game — use it to understand entity relationships and debug complex interactions (`cargo dq --help` for full usage):

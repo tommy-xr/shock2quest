@@ -41,3 +41,10 @@ seated/standing reach comfort or how a haptic pulse feels.
 
 Visual refinement: glowing binary fragments spiral into the card with fading trails;
 the card attaches to the authored buckle and follows the same body heading.
+
+Author the card’s resting placement with `cargo dx ui --belt-card` in
+`dark_explorer` (VR Setup → Belt card). Save position/rotation to
+`assets/vr-belt-card.json`, then restart the game. The editor and runtime share
+the mounting transform, card scale and model centering; its grab target follows
+the edited resting center. Hand-held grips and whole-belt dev parameters remain
+separate adjustments.

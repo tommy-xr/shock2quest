@@ -4599,6 +4599,7 @@ impl MissionCore {
         );
         self.personal_card
             .advance_downloads(time.elapsed.as_secs_f32());
+        self.personal_card.load_pose(asset_cache);
         self.personal_card.update(
             &body_input,
             self.holsters.body_pose,
