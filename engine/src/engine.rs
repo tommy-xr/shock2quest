@@ -1,6 +1,11 @@
 pub struct EngineRenderContext {
     pub time: f32,
 
+    /// Multiplier for the authored world ambient lighting floor; 1 preserves it.
+    pub ambient_light_intensity: f32,
+    /// Multiplier for baked world lightmaps, applied before the ambient floor.
+    pub lightmap_light_intensity: f32,
+
     pub camera_offset: cgmath::Vector3<f32>,
     pub camera_rotation: cgmath::Quaternion<f32>,
 

@@ -58,6 +58,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform sampler2D texture1; // lightmap
         uniform sampler2D texture2; // diffuse texture
         uniform vec3 ambientColor;  // authored mission-wide minimum lighting
+        uniform float lightmapIntensity;
 
         // Spotlight array uniforms (up to 6 spotlights)
         uniform vec3 spotlightPos[6];
@@ -120,7 +121,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             wrappedTexCoord.x = mod(lightMapTexCoord.x * width, width) + atlasCoord.x + half_pixel;
             wrappedTexCoord.y = mod(lightMapTexCoord.y * height, height) + atlasCoord.y + half_pixel;
 
-            vec4 lightmapColor = texture(texture1, wrappedTexCoord);
+            vec4 lightmapColor = texture(texture1, wrappedTexCoord) * lightmapIntensity;
             vec4 diffuseColor = texture(texture2, texCoord);
 
             // Dark's mission ambient is a minimum final intensity: preserve
@@ -147,6 +148,7 @@ struct UnifiedUniforms {
     texture1_loc: i32, // lightmap
     texture2_loc: i32, // diffuse
     ambient_color_loc: i32,
+    lightmap_intensity_loc: i32,
 
     // Spotlight array uniforms (6 spotlights)
     spotlight_pos_loc: [i32; 6],
@@ -208,11 +210,15 @@ impl LightmapMaterial {
             // Set texture samplers
             gl::Uniform1i(uniforms.texture1_loc, 0); // lightmap
             gl::Uniform1i(uniforms.texture2_loc, 1); // diffuse
+            gl::Uniform1f(
+                uniforms.lightmap_intensity_loc,
+                render_context.lightmap_light_intensity,
+            );
             gl::Uniform3f(
                 uniforms.ambient_color_loc,
-                self.ambient_color.x,
-                self.ambient_color.y,
-                self.ambient_color.z,
+                self.ambient_color.x * render_context.ambient_light_intensity,
+                self.ambient_color.y * render_context.ambient_light_intensity,
+                self.ambient_color.z * render_context.ambient_light_intensity,
             );
 
             // Set spotlight array uniforms
@@ -307,6 +313,10 @@ impl Material for LightmapMaterial {
                     ambient_color_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("ambientColor").as_ptr(),
+                    ),
+                    lightmap_intensity_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("lightmapIntensity").as_ptr(),
                     ),
 
                     // Spotlight array uniforms (6 spotlights)

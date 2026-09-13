@@ -797,6 +797,8 @@ impl ModelPreview {
         let pitch_quat = Quaternion::from_angle_x(Rad(pitch_rad - 90.0f32.to_radians()));
         let yaw_quat = Quaternion::from_angle_y(Rad(-yaw_rad + 90.0f32.to_radians()));
         let render_context = engine::EngineRenderContext {
+            ambient_light_intensity: 1.0,
+            lightmap_light_intensity: 1.0,
             time: 0.0,
             camera_offset: self.target + offset,
             camera_rotation: Quaternion {
