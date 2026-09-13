@@ -29,6 +29,17 @@ test("an unreachable target causes a bounded gesture and a combat-mode cooldown"
   assert.ok(episodes.length > 0, "a stalled combatant must express frustration");
   assert.ok(longestHold >= 1 && longestHold <= 2.5,
     `gesture should persist briefly, observed ${longestHold}s`);
+  // Exercise the BaseMonster wrapper's nested state dispatch, not only the
+  // child AI serializer: every armed monster in the mission uses this path.
+  const save = `combat_frustration_e2e_${Date.now()}`;
+  assert.equal((await game.save(save)).success, true);
+  assert.equal((await game.load(save)).success, true);
+  const [restored] = await game.entities.byTemplate(728);
+  assert.ok(restored);
+  await game.step({ frames: 30 });
+  assert.ok(!(await game.entities.detail(restored.id)).properties
+    .find(p => p.name === "AIBehavior")?.value.includes("Frustration"),
+    "loading a cooldown must not replay its completed gesture");
   for (let i = 1; i < episodes.length; i++) {
     assert.ok(episodes[i]! - episodes[i - 1]! >= 9.5,
       `must not repeat during lockout: ${episodes}`);
