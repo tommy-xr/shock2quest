@@ -102,8 +102,17 @@ test(
     const [pod] = await game.entities.byTemplate(-1476);
     assert.ok(pod);
     await game.entities.sendMessage(pod.id, { type: "TurnOn" });
+    // Sample the first glob before the volley can collide and change speed.
+    await game.step({ frames: 7 });
+    const firstShots = await game.entities.byTemplate(-1557);
+    assert.ok(firstShots.length > 0);
+    const [first] = (await game.physics.bodies({ entityId: firstShots[0]!.id })).bodies;
+    assert.ok(first);
+    const speed = Math.hypot(first.velocity[0]!, first.velocity[2]!);
+    assert.ok(Math.abs(speed - 3.2) < 0.05,
+      `authored 8 Dark units/s must become 3.2 world units/s exactly once, got ${speed}`);
     // Long enough for all four to be away (100 ms apart) and still airborne.
-    await game.step({ frames: 26 });
+    await game.step({ frames: 19 });
 
     const shots = await game.entities.byTemplate(-1557);
     assert.equal(shots.length, 4);

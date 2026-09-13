@@ -8797,8 +8797,9 @@ impl MissionCore {
                                     // Same re-permutation as the GunFlash
                                     // casing path: the parser's runtime vector
                                     // back into a +Z-forward launch frame.
+                                    // PropPhysInitialVelocity is already in
+                                    // world units; only change its launch frame.
                                     orientation * vec3(velocity.0.z, velocity.0.y, -velocity.0.x)
-                                        / SCALE_FACTOR
                                 })
                             })
                             .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
