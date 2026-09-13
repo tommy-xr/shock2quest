@@ -174,19 +174,28 @@ pub(crate) fn is_cyber_module(world: &World, entity: EntityId) -> bool {
     entity_has_script(world, entity, EXP_COOKIE_SCRIPT)
 }
 
+/// Pickups that VR can hold before downloading into the personal card on release.
+/// Logs deliberately retain immediate collection; invalid/unused software is not
+/// claimed because its script cannot install or consume it.
+pub(crate) fn is_download_pickup(world: &World, entity: EntityId) -> bool {
+    crate::virtual_hand::is_key_source(world, entity)
+        || is_nanite_pickup(world, entity)
+        || is_cyber_module(world, entity)
+        || world
+            .borrow::<View<dark::properties::PropSoftType>>()
+            .is_ok_and(|soft| {
+                soft.get(entity).is_ok_and(|soft| {
+                    crate::player_stats::Software::from_soft_type(soft.0).is_some()
+                })
+            })
+}
+
 /// Whether `entity` belongs to a category the game *collects* rather than
 /// carries: keycards, nanite piles, cyber modules and audio/data logs.
 ///
-/// These four never become a physically-held prop and never occupy an inventory
-/// slot - their value goes straight into a player stat, the credential list or
-/// the PDA, and their scripts' side effects (SwitchLinks, quest bits, awards)
-/// only fire on Frob. So *every* acquisition gesture, on every path - world
-/// frob, world squeeze, a loot panel's take arm or squeeze, a click on the
-/// inventory strip - must route through Frob instead of a grab or a transfer.
-///
-/// The single predicate all of those sites consult, so the category cannot
-/// drift between them. Each arm delegates to the per-type predicate that owns
-/// that type's identity rather than re-deriving it here.
+/// Immediate acquisition routes use Frob instead of transferring these into a
+/// backpack cell. VR physical grips separately use `is_download_pickup` to
+/// defer collection until release.
 pub(crate) fn is_always_collected(world: &World, entity: EntityId) -> bool {
     crate::virtual_hand::is_key_source(world, entity)
         || is_nanite_pickup(world, entity)
