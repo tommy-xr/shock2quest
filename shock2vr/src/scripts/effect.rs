@@ -973,6 +973,8 @@ pub enum Effect {
     /// refusal text, but the effect handler is authoritative so two
     /// same-frame selections cannot both spend the same balance.
     ReplicatorPurchase {
+        replicator: EntityId,
+        slot: usize,
         cost: i32,
         template_name: String,
         position: Point3<f32>,
