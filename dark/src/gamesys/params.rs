@@ -6,7 +6,7 @@
 //! `PSICOST` (5 tiers x 8 ints, first int of each tier row = the tier unlock
 //! cost, the remaining 7 = per-power costs within that tier). All values are
 //! little-endian `i32`, Normal difficulty (the per-difficulty multipliers live
-//! in `DIFFPARAM`, whose exact layout is unverified - Normal-only for now).
+//! in `DIFFPARAM`, parsed by `DifficultyParams`).
 //!
 //! Decoded from the shipped `shock2.gam` (projects/flat-ui-panels.md §3.2) and
 //! identical to the community-documented tables, so both sources corroborate.

@@ -31,6 +31,9 @@ pub struct CollectedLog {
 
 #[derive(Deserialize, Serialize, Unique, Clone, Debug)]
 pub struct QuestInfo {
+    /// Fixed at campaign creation. A typed field keeps invalid quest-bit values
+    /// and generic quest mutations from changing the campaign rules.
+    difficulty: dark::gamesys::Difficulty,
     quest_bit_values: HashMap<String, QuestBitValue>,
     played_emails: HashSet<String>,
     key_cards: Vec<KeyCard>,
@@ -57,7 +60,12 @@ pub struct QuestInfo {
 
 impl QuestInfo {
     pub fn new() -> QuestInfo {
+        Self::with_difficulty(dark::gamesys::Difficulty::Normal)
+    }
+
+    pub fn with_difficulty(difficulty: dark::gamesys::Difficulty) -> Self {
         QuestInfo {
+            difficulty,
             quest_bit_values: HashMap::new(),
             played_emails: HashSet::new(),
             key_cards: Vec::new(),
@@ -66,6 +74,17 @@ impl QuestInfo {
             explored_maps: HashMap::new(),
             research: ResearchState::default(),
         }
+    }
+
+    /// Scene constructors seed their own test stats; retain those while selecting
+    /// the difficulty of the newly-created debug scene. Not a live setting.
+    pub(crate) fn for_debug_difficulty(mut self, difficulty: dark::gamesys::Difficulty) -> Self {
+        self.difficulty = difficulty;
+        self
+    }
+
+    pub fn difficulty(&self) -> dark::gamesys::Difficulty {
+        self.difficulty
     }
 
     pub fn research(&self) -> &ResearchState {
@@ -187,6 +206,9 @@ impl QuestInfo {
     }
 
     pub fn set_quest_bit_value(&mut self, quest_name: &str, quest_value: QuestBitValue) {
+        if quest_name.eq_ignore_ascii_case("difficulty") {
+            return;
+        }
         self.quest_bit_values
             .insert(quest_name.to_ascii_lowercase(), quest_value);
     }
@@ -331,5 +353,25 @@ mod log_tests {
                 read: false
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod difficulty_tests {
+    use super::*;
+    #[test]
+    fn difficulty_is_sticky_and_round_trips_with_campaign() {
+        for difficulty in dark::gamesys::Difficulty::ALL {
+            let mut q = QuestInfo::with_difficulty(difficulty);
+            q.set_quest_bit_value("Difficulty", QuestBitValue::COMPLETE);
+            q.clear_quest_bit_value("difficulty");
+            let saved = serde_json::to_string(&q).unwrap();
+            let restored: QuestInfo = serde_json::from_str(&saved).unwrap();
+            assert_eq!(restored.difficulty(), difficulty);
+            assert_eq!(restored.clone().difficulty(), difficulty);
+        }
+        let mut value = serde_json::to_value(QuestInfo::new()).unwrap();
+        value["difficulty"] = serde_json::json!("multiplayer");
+        assert!(serde_json::from_value::<QuestInfo>(value).is_err());
     }
 }

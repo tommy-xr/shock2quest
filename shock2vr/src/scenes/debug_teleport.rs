@@ -20,6 +20,7 @@ impl DebugTeleportScene {
         experimental_features.insert("teleport".to_string());
 
         let teleport_options = GameOptions {
+            difficulty: game_options.difficulty,
             mission: game_options.mission.clone(),
             presentation_mode: game_options.presentation_mode,
             spawn_location: game_options.spawn_location.clone(),

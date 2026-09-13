@@ -585,6 +585,8 @@ export interface ClimbGripResult {
 }
 
 export interface PlayerSnapshot {
+  /** Read-only campaign choice; null when no player is available. */
+  difficulty: "easy" | "normal" | "hard" | "impossible" | null;
   entity_id: number | null;
   /** Runtime id of the backpack container; rediscover it after save/load. */
   inventory_entity_id?: number | null;

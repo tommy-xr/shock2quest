@@ -9,6 +9,8 @@ import { Game } from "./game.js";
 export interface LaunchOptions {
   /** Mission file or debug scene, e.g. "medsci1.mis" or "debug_minimal". */
   mission: string;
+  /** Fixed for this fresh campaign; loading a save retains its difficulty. */
+  difficulty?: "easy" | "normal" | "hard" | "impossible";
   /**
    * Exact port for the debug runtime HTTP server. Omit it (the default) and
    * the runtime binds an OS-assigned ephemeral port, which the SDK learns
@@ -312,6 +314,7 @@ export class GameServer extends Game implements AsyncDisposable {
       ...(options.experimental?.length
         ? ["--experimental", options.experimental.join(",")]
         : []),
+      ...(options.difficulty ? ["--difficulty", options.difficulty] : []),
       ...(options.debugFlags ?? []),
     ];
 

@@ -866,6 +866,7 @@ pub struct TimeInfo {
 /// Player information
 #[derive(Debug, Serialize, Clone)]
 pub struct PlayerInfo {
+    pub difficulty: Option<dark::gamesys::Difficulty>,
     pub entity_id: Option<i32>,
     pub inventory_entity_id: Option<i32>,
     pub position: [f32; 3],

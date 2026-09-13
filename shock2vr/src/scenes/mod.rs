@@ -219,7 +219,18 @@ pub fn create_debug_scene(
     DEBUG_SCENES
         .iter()
         .find(|(scene_name, _)| name.eq_ignore_ascii_case(scene_name))
-        .map(|(_, create)| create(global_context, options, asset_cache, audio_context))
+        .map(|(_, create)| {
+            let scene = create(global_context, options, asset_cache, audio_context);
+            // Debug scenes are fresh campaigns, but retain their seeded test stats.
+            {
+                let mut quests = scene
+                    .world()
+                    .borrow::<shipyard::UniqueViewMut<QuestInfo>>()
+                    .unwrap();
+                *quests = quests.clone().for_debug_difficulty(options.difficulty);
+            }
+            scene
+        })
 }
 
 pub fn create_initial_scene(
@@ -284,7 +295,7 @@ pub fn create_initial_scene(
         audio_context,
         global_context,
         options.spawn_location.clone(),
-        QuestInfo::new(),
+        QuestInfo::with_difficulty(options.difficulty),
         Box::new(MissionEntityPopulator::create()),
         HeldItemSaveData::empty(),
         options,

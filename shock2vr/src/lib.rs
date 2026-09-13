@@ -475,6 +475,8 @@ pub enum PresentationMode {
 }
 
 pub struct GameOptions {
+    /// Used only when starting a fresh campaign; loaded campaigns retain theirs.
+    pub difficulty: dark::gamesys::Difficulty,
     pub mission: String,
     pub presentation_mode: PresentationMode,
     pub spawn_location: SpawnLocation,
@@ -493,6 +495,7 @@ pub struct GameOptions {
 impl Default for GameOptions {
     fn default() -> Self {
         Self {
+            difficulty: dark::gamesys::Difficulty::Normal,
             mission: "earth.mis".to_owned(),
             presentation_mode: PresentationMode::Vr,
             spawn_location: SpawnLocation::MapDefault,
@@ -680,6 +683,7 @@ pub struct Game {
 /// player's "left hand" slot); in VR the two hand slots hold whatever is grabbed.
 #[derive(Clone, Debug)]
 pub struct PlayerStateSnapshot {
+    pub difficulty: dark::gamesys::Difficulty,
     pub entity_id: i32,
     /// Runtime id of the player's backpack container. Exposed for deterministic
     /// inventory/link assertions; like every concrete id it must be rediscovered
@@ -822,6 +826,7 @@ impl Game {
         });
         let gun_setting = crate::hud::get_wielded_gun_setting(world);
         Some(PlayerStateSnapshot {
+            difficulty: world.borrow::<UniqueView<QuestInfo>>().ok()?.difficulty(),
             entity_id: info.entity_id.inner() as i32,
             inventory_entity_id: info.inventory_entity_id.inner() as i32,
             position: [info.pos.x, info.pos.y, info.pos.z],
