@@ -6,6 +6,7 @@ import type { EntitySummary, UiElement, UiPanelPose, UiState, Vec3 } from "../sr
 import { teleportVerified } from "./helpers/teleport.js";
 import {
   LOOT_PANEL_SIZE_PX,
+  drawPersonalCard,
   aimVrHandAt,
   aimVrHandAtCanvas,
   squeezeWorldPanelElement,
@@ -15,15 +16,8 @@ import {
 //   corpse 754 --Contains--> card 942 (PropKeySrc region 128)
 //   card slots 1120/1122 --SwitchLink--> HydroSectorB door 1127
 //
-// Both cases use default VR and production hand input. With the fix, a
-// keycard can never come to rest in the backpack strip through any live
-// squeeze path - `panel_grab_effect` Frobs it (collecting the credential)
-// instead of holding it, on the corpse's real loot panel and the use-mode
-// strip alike. The second scenario stages a card directly into the backpack
-// (bypassing every fixed path, the way an old save or the still-open flat
-// cursor-drag gap - #583's deferred M2 - could) and verifies the strip
-// squeeze still recovers the credential rather than leaving an inert card
-// sitting in the grid.
+// VR physical grips hold found cards until release. The downloaded credential
+// opens its authored gate only after presenting the permanent personal card.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const CORPSE = 754;
 const CARD = 942;
@@ -85,6 +79,14 @@ async function assertCardCollectedAndDoorOpens(
   await game.input.set("right_hand.trigger", 0);
   await game.step({ frames: 180 });
 
+  assert.ok(distance((await game.entities.detail(door.id)).position, before) < 0.05,
+    "owning a credential must not let empty-hand Frob bypass scanning");
+  await drawPersonalCard(game);
+  await aimVrHandAt(game, aim.world_point, 0.20, 1);
+  await game.step({ frames: 180 });
+  await game.input.set("right_hand.squeeze", 0);
+  await game.step({ frames: 3 });
+
   const after = (await game.entities.detail(door.id)).position;
   assert.ok(
     distance(after, before) > 0.5,
@@ -97,7 +99,7 @@ async function assertCardCollectedAndDoorOpens(
 }
 
 test(
-  "Hydro2 VR corpse-panel squeeze collects Card B and opens its authored door",
+  "Hydro2 VR corpse-panel grip holds Card B until release, then scans its gate",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -127,12 +129,16 @@ test(
     );
     assert.ok(cardElement, "corpse 754 must expose its real Card B button");
     await squeezeWorldPanelElement(game, LOOT_PANEL_SIZE_PX, 1, cardElement);
+    // The panel helper completes the release too; state is collected on return.
+    await game.input.set("right_hand.position", [0.3, 0.9, -0.5]);
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 8 });
     await assertCardCollectedAndDoorOpens(game, CARD);
   },
 );
 
 test(
-  "Hydro2 VR strip squeeze recovers an already-inventoried Card B instead of holding it",
+  "Hydro2 VR strip grip holds Card B and release downloads its credential",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -141,11 +147,8 @@ test(
     });
     await game.step({ frames: 5 });
 
-    // Stage the authored card directly in the backpack, bypassing every
-    // squeeze/click path this PR fixes - the state an old save (or the
-    // still-open flat cursor-drag gap, #583's deferred M2) could leave
-    // behind. The fix's contract is that this card is never left inert:
-    // squeezing it out of the strip must still Frob it, not lift it.
+    // Stage the authored card in the backpack to exercise the strip's grip
+    // path independently of the corpse-panel path above.
     const card = await game.player.spawnItem(CARD_ARCHETYPE);
     assert.equal(
       (await game.player.inventory()).items.find((item) => item.entity_id === card.entity_id)
@@ -172,14 +175,14 @@ test(
 
     assert.equal(
       (await game.info()).player.right_hand_entity_id,
-      null,
-      "a keycard squeeze must Frob the credential, never land it in the hand",
+      card.entity_id,
+      "a keycard squeeze must hold the credential until release",
     );
     ui = await game.ui.state();
     assert.equal(
-      stripSlotFor(ui, card.entity_id),
+      ui.strip?.elements.find(element => element.entity_id === card.entity_id && element.kind === "button"),
       undefined,
-      "the collected card must leave the strip grid",
+      "the held card must leave backpack cells (the hand readout may remain)",
     );
 
     // Leave the cyber interface - it swallows the world trigger while open,
@@ -188,6 +191,9 @@ test(
     await game.step({ frames: 5 });
     assert.equal((await game.ui.state()).mode, "shooter");
 
+    await game.input.set("right_hand.position", [0.3, 0.9, -0.5]);
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 8 });
     await assertCardCollectedAndDoorOpens(game, CARD_ARCHETYPE);
   },
 );

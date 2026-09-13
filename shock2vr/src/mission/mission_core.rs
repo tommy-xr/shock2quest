@@ -332,9 +332,8 @@ fn strip_deposit_entities(
 /// frame and at the same point the drop they replace would have been - the
 /// `Drop` therefore still reaches this frame's `script_world.update`.
 ///
-/// `collect` is the keycard exception (see the caller): those are Frobbed
-/// rather than stored, so the credential is recorded instead of an inert card
-/// being banked.
+/// `collect` routes downloads through their collecting Frob instead of storing
+/// inert pickup objects in the backpack.
 ///
 /// `store` pairs each stored item with its targeted or reserved inventory cell,
 /// when one resolved - the deposit becomes a [`VirtualHandEffect::StoreItemAtCell`]
@@ -2542,7 +2541,9 @@ pub struct MissionCore {
     shoulder_backpack: super::shoulder_backpack::ShoulderBackpack,
     holsters: super::holsters::Holsters,
     ammo_pouch: super::ammo_pouch::AmmoPouch,
+    personal_card: super::personal_card::PersonalCard,
     body_hand_contacts: [Option<Vector3<f32>>; 2],
+    download_release_disarmed: [bool; 2],
 
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
     /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
@@ -3443,8 +3444,10 @@ impl MissionCore {
             vr_clip_insert_engaged: [false; 2],
             shoulder_backpack: Default::default(),
             body_hand_contacts: [None; 2],
+            download_release_disarmed: [false; 2],
             holsters: Default::default(),
             ammo_pouch: Default::default(),
+            personal_card: Default::default(),
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
@@ -4006,6 +4009,10 @@ impl MissionCore {
         // correction on top of a body that has already absorbed the last one.
         // A scripted top-out owns the body outright, so the hands do nothing
         // while one runs and cannot take a fresh hold part-way over the lip.
+        self.interaction.reserve_body_tool_hands([
+            self.personal_card.hand == Some(0),
+            self.personal_card.hand == Some(1),
+        ]);
         let hand_climb = (!time.elapsed.is_zero() && !self.player_handle.is_topping_out())
             .then(|| {
                 let pawn_pos = self
@@ -4590,8 +4597,30 @@ impl MissionCore {
                 && self.player_controls_enabled,
             time.elapsed.as_secs_f32(),
         );
-        let pouch_available = [crate::Handedness::Left, crate::Handedness::Right]
-            .map(|hand| self.interaction.hand_available_for_body_slot(hand));
+        self.personal_card
+            .advance_downloads(time.elapsed.as_secs_f32());
+        self.personal_card.update(
+            &body_input,
+            self.holsters.body_pose,
+            [crate::Handedness::Left, crate::Handedness::Right].map(|hand| {
+                let i = crate::vr_config::hand_slot(hand);
+                self.interaction.hand_available_for_body_slot(hand)
+                    && holster_actions[i].is_none()
+                    && !self.shoulder_backpack.near[i]
+            }),
+            game_options.presentation_mode == crate::PresentationMode::Vr
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
+        );
+        self.personal_card
+            .sample_hand(hands_input, player_pos, player_rot);
+        self.interaction
+            .reserve_body_tool_hands(self.personal_card.blocked);
+        let pouch_available = [crate::Handedness::Left, crate::Handedness::Right].map(|hand| {
+            self.interaction.hand_available_for_body_slot(hand)
+                && !self.personal_card.blocked[crate::vr_config::hand_slot(hand)]
+        });
         let pouch_offers = std::array::from_fn(|i| {
             pouch_available[i]
                 .then_some(pouch_weapons[i])
@@ -4707,6 +4736,7 @@ impl MissionCore {
             shoulder_releases[i]
                 && held[i].is_some_and(|entity| {
                     crate::scripts::script_util::is_always_collected(&self.world, entity)
+                        || crate::scripts::script_util::is_download_pickup(&self.world, entity)
                 })
         });
         let shoulder_cells = if (0..2).any(|i| {
@@ -4731,6 +4761,38 @@ impl MissionCore {
             [None; 2]
         };
         let mut shoulder_input = hands_input.clone();
+        for (i, hand) in [
+            &mut shoulder_input.left_hand,
+            &mut shoulder_input.right_hand,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if !held[i].is_some_and(|entity| {
+                crate::scripts::script_util::is_download_pickup(&self.world, entity)
+            }) {
+                self.download_release_disarmed[i] = false;
+                continue;
+            }
+            let tracked = crate::vr_support::GripPose {
+                position: hand.position,
+                rotation: hand.rotation,
+            }
+            .is_tracked()
+                && input_context
+                    .pose_tracking
+                    .is_none_or(|p| p.head && p.hands[i])
+                && hand.squeeze_value.is_finite();
+            if !tracked {
+                self.download_release_disarmed[i] = true;
+            } else if hand.squeeze_value >= 0.5 {
+                self.download_release_disarmed[i] = false;
+            }
+            if self.download_release_disarmed[i] {
+                hand.squeeze_value = 1.0;
+            }
+        }
+
         for i in 0..2 {
             if shoulder_releases[i] {
                 let accepted = shoulder_collect[i]
@@ -4752,12 +4814,16 @@ impl MissionCore {
                         "Backpack full — item kept in hand. Squeeze to re-grip.".to_owned()
                     },
                 });
-                effects.push(Effect::PlaySound {
-                    handle: AudioHandle::new(),
-                    name: if accepted { "bset" } else { "repfail" }.to_owned(),
-                    source: held[i],
-                    spatial: false,
-                });
+                if !held[i].is_some_and(|entity| {
+                    crate::scripts::script_util::is_download_pickup(&self.world, entity)
+                }) {
+                    effects.push(Effect::PlaySound {
+                        handle: AudioHandle::new(),
+                        name: if accepted { "bset" } else { "repfail" }.to_owned(),
+                        source: held[i],
+                        spatial: false,
+                    });
+                }
                 tracing::info!(hand = i, entity = ?held[i], accepted, "shoulder backpack release");
             }
             if let Some(action) = holster_actions[i] {
@@ -4832,6 +4898,19 @@ impl MissionCore {
                 }
             }
         }
+        for (i, hand) in [
+            &mut shoulder_input.left_hand,
+            &mut shoulder_input.right_hand,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if self.personal_card.blocked[i] {
+                hand.squeeze_value = 0.0;
+                hand.trigger_value = 0.0;
+                hand.a_value = 0.0;
+            }
+        }
         let hands_input = &shoulder_input;
 
         // Opening a hand over the inventory strip puts the item in the
@@ -4849,13 +4928,8 @@ impl MissionCore {
                 hands_input.right_hand.squeeze_value < crate::ui::VR_TRIGGER_THRESHOLD,
             ],
         );
-        // The always-collected exception, the same one `ContainerGui`'s own
-        // `Take` and squeeze make on the same predicate: a keycard's Frob is
-        // what records the credential, a pile's what credits the nanites, so
-        // banking any of them bodily would put an object in the pack that
-        // unlocks or buys nothing. Reachable only for one restored into a hand
-        // by an older save - acquiring one routes through Frob - which is
-        // exactly why `held_trigger_press_payload` keeps its own arm.
+        // Downloads and logs never occupy backpack cells. The later actual
+        // release pass also claims downloads outside the strip/shoulder zones.
         let (collect, store): (Vec<_>, Vec<_>) = strip_deposits.iter().partition(|entity_id| {
             crate::scripts::script_util::is_always_collected(&self.world, **entity_id)
         });
@@ -4917,7 +4991,137 @@ impl MissionCore {
             &mut interaction_msgs,
             game_options,
         );
+        self.personal_card.grip = self
+            .personal_card
+            .hand
+            .and_then(|hand| self.interaction.personal_card_grip(hand));
+        // Claim actual hand releases, anywhere, before backpack/world ownership
+        // changes. The shared rewrite preserves Drop and removes competing offers.
+        let downloads: Vec<_> = interaction_msgs
+            .iter()
+            .filter_map(|effect| match effect {
+                VirtualHandEffect::DropItem { entity_id }
+                    if game_options.presentation_mode == crate::PresentationMode::Vr
+                        && crate::scripts::script_util::is_download_pickup(
+                            &self.world,
+                            *entity_id,
+                        ) =>
+                {
+                    Some(*entity_id)
+                }
+                _ => None,
+            })
+            .collect();
+        collect.extend(downloads.iter().copied());
+        store.retain(|(entity, _)| !collect.contains(entity));
+        for entity in &downloads {
+            if let Some(slot) = held.iter().position(|held| *held == Some(*entity)) {
+                let source = [&input_context.left_hand, &input_context.right_hand][slot];
+                self.personal_card
+                    .download(crate::virtual_hand::hand_world_position(
+                        player_pos,
+                        player_rot,
+                        source.position,
+                    ));
+                effects.push(Effect::HandHaptic {
+                    hand: if slot == 0 {
+                        crate::Handedness::Left
+                    } else {
+                        crate::Handedness::Right
+                    },
+                    pulse: crate::haptics::HapticPulse {
+                        amplitude: 0.5,
+                        duration_ms: 70,
+                    },
+                });
+                effects.push(Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    source: None,
+                    name: "bset".to_owned(),
+                    spatial: false,
+                });
+            }
+        }
         rewrite_inventory_release(&mut interaction_msgs, &store, &collect);
+        if game_options.presentation_mode == crate::PresentationMode::Vr {
+            let mut scan_required = false;
+            interaction_msgs.retain(|effect| {
+                let blocked = matches!(effect,
+                    VirtualHandEffect::OutMessage { message: Message { to, payload: MessagePayload::Frob } }
+                        if super::personal_card::is_reader(&self.world, *to));
+                scan_required |= blocked;
+                !blocked
+            });
+            if scan_required {
+                effects.push(Effect::ShowMessage {
+                    text: "Scan your personal access card".to_owned(),
+                });
+                effects.push(Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    source: None,
+                    name: "repfail".to_owned(),
+                    spatial: false,
+                });
+            }
+            // Use the hand's aim to identify the reader, then require the card
+            // itself within contact reach. Starting a parallel ray at a pinch
+            // offset misses narrow card slots even when held against them.
+            let target = self
+                .personal_card
+                .held_pose
+                .and_then(|(aim_origin, rotation)| {
+                    let position = self
+                        .personal_card
+                        .transform(player_pos, player_rot)?
+                        .w
+                        .truncate();
+                    let hit = crate::virtual_hand::interaction_ray_cast(
+                        &self.physics,
+                        &self.world,
+                        vec3_to_point3(aim_origin),
+                        rotation.rotate_vector(vec3(0.0, 0.0, -1.0)),
+                        None,
+                    )?;
+                    let entity = hit.maybe_entity_id?;
+                    ((hit.hit_point - vec3_to_point3(position)).magnitude()
+                        <= 0.20 / crate::METERS_PER_WORLD_UNIT
+                        && super::personal_card::is_reader(&self.world, entity))
+                    .then_some(entity)
+                });
+            if let Some(entity) = self.personal_card.scan(target, time.elapsed.as_secs_f32()) {
+                let denied = crate::scripts::script_util::is_entity_locked(&self.world, entity);
+                self.script_world.dispatch(Message {
+                    to: entity,
+                    payload: MessagePayload::Frob,
+                });
+                effects.push(Effect::ShowMessage {
+                    text: if denied {
+                        "Access denied"
+                    } else {
+                        "Access authorized"
+                    }
+                    .to_owned(),
+                });
+                effects.push(Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    source: None,
+                    name: if denied { "repfail" } else { "bset" }.to_owned(),
+                    spatial: false,
+                });
+                effects.push(Effect::HandHaptic {
+                    hand: if self.personal_card.hand == Some(0) {
+                        crate::Handedness::Left
+                    } else {
+                        crate::Handedness::Right
+                    },
+                    pulse: crate::haptics::HapticPulse {
+                        amplitude: if denied { 0.75 } else { 0.4 },
+                        duration_ms: if denied { 150 } else { 60 },
+                    },
+                });
+            }
+        }
+
         // Holstering claims only this release, including its consumption offer.
         for (i, action) in holster_actions.into_iter().enumerate() {
             let Some(action) = action else {
@@ -5116,6 +5320,12 @@ impl MissionCore {
             crate::PresentationMode::Vr => (Vec::new(), Vec::new()),
         };
         for msg in ui_messages {
+            if game_options.presentation_mode == crate::PresentationMode::Vr
+                && matches!(msg.payload, MessagePayload::Frob)
+                && super::personal_card::is_reader(&self.world, msg.to)
+            {
+                continue;
+            }
             self.script_world.dispatch(msg);
         }
         for action in ui_drag_actions {
@@ -12288,6 +12498,10 @@ impl MissionCore {
 
         if options.presentation_mode == crate::PresentationMode::Vr {
             scene.extend(
+                self.personal_card
+                    .render(asset_cache, player.pos, player.rotation),
+            );
+            scene.extend(
                 self.holsters
                     .render(&self.world, player.pos, player.rotation),
             );
@@ -14605,6 +14819,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         let mut feedback = self.interaction.hand_feedback_diagnostics();
         if let Some(object) = feedback.as_object_mut() {
             object.insert("body_gear".to_owned(), serde_json::json!({
+                "personal_card": {
+                    "hand": self.personal_card.hand,
+                    "center": self.personal_card.center.map(|v| [v.x, v.y, v.z]),
+                    "scans": self.personal_card.scans,
+                    "last_scan": self.personal_card.last_scan.map(|e| e.inner()),
+                },
                 "shoulder_weapons": self.world.borrow::<UniqueView<PlayerInfo>>().ok().map(|player| super::shoulder_backpack::weapons(&self.world, player.inventory_entity_id).map(|item| item.map(|id| id.inner() as i32))),
                 "pouch": self.body_pouch_readout(),
                 "holsters": super::holsters::occupants(&self.world).map(|item| super::body_gear_feedback::HolsterReadout::resolve(&self.world, item)),
