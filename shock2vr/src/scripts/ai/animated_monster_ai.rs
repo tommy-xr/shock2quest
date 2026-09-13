@@ -3958,13 +3958,16 @@ mod tests {
     #[test]
     fn turning_in_place_does_not_hide_stalled_combat() {
         let (mut world, entity) = world_with_monster_and_player(Deg(0.0));
-        world.add_component(entity, dark::properties::Links {
-            to_links: vec![dark::properties::ToLink {
-                to_template_id: -1,
-                to_entity_id: None,
-                link: dark::properties::Link::Weapon,
-            }],
-        });
+        world.add_component(
+            entity,
+            dark::properties::Links {
+                to_links: vec![dark::properties::ToLink {
+                    to_template_id: -1,
+                    to_entity_id: None,
+                    link: dark::properties::Link::Weapon,
+                }],
+            },
+        );
         let physics = PhysicsWorld::new();
         let mut monster = AnimatedMonsterAI::new();
         monster.alertness.current_level = AIAlertLevel::High;
@@ -3976,11 +3979,15 @@ mod tests {
         assert!(!monster.combat_frustration.allows(CombatMode::Melee));
         assert!(monster.combat_frustration.allows(CombatMode::Ranged));
         monster.turn_clip = None;
-        tell(&mut monster, &world, entity, MessagePayload::AnimationCompleted);
+        tell(
+            &mut monster,
+            &world,
+            entity,
+            MessagePayload::AnimationCompleted,
+        );
         assert!(monster.current_behavior.borrow().is_combat_frustration());
         monster.update_combat_frustration(&world, &physics, entity, true, 2.1);
         assert!(!monster.current_behavior.borrow().is_combat_frustration());
         assert!(!monster.combat_frustration.allows(CombatMode::Melee));
     }
-
 }
