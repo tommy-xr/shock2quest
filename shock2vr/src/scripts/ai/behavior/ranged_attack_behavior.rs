@@ -44,10 +44,16 @@ impl Behavior for RangedAttackBehavior {
 
     fn next_behavior(
         &mut self,
-        _world: &World,
-        _physics: &PhysicsWorld,
-        _entity_id: EntityId,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
     ) -> NextBehavior {
-        NextBehavior::Next(Box::new(RefCell::new(ChaseBehavior::new())))
+        // A completed shot is not a reason to walk. Recheck the same range,
+        // weapon and line-of-fire gates used when entering combat; chase
+        // only when no attack is available now.
+        NextBehavior::Next(
+            super::attack_behavior_for_distance(world, physics, entity_id)
+                .unwrap_or_else(|| Box::new(RefCell::new(ChaseBehavior::new()))),
+        )
     }
 }
