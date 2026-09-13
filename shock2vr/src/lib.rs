@@ -12,7 +12,6 @@ pub mod inventory;
 pub mod message_trace;
 pub mod save_load;
 pub mod scenes;
-pub mod teleport;
 pub mod time;
 mod weapon_button_hold;
 

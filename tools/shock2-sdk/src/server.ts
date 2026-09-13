@@ -23,7 +23,7 @@ export interface LaunchOptions {
    * `game.baseUrl` reports the address actually in use.
    */
   port?: number;
-  /** Experimental feature flags, e.g. ["teleport"]. */
+  /** Experimental feature flags, e.g. ["physical_held_items"]. */
   experimental?: string[];
   /** Extra debug flags, e.g. ["--debug-pathfinding"]. */
   debugFlags?: string[];

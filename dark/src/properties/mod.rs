@@ -145,8 +145,7 @@ pub struct PropPosition {
 /// be reconstructed without replaying tripwire ENTER.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TeleportSource {
-    /// Player-initiated movement teleport: VR teleport locomotion or a debug
-    /// teleport. Tripwire ENTER fires on arrival.
+    /// Debug player repositioning. Tripwire ENTER fires on arrival.
     #[default]
     Locomotion,
     /// A scripted teleport trap (TrapTeleportPlayer) repositioned the player.
@@ -160,9 +159,9 @@ pub enum TeleportSource {
 }
 
 #[derive(Debug, Component, Serialize, Deserialize)]
-/// Marks an entity as having just teleported (VR teleport locomotion, teleport
-/// traps, debug teleport, or save restore). Tripwires fire on locomotion
-/// teleport-entry like the original engine; the other sources reconstruct
+/// Marks an entity as having just teleported (teleport traps, debug teleport,
+/// or save restore). Tripwires fire on debug teleport-entry like the original
+/// engine; the other sources reconstruct
 /// their arrival without replaying ENTER.
 pub struct PropTeleported {
     pub countdown_timer: f32, // Remaining time to be considered 'recently teleported'

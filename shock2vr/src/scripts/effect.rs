@@ -831,7 +831,7 @@ pub enum Effect {
         position: Vector3<f32>,
         is_teleport: bool,
         /// What repositioned the player. `ScriptedTrap` arrivals suppress
-        /// tripwire ENTER (#515); `Locomotion` (VR teleport) still fires it.
+        /// tripwire ENTER (#515); `Locomotion` (debug repositioning) still fires it.
         source: TeleportSource,
     },
 

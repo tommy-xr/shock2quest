@@ -109,7 +109,6 @@ use crate::{
     systems::{
         run_attachment_update, run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs,
     },
-    teleport::{TeleportSystem, TeleportUI, TeleportVisualStyle},
     time::Time,
     util::{debug_entity, get_email_sound_file, get_entity_position, has_refs, vec3_to_point3},
     virtual_hand::VirtualHandEffect,
@@ -2408,7 +2407,6 @@ pub struct MissionCore {
     template_to_particle_attachees: HashMap<i32, Vec<i32>>,
     interaction: Box<dyn PlayerInteraction>,
     pub visibility_engine: Box<dyn VisibilityEngine>,
-    pub teleport_system: TeleportSystem,
     pub pending_entity_triggers: Vec<String>,
     pub path_database: Option<dark::mission::PathDatabase>,
     pub pathfinding_service: Option<Arc<PathfindingService>>,
@@ -3188,24 +3186,6 @@ impl MissionCore {
             effects: Vec::new(),
         });
 
-        // Initialize teleport system based on game options
-        let teleport_system = if game_options.experimental_features.contains("teleport") {
-            let teleport_config = crate::teleport::TeleportConfig {
-                enabled: true,
-                button_mapping: crate::teleport::TeleportButton::Trigger,
-                trigger_threshold: 0.5,
-                max_distance: 20.0,
-                ..Default::default()
-            };
-            TeleportSystem::new(teleport_config)
-        } else {
-            let teleport_config = crate::teleport::TeleportConfig {
-                enabled: false,
-                ..Default::default()
-            };
-            TeleportSystem::new(teleport_config)
-        };
-
         // Mission-placed particle entities follow the object their concrete
         // ParticleAttachement link names (steam rides its machinery): bolt
         // them with RuntimePropAttachment, preserving the authored relative
@@ -3415,7 +3395,6 @@ impl MissionCore {
             hit_boxes: HitBoxManager::new(),
             rag_doll_manager: RagDollManager::new(),
             visibility_engine: abstract_mission.visibility_engine,
-            teleport_system,
             pending_entity_triggers: Vec::new(),
             obj_map: abstract_mission.obj_map,
             path_database: abstract_mission.path_database.clone(),
@@ -3915,13 +3894,6 @@ impl MissionCore {
         // Player movement logic
         let delta_time = time.elapsed.as_secs_f32();
 
-        // Update teleport system and add effects (only if experimental flag enabled)
-        if game_options.experimental_features.contains("teleport") {
-            let teleport_effects =
-                self.teleport_system
-                    .update(input_context, player.pos, player.rotation, delta_time);
-            effects.extend(teleport_effects);
-        }
         // While the psi MFD is docked it captures ONE thumbstick (which one is
         // `psi_navigation_hand`'s call) and withholds that stick's locomotion,
         // so browsing powers cannot walk the player off. The other stick still
@@ -10036,7 +10008,7 @@ impl MissionCore {
                 } => {
                     self.physics
                         .set_player_translation(position, &mut self.player_handle);
-                    // Teleport locomotion, level load and quickload all land
+                    // Scripted teleports, level load and quickload all land
                     // here, and none of them ran a movement frame: forget the
                     // stride and the fall in progress so the arrival is silent
                     // rather than a burst of steps or a phantom thud.
@@ -12475,19 +12447,6 @@ impl MissionCore {
         if options.presentation_mode == crate::PresentationMode::Flat {
             let inventory_objs = PlayerInventoryEntity::render(&self.world);
             scene.extend(inventory_objs);
-        }
-
-        // Render teleport arc + landing indicator
-        if options.experimental_features.contains("teleport")
-            && self.teleport_system.get_config().enabled
-        {
-            let style = TeleportVisualStyle::default();
-            let mut teleport_visuals = TeleportUI::build_visuals(
-                self.teleport_system.get_left_hand_state(),
-                self.teleport_system.get_right_hand_state(),
-                &style,
-            );
-            scene.append(&mut teleport_visuals);
         }
 
         // Render debug physics

@@ -38,7 +38,6 @@ pub mod debug_particles;
 pub mod debug_protocol_droid;
 pub mod debug_psi;
 pub mod debug_ragdoll;
-pub mod debug_teleport;
 pub mod debug_turret;
 pub mod debug_weapons;
 pub mod developer;
@@ -64,7 +63,6 @@ pub use debug_particles::DebugParticlesScene;
 pub use debug_protocol_droid::DebugProtocolDroidScene;
 pub use debug_psi::create_debug_psi_scene;
 pub use debug_ragdoll::DebugRagdollScene;
-pub use debug_teleport::DebugTeleportScene;
 pub use debug_turret::DebugTurretScene;
 pub use debug_weapons::create_debug_weapons_scene;
 pub use developer::DeveloperScene;
@@ -178,9 +176,6 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     ("debug_ladder", create_debug_ladder_scene),
     ("debug_psi", create_debug_psi_scene),
     ("debug_annelid", create_debug_annelid_scene),
-    ("debug_teleport", |global, options, assets, audio| {
-        Box::new(DebugTeleportScene::create(global, options, assets, audio))
-    }),
     ("debug_camera", DebugCameraScene::new),
     ("debug_protocol_droid", DebugProtocolDroidScene::new),
     ("debug_turret", DebugTurretScene::new),

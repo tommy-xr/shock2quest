@@ -115,7 +115,7 @@ import { GameServer } from '@shock2vr/sdk';
 const game = await GameServer.launch({
   mission: 'medsci1.mis',
   port: 8080,
-  experimental: ['teleport'],
+  experimental: ['physical_held_items'],
 });
 
 // Or connect to existing server
@@ -265,7 +265,7 @@ cargo dbgr -- --mission medsci1.mis --port 8080
 cargo dbgr -- --mission earth.mis --debug-physics --debug-draw
 
 # With experimental features
-cargo dbgr -- --mission medsci1.mis --experimental teleport
+cargo dbgr --mission medsci1.mis --vr --experimental physical_held_items
 ```
 
 ### API Examples
