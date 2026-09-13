@@ -323,6 +323,7 @@ pub struct AnimatedMonsterAI {
     door_wait: Option<(EntityId, f32)>,
     /// Seconds left before this AI may show frustration again
     frustration_cooldown: f32,
+    combat_frustration: CombatFrustration,
     /// Pinned alertness (DebugForceChase): treated as permanent sight of the
     /// player - no decay, live target position - until cleared
     alertness_pinned: bool,
@@ -357,6 +358,7 @@ impl AnimatedMonsterAI {
             door_cooldown: 0.0,
             door_wait: None,
             frustration_cooldown: 0.0,
+            combat_frustration: CombatFrustration::default(),
             turn_clip: None,
             turn_cooldown: 0.0,
             turn_token: 0,
@@ -386,6 +388,7 @@ impl AnimatedMonsterAI {
             door_cooldown: 0.0,
             door_wait: None,
             frustration_cooldown: 0.0,
+            combat_frustration: CombatFrustration::default(),
             turn_clip: None,
             turn_cooldown: 0.0,
             turn_token: 0,
@@ -459,9 +462,92 @@ impl AnimatedMonsterAI {
                 // an attack on arrival via the same shared helper). Without
                 // the range check, a far-away High AI stood still swinging.
                 physics
-                    .and_then(|physics| attack_behavior_for_distance(world, physics, entity_id))
+                    .and_then(|physics| self.available_attack(world, physics, entity_id))
                     .unwrap_or_else(|| Box::new(RefCell::new(ChaseBehavior::new())))
             }
+        }
+    }
+
+    fn available_attack(
+        &self,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity: EntityId,
+    ) -> Option<Box<RefCell<dyn Behavior>>> {
+        attack_behavior_with_modes(
+            world,
+            physics,
+            entity,
+            self.combat_frustration.allows(CombatMode::Melee),
+            self.combat_frustration.allows(CombatMode::Ranged),
+        )
+    }
+
+    fn update_combat_frustration(
+        &mut self,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity: EntityId,
+        visible: bool,
+        dt: f32,
+    ) -> Effect {
+        self.combat_frustration.tick(dt);
+        if self.current_behavior.borrow().is_combat_frustration() {
+            if self.combat_frustration.gesture_remaining > 0.0 {
+                return Effect::NoEffect;
+            }
+            self.current_behavior = self.behavior_for_alertness(world, Some(physics), entity);
+        } else {
+            // Turning in place is not pursuit progress. Let the stall timer
+            // span pivots; replacing their clip reports cancellation normally.
+            let eligible = self.door_wait.is_none()
+                && self.current_behavior.borrow().scripted_state() == ScriptedState::NotScripted
+                && matches!(
+                    self.alertness.current_level,
+                    AIAlertLevel::Moderate | AIAlertLevel::High
+                )
+                && !is_self_destructing(world, entity);
+            if !eligible {
+                self.combat_frustration
+                    .observe(None, vec3(0.0, 0.0, 0.0), 0.0);
+                return Effect::NoEffect;
+            }
+            let melee = melee_weapon_template(world, entity).is_some();
+            let ranged = has_ranged_weapon(world, entity);
+            let distance = chase_target_distance(world, entity).unwrap_or(f32::MAX);
+            let mode = if melee && distance < MELEE_ATTACK_RANGE {
+                Some(CombatMode::Melee)
+            } else if ranged {
+                Some(CombatMode::Ranged)
+            } else if melee {
+                Some(CombatMode::Melee)
+            } else {
+                None
+            };
+            let lost_at_goal =
+                !visible && self.published_awareness.is_some() && distance < MELEE_ATTACK_RANGE;
+            let no_attack = self.available_attack(world, physics, entity).is_none();
+            let failed = if lost_at_goal || no_attack {
+                mode
+            } else {
+                None
+            };
+            let positions = world.borrow::<View<PropPosition>>().unwrap();
+            let Ok(position) = positions.get(entity) else {
+                return Effect::NoEffect;
+            };
+            if !self
+                .combat_frustration
+                .observe(failed, position.position, dt)
+            {
+                return Effect::NoEffect;
+            }
+            self.current_behavior = Box::new(RefCell::new(FrustrationBehavior));
+        }
+        Effect::PlayAnimationBySchema {
+            entity_id: entity,
+            motion_queries: self.current_behavior.borrow().animation_queries(),
+            selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
         }
     }
 
@@ -1186,6 +1272,31 @@ impl AnimatedMonsterAI {
 }
 
 impl Script for AnimatedMonsterAI {
+    fn script_state_key(&self) -> Option<&'static str> {
+        Some("shock2vr.animated_combat")
+    }
+    fn save_state(&self) -> Result<crate::scripts::ScriptState, crate::scripts::ScriptStateError> {
+        crate::scripts::ScriptState::encode(1, &self.combat_frustration, "shock2vr.animated_combat")
+    }
+    fn restore_state(
+        &mut self,
+        saved: &crate::scripts::ScriptState,
+        _: &crate::scripts::ScriptRestoreContext<'_>,
+    ) -> Result<(), crate::scripts::ScriptStateError> {
+        self.combat_frustration = saved.decode(1, "shock2vr.animated_combat")?;
+        Ok(())
+    }
+    fn initialize_after_hydration(
+        &mut self,
+        entity: EntityId,
+        world: &World,
+        _hydrated: bool,
+    ) -> Effect {
+        // Only combat lockouts are persisted here; reconstruct the same
+        // configuration/awareness/initial pose as before this state existed.
+        self.initialize(entity, world)
+    }
+
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
         self.current_heading = current_yaw(entity_id, world);
 
@@ -1589,6 +1700,13 @@ impl Script for AnimatedMonsterAI {
             &FovDebugConfig::monster(),
         );
 
+        let combat_effect = self.update_combat_frustration(
+            world,
+            physics,
+            entity_id,
+            is_visible,
+            time.elapsed.as_secs_f32(),
+        );
         let behavior_publish_effect = self.publish_behavior(entity_id);
 
         // Open a door blocking the pursuit (or give up at a locked one)
@@ -1608,6 +1726,7 @@ impl Script for AnimatedMonsterAI {
             door_effect,
             frustration_effect,
             turn_clip_effect,
+            combat_effect,
         ])
     }
 
@@ -1920,7 +2039,16 @@ impl Script for AnimatedMonsterAI {
                         NextBehavior::NoOpinion => (),
                         NextBehavior::Stay => (),
                         NextBehavior::Next(behavior) => {
-                            self.current_behavior = behavior;
+                            self.current_behavior = if behavior
+                                .borrow()
+                                .combat_mode()
+                                .is_some_and(|mode| !self.combat_frustration.allows(mode))
+                            {
+                                self.available_attack(world, physics, entity_id)
+                                    .unwrap_or_else(|| Box::new(RefCell::new(ChaseBehavior::new())))
+                            } else {
+                                behavior
+                            };
                         }
                     };
 
@@ -3800,5 +3928,66 @@ mod tests {
         let effect = effect_of_animation_flags(MotionFlags::INTERRUPTIBLE);
 
         assert!(sound_queries(&effect).is_empty());
+    }
+    #[test]
+    fn combat_lockouts_survive_hydration_without_replaying_the_gesture() {
+        let (world, entity) = world_with_monster_and_player(Deg(0.0));
+        let mut monster = AnimatedMonsterAI::new();
+        assert!(monster.combat_frustration.observe(
+            Some(CombatMode::Ranged),
+            vec3(0.0, 0.0, 0.0),
+            2.0
+        ));
+        monster.combat_frustration.tick(3.0);
+        let saved = monster.save_state().unwrap();
+        let mut restored = AnimatedMonsterAI::new();
+        restored
+            .restore_state(
+                &saved,
+                &crate::scripts::ScriptRestoreContext::new(&std::collections::HashMap::new()),
+            )
+            .unwrap();
+        restored.initialize_after_hydration(entity, &world, true);
+        assert_eq!(saved, restored.save_state().unwrap());
+        assert!(!restored.combat_frustration.allows(CombatMode::Ranged));
+        assert!(restored.combat_frustration.allows(CombatMode::Melee));
+        assert!(!restored.current_behavior.borrow().is_combat_frustration());
+        restored.combat_frustration.tick(7.0);
+        assert!(restored.combat_frustration.allows(CombatMode::Ranged));
+    }
+    #[test]
+    fn turning_in_place_does_not_hide_stalled_combat() {
+        let (mut world, entity) = world_with_monster_and_player(Deg(0.0));
+        world.add_component(
+            entity,
+            dark::properties::Links {
+                to_links: vec![dark::properties::ToLink {
+                    to_template_id: -1,
+                    to_entity_id: None,
+                    link: dark::properties::Link::Weapon,
+                }],
+            },
+        );
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.alertness.current_level = AIAlertLevel::High;
+        monster.turn_clip = Some(TurnClip::Requested { token: 1 });
+        for _ in 0..21 {
+            monster.update_combat_frustration(&world, &physics, entity, true, 0.1);
+        }
+        assert!(monster.current_behavior.borrow().is_combat_frustration());
+        assert!(!monster.combat_frustration.allows(CombatMode::Melee));
+        assert!(monster.combat_frustration.allows(CombatMode::Ranged));
+        monster.turn_clip = None;
+        tell(
+            &mut monster,
+            &world,
+            entity,
+            MessagePayload::AnimationCompleted,
+        );
+        assert!(monster.current_behavior.borrow().is_combat_frustration());
+        monster.update_combat_frustration(&world, &physics, entity, true, 2.1);
+        assert!(!monster.current_behavior.borrow().is_combat_frustration());
+        assert!(!monster.combat_frustration.allows(CombatMode::Melee));
     }
 }

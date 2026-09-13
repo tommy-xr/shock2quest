@@ -118,6 +118,9 @@ impl Behavior for BackOffBehavior {
     fn name(&self) -> &'static str {
         "BackOff"
     }
+    fn combat_mode(&self) -> Option<super::CombatMode> {
+        Some(super::CombatMode::Ranged)
+    }
     fn animation(&self) -> Vec<MotionQueryItem> {
         // Required direction: falling back to a forward walk would close
         // the distance while the behavior claims to retreat.
@@ -337,6 +340,20 @@ mod tests {
         let mut player = physics.create_player(vec3(30.0, 1.0, 30.0), EntityId::dead());
         physics.update(Vector3::zero(), &mut player);
         assert!(!can_back_off(&world, &physics, entity));
+    }
+
+    #[test]
+    fn ranged_lockout_also_suppresses_retreat_that_could_fire() {
+        let (world, physics, entity) = fixture(false, 10, 40, true);
+        assert!(
+            super::super::attack_behavior_with_modes(&world, &physics, entity, true, false,)
+                .is_none()
+        );
+        let behavior = BackOffBehavior::new(authored_stand_off(&world, entity).unwrap());
+        assert_eq!(
+            behavior.combat_mode(),
+            Some(super::super::CombatMode::Ranged)
+        );
     }
 
     #[test]

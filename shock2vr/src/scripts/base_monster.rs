@@ -53,6 +53,7 @@ impl Script for BaseMonster {
         self.hydrated_ai = false;
         if let Some((key, saved)) = child {
             self.ai = match key.as_str() {
+                "shock2vr.animated_combat" => Box::new(AnimatedMonsterAI::new()),
                 "shock2vr.grub_ai" => Box::new(GrubAI::new()),
                 "shock2vr.swarmer_ai" => Box::new(SwarmerAI::new()),
                 "shock2vr.turret" => Box::new(TurretAI::new()),
@@ -223,6 +224,25 @@ mod tests {
             self.0.set(self.0.get() + 1);
             Effect::NoEffect
         }
+    }
+
+    #[test]
+    fn animated_combat_state_round_trips_through_the_monster_wrapper() {
+        let original = BaseMonster {
+            ai: Box::new(AnimatedMonsterAI::new()),
+            stasis: None,
+            hydrated_ai: false,
+        };
+        let saved = original.save_state().unwrap();
+        let mut restored = BaseMonster::new();
+        restored
+            .restore_state(
+                &saved,
+                &super::super::ScriptRestoreContext::new(&std::collections::HashMap::new()),
+            )
+            .unwrap();
+        assert!(restored.hydrated_ai);
+        assert_eq!(restored.save_state().unwrap(), saved);
     }
 
     #[test]

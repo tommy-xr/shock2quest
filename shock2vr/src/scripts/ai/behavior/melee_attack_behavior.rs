@@ -19,6 +19,10 @@ use super::{Behavior, ChaseBehavior, NextBehavior};
 pub struct MeleeAttackBehavior;
 
 impl Behavior for MeleeAttackBehavior {
+    fn combat_mode(&self) -> Option<super::CombatMode> {
+        Some(super::CombatMode::Melee)
+    }
+
     fn name(&self) -> &'static str {
         "MeleeAttack"
     }

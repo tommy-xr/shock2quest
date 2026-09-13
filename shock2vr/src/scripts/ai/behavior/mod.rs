@@ -2,6 +2,7 @@ mod back_off_behavior;
 mod behavior;
 mod chase_behavior;
 mod dead_behavior;
+mod frustration_behavior;
 mod idle_behavior;
 mod melee_attack_behavior;
 mod noop_behavior;
@@ -16,6 +17,7 @@ pub use back_off_behavior::BackOffBehavior;
 pub use behavior::*;
 pub use chase_behavior::*;
 pub use dead_behavior::*;
+pub use frustration_behavior::*;
 pub use idle_behavior::*;
 pub use melee_attack_behavior::*;
 pub use patrol_behavior::*;
@@ -56,6 +58,16 @@ pub fn attack_behavior_for_distance(
     physics: &PhysicsWorld,
     entity_id: EntityId,
 ) -> Option<Box<RefCell<dyn Behavior>>> {
+    attack_behavior_with_modes(world, physics, entity_id, true, true)
+}
+
+pub fn attack_behavior_with_modes(
+    world: &World,
+    physics: &PhysicsWorld,
+    entity_id: EntityId,
+    allow_melee: bool,
+    allow_ranged: bool,
+) -> Option<Box<RefCell<dyn Behavior>>> {
     // Distance and line of fire both gate against the AI's KNOWN target
     // (the last-known position when awareness is published, the player's
     // true position otherwise) - the same point chase steering faces and
@@ -64,7 +76,6 @@ pub fn attack_behavior_for_distance(
     let target = chase_target(world, entity_id)?;
     let distance = chase_target_distance(world, entity_id)?;
     let melee_attack_distance = 8.0 / SCALE_FACTOR;
-    let ranged_max_attack_distance = RANGED_MAX_ATTACK_DISTANCE;
 
     // Melee damage is the swing weapon's contact stims, so an AI with no
     // Weapon link cannot land a blow at all. The shotgun and grenade
@@ -83,7 +94,7 @@ pub fn attack_behavior_for_distance(
     // A gun AI with nothing to swing keeps shooting all the way in to
     // contact rather than standing off, so being cornered by one hurts:
     // retail hybrids fire point-blank instead of closing to swing.
-    let ranged_min_attack_distance = if gives_up_melee {
+    let ranged_min_attack_distance = if gives_up_melee || !allow_melee {
         0.0
     } else {
         15.0 / SCALE_FACTOR
@@ -97,7 +108,8 @@ pub fn attack_behavior_for_distance(
 
     // Standing distance is a movement preference, never a firing prohibition:
     // a cornered gun-only creature must still shoot when it cannot retreat.
-    if (gives_up_melee || distance >= melee_attack_distance)
+    if allow_ranged
+        && (gives_up_melee || !allow_melee || distance >= melee_attack_distance)
         && has_ranged_weapon(world, entity_id)
         && has_line_of_fire(entity_id, world, physics, target)
     {
@@ -117,13 +129,14 @@ pub fn attack_behavior_for_distance(
     // another floor) must be chased, or the AI stands rooted firing into
     // geometry for as long as its alertness holds - permanently under a
     // pinned alert (issue #481's stand-and-shoot freeze).
-    if distance > ranged_min_attack_distance
-        && distance < ranged_max_attack_distance
+    if allow_ranged
+        && distance > ranged_min_attack_distance
+        && distance < RANGED_MAX_ATTACK_DISTANCE
         && has_ranged_weapon(world, entity_id)
         && has_line_of_fire(entity_id, world, physics, target)
     {
         Some(Box::new(RefCell::new(RangedAttackBehavior)))
-    } else if distance < melee_attack_distance && !gives_up_melee {
+    } else if allow_melee && distance < melee_attack_distance && !gives_up_melee {
         Some(Box::new(RefCell::new(MeleeAttackBehavior)))
     } else {
         None
@@ -296,5 +309,16 @@ mod tests {
             panic!("blocked fire must select chase");
         };
         assert_eq!(next.borrow().name(), "Chase");
+    }
+
+    #[test]
+    fn frustrated_melee_can_hand_off_to_a_real_ranged_weapon_at_contact() {
+        let (world, entity) = world_with_armed_ai(vec![Link::Weapon, ai_projectile()], 1.0);
+        let physics = PhysicsWorld::new();
+        let attack = attack_behavior_with_modes(&world, &physics, entity, false, true).unwrap();
+        assert_eq!(attack.borrow().name(), "RangedAttack");
+        assert!(attack_behavior_with_modes(&world, &physics, entity, false, false).is_none());
+        let attack = attack_behavior_with_modes(&world, &physics, entity, true, false).unwrap();
+        assert_eq!(attack.borrow().name(), "MeleeAttack");
     }
 }
