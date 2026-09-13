@@ -229,6 +229,7 @@ pub fn create_debug_scene(
                     .unwrap();
                 *quests = quests.clone().for_debug_difficulty(options.difficulty);
             }
+            crate::difficulty::refresh_player_pools(scene.world(), true);
             scene
         })
 }

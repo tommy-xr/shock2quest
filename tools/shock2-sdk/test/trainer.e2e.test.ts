@@ -171,7 +171,7 @@ test(
     }
     const afterPurchases = (await game.info()).player;
     assert.equal(afterPurchases.max_hit_points, baseMaxHp + 15, "three levels grant +15 max HP");
-    assert.equal(afterPurchases.hit_points, beforePlayer.hit_points, "Endurance does not heal");
+    assert.equal(afterPurchases.hit_points, beforePlayer.hit_points! + 15, "Endurance preserves the health deficit");
     await game.screenshot("trainer-after-endurance-4.png");
 
     // --- Persistence: save/load, then a level transition. ---

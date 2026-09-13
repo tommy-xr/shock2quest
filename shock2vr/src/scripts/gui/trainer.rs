@@ -56,12 +56,6 @@ pub enum TrainerMode {
     Psi,
 }
 
-/// Normal difficulty grants five maximum hit points per Endurance level. The
-/// original manual documents the stat as raising maximum HP; the retail Normal
-/// table is `30 + 5 * END`. shock2quest has no difficulty setting yet, matching
-/// the Normal-only trainer prices above.
-pub const ENDURANCE_HP_PER_LEVEL: u32 = 5;
-
 /// Whether a stat has a real gameplay consumer and is therefore safe to sell.
 /// Keep this gate shared by display, immediate feedback, and authoritative
 /// effect handling so a future caller cannot bypass the module-loss guard.
@@ -414,16 +408,23 @@ impl Gui<TrainerGuiState, TrainerGuiMsg> for TrainerGui {
                 },
                 Effect::NoEffect,
             ),
-            Some(cost) => (
-                TrainerGuiState {
-                    message: Some(if matches!(target, TrainerTarget::Stat(Stat::Endurance)) {
-                        format!("Max HP +{} (-{} cm)", ENDURANCE_HP_PER_LEVEL, cost)
-                    } else {
-                        format!("Upgrade complete (-{} cm)", cost)
-                    }),
-                },
-                Effect::TrainerPurchase { target: *target },
-            ),
+            Some(cost) => {
+                let message = if matches!(target, TrainerTarget::Stat(Stat::Endurance)) {
+                    let hp_bonus = world
+                        .borrow::<UniqueView<crate::difficulty::GlobalDifficultyParams>>()
+                        .map(|p| p.coefficients(quests.difficulty()).hp_per_endurance)
+                        .unwrap_or(5);
+                    format!("Max HP +{} (-{} cm)", hp_bonus, cost)
+                } else {
+                    format!("Upgrade complete (-{} cm)", cost)
+                };
+                (
+                    TrainerGuiState {
+                        message: Some(message),
+                    },
+                    Effect::TrainerPurchase { target: *target },
+                )
+            }
         }
     }
 }
