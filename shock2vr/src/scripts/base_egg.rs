@@ -28,10 +28,8 @@ struct BaseEggState {
 pub enum EggPayload {
     /// `GooEgg` - "a toxic egg". The emitter is a `TweqEmitterConfig` object
     /// that lobs four venom-stimmed "Goo Projectile"s and then destroys
-    /// itself. The cloud is currently decoration: it authors a Venom radius
-    /// stim, but the port applies radius stims only from explosions and the
-    /// radiation source, so the toxin a goo pod actually deals is the globs'
-    /// contact stim.
+    /// itself. EggGooCloud adds its authored one-shot Venom radius pulse
+    /// and expires after its particle burst.
     Goo,
     /// `GrubEgg` - "a crawling-annelid egg".
     Grub,

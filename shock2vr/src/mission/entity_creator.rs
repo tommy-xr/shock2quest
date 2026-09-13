@@ -549,6 +549,16 @@ pub fn create_entity_core(
         processed_scripts.push("internal_radiation_source".to_owned());
     }
 
+    // EggGooCloud (-438) has no authored object script: its single radius
+    // pulse and one-shot particle lifetime belong to Dark's engine services.
+    if crate::mission::mission_core::template_is_or_descends_from(
+        ss2_entity_info::get_hierarchy(entity_info),
+        template_id,
+        -438,
+    ) {
+        processed_scripts.push("internal_egg_goo_cloud".to_owned());
+    }
+
     // ...and remove any duplicates!
     processed_scripts.sort_unstable();
     processed_scripts.dedup();

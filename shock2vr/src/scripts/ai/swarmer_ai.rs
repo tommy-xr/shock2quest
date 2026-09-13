@@ -343,6 +343,7 @@ impl Script for SwarmerAI {
             {
                 if let StimPropagator::Radius { radius } = options.propagator {
                     effects.push(Effect::RadiusStim {
+                        linear_falloff: true,
                         source_entity_id: Some(entity_id),
                         center: position,
                         radius,
