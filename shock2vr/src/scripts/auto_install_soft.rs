@@ -10,7 +10,8 @@ use super::{Effect, MessagePayload, Script};
 /// The retail `AutoInstallSoft` script, carried by every `Softs` archetype
 /// (hack / modify / repair / research softs, V1-V3).
 ///
-/// Softs are not carryable items: the `Softs` archetype authors a `SCRIPT`
+/// Softs install without occupying backpack cells. VR can hold them until
+/// release; immediate acquisition paths use Frob. The archetype authors a `SCRIPT`
 /// world *and* inventory frob action, so frobbing one in the world - or
 /// clicking it in a container's loot MFD, which routes a use-only item's click
 /// to a `Frob` - installs it and consumes the object rather than moving it

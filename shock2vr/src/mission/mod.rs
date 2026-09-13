@@ -1,4 +1,5 @@
 pub mod entity_creator;
+pub(crate) mod personal_card;
 use tracing::info;
 mod ammo_pouch;
 mod body_gear_feedback;

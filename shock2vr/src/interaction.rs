@@ -203,6 +203,13 @@ pub trait PlayerInteraction {
         false
     }
 
+    fn personal_card_grip(&self, _hand: usize) -> Option<crate::vr_grip::ResolvedGrip> {
+        None
+    }
+
+    /// Permanent body tools reserve hands without inventing inventory entities.
+    fn reserve_body_tool_hands(&mut self, _reserved: [bool; 2]) {}
+
     /// Current tracked palms in pawn space, using the same calibrated glove
     /// kinematics as fitted items and support grips. Missing rigs are disarmed.
     fn body_palm_positions(&self, _input: &InputContext) -> [Option<Vector3<f32>>; 2] {
@@ -247,6 +254,7 @@ pub struct VrInteraction {
     support_preview: Option<SupportCandidate>,
     support_pressed: [bool; 2],
     support_blocked: [bool; 2],
+    body_tool_hands: [bool; 2],
     visual_hands: [Option<GripPose>; 2],
     step_dt: f32,
 }
@@ -350,6 +358,7 @@ impl VrInteraction {
             support_preview: None,
             support_pressed: [true; 2],
             support_blocked: [false; 2],
+            body_tool_hands: [false; 2],
             visual_hands: [None, None],
             step_dt: 0.0,
         }
@@ -693,6 +702,17 @@ impl PlayerInteraction for VrInteraction {
         })
     }
 
+    fn personal_card_grip(&self, hand: usize) -> Option<crate::vr_grip::ResolvedGrip> {
+        self.grip_library
+            .as_ref()?
+            .lookup("scipass", if hand == 0 { "left" } else { "right" })
+            .cloned()
+    }
+
+    fn reserve_body_tool_hands(&mut self, reserved: [bool; 2]) {
+        self.body_tool_hands = reserved;
+    }
+
     fn hand_available_for_body_slot(&self, hand: Handedness) -> bool {
         let i = crate::vr_config::hand_slot(hand);
         let held = if i == 0 {
@@ -701,6 +721,7 @@ impl PlayerInteraction for VrInteraction {
             self.right_hand.get_held_entity()
         };
         held.is_none()
+            && !self.body_tool_hands[i]
             && !self.support_blocked[i]
             && !self.hand_climb.grips().any(|(h, _)| h == hand)
     }
@@ -1070,7 +1091,9 @@ impl PlayerInteraction for VrInteraction {
                 local_position: input.position,
                 squeeze: input.squeeze_value,
                 // A hand that is carrying something cannot also hold a ladder.
-                is_empty: hand.get_held_entity().is_none() && !self.support_blocked[index],
+                is_empty: hand.get_held_entity().is_none()
+                    && !self.support_blocked[index]
+                    && !self.body_tool_hands[index],
             }
         };
         self.hand_climb.update(
@@ -1254,15 +1277,20 @@ impl PlayerInteraction for VrInteraction {
             Some((1 - support.primary, grip))
         });
         for (index, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
-            let grip = self.fitted_grips[index]
-                .as_ref()
-                .and_then(|g| g.resolved.as_ref())
-                .or_else(|| {
-                    support_grip
-                        .as_ref()
-                        .filter(|(i, _)| *i == index)
-                        .map(|(_, g)| g)
-                });
+            let card_grip = self.body_tool_hands[index]
+                .then(|| self.personal_card_grip(index))
+                .flatten();
+            let grip = card_grip.as_ref().or_else(|| {
+                self.fitted_grips[index]
+                    .as_ref()
+                    .and_then(|g| g.resolved.as_ref())
+                    .or_else(|| {
+                        support_grip
+                            .as_ref()
+                            .filter(|(i, _)| *i == index)
+                            .map(|(_, g)| g)
+                    })
+            });
             objs.extend(hand.render(
                 world,
                 glove_renderer.as_deref_mut(),

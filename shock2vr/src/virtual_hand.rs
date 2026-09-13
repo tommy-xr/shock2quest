@@ -576,7 +576,12 @@ fn handle_empty_hand_state(
     let mut msgs = Vec::new();
     let mut last_frobbed_entity = frobbed_entity;
     let mut next_hand_state = HandState::Empty;
-    if input_hand.trigger_value > 0.5 || input_hand.a_value > 0.5 {
+    if (input_hand.trigger_value > 0.5 || input_hand.a_value > 0.5)
+        && !result
+            .as_ref()
+            .and_then(|hit| hit.maybe_entity_id)
+            .is_some_and(|entity| crate::scripts::script_util::is_download_pickup(world, entity))
+    {
         if let Some(RayCastResult {
             hit_point: _,
             hit_normal: _,
@@ -630,10 +635,8 @@ fn handle_empty_hand_state(
                 && needs_scripted_frob
                 && last_frobbed_entity != Some(entity_id)
             {
-                // Items whose taking must go through a script (nanites
-                // collected straight into the player stat, keycards, ...) are
-                // always Frob'd, never squeeze-grabbed into the hand - see
-                // `uses_scripted_world_frob`.
+                // Script-only interactions such as logs still Frob on squeeze.
+                // Downloads took the physical HoldItem branch above.
                 msgs.push(VirtualHandEffect::OutMessage {
                     message: Message {
                         to: entity_id,
@@ -683,10 +686,10 @@ fn get_held_position_orientation(
 /// protocol even though the Weapon archetype also inherits that inventory
 /// flag. The decision stays tied to Dark's production frob metadata.
 fn held_trigger_press_payload(world: &World, entity_id: EntityId) -> MessagePayload {
-    // An always-collected item can only be in a hand at all if an older save put
-    // it there, and it must still collect rather than act: PropKeySrc injects
-    // `internal_keycard` at runtime even though retail ID cards author no
-    // inventory SCRIPT flag, so the metadata check below would miss a card.
+    if crate::scripts::script_util::is_download_pickup(world, entity_id) {
+        return MessagePayload::TriggerPull;
+    }
+    // Logs normally collect immediately, but recover a manually restored one.
     if crate::scripts::script_util::is_always_collected(world, entity_id) {
         return MessagePayload::Frob;
     }
@@ -825,7 +828,7 @@ fn resolve_hit_proxy_entity(world: &World, ray_cast_result: RayCastResult) -> Ra
     }
 }
 
-fn interaction_ray_cast(
+pub(crate) fn interaction_ray_cast(
     physics: &PhysicsWorld,
     world: &World,
     ray_start: cgmath::Point3<f32>,
@@ -1094,6 +1097,65 @@ mod tests {
     /// continue reaching WeaponScript/PsiAmpScript as TriggerPull even though
     /// their inherited inventory action is also SCRIPT.
     #[test]
+    fn vr_grip_holds_downloads_but_logs_still_collect_immediately() {
+        use crate::test_support::{CollectedKind, spawn_collected};
+        for kind in CollectedKind::ALL {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity = spawn_collected(&mut world, kind);
+            register_kinematic_body(
+                &mut world,
+                &mut physics,
+                entity,
+                vec3(0.0, 0.0, -0.5),
+                vec3(1.0, 1.0, 1.0),
+                CollisionGroup::selectable(),
+            );
+            let mut input = Hand::default();
+            input.squeeze_value = 1.0;
+            let (hand, effects) = handle_empty_hand_state(
+                Handedness::Right,
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                None,
+                &world,
+                &physics,
+                &input,
+                None,
+            );
+            if kind == CollectedKind::AudioLog {
+                assert_eq!(hand.get_held_entity(), None);
+                assert_eq!(frob_message_count(&effects), 1);
+            } else {
+                assert_eq!(hand.get_held_entity(), Some(entity), "{kind:?}");
+                assert_eq!(
+                    frob_message_count(&effects),
+                    0,
+                    "no credit before release: {kind:?}"
+                );
+            }
+        }
+        let mut world = World::new();
+        let soft = world.add_entity((
+            dark::properties::PropSoftType(1),
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::SCRIPT,
+                tool_action: FrobFlag::empty(),
+            },
+        ));
+        assert!(HandTarget::resolve(&world, soft, true).grabbable);
+        assert!(matches!(
+            held_trigger_press_payload(&world, soft),
+            MessagePayload::TriggerPull
+        ));
+        let invalid = world.add_entity(dark::properties::PropSoftType(0));
+        assert!(!crate::scripts::script_util::is_download_pickup(
+            &world, invalid
+        ));
+    }
+
+    #[test]
     fn held_player_gun_preserves_trigger_pull() {
         let mut world = World::new();
         let weapon_or_psi_amp = world.add_entity((scripted_inventory_use(), player_gun()));
@@ -1104,12 +1166,9 @@ mod tests {
         ));
     }
 
-    /// A keycard physically held by an older save or a pre-fix backpack grab
-    /// must still be recoverable through the production VR trigger gesture.
-    /// Its inventory metadata has no SCRIPT bit, so PropKeySrc is the semantic
-    /// source of truth.
+    /// Trigger use must not collect a card before grip release.
     #[test]
-    fn held_keycard_trigger_collects_it_through_frob() {
+    fn held_keycard_trigger_waits_for_release() {
         let mut world = World::new();
         let keycard = world.add_entity((
             PropFrobInfo {
@@ -1126,7 +1185,7 @@ mod tests {
 
         assert!(matches!(
             held_trigger_payload(&world, keycard),
-            MessagePayload::Frob
+            MessagePayload::TriggerPull
         ));
     }
 
@@ -1165,30 +1224,17 @@ mod tests {
         assert!(shows_hand_visual(&world, Some(consumable)));
     }
 
-    /// A scripted world pickup (here, a keycard - nanite piles are the
-    /// motivating case) that also carries a `MOVE` frob action, so a test can
-    /// tell the deliberate "route through Frob" branch apart from simply
-    /// never being grabbable (`can_grab_item` alone would already be false
-    /// without it).
+    /// A SCRIPT-only world interaction for frob-latch regression coverage.
     fn scripted_world_pickup_at(
         world: &mut World,
         physics: &mut PhysicsWorld,
         position: Vector3<f32>,
     ) -> EntityId {
-        use dark::properties::{KeyCard, PropKeySrc};
-
-        let entity = world.add_entity((
-            PropKeySrc(KeyCard {
-                is_master: false,
-                region_id: 0,
-                lock_id: 0,
-            }),
-            PropFrobInfo {
-                world_action: FrobFlag::MOVE,
-                inventory_action: FrobFlag::empty(),
-                tool_action: FrobFlag::empty(),
-            },
-        ));
+        let entity = world.add_entity(PropFrobInfo {
+            world_action: FrobFlag::SCRIPT,
+            inventory_action: FrobFlag::empty(),
+            tool_action: FrobFlag::empty(),
+        });
         register_kinematic_body(
             world,
             physics,
@@ -1221,12 +1267,7 @@ mod tests {
             .count()
     }
 
-    /// Negative-first regression: a scripted world pickup (here, a keycard -
-    /// nanite piles are the motivating case) is not physically grabbable, so
-    /// squeeze routes it through Frob (see `uses_scripted_world_frob`). The
-    /// trigger-idle branch used to clear the frob latch unconditionally every
-    /// frame, so a squeeze held across frames re-sent Frob every tick the
-    /// entity survived instead of just once on the rising edge.
+    /// A squeeze held over a SCRIPT-only target must send only one Frob.
     #[test]
     fn held_squeeze_frobs_a_scripted_pickup_only_once() {
         let mut world = World::new();
