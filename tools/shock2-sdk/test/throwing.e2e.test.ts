@@ -4,11 +4,19 @@ import { GameServer } from "../src/index.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 
-test("VR cup throw inherits motion and deals at most two damage once to a hybrid",
+for (const tuning of [
+  { name: "default", params: {}, speed: 7.5, damage: 2 },
+  { name: "live developer tuning", params: { throw_speed_scale: 1.5, throw_strength_override: 1, throw_organic_cap: 1 }, speed: 9, damage: 1 },
+]) {
+ test(`VR cup throw: ${tuning.name}`,
+
   { skip: !enabled, timeout: 600_000 }, async () => {
     await using game = await GameServer.launch({
       mission: "debug_interactions", debugFlags: ["--vr"],
     });
+    for (const [key, value] of Object.entries(tuning.params)) {
+      await game.devParams.set(key, value);
+    }
     await game.step({ frames: 60 });
     const mug = (await game.entities.list({ filter: "Mug" })).entities.find(
       entity => entity.template_id === -1221,
@@ -60,20 +68,21 @@ test("VR cup throw inherits motion and deals at most two damage once to a hybrid
     assert.equal((await game.info()).player.right_hand_entity_id, null);
     const bodies = (await game.physics.bodies({ entityId: mug.id })).bodies;
     assert.equal(bodies.length, 1, "released cup is a physical object");
-    assert.ok(bodies[0].velocity[0] < -6 && bodies[0].velocity[0] > -9,
+    assert.ok(Math.abs(bodies[0].velocity[0] + tuning.speed) < 0.1,
       `release carries the swing with Strength scaling: ${bodies[0].velocity}`);
     // Check the live collision path, including the rebound and later contacts.
     let minimum = before;
     for (let frame = 0; frame < 30; frame++) {
       await game.step({ frames: 2 });
       const current = await hp();
-      assert.ok(current >= before - 2, "a cup never exceeds two organic damage");
+      assert.ok(current >= before - tuning.damage, "a cup never exceeds two organic damage");
       minimum = Math.min(minimum, current);
     }
-    assert.equal(minimum, before - 2, "the fast cup strike reaches its low damage cap");
-    assert.equal(await hp(), before - 2, "bouncing/contact persistence cannot damage again");
+    assert.equal(minimum, before - tuning.damage, "the fast cup strike reaches its low damage cap");
+    assert.equal(await hp(), before - tuning.damage, "bouncing/contact persistence cannot damage again");
   });
 
+}
 
 test("saving a real mission during a cup throw preserves flight", { skip: !enabled, timeout: 600_000 }, async () => {
   await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: ["--vr"] });

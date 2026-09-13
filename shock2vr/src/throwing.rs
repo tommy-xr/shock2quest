@@ -10,6 +10,52 @@ use crate::{
     scripts::{DamageImpact, Message, MessagePayload},
 };
 
+/// Read once at release/impact so one calculation uses a consistent set of knobs.
+struct ThrowTuning {
+    speed_scale: f32,
+    spin_scale: f32,
+    max_speed: f32,
+    max_spin: f32,
+    strength_override: f32,
+    strength_bonus: f32,
+    weight_exponent: f32,
+    strength_weight_relief: f32,
+    min_speed: f32,
+    impact_min_speed: f32,
+    damage_speed: f32,
+    organic_cap: f32,
+    inorganic_cap: f32,
+    damage_window: f32,
+}
+impl ThrowTuning {
+    fn read(read_value: impl Fn(crate::dev_params::DevParamId) -> f32) -> Self {
+        use crate::dev_params::*;
+        Self {
+            speed_scale: read_value(THROW_SPEED_SCALE),
+            spin_scale: read_value(THROW_SPIN_SCALE),
+            max_speed: read_value(THROW_MAX_SPEED),
+            max_spin: read_value(THROW_MAX_SPIN),
+            strength_override: read_value(THROW_STRENGTH_OVERRIDE),
+            strength_bonus: read_value(THROW_STRENGTH_BONUS),
+            weight_exponent: read_value(THROW_WEIGHT_EXPONENT),
+            strength_weight_relief: read_value(THROW_STRENGTH_WEIGHT_RELIEF),
+            min_speed: read_value(THROW_MIN_SPEED),
+            impact_min_speed: read_value(THROW_IMPACT_MIN_SPEED),
+            damage_speed: read_value(THROW_DAMAGE_SPEED),
+            organic_cap: read_value(THROW_ORGANIC_CAP),
+            inorganic_cap: read_value(THROW_INORGANIC_CAP),
+            damage_window: read_value(THROW_DAMAGE_WINDOW),
+        }
+    }
+    fn current() -> Self {
+        Self::read(crate::dev_params::get)
+    }
+    #[cfg(test)]
+    fn defaults() -> Self {
+        Self::read(|id| crate::dev_params::spec(id).default)
+    }
+}
+
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ReleaseMotion {
     pub linear: Vector3<f32>,
@@ -137,7 +183,7 @@ impl HandMotion {
         // a stale peak after the player has deliberately stopped their hand.
         while self.samples.len() > 1
             && self.samples.iter().map(|(_, dt)| dt).sum::<f32>() - self.samples.front().unwrap().1
-                >= 0.05
+                >= crate::dev_params::get(crate::dev_params::THROW_SMOOTHING_MS) / 1000.0
         {
             self.samples.pop_front();
         }
@@ -196,29 +242,36 @@ fn launch_motion(
     strength: i32,
     mass: f32,
     player_velocity: Vector3<f32>,
+    tuning: &ThrowTuning,
 ) -> ReleaseMotion {
     let strength = (strength.clamp(1, 6) - 1) as f32 / 5.0;
-    let weight_penalty = mass.max(1.0).powf(0.25);
-    let gain = (1.0 + 0.25 * strength) / (weight_penalty + (1.0 - weight_penalty) * strength * 0.5);
-    motion.linear *= gain;
-    if motion.linear.magnitude() > 12.0 {
-        motion.linear = motion.linear.normalize() * 12.0;
+    let weight_penalty = mass.max(1.0).powf(tuning.weight_exponent);
+    let gain = (1.0 + tuning.strength_bonus * strength)
+        / (1.0 + (weight_penalty - 1.0) * (1.0 - strength * tuning.strength_weight_relief));
+    motion.linear *= gain * tuning.speed_scale;
+    if motion.linear.magnitude() > tuning.max_speed {
+        motion.linear = motion.linear.normalize() * tuning.max_speed;
     }
     motion.linear += player_velocity;
-    if motion.angular.magnitude() > 25.0 {
-        motion.angular = motion.angular.normalize() * 25.0;
+    motion.angular *= tuning.spin_scale;
+    if motion.angular.magnitude() > tuning.max_spin {
+        motion.angular = motion.angular.normalize() * tuning.max_spin;
     }
     motion
 }
 
-fn impact_damage(mass: f32, closing_speed: f32, organic: bool) -> f32 {
-    if !closing_speed.is_finite() || closing_speed < 2.0 {
+fn impact_damage(mass: f32, closing_speed: f32, organic: bool, tuning: &ThrowTuning) -> f32 {
+    if !closing_speed.is_finite() || closing_speed < tuning.impact_min_speed {
         return 0.0;
     }
-    let cap = if organic { 2.0 } else { 1.0 };
+    let cap = if organic {
+        tuning.organic_cap
+    } else {
+        tuning.inorganic_cap
+    };
     // Mug reaches its cap at 6 world units/s; light/heavy objects differ in
     // how quickly they reach the same intentionally small ceiling.
-    (cap * mass.clamp(0.1, 4.0) * (closing_speed / 6.0).powi(2))
+    (cap * mass.clamp(0.1, 4.0) * (closing_speed / tuning.damage_speed).powi(2))
         .min(cap)
         .floor()
 }
@@ -241,18 +294,24 @@ impl ThrownItems {
                 .ok()
                 .and_then(|v| v.get(entity).ok().map(|p| p.mass)),
         );
+        let tuning = ThrowTuning::current();
         let strength = world
             .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
             .map(|q| q.player_stats().strength)
             .unwrap_or(1);
-        let deliberate = motion.linear.magnitude() >= 1.5;
-        let motion = launch_motion(motion, strength, mass, physics.player_velocity());
+        let strength = if tuning.strength_override > 0.0 {
+            tuning.strength_override as i32
+        } else {
+            strength
+        };
+        let deliberate = motion.linear.magnitude() >= tuning.min_speed;
+        let motion = launch_motion(motion, strength, mass, physics.player_velocity(), &tuning);
         if physics.release_motion(entity, motion) {
             self.active.insert(
                 entity,
                 SavedThrow {
                     mass,
-                    remaining: 5.0,
+                    remaining: tuning.damage_window,
                     armed: deliberate,
                     motion,
                 },
@@ -358,7 +417,7 @@ impl ThrownItems {
                     .map(|p| p.0.to_ascii_lowercase().contains("flesh"))
             })
             .unwrap_or(false);
-        let amount = impact_damage(throw.mass, speed, organic);
+        let amount = impact_damage(throw.mass, speed, organic, &ThrowTuning::current());
         (amount > 0.0).then_some(Message {
             to: target,
             payload: MessagePayload::Damage {
@@ -585,14 +644,54 @@ mod tests {
     }
 
     #[test]
+    fn tuning_scales_spin_and_launch_without_exceeding_selected_limits() {
+        let mut tuning = ThrowTuning::defaults();
+        tuning.speed_scale = 2.0;
+        tuning.spin_scale = 2.0;
+        tuning.max_speed = 8.0;
+        tuning.max_spin = 3.0;
+        let input = ReleaseMotion {
+            linear: vec3(6.0, 0.0, 0.0),
+            angular: vec3(0.0, 2.0, 0.0),
+        };
+        let result = launch_motion(input, 1, 1.0, Vector3::zero(), &tuning);
+        assert_eq!(result.linear.x, 8.0);
+        assert_eq!(result.angular.y, 3.0);
+        tuning.organic_cap = 1.0;
+        tuning.inorganic_cap = 0.0;
+        assert_eq!(impact_damage(1.0, 20.0, true, &tuning), 1.0);
+        assert_eq!(impact_damage(1.0, 20.0, false, &tuning), 0.0);
+        tuning.weight_exponent = 1.0;
+        tuning.strength_weight_relief = 1.0;
+        assert!(
+            launch_motion(input, 6, 1e30, Vector3::zero(), &tuning)
+                .linear
+                .x
+                .is_finite()
+        );
+    }
+
+    #[test]
     fn cup_damage_caps_and_grazes() {
-        assert_eq!(impact_damage(1.0, 6.0, true), 2.0);
-        assert_eq!(impact_damage(1.0, 6.0, false), 1.0);
-        assert_eq!(impact_damage(100.0, 100.0, true), 2.0);
-        assert_eq!(impact_damage(100.0, 100.0, false), 1.0);
-        assert_eq!(impact_damage(1.0, 1.9, true), 0.0);
-        assert_eq!(impact_damage(1.0, f32::NAN, true), 0.0);
-        assert_eq!(impact_damage(0.2, 6.0, true), 0.0);
+        assert_eq!(impact_damage(1.0, 6.0, true, &ThrowTuning::defaults()), 2.0);
+        assert_eq!(
+            impact_damage(1.0, 6.0, false, &ThrowTuning::defaults()),
+            1.0
+        );
+        assert_eq!(
+            impact_damage(100.0, 100.0, true, &ThrowTuning::defaults()),
+            2.0
+        );
+        assert_eq!(
+            impact_damage(100.0, 100.0, false, &ThrowTuning::defaults()),
+            1.0
+        );
+        assert_eq!(impact_damage(1.0, 1.9, true, &ThrowTuning::defaults()), 0.0);
+        assert_eq!(
+            impact_damage(1.0, f32::NAN, true, &ThrowTuning::defaults()),
+            0.0
+        );
+        assert_eq!(impact_damage(0.2, 6.0, true, &ThrowTuning::defaults()), 0.0);
     }
     #[test]
     fn strength_helps_without_changing_direction() {
@@ -600,12 +699,12 @@ mod tests {
             linear: vec3(0.0, 0.0, -6.0),
             angular: Vector3::zero(),
         };
-        let weak = launch_motion(input, 1, 1.0, Vector3::zero());
-        let strong = launch_motion(input, 6, 1.0, Vector3::zero());
+        let weak = launch_motion(input, 1, 1.0, Vector3::zero(), &ThrowTuning::defaults());
+        let strong = launch_motion(input, 6, 1.0, Vector3::zero(), &ThrowTuning::defaults());
         assert_eq!(weak.linear.z, -6.0);
         assert_eq!(strong.linear.z, -7.5);
         assert!(
-            launch_motion(input, 1, 4.0, Vector3::zero())
+            launch_motion(input, 1, 4.0, Vector3::zero(), &ThrowTuning::defaults())
                 .linear
                 .magnitude()
                 < weak.linear.magnitude()
