@@ -946,6 +946,9 @@ impl ScriptWorld {
     }
 
     fn create_script(script_name: String) -> Box<dyn Script> {
+        if script_name.eq_ignore_ascii_case("EarthHorde") {
+            return Box::new(crate::mission::earth_horde::HordeDirector::default());
+        }
         match script_name.to_ascii_lowercase().as_str() {
             // PROJECTILE stuff
             "lasershot" => Box::new(laser_shot::LaserShot::new()),

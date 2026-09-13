@@ -11464,7 +11464,7 @@ impl MissionCore {
     /// Spawned at the player's position: containment makes the item
     /// non-physical immediately, so the spawn point is never observed - it just
     /// has to be somewhere valid for instantiation.
-    fn spawn_into_backpack(
+    pub(crate) fn spawn_into_backpack(
         &mut self,
         asset_cache: &mut AssetCache,
         template_id: i32,

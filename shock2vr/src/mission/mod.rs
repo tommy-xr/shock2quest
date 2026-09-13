@@ -4,6 +4,7 @@ mod ammo_pouch;
 mod body_gear_feedback;
 mod body_inventory;
 mod character_sheet;
+pub(crate) mod earth_horde;
 pub mod entity_populator;
 pub mod flat_ui_host;
 mod holsters;
@@ -69,7 +70,10 @@ impl Mission {
         // Through the asset paths, not `File::open`: on a 25AE install the
         // missions live inside `sshock2.kpf`.
         let reader = asset_paths
-            .get_reader(base_path.to_owned(), mission.to_ascii_lowercase())
+            .get_reader(
+                base_path.to_owned(),
+                earth_horde::asset_mission(mission).to_ascii_lowercase(),
+            )
             .unwrap_or_else(|| panic!("mission {mission} not found in the mounted data"));
         dark::mission::read(
             asset_paths,
@@ -123,7 +127,10 @@ impl Mission {
             path_database: level.path_database,
         };
 
-        let mission_core = MissionCore::load(
+        let fresh_horde = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let entity_populator =
+            earth_horde::wrap_population(&mission, entity_populator, fresh_horde.clone());
+        let mut mission_core = MissionCore::load(
             mission,
             abstract_mission,
             asset_cache,
@@ -135,6 +142,9 @@ impl Mission {
             held_item_save_data,
             game_options,
         );
+        if fresh_horde.load(std::sync::atomic::Ordering::Relaxed) {
+            earth_horde::provision(&mut mission_core, asset_cache);
+        }
         engine::platform::service_events();
         Mission { mission_core }
     }
