@@ -8,6 +8,7 @@ mod prop_ai_device;
 mod prop_ai_grub;
 mod prop_ai_hearing;
 mod prop_ai_mode;
+mod prop_ai_swarm;
 mod prop_ambient_hacked;
 mod prop_anim_light;
 mod prop_anim_tex;
@@ -58,6 +59,7 @@ pub use prop_ai_device::*;
 pub use prop_ai_grub::*;
 pub use prop_ai_hearing::*;
 pub use prop_ai_mode::*;
+pub use prop_ai_swarm::*;
 pub use prop_ambient_hacked::*;
 pub use prop_anim_light::*;
 pub use prop_anim_tex::*;
@@ -2224,6 +2226,18 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$AI_MoveSp",
             PropAIMoveSpeed::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_Swarm",
+            PropAISwarm::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_MoveZO",
+            PropAIMoveZOffset::read,
             identity,
             accumulator::latest,
         ),

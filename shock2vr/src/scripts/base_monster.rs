@@ -5,7 +5,7 @@ use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
     Effect, MessagePayload, NoopScript, Script,
-    ai::{AnimatedMonsterAI, CameraAI, GrubAI, TurretAI},
+    ai::{AnimatedMonsterAI, CameraAI, GrubAI, SwarmerAI, TurretAI},
     script_util,
 };
 
@@ -54,6 +54,7 @@ impl Script for BaseMonster {
         if let Some((key, saved)) = child {
             self.ai = match key.as_str() {
                 "shock2vr.grub_ai" => Box::new(GrubAI::new()),
+                "shock2vr.swarmer_ai" => Box::new(SwarmerAI::new()),
                 "shock2vr.turret" => Box::new(TurretAI::new()),
                 _ => {
                     return Err(super::ScriptStateError::InvalidPayload {
@@ -125,8 +126,7 @@ impl Script for BaseMonster {
                     "shockdefault" => Box::new(AnimatedMonsterAI::new()),
                     "turret" => Box::new(TurretAI::new()),
                     "grub" => Box::new(GrubAI::new()),
-                    // TODO: flying object-model controller.
-                    "swarmer" => Box::new(NoopScript {}),
+                    "swarmer" => Box::new(SwarmerAI::new()),
 
                     _ => Box::new(AnimatedMonsterAI::idle()),
                 }
