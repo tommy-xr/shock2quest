@@ -12496,6 +12496,21 @@ impl MissionCore {
             scene.append(&mut debug_render.clone());
         }
 
+        // Draw the live damage proxies, using their actual physics transforms.
+        // Shared world pass: the same hitboxes appear in flat and VR.
+        if crate::dev_params::get_bool(crate::dev_params::SHOW_HITBOXES) {
+            let hitboxes = self
+                .world
+                .borrow::<View<crate::creature::RuntimePropHitBox>>()
+                .unwrap();
+            for (id, _) in hitboxes.iter().with_id() {
+                scene.extend(
+                    self.physics
+                        .debug_entity_collider_lines(id, vec3(0.2, 1.0, 0.3)),
+                );
+            }
+        }
+
         // Held-melee contact volumes. Emitted in the shared world pass, so
         // flat and VR draw the identical overlay - required, since the
         // question it answers ("is the damage volume on the weapon I can

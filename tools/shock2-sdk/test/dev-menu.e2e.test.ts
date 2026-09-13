@@ -29,22 +29,11 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 /** The repurposed Options slot, third of the six main-menu entries. */
 const DEVELOPER_ENTRY = menuEntry(2);
 
-// The shared panel geometry (ui/dev_params_panel.rs): rows in the GAMELOD
-// pane starting at y=54 on a 28px pitch (24px tall), arrows 20px wide ending
-// 8px inside the pane's right edge at x=463, "Done" on the GAMELODR button
-// art. Row 0 is `panel_distance` (declaration order of the registry).
-//
-// The list now scrolls, and its rocker takes a 26px gutter off the pane's
-// right edge whenever there is something to scroll - which shifts every row's
-// arrows left by that much. Written as its own term rather than folded into
-// the numbers, so the next person can see why these are not simply the pane
-// edge minus the inset.
-const SCROLL_GUTTER = 26;
-const ROW0_INCREMENT: [number, number] = [463 - 8 - SCROLL_GUTTER - 10, 54 + 12];
-const ROW0_DECREMENT: [number, number] = [
-  463 - 8 - SCROLL_GUTTER - 20 - 48 - 10,
-  54 + 12,
-];
+// Camera & view is root category row 4. Its first parameter is
+// panel_distance. Compact single-line entries fit without a scroll gutter.
+const CAMERA_CATEGORY: [number, number] = [330, 54 + 4 * 28 + 12];
+const ROW0_INCREMENT: [number, number] = [449, 66];
+const ROW0_DECREMENT: [number, number] = [407, 66];
 
 // The upper framed button (`GAMELODR.BIN` rect 2 - the load screen's "Load"
 // frame): the debug-scene launcher's door on the parameters page, and the
@@ -70,7 +59,6 @@ const DEBUG_MINIMAL_ROW = 2;
 const MEDSCI1_ROW = 9;
 
 const PAUSE_DEVELOPER = pauseEntry(3);
-const PAUSE_CONTINUE = pauseEntry(0);
 
 async function paramValue(game: GameServer, key: string): Promise<number> {
   const { params } = await game.devParams.list();
@@ -93,6 +81,8 @@ test(
     await game.input.set("pointer.pressed", 0);
     await game.step({ frames: 5 });
     assert.equal((await game.info()).mission, "developer");
+
+    await click(game, CAMERA_CATEGORY);
 
     // Row 0 is panel_distance at its 2.0 default; `>` steps by the declared
     // 0.1, `<` steps back down.
@@ -170,6 +160,8 @@ test(
     assert.equal((await game.info()).mission, "developer");
     await game.step({ frames: 5 });
 
+    await vrClick(game, CAMERA_CATEGORY);
+
     const before = panelDepth((await game.scene.objects()).objects);
     assert.ok(
       Math.abs(before - 2.0) < 0.05,
@@ -217,6 +209,8 @@ test(
     assert.equal((await game.info()).paused, true, "the page turn must not resume");
     assert.equal((await game.info()).mission, "medsci1.mis", "no scene swap");
 
+    await click(game, CAMERA_CATEGORY);
+
     // The same shared rows at the same canvas coordinates as the frontend
     // host: one page description, two hosts.
     await click(game, ROW0_INCREMENT);
@@ -227,11 +221,15 @@ test(
     await game.screenshot("dev-menu-pause.png");
     await click(game, ROW0_DECREMENT);
 
-    // Done returns to the root page (still paused), where Continue resumes.
+    // Resume closes directly. Developer restores the last submenu on re-entry.
     await click(game, DEV_DONE);
-    assert.equal((await game.info()).paused, true, "Done turns the page, not the sim");
-    await click(game, PAUSE_CONTINUE);
-    assert.equal((await game.info()).paused, false, "Continue on the root resumes");
+    assert.equal((await game.info()).paused, false);
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 5 });
+    await click(game, PAUSE_DEVELOPER);
+    await click(game, ROW0_INCREMENT);
+    assert.ok(Math.abs((await paramValue(game, "panel_distance")) - 2.1) < 1e-4);
+    await click(game, DEV_DONE);
   },
 );
 
@@ -261,6 +259,7 @@ test(
     // "Done" on the launcher goes back to the parameters, not to the menu...
     await click(game, DEV_DONE);
     assert.equal((await game.info()).mission, "developer");
+    await click(game, CAMERA_CATEGORY);
     // ...and the parameter rows really are back: `>` steps a value again.
     const before = await paramValue(game, "panel_distance");
     await click(game, ROW0_INCREMENT);
@@ -341,3 +340,56 @@ test(
     assert.equal((await game.info()).mission, "debug_minimal");
   },
 );
+
+for (const vr of [false, true]) {
+  test(
+    `${vr ? "VR" : "flat"} categories preserve location and keep Locked editable`,
+    { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 300_000 },
+    async () => {
+      await using game = await GameServer.launch({
+        mission: "main_menu",
+        debugFlags: vr ? ["--vr"] : [],
+      });
+      const press = (point: [number, number]) =>
+        vr ? vrClick(game, point) : click(game, point);
+      const category = (index: number): [number, number] => [330, 54 + index * 28 + 12];
+      const back: [number, number] = [309, 436];
+      const zoneKeys = [
+        "melee_glove_overlay", "vr_backpack_zones", "vr_glove_spheres",
+        "vr_ammo_pouch_zones", "vr_holster_zones", "vr_support_grips", "clip_zone",
+      ];
+      await game.step({ frames: 10 });
+      await press([489, 202]);
+      await press(category(0)); // Visualizations
+      await press(category(1)); // Hands & zones (after the bulk row)
+      await press([310, 74]); // All on
+      for (const key of zoneKeys) assert.equal(await paramValue(game, key), 1, key);
+      assert.equal(await paramValue(game, "free_camera"), 0);
+      assert.equal(await paramValue(game, "glove_fit_visible"), 1);
+      await press([410, 74]); // All off
+      for (const key of zoneKeys) assert.equal(await paramValue(game, key), 0, key);
+
+      // Individual changes address the displayed row, and re-entry restores
+      // the same submenu. Nonzero scroll is covered with a short pane in Rust.
+      await press([449, 122]);
+      assert.equal(await paramValue(game, "vr_backpack_zones"), 1);
+      assert.equal(await paramValue(game, "melee_glove_overlay"), 0);
+      await press(DEV_DONE);
+      await press([489, 202]);
+      await press([449, 122]);
+      assert.equal(await paramValue(game, "vr_backpack_zones"), 0);
+      assert.equal(await paramValue(game, "melee_glove_overlay"), 0);
+
+      await press(back);
+      await press(back);
+      await press(category(5)); // Locked
+      await press(category(0)); // Hands & gloves
+      const locked = (await game.devParams.list()).params.find(p => p.key === "glove_forward_cm");
+      assert.equal(locked?.locked, true);
+      await press([449, 66]);
+      assert.equal(await paramValue(game, "glove_forward_cm"), -14.5);
+      await game.devParams.set("glove_forward_cm", -15);
+      assert.equal(await paramValue(game, "glove_forward_cm"), -15);
+    },
+  );
+}

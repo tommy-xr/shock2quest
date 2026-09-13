@@ -254,6 +254,26 @@ free-camera switches. Values are read every frame, so a change is live on the
 next one, and the same registry is exposed over HTTP by the debug runtime
 (`GET`/`POST /v1/dev-params`) for headless runs.
 
+Developer parameters use category submenus. **Back** moves up one category;
+**Resume** on the pause Developer page returns directly to gameplay. Opening
+Pause still starts at the pause root, but choosing Developer restores the last
+category and its scroll position. The main-menu Developer screen shares this
+navigation for the lifetime of the application, including across mission changes.
+
+**Visualizations** offers **All on / All off** for all overlays or just a
+subcategory. Individual switches stay editable; counts show how many are on.
+Hands & zones includes gloves, support grips, clip insertion, ammo pouch,
+holsters, and backpack zones. Combat includes creature hitboxes
+(`show_hitboxes`), held melee contact volumes, and damage numbers. Bulk controls
+only change visualization flags, never fit settings or tuning values.
+
+**Locked** contains settled tuning, hidden from the ordinary categories but
+editable when opened. HTTP access is unchanged. Initially this includes global
+glove forward offset and melee drive limits, swing threshold, and model scale.
+Declarations use `Category::float(...)` / `Category::bool(...)`, or
+`float_locked(...)` / `bool_locked(...)`; locking only changes menu placement.
+`GET /v1/dev-params` also reports each parameter's category label and locked flag.
+
 #### Glove fit check (`debug_gloves`)
 
 Open `debug_gloves` from the Developer scene list. On Quest it requests room

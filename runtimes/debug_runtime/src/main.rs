@@ -4275,10 +4275,12 @@ async fn list_dev_params() -> Json<Value> {
             match param.kind {
                 shock2vr::dev_params::DevParamKind::Float { min, max, step } => json!({
                     "key": key, "label": label, "value": value, "default": default,
+                    "category": param.category.label(), "locked": param.locked,
                     "kind": "float", "min": min, "max": max, "step": step,
                 }),
                 shock2vr::dev_params::DevParamKind::Bool => json!({
                     "key": key, "label": label, "value": value, "default": default,
+                    "category": param.category.label(), "locked": param.locked,
                     "kind": "bool",
                 }),
             }

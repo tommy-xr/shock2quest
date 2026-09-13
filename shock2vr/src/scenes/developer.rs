@@ -155,8 +155,8 @@ pub enum DeveloperAction {
 struct ScreenState {
     page: DeveloperPage,
     rects: PanelRects,
-    /// Registry index drawn in the parameter pane's top row.
-    scroll: usize,
+    /// Snapshot shared by the parameter hit tests for this frame.
+    navigation: dev_params_panel::DevParamsNavigation,
     /// How many entries the launcher's showing tab lists - the only thing the
     /// shared list geometry needs to know about the data source.
     list_len: usize,
@@ -223,7 +223,7 @@ fn hit(state: ScreenState, point: Vector2<f32>) -> Option<DeveloperAction> {
             if state.rects.action_rect().contains(point) {
                 return Some(DeveloperAction::OpenScenes);
             }
-            dev_params_panel::hit(state.rects, state.scroll, point).map(DeveloperAction::Param)
+            dev_params_panel::hit(state.rects, &state.navigation, point).map(DeveloperAction::Param)
         }
         DeveloperPage::Scenes => {
             if let Some(tab) = SceneTab::ALL
@@ -289,10 +289,9 @@ pub struct DeveloperScene {
     /// The panel's widget rects, re-resolved from `GAMELODR.BIN` each update
     /// (the render path takes `&self`, so it reads the resolved value here).
     panel_rects: PanelRects,
-    /// Index of the registry parameter drawn in the pane's top row. The panel
-    /// itself is stateless, so the scroll position lives with the host and is
-    /// handed to the hit test and the render alike.
-    scroll: usize,
+    /// Session navigation retained by Game across frontend scene replacement,
+    /// shared with the pause overlay's developer page.
+    navigation: dev_params_panel::DevParamsSession,
     /// Which page is showing.
     page: DeveloperPage,
     /// Which of the launcher's tabs is showing.
@@ -323,7 +322,7 @@ impl DeveloperScene {
             scene_name: "developer".to_owned(),
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
             panel_rects: PanelRects::default(),
-            scroll: 0,
+            navigation: Default::default(),
             page: DeveloperPage::Params,
             tab: SceneTab::Missions,
             missions: Vec::new(),
@@ -359,13 +358,20 @@ impl DeveloperScene {
         self.selected_scene = (self.tab_list_len() > 0).then_some(0);
     }
 
+    pub fn with_navigation(navigation: dev_params_panel::DevParamsSession) -> Self {
+        Self {
+            navigation,
+            ..Self::new()
+        }
+    }
+
     /// Everything a click on this frame depends on, in one value shared by the
     /// hit test and the draw.
     fn state(&self) -> ScreenState {
         ScreenState {
             page: self.page,
             rects: self.panel_rects,
-            scroll: self.scroll,
+            navigation: *self.navigation.lock().unwrap(),
             list_len: self.tab_list_len(),
             scene_scroll: self.scene_scroll,
             has_selection: self.selected_scene.is_some(),
@@ -398,7 +404,13 @@ impl DeveloperScene {
                 // The rows, the header and "Done" are the shared panel's; the
                 // launcher's door is this host's, because the pause overlay
                 // hosts the same panel and cannot swap the scene under itself.
-                dev_params_panel::draw(&mut canvas, self.panel_rects, self.scroll, pointer_canvas);
+                dev_params_panel::draw(
+                    &mut canvas,
+                    self.panel_rects,
+                    &self.navigation.lock().unwrap(),
+                    pointer_canvas,
+                    "Done",
+                );
                 button(
                     &mut canvas,
                     self.panel_rects.action_rect(),
@@ -493,7 +505,11 @@ impl DeveloperScene {
     fn handle_action(&mut self, action: DeveloperAction) -> Vec<Effect> {
         match action {
             DeveloperAction::Param(event) => {
-                if dev_params_panel::activate(self.panel_rects, event, &mut self.scroll) {
+                if dev_params_panel::activate(
+                    self.panel_rects,
+                    event,
+                    &mut self.navigation.lock().unwrap(),
+                ) {
                     return vec![Effect::GlobalEffect(GlobalEffect::ShowMainMenu)];
                 }
             }
@@ -677,12 +693,22 @@ mod tests {
     // and normalized coords map straight onto the 640x480 canvas.
     const SCREEN: Vector2<f32> = Vector2 { x: 800.0, y: 600.0 };
 
+    fn test_navigation(scroll: usize) -> dev_params_panel::DevParamsNavigation {
+        let mut nav = dev_params_panel::DevParamsNavigation::default();
+        nav.enter(dev_params_panel::DevParamsLocation {
+            category: Some(dev_params::DevCategory::Hands),
+            locked: false,
+        });
+        *nav.scroll_mut() = scroll;
+        nav
+    }
+
     /// The parameters page at `scroll`, on the decoded fallback rects.
     fn params_state(scroll: usize) -> ScreenState {
         ScreenState {
             page: DeveloperPage::Params,
             rects: PanelRects::default(),
-            scroll,
+            navigation: test_navigation(scroll),
             list_len: scene_count(),
             scene_scroll: 0,
             has_selection: true,
@@ -694,7 +720,7 @@ mod tests {
         ScreenState {
             page: DeveloperPage::Scenes,
             rects: PanelRects::default(),
-            scroll: 0,
+            navigation: Default::default(),
             list_len: len,
             scene_scroll,
             has_selection,
@@ -720,14 +746,23 @@ mod tests {
     /// A canvas point over the first parameter's `>` arrow, found through the
     /// same hit test the screen uses (no duplicated geometry in the test).
     fn first_increment_point() -> Vector2<f32> {
-        let (id, _) = dev_params::all().next().expect("registry is non-empty");
+        let (id, _) = (
+            dev_params::GLOVE_SIDE_CM,
+            dev_params::spec(dev_params::GLOVE_SIDE_CM),
+        );
         // Scan the canvas for the arrow; coarse 2px grid is plenty at 20px
         // button widths.
         for y in (0..480).step_by(2) {
             for x in (0..640).step_by(2) {
                 let p = vec2(x as f32, y as f32);
-                if dev_params_panel::hit(PanelRects::default(), 0, p)
-                    == Some(DevParamsEvent::Increment(id))
+                // Aim inside the target: a ray/normalized-pointer round trip
+                // may land a fraction of a pixel outside an exact top/left edge.
+                if [p, p - vec2(4.0, 4.0), p + vec2(4.0, 4.0)]
+                    .into_iter()
+                    .all(|point| {
+                        dev_params_panel::hit(PanelRects::default(), &test_navigation(0), point)
+                            == Some(DevParamsEvent::Increment(id))
+                    })
                 {
                     return p;
                 }
@@ -737,7 +772,10 @@ mod tests {
     }
 
     fn first_increment_action() -> DeveloperAction {
-        let (id, _) = dev_params::all().next().unwrap();
+        let (id, _) = (
+            dev_params::GLOVE_SIDE_CM,
+            dev_params::spec(dev_params::GLOVE_SIDE_CM),
+        );
         DeveloperAction::Param(DevParamsEvent::Increment(id))
     }
 

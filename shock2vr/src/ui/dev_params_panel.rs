@@ -1,7 +1,7 @@
 //! The Developer screen's parameter rows, described once for every host.
 //!
-//! One row per [`crate::dev_params`] entry - label, `<` button, value readout,
-//! `>` button - plus a "Done" button, all in canvas pixels on the shared
+//! Category submenus and parameter rows, with Back and a host exit button,
+//! all in canvas pixels on the shared
 //! 640x480 frontend canvas. Two hosts draw it (the [`DeveloperScene`] reached
 //! from the main menu, and the pause overlay's Developer page) and both call
 //! these same functions, so the screen cannot drift between hosts - and
@@ -17,7 +17,9 @@
 //!
 //! [`DeveloperScene`]: crate::scenes::DeveloperScene
 
-use std::ops::Range;
+pub use super::dev_params_navigation::{
+    DevParamsLocation, DevParamsNavigation, DevParamsRow, DevParamsSession,
+};
 
 use cgmath::{Vector2, vec2};
 use dark::{importers::UI_LAYOUT_IMPORTER, map::MapRect};
@@ -147,22 +149,19 @@ pub fn rects(asset_cache: &mut AssetCache) -> PanelRects {
     PanelRects::from_layout(layout.as_deref().map(|r| r.as_slice()))
 }
 
-/// Vertical distance between row tops, and each row's own height. Taller
-/// than the load list's 19px rows: these rows carry click targets (the
-/// arrows), so they get more air and a bigger hit area.
-///
-/// These were briefly shaved to 25/22 to squeeze a tenth parameter into the
-/// pane. That trade is gone: the list scrolls, so the pane holds whatever it
-/// comfortably can and the registry may grow without touching the pitch.
+/// Compact single-line rows; names keep most of the pane's width while
+/// the value controls form a tight group at the right edge.
 const ROW_PITCH: f32 = 28.0;
 const ROW_H: f32 = 24.0;
+const PARAM_FONT_SIZE: f32 = 10.0;
+const CONTROL_GAP: f32 = 6.0;
 /// Horizontal inset from the pane's edges, matching the load list's text
 /// inset so the two screens' contents align inside the same art.
 const TEXT_INSET: f32 = 8.0;
 /// Width of the `<` / `>` hit regions.
-const ARROW_W: f32 = 20.0;
+const ARROW_W: f32 = 12.0;
 /// Width of the value readout between the arrows.
-const VALUE_W: f32 = 48.0;
+const VALUE_W: f32 = 30.0;
 /// The scroll gutter down the list pane's right edge. The rocker itself - its
 /// geometry, its arrow art and its "an end that cannot move is inert" rule - is
 /// [`list_scroll`]'s, shared with the debug-scene launcher.
@@ -187,6 +186,9 @@ pub enum DevParamsEvent {
     ScrollUp,
     /// Scroll the list one row towards its end.
     ScrollDown,
+    Back,
+    Enter(DevParamsLocation),
+    Bulk(bool),
     Done,
 }
 
@@ -198,7 +200,7 @@ struct RowRects {
     increment: Rect,
 }
 
-fn row_rects(rects: PanelRects, index: usize) -> RowRects {
+fn row_rects(rects: PanelRects, index: usize, len: usize) -> RowRects {
     let list = rects.list;
     let y = list.y + index as f32 * ROW_PITCH;
     // Leave the scroll gutter clear whenever it is in use, so a row's `>`
@@ -207,18 +209,18 @@ fn row_rects(rects: PanelRects, index: usize) -> RowRects {
     // The gutter subsumes the right inset: the rocker's own art carries a dark
     // margin either side of its arrow, so charging the row for both as well
     // costs label width and ellipsizes names that otherwise fit.
-    let right_margin = if max_scroll(rects) > 0 {
+    let right_margin = if self::list(rects).max_scroll(len) > 0 {
         SCROLL_GUTTER_W
     } else {
         TEXT_INSET
     };
     let right = list.x + list.w - right_margin;
+    let label_x = list.x + TEXT_INSET;
     let increment_x = right - ARROW_W;
     let value_x = increment_x - VALUE_W;
     let decrement_x = value_x - ARROW_W;
-    let label_x = list.x + TEXT_INSET;
     RowRects {
-        label: Rect::new(label_x, y, decrement_x - label_x, ROW_H),
+        label: Rect::new(label_x, y, decrement_x - CONTROL_GAP - label_x, ROW_H),
         decrement: Rect::new(decrement_x, y, ARROW_W, ROW_H),
         value: Rect::new(value_x, y, VALUE_W, ROW_H),
         increment: Rect::new(increment_x, y, ARROW_W, ROW_H),
@@ -228,7 +230,7 @@ fn row_rects(rects: PanelRects, index: usize) -> RowRects {
 /// This page's list geometry - the paging and the gutter rocker every other
 /// frontend list uses, at the parameter rows' own pitch. The rows themselves
 /// are built by [`row_rects`] rather than the shared `row_rect`, because a
-/// parameter row is not one target but four columns (label, `<`, value, `>`).
+/// parameter row contains a name and three compact value controls.
 fn list(rects: PanelRects) -> list_scroll::ListGeometry {
     list_scroll::ListGeometry {
         pane: rects.list,
@@ -238,50 +240,20 @@ fn list(rects: PanelRects) -> list_scroll::ListGeometry {
     }
 }
 
-/// How many rows fit in the pane above the backdrop's painted field - the
-/// size of one page of the list, however long the registry is.
-fn rows_per_page(rects: PanelRects) -> usize {
-    list(rects).rows_per_page()
+fn back_rect(rects: PanelRects) -> Rect {
+    Rect::new(rects.list.x, rects.done.y, 96.0, rects.done.h)
 }
 
-/// The furthest the list can scroll: the first-row index that puts the tail
-/// of the registry against the bottom of the pane. Zero when everything fits
-/// at once, which is also what hides the scroll rocker.
-fn max_scroll(rects: PanelRects) -> usize {
-    list(rects).max_scroll(dev_params::PARAMS.len())
+fn wide_row(rects: PanelRects, slot: usize, len: usize) -> Rect {
+    let row = row_rects(rects, slot, len);
+    Rect::new(
+        row.label.x,
+        row.label.y,
+        row.increment.x + row.increment.w - row.label.x,
+        ROW_H,
+    )
 }
 
-/// The registry indices on screen at `scroll`, with `scroll` clamped to what
-/// the pane can actually show.
-///
-/// The one place a screen row is tied to a parameter: [`draw`] and [`hit`]
-/// both walk this range, so a row can never *show* one parameter's value and
-/// *step* another's - the failure a positional row index invites the moment
-/// the list scrolls.
-fn visible_rows(rects: PanelRects, scroll: usize) -> Range<usize> {
-    list(rects).visible_rows(dev_params::PARAMS.len(), scroll)
-}
-
-/// The scroll rocker's two halves - up and down arrows - in a gutter down the
-/// list pane's right edge, beside the rows they scroll. `None` when the whole
-/// registry fits on one page.
-///
-/// Deliberately *not* on the upper framed button: that is the load screen's
-/// "Load" frame, which the Developer screen now spends on its debug-scene
-/// launcher ([`ACTION_RECT_INDEX`]). Scrolling belongs against its own list
-/// anyway - a scrollbar's place is beside what it scrolls, not across the
-/// screen from it.
-fn rocker(rects: PanelRects) -> Option<list_scroll::Rocker> {
-    list(rects).rocker(dev_params::PARAMS.len())
-}
-
-#[cfg(test)]
-fn scroll_rects(rects: PanelRects) -> Option<(Rect, Rect)> {
-    rocker(rects).map(|r| (r.up, r.down))
-}
-
-/// The value readout: floats as `{:.2}`, the format the step grids are
-/// declared in.
 fn format_value(kind: &DevParamKind, value: f32, bool_labels: Option<[&str; 2]>) -> String {
     match kind {
         DevParamKind::Float { .. } => format!("{value:.2}"),
@@ -293,144 +265,252 @@ fn format_value(kind: &DevParamKind, value: f32, bool_labels: Option<[&str; 2]>)
 
 /// The event at a canvas point, if any. Shared by the click and the hover
 /// highlight, so the two can never disagree about where a button is.
-pub fn hit(rects: PanelRects, scroll: usize, point: Vector2<f32>) -> Option<DevParamsEvent> {
-    let mut canvas = UiCanvas::<DevParamsEvent>::with_events(vec2(CANVAS_W, CANVAS_H));
-    // Rows are addressed by *screen slot* but carry the id of the registry
-    // entry scrolled into that slot. Resolving the slot from anything other
-    // than this same offset is the bug this whole seam invites: the panel
-    // would draw one parameter and the click would change another.
-    let rows = visible_rows(rects, scroll);
-    for (slot, (id, _)) in dev_params::all()
-        .skip(rows.start)
-        .take(rows.len())
-        .enumerate()
-    {
-        let row = row_rects(rects, slot);
-        canvas.button(row.decrement, "", DevParamsEvent::Decrement(id));
-        canvas.button(row.increment, "", DevParamsEvent::Increment(id));
-    }
-    canvas.button(rects.done, "", DevParamsEvent::Done);
-    // A rocker half that cannot move is inert, not just dimmed - the rule lives
-    // in `list_scroll`, so every scrolling list obeys the same one.
-    if let Some(rocker) = rocker(rects) {
-        if let Some(half) = list_scroll::hit(&rocker, rows.start, max_scroll(rects), point) {
-            return Some(match half {
-                ScrollHalf::Up => DevParamsEvent::ScrollUp,
-                ScrollHalf::Down => DevParamsEvent::ScrollDown,
-            });
-        }
-    }
-    canvas.click_at(point)
-}
-
-/// Describe the panel onto the host's canvas: header, one row per parameter,
-/// and "Done". `pointer_canvas` is the hover position in canvas pixels,
-/// whatever produced it - the mouse or a VR controller ray; the highlight
-/// resolves through the very same [`hit`] the click does.
-pub fn draw(
-    canvas: &mut UiCanvas,
+/// Build controls and readouts once. Both rendering and hit testing replay this
+/// emit, so categories, bulk buttons and parameter arrows share exact geometry.
+fn emit(
     rects: PanelRects,
-    scroll: usize,
-    pointer_canvas: Option<Vector2<f32>>,
-) {
-    let hovered = pointer_canvas.and_then(|point| hit(rects, scroll, point));
-    let hover_opacity = |event: DevParamsEvent| {
-        if hovered == Some(event) {
-            HOVER_OPACITY
-        } else {
-            IDLE_OPACITY
+    navigation: &DevParamsNavigation,
+    exit_label: &str,
+    pointer: Option<Vector2<f32>>,
+) -> (UiCanvas, Vec<(Rect, DevParamsEvent)>) {
+    let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
+    let mut targets = Vec::new();
+    let mut button = |canvas: &mut UiCanvas,
+                      rect: Rect,
+                      label: &str,
+                      event: DevParamsEvent,
+                      font: &str,
+                      align: HAlign| {
+        targets.push((rect, event));
+        // Rocker art is emitted by list_scroll; its targets have no text.
+        // Empty text has no glyph mesh and must not reach the renderer.
+        if label.is_empty() {
+            return;
         }
+        let font_size = if matches!(
+            event,
+            DevParamsEvent::Increment(_) | DevParamsEvent::Decrement(_)
+        ) {
+            PARAM_FONT_SIZE
+        } else {
+            0.0
+        };
+        canvas
+            .text_fit(rect, label, font, font_size, align, VAlign::Middle)
+            .opacity(if pointer.is_some_and(|p| rect.contains(p)) {
+                HOVER_OPACITY
+            } else {
+                IDLE_OPACITY
+            });
     };
-
-    canvas.text_native(
+    let entries = navigation.rows();
+    let len = entries.len();
+    let geometry = list(rects);
+    let visible = geometry.visible_rows(len, navigation.scroll());
+    let title = if navigation.location.locked
+        && navigation.location.category() == dev_params::DevCategory::Root
+    {
+        "Locked"
+    } else {
+        navigation.location.category().label()
+    };
+    canvas.text_native_fit(
         rects.header,
-        "Developer",
+        title,
         MENU_FONT,
         HAlign::Center,
         VAlign::Middle,
     );
-
-    let rows = visible_rows(rects, scroll);
-    for (slot, (id, param)) in dev_params::all()
-        .skip(rows.start)
-        .take(rows.len())
-        .enumerate()
-    {
-        let row = row_rects(rects, slot);
-        // Fitted, not plain: a label is authored text of unbounded length and
-        // `text_native` does not shrink to its rect, so a long one ("FOV
-        // override (deg)", "Melee glove overlay") ran past the label column
-        // and struck the `<` arrow beside it. Ellipsizing keeps the row
-        // legible and the arrow clickable; the registry is free to name a
-        // parameter clearly without measuring it first.
-        canvas
-            .text_native_fit(
-                row.label,
-                param.label,
-                ROW_FONT,
-                HAlign::Left,
-                VAlign::Middle,
-            )
-            .opacity(READOUT_OPACITY);
-        canvas
-            .text_native(
-                row.decrement,
-                "<",
-                MENU_FONT,
-                HAlign::Center,
-                VAlign::Middle,
-            )
-            .opacity(hover_opacity(DevParamsEvent::Decrement(id)));
-        canvas
-            .text_native(
-                row.value,
-                &format_value(&param.kind, dev_params::get(id), param.bool_labels),
-                ROW_FONT,
-                HAlign::Center,
-                VAlign::Middle,
-            )
-            .opacity(READOUT_OPACITY);
-        canvas
-            .text_native(
-                row.increment,
-                ">",
-                MENU_FONT,
-                HAlign::Center,
-                VAlign::Middle,
-            )
-            .opacity(hover_opacity(DevParamsEvent::Increment(id)));
-    }
-
-    if let Some(rocker) = rocker(rects) {
-        list_scroll::draw(
-            canvas,
-            &rocker,
-            rows.start,
-            max_scroll(rects),
-            match hovered {
-                Some(DevParamsEvent::ScrollUp) => Some(ScrollHalf::Up),
-                Some(DevParamsEvent::ScrollDown) => Some(ScrollHalf::Down),
-                _ => None,
-            },
-        );
-    }
-
-    canvas
-        .text_native(
-            rects.done,
-            "Done",
-            MENU_FONT,
+    // Use the interior of the backdrop's name field. Its borders are at
+    // y=323 and y=344; inset the text on every side rather than straddling
+    // that rule or the curved footer. The header already names this category.
+    let breadcrumb = navigation.breadcrumb();
+    if let Some((parents, _)) = breadcrumb.rsplit_once(" > ") {
+        canvas.text_fit(
+            Rect::new(
+                rects.list.x + TEXT_INSET,
+                FIELD_TOP_Y + 3.0,
+                rects.list.w - TEXT_INSET * 2.0,
+                14.0,
+            ),
+            parents,
+            ROW_FONT,
+            PARAM_FONT_SIZE,
             HAlign::Center,
             VAlign::Middle,
-        )
-        .opacity(hover_opacity(DevParamsEvent::Done));
+        );
+    }
+    for (slot, entry) in entries[visible.clone()].iter().enumerate() {
+        let row = row_rects(rects, slot, len);
+        match *entry {
+            DevParamsRow::Category(location) => {
+                let label = if location.category.is_none() {
+                    "Locked"
+                } else {
+                    location.category().label()
+                };
+                let label = if dev_params::DevCategory::Visualizations.contains(location.category())
+                {
+                    let members: Vec<_> = navigation.params_under(location.category()).collect();
+                    let on = members
+                        .iter()
+                        .filter(|&&id| dev_params::get_bool(id))
+                        .count();
+                    format!("{label} {on}/{} >", members.len())
+                } else {
+                    format!("{label} >")
+                };
+                button(
+                    &mut canvas,
+                    wide_row(rects, slot, len),
+                    &label,
+                    DevParamsEvent::Enter(location),
+                    ROW_FONT,
+                    HAlign::Left,
+                );
+            }
+            DevParamsRow::Bulk => {
+                let whole = wide_row(rects, slot, len);
+                let half = whole.w / 2.0;
+                button(
+                    &mut canvas,
+                    Rect::new(whole.x, whole.y, half, whole.h),
+                    "All on",
+                    DevParamsEvent::Bulk(true),
+                    ROW_FONT,
+                    HAlign::Center,
+                );
+                button(
+                    &mut canvas,
+                    Rect::new(whole.x + half, whole.y, half, whole.h),
+                    "All off",
+                    DevParamsEvent::Bulk(false),
+                    ROW_FONT,
+                    HAlign::Center,
+                );
+            }
+            DevParamsRow::Parameter(id) => {
+                let param = dev_params::spec(id);
+                canvas
+                    .text_fit(
+                        row.label,
+                        param.label,
+                        ROW_FONT,
+                        PARAM_FONT_SIZE,
+                        HAlign::Left,
+                        VAlign::Middle,
+                    )
+                    .opacity(READOUT_OPACITY);
+                button(
+                    &mut canvas,
+                    row.decrement,
+                    "<",
+                    DevParamsEvent::Decrement(id),
+                    ROW_FONT,
+                    HAlign::Center,
+                );
+                canvas
+                    .text_fit(
+                        row.value,
+                        &format_value(&param.kind, dev_params::get(id), param.bool_labels),
+                        ROW_FONT,
+                        PARAM_FONT_SIZE,
+                        HAlign::Center,
+                        VAlign::Middle,
+                    )
+                    .opacity(READOUT_OPACITY);
+                button(
+                    &mut canvas,
+                    row.increment,
+                    ">",
+                    DevParamsEvent::Increment(id),
+                    ROW_FONT,
+                    HAlign::Center,
+                );
+            }
+        }
+    }
+    if let Some(rocker) = geometry.rocker(len) {
+        let max = geometry.max_scroll(len);
+        let hovered =
+            pointer.and_then(|point| list_scroll::hit(&rocker, visible.start, max, point));
+        list_scroll::draw(&mut canvas, &rocker, visible.start, max, hovered);
+        if visible.start > 0 {
+            button(
+                &mut canvas,
+                rocker.up,
+                "",
+                DevParamsEvent::ScrollUp,
+                MENU_FONT,
+                HAlign::Center,
+            );
+        }
+        if visible.start < max {
+            button(
+                &mut canvas,
+                rocker.down,
+                "",
+                DevParamsEvent::ScrollDown,
+                MENU_FONT,
+                HAlign::Center,
+            );
+        }
+    }
+    button(
+        &mut canvas,
+        back_rect(rects),
+        "Back",
+        DevParamsEvent::Back,
+        MENU_FONT,
+        HAlign::Center,
+    );
+    button(
+        &mut canvas,
+        rects.done,
+        exit_label,
+        DevParamsEvent::Done,
+        MENU_FONT,
+        HAlign::Center,
+    );
+    (canvas, targets)
 }
 
-/// Apply a clicked event to the registry, or to the host's `scroll` offset.
+pub fn hit(
+    rects: PanelRects,
+    navigation: &DevParamsNavigation,
+    point: Vector2<f32>,
+) -> Option<DevParamsEvent> {
+    emit(rects, navigation, "Done", None)
+        .1
+        .into_iter()
+        .rev()
+        .find(|(rect, _)| rect.contains(point))
+        .map(|(_, event)| event)
+}
+
+pub fn draw(
+    canvas: &mut UiCanvas,
+    rects: PanelRects,
+    navigation: &DevParamsNavigation,
+    pointer_canvas: Option<Vector2<f32>>,
+    exit_label: &str,
+) {
+    let (content, _) = emit(rects, navigation, exit_label, pointer_canvas);
+    // Replay the same resolved widgets with the host's hover position.
+    for element in content.into_elements() {
+        canvas.push(element);
+    }
+}
+
+/// Apply a click to the registry or session navigation.
 /// Returns `true` when the event was [`DevParamsEvent::Done`] - the one thing
 /// the host must act on (leave the screen); the steps and the scrolling are
 /// absorbed here so both hosts stay a one-liner.
-pub fn activate(rects: PanelRects, event: DevParamsEvent, scroll: &mut usize) -> bool {
+pub fn activate(
+    rects: PanelRects,
+    event: DevParamsEvent,
+    navigation: &mut DevParamsNavigation,
+) -> bool {
     let step_by = |id: DevParamId, direction: f32| match dev_params::spec(id).kind {
         DevParamKind::Float { step, .. } => {
             // `set` clamps into range and snaps to the step grid, so walking
@@ -453,11 +533,24 @@ pub fn activate(rects: PanelRects, event: DevParamsEvent, scroll: &mut usize) ->
             false
         }
         DevParamsEvent::ScrollUp => {
-            list_scroll::apply(ScrollHalf::Up, scroll, max_scroll(rects));
+            let max = list(rects).max_scroll(navigation.rows().len());
+            list_scroll::apply(ScrollHalf::Up, navigation.scroll_mut(), max);
             false
         }
         DevParamsEvent::ScrollDown => {
-            list_scroll::apply(ScrollHalf::Down, scroll, max_scroll(rects));
+            let max = list(rects).max_scroll(navigation.rows().len());
+            list_scroll::apply(ScrollHalf::Down, navigation.scroll_mut(), max);
+            false
+        }
+        DevParamsEvent::Enter(location) => {
+            navigation.enter(location);
+            false
+        }
+        DevParamsEvent::Back => !navigation.back(),
+        DevParamsEvent::Bulk(enabled) => {
+            for id in navigation.bulk_members() {
+                dev_params::set(id, if enabled { 1.0 } else { 0.0 });
+            }
             false
         }
         DevParamsEvent::Done => true,
@@ -467,301 +560,207 @@ pub fn activate(rects: PanelRects, event: DevParamsEvent, scroll: &mut usize) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dev_params::DevCategory;
 
-    fn param_ids() -> Vec<DevParamId> {
-        dev_params::all().map(|(id, _)| id).collect()
-    }
-
-    /// Every registered parameter must be *reachable*: whatever the registry
-    /// grows to, some scroll offset puts it on screen with working arrows.
-    /// (Its predecessor asserted every param fit on one page, which is what
-    /// forced a pitch shave per new knob; the list scrolls now, so the
-    /// invariant is reachability, not fitting.)
     #[test]
-    fn every_registered_param_is_reachable_by_scrolling() {
+    fn every_param_is_reachable_only_in_its_locked_or_ordinary_category() {
         let rects = PanelRects::default();
-        let ids = param_ids();
-        for (index, id) in ids.iter().enumerate() {
-            // Scrolling to a param's own index always shows it (clamped when
-            // it is inside the last page).
-            let scroll = index;
-            let rows = visible_rows(rects, scroll);
-            assert!(
-                rows.contains(&index),
-                "param {index} is not on screen at scroll {scroll}"
-            );
-            let row = row_rects(rects, index - rows.start);
+        for (id, param) in dev_params::all() {
+            let mut nav = DevParamsNavigation::default();
+            nav.enter(DevParamsLocation {
+                category: Some(param.category),
+                locked: param.locked,
+            });
+            let entries = nav.rows();
+            let index = entries
+                .iter()
+                .position(|r| *r == DevParamsRow::Parameter(id))
+                .unwrap();
+            *nav.scroll_mut() = index;
+            let visible = list(rects).visible_rows(entries.len(), nav.scroll());
+            assert!(visible.contains(&index));
+            let row = row_rects(rects, index - visible.start, entries.len());
             assert_eq!(
-                hit(rects, scroll, row.increment.center()),
-                Some(DevParamsEvent::Increment(*id)),
-                "param {index} > at scroll {scroll}"
-            );
-        }
-    }
-
-    /// The last parameter in particular: it is only reachable at the bottom
-    /// of the scroll, which is the offset a clamp bug lands one short of.
-    #[test]
-    fn the_last_param_is_reachable_at_the_bottom_of_the_scroll() {
-        let rects = PanelRects::default();
-        let last_index = dev_params::PARAMS.len() - 1;
-        let last_id = *param_ids().last().unwrap();
-        let bottom = max_scroll(rects);
-        let rows = visible_rows(rects, bottom);
-        assert_eq!(rows.end, dev_params::PARAMS.len());
-        let row = row_rects(rects, last_index - rows.start);
-        assert_eq!(
-            hit(rects, bottom, row.decrement.center()),
-            Some(DevParamsEvent::Decrement(last_id))
-        );
-        // ...and every drawn row clears the backdrop's painted field.
-        assert!(row.label.y + ROW_H <= FIELD_TOP_Y);
-        // An over-scroll cannot walk the list off its end.
-        assert_eq!(visible_rows(rects, bottom + 99), rows);
-    }
-
-    /// The bug a scrolling list invites: the rows move but the hit test still
-    /// indexes the registry positionally, so clicking a row steps whatever
-    /// parameter *used* to be there. Slot 0 must belong to the first VISIBLE
-    /// param, not to `PARAMS[0]`.
-    #[test]
-    fn the_hit_test_follows_the_scroll_offset() {
-        let rects = PanelRects::default();
-        let ids = param_ids();
-        assert!(max_scroll(rects) > 0, "the pane must be scrollable to test");
-        for scroll in 1..=max_scroll(rects) {
-            let slot0 = row_rects(rects, 0);
-            assert_eq!(
-                hit(rects, scroll, slot0.increment.center()),
-                Some(DevParamsEvent::Increment(ids[scroll])),
-                "top row at scroll {scroll}"
+                hit(rects, &nav, row.increment.center()),
+                Some(DevParamsEvent::Increment(id))
             );
             assert_eq!(
-                hit(rects, scroll, slot0.decrement.center()),
-                Some(DevParamsEvent::Decrement(ids[scroll])),
-                "top row at scroll {scroll}"
+                hit(rects, &nav, row.decrement.center()),
+                Some(DevParamsEvent::Decrement(id))
             );
-            // The param that was on top before is now off screen entirely.
-            assert!(!visible_rows(rects, scroll).contains(&(scroll - 1)));
+            assert!(row.label.y + ROW_H <= FIELD_TOP_Y);
+            assert_eq!(hit(rects, &nav, row.label.center()), None);
+            nav.location.locked = !param.locked;
+            assert!(!nav.rows().contains(&DevParamsRow::Parameter(id)));
         }
     }
 
     #[test]
-    fn the_rocker_scrolls_and_stops_at_both_ends() {
-        let rects = PanelRects::default();
-        let (up, down) = scroll_rects(rects).expect("the shipped registry scrolls");
-        let mut scroll = 0;
-
-        // At the top the up half is inert - and stays inert if activated.
-        assert_eq!(hit(rects, scroll, up.center()), None);
-        assert_eq!(
-            hit(rects, scroll, down.center()),
-            Some(DevParamsEvent::ScrollDown)
-        );
-        assert!(!activate(rects, DevParamsEvent::ScrollUp, &mut scroll));
-        assert_eq!(scroll, 0);
-
-        // Walking down stops at the bottom rather than scrolling past the end.
-        for _ in 0..max_scroll(rects) + 3 {
-            activate(rects, DevParamsEvent::ScrollDown, &mut scroll);
+    fn category_controls_drill_in_and_back_without_changing_other_scroll_positions() {
+        let rects = PanelRects {
+            list: Rect::new(261.0, 54.0, 202.0, 100.0),
+            ..PanelRects::default()
+        };
+        let mut nav = DevParamsNavigation::default();
+        let root = nav;
+        let first = hit(rects, &nav, wide_row(rects, 0, nav.rows().len()).center()).unwrap();
+        assert!(matches!(first, DevParamsEvent::Enter(_)));
+        assert!(!activate(rects, first, &mut nav));
+        assert_eq!(nav.location.category(), DevCategory::Visualizations);
+        assert!(!activate(rects, DevParamsEvent::Back, &mut nav));
+        assert_eq!(nav.location.category(), root.location.category());
+        assert!(activate(rects, DevParamsEvent::Back, &mut nav));
+        let body = DevParamsLocation {
+            category: Some(DevCategory::Body),
+            locked: false,
+        };
+        nav.enter(body);
+        for _ in 0..20 {
+            activate(rects, DevParamsEvent::ScrollDown, &mut nav);
         }
-        assert_eq!(scroll, max_scroll(rects));
-        assert_eq!(hit(rects, scroll, down.center()), None);
-        assert_eq!(
-            hit(rects, scroll, up.center()),
-            Some(DevParamsEvent::ScrollUp)
-        );
-
-        activate(rects, DevParamsEvent::ScrollUp, &mut scroll);
-        assert_eq!(scroll, max_scroll(rects) - 1);
+        let bottom = nav.scroll();
+        assert!(bottom > 0, "exercise a real nonzero scroll position");
+        assert_eq!(bottom, list(rects).max_scroll(nav.rows().len()));
+        nav.back();
+        assert_eq!(nav.scroll(), 0);
+        nav.enter(body);
+        assert_eq!(nav.scroll(), bottom);
+        let before_exit = nav;
+        assert!(activate(rects, DevParamsEvent::Done, &mut nav));
+        assert_eq!(nav, before_exit);
     }
 
-    /// The registry no longer fits any pane this backdrop can authorize, so
-    /// the rocker is always present - even on the tallest pane the canvas
-    /// allows.
-    ///
-    /// This used to assert the opposite ("a pane tall enough has no rocker").
-    /// Rows are capped at `FIELD_TOP_Y / ROW_PITCH` = 11 however tall the
-    /// authored pane is, and the table passed that when the free-camera
-    /// switches landed. The fits-on-one-page branch is still live code and
-    /// still covered, generically, by
-    /// `list_scroll::the_rocker_sits_in_the_gutter_and_its_ends_are_inert`.
     #[test]
-    fn the_tallest_authored_pane_still_needs_the_rocker() {
-        let tall = PanelRects::from_layout(Some(&[
-            MapRect::new(261, 31, 463, 51),
-            // Starts at the top of the canvas, so it reaches FIELD_TOP_Y -
-            // the most rows any authored layout can get.
-            MapRect::new(261, 0, 463, 320),
-            MapRect::new(527, 161, 623, 223),
-            MapRect::new(527, 405, 622, 467),
+    fn category_tree_reaches_every_parameter_and_has_no_empty_branches() {
+        fn walk(nav: DevParamsNavigation, found: &mut Vec<DevParamId>) {
+            for row in nav.rows() {
+                match row {
+                    DevParamsRow::Category(location) => {
+                        let mut child = nav;
+                        child.enter(location);
+                        assert!(!child.rows().is_empty());
+                        walk(child, found);
+                    }
+                    DevParamsRow::Parameter(id) => {
+                        assert!(!found.contains(&id), "duplicate parameter in tree");
+                        found.push(id);
+                    }
+                    DevParamsRow::Bulk => {}
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(DevParamsNavigation::default(), &mut found);
+        assert_eq!(found.len(), dev_params::PARAMS.len());
+    }
+
+    #[test]
+    fn bulk_members_are_only_visualization_bools() {
+        let mut nav = DevParamsNavigation::default();
+        for category in DevCategory::ALL {
+            nav.enter(DevParamsLocation {
+                category: Some(category),
+                locked: false,
+            });
+            let members = nav.bulk_members();
+            assert_eq!(
+                !members.is_empty(),
+                DevCategory::Visualizations.contains(category)
+            );
+            for id in members {
+                assert_eq!(dev_params::spec(id).kind, DevParamKind::Bool);
+                assert!(!dev_params::spec(id).locked);
+            }
+        }
+        nav.enter(DevParamsLocation {
+            category: Some(DevCategory::Interaction),
+            locked: false,
+        });
+        assert_eq!(nav.bulk_members().len(), 7);
+        assert!(!nav.bulk_members().contains(&dev_params::GLOVE_FIT_VISIBLE));
+    }
+
+    #[test]
+    fn alternate_layout_moves_controls_and_reserves_scroll_gutter() {
+        let rects = PanelRects::from_layout(Some(&[
+            MapRect::new(10, 0, 110, 50),
+            MapRect::new(20, 60, 300, 160),
+            MapRect::new(350, 100, 396, 160),
+            MapRect::new(400, 400, 500, 450),
         ]));
-        let cap = (FIELD_TOP_Y / ROW_PITCH).floor() as usize;
-        assert_eq!(rows_per_page(tall), cap);
-        assert!(
-            dev_params::PARAMS.len() > cap,
-            "if the registry ever fits again, restore the no-rocker assertions"
-        );
-        assert!(max_scroll(tall) > 0);
-        assert!(scroll_rects(tall).is_some());
-        // Scrolling means the gutter is reserved: a row's increment stops at
-        // the rocker's left edge. The gutter replaces the right inset rather
-        // than adding to it, so reserving it costs the label no width it did
-        // not already lose.
+        let nav = DevParamsNavigation::default();
         assert_eq!(
-            row_rects(tall, 0).increment.x + ARROW_W,
-            tall.list.x + tall.list.w - SCROLL_GUTTER_W
-        );
-        assert_eq!(visible_rows(tall, 0), 0..cap);
-    }
-
-    #[test]
-    fn rows_stay_inside_the_pane_horizontally() {
-        let rects = PanelRects::default();
-        let row = row_rects(rects, 0);
-        assert!(row.label.x >= rects.list.x);
-        assert!(
-            row.increment.x + row.increment.w <= rects.list.x + rects.list.w,
-            "the increment arrow must not spill out of the pane art"
-        );
-        // Left to right: label, <, value, >, with no overlaps.
-        assert!(row.label.x + row.label.w <= row.decrement.x);
-        assert!(row.decrement.x + row.decrement.w <= row.value.x);
-        assert!(row.value.x + row.value.w <= row.increment.x);
-    }
-
-    #[test]
-    fn the_arrows_and_done_hit_test() {
-        let rects = PanelRects::default();
-        let ids = param_ids();
-        // Unscrolled, slot N is param N for every row the pane shows.
-        for (index, id) in ids.iter().enumerate().take(rows_per_page(rects)) {
-            let row = row_rects(rects, index);
-            assert_eq!(
-                hit(rects, 0, row.decrement.center()),
-                Some(DevParamsEvent::Decrement(*id)),
-                "row {index} <"
-            );
-            assert_eq!(
-                hit(rects, 0, row.increment.center()),
-                Some(DevParamsEvent::Increment(*id)),
-                "row {index} >"
-            );
-            // The label and the value are readouts, not buttons.
-            assert_eq!(hit(rects, 0, row.label.center()), None);
-            assert_eq!(hit(rects, 0, row.value.center()), None);
-        }
-        assert_eq!(
-            hit(rects, 0, rects.done.center()),
+            hit(rects, &nav, rects.done.center()),
             Some(DevParamsEvent::Done)
         );
-        // Bare backdrop is not a control.
-        assert_eq!(hit(rects, 0, vec2(50.0, 50.0)), None);
-    }
-
-    /// The rows follow the layout FILE, not the decoded fallbacks: an
-    /// alternate authored `GAMELODR.BIN` has to move the rows, the arrows and
-    /// "Done" with the backdrop art, exactly as it moves the load screen's.
-    #[test]
-    fn the_layout_file_moves_the_rows_and_done() {
-        let layout = [
-            MapRect {
-                ul_x: 10,
-                ul_y: 0,
-                lr_x: 110,
-                lr_y: 50,
-            },
-            MapRect {
-                ul_x: 20,
-                ul_y: 60,
-                lr_x: 300,
-                lr_y: 300,
-            },
-            MapRect {
-                ul_x: 350,
-                ul_y: 100,
-                lr_x: 396,
-                lr_y: 160,
-            },
-            MapRect {
-                ul_x: 400,
-                ul_y: 400,
-                lr_x: 500,
-                lr_y: 450,
-            },
-        ];
-        let rects = PanelRects::from_layout(Some(&layout));
-        assert_eq!(rects.header, Rect::new(10.0, 0.0, 100.0, 50.0));
-        assert_eq!(rects.done, Rect::new(400.0, 400.0, 100.0, 50.0));
-        // Row 0 starts at the authored pane, and "Done" hit-tests where the
-        // file put it - not at the fallback rect.
-        let row = row_rects(rects, 0);
-        assert_eq!(row.label.x, 20.0 + TEXT_INSET);
-        assert_eq!(row.label.y, 60.0);
+        assert_eq!(hit(rects, &nav, FALLBACK_DONE.center()), None);
+        let rocker = list(rects).rocker(nav.rows().len()).unwrap();
+        assert_eq!(hit(rects, &nav, rocker.up.center()), None);
         assert_eq!(
-            hit(rects, 0, rects.done.center()),
-            Some(DevParamsEvent::Done)
-        );
-        assert_eq!(hit(rects, 0, FALLBACK_DONE.center()), None);
-        // The rocker rides the authored *list pane*, so a moved backdrop takes
-        // it along with the rows it scrolls - and the rows shorten to keep
-        // their `>` out from under it.
-        let (up, down) = scroll_rects(rects).expect("this pane is too short to fit the registry");
-        let list_right = 20.0 + 280.0;
-        assert_eq!(up.x, list_right - SCROLL_GUTTER_W);
-        assert_eq!(up.y, 60.0);
-        assert_eq!(down.x, up.x);
-        assert!(down.y > up.y, "the rocker's halves must not overlap");
-        assert!(
-            row.increment.x + row.increment.w <= up.x,
-            "a row's increment must stay clear of the scroll gutter"
-        );
-        assert_eq!(
-            hit(rects, 0, down.center()),
+            hit(rects, &nav, rocker.down.center()),
             Some(DevParamsEvent::ScrollDown)
         );
-        assert_eq!(hit(rects, 0, FALLBACK_LIST.center()), None);
-    }
-
-    /// A missing layout file leaves every rect on the decoded fallback.
-    #[test]
-    fn an_absent_layout_file_falls_back_to_the_decoded_rects() {
+        let row = wide_row(rects, 0, nav.rows().len());
+        assert!(row.x + row.w <= rocker.up.x);
         assert_eq!(PanelRects::from_layout(None), PanelRects::default());
     }
 
     #[test]
-    fn done_activates_as_done_and_steps_do_not() {
-        // `activate` on the step events is deliberately not exercised here:
-        // it mutates the process-global registry, which parallel tests read
-        // (the same rule dev_params' own tests follow). The step math is
-        // `get + step` through `set`'s tested clamp/snap; that a click
-        // really moves a value is proven by the SDK e2e
-        // (`dev-menu.e2e.test.ts`).
-        let mut scroll = 0;
-        assert!(activate(
-            PanelRects::default(),
-            DevParamsEvent::Done,
-            &mut scroll
-        ));
-        assert_eq!(scroll, 0, "leaving the screen must not scroll it");
+    fn locked_breadcrumb_and_back_preserve_the_filter_until_locked_root() {
+        let mut nav = DevParamsNavigation::default();
+        nav.enter(DevParamsLocation {
+            category: Some(DevCategory::Melee),
+            locked: true,
+        });
+        assert_eq!(nav.breadcrumb(), "Developer > Locked > Weapons > Melee");
+        assert!(nav.back());
+        assert!(nav.location.locked);
+        assert!(nav.back());
+        assert_eq!(nav.breadcrumb(), "Developer > Locked");
+        assert!(nav.back());
+        assert_eq!(nav, DevParamsNavigation::default());
     }
 
     #[test]
-    fn values_format_as_two_decimal_floats() {
+    fn scrolling_emits_targets_without_empty_text_meshes() {
+        let mut nav = DevParamsNavigation::default();
+        nav.enter(DevParamsLocation {
+            category: Some(DevCategory::Interaction),
+            locked: false,
+        });
+        let rects = PanelRects {
+            list: Rect::new(261.0, 54.0, 202.0, 100.0),
+            ..PanelRects::default()
+        };
+        let (canvas, targets) = emit(rects, &nav, "Resume", None);
+        assert!(
+            targets
+                .iter()
+                .any(|(_, event)| *event == DevParamsEvent::ScrollDown)
+        );
+        for element in canvas.elements() {
+            if let super::super::UiElement::Text { text, .. } = element {
+                assert!(!text.is_empty(), "empty text cannot build a glyph mesh");
+            }
+        }
+        let row = row_rects(rects, 1, nav.rows().len());
+        assert!(row.label.w > ARROW_W * 2.0 + VALUE_W);
+        assert!(row.label.x + row.label.w < row.decrement.x);
+        assert_eq!(row.label.center().y, row.value.center().y);
+    }
+
+    #[test]
+    fn values_format_without_float_grid_noise_and_preserve_bool_labels() {
         let kind = DevParamKind::Float {
             min: 0.0,
             max: 1.0,
             step: 0.02,
         };
-        assert_eq!(format_value(&kind, 0.72, None), "0.72");
-        // The snap grid's f32 wobble (0.71999997) must not leak into the UI.
         assert_eq!(format_value(&kind, 0.719_999_97, None), "0.72");
-        assert_eq!(format_value(&kind, 2.0, None), "2.00");
-    }
-
-    #[test]
-    fn bools_format_as_on_and_off() {
         assert_eq!(format_value(&DevParamKind::Bool, 1.0, None), "On");
-        assert_eq!(format_value(&DevParamKind::Bool, 0.0, None), "Off");
+        assert_eq!(
+            format_value(&DevParamKind::Bool, 0.0, Some(["Aim", "Grip"])),
+            "Aim"
+        );
     }
 }

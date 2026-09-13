@@ -26,6 +26,77 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
+/// Categories are navigation metadata; only visualization descendants participate
+/// in bulk on/off. Stable HTTP parameter keys remain independent of this tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DevCategory {
+    Root,
+    Visualizations,
+    Interaction,
+    Combat,
+    Hands,
+    Fit,
+    Body,
+    Weapons,
+    Recoil,
+    Melee,
+    Camera,
+}
+
+impl DevCategory {
+    pub const ALL: [Self; 11] = [
+        Self::Root,
+        Self::Visualizations,
+        Self::Interaction,
+        Self::Combat,
+        Self::Hands,
+        Self::Fit,
+        Self::Body,
+        Self::Weapons,
+        Self::Recoil,
+        Self::Melee,
+        Self::Camera,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Root => "Developer",
+            Self::Visualizations => "Visualizations",
+            Self::Interaction => "Hands & zones",
+            Self::Combat => "Combat",
+            Self::Hands => "Hands & gloves",
+            Self::Fit => "Fit experiment",
+            Self::Body => "Body inventory",
+            Self::Weapons => "Weapons",
+            Self::Recoil => "Recoil",
+            Self::Melee => "Melee",
+            Self::Camera => "Camera & view",
+        }
+    }
+
+    pub fn parent(self) -> Option<Self> {
+        match self {
+            Self::Root => None,
+            Self::Interaction | Self::Combat => Some(Self::Visualizations),
+            Self::Fit => Some(Self::Hands),
+            Self::Recoil | Self::Melee => Some(Self::Weapons),
+            _ => Some(Self::Root),
+        }
+    }
+
+    pub fn contains(self, mut category: Self) -> bool {
+        loop {
+            if category == self {
+                return true;
+            }
+            let Some(parent) = category.parent() else {
+                return false;
+            };
+            category = parent;
+        }
+    }
+}
+
 /// How a parameter's value is interpreted and constrained.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DevParamKind {
@@ -48,6 +119,10 @@ pub struct DevParam {
     pub label: &'static str,
     pub kind: DevParamKind,
     pub default: f32,
+    /// Menu category, independent of the stable HTTP key.
+    pub category: DevCategory,
+    /// Settled tuning: hidden in the ordinary tree, editable under Locked.
+    pub locked: bool,
     /// Optional names for the false/true states of a two-choice control.
     pub bool_labels: Option<[&'static str; 2]>,
 }
@@ -62,6 +137,8 @@ pub struct DevParamId(usize);
 /// table can mix kinds: the outer macro matches each line as
 /// `kind(args...)` and defers the shape of `args` to these arms.
 macro_rules! dev_param_entry {
+    (float_locked($($args:tt)*)) => { DevParam { locked: true, ..dev_param_entry!(float($($args)*)) } };
+    (bool_locked($($args:tt)*)) => { DevParam { locked: true, ..dev_param_entry!(bool($($args)*)) } };
     (bool($key:literal, $label:literal, $default:expr, $off:literal, $on:literal)) => {
         DevParam {
             bool_labels: Some([$off, $on]),
@@ -70,6 +147,8 @@ macro_rules! dev_param_entry {
     };
     (float($key:literal, $label:literal, $default:expr, $min:expr, $max:expr, $step:expr)) => {
         DevParam {
+            category: DevCategory::Root,
+            locked: false,
             bool_labels: None,
             key: $key,
             label: $label,
@@ -83,6 +162,8 @@ macro_rules! dev_param_entry {
     };
     (bool($key:literal, $label:literal, $default:expr)) => {
         DevParam {
+            category: DevCategory::Root,
+            locked: false,
             bool_labels: None,
             key: $key,
             label: $label,
@@ -95,6 +176,8 @@ macro_rules! dev_param_entry {
 /// One declaration's default, as the `f32` the value table stores. A `bool`
 /// cannot be `as f32`, and this is the one place that conversion belongs.
 macro_rules! dev_param_default {
+    (float_locked($($args:tt)*)) => { dev_param_default!(float($($args)*)) };
+    (bool_locked($($args:tt)*)) => { dev_param_default!(bool($($args)*)) };
     (bool($key:literal, $label:literal, $default:expr, $off:literal, $on:literal)) => {
         dev_param_default!(bool($key, $label, $default))
     };
@@ -107,10 +190,10 @@ macro_rules! dev_param_default {
 }
 
 macro_rules! dev_params {
-    ($($(#[$doc:meta])* $id:ident = $kind:ident ( $($args:tt)* )),+ $(,)?) => {
+    ($($(#[$doc:meta])* $id:ident = $category:ident :: $kind:ident ( $($args:tt)* )),+ $(,)?) => {
         /// Every registered parameter, in declaration order (index == id).
         pub static PARAMS: &[DevParam] = &[
-            $(dev_param_entry!($kind($($args)*))),+
+            $(DevParam { category: DevCategory::$category, ..dev_param_entry!($kind($($args)*)) }),+
         ];
 
         /// Current values, as `f32` bits, seeded with the defaults. A sized
@@ -129,26 +212,26 @@ macro_rules! dev_params {
 dev_params! {
     /// Global VR hand-frame offset along controller-local -Z, in centimeters.
     /// Includes menu gloves, wrist UI, held items and interactions; negative pulls back.
-    GLOVE_FORWARD_CM = float("glove_forward_cm", "Glove forward cm", -15.0, -20.0, 20.0, 0.5),
+    GLOVE_FORWARD_CM = Hands::float_locked("glove_forward_cm", "Glove forward cm", -15.0, -20.0, 20.0, 0.5),
     /// Mirrored local X offset: positive moves right for the right hand, left for the left.
-    GLOVE_SIDE_CM = float("glove_side_cm", "Glove side cm", 0.0, -10.0, 10.0, 0.5),
+    GLOVE_SIDE_CM = Hands::float("glove_side_cm", "Glove side cm", 0.0, -10.0, 10.0, 0.5),
     /// Controller-local +Y offset, rotating with the hand rather than world up.
-    GLOVE_UP_CM = float("glove_up_cm", "Glove up cm", 0.0, -10.0, 10.0, 0.5),
+    GLOVE_UP_CM = Hands::float("glove_up_cm", "Glove up cm", 0.0, -10.0, 10.0, 0.5),
     /// Fit-scene-only model size, about the hand origin; does not rescale tracking.
-    GLOVE_FIT_SIZE = float("glove_fit_size", "Glove size", 1.0, 0.5, 1.5, 0.01),
+    GLOVE_FIT_SIZE = Fit::float("glove_fit_size", "Glove size", 1.0, 0.5, 1.5, 0.01),
     /// Hide the fit gloves to compare the real hand silhouette in passthrough.
-    GLOVE_FIT_VISIBLE = bool("glove_fit_visible", "Fit gloves", true),
+    GLOVE_FIT_VISIBLE = Fit::bool("glove_fit_visible", "Fit gloves", true),
     /// Quest only: compare grip pose against gameplay's current aim pose.
-    GLOVE_FIT_GRIP_POSE = bool("glove_fit_grip_pose", "Hand pose", false, "Aim", "Grip"),
+    GLOVE_FIT_GRIP_POSE = Fit::bool("glove_fit_grip_pose", "Hand pose", false, "Aim", "Grip"),
     /// Quest only: show the room behind debug_gloves. Other scenes stay opaque.
-    GLOVE_FIT_PASSTHROUGH = bool("glove_fit_passthrough", "Fit passthrough", true),
+    GLOVE_FIT_PASSTHROUGH = Fit::bool("glove_fit_passthrough", "Fit passthrough", true),
     /// How far ahead of the head the VR frontend/pause panel hangs, in world
     /// units. Default matches the old `ui::FRONTEND_PANEL_DISTANCE` const.
-    FRONTEND_PANEL_DISTANCE = float("panel_distance", "Panel distance", 2.0, 0.5, 6.0, 0.1),
+    FRONTEND_PANEL_DISTANCE = Camera::float("panel_distance", "Panel distance", 2.0, 0.5, 6.0, 0.1),
     /// How dark the world goes behind the pause panel in VR: 0 leaves it
     /// untouched, 1 blacks it out. Default matches the old
     /// `pause_menu::WORLD_DIM_STRENGTH` const.
-    WORLD_DIM_STRENGTH = float("dim_strength", "Pause dim", 0.72, 0.0, 1.0, 0.02),
+    WORLD_DIM_STRENGTH = Camera::float("dim_strength", "Pause dim", 0.72, 0.0, 1.0, 0.02),
     /// Vertical offset applied to the whole tracked stage on the Quest, in
     /// **meters** (the stage's own unit): head, hands and the per-eye view
     /// move together, because `oculus_runtime` adds it inside its single
@@ -165,7 +248,7 @@ dev_params! {
     /// tuning matters while the debug runtime falsely "verified" it (the PR1
     /// deferral). Consequently the debug runtime cannot exercise this knob;
     /// it needs a worn check on device.
-    EYE_HEIGHT_OFFSET = float("eye_offset", "Eye height (m)", 0.0, -0.5, 0.5, 0.02),
+    EYE_HEIGHT_OFFSET = Camera::float("eye_offset", "Eye height (m)", 0.0, -0.5, 0.5, 0.02),
     /// Live override for the flat runtimes' projection FOV, in degrees. `0`
     /// (the default) means "no override - use `Game::desired_fov_deg()`";
     /// any positive value forces that FOV instead, for verifying the
@@ -173,21 +256,21 @@ dev_params! {
     /// is untouched: OpenXR view FOVs must be used as-is. (`debug_runtime`
     /// shares its single flat projection between flat and `--vr` mode, so this
     /// override reaches both there.)
-    FOV_OVERRIDE_DEG = float("fov_override_deg", "FOV override", 0.0, 0.0, 120.0, 1.0),
+    FOV_OVERRIDE_DEG = Camera::float("fov_override_deg", "FOV override", 0.0, 0.0, 120.0, 1.0),
     /// Weapon-handling test overrides only: 0 follows the character sheet,
     /// 1–6 selects a live test level without changing stats or saves. Strength
     /// affects physical gun recoil and optional weight; Agility affects recoil.
-    GUN_STRENGTH_OVERRIDE = float("gun_strength_override", "Gun STR ovrd", 0.0, 0.0, 6.0, 1.0),
-    GUN_AGILITY_OVERRIDE = float("gun_agility_override", "Gun AGI ovrd", 0.0, 0.0, 6.0, 1.0),
+    GUN_STRENGTH_OVERRIDE = Weapons::float("gun_strength_override", "Gun STR ovrd", 0.0, 0.0, 6.0, 1.0),
+    GUN_AGILITY_OVERRIDE = Weapons::float("gun_agility_override", "Gun AGI ovrd", 0.0, 0.0, 6.0, 1.0),
     /// Per-axis gain for new physical gun recoil impulses (baseline and extra
     /// one-hand spring). 1 preserves the profile; 0 disables new kick on that
     /// axis. Existing displacement caps and recovery rates remain unchanged.
-    GUN_KICKBACK_SCALE = float("gun_kickback_scale", "Back scale", 1.0, 0.0, 3.0, 0.1),
-    GUN_PITCH_SCALE = float("gun_pitch_scale", "Pitch scale", 1.0, 0.0, 3.0, 0.1),
-    GUN_YAW_SCALE = float("gun_yaw_scale", "Yaw scale", 1.0, 0.0, 3.0, 0.1),
+    GUN_KICKBACK_SCALE = Recoil::float("gun_kickback_scale", "Back scale", 1.0, 0.0, 3.0, 0.1),
+    GUN_PITCH_SCALE = Recoil::float("gun_pitch_scale", "Pitch scale", 1.0, 0.0, 3.0, 0.1),
+    GUN_YAW_SCALE = Recoil::float("gun_yaw_scale", "Yaw scale", 1.0, 0.0, 3.0, 0.1),
     /// Additional one-handed recoil only; support already removes this spring.
     /// Applied alongside per-axis gains after Strength, without changing weight.
-    GUN_ONE_HAND_SCALE = float("gun_one_hand_scale", "1-hand scale", 1.0, 0.0, 3.0, 0.1),
+    GUN_ONE_HAND_SCALE = Recoil::float("gun_one_hand_scale", "1-hand scale", 1.0, 0.0, 3.0, 0.1),
     /// Ceiling on how fast a physically simulated held melee weapon may be
     /// driven onto its tracked-hand target, in world units per second.
     ///
@@ -198,9 +281,9 @@ dev_params! {
     /// without a ceiling that becomes one enormous impulse into the geometry.
     /// Read before every physics step, so a headset can tune it without a
     /// rebuild.
-    MELEE_MAX_SPEED = float("melee_max_speed", "Melee speed", 60.0, 1.0, 200.0, 5.0),
+    MELEE_MAX_SPEED = Melee::float_locked("melee_max_speed", "Melee speed", 60.0, 1.0, 200.0, 5.0),
     /// The angular counterpart of [`MELEE_MAX_SPEED`], in radians per second.
-    MELEE_MAX_TURN = float("melee_max_turn", "Melee turn", 60.0, 1.0, 200.0, 5.0),
+    MELEE_MAX_TURN = Melee::float_locked("melee_max_turn", "Melee turn", 60.0, 1.0, 200.0, 5.0),
     /// Minimum closing speed, in world units per second, at which a held melee
     /// weapon damages what it touches. This is the shipped VR melee rule: a
     /// swing damages because it was moving, not because a button was down,
@@ -211,7 +294,7 @@ dev_params! {
     /// (`physics::held_melee_drive::free_swing_speed_separation`): a brisk
     /// swing peaks at **4.07** and ordinary walking carries the weapon at
     /// **1.80**. 2.0 was then tuned in-headset from that measurement.
-    MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Free swing", 2.0, 0.5, 20.0, 0.5),
+    MELEE_FREE_SWING_SPEED = Melee::float_locked("melee_free_swing", "Free swing", 2.0, 0.5, 20.0, 0.5),
     /// Draw the tracked-hand glove *in addition to* a wielded weapon's own
     /// first-person model, instead of letting the weapon model stand in for the
     /// hand. `0` off, `1` on.
@@ -222,9 +305,7 @@ dev_params! {
     /// drawn at once the offset is directly visible - and directly tunable,
     /// since the registry reaches a headset without a rebuild.
     ///
-    /// A 0/1 float because the registry has no `Bool` kind yet; it should
-    /// become one when that lands.
-    MELEE_GLOVE_OVERLAY = float("melee_glove_overlay", "Show hands", 0.0, 0.0, 1.0, 1.0),
+    MELEE_GLOVE_OVERLAY = Interaction::bool("melee_glove_overlay", "Tracked-hand overlay", false),
     /// Draw the live contact volume of every held melee weapon as a world-space
     /// wireframe. `0` off, `1` on.
     ///
@@ -232,29 +313,27 @@ dev_params! {
     /// where my hand is", this one answers "is the damage volume where the
     /// weapon is". Read out of Rapier at the collider's own isometry, so it
     /// shows what is actually simulated rather than what the wield intended.
-    MELEE_VOLUMES = float("melee_volumes", "Show hurtbox", 0.0, 0.0, 1.0, 1.0),
+    MELEE_VOLUMES = Combat::bool("melee_volumes", "Melee contact volumes", false),
     /// Visualize shoulder backpack stow zones (cyan; green while reached).
-    VR_BACKPACK_ZONES = bool("vr_backpack_zones", "Backpack zones", false),
-    VR_BACKPACK_RADIUS = float("vr_backpack_radius", "Backpack reach radius (m)", 0.28, 0.18, 0.35, 0.01),
-    VR_HOLSTER_RADIUS = float("vr_holster_radius", "Holster reach radius (m)", 0.35, 0.14, 0.45, 0.01),
-    VR_GLOVE_SPHERES = bool("vr_glove_spheres", "Glove contact spheres", false),
-    VR_GLOVE_RADIUS = float("vr_glove_radius", "Glove contact radius (m)", 0.05, 0.02, 0.09, 0.005),
-    VR_AMMO_POUCH_ZONES = bool("vr_ammo_pouch_zones", "Ammo pouch zone", false),
-    VR_HOLSTER_ZONES = bool("vr_holster_zones", "Holster zones", false),
+    VR_BACKPACK_ZONES = Interaction::bool("vr_backpack_zones", "Backpack zones", false),
+    VR_BACKPACK_RADIUS = Body::float("vr_backpack_radius", "Backpack reach radius (m)", 0.28, 0.18, 0.35, 0.01),
+    VR_HOLSTER_RADIUS = Body::float("vr_holster_radius", "Holster reach radius (m)", 0.35, 0.14, 0.45, 0.01),
+    VR_GLOVE_SPHERES = Interaction::bool("vr_glove_spheres", "Glove contact spheres", false),
+    VR_GLOVE_RADIUS = Body::float("vr_glove_radius", "Glove contact radius (m)", 0.05, 0.02, 0.09, 0.005),
+    VR_AMMO_POUCH_ZONES = Interaction::bool("vr_ammo_pouch_zones", "Ammo pouch zone", false),
+    VR_HOLSTER_ZONES = Interaction::bool("vr_holster_zones", "Holster zones", false),
     /// Actual front of the curved belt, including the asset's authored offset.
     /// The ammo pouch follows this setting so its mesh and grab target stay together.
-    VR_BELT_DISTANCE = float("vr_belt_distance", "Belt forward (m)", 0.20, 0.10, 0.45, 0.01),
-    VR_HOLSTER_DROP = float("vr_holster_drop", "Holster below eyes (m)", 0.78, 0.55, 1.1, 0.02),
-    VR_HOLSTER_SIDE = float("vr_holster_side", "Holster side (m)", 0.23, 0.16, 0.40, 0.01),
-    VR_HOLSTER_FORWARD = float("vr_holster_forward", "Holster forward (m)", 0.04, -0.20, 0.30, 0.01),
+    VR_BELT_DISTANCE = Body::float("vr_belt_distance", "Belt forward (m)", 0.20, 0.10, 0.45, 0.01),
+    VR_HOLSTER_DROP = Body::float("vr_holster_drop", "Holster below eyes (m)", 0.78, 0.55, 1.1, 0.02),
+    VR_HOLSTER_SIDE = Body::float("vr_holster_side", "Holster side (m)", 0.23, 0.16, 0.40, 0.01),
+    VR_HOLSTER_FORWARD = Body::float("vr_holster_forward", "Holster forward (m)", 0.04, -0.20, 0.30, 0.01),
     /// VR support target/radius (cyan; green when attached) and tracked palm (amber).
-    VR_SUPPORT_GRIPS = bool("vr_support_grips", "Support grips", false),
-    /// Draw a floating "-7 HP" at the point each blow lands, labeled with the
-    /// hitbox it struck.
-    ///
-    /// The readout for the hitbox work: which limb a shot or swing actually
-    /// hit, and for how much, without reading hit points before and after.
-    DAMAGE_NUMBERS = bool("damage_numbers", "Damage numbers", false),
+    VR_SUPPORT_GRIPS = Interaction::bool("vr_support_grips", "Support grips", false),
+    /// Draw the live creature damage colliders in both presentations.
+    SHOW_HITBOXES = Combat::bool("show_hitboxes", "Creature hitboxes", false),
+    /// Floating damage amounts labeled with the limb struck.
+    DAMAGE_NUMBERS = Combat::bool("damage_numbers", "Damage numbers", false),
     /// Draw every held gun's clip-insert zone as world-space wire spheres:
     /// the enter radius (green; red while the other hand's item is inside -
     /// the gesture latches on any held item and only then asks whether it is
@@ -262,7 +341,7 @@ dev_params! {
     /// radius (dim), and a small blue marker on the model origin the anchor
     /// is measured from. Answers "where do I have to bring the clip?" in a
     /// headset, and is how the per-model magazine anchors are placed.
-    CLIP_ZONE = bool("clip_zone", "Show clip-insert zone", false),
+    CLIP_ZONE = Interaction::bool("clip_zone", "Show clip-insert zone", false),
     /// Uniform scale applied to a wielded melee `_h` view model, about the
     /// baked fist so the grip stays on the controller.
     ///
@@ -284,13 +363,13 @@ dev_params! {
     /// single scale makes both right. 0.7 draws a 46 cm Wrench on a 40 cm arm;
     /// making the arm exactly life-size (0.79) would leave the Wrench at 52,
     /// and making the Wrench right (~0.5) would leave a child's arm.
-    MELEE_WIELD_SCALE = float("melee_scale", "Melee scale", 0.7, 0.25, 1.5, 0.05),
+    MELEE_WIELD_SCALE = Melee::float_locked("melee_scale", "Melee scale", 0.7, 0.25, 1.5, 0.05),
     /// Enables the detached debug ("free") camera. This is the *gate*, not
     /// the camera's own on/off: while it is false the toggle input is not
     /// even read, so a stray `Alt+V` (or controller chord) during normal play
     /// cannot detach the view. Turning it back off while detached also
     /// re-attaches the camera, so the switch is always a way out.
-    FREE_CAMERA = bool("free_camera", "Free camera", false),
+    FREE_CAMERA = Camera::bool("free_camera", "Free camera", false),
     /// Which pose the visibility engine culls from while the free camera is
     /// detached. Off (the default) culls from the *player*, so flying out
     /// shows exactly what the player's viewpoint decided - cells the player
@@ -298,7 +377,7 @@ dev_params! {
     /// culls from the free camera instead, for when you just want to look at
     /// something. Inert while the camera is attached (the two poses are the
     /// same pose).
-    FREE_CAMERA_CULL_FROM_CAMERA = bool("free_camera_cull", "Cull from cam", false),
+    FREE_CAMERA_CULL_FROM_CAMERA = Camera::bool("free_camera_cull", "Cull from cam", false),
     /// How fast the free camera flies, in the player's own speed units - the
     /// default IS [`PLAYER_MOVE_SPEED`], so "walking pace" cannot drift from
     /// what walking actually is. These are pre-scale SS2 units, not world
@@ -309,7 +388,7 @@ dev_params! {
     /// being inspected.
     ///
     /// [`PLAYER_MOVE_SPEED`]: crate::mission::PLAYER_MOVE_SPEED
-    FREE_CAMERA_SPEED = float(
+    FREE_CAMERA_SPEED = Camera::float(
         "free_camera_speed",
         "Cam speed",
         crate::mission::PLAYER_MOVE_SPEED,
@@ -413,6 +492,18 @@ mod tests {
 
     /// The registry replaced two consts; anything but these exact defaults
     /// is a behavior change at launch.
+    #[test]
+    fn locked_declarations_keep_their_normal_kind_and_defaults() {
+        let float = dev_param_entry!(float_locked("test", "Test", 0.5, 0.0, 1.0, 0.1));
+        let flag = dev_param_entry!(bool_locked("test", "Test", true, "Aim", "Grip"));
+        assert!(float.locked && flag.locked);
+        assert_eq!(float.default, 0.5);
+        assert_eq!(flag.kind, DevParamKind::Bool);
+        assert_eq!(flag.default, 1.0);
+        assert_eq!(flag.bool_labels, Some(["Aim", "Grip"]));
+        assert_eq!(apply(&float.kind, float.default, 0.8), 0.8);
+    }
+
     #[test]
     fn defaults_equal_the_consts_they_replaced() {
         assert_eq!(get(FRONTEND_PANEL_DISTANCE), 2.0);

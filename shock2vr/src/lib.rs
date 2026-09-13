@@ -2135,7 +2135,9 @@ impl Game {
                 // A frontend screen swap, like ShowLoadGame: no ledger
                 // write-back, and any pending transition is abandoned.
                 self.pending_transition = None;
-                self.set_active_scene(Box::new(DeveloperScene::new()));
+                self.set_active_scene(Box::new(DeveloperScene::with_navigation(
+                    self.pause_menu.dev_navigation(),
+                )));
             }
             GlobalEffect::LaunchDebugScene { name } => {
                 // A scene swap like the frontend ones: no ledger write-back,
