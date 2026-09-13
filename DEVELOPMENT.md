@@ -602,8 +602,9 @@ solid cover, sharing the explosion ray filtering. Full cover reduces range to
 not sound paths around corners or a room/portal acoustic simulation.
 
 A heard noise supplies the landing/firing/footstep position to the existing AI
-investigation behavior. On arrival, the monster stops and scans rather than
-attacking the empty location. Seeing the player again resumes pursuit/combat.
+investigation behavior. Each fresh heard cue renews the loss-of-contact timer,
+including when the AI is already alerted. On arrival, the monster stops and scans
+rather than attacking the empty location. Seeing the player again resumes pursuit/combat.
 The player can throw a cup away from their hiding place to draw a monster there.
 Released props use pre-solve relative contact speed and the existing impact
 sound gate (0.1 world units/s, 0.15 s cooldown per contact partner), independently
