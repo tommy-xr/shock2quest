@@ -237,4 +237,45 @@ mod tests {
             .map(|behavior| behavior.borrow().name().to_owned());
         assert_eq!(name.as_deref(), Some("SelfDestruct"));
     }
+    #[test]
+    fn ranged_clip_completion_reselects_the_available_attack() {
+        for (links, distance, expected) in [
+            (vec![ai_projectile()], 1.0, "RangedAttack"),
+            (vec![ai_projectile()], 8.0, "RangedAttack"),
+            (vec![ai_projectile()], 20.0, "Chase"),
+            (vec![Link::Weapon, ai_projectile()], 1.0, "MeleeAttack"),
+        ] {
+            let (world, entity) = world_with_armed_ai(links, distance);
+            let physics = PhysicsWorld::new();
+            let NextBehavior::Next(next) =
+                RangedAttackBehavior.next_behavior(&world, &physics, entity)
+            else {
+                panic!("completion must re-evaluate attack range and line of fire");
+            };
+            assert_eq!(next.borrow().name(), expected);
+        }
+    }
+
+    #[test]
+    fn ranged_clip_completion_chases_when_cover_blocks_the_shot() {
+        let (mut world, entity) = world_with_armed_ai(vec![ai_projectile()], 8.0);
+        let mut physics = PhysicsWorld::new();
+        let wall = world.add_entity(());
+        physics.add_kinematic(
+            wall,
+            vec3(0.0, 0.0, 4.0),
+            Quaternion::from_angle_y(cgmath::Deg(0.0)),
+            vec3(0.0, 0.0, 0.0),
+            vec3(10.0, 10.0, 0.5),
+            crate::physics::CollisionGroup::entity(),
+            false,
+        );
+        let mut player = physics.create_player(vec3(20.0, 20.0, 20.0), EntityId::dead());
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let NextBehavior::Next(next) = RangedAttackBehavior.next_behavior(&world, &physics, entity)
+        else {
+            panic!("blocked fire must select chase");
+        };
+        assert_eq!(next.borrow().name(), "Chase");
+    }
 }
