@@ -299,6 +299,12 @@ holsters, and backpack zones. Combat includes creature hitboxes
 (`show_hitboxes`), held melee contact volumes, and damage numbers. Bulk controls
 only change visualization flags, never fit settings or tuning values.
 
+**Visualizations → Show position** (`show_position`) displays the player's
+world X/Y/Z coordinates, updated live in flat and VR. It defaults off and
+participates in All on / All off. VR places the shared readout on an upright
+panel with lazy recentering; it is hidden while the cyber interface, pause menu,
+or death camera owns the view. Values last until app restart.
+
 **Locked** contains settled tuning, hidden from the ordinary categories but
 editable when opened. HTTP access is unchanged. Initially this includes global
 glove forward offset and melee drive limits, swing threshold, and model scale.
