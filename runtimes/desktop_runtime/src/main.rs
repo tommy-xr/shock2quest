@@ -293,6 +293,10 @@ pub fn main() {
 
     //tracing_subscriber::fmt::init();
     let args = Args::parse();
+    // Seed before any HTTP server or game starts: later live writes must win.
+    if args.debug_physics {
+        shock2vr::dev_params::set(shock2vr::dev_params::DEBUG_PHYSICS, 1.0);
+    }
     //panic!("args: {:?}", args);
     let mut glfw = glfw::init(glfw::fail_on_errors).unwrap();
     // TODO: Figure out ANGLE
@@ -367,7 +371,6 @@ pub fn main() {
         spawn_location,
         save_file: args.save_file,
         debug_draw: args.debug_draw,
-        debug_physics: args.debug_physics,
         debug_portals: args.debug_portals,
         debug_show_ids: args.debug_show_ids,
         debug_skeletons: args.debug_skeletons,

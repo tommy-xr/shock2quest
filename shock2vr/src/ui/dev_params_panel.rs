@@ -706,6 +706,11 @@ mod tests {
                 .contains(&DevParamsRow::Parameter(dev_params::SHOW_POSITION))
         );
         assert!(nav.bulk_members().contains(&dev_params::SHOW_POSITION));
+        assert!(
+            nav.rows()
+                .contains(&DevParamsRow::Parameter(dev_params::DEBUG_PHYSICS))
+        );
+        assert!(nav.bulk_members().contains(&dev_params::DEBUG_PHYSICS));
     }
 
     #[test]

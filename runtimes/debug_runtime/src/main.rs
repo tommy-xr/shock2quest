@@ -114,7 +114,7 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_IDLE_TIMEOUT_SECS)]
     idle_timeout_secs: u64,
 
-    /// Enable debug physics rendering
+    /// Start with physics wireframes on; toggle live in Developer > Visualizations.
     #[arg(long)]
     debug_physics: bool,
 
@@ -252,6 +252,10 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
+    // Seed before any HTTP server or game starts: later live writes must win.
+    if args.debug_physics {
+        shock2vr::dev_params::set(shock2vr::dev_params::DEBUG_PHYSICS, 1.0);
+    }
     let _ = INSTANCE_ID.set(args.instance_id.clone());
 
     info!(
@@ -597,7 +601,6 @@ fn run_game_blocking(
         spawn_location,
         save_file: args.save_file,
         debug_draw: args.debug_draw,
-        debug_physics: args.debug_physics,
         debug_portals: args.debug_portals,
         debug_show_ids: args.debug_show_ids,
         debug_skeletons: args.debug_skeletons,
