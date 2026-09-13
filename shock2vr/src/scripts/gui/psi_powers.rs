@@ -241,6 +241,203 @@ pub fn stick_nav(stick: Vector2<f32>, latched: bool) -> (Option<NavStep>, bool) 
 
 pub struct PsiPowersGui;
 
+/// The trainer reuses the selector's icon grid and help. Its tier browsing is
+/// local, and clicking a discipline purchases it rather than selecting it.
+pub struct PsiTrainerGui;
+
+#[derive(Clone, Debug)]
+pub struct PsiTrainerState {
+    tier: i32,
+    message: Option<String>,
+}
+
+impl Default for PsiTrainerState {
+    fn default() -> Self {
+        Self {
+            tier: 1,
+            message: None,
+        }
+    }
+}
+
+/// Only sell disciplines with a gameplay implementation. In particular,
+/// setting a sustained status flag alone does not make that status useful.
+fn purchasable_power(power: &crate::psi::PsiPowerInfo) -> bool {
+    use crate::psi::*;
+    match power.power.activation_type {
+        ACTIVATION_TYPE_INSTANT => power.template_id == PSI_HEAL_TEMPLATE_ID,
+        ACTIVATION_TYPE_SUSTAINED => {
+            power.duration.is_some()
+                && matches!(
+                    power.template_id,
+                    INVISO_TEMPLATE_ID
+                        | BERSERK_TEMPLATE_ID
+                        | STABILITY_TEMPLATE_ID
+                        | -1107
+                        | -1113
+                        | -1114
+                )
+        }
+        _ => !power.projectiles.is_empty(),
+    }
+}
+
+/// Authored PSICOST column 0 buys the tier; columns 1..7 buy disciplines.
+/// Shared by the display, input handler and authoritative effect applier.
+pub(crate) fn psi_power_quote(world: &World, template_id: i32) -> Option<i32> {
+    let powers = world.borrow::<UniqueView<GlobalPsiPowers>>().ok()?;
+    let power = powers.0.iter().find(|p| p.template_id == template_id)?;
+    let tier = power.tier();
+    let slot = power.power.power_id % POWERS_PER_TIER;
+    if !(1..=TIERS).contains(&tier) || slot <= 0 || !purchasable_power(power) {
+        return None;
+    }
+    let known = world.borrow::<UniqueView<PlayerPsiKnownPowers>>().ok()?;
+    let quests = world
+        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+        .ok()?;
+    if known.0.contains(&template_id) || quests.player_stats().psi_tier < tier {
+        return None;
+    }
+    let costs = crate::difficulty::trainer_costs(world)?;
+    let price = costs.psi_cost[(tier - 1) as usize][slot as usize];
+    (price >= 0).then_some(price)
+}
+
+impl Gui<PsiTrainerState, PsiPowersGuiMsg> for PsiTrainerGui {
+    fn get_components(
+        &self,
+        cursor: &Option<GuiCursor>,
+        _entity: EntityId,
+        world: &World,
+        state: &PsiTrainerState,
+    ) -> Vec<GuiComponent<PsiPowersGuiMsg>> {
+        let mut components = psi_panel_components(cursor, world, Some(state.tier));
+        let marker = cell_rect(0, 0);
+        components.push(
+            gui::button(PsiPowersGuiMsg::SelectPower(
+                (state.tier - 1) * POWERS_PER_TIER,
+            ))
+            .with_image(BACKDROP)
+            .with_alpha(0.0)
+            .with_label(&format!("buy_psi_tier_{}", state.tier))
+            .with_position(vec2(marker.x, marker.y))
+            .with_size(vec2(marker.w, marker.h)),
+        );
+        let quests = world
+            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+            .unwrap();
+        let stats = quests.player_stats();
+        let powers = world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+        let known = world.borrow::<UniqueView<PlayerPsiKnownPowers>>().unwrap();
+        let hovered = cursor
+            .as_ref()
+            .and_then(|c| cell_at(c.position.x, c.position.y))
+            .map(|(col, row)| power_id_at_cell(state.tier, col, row));
+        let detail = if let Some(id) = hovered {
+            if is_tier_marker(id) {
+                let cost = crate::difficulty::trainer_costs(world).and_then(|costs| {
+                    super::upgrade_quote(&costs, stats, super::TrainerTarget::PsiTier(state.tier))
+                });
+                match cost {
+                    Some(cost) => format!("Buy tier {}: {} cm", state.tier, cost),
+                    None if stats.psi_tier >= state.tier => "Tier already unlocked".into(),
+                    _ => "Unlock previous tier first".into(),
+                }
+            } else if let Some(index) = power_index(&powers.0, id) {
+                let power = &powers.0[index];
+                if known.0.contains(&power.template_id) {
+                    "Power already learned".into()
+                } else if !purchasable_power(power) {
+                    "Power unavailable".into()
+                } else if let Some(cost) = psi_power_quote(world, power.template_id) {
+                    format!("Buy power: {} cm", cost)
+                } else {
+                    "Unlock this tier first".into()
+                }
+            } else {
+                "Power unavailable".into()
+            }
+        } else {
+            state
+                .message
+                .clone()
+                .unwrap_or_else(|| "Click a power or tier to buy".into())
+        };
+        components.push(
+            gui::text(&detail)
+                .with_position(vec2(13.0, 266.0))
+                .with_size(vec2(170.0, 11.0)),
+        );
+        components.push(
+            gui::text(&format!("Modules: {}", stats.cyber_modules))
+                .with_position(vec2(13.0, 280.0))
+                .with_size(vec2(170.0, 11.0)),
+        );
+        components
+    }
+    fn get_config(&self) -> GuiConfig {
+        PsiPowersGui.get_config()
+    }
+    fn handle_msg(
+        &self,
+        _entity: EntityId,
+        world: &World,
+        state: &PsiTrainerState,
+        msg: &PsiPowersGuiMsg,
+    ) -> (PsiTrainerState, Effect) {
+        if let PsiPowersGuiMsg::BrowseTier(tier) = msg {
+            return (
+                PsiTrainerState {
+                    tier: (*tier).clamp(1, TIERS),
+                    message: None,
+                },
+                Effect::NoEffect,
+            );
+        }
+        let PsiPowersGuiMsg::SelectPower(id) = msg else {
+            unreachable!()
+        };
+        let quests = world
+            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+            .unwrap();
+        let stats = quests.player_stats();
+        let (cost, effect) = if is_tier_marker(*id) {
+            let tier = id / POWERS_PER_TIER + 1;
+            let target = super::TrainerTarget::PsiTier(tier);
+            (
+                crate::difficulty::trainer_costs(world)
+                    .and_then(|c| super::upgrade_quote(&c, stats, target)),
+                Effect::TrainerPurchase { target },
+            )
+        } else {
+            let powers = world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+            let Some(index) = power_index(&powers.0, *id) else {
+                return (state.clone(), Effect::NoEffect);
+            };
+            let template_id = powers.0[index].template_id;
+            (
+                psi_power_quote(world, template_id),
+                Effect::PurchasePsiPower { template_id },
+            )
+        };
+        let (message, effect) = match cost {
+            Some(cost) if stats.cyber_modules >= cost => {
+                (format!("Purchased (-{} cm)", cost), effect)
+            }
+            Some(_) => ("Insufficient cyber modules".into(), Effect::NoEffect),
+            None => ("Owned, locked or unavailable".into(), Effect::NoEffect),
+        };
+        (
+            PsiTrainerState {
+                message: Some(message),
+                ..state.clone()
+            },
+            effect,
+        )
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PsiPowersGuiState;
 
@@ -501,6 +698,84 @@ mod tests {
 
     fn components(world: &World) -> Vec<GuiComponent<PsiPowersGuiMsg>> {
         PsiPowersGui.get_components(&None, EntityId::dead(), world, &PsiPowersGuiState)
+    }
+
+    #[test]
+    fn discipline_purchase_uses_its_own_price_and_requires_its_tier() {
+        let world = world_with(1, 1, &[]);
+        world.add_unique(crate::quest_info::QuestInfo::new());
+        let mut costs = dark::gamesys::TrainerCostTables {
+            stat_cost: [[0; 5]; 5],
+            tech_cost: [[0; 6]; 5],
+            weapon_cost: [[0; 6]; 4],
+            psi_cost: [[7; 8]; 5],
+        };
+        costs.psi_cost[0][0] = 99;
+        costs.psi_cost[0][1] = 3;
+        world.add_unique(crate::mission::GlobalTrainerCosts(Some(costs)));
+        {
+            let mut powers = world
+                .borrow::<shipyard::UniqueViewMut<GlobalPsiPowers>>()
+                .unwrap();
+            powers.0[0].projectiles.push((
+                -1,
+                dark::properties::ProjectileOptions {
+                    order: 0,
+                    setting: 0,
+                },
+            ));
+        }
+        assert_eq!(
+            psi_power_quote(&world, -1001),
+            None,
+            "a locked tier cannot sell its power"
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<crate::quest_info::QuestInfo>>()
+            .unwrap()
+            .player_stats_mut()
+            .psi_tier = 1;
+        assert_eq!(
+            psi_power_quote(&world, -1001),
+            Some(3),
+            "use the discipline column, not capacity column"
+        );
+        assert_eq!(
+            psi_power_quote(&world, -1002),
+            None,
+            "an unimplemented power cannot consume modules"
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerPsiKnownPowers>>()
+            .unwrap()
+            .0
+            .insert(-1001);
+        assert_eq!(
+            psi_power_quote(&world, -1001),
+            None,
+            "already learned powers cannot be charged twice"
+        );
+    }
+
+    #[test]
+    fn trainer_browsing_does_not_move_the_amp_selection() {
+        let world = world_with(1, 1, &[1]);
+        let (state, effect) = PsiTrainerGui.handle_msg(
+            EntityId::dead(),
+            &world,
+            &PsiTrainerState::default(),
+            &PsiPowersGuiMsg::BrowseTier(4),
+        );
+        assert_eq!(state.tier, 4);
+        assert!(matches!(effect, Effect::NoEffect));
+        assert_eq!(world.borrow::<UniqueView<PsiPanelTier>>().unwrap().0, 1);
+        assert_eq!(
+            world
+                .borrow::<UniqueView<PsiPowerSelection>>()
+                .unwrap()
+                .index,
+            0
+        );
     }
 
     fn images(components: &[GuiComponent<PsiPowersGuiMsg>]) -> Vec<(String, Vector2<f32>)> {

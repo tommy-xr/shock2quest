@@ -182,6 +182,11 @@ pub struct PlayerStats {
     /// purchases are deferred (see `scripts::gui::trainer`).
     #[serde(default)]
     pub psi_tier: i32,
+    /// Individually purchased disciplines, by stable gamesys template id.
+    /// Kept on the persistent sheet so saves and mission transitions rebuild
+    /// the same learned set without charging for a power again.
+    #[serde(default)]
+    pub purchased_psi_powers: BTreeSet<i32>,
     /// O/S upgrade traits acquired at trait machines, by the original game's
     /// trait id (1..=16, the shipped `TRAITS.STR` `Trait1..16` order), in
     /// acquisition order. At most [`OS_TRAIT_SLOTS`]: the whole game has
@@ -229,6 +234,7 @@ impl Default for PlayerStats {
             granted_years: BTreeSet::new(),
             cyber_modules: 0,
             psi_tier: 0,
+            purchased_psi_powers: BTreeSet::new(),
             os_traits: Vec::new(),
             software: SoftwareVersions::default(),
             nanites: 0,

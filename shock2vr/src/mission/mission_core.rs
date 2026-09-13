@@ -2806,6 +2806,13 @@ impl MissionCore {
             THE_PLAYER_TEMPLATE_ID,
             mission.starts_with("debug_"),
         );
+        known_powers.0.extend(
+            quest_info
+                .player_stats()
+                .purchased_psi_powers
+                .iter()
+                .copied(),
+        );
 
         // Career powers remain authored separately; HP/psi maxima are derived
         // from the character sheet and campaign difficulty below.
@@ -8592,6 +8599,33 @@ impl MissionCore {
                     self.psi_powers_open = true;
                 }
 
+                Effect::PurchasePsiPower { template_id } => {
+                    // Revalidation includes the learned set, so two requests
+                    // in one effect batch can neither spend twice nor learn
+                    // a power after another purchase exhausted the balance.
+                    if let Some(cost) =
+                        crate::scripts::gui::psi_power_quote(&self.world, template_id)
+                    {
+                        let paid = {
+                            let mut quests =
+                                self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                            let stats = quests.player_stats_mut();
+                            if stats.spend_cyber_modules(cost) {
+                                stats.purchased_psi_powers.insert(template_id);
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if paid {
+                            self.world
+                                .borrow::<UniqueViewMut<PlayerPsiKnownPowers>>()
+                                .unwrap()
+                                .0
+                                .insert(template_id);
+                        }
+                    }
+                }
                 Effect::GrantPsiPower { template_id } => {
                     let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
                     let mut known = self

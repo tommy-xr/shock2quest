@@ -465,6 +465,12 @@ pub enum Effect {
         template_id: i32,
     },
 
+    /// Validate the unlocked tier, learned set and authored module price,
+    /// then purchase one discipline atomically.
+    PurchasePsiPower {
+        template_id: i32,
+    },
+
     /// Deduct psi points from the player's pool (`PropPsiState`), clamped at
     /// zero. Emitted by the psi amp when a power is cast.
     SpendPsiPoints {

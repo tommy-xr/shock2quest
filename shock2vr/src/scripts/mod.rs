@@ -1211,7 +1211,7 @@ impl ScriptWorld {
             "triggerdestroy" => Box::new(TriggerDestroy::new()),
 
             // skill point machines
-            "psitrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Psi))),
+            "psitrainer" => gui_script(Box::new(gui::PsiTrainerGui)),
             "techtrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Tech))),
             "statstrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Stats))),
             "traitmachine" => gui_script(Box::new(TraitGui)),
