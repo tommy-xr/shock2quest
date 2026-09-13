@@ -99,14 +99,19 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
   pickup is a documented *stopgap* because VR lacks an action mapper (issue
   #921) - do not preserve it as "faithful", and do not model logs as
   carryable objects.
-- **Keycards are COLLECTED, not inventoried.** Frobbing a `PropKeySrc` item
-  emits `AcquireKeyCard`, records the credential in `QuestInfo`'s key-card
-  list (a separate mechanism from quest bits - contrast `FrobQB`), destroys
-  the pickup, and doors consult it implicitly via `can_unlock`. Never put a
-  keycard in the inventory grid or require wielding one at a door. Known gap:
-  the VR *hold/grab* path currently just grabs the card physically instead of
-  collecting it - issue #583 (open) tracks reconciling the pickup paths; the
-  intended spec is that both frob and hold collect.
+- **VR downloads on release.** Nanites, cyber modules, valid software upgrades,
+  and found access cards are physically held until grip release, anywhere
+  (including shoulder/backpack and against the personal card). Collection uses
+  their existing scripts to credit balances, install software or record credentials;
+  they never occupy backpack cells. Logs retain their separate immediate-collection
+  behavior. Flat pickup remains immediate. See
+  `projects/vr-personal-access-card.md` for the accepted design and implementation status.
+- **The personal belt card is permanent.** Available before the first credential,
+  drawn by either free hand, returned on release, never consumable or lost. In VR,
+  scanning is mandatory at credential-locked doors/readers and supported machines;
+  ordinary unlocked doors remain ordinary interactions. A scan authorizes a machine
+  interface, never a purchase. Require withdrawal before another scan. This design
+  supersedes the immediate-VR-pickup/no-wielding rule and PR #1387's optional card.
 - When implementing any pickup, check which model the original game uses
   (collected flag / credential vs. inventory object) before defaulting to
   "add to inventory" - `cargo dq` on the template's properties/links usually

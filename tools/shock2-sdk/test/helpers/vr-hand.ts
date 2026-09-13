@@ -211,3 +211,29 @@ export async function squeezeWorldPanelElement(
   await game.input.set("right_hand.squeeze", 0);
   await game.step({ frames: 8 });
 }
+
+/** Draw the permanent card using the same calibrated palm contact as body slots. */
+export async function drawPersonalCard(game: GameServer, hand: Hand = "right") {
+  const i = hand === "left" ? 0 : 1;
+  await game.input.set(`${hand}_hand.squeeze`, 0);
+  await game.input.set(`${hand}_hand.trigger`, 0);
+  await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
+  await game.step({ frames: 3 });
+  let player = (await game.info()).player;
+  const center = player.hand_feedback?.body_gear?.personal_card.center;
+  if (!center) throw new Error("Personal card has no tracked belt anchor");
+  await game.input.set(`${hand}_hand.position`, center);
+  await game.step({ frames: 3 });
+  player = (await game.info()).player;
+  const palm = player.hand_feedback?.glove_contacts?.centers[i];
+  if (!palm) throw new Error("Personal card draw requires a calibrated palm");
+  const localPalm = quatRotate(quatConjugate(player.rotation), sub(palm, player.position));
+  const currentCenter = player.hand_feedback!.body_gear!.personal_card.center!;
+  await game.input.set(`${hand}_hand.position`, add(center, sub(currentCenter, localPalm)));
+  await game.step({ frames: 3 });
+  await game.input.set(`${hand}_hand.squeeze`, 1);
+  await game.step({ frames: 3 });
+  if ((await game.info()).player.hand_feedback?.body_gear?.personal_card.hand !== i) {
+    throw new Error(`Failed to draw personal card with ${hand} hand`);
+  }
+}

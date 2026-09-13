@@ -24,8 +24,12 @@ pub(crate) struct HandTarget {
 impl HandTarget {
     pub fn resolve(world: &World, entity: EntityId, has_body: bool) -> Self {
         let scripted = crate::virtual_hand::uses_scripted_world_frob(world, entity);
-        let grabbable = has_body && !scripted && crate::virtual_hand::can_grab_item(world, entity);
-        let affordance = if grabbable {
+        let grabbable = has_body
+            && (crate::scripts::script_util::is_download_pickup(world, entity)
+                || (!scripted && crate::virtual_hand::can_grab_item(world, entity)));
+        let affordance = if crate::mission::personal_card::is_reader(world, entity) {
+            HandAffordance::Blocked
+        } else if grabbable {
             HandAffordance::Grabbable
         } else if scripted || is_frob_responsive(world, entity) {
             let door = world

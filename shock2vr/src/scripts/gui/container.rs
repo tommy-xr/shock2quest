@@ -466,19 +466,16 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
     }
 }
 
-/// A squeeze over a panel normally retrieves the icon into that hand. The
-/// always-collected categories are the semantic exception: a keycard is an
-/// access credential, a pile is currency, a module is an upgrade and a disc is a
-/// PDA entry - none of them is an object you can hold. Every panel (corpse loot,
-/// the backpack, the cyber interface's strip) therefore routes the gesture
-/// through their collecting Frob instead of physically holding an unregistered
-/// object.
+/// A physical panel grip holds downloadable pickups until release. Logs still
+/// collect immediately; flat Take keeps its existing acquisition policy.
 fn panel_grab_effect(
     world: &World,
     entity_id: EntityId,
     hand: crate::vr_config::Handedness,
 ) -> Effect {
-    if crate::scripts::script_util::is_always_collected(world, entity_id) {
+    if crate::scripts::script_util::is_always_collected(world, entity_id)
+        && !crate::scripts::script_util::is_download_pickup(world, entity_id)
+    {
         Effect::Send {
             msg: Message {
                 payload: MessagePayload::Frob,
@@ -675,11 +672,10 @@ mod tests {
     }
 
     /// In VR a squeeze over either a corpse-loot or backpack icon normally
-    /// emits `GrabbedWith*`. Keycards are collected credentials, so that edge
-    /// must Frob them rather than putting an unregistered physical card in the
-    /// hand. Ordinary MOVE loot keeps the existing grab behavior.
+    /// emits `GrabbedWith*`. Downloadable credentials and ordinary MOVE loot
+    /// both enter the hand; credentials collect only when subsequently released.
     #[test]
-    fn vr_panel_grab_frobs_only_keycards() {
+    fn vr_panel_grab_holds_keycards_until_release() {
         let (mut world, container, keycard, _inventory) = loot_world();
         mark_as_keycard(&mut world, keycard);
         let ordinary = world.add_entity(PropFrobInfo {
@@ -698,14 +694,9 @@ mod tests {
             assert!(
                 matches!(
                     effect,
-                    Effect::Send {
-                        msg: Message {
-                            to,
-                            payload: MessagePayload::Frob,
-                        },
-                    } if to == keycard
+                    Effect::GrabEntity { entity_id, .. } if entity_id == keycard
                 ),
-                "VR keycard squeeze must collect instead of hold, got {effect:?}"
+                "VR keycard squeeze must hold until release, got {effect:?}"
             );
         }
 
@@ -728,13 +719,10 @@ mod tests {
         );
     }
 
-    /// Keycards, nanite piles, cyber modules and audio logs are collected, never
-    /// carried: neither of the panel's two acquisition gestures - the take
-    /// click and the VR squeeze - may put one in the backpack grid or in a hand.
-    /// Their scripts' Frob is the only thing that records the credential,
-    /// credits the nanites, awards the modules or files the log.
+    /// Take collects immediately. Physical grips hold downloads until release,
+    /// while logs still file immediately through Frob.
     #[test]
-    fn every_always_collected_category_frobs_from_a_panel() {
+    fn panel_take_collects_and_physical_grip_defers_downloads() {
         use crate::test_support::{CollectedKind, spawn_collected};
 
         for kind in CollectedKind::ALL {
@@ -749,6 +737,14 @@ mod tests {
             ] {
                 let (_state, effect) =
                     gui.handle_msg(container, &world, &ContainerGuiState {}, &message);
+                if !matches!(message, ContainerGuiMsg::Take(_))
+                    && crate::scripts::script_util::is_download_pickup(&world, pickup)
+                {
+                    assert!(
+                        matches!(effect, Effect::GrabEntity { entity_id, .. } if entity_id == pickup)
+                    );
+                    continue;
+                }
                 assert!(
                     matches!(
                         effect,
