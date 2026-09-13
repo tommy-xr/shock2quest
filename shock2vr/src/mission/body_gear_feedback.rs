@@ -158,7 +158,7 @@ pub(super) fn pouch(
             let longest = width.max(height).max(1.0);
             let texture: std::rc::Rc<dyn engine::texture::TextureTrait> = texture;
             let mut icon = SceneObject::new(
-                scene::basic_material::create(texture, 1.0, 0.0),
+                scene::basic_material::create_with_fixed_ambient(texture, 1.0, 0.0),
                 // PCX rows start at the top; retain the outward geometry winding
                 // and reverse V so the complete authored icon reads upright.
                 Box::new(scene::quad::create_with_uv(

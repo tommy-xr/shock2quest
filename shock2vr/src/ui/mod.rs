@@ -1223,7 +1223,7 @@ fn present_world(
             let texture = asset_cache
                 .get_ext(&TEXTURE_IMPORTER, texture, &texture_options(*kind))
                 .clone();
-            let material = engine::scene::basic_material::create(
+            let material = engine::scene::basic_material::create_with_fixed_ambient(
                 texture as Rc<dyn TextureTrait>,
                 1.0,
                 1.0 - alpha,

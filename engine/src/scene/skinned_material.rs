@@ -89,6 +89,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         // Material properties
         uniform sampler2D texture1;
         uniform float emissivity;
+        uniform float ambientIntensity;
         uniform float transparency;
 
         // A light painted onto part of the mesh: the mask's red channel says
@@ -153,7 +154,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             if (texColor.a < 0.1) discard;
 
             // Base material color (ambient)
-            vec3 finalColor = texColor.rgb * 0.5;
+            vec3 finalColor = texColor.rgb * 0.5 * ambientIntensity;
 
             // Add emissive contribution
             finalColor += texColor.rgb * emissivity;
@@ -182,6 +183,7 @@ struct UnifiedUniforms {
 
     // Material properties
     emissivity_loc: i32,
+    ambient_intensity_loc: i32,
     transparency_loc: i32,
     emissive_tint_loc: i32,
 
@@ -255,6 +257,10 @@ impl SkinnedMaterial {
             // Set material properties
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
             gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
+            gl::Uniform1f(
+                uniforms.ambient_intensity_loc,
+                render_context.ambient_light_intensity,
+            );
             gl::Uniform3f(
                 uniforms.emissive_tint_loc,
                 self.emissive_tint.x,
@@ -399,6 +405,10 @@ impl Material for SkinnedMaterial {
                     ),
 
                     // Material properties
+                    ambient_intensity_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("ambientIntensity").as_ptr(),
+                    ),
                     emissivity_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("emissivity").as_ptr(),

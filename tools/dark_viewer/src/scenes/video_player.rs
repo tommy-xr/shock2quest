@@ -104,7 +104,7 @@ impl ToolScene for VideoPlayerScene {
             }
         };
 
-        let cube_mat = basic_material::create(texture, 1.0, 0.0);
+        let cube_mat = basic_material::create_with_fixed_ambient(texture, 1.0, 0.0);
         let mut cube_obj = SceneObject::new(cube_mat, Box::new(cube::create()));
         cube_obj.set_transform(Matrix4::from_scale(3.0));
 
