@@ -497,7 +497,6 @@ For debugging visual/rendering changes without a full interactive session:
    | `debug_hitbox`           | View fitted hitbox shapes vs ragdoll colliders across poses |
    | `debug_gloves`           | Test VR hand/glove rendering                 |
    | `debug_hand_poses`       | 25AE authored hand poses, anchored at a common hand origin |
-   | `debug_teleport`         | Test VR teleport locomotion                  |
    | `debug_joint_constraint` | Test physics joint constraints               |
    | `debug_hud`              | Test HUD rendering                           |
    | `debug_map`              | Test map/automap rendering                   |
@@ -615,7 +614,7 @@ For faster development, the project includes convenient cargo aliases (defined i
 
 Example usage:
 ```bash
-cargo dr --release --experimental teleport
+cargo run --release -p desktop_runtime -- --vr --experimental physical_held_items
 cargo dq entities earth.mis --filter "*Door*" --limit 10
 cargo dv grunt_p.bin
 ```
@@ -631,15 +630,10 @@ The project supports experimental flags for gating in-progress features during d
 #### Using Experimental Flags
 
 - Add `--experimental` flag followed by feature names when running desktop runtime
-- Example: `cargo run -- --experimental teleport`
-- Multiple features: `cargo run -- --experimental teleport,feature2`
+- Example: `cargo run -p desktop_runtime -- --vr --experimental physical_held_items`
+- Multiple features: `cargo run -p desktop_runtime -- --vr --experimental physical_held_items,physical_gun_weight`
 
 #### Available Experimental Features
-
-- **`teleport`**: VR teleport movement system
-  - Enables point-and-teleport locomotion for VR comfort
-  - Alternative to smooth movement that can cause motion sickness
-  - Triggered via controller trigger button
 
 - **`ragdoll`**: spawn a physics ragdoll on creature death (`SlayEntity`) instead of
   just removing the entity. Without it, death is unchanged.

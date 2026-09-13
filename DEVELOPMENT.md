@@ -102,7 +102,7 @@ Alternatively, use the project's cargo aliases from the root directory:
 
 Example:
 ```bash
-cargo dr --release --experimental teleport
+cargo run --release -p desktop_runtime -- --vr --experimental physical_held_items
 ```
 
 ### Debug & developer keys

@@ -106,7 +106,7 @@ impl PlayerFootsteps {
     }
 
     /// Forget the stride and the fall in progress. Called on any direct
-    /// relocation (teleport locomotion, level load, quickload) so the player
+    /// relocation (scripted teleport, level load, quickload) so the player
     /// never arrives owing a footstep from wherever they were before.
     pub fn reset(&mut self) {
         self.distance = 0.0;

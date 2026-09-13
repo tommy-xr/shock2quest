@@ -104,7 +104,7 @@ The project includes convenient cargo aliases:
 
 Example usage:
 ```bash
-cargo dr --experimental teleport  # Run desktop with teleport feature
+cargo dr --vr --experimental physical_held_items  # Run desktop with physical held items
 cargo dq entities earth.mis --limit 5  # Query entities in mission
 cargo dv grunt_p.bin  # View model file
 ```
