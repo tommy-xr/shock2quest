@@ -259,6 +259,12 @@ and **Belt forward (m)** (larger brings it farther out). Both move the belt,
 personal card, ammo pouch and grab targets together; thigh holsters retain their
 separate controls. These developer values apply for the current session.
 
+For persistent card placement **relative to the belt**, use
+`cargo dx ui --belt-card` (VR Setup → Belt card). The editor previews the actual
+belt and lets you save position and rotation to `assets/vr-belt-card.json`.
+Restart the game after saving; include that asset in your next Quest deploy.
+Hand-held card poses remain in the Hand grips editor (`--grip scipass`).
+
 #### Glove fit check (`debug_gloves`)
 
 Open `debug_gloves` from the Developer scene list. On Quest it requests room

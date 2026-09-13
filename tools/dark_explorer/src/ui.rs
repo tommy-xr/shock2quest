@@ -28,6 +28,8 @@ const GRID_TILE_CAP: usize = 400;
 const THUMBS_PER_FRAME: usize = 6;
 
 pub struct UiOptions {
+    pub belt_card: bool,
+    pub belt_card_library: Option<PathBuf>,
     pub grip: Option<String>,
     pub grip_hand: String,
     pub grip_support: bool,
@@ -350,7 +352,7 @@ struct MountIndex {
 
 impl ExplorerApp {
     fn new(options: UiOptions) -> ExplorerApp {
-        let grip_tab = options.grip.is_some() || options.grip_support;
+        let grip_tab = options.belt_card || options.grip.is_some() || options.grip_support;
         let mut app = ExplorerApp {
             grip_editor: crate::grip_editor::GripEditor::new(
                 options.grip_library,
@@ -392,6 +394,9 @@ impl ExplorerApp {
             selected_entry: None,
             archive_results: None,
         };
+        app.grip_editor.belt_mode = options.belt_card;
+        app.grip_editor.belt_editor =
+            crate::belt_card_editor::BeltCardEditor::new(options.belt_card_library);
         if let Some(archetype) = options.archetype {
             // Fail loudly, like --select: a `--screenshot` run that quietly
             // captured an empty preview would still exit 0 otherwise.
@@ -1030,7 +1035,7 @@ impl eframe::App for ExplorerApp {
                     ui.selectable_value(&mut self.tab, Tab::Files, "Files");
                     ui.selectable_value(&mut self.tab, Tab::Archetypes, "Archetypes");
                     ui.selectable_value(&mut self.tab, Tab::Archives, "Archives");
-                    ui.selectable_value(&mut self.tab, Tab::Grips, "VR Grips");
+                    ui.selectable_value(&mut self.tab, Tab::Grips, "VR Setup");
                 });
                 // The preview belongs to the tab that selected it; a Files
                 // asset must not keep showing under the Archives tab.

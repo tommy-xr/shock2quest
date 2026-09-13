@@ -3,6 +3,7 @@ use engine::assets::asset_paths::AssetEntry;
 
 mod archetypes;
 mod archives;
+mod belt_card_editor;
 mod explorer;
 mod grip_editor;
 mod model_preview;
@@ -46,6 +47,12 @@ enum Commands {
     },
     /// Open a windowed asset browser (tree + search + preview)
     Ui {
+        /// Edit the personal card's resting position and rotation on the battle belt
+        #[arg(long)]
+        belt_card: bool,
+        /// Card pose JSON to edit (defaults to assets/vr-belt-card.json)
+        #[arg(long)]
+        belt_card_library: Option<std::path::PathBuf>,
         /// Open VR Grips with this prepared pickup model selected (e.g. mug)
         #[arg(long)]
         grip: Option<String>,
@@ -240,6 +247,8 @@ fn main() {
         } => ls(family, filter, limit),
         Commands::Find { pattern, limit } => find(pattern, limit),
         Commands::Ui {
+            belt_card,
+            belt_card_library,
             grip,
             grip_hand,
             grip_support,
@@ -259,6 +268,8 @@ fn main() {
             archives,
             select_entry,
         } => ui::run(ui::UiOptions {
+            belt_card,
+            belt_card_library,
             grip,
             grip_hand,
             grip_support,
