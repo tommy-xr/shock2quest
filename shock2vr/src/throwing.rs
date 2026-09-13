@@ -7,7 +7,7 @@ use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
 use crate::{
     physics::{CollisionContact, PhysicsWorld},
-    scripts::{DamageImpact, Message, MessagePayload},
+    scripts::{DamageImpact, Effect, Message, MessagePayload, impact_sound::ImpactSoundGuard},
 };
 
 /// Read once at release/impact so one calculation uses a consistent set of knobs.
@@ -226,6 +226,7 @@ pub(crate) struct SavedThrows(pub HashMap<u64, SavedThrow>);
 pub(crate) struct ThrownItems {
     active: HashMap<EntityId, SavedThrow>,
     before_step: HashMap<EntityId, BodyMotion>,
+    sound_guards: HashMap<EntityId, ImpactSoundGuard>,
 }
 
 fn relative_mass(authored: Option<f32>) -> f32 {
@@ -277,8 +278,36 @@ fn impact_damage(mass: f32, closing_speed: f32, organic: bool, tuning: &ThrowTun
 }
 
 impl ThrownItems {
+    /// Flat inventory tosses keep their existing launch speed and damage
+    /// behavior, but need the same impact audio/provenance as VR releases.
+    pub fn track_existing_motion(
+        &mut self,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity: EntityId,
+    ) {
+        let Some(body) = physics.snapshot_body_motion().get(&entity).copied() else {
+            return;
+        };
+        self.cancel(entity);
+        self.active.insert(
+            entity,
+            SavedThrow {
+                mass: 1.0,
+                remaining: 5.0,
+                armed: false,
+                motion: ReleaseMotion {
+                    linear: body.linear,
+                    angular: body.angular,
+                },
+            },
+        );
+        self.publish(world, physics);
+    }
+
     pub fn cancel(&mut self, entity: EntityId) {
         self.active.remove(&entity);
+        self.sound_guards.remove(&entity);
     }
     pub fn launch(
         &mut self,
@@ -287,7 +316,7 @@ impl ThrownItems {
         entity: EntityId,
         motion: ReleaseMotion,
     ) {
-        self.active.remove(&entity);
+        self.cancel(entity);
         let mass = relative_mass(
             world
                 .borrow::<View<PropPhysAttr>>()
@@ -369,11 +398,71 @@ impl ThrownItems {
                         || throw.motion.angular.magnitude() > 0.05
                 })
         });
+        self.sound_guards.retain(|entity, guard| {
+            guard.tick(dt);
+            self.active.contains_key(entity)
+        });
         self.before_step = if self.active.is_empty() {
             HashMap::new()
         } else {
             physics.snapshot_body_motion()
         };
+    }
+
+    /// Audible collisions for player-released props, independent of their
+    /// one-shot damage budget. Melee and terminal projectiles already own
+    /// their sound path; never duplicate their playback here.
+    pub fn impact_sound(
+        &mut self,
+        world: &World,
+        item: EntityId,
+        target: EntityId,
+        contact: Option<CollisionContact>,
+    ) -> Effect {
+        use dark::properties::{CollisionType, PropCollisionType, PropLimbModel};
+        if !self.active.contains_key(&item)
+            || world
+                .borrow::<View<PropLimbModel>>()
+                .is_ok_and(|v| v.get(item).is_ok())
+            || world.borrow::<View<PropCollisionType>>().is_ok_and(|v| {
+                v.get(item).is_ok_and(|p| {
+                    p.collision_type.intersects(
+                        CollisionType::SLAY_ON_IMPACT | CollisionType::DESTROY_ON_IMPACT,
+                    )
+                })
+            })
+        {
+            return Effect::NoEffect;
+        }
+        let Some(contact) = contact else {
+            return Effect::NoEffect;
+        };
+        let target = crate::util::resolve_proxy_entity(world, target);
+        let speed = self.contact_speed(item, target, contact).unwrap_or(0.0);
+        if !self
+            .sound_guards
+            .entry(item)
+            .or_default()
+            .should_play_speed(target, speed)
+        {
+            return Effect::NoEffect;
+        }
+        crate::scripts::impact_sound::impact_sound_effect(item, target, world)
+    }
+
+    fn contact_speed(
+        &self,
+        item: EntityId,
+        target: EntityId,
+        contact: CollisionContact,
+    ) -> Option<f32> {
+        let incoming = self.before_step.get(&item)?.at(contact.point);
+        let other = self
+            .before_step
+            .get(&target)
+            .map(|m| m.at(contact.point))
+            .unwrap_or_else(Vector3::zero);
+        Some((incoming - other).dot(contact.normal).max(0.0))
     }
 
     pub fn impact(
@@ -390,6 +479,7 @@ impl ThrownItems {
             return None;
         }
         let contact = contact?;
+        let mass = throw.mass;
         let target = crate::util::resolve_proxy_entity(world, target);
         if world
             .borrow::<UniqueView<crate::mission::PlayerInfo>>()
@@ -401,13 +491,7 @@ impl ThrownItems {
         if hp.get(target).ok()?.hit_points <= 0 {
             return None;
         }
-        let incoming = self.before_step.get(&item)?.at(contact.point);
-        let target_velocity = self
-            .before_step
-            .get(&target)
-            .map(|v| v.at(contact.point))
-            .unwrap_or_else(Vector3::zero);
-        let speed = (incoming - target_velocity).dot(contact.normal).max(0.0);
+        let speed = self.contact_speed(item, target, contact)?;
         let organic = world
             .borrow::<View<PropMaterial>>()
             .ok()
@@ -417,7 +501,7 @@ impl ThrownItems {
                     .map(|p| p.0.to_ascii_lowercase().contains("flesh"))
             })
             .unwrap_or(false);
-        let amount = impact_damage(throw.mass, speed, organic, &ThrowTuning::current());
+        let amount = impact_damage(mass, speed, organic, &ThrowTuning::current());
         (amount > 0.0).then_some(Message {
             to: target,
             payload: MessagePayload::Damage {
@@ -543,6 +627,112 @@ mod tests {
             closing_speed: None,
         };
         (world, throws, item, target, contact)
+    }
+
+    #[test]
+    fn thrown_prop_sound_is_thresholded_rate_limited_and_independent_of_damage() {
+        use dark::properties::{CollisionType, PropCollisionType};
+        let (mut world, mut throws, item, target, contact) = impact_fixture("Material Metal");
+        world.add_component(item, PropMaterial("Material Glass".into()));
+        world.add_unique(SavedThrows(
+            throws
+                .active
+                .iter()
+                .map(|(id, t)| (id.inner(), *t))
+                .collect(),
+        ));
+        // A stationary release or a spent damage budget still clatters; sound
+        // uses the pre-solve contact speed, not the damage latch or remaining HP.
+        throws.active.get_mut(&item).unwrap().armed = false;
+        throws.before_step.get_mut(&item).unwrap().linear = vec3(0.01, 0.0, 0.0);
+        assert!(matches!(
+            throws.impact_sound(&world, item, target, Some(contact)),
+            Effect::NoEffect
+        ));
+        throws.before_step.get_mut(&item).unwrap().linear = vec3(6.0, 0.0, 0.0);
+        let effects = Effect::flatten(vec![throws.impact_sound(
+            &world,
+            item,
+            target,
+            Some(contact),
+        )]);
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|e| matches!(e, Effect::PlayImpactSound { .. }))
+                .count(),
+            1
+        );
+        let Effect::PlayImpactSound { query, .. } = &effects[0] else {
+            panic!("missing sound");
+        };
+        assert!(
+            query
+                .tag_values()
+                .contains(&("material".into(), "glass".into()))
+        );
+        assert!(
+            query
+                .tag_values()
+                .contains(&("material2".into(), "metal".into()))
+        );
+
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|e| matches!(e, Effect::PlayImpactSound { source, .. } if *source == item))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            throws.impact_sound(&world, item, target, Some(contact)),
+            Effect::NoEffect
+        ));
+        throws.sound_guards.get_mut(&item).unwrap().tick(0.2);
+        world.add_component(
+            item,
+            PropCollisionType {
+                collision_type: CollisionType::NO_COLLISION_SOUND,
+            },
+        );
+        assert!(matches!(
+            throws.impact_sound(&world, item, target, Some(contact)),
+            Effect::NoEffect
+        ));
+    }
+
+    #[test]
+    fn only_player_owned_impacts_generate_investigation_cues() {
+        use crate::runtime_props::{
+            RuntimePropLaunchedProjectile, RuntimePropPlayerFiredProjectile,
+        };
+        use dark::properties::PropClassTag;
+        let mut world = World::new();
+        let projectile = world.add_entity((
+            PropClassTag::from_string("AmmoType Standard"),
+            RuntimePropLaunchedProjectile,
+        ));
+        let wall = world.add_entity(());
+        let effects = Effect::flatten(vec![crate::scripts::script_util::play_impact_sound(
+            &world,
+            projectile,
+            wall,
+            Vector3::zero(),
+        )]);
+        assert_eq!(effects.len(), 1, "enemy impact plays audio only");
+        assert!(matches!(effects[0], Effect::PlayEnvironmentalSound { .. }));
+        world.add_component(projectile, RuntimePropPlayerFiredProjectile);
+        let effects = Effect::flatten(vec![crate::scripts::script_util::play_impact_sound(
+            &world,
+            projectile,
+            wall,
+            Vector3::zero(),
+        )]);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::PlayImpactSound { .. }))
+        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ pub use wander_behavior::*;
 use std::cell::RefCell;
 
 use dark::SCALE_FACTOR;
-use shipyard::{EntityId, World};
+use shipyard::{EntityId, Get, World};
 
 use crate::{
     physics::PhysicsWorld,
@@ -68,6 +68,14 @@ pub fn attack_behavior_with_modes(
     allow_melee: bool,
     allow_ranged: bool,
 ) -> Option<Box<RefCell<dyn Behavior>>> {
+    // A sound or an old sighting supplies a place to investigate, not a
+    // target to swing at or shoot. Sight updates restore attack eligibility.
+    if world
+        .borrow::<shipyard::View<crate::runtime_props::RuntimePropAITargetAwareness>>()
+        .is_ok_and(|v| v.get(entity_id).is_ok_and(|a| !a.has_line_of_sight))
+    {
+        return None;
+    }
     // Distance and line of fire both gate against the AI's KNOWN target
     // (the last-known position when awareness is published, the player's
     // true position otherwise) - the same point chase steering faces and
@@ -203,6 +211,90 @@ mod tests {
             joint: 0,
             vhot: 0,
         })
+    }
+
+    #[test]
+    fn a_nearby_noise_is_investigated_without_attacking_an_imaginary_target() {
+        use crate::runtime_props::RuntimePropAITargetAwareness;
+        for links in [vec![Link::Weapon], vec![ai_projectile()]] {
+            let (mut world, entity) = world_with_armed_ai(links, 20.0);
+            let physics = PhysicsWorld::new();
+            world.add_component(
+                entity,
+                RuntimePropAITargetAwareness {
+                    last_known_pos: vec3(0.0, 0.0, 1.0),
+                    has_line_of_sight: false,
+                },
+            );
+            assert!(attack_behavior_for_distance(&world, &physics, entity).is_none());
+            world.add_component(
+                entity,
+                RuntimePropAITargetAwareness {
+                    last_known_pos: vec3(0.0, 0.0, 1.0),
+                    has_line_of_sight: true,
+                },
+            );
+            assert!(attack_behavior_for_distance(&world, &physics, entity).is_some());
+        }
+    }
+
+    #[test]
+    fn arriving_at_a_heard_location_stops_and_scans_before_alertness_decays() {
+        use crate::runtime_props::RuntimePropAITargetAwareness;
+        let (mut world, entity) = world_with_armed_ai(vec![Link::Weapon], 20.0);
+        world.add_component(
+            entity,
+            crate::runtime_props::RuntimePropTransform(cgmath::Matrix4::from_translation(vec3(
+                0.0, 0.0, 0.0,
+            ))),
+        );
+        let physics = PhysicsWorld::new();
+        world.add_component(
+            entity,
+            RuntimePropAITargetAwareness {
+                last_known_pos: vec3(0.0, -1.0, 0.5),
+                has_line_of_sight: false,
+            },
+        );
+        let NextBehavior::Next(search) =
+            ChaseBehavior::new().next_behavior(&world, &physics, entity)
+        else {
+            panic!("arrival must hand off to search");
+        };
+        let mut search = search.borrow_mut();
+        assert_eq!(search.name(), "Search");
+        search.steer(
+            cgmath::Deg(0.0),
+            &world,
+            &physics,
+            entity,
+            &crate::time::Time::default(),
+        );
+        assert!(
+            search.holds_position(),
+            "scanning cannot retain locomotion root motion"
+        );
+        assert!(!search.is_locomotion());
+        // Seeing the player again while already High has no level-change
+        // event; Search itself must resume combat on the next clip boundary.
+        world.add_component(
+            entity,
+            dark::properties::PropAIAlertness {
+                level: dark::properties::AIAlertLevel::High,
+                peak: dark::properties::AIAlertLevel::High,
+            },
+        );
+        world.add_component(
+            entity,
+            RuntimePropAITargetAwareness {
+                last_known_pos: vec3(0.0, 0.0, 1.0),
+                has_line_of_sight: true,
+            },
+        );
+        let NextBehavior::Next(attack) = search.next_behavior(&world, &physics, entity) else {
+            panic!("sight reacquisition must resume combat even without a level transition");
+        };
+        assert_eq!(attack.borrow().name(), "MeleeAttack");
     }
 
     /// A hybrid with a pipe swings, and its swing is what carries the

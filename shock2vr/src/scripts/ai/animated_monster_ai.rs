@@ -501,6 +501,9 @@ impl AnimatedMonsterAI {
             // Turning in place is not pursuit progress. Let the stall timer
             // span pivots; replacing their clip reports cancellation normally.
             let eligible = self.door_wait.is_none()
+                // Scanning an empty sound location is successful searching,
+                // not failed combat. Do not replace it with a stall gesture.
+                && self.current_behavior.borrow().name() != "Search"
                 && self.current_behavior.borrow().scripted_state() == ScriptedState::NotScripted
                 && matches!(
                     self.alertness.current_level,
@@ -754,6 +757,10 @@ impl AnimatedMonsterAI {
         // Refresh even when already alerted - the cue reveals where the
         // player is now, redirecting a stale chase or a search.
         self.last_known_player_pos = Some(origin);
+        // Fresh contact renews memory even when already alerted. Otherwise
+        // repeated heard footsteps update the goal while the unseen timer
+        // still expires underneath the pursuit.
+        self.alertness.hidden_time = 0.0;
 
         let cap = config.alert_cap.clone();
         // Only force when the clamped target actually raises the level (so a
@@ -2269,6 +2276,71 @@ mod tests {
             total: std::time::Duration::from_millis(100),
         };
         Effect::flatten(vec![monster.update(entity_id, world, &physics, &time)])
+    }
+
+    #[test]
+    fn repeated_heard_cues_renew_memory_without_a_level_change() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let physics = PhysicsWorld::new();
+        for level in [AIAlertLevel::Moderate, AIAlertLevel::High] {
+            let mut monster = AnimatedMonsterAI::new();
+            monster.initialize(entity, &world);
+            monster.alertness.current_level = level;
+            monster.current_behavior = Box::new(RefCell::new(ChaseBehavior::new()));
+            let config = monster.config.as_ref().unwrap().clone();
+            let timeout = if level == AIAlertLevel::High {
+                config.timings.from_high
+            } else {
+                config.timings.from_moderate
+            };
+            for step in 0..3 {
+                monster.alertness.hidden_time = timeout - 0.1;
+                let origin = vec3(step as f32, 0.0, 5.0);
+                monster.handle_message(
+                    entity,
+                    &world,
+                    &physics,
+                    &MessagePayload::HeardNoise { origin },
+                );
+                assert_eq!(monster.alertness.hidden_time, 0.0);
+                assert_eq!(monster.last_known_player_pos, Some(origin));
+                assert!(
+                    alertness::process_alertness_update(
+                        &mut monster.alertness,
+                        false,
+                        0.2,
+                        &config.timings,
+                        &config.alert_cap
+                    )
+                    .is_none()
+                );
+                assert_eq!(monster.alertness.current_level, level);
+            }
+            assert!(
+                alertness::process_alertness_update(
+                    &mut monster.alertness,
+                    false,
+                    timeout,
+                    &config.timings,
+                    &config.alert_cap
+                )
+                .is_some(),
+                "silence must still let memory decay"
+            );
+        }
+    }
+
+    #[test]
+    fn investigating_an_empty_sound_location_is_not_failed_combat() {
+        let world = World::new();
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.alertness.current_level = AIAlertLevel::Moderate;
+        monster.current_behavior = Box::new(RefCell::new(SearchBehavior::new(vec3(0.0, 0.0, 0.0))));
+        for _ in 0..10 {
+            monster.update_combat_frustration(&world, &physics, EntityId::dead(), false, 1.0);
+            assert_eq!(monster.current_behavior.borrow().name(), "Search");
+        }
     }
 
     /// #791: a calm creature that can see the player must turn to look at it.

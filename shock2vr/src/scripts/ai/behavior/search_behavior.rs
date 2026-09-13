@@ -47,6 +47,14 @@ pub struct SearchBehavior {
 }
 
 impl SearchBehavior {
+    pub(super) fn at_goal(world: &World, entity_id: EntityId, goal: Vector3<f32>) -> bool {
+        let (position, _) = ai_util::get_position_and_forward(world, entity_id);
+        let dx = position.x - goal.x;
+        let dz = position.z - goal.z;
+        (dx * dx + dz * dz).sqrt() < SEARCH_ARRIVE_DISTANCE
+            && (position.y - goal.y).abs() < SEARCH_ARRIVE_HEIGHT
+    }
+
     pub fn new(goal: Vector3<f32>) -> SearchBehavior {
         SearchBehavior {
             goal,
@@ -86,14 +94,7 @@ impl Behavior for SearchBehavior {
         self.total_seconds += dt;
 
         if !self.arrived {
-            let (position, _) = ai_util::get_position_and_forward(world, entity_id);
-            let dx = position.x - self.goal.x;
-            let dz = position.z - self.goal.z;
-            if (dx * dx + dz * dz).sqrt() < SEARCH_ARRIVE_DISTANCE
-                && (position.y - self.goal.y).abs() < SEARCH_ARRIVE_HEIGHT
-            {
-                self.arrived = true;
-            }
+            self.arrived = Self::at_goal(world, entity_id, self.goal);
         }
 
         if self.arrived {
@@ -125,12 +126,28 @@ impl Behavior for SearchBehavior {
         !self.arrived
     }
 
+    fn holds_position(&self) -> bool {
+        self.arrived
+    }
+
     fn next_behavior(
         &mut self,
         world: &World,
-        _physics: &PhysicsWorld,
+        physics: &PhysicsWorld,
         entity_id: EntityId,
     ) -> NextBehavior {
+        // Reacquisition can happen while already High, with no alertness
+        // level-change event to replace this search. Resume pursuit/combat
+        // explicitly instead of scanning while staring at the player.
+        if world
+            .borrow::<View<crate::runtime_props::RuntimePropAITargetAwareness>>()
+            .is_ok_and(|v| v.get(entity_id).is_ok_and(|a| a.has_line_of_sight))
+        {
+            return NextBehavior::Next(
+                super::attack_behavior_for_distance(world, physics, entity_id)
+                    .unwrap_or_else(|| Box::new(RefCell::new(super::ChaseBehavior::new()))),
+            );
+        }
         if !self.give_up() {
             return NextBehavior::Stay;
         }
