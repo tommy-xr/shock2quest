@@ -612,6 +612,21 @@ of throw damage. Contacts below that threshold and `NO_COLLISION_SOUND` props ar
 silent. Impact noises notify AI only after a sound sample resolves and plays. A rebound may clatter again after the cooldown. Flat inventory tosses
 also use this sound path while retaining their existing speed/damage behavior.
 
+During pursuit/search, mobile monsters can also pick up the player's recent
+scent after reaching their current seen/heard destination. A mission-local buffer
+holds at most 40 grounded positions, sampled every 0.5 simulation seconds with
+nearby samples merged. Scent lasts 20 seconds; pickup range fades from 2.5 to
+0.75 world units. A solid-cover ray must be clear. Idle monsters do not acquire
+scent, and scent does not interrupt travel toward a thrown distraction.
+
+The first pickup chooses the freshest nearby point. Later pickups follow newer
+points in order, each discovered locally after reaching the previous goal. There
+is no access to remote trail points or the unseen player's live position. Sight
+and audible cues keep their existing priority; a trail gap or expiry ends scent
+tracking and leaves the normal search/decay behavior. Trail age and each monster's
+tracking cursor/destination survive save/load. These are initial tuning constants;
+Agility/hearing affect sound detection, not scent lifetime or range.
+
 The acoustic regression tests cover hearing ratings, cover, Agility, and crouch;
 SDK scenarios exercise real footsteps, gunfire, and thrown-cup audio/investigation.
 Footstep pacing retains its existing limits: tracked room-scale head movement

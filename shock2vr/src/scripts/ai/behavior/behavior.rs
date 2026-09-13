@@ -37,6 +37,11 @@ pub trait Behavior {
     /// Short stable name for debug introspection (e.g. "Chase", "Wander")
     fn name(&self) -> &'static str;
 
+    /// Fixed destination being investigated, if this behavior owns one.
+    fn investigation_goal(&self) -> Option<Vector3<f32>> {
+        None
+    }
+
     fn combat_mode(&self) -> Option<super::CombatMode> {
         None
     }

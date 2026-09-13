@@ -3280,6 +3280,12 @@ impl MissionCore {
             world.add_component(player_entity, skills);
         }
 
+        if world
+            .borrow::<UniqueView<super::player_trail::PlayerTrail>>()
+            .is_err()
+        {
+            world.add_unique(super::player_trail::PlayerTrail::default());
+        }
         let player_handle = physics.create_player(start_pos, player_entity);
 
         world.add_unique(PlayerInfo {
@@ -5407,6 +5413,16 @@ impl MissionCore {
                 .sync_sensor_position_rotation(id, pose.position, pose.rotation);
             self.world.add_component(id, pose);
         }
+
+        // Deposit scent after movement, before AI senses the world.
+        self.world
+            .borrow::<UniqueViewMut<super::player_trail::PlayerTrail>>()
+            .unwrap()
+            .update(
+                time.elapsed.as_secs_f32(),
+                (self.player_handle.is_grounded() && !player_health_depleted)
+                    .then_some(self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos),
+            );
 
         // Update scripts
         let mut script_effects = profile!(
