@@ -4296,11 +4296,8 @@ impl MissionCore {
 
         // Default VR has one object-bound world-panel slot. Keep its
         // transient proxy faithful to the original overlay lifecycle before
-        // either hand raycasts: destroyed hosts and walk-away panels close,
-        // while `--experimental gui` retains its legacy all-panels behavior.
-        if game_options.presentation_mode == crate::PresentationMode::Vr
-            && !game_options.experimental_features.contains("gui")
-        {
+        // either hand raycasts: destroyed hosts and walk-away panels close.
+        if game_options.presentation_mode == crate::PresentationMode::Vr {
             self.gui.maintain_active_panel(
                 &mut self.world,
                 &mut self.physics,
@@ -8173,9 +8170,8 @@ impl MissionCore {
                     }
                     // Bind the presentation's single object-panel slot to the
                     // frobbed entity (the original's frob-script -> overlay
-                    // flow). Flat docks it in the MFD; default VR creates a
-                    // world quad beside the object. The explicit experimental
-                    // mode retains its historical all-panels presentation.
+                    // flow). Flat docks it in the MFD; VR creates a world
+                    // quad beside the object.
                     match game_options.presentation_mode {
                         crate::PresentationMode::Flat => self.flat_ui.open(entity),
                         crate::PresentationMode::Vr => {
@@ -8188,7 +8184,6 @@ impl MissionCore {
                             self.flat_ui.close();
                             self.gui.open_panel(
                                 entity,
-                                game_options.experimental_features.contains("gui"),
                                 &mut self.world,
                                 &mut self.physics,
                                 &mut self.script_world,
@@ -9186,16 +9181,13 @@ impl MissionCore {
                     components,
                 } => {
                     // The FlatUiHost's canvas slots: the flat MFD panel
-                    // (deliberately NOT behind `--experimental gui` - the flat
-                    // MFD is the #435 fix) and the use-mode inventory strip,
+                    // and the use-mode inventory strip,
                     // which BOTH presentations stash here - VR presents the
                     // same strip canvas on the cyber-interface world panel.
                     // The host only keeps components addressed to its bound
                     // slots, so this is inert outside those modes. VR's
                     // object-bound world panel still accepts only the panel
-                    // explicitly opened through `OpenPanel` (below); the
-                    // experimental mode retains its legacy all-panels
-                    // behavior.
+                    // explicitly opened through `OpenPanel` (below).
                     self.flat_ui
                         .on_set_ui(&self.world, parent_entity, world_size, &components);
                     let is_map = self
@@ -9203,9 +9195,8 @@ impl MissionCore {
                         .borrow::<UniqueView<MapPanelEntity>>()
                         .is_ok_and(|map| map.0 == parent_entity);
                     let update_world_panel = !is_map
-                        && (game_options.experimental_features.contains("gui")
-                            || (game_options.presentation_mode == crate::PresentationMode::Vr
-                                && self.gui.active_panel() == Some(parent_entity)));
+                        && game_options.presentation_mode == crate::PresentationMode::Vr
+                        && self.gui.active_panel() == Some(parent_entity);
                     if update_world_panel {
                         // `internal_inventory` is a 15-column strip: keep its
                         // shared canvas/layout identical, but map that resolved
@@ -12594,12 +12585,8 @@ impl MissionCore {
             scene.push(debug);
         }
 
-        // Render world-space GUI. The explicit experiment preserves the old
-        // all-panels mode; default VR renders only the gameplay panel opened
-        // by frobbing its object.
-        if options.experimental_features.contains("gui") {
-            scene.extend(self.gui.render(asset_cache, &self.world));
-        } else if options.presentation_mode == crate::PresentationMode::Vr {
+        // VR renders only the gameplay panel opened by frobbing its object.
+        if options.presentation_mode == crate::PresentationMode::Vr {
             scene.extend(self.gui.render_active(asset_cache, &self.world));
         }
 

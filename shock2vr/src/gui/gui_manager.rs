@@ -50,8 +50,7 @@ pub struct GuiManager {
     handle_to_instance: HashMap<GuiHandle, GuiInstanceInfo>,
     entity_id_to_proxy_entity_id: HashMap<EntityId, EntityId>,
     /// The single object-bound world panel opened through `Effect::OpenPanel`
-    /// in default VR. The old `--experimental gui` mode still materializes
-    /// every panel and does not consult this slot.
+    /// in VR.
     active_panel: Option<EntityId>,
 }
 
@@ -108,26 +107,22 @@ impl GuiManager {
         if self.active_panel == Some(entity) {
             self.close_panel(world, physics, scripts, id_to_physics);
         } else {
-            self.open_panel(entity, false, world, physics, scripts, id_to_physics);
+            self.open_panel(entity, world, physics, scripts, id_to_physics);
         }
     }
 
     /// Bind the default-VR world-panel slot to one gameplay entity. Opening a
     /// second object removes the first panel's transient proxy, just as the
     /// original left MFD slot replaces the previous object-bound overlay.
-    ///
-    /// `retain_existing` preserves the legacy `--experimental gui` behavior,
-    /// where all authored panels are materialized at once.
     pub fn open_panel(
         &mut self,
         entity: EntityId,
-        retain_existing: bool,
         world: &mut World,
         physics: &mut PhysicsWorld,
         scripts: &mut ScriptWorld,
         id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
     ) {
-        if self.active_panel != Some(entity) && !retain_existing {
+        if self.active_panel != Some(entity) {
             if let Some(previous) = self.active_panel {
                 self.remove_parent_instances(previous, world, physics, scripts, id_to_physics);
             }
@@ -311,20 +306,6 @@ impl GuiManager {
 
     pub fn update(&mut self) {}
 
-    pub fn render(&mut self, asset_cache: &mut AssetCache, world: &World) -> Vec<SceneObject> {
-        self.render_filtered(asset_cache, world, false)
-    }
-
-    /// Render only the object-bound default-VR slot. Experimental GUI keeps
-    /// using [`render`](Self::render) to show every authored panel.
-    pub fn render_active(
-        &mut self,
-        asset_cache: &mut AssetCache,
-        world: &World,
-    ) -> Vec<SceneObject> {
-        self.render_filtered(asset_cache, world, true)
-    }
-
     /// Read-only snapshot of the active VR panel using the exact normalized
     /// component data its world-space renderer consumes. This extends the
     /// existing `/v1/ui` contract across presentations without introducing a
@@ -400,16 +381,16 @@ impl GuiManager {
             .collect()
     }
 
-    fn render_filtered(
+    /// Render the active object-bound world panel.
+    pub fn render_active(
         &mut self,
         asset_cache: &mut AssetCache,
         world: &World,
-        active_only: bool,
     ) -> Vec<SceneObject> {
         let mut ret = Vec::new();
         let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
         for (_handle, info) in &self.handle_to_instance {
-            if active_only && Some(info.parent_entity) != self.active_panel {
+            if Some(info.parent_entity) != self.active_panel {
                 continue;
             }
             let player_mat = engine::scene::color_material::create(Vector3::new(0.0, 0.0, 1.0));
@@ -543,7 +524,6 @@ mod tests {
 
         manager.open_panel(
             first,
-            false,
             &mut world,
             &mut physics,
             &mut scripts,
@@ -567,7 +547,6 @@ mod tests {
 
         manager.open_panel(
             second,
-            false,
             &mut world,
             &mut physics,
             &mut scripts,
@@ -655,7 +634,6 @@ mod tests {
         let mut manager = GuiManager::new();
         manager.open_panel(
             parent,
-            false,
             &mut world,
             &mut physics,
             &mut scripts,

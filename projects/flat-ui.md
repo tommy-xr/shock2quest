@@ -447,8 +447,8 @@ a **flat presentation + a mouse-cursor input source**, and an **open/close model
   panel coordinates. A flat presentation replaces exactly this pair — nothing above
   it.
 - **Gating (current):** flat `SetUI` snapshots feed the default MFD host. Default
-  VR feeds only the object-bound world panel opened through `OpenPanel`; the
-  explicit `--experimental gui` mode retains the historical all-panels world.
+  VR feeds only the object-bound world panel opened through `OpenPanel`.
+  The legacy all-panels experiment has been removed.
 
 ### 4.2 Panels already implemented against that trait (`shock2vr/src/scripts/gui/`)
 
@@ -528,7 +528,7 @@ consumers are the save system `save_load/mod.rs:56`, the pickup-transfer helper
   **not world-placed** — it exists only inside the container's loot panel.
 - So today: contained loot lies on the floor at editor-authored spots (or clipping
   into furniture), which playtests have misread as item-placement bugs, and the
-  container panels (even in VR with `--experimental gui`) show icons for items that
+  container panels show icons for items that
   *also* exist in the world.
 - Counter-example for calibration: the Cryo Card (medsci1 mission id 1050) has
   **no** incoming `Contains` link — genuinely world-placed pickups exist and must
@@ -669,8 +669,8 @@ save/restore semantics) until taken (transfer link → player backpack, reusing
 ### PR 2 — Keypad MFD on frob (**resolves #435**)
 
 `GuiScript` `Frob → Effect::OpenPanel`; `FlatUiHost` with a single MFD slot at the
-original left-MFD anchor `(2, 124)`; `SetUI` interception in flat mode (also ungate
-it from `--experimental gui` for the flat path); `GUIHover` synthesis from the
+original left-MFD anchor `(2, 124)`; `SetUI` interception in flat mode;
+`GUIHover` synthesis from the
 pointer; cursor draw; close button + walk-away auto-close.
 **e2e (`keypad.e2e.test.ts`):** launch `medsci1.mis` flat → discover keypad by
 `template_id` −258 + `KeypadCode` 45100 (mission id 1681; never hardcode runtime
@@ -731,9 +731,9 @@ visible.
   path but couples flat rendering to the effect stream; a `FlatUiHost` that *calls*
   `Gui::get_components` directly (skipping `GuiScript`) would duplicate state.
   Current lean: intercept, keep `GuiScript` the single state owner.
-- **`--experimental gui` gate (resolved by #940):** flat panels and the single
-  frob-bound VR world panel work by default. The flag is reserved for the legacy
-  all-panels world presentation.
+- **Default panels (resolved by #940):** flat panels and the single
+  frob-bound VR world panel work by default. The legacy all-panels flag has
+  been removed.
 - **Keypad check timing fidelity:** the original defers the code check until
   **exactly 5 digits** are typed (`KeypadButton`, §2.3); shock2quest's
   `KeyPadGui` checks after *every* press (`keypad.rs:216-238`) — functionally

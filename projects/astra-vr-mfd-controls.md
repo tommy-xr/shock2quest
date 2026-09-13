@@ -84,7 +84,7 @@ MAP toggles the existing automap in the cyber interface through `ToggleMap`.
 Both presentations use its mission map art, explored regions and player pip.
 The wide panel scales uniformly to clear the bottom HUD and keep CLOSE
 inside the canvas. VR's map is a synthetic cyber-panel host, never an extra
-world quad even with the legacy experimental GUI enabled. Opening MAP closes
+world quad. Opening MAP closes
 the utility reader; clicking it again or using the map's close button dismisses
 the map. The VR shortcut only acts while the cyber interface is active.
 
