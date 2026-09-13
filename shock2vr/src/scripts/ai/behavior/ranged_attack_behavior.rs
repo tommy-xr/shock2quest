@@ -19,6 +19,10 @@ use super::{Behavior, ChaseBehavior, NextBehavior};
 pub struct RangedAttackBehavior;
 
 impl Behavior for RangedAttackBehavior {
+    fn combat_mode(&self) -> Option<super::CombatMode> {
+        Some(super::CombatMode::Ranged)
+    }
+
     fn name(&self) -> &'static str {
         "RangedAttack"
     }

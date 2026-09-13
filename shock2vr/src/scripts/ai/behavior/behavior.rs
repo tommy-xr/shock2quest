@@ -37,6 +37,13 @@ pub trait Behavior {
     /// Short stable name for debug introspection (e.g. "Chase", "Wander")
     fn name(&self) -> &'static str;
 
+    fn combat_mode(&self) -> Option<super::CombatMode> {
+        None
+    }
+    fn is_combat_frustration(&self) -> bool {
+        false
+    }
+
     fn scripted_state(&self) -> ScriptedState {
         ScriptedState::NotScripted
     }
