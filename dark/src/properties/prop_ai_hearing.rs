@@ -8,14 +8,18 @@ use crate::ss2_common::{read_bytes, read_u32};
 /// AI hearing acuity rating (P$AI_Hearin), 0-5: 0 = deaf (the AI ignores
 /// noises entirely - e.g. the `Deaf` metaproperty sets it), higher values are
 /// progressively more acute. Creatures without the property hear normally.
-/// Only deafness is honored so far - nonzero ratings don't yet scale hearing
-/// range.
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropAIHearing {
     pub rating: u32,
 }
 
 impl PropAIHearing {
+    /// Default Dark Engine AIHearStat distance multipliers (aibassns.cpp).
+    /// Missing properties use Normal (3); clamp malformed ratings to VeryHigh.
+    pub fn range_multiplier(&self) -> f32 {
+        [0.0, 0.25, 0.65, 1.0, 1.5, 3.0][self.rating.min(5) as usize]
+    }
+
     pub fn is_deaf(&self) -> bool {
         self.rating == 0
     }

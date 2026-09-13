@@ -643,6 +643,7 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
     if is_gunshot {
         if let Some(origin) = weapon_world_position(world, entity_id) {
             effects.push(Effect::RaiseNoise {
+                source: entity_id,
                 origin,
                 radius: GUNSHOT_NOISE_RADIUS,
             });

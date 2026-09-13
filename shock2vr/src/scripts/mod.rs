@@ -38,7 +38,7 @@ pub mod gui;
 mod hazard_objects;
 pub mod healing_item;
 mod homing;
-mod impact_sound;
+pub(crate) mod impact_sound;
 mod internal_collision_type;
 mod internal_explosion;
 pub mod internal_fast_projectile;

@@ -590,11 +590,10 @@ pub enum Effect {
         stim_template_id: i32,
     },
 
-    /// A noise (gunfire, etc.) at `origin`: every creature within `radius`
-    /// hears it, escalates alertness, and investigates the source - so
-    /// firing a weapon draws nearby AIs even with no line of sight. A plain
-    /// Euclidean radius for now (walls don't attenuate it yet).
+    /// A player-caused noise. Range is scaled by listener acuity and cover.
+    /// Source identity excludes the emitting collider from acoustic rays.
     RaiseNoise {
+        source: EntityId,
         origin: Vector3<f32>,
         radius: f32,
     },
@@ -781,6 +780,15 @@ pub enum Effect {
         query: EnvSoundQuery,
         fallback: EnvSoundQuery,
         position: Vector3<f32>,
+    },
+    /// A qualifying player impact: notify AI only if an authored or fallback
+    /// sample actually resolves and plays. Unresolved schemas stay silent.
+    PlayImpactSound {
+        audio_handle: AudioHandle,
+        query: EnvSoundQuery,
+        fallback: Option<EnvSoundQuery>,
+        position: Vector3<f32>,
+        source: EntityId,
     },
     PositionInventory {
         position: Vector3<f32>,

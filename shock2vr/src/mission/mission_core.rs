@@ -1777,6 +1777,24 @@ fn blast_exposure(
         sample_points.push(victim_position);
     }
 
+    occlusion_exposure(
+        physics,
+        source_entity,
+        victim_entity,
+        center,
+        &sample_points,
+    )
+}
+
+/// Shared actor-solid cover rays for blast and sound. Sources and recipients
+/// cannot occlude their own event; interaction-only bounds and sensors pass.
+fn occlusion_exposure(
+    physics: &PhysicsWorld,
+    source_entity: Option<EntityId>,
+    victim_entity: EntityId,
+    center: Vector3<f32>,
+    sample_points: &[Vector3<f32>],
+) -> f32 {
     let start = Point3::from_vec(center);
     let ray_can_hit_entity =
         |entity_id| Some(entity_id) != source_entity && entity_id != victim_entity;
@@ -1804,6 +1822,49 @@ fn blast_exposure(
     visible_samples as f32 / sample_points.len() as f32
 }
 
+/// Acuity has already scaled `range`. Use only three acoustic cover rays,
+/// and retain quarter range through full cover so walls muffle rather than
+/// behave as an absolute sound barrier.
+fn noise_reaches_listener(
+    physics: &PhysicsWorld,
+    source: EntityId,
+    listener: EntityId,
+    origin: Vector3<f32>,
+    position: Vector3<f32>,
+    range: f32,
+) -> bool {
+    let distance = (position - origin).magnitude();
+    if distance >= range || range <= 0.0 {
+        return false;
+    }
+    // Sample center and both upper sides: low/narrow cover
+    // muffles sound without turning a railing into a sealed wall.
+    let (center, half) = physics
+        .get_aabb2(listener)
+        .map(|b| {
+            (
+                (b.min.to_vec() + b.max.to_vec()) * 0.5,
+                (b.max - b.min) * 0.4,
+            )
+        })
+        .unwrap_or((position, vec3(0.2, 0.4, 0.2)));
+    let side = vec3(center.z - origin.z, 0.0, origin.x - center.x);
+    let side = if side.magnitude2() > 1e-6 {
+        side.normalize() * half.x.max(half.z)
+    } else {
+        vec3(half.x, 0.0, 0.0)
+    };
+    let upper = center + vec3(0.0, half.y, 0.0);
+    let exposure = occlusion_exposure(
+        physics,
+        Some(source),
+        listener,
+        origin,
+        &[center, upper + side, upper - side],
+    );
+    distance < range * (0.25 + 0.75 * exposure)
+}
+
 #[cfg(test)]
 mod blast_occlusion_tests {
     use super::*;
@@ -1812,7 +1873,11 @@ mod blast_occlusion_tests {
         Quaternion::from_sv(1.0, vec3(0.0, 0.0, 0.0))
     }
 
-    fn exposure_with_cover(cover_size: Option<Vector3<f32>>, cover_blocks_actors: bool) -> f32 {
+    fn with_cover<T>(
+        cover_size: Option<Vector3<f32>>,
+        cover_blocks_actors: bool,
+        inspect: impl FnOnce(&PhysicsWorld, EntityId, EntityId) -> T,
+    ) -> T {
         let mut world = World::new();
         let source = world.add_entity(());
         let victim = world.add_entity(());
@@ -1859,13 +1924,94 @@ mod blast_occlusion_tests {
         let mut player_handle = physics.create_player(vec3(50.0, 50.0, 50.0), player);
         physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
 
-        blast_exposure(
-            &physics,
-            Some(source),
-            victim,
-            vec3(0.0, 0.0, 0.0),
-            vec3(0.0, 0.0, 4.0),
+        inspect(&physics, source, victim)
+    }
+
+    fn exposure_with_cover(cover_size: Option<Vector3<f32>>, cover_blocks_actors: bool) -> f32 {
+        with_cover(
+            cover_size,
+            cover_blocks_actors,
+            |physics, source, victim| {
+                blast_exposure(
+                    physics,
+                    Some(source),
+                    victim,
+                    vec3(0.0, 0.0, 0.0),
+                    vec3(0.0, 0.0, 4.0),
+                )
+            },
         )
+    }
+
+    #[test]
+    fn hearing_acuity_and_cover_control_delivery() {
+        for cover in [
+            None,
+            Some(vec3(10.0, 10.0, 0.25)),
+            Some(vec3(0.5, 10.0, 0.25)),
+        ] {
+            with_cover(cover, true, |physics, source, victim| {
+                let outcomes: Vec<bool> = (0..=5)
+                    .map(|rating| {
+                        let range =
+                            8.0 * dark::properties::PropAIHearing { rating }.range_multiplier();
+                        noise_reaches_listener(
+                            physics,
+                            source,
+                            victim,
+                            Vector3::zero(),
+                            vec3(0.0, 0.0, 4.0),
+                            range,
+                        )
+                    })
+                    .collect();
+                let expected = match cover {
+                    None => vec![false, false, true, true, true, true],
+                    Some(size) if size.x > 1.0 => vec![false, false, false, false, false, true],
+                    _ => vec![false, false, false, true, true, true],
+                };
+                assert_eq!(outcomes, expected, "cover={cover:?}");
+            });
+        }
+        with_cover(
+            Some(vec3(10.0, 10.0, 0.25)),
+            false,
+            |physics, source, victim| {
+                assert!(noise_reaches_listener(
+                    physics,
+                    source,
+                    victim,
+                    Vector3::zero(),
+                    vec3(0.0, 0.0, 4.0),
+                    8.0
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn agility_and_crouching_change_which_footsteps_reach_a_listener() {
+        use crate::mission::player_footsteps::{PlayerFootstep, footstep_noise_radius};
+        with_cover(None, true, |physics, source, victim| {
+            for (agility, crouched, footstep, expected) in [
+                (1, false, PlayerFootstep::Step, true),
+                (6, false, PlayerFootstep::Step, false),
+                (1, true, PlayerFootstep::Step, false),
+                (6, false, PlayerFootstep::Landing, true),
+            ] {
+                assert_eq!(
+                    noise_reaches_listener(
+                        physics,
+                        source,
+                        victim,
+                        Vector3::zero(),
+                        vec3(0.0, 0.0, 4.0),
+                        footstep_noise_radius(footstep, agility, crouched)
+                    ),
+                    expected
+                );
+            }
+        });
     }
 
     #[test]
@@ -4140,6 +4286,24 @@ impl MissionCore {
                     footstep,
                     new_character_pos,
                 ));
+                let agility = self
+                    .world
+                    .borrow::<UniqueView<QuestInfo>>()
+                    .map(|q| q.player_stats().agility)
+                    .unwrap_or(1);
+                effects.push(Effect::RaiseNoise {
+                    source: self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .unwrap()
+                        .entity_id,
+                    origin: new_character_pos,
+                    radius: crate::mission::player_footsteps::footstep_noise_radius(
+                        footstep,
+                        agility,
+                        self.player_handle.is_crouched(),
+                    ),
+                });
             }
 
             let player_id = self
@@ -4216,17 +4380,21 @@ impl MissionCore {
                     contact,
                 } => {
                     for (item, target) in [(entity1_id, entity2_id), (entity2_id, entity1_id)] {
-                        if let Some(message) = self.thrown_items.impact(
+                        let contact = contact.map(|mut c| {
+                            if item == entity2_id {
+                                c.normal = -c.normal;
+                            }
+                            c
+                        });
+                        effects.push(self.thrown_items.impact_sound(
                             &self.world,
                             item,
                             target,
-                            contact.map(|mut c| {
-                                if item == entity2_id {
-                                    c.normal = -c.normal;
-                                }
-                                c
-                            }),
-                        ) {
+                            contact,
+                        ));
+                        if let Some(message) =
+                            self.thrown_items.impact(&self.world, item, target, contact)
+                        {
                             self.script_world.dispatch(message);
                         }
                     }
@@ -6191,14 +6359,10 @@ impl MissionCore {
         }
     }
 
-    /// Propagate a noise (Effect::RaiseNoise): every creature within `radius`
-    /// of `origin` hears it and gets a HeardNoise message, so it can alert and
-    /// investigate the source. A plain Euclidean radius - walls don't
-    /// attenuate it yet (a path-distance model is a follow-up). Deaf AIs
-    /// (hearing acuity 0, e.g. the `Deaf` metaproperty on medsci1's
-    /// card-slot-watching OG-Pipe, obj 596 - the corridor hybrids hear
-    /// normally) are filtered out here so no listener has to re-check.
-    fn raise_noise(&mut self, origin: Vector3<f32>, radius: f32) {
+    /// Player-caused sounds use authored hearing acuity and three cover rays.
+    /// Fully covered listeners get 25% range, partly covered ones interpolate
+    /// toward full range. This is cheap occlusion, not acoustic path tracing.
+    fn raise_noise(&mut self, source: EntityId, origin: Vector3<f32>, radius: f32) {
         let heard: Vec<EntityId> = {
             let v_creature = self
                 .world
@@ -6213,12 +6377,20 @@ impl MissionCore {
                 .iter()
                 .with_id()
                 .filter_map(|(entity_id, (_creature, transform))| {
-                    if v_hearing.get(entity_id).is_ok_and(|h| h.is_deaf()) {
-                        return None;
-                    }
+                    let multiplier = v_hearing
+                        .get(entity_id)
+                        .map(|h| h.range_multiplier())
+                        .unwrap_or(1.0);
                     let pos = transform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
-                    let distance = (crate::util::point3_to_vec3(pos) - origin).magnitude();
-                    (distance < radius).then_some(entity_id)
+                    noise_reaches_listener(
+                        &self.physics,
+                        source,
+                        entity_id,
+                        origin,
+                        pos.to_vec(),
+                        radius * multiplier,
+                    )
+                    .then_some(entity_id)
                 })
                 .collect()
         };
@@ -6845,6 +7017,8 @@ impl MissionCore {
             vec3(1.0, 1.0, 1.0),
         );
         self.physics.set_velocity(entity_id, forward * THROW_SPEED);
+        self.thrown_items
+            .track_existing_motion(&self.world, &self.physics, entity_id);
         // A thrown item is a normal referenced world object again.
         self.world.add_component(entity_id, PropHasRefs(true));
         self.script_world.dispatch(Message {
@@ -7926,8 +8100,12 @@ impl MissionCore {
                     );
                 }
 
-                Effect::RaiseNoise { origin, radius } => {
-                    self.raise_noise(origin, radius);
+                Effect::RaiseNoise {
+                    source,
+                    origin,
+                    radius,
+                } => {
+                    self.raise_noise(source, origin, radius);
                 }
 
                 Effect::ReloadWeapon { weapon } => {
@@ -9850,6 +10028,34 @@ impl MissionCore {
                         strength,
                         self.interaction.is_supported(entity_id),
                     );
+                }
+                Effect::PlayImpactSound {
+                    query,
+                    fallback,
+                    position,
+                    audio_handle,
+                    source,
+                } => {
+                    let played = play_environmental_sound(
+                        &global_context.gamesys,
+                        asset_cache,
+                        audio_context,
+                        query,
+                        audio_handle.clone(),
+                        position,
+                    ) || fallback.is_some_and(|fallback| {
+                        play_environmental_sound(
+                            &global_context.gamesys,
+                            asset_cache,
+                            audio_context,
+                            fallback,
+                            audio_handle,
+                            position,
+                        )
+                    });
+                    if played {
+                        self.raise_noise(source, position, 8.0);
+                    }
                 }
                 Effect::PlayEnvironmentalSoundWithFallback {
                     query,

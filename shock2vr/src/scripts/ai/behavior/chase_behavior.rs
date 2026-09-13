@@ -78,6 +78,21 @@ impl Behavior for ChaseBehavior {
         physics: &PhysicsWorld,
         entity_id: EntityId,
     ) -> NextBehavior {
+        // Reaching a heard/remembered location ends pursuit even before
+        // alertness decays. Otherwise root motion walks past the empty goal.
+        let remembered = world
+            .borrow::<View<crate::runtime_props::RuntimePropAITargetAwareness>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().copied());
+        if let Some(awareness) = remembered {
+            if !awareness.has_line_of_sight
+                && super::SearchBehavior::at_goal(world, entity_id, awareness.last_known_pos)
+            {
+                return NextBehavior::Next(Box::new(std::cell::RefCell::new(
+                    super::SearchBehavior::new(awareness.last_known_pos),
+                )));
+            }
+        }
         match super::attack_behavior_for_distance(world, physics, entity_id) {
             Some(behavior) => NextBehavior::Next(behavior),
             None => NextBehavior::Stay,

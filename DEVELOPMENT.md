@@ -575,3 +575,43 @@ installs + launches over the air; `adb logcat` streams logs wirelessly.
   `adb connect` per session, or let Meta Quest Developer Hub manage the
   connection (it auto-reconnects and can keep the headset awake).
 - APK push is slower over Wi-Fi than USB; fine for the normal iterate loop.
+
+### AI hearing and distractions
+
+AI hearing receives player gunshots, player footsteps/landings, and qualifying
+player-caused material impacts (held weapons, released props, and player-fired
+projectiles). Creature footsteps, voices, and enemy projectile impacts play
+normally without generating investigation cues. Audible playback and AI hearing
+are separate; music, narration, ambient audio, and other schema sounds do not
+alert enemies merely because they play.
+
+| Noise | Base range (world units), before listener acuity and cover |
+| --- | --- |
+| Gunshot | 20 |
+| Material impact | 8 |
+| Walking | 6 at Agility 1, falling linearly to 3 at Agility 6 |
+| Crouching | Half the walking range |
+| Landing | 1.5 times the walking/crouching range |
+
+These source ranges and the Agility/cover curves are gameplay tuning, not a
+claim of exact original-engine parity. `P$AI_Hearin` uses the original default
+range multipliers: 0 (deaf), 0.25, 0.65, 1, 1.5, 3 for ratings 0–5. An absent
+property means normal hearing (rating 3). Three rays toward the listener sample
+solid cover, sharing the explosion ray filtering. Full cover reduces range to
+25%; partial cover interpolates toward full range. This approximates muffling,
+not sound paths around corners or a room/portal acoustic simulation.
+
+A heard noise supplies the landing/firing/footstep position to the existing AI
+investigation behavior. On arrival, the monster stops and scans rather than
+attacking the empty location. Seeing the player again resumes pursuit/combat.
+The player can throw a cup away from their hiding place to draw a monster there.
+Released props use pre-solve relative contact speed and the existing impact
+sound gate (0.1 world units/s, 0.15 s cooldown per contact partner), independently
+of throw damage. Contacts below that threshold and `NO_COLLISION_SOUND` props are
+silent. Impact noises notify AI only after a sound sample resolves and plays. A rebound may clatter again after the cooldown. Flat inventory tosses
+also use this sound path while retaining their existing speed/damage behavior.
+
+The acoustic regression tests cover hearing ratings, cover, Agility, and crouch;
+SDK scenarios exercise real footsteps, gunfire, and thrown-cup audio/investigation.
+Footstep pacing retains its existing limits: tracked room-scale head movement
+alone does not move the pawn or generate steps.

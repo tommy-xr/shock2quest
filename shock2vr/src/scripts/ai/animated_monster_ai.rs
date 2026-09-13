@@ -501,6 +501,9 @@ impl AnimatedMonsterAI {
             // Turning in place is not pursuit progress. Let the stall timer
             // span pivots; replacing their clip reports cancellation normally.
             let eligible = self.door_wait.is_none()
+                // Scanning an empty sound location is successful searching,
+                // not failed combat. Do not replace it with a stall gesture.
+                && self.current_behavior.borrow().name() != "Search"
                 && self.current_behavior.borrow().scripted_state() == ScriptedState::NotScripted
                 && matches!(
                     self.alertness.current_level,
@@ -2269,6 +2272,19 @@ mod tests {
             total: std::time::Duration::from_millis(100),
         };
         Effect::flatten(vec![monster.update(entity_id, world, &physics, &time)])
+    }
+
+    #[test]
+    fn investigating_an_empty_sound_location_is_not_failed_combat() {
+        let world = World::new();
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.alertness.current_level = AIAlertLevel::Moderate;
+        monster.current_behavior = Box::new(RefCell::new(SearchBehavior::new(vec3(0.0, 0.0, 0.0))));
+        for _ in 0..10 {
+            monster.update_combat_frustration(&world, &physics, EntityId::dead(), false, 1.0);
+            assert_eq!(monster.current_behavior.borrow().name(), "Search");
+        }
     }
 
     /// #791: a calm creature that can see the player must turn to look at it.

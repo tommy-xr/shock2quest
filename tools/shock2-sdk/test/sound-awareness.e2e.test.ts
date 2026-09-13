@@ -24,6 +24,7 @@ test(
     });
 
     await game.step({ frames: 10 });
+    await game.player.setStats({ skills: { standard_weapons: 1 } });
 
     // Wield a pistol (spawns and auto-wields in front of the empty-handed
     // player), then spawn a monster - both appear along the player's aim.
@@ -44,16 +45,17 @@ test(
 
     // Step to the side of the monster (perpendicular to the spawn axis) so a
     // shot fired straight ahead MISSES it - the alert must come from the
-    // gunshot noise, not a bullet hit. Stay close enough to be in earshot.
+    // gunshot noise, not a bullet hit. Stay inside the 5-unit muffled range
+    // too: this mission staging can put walls between source and listener.
     const fx = m[0] - start.x;
     const fz = m[2] - start.z;
     const flen = Math.hypot(fx, fz) || 1;
     const px = fz / flen; // perpendicular in XZ
     const pz = -fx / flen;
     await game.player.teleport({
-      x: m[0] + px * 5,
+      x: m[0] + px * 3,
       y: start.y,
-      z: m[2] + pz * 5,
+      z: m[2] + pz * 3,
     });
     await game.step({ frames: 5 });
 
@@ -74,9 +76,13 @@ test(
     );
 
     // Fire the pistol. The gunshot noise reaches the nearby monster.
+    const beforeAudio = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
     await fireOnce(game);
     await game.step({ frames: 5 });
     detail = await game.entities.detail(monster.id);
+    assert.ok((await game.audio.recent()).sounds.some(s => s.sequence > beforeAudio
+      && s.tags.some(([tag, value]) => tag === "event" && value === "shoot")),
+      "a real gunshot must fire; an unmet weapon skill must not masquerade as a hearing failure");
     assert.equal(
       aiProp(detail, "AIAlertness"),
       "Moderate",
