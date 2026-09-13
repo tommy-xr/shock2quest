@@ -256,7 +256,25 @@ fn wide_row(rects: PanelRects, slot: usize, len: usize) -> Rect {
 
 fn format_value(kind: &DevParamKind, value: f32, bool_labels: Option<[&str; 2]>) -> String {
     match kind {
-        DevParamKind::Float { .. } => format!("{value:.2}"),
+        DevParamKind::Float { min, step, .. } => {
+            // Use the grid's precision instead of spending narrow readout space
+            // on trailing zeroes (50 ms must read "50", not ellipsized "50…").
+            // Include min: a 0.1 grid anchored at 0.25 still needs two decimals.
+            let precision = if *step <= 0.0 {
+                2
+            } else {
+                (0..=4)
+                    .find(|digits| {
+                        let scale = 10_f32.powi(*digits);
+                        [*min, *step].into_iter().all(|v| {
+                            let scaled = v * scale;
+                            (scaled - scaled.round()).abs() < 0.0001
+                        })
+                    })
+                    .unwrap_or(4) as usize
+            };
+            format!("{value:.precision$}")
+        }
         DevParamKind::Bool => {
             bool_labels.unwrap_or(["Off", "On"])[usize::from(value != 0.0)].to_owned()
         }
@@ -757,6 +775,29 @@ mod tests {
             step: 0.02,
         };
         assert_eq!(format_value(&kind, 0.719_999_97, None), "0.72");
+        for (id, value, expected) in [
+            (dev_params::THROW_SMOOTHING_MS, 50.0, "50"),
+            (dev_params::THROW_SMOOTHING_MS, 100.0, "100"),
+            (dev_params::THROW_STRENGTH_BONUS, 0.25, "0.25"),
+            (dev_params::VR_GLOVE_RADIUS, 0.055, "0.055"),
+        ] {
+            assert_eq!(
+                format_value(&dev_params::spec(id).kind, value, None),
+                expected
+            );
+        }
+        assert_eq!(
+            format_value(
+                &DevParamKind::Float {
+                    min: 0.25,
+                    max: 2.0,
+                    step: 0.1
+                },
+                0.35,
+                None
+            ),
+            "0.35"
+        );
         assert_eq!(format_value(&DevParamKind::Bool, 1.0, None), "On");
         assert_eq!(
             format_value(&DevParamKind::Bool, 0.0, Some(["Aim", "Grip"])),
