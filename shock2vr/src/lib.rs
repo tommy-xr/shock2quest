@@ -23,6 +23,7 @@ pub mod death_camera;
 pub mod dev_params;
 mod flat_player_controller;
 pub mod free_camera;
+mod glove_fit;
 mod gui;
 mod hand_feedback;
 mod hand_glove;
@@ -1406,6 +1407,13 @@ impl Game {
         input_context: &input_context::InputContext,
         actions: &mut input::InputActionState,
     ) {
+        let calibrated_input = glove_fit::calibrated_input(
+            input_context,
+            self.options.presentation_mode,
+            self.active_game_scene.scene_name() == "debug_gloves",
+            dev_params::get(dev_params::GLOVE_FORWARD_CM),
+        );
+        let input_context = &calibrated_input;
         let span = span!(Level::INFO, "update");
         let _enter = span.enter();
         let delta_time = time.elapsed.as_secs_f32();
@@ -1988,6 +1996,14 @@ impl Game {
                 }
             }
             GlobalEffect::TestReload => {
+                let level_name = self.active_game_scene.scene_name().to_string();
+                if scenes::debug_scene_names().any(|name| name.eq_ignore_ascii_case(&level_name)) {
+                    // Generated scenes have no .mis to parse. Reuse the
+                    // Developer launcher's reset path instead of sending their
+                    // names to the background mission loader.
+                    self.handle_global_effect(GlobalEffect::LaunchDebugScene { name: level_name });
+                    return;
+                }
                 let (position, rotation) = match self.player_standing_transform() {
                     Ok(transform) => transform,
                     Err(error) => {
@@ -1995,7 +2011,6 @@ impl Game {
                         return;
                     }
                 };
-                let level_name = self.active_game_scene.scene_name().to_string();
                 let spawn_loc = SpawnLocation::PositionRotation(position, rotation);
                 self.begin_transition(
                     level_name,
@@ -2383,9 +2398,12 @@ impl Game {
             scene.push(ring);
         }
 
-        let mut pause_objects =
-            self.pause_menu
-                .render(&mut self.asset_cache, &self.options, pawn_to_world);
+        let mut pause_objects = self.pause_menu.render(
+            &mut self.asset_cache,
+            &self.options,
+            pawn_to_world,
+            self.active_game_scene.scene_name() == "debug_gloves",
+        );
         for object in &mut pause_objects {
             object.set_render_layer(RenderLayer::SystemOverlay);
         }
@@ -2936,6 +2954,13 @@ impl MissingAssets {
 
     fn update(&mut self, time: &Time, input_context: &input_context::InputContext) {
         use crate::game_scene::GameScene;
+        let calibrated_input = glove_fit::calibrated_input(
+            input_context,
+            self.options.presentation_mode,
+            false,
+            dev_params::get(dev_params::GLOVE_FORWARD_CM),
+        );
+        let input_context = &calibrated_input;
         self.scene.update(
             time,
             input_context,

@@ -1,7 +1,7 @@
 import type { GameServer } from "../../src/index.js";
 import type { Vec3 } from "../../src/types.js";
 
-import { add, quatConjugate, quatRotate, scale, sub } from "./vr-hand.js";
+import { add, quatConjugate, quatRotate, scale, sub, type Hand, type Quat } from "./vr-hand.js";
 
 /**
  * A world point as a hand channel value.
@@ -16,9 +16,16 @@ import { add, quatConjugate, quatRotate, scale, sub } from "./vr-hand.js";
 export async function vrHandLocal(
   game: GameServer,
   world: Vec3,
+  hand: Hand = "right",
 ): Promise<Vec3> {
-  const { player } = await game.info();
-  return quatRotate(quatConjugate(player.rotation), sub(world, player.position));
+  const { player, inputs } = await game.info();
+  const local = quatRotate(quatConjugate(player.rotation), sub(world, player.position));
+  const raw = inputs as { hands: Record<Hand, { rotation: Quat }> };
+  const forward = (await game.devParams.list()).params.find(p => p.key === "glove_forward_cm")!.value;
+  // A requested hold is a calibrated hand point; input channels accept the
+  // raw controller pose. Undo the physical offset (0.3048 meters/foot * SCALE_FACTOR 2.5).
+  const offset = quatRotate(raw.hands[hand].rotation, [0, 0, -forward * 0.01 / 0.762]);
+  return sub(local, offset);
 }
 
 /** A world-space displacement in pawn space (rotation only). */
@@ -62,7 +69,7 @@ export async function vrClimbPull(
   },
 ): Promise<VrClimbPullResult> {
   const before = (await game.info()).player.position;
-  const atGrab = await vrHandLocal(game, grabAt);
+  const atGrab = await vrHandLocal(game, grabAt, hand);
   const pullLocal = await vrHandLocalDelta(game, pull);
 
   // Reach out with an OPEN hand first: the grab is a squeeze edge, so the

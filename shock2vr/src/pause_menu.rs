@@ -585,10 +585,13 @@ impl PauseMenu {
         asset_cache: &mut AssetCache,
         options: &GameOptions,
         pawn_to_world: Matrix4<f32>,
+        glove_fit_scene: bool,
     ) -> Vec<SceneObject> {
         if !self.open {
             return Vec::new();
         }
+        self.menu
+            .set_glove_fit(glove_fit_scene.then(crate::glove_fit::GloveFit::current));
         FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE).present_world_space(
             || {
                 let panel = self.menu.panel();

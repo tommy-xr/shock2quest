@@ -15,9 +15,12 @@ for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as 
       skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000,
     }, async () => {
       await using game = await GameServer.launch({mission:"debug_weapons",debugFlags:model === "ar15_h" ? ["--vr","--experimental","physical_held_items"] : ["--vr"]});
+      await game.input.set("head.rotation",[0,0,0,1]);
       await game.step({frames:30});
       const weapon = await cycleToWeapon(game,e=>e.template_id === template);
-      await aimVrHandAt(game,weapon.position,.2,1,0,{hand:primary});
+      // Keep the head facing forward: the pickup target is off to the side,
+      // and turning toward it puts the support fixture in a shoulder bag.
+      await aimVrHandAt(game,weapon.position,.2,1,0,{hand:primary, lookAtTarget:false});
       const other = primary === "left" ? "right" : "left";
       const owner = primary === "left" ? "wielded_entity_id" : "right_hand_entity_id";
       const empty = primary === "left" ? "right_hand_entity_id" : "wielded_entity_id";

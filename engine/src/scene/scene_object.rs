@@ -567,7 +567,12 @@ impl SceneObject {
         self.geometry.draw();
         if self.additive_color {
             unsafe {
-                gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+                gl::BlendFuncSeparate(
+                    gl::SRC_ALPHA,
+                    gl::ONE_MINUS_SRC_ALPHA,
+                    gl::ONE,
+                    gl::ONE_MINUS_SRC_ALPHA,
+                );
             }
         }
 
