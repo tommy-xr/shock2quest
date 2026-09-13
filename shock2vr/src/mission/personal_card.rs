@@ -4,6 +4,9 @@ use super::body_inventory::BodyPose;
 use crate::{input_context::InputContext, vr_support::GripPose};
 use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, vec3};
 use shipyard::{EntityId, Get, View, World};
+use std::{cell::OnceCell, rc::Rc};
+
+const DOWNLOAD_SECONDS: f32 = 1.15;
 
 pub(crate) fn is_reader(world: &World, entity: EntityId) -> bool {
     world
@@ -28,6 +31,8 @@ pub(crate) fn is_reader(world: &World, entity: EntityId) -> bool {
 pub(super) struct PersonalCard {
     pub center: Option<Vector3<f32>>,
     pub hand: Option<usize>,
+    belt_yaw: f32,
+    bit_textures: OnceCell<[Rc<dyn engine::texture::TextureTrait>; 2]>,
     pub blocked: [bool; 2],
     pressed: [bool; 2],
     tracked: [bool; 2],
@@ -45,6 +50,8 @@ impl Default for PersonalCard {
         Self {
             center: None,
             hand: None,
+            belt_yaw: 0.0,
+            bit_textures: OnceCell::new(),
             blocked: [false; 2],
             pressed: [true; 2],
             tracked: [false; 2],
@@ -64,7 +71,7 @@ impl PersonalCard {
         for (_, age) in &mut self.downloads {
             *age += dt.max(0.0);
         }
-        self.downloads.retain(|(_, age)| *age < 0.55);
+        self.downloads.retain(|(_, age)| *age < DOWNLOAD_SECONDS);
     }
 
     pub fn download(&mut self, origin: Vector3<f32>) {
@@ -79,10 +86,15 @@ impl PersonalCard {
         enabled: bool,
     ) {
         self.center = body.map(|body| {
+            self.belt_yaw = body.yaw;
+            // Match the existing astra-vr-belt.glb buckle node: x=-115 mm,
+            // y=0, z=-316 mm relative to its front strap at z=-300 mm.
+            // Another 8 mm clears the buckle's face. This is beside the pouch,
+            // not at the belt origin (which is occupied by the ammo pouch).
             body.front(
-                0.50,
-                crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE),
-            ) - vec3(body.yaw.cos(), 0.0, body.yaw.sin()) * (0.20 / crate::METERS_PER_WORLD_UNIT)
+                0.55,
+                crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) + 0.024,
+            ) - vec3(body.yaw.cos(), 0.0, body.yaw.sin()) * (0.115 / crate::METERS_PER_WORLD_UNIT)
         });
         self.blocked = [false; 2];
         if !enabled {
@@ -125,7 +137,7 @@ impl PersonalCard {
                 && !self.pressed[i]
                 && self.center.is_some_and(|center| {
                     (hand.position - center).magnitude()
-                        <= 0.08 / crate::METERS_PER_WORLD_UNIT
+                        <= 0.05 / crate::METERS_PER_WORLD_UNIT
                             + super::body_inventory::hand_radius()
                 })
             {
@@ -191,7 +203,10 @@ impl PersonalCard {
             self.center.map(|center| {
                 Matrix4::from_translation(pawn + rotation.rotate_vector(center))
                     * Matrix4::from(rotation)
+                    * Matrix4::from_angle_y(cgmath::Rad(-self.belt_yaw))
                     * Matrix4::from_angle_x(cgmath::Deg(90.0))
+                    // scipass lies in X/Z; turn its long Z edge horizontal, face upright.
+                    * Matrix4::from_angle_y(cgmath::Deg(90.0))
             })
         }
     }
@@ -236,30 +251,65 @@ impl PersonalCard {
                 object
             })
             .collect();
-        // Eight short blue motes converge on the same card transform used by
-        // rendering. Depth-tested world geometry naturally clips offscreen or
-        // occluded trails; collection has already completed independently.
-        let destination = transform.w.truncate();
-        for (origin, age) in &self.downloads {
-            for i in 0..8 {
-                let t = (*age - i as f32 * 0.018) / 0.40;
-                if !(0.0..=1.0).contains(&t) {
-                    continue;
+        // Camera-facing binary fragments spiral along the transfer direction.
+        // Two trailing samples make motion readable without solid geometry;
+        // texture glow and fade keep the stream airy at headset distances.
+        if !self.downloads.is_empty() {
+            let textures = self
+                .bit_textures
+                .get_or_init(|| [download_bit_texture(false), download_bit_texture(true)]);
+            let destination = transform.w.truncate();
+            for (origin, age) in &self.downloads {
+                let direction = destination - *origin;
+                let axis = if direction.magnitude2() > 0.00001 {
+                    direction.normalize()
+                } else {
+                    Vector3::unit_y()
+                };
+                let reference = if axis.dot(Vector3::unit_y()).abs() < 0.9 {
+                    Vector3::unit_y()
+                } else {
+                    Vector3::unit_x()
+                };
+                let u = axis.cross(reference).normalize();
+                let v = axis.cross(u);
+                for i in 0..24 {
+                    for tail in 0..3 {
+                        let t = (*age - i as f32 * 0.016 - tail as f32 * 0.018) / 0.72;
+                        if !(0.0..1.0).contains(&t) {
+                            continue;
+                        }
+                        let phase = i as f32 * 2.399_963 + t * std::f32::consts::TAU * 1.7;
+                        let envelope = (std::f32::consts::PI * t).sin();
+                        let radius = (0.055 + (i % 4) as f32 * 0.012)
+                            / crate::METERS_PER_WORLD_UNIT
+                            * envelope;
+                        let point = *origin
+                            + direction * (t * t * (3.0 - 2.0 * t))
+                            + (u * phase.cos() + v * phase.sin()) * radius;
+                        let opacity = (t * 12.0).min(1.0)
+                            * ((1.0 - t) * 9.0).min(1.0)
+                            * [0.95, 0.22, 0.08][tail];
+                        let color = if i % 3 == 0 {
+                            vec3(0.55, 1.0, 0.85)
+                        } else {
+                            vec3(0.12, 0.80, 1.0)
+                        };
+                        let material = engine::scene::BillboardMaterial::create(
+                            textures[i % 2].clone(),
+                            color,
+                            0.65,
+                            1.0 - opacity,
+                            (0.035 + (i % 3) as f32 * 0.004) / crate::METERS_PER_WORLD_UNIT,
+                        );
+                        let mut bit = engine::scene::SceneObject::new(
+                            material,
+                            Box::new(engine::scene::quad::create()),
+                        );
+                        bit.set_transform(Matrix4::from_translation(point));
+                        scene.push(bit);
+                    }
                 }
-                let point = *origin
-                    + (destination - *origin) * (t * t * (3.0 - 2.0 * t))
-                    + Vector3::unit_y()
-                        * (0.10 / crate::METERS_PER_WORLD_UNIT)
-                        * (t * std::f32::consts::PI).sin();
-                let mut mote = engine::scene::SceneObject::new(
-                    engine::scene::color_material::create(vec3(0.2, 0.85, 1.0)),
-                    Box::new(engine::scene::cube::create()),
-                );
-                mote.set_transform(
-                    Matrix4::from_translation(point)
-                        * Matrix4::from_scale(0.006 / crate::METERS_PER_WORLD_UNIT),
-                );
-                scene.push(mote);
             }
         }
         crate::util::tag_render_source(&mut scene, crate::util::render_source::PLAYER_HANDS);
@@ -267,6 +317,49 @@ impl PersonalCard {
     }
 }
 use cgmath::EuclideanSpace;
+
+/// A tiny glowing bitmap glyph, cached once per mission. RGBA sprites use the
+/// existing per-eye billboard material, so fragments face each eye correctly.
+fn download_bit_texture(one: bool) -> Rc<dyn engine::texture::TextureTrait> {
+    const ZERO: [&str; 7] = [
+        "01110", "10001", "10001", "10001", "10001", "10001", "01110",
+    ];
+    const ONE: [&str; 7] = [
+        "00100", "01100", "00100", "00100", "00100", "00100", "01110",
+    ];
+    let glyph = if one { ONE } else { ZERO };
+    let mut bytes = Vec::with_capacity(64 * 64 * 4);
+    for y in 0..64 {
+        for x in 0..64 {
+            let mut distance = f32::INFINITY;
+            for (row, line) in glyph.iter().enumerate() {
+                for (col, cell) in line.bytes().enumerate() {
+                    if cell != b'1' {
+                        continue;
+                    }
+                    let dx = ((x as f32 - (20.0 + col as f32 * 6.0)).abs() - 2.4).max(0.0);
+                    let dy = ((y as f32 - (50.0 - row as f32 * 6.0)).abs() - 2.4).max(0.0);
+                    distance = distance.min(dx.hypot(dy));
+                }
+            }
+            let core = (1.0 - distance / 1.2).clamp(0.0, 1.0);
+            let glow = 0.26 * (-distance * distance / 15.0).exp();
+            bytes.extend_from_slice(&[255, 255, 255, ((core + glow).min(1.0) * 255.0) as u8]);
+        }
+    }
+    Rc::new(engine::texture::init_from_memory2(
+        engine::texture_format::RawTextureData {
+            bytes,
+            width: 64,
+            height: 64,
+            format: engine::texture_format::PixelFormat::RGBA,
+        },
+        &engine::texture::TextureOptions {
+            wrap: false,
+            ..Default::default()
+        },
+    ))
+}
 
 #[cfg(test)]
 mod tests {
@@ -282,6 +375,32 @@ mod tests {
         };
         (PersonalCard::default(), input, body)
     }
+    #[test]
+    fn landscape_card_follows_body_heading_without_claiming_pouch_center() {
+        use cgmath::Transform;
+        let (mut card, mut input, mut body) = fixture();
+        body.yaw = 1.1;
+        card.update(&input, Some(body), [true; 2], true);
+        let transform = card
+            .transform(vec3(0.0, 0.0, 0.0), Quaternion::new(1.0, 0.0, 0.0, 0.0))
+            .unwrap();
+        let long_edge = transform.transform_vector(Vector3::unit_z());
+        assert!(
+            long_edge.y.abs() < 0.0001,
+            "long card edge must lie horizontally"
+        );
+        let body_right = vec3(body.yaw.cos(), 0.0, body.yaw.sin());
+        assert!(long_edge.dot(body_right).abs() > 0.999);
+        input.left_hand.position = super::super::ammo_pouch::center_for(body);
+        card.update(&input, Some(body), [true; 2], true);
+        input.left_hand.squeeze_value = 1.0;
+        card.update(&input, Some(body), [true; 2], true);
+        assert_eq!(
+            card.hand, None,
+            "a grip at the ammo pouch must not take the buckle card"
+        );
+    }
+
     #[test]
     fn one_permanent_card_draws_on_fresh_grip_and_returns_anywhere() {
         let (mut card, mut input, body) = fixture();

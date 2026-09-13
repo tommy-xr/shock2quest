@@ -12,7 +12,7 @@ interaction. Reuse the current shoulder backpack and shared body-inventory frame
   A short download trail may travel from the pickup to the personal card;
   animation and visibility never control whether collection succeeds.
 - The personal card represents balances, software and collected credentials.
-  It exists from the start on the belt, draws into either free hand, and returns
+  It exists from the start attached landscape to the belt buckle, draws into either free hand, and returns
   on release. It is not an inventory item and cannot be lost or consumed.
 - In VR, credential-locked doors/readers and machines require a physical scan.
   Unlocked ordinary doors retain normal operation. Machine scanning opens or
@@ -38,3 +38,6 @@ Verification covers deterministic VR collection and scanning plus flat/log
 regressions. The replacement PR records device verification and its limits.
 Headless poses establish placement and state changes; they do not establish
 seated/standing reach comfort or how a haptic pulse feels.
+
+Visual refinement: glowing binary fragments spiral into the card with fading trails;
+the card attaches to the authored buckle and follows the same body heading.
