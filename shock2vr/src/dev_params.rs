@@ -40,11 +40,12 @@ pub enum DevCategory {
     Weapons,
     Recoil,
     Melee,
+    Throwing,
     Camera,
 }
 
 impl DevCategory {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Root,
         Self::Visualizations,
         Self::Interaction,
@@ -55,6 +56,7 @@ impl DevCategory {
         Self::Weapons,
         Self::Recoil,
         Self::Melee,
+        Self::Throwing,
         Self::Camera,
     ];
 
@@ -70,6 +72,7 @@ impl DevCategory {
             Self::Weapons => "Weapons",
             Self::Recoil => "Recoil",
             Self::Melee => "Melee",
+            Self::Throwing => "Throwing",
             Self::Camera => "Camera & view",
         }
     }
@@ -79,7 +82,7 @@ impl DevCategory {
             Self::Root => None,
             Self::Interaction | Self::Combat => Some(Self::Visualizations),
             Self::Fit => Some(Self::Hands),
-            Self::Recoil | Self::Melee => Some(Self::Weapons),
+            Self::Recoil | Self::Melee | Self::Throwing => Some(Self::Weapons),
             _ => Some(Self::Root),
         }
     }
@@ -266,6 +269,23 @@ dev_params! {
     /// affects physical gun recoil and optional weight; Agility affects recoil.
     GUN_STRENGTH_OVERRIDE = Weapons::float("gun_strength_override", "Gun STR ovrd", 0.0, 0.0, 6.0, 1.0),
     GUN_AGILITY_OVERRIDE = Weapons::float("gun_agility_override", "Gun AGI ovrd", 0.0, 0.0, 6.0, 1.0),
+    /// Throw feel and balance. Launch values apply to the next release; damage
+    /// values are read at impact. Tracking/teleport rejection stays fixed.
+    THROW_SPEED_SCALE = Throwing::float("throw_speed_scale", "Speed scale", 1.0, 0.0, 3.0, 0.1),
+    THROW_SPIN_SCALE = Throwing::float("throw_spin_scale", "Spin scale", 1.0, 0.0, 3.0, 0.1),
+    THROW_MAX_SPEED = Throwing::float("throw_max_speed", "Max speed (u/s)", 12.0, 0.5, 20.0, 0.5),
+    THROW_MAX_SPIN = Throwing::float("throw_max_spin", "Max spin (rad/s)", 25.0, 0.0, 50.0, 1.0),
+    THROW_SMOOTHING_MS = Throwing::float("throw_smoothing_ms", "Motion smoothing (ms)", 50.0, 0.0, 100.0, 5.0),
+    THROW_STRENGTH_OVERRIDE = Throwing::float("throw_strength_override", "Strength override", 0.0, 0.0, 6.0, 1.0),
+    THROW_STRENGTH_BONUS = Throwing::float("throw_strength_bonus", "Strength speed bonus", 0.25, 0.0, 1.0, 0.05),
+    THROW_WEIGHT_EXPONENT = Throwing::float("throw_weight_exponent", "Weight slowdown", 0.25, 0.0, 1.0, 0.05),
+    THROW_STRENGTH_WEIGHT_RELIEF = Throwing::float("throw_strength_weight_relief", "Strength weight relief", 0.5, 0.0, 1.0, 0.1),
+    THROW_MIN_SPEED = Throwing::float("throw_min_speed", "Min throw speed (u/s)", 1.5, 0.1, 5.0, 0.1),
+    THROW_IMPACT_MIN_SPEED = Throwing::float("throw_impact_min_speed", "Min impact speed (u/s)", 2.0, 0.1, 10.0, 0.1),
+    THROW_DAMAGE_SPEED = Throwing::float("throw_damage_speed", "Full damage speed (u/s)", 6.0, 0.5, 20.0, 0.5),
+    THROW_ORGANIC_CAP = Throwing::float("throw_organic_cap", "Organic damage cap", 2.0, 0.0, 2.0, 1.0),
+    THROW_INORGANIC_CAP = Throwing::float("throw_inorganic_cap", "Inorganic damage cap", 1.0, 0.0, 1.0, 1.0),
+    THROW_DAMAGE_WINDOW = Throwing::float("throw_damage_window", "Damage window (s)", 5.0, 0.1, 10.0, 0.1),
     /// Per-axis gain for new physical gun recoil impulses (baseline and extra
     /// one-hand spring). 1 preserves the profile; 0 disables new kick on that
     /// axis. Existing displacement caps and recovery rates remain unchanged.

@@ -128,20 +128,21 @@ impl Script for HeldMeleeWeapon {
                 } else {
                     vec3(0.0, 0.0, 0.0)
                 };
-                let damage = self
-                    .may_damage(entity_id, owner, physics, *contact, player_velocity)
-                    .then(|| authored_contact_damage(world, entity_id, owner))
-                    .flatten()
-                    // Adrenaline Overproduction scales the *player's* swing,
-                    // so only a weapon in their hand gets the bonus (a wrench
-                    // knocked into a creature is nobody's swing).
-                    .map(|amount| {
-                        if self.is_held(world, entity_id) {
-                            amount * crate::scripts::berserk::melee_damage_multiplier(world)
-                        } else {
-                            amount
-                        }
-                    });
+                // Released weapons use the same capped throw damage as other props.
+                let damage = (is_held
+                    && self.may_damage(entity_id, owner, physics, *contact, player_velocity))
+                .then(|| authored_contact_damage(world, entity_id, owner))
+                .flatten()
+                // Adrenaline Overproduction scales the *player's* swing,
+                // so only a weapon in their hand gets the bonus (a wrench
+                // knocked into a creature is nobody's swing).
+                .map(|amount| {
+                    if self.is_held(world, entity_id) {
+                        amount * crate::scripts::berserk::melee_damage_multiplier(world)
+                    } else {
+                        amount
+                    }
+                });
 
                 let mut effects = Vec::new();
                 if let Some(amount) = damage {
@@ -648,6 +649,7 @@ mod tests {
             vec![(WEAPON_BASH, WEAPON_BASH_INTENSITY)],
         )])));
         let weapon = world.add_entity((
+            crate::runtime_props::RuntimePropVrGripOffset(vec3(0.0, 0.0, 0.0)),
             PropCollisionType {
                 collision_type: CollisionType::NO_COLLISION_SOUND,
             },
@@ -694,6 +696,15 @@ mod tests {
                         )
             )
         }));
+    }
+
+    #[test]
+    fn loose_melee_weapon_does_not_bypass_the_throw_damage_cap() {
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        world.remove::<crate::runtime_props::RuntimePropVrGripOffset>(weapon);
+        let mut script = HeldMeleeWeapon::new();
+        let effect = collide(&mut script, &world, weapon, target);
+        assert_eq!(damage_count(&effect), 0);
     }
 
     /// The regression behind the damage fix: a landed VR swing must cost the

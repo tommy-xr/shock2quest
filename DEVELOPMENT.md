@@ -435,6 +435,39 @@ Headlessly, `GET /v1/camera` reports whether the camera is detached and the
 pose it is rendering from, so a test can check what the camera did without
 reading pixels - see `tools/shock2-sdk/test/free-camera.e2e.test.ts`.
 
+#### Throw tuning
+
+**Developer → Weapons → Throwing** contains the live, unlocked throw controls.
+They appear in both the main-menu and pause Developer pages introduced in #1541,
+and are also available through `game.devParams.set(key, value)` or
+`POST /v1/dev-params`. Values reset on app restart; Reset restores each default.
+Launch settings apply on the next release, smoothing on the next motion sample,
+and damage settings at impact. Damage window is selected when releasing.
+
+| Key | Default | Controls |
+| --- | --- | --- |
+| `throw_speed_scale` | 1 | Overall hand-speed gain, before the speed cap |
+| `throw_spin_scale` | 1 | Overall angular-speed gain, before the spin cap |
+| `throw_max_speed` | 12 | Maximum hand-derived speed in world units/s; player motion is added afterward |
+| `throw_max_spin` | 25 | Maximum spin in radians/s |
+| `throw_smoothing_ms` | 50 | Recent motion averaging window; 0 uses the latest sample |
+| `throw_strength_override` | 0 | 0 follows the character sheet; 1–6 tests Strength without changing saved stats |
+| `throw_strength_bonus` | 0.25 | Extra speed at Strength 6, interpolated from no bonus at Strength 1 |
+| `throw_weight_exponent` | 0.25 | Slowdown for objects heavier than the reference mug; 0 removes it |
+| `throw_strength_weight_relief` | 0.5 | Fraction of heavy-object slowdown removed at Strength 6 |
+| `throw_min_speed` | 1.5 | Minimum hand speed in world units/s to arm impact damage |
+| `throw_impact_min_speed` | 2 | Minimum closing speed for damage |
+| `throw_damage_speed` | 6 | Reference-mug closing speed that reaches its damage cap |
+| `throw_organic_cap` | 2 | Whole HP per flesh-target hit, adjustable from 0 to 2 |
+| `throw_inorganic_cap` | 1 | Whole HP per other-material hit, adjustable from 0 to 1 |
+| `throw_damage_window` | 5 | Seconds after release during which the first contact can damage |
+
+Start with speed/spin scale and smoothing to tune release feel, then compare
+Strength 1 and 6 with the same object. The mug uses authored mass 30 as the
+reference weight; these are Dark units, not kilograms. First contact spends a
+throw even against scenery. Tracking validity, teleport rejection, and the
+one-impact rule stay fixed.
+
 #### 3b. Oculus Quest 2
 
 ##### Pre-requisites

@@ -46,6 +46,7 @@ mod security_alarm;
 mod systems;
 #[cfg(test)]
 mod test_support;
+mod throwing;
 /// Shared 2D canvas UI: layout, the screen-space presentation, and the
 /// world-space (VR) panel. Public so a runtime can check where its simulated
 /// controller ray lands on a frontend panel (`FrontendPanelAnchor` +
@@ -1765,6 +1766,7 @@ impl Game {
     /// instead would mint the short press nobody made.
     pub fn cancel_menu_hold(&mut self) {
         self.menu_hold.cancel();
+        throwing::cancel_tracking(self.active_game_scene.world());
         self.weapon_buttons.cancel(self.active_game_scene.world());
     }
 
@@ -1846,6 +1848,7 @@ impl Game {
         // the player is not left with a cursor-driven overlay under the pause
         // panel.
         self.apply_scene_effects(vec![Effect::CloseUseMode]);
+        throwing::cancel_tracking(self.active_game_scene.world());
         self.pause_menu.open();
     }
 

@@ -292,6 +292,17 @@ pub fn to_save_data_with_scripts(
         partition_map(raw_meta_properties, |entity_id| {
             held_entities.contains(entity_id)
         });
+    let thrown_props = world
+        .borrow::<UniqueView<crate::throwing::SavedThrows>>()
+        .map(|saved| {
+            saved
+                .0
+                .iter()
+                .filter(|(id, _)| !entities_to_filter.contains(id) && !held_entities.contains(id))
+                .map(|(id, value)| (*id, *value))
+                .collect()
+        })
+        .unwrap_or_default();
     let world_entity_data = EntitySaveData {
         security_alarm: Some(crate::security_alarm::status(world)),
         properties: world_serialized_properties,
@@ -307,6 +318,7 @@ pub fn to_save_data_with_scripts(
         launched_projectiles: world_launched_projectiles,
         player_fired_projectiles: world_player_fired_projectiles,
         projectile_velocities: world_velocities.into_iter().collect(),
+        thrown_props,
         meta_properties: world_meta_properties,
         script_states: world_script_states,
     };
@@ -326,6 +338,7 @@ pub fn to_save_data_with_scripts(
         launched_projectiles: held_launched_projectiles,
         player_fired_projectiles: held_player_fired_projectiles,
         projectile_velocities: held_velocities.into_iter().collect(),
+        thrown_props: HashMap::new(),
         meta_properties: held_meta_properties,
         script_states: held_script_states,
     };

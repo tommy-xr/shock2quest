@@ -56,6 +56,8 @@ pub struct EntitySaveData {
     pub player_fired_projectiles: Vec<u64 /* entity id */>,
     #[serde(default)]
     pub projectile_velocities: HashMap<u64, cgmath::Vector3<f32>>,
+    #[serde(default)]
+    pub thrown_props: HashMap<u64, crate::throwing::SavedThrow>,
     /// Runtime Add/Remove metaproperty relation deltas. The resulting Dark
     /// components are already in `properties`; this preserves enough relation
     /// state for a later scripted metaproperty action to recompose correctly.
@@ -85,6 +87,7 @@ impl EntitySaveData {
             launched_projectiles: Vec::new(),
             player_fired_projectiles: Vec::new(),
             projectile_velocities: HashMap::new(),
+            thrown_props: HashMap::new(),
             meta_properties: HashMap::new(),
             script_states: Vec::new(),
         }
@@ -115,6 +118,13 @@ impl EntitySaveData {
 
         let (all_properties, _, _) = dark::properties::get::<File>();
 
+        for (old, saved) in &self.thrown_props {
+            if let Some(new) =
+                EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
+            {
+                world.add_component(*new, *saved);
+            }
+        }
         for (old, velocity) in &self.projectile_velocities {
             if let Some(new) =
                 EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))

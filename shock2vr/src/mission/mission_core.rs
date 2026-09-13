@@ -359,7 +359,7 @@ fn rewrite_inventory_release(
     let mut rewritten = Vec::with_capacity(effects.len());
     for effect in effects.drain(..) {
         match effect {
-            VirtualHandEffect::DropItem { entity_id } if claimed(&entity_id) => {
+            VirtualHandEffect::DropItem { entity_id, .. } if claimed(&entity_id) => {
                 rewritten.push(VirtualHandEffect::OutMessage {
                     message: Message {
                         to: entity_id,
@@ -2432,6 +2432,7 @@ pub struct MissionCore {
     /// entity and its motion player (loops the player-melee idle; a swing is
     /// queued on attack and auto-returns to idle). `None` for guns / no weapon.
     flat_melee_anim: Option<(EntityId, AnimationPlayer)>,
+    thrown_items: crate::throwing::ThrownItems,
 
     /// "Use" (metagame) mode, toggled by `Effect::ToggleUseMode` (Tab on
     /// flat; a free hand's lower face button in VR). One mode, two
@@ -3406,6 +3407,7 @@ impl MissionCore {
             debug_weapon_index: 0,
             player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),
             flat_melee_anim: None,
+            thrown_items: Default::default(),
             use_mode: false,
             weapon_settings_gun: None,
             psi_powers_open: false,
@@ -3432,6 +3434,9 @@ impl MissionCore {
             last_head_position: vec3(0.0, 0.0, 0.0),
             death_camera: None,
         };
+        mission_core
+            .thrown_items
+            .restore(&mission_core.world, &mut mission_core.physics);
         for (index, entity_id) in backpack_load_remap.overflow.into_iter().enumerate() {
             mission_core.spill_backpack_overflow(entity_id, index);
         }
@@ -4025,6 +4030,8 @@ impl MissionCore {
         // player position is still read from the character body (not stepped)
         // so a teleport - which writes the body directly - is reflected in
         // PlayerInfo/introspection even before the next real step.
+        self.thrown_items
+            .prepare(&self.physics, time.elapsed.as_secs_f32());
         let (new_character_pos, collision_events) = if time.elapsed.is_zero() {
             (
                 self.physics.get_player_translation(&self.player_handle),
@@ -4208,6 +4215,21 @@ impl MissionCore {
                     entity2_id,
                     contact,
                 } => {
+                    for (item, target) in [(entity1_id, entity2_id), (entity2_id, entity1_id)] {
+                        if let Some(message) = self.thrown_items.impact(
+                            &self.world,
+                            item,
+                            target,
+                            contact.map(|mut c| {
+                                if item == entity2_id {
+                                    c.normal = -c.normal;
+                                }
+                                c
+                            }),
+                        ) {
+                            self.script_world.dispatch(message);
+                        }
+                    }
                     self.script_world.dispatch(Message {
                         to: entity1_id,
                         payload: MessagePayload::Collided {
@@ -4229,6 +4251,8 @@ impl MissionCore {
                 }
             }
         }
+
+        self.thrown_items.publish(&self.world, &self.physics);
 
         // Update PropTeleported entities
         self.world.run(
@@ -4897,7 +4921,7 @@ impl MissionCore {
                     interaction_msgs.retain(|effect| !matches!(effect, VirtualHandEffect::OutMessage { message }
                         if matches!(message.payload, MessagePayload::ProvideForConsumption { entity: offered } if offered == entity)));
                     for effect in &mut interaction_msgs {
-                        if matches!(effect, VirtualHandEffect::DropItem { entity_id } if *entity_id == entity)
+                        if matches!(effect, VirtualHandEffect::DropItem { entity_id, .. } if *entity_id == entity)
                         {
                             *effect = VirtualHandEffect::HolsterItem {
                                 entity_id: entity,
@@ -12965,6 +12989,8 @@ impl MissionCore {
                     );
                 }
                 VirtualHandEffect::HoldItem { entity_id } => {
+                    self.thrown_items.cancel(entity_id);
+                    self.thrown_items.publish(&self.world, &self.physics);
                     self.world
                         .remove::<crate::runtime_props::RuntimePropHolstered>(entity_id);
                     // Most held items stay unphysical and pass through
@@ -13072,8 +13098,10 @@ impl MissionCore {
                         self.restore_refused_store_to_world(entity_id);
                     }
                 }
-                VirtualHandEffect::DropItem { entity_id } => {
+                VirtualHandEffect::DropItem { entity_id, motion } => {
                     self.drop_held_item_into_world(entity_id);
+                    self.thrown_items
+                        .launch(&self.world, &mut self.physics, entity_id, motion);
                 }
             }
         }
@@ -13094,7 +13122,7 @@ impl MissionCore {
         }
         if self.held_item_collision_group(entity_id).is_some() {
             // Recreate from authored physics so the released item is an
-            // ordinary dynamic, harmless loose prop again.
+            // ordinary dynamic loose prop again; the release may then seed a throw.
             self.make_un_physical(entity_id);
         }
         // After the body is gone (so this writes the entity's transform
@@ -16319,8 +16347,14 @@ mod strip_deposit_tests {
     fn a_claimed_release_becomes_a_backpack_store() {
         let (_world, item, other) = two_entities();
         let mut effects = vec![
-            VirtualHandEffect::DropItem { entity_id: item },
-            VirtualHandEffect::DropItem { entity_id: other },
+            VirtualHandEffect::DropItem {
+                entity_id: item,
+                motion: Default::default(),
+            },
+            VirtualHandEffect::DropItem {
+                entity_id: other,
+                motion: Default::default(),
+            },
         ];
         rewrite_inventory_release(&mut effects, &[(item, None)], &[]);
         assert!(
@@ -16335,7 +16369,7 @@ mod strip_deposit_tests {
                     },
                     VirtualHandEffect::StoreItem { entity_id },
                     VirtualHandEffect::DropItem {
-                        entity_id: untouched
+                        entity_id: untouched, ..
                     },
                 ] if *to == item && *entity_id == item && *untouched == other
             ),
@@ -16348,7 +16382,10 @@ mod strip_deposit_tests {
     #[test]
     fn a_claimed_release_with_a_resolved_cell_targets_it() {
         let (_world, item, _other) = two_entities();
-        let mut effects = vec![VirtualHandEffect::DropItem { entity_id: item }];
+        let mut effects = vec![VirtualHandEffect::DropItem {
+            entity_id: item,
+            motion: Default::default(),
+        }];
         rewrite_inventory_release(&mut effects, &[(item, Some((3, 1)))], &[]);
         assert!(
             matches!(
@@ -16375,7 +16412,10 @@ mod strip_deposit_tests {
     #[test]
     fn a_claimed_key_source_is_frobbed_instead() {
         let (_world, card, _other) = two_entities();
-        let mut effects = vec![VirtualHandEffect::DropItem { entity_id: card }];
+        let mut effects = vec![VirtualHandEffect::DropItem {
+            entity_id: card,
+            motion: Default::default(),
+        }];
         rewrite_inventory_release(&mut effects, &[], &[card]);
         assert!(
             matches!(
@@ -16452,7 +16492,10 @@ mod strip_deposit_tests {
     #[test]
     fn an_unclaimed_frame_is_untouched() {
         let (_world, item, _other) = two_entities();
-        let mut effects = vec![VirtualHandEffect::DropItem { entity_id: item }];
+        let mut effects = vec![VirtualHandEffect::DropItem {
+            entity_id: item,
+            motion: Default::default(),
+        }];
         rewrite_inventory_release(&mut effects, &[], &[]);
         assert!(
             matches!(effects.as_slice(), [VirtualHandEffect::DropItem { .. }]),

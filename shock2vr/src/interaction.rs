@@ -1116,6 +1116,18 @@ impl PlayerInteraction for VrInteraction {
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
         self.update_support(ctx);
+        for (i, hand) in [&mut self.left_hand, &mut self.right_hand]
+            .into_iter()
+            .enumerate()
+        {
+            if ctx
+                .input
+                .pose_tracking
+                .is_some_and(|p| !p.head || !p.hands[i])
+            {
+                hand.reset_throw_motion();
+            }
+        }
         let left_held_entity = self.left_hand.get_held_entity();
         // Read both positions from this frame before either hand updates, so
         // native-toxin self-use has the same distance in either hand.
@@ -2021,7 +2033,7 @@ mod tests {
         let effects = interaction.update(&context(&world, &physics, &input));
         assert_eq!(interaction.held_entities(), (None, None));
         assert!(effects.iter().any(|effect| matches!(
-            effect, VirtualHandEffect::DropItem { entity_id } if *entity_id == item
+            effect, VirtualHandEffect::DropItem { entity_id, .. } if *entity_id == item
         )));
         assert!(!effects.iter().any(|effect| matches!(
             effect, VirtualHandEffect::HoldItem { entity_id } if *entity_id == item
