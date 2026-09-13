@@ -257,10 +257,10 @@ dev_params! {
     /// shares its single flat projection between flat and `--vr` mode, so this
     /// override reaches both there.)
     FOV_OVERRIDE_DEG = Camera::float("fov_override_deg", "FOV override", 0.0, 0.0, 120.0, 1.0),
-    /// Scale the authored world ambient floor: 0 disables it, 1 preserves it.
+    /// Scale the world ambient floor and model ambient: 0 disables, 1 preserves.
     AMBIENT_LIGHT_INTENSITY = Camera::float("ambient_light_intensity", "Ambient intensity", 1.0, 0.0, 3.0, 0.05),
     /// Scale baked world lighting independently of the ambient floor and spotlights.
-    LIGHTMAP_LIGHT_INTENSITY = Camera::float("lightmap_light_intensity", "Lightmap intensity", 1.0, 0.0, 3.0, 0.05),
+    LEVEL_LIGHT_INTENSITY = Camera::float("level_light_intensity", "Level light intensity", 1.0, 0.0, 3.0, 0.05),
     /// Weapon-handling test overrides only: 0 follows the character sheet,
     /// 1–6 selects a live test level without changing stats or saves. Strength
     /// affects physical gun recoil and optional weight; Agility affects recoil.

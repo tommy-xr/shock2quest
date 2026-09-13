@@ -51,6 +51,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         // Material properties
         uniform sampler2D texture1;
         uniform float emissivity;
+        uniform float ambientIntensity;
         uniform float transparency;
         uniform bool additiveUnlit;
 
@@ -115,7 +116,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             if (texColor.a < 0.1) discard;
 
             // Base material color (ambient)
-            vec3 finalColor = texColor.rgb * 0.5;
+            vec3 finalColor = texColor.rgb * 0.5 * ambientIntensity;
 
             // Add emissive contribution
             finalColor += texColor.rgb * emissivity;
@@ -138,6 +139,7 @@ struct UnifiedUniforms {
 
     // Material properties
     emissivity_loc: i32,
+    ambient_intensity_loc: i32,
     transparency_loc: i32,
     additive_unlit_loc: i32,
 
@@ -162,6 +164,7 @@ where
     transparency: f32,
     base_transparency: f32,
     additive_unlit: bool,
+    fixed_ambient: bool,
 }
 
 impl<T> BasicMaterial<T>
@@ -197,6 +200,14 @@ where
             gl::Uniform1i(uniforms.additive_unlit_loc, i32::from(self.additive_unlit));
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
             gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
+            gl::Uniform1f(
+                uniforms.ambient_intensity_loc,
+                if self.fixed_ambient {
+                    1.0
+                } else {
+                    render_context.ambient_light_intensity
+                },
+            );
 
             // Set spotlight array uniforms
             for i in 0..6 {
@@ -298,6 +309,10 @@ where
                     ),
 
                     // Material properties
+                    ambient_intensity_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("ambientIntensity").as_ptr(),
+                    ),
                     emissivity_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("emissivity").as_ptr(),
@@ -496,5 +511,27 @@ where
         transparency,
         base_transparency: transparency,
         additive_unlit,
+        fixed_ambient: false,
+    })
+}
+
+/// Preserve the ambient baseline for UI, video, and explicitly fullbright surfaces.
+/// These materials must stay readable independently of world lighting tuning.
+pub fn create_with_fixed_ambient<T>(
+    diffuse_texture: T,
+    emissivity: f32,
+    transparency: f32,
+) -> Box<dyn Material>
+where
+    T: Deref<Target = dyn TextureTrait> + 'static,
+{
+    Box::new(BasicMaterial {
+        diffuse_texture,
+        has_initialized: false,
+        emissivity,
+        transparency,
+        base_transparency: transparency,
+        additive_unlit: false,
+        fixed_ambient: true,
     })
 }

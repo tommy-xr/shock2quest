@@ -114,7 +114,7 @@ impl RingArt {
         // per-pixel alpha.
         let transparency = (1.0 - alpha).max(0.02);
         SceneObject::new(
-            basic_material::create(texture, 1.0, transparency),
+            basic_material::create_with_fixed_ambient(texture, 1.0, transparency),
             Box::new(engine::scene::quad::create()),
         )
     }

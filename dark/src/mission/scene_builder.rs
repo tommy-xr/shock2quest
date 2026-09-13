@@ -246,7 +246,7 @@ pub fn to_scene(
 
         let material = {
             if tex_info.render_type == RenderType::FullBright {
-                RefCell::new(engine::scene::basic_material::create(
+                RefCell::new(engine::scene::basic_material::create_with_fixed_ambient(
                     animated_texture,
                     1.0,
                     0.0,

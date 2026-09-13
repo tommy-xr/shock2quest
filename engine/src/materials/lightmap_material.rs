@@ -212,7 +212,7 @@ impl LightmapMaterial {
             gl::Uniform1i(uniforms.texture2_loc, 1); // diffuse
             gl::Uniform1f(
                 uniforms.lightmap_intensity_loc,
-                render_context.lightmap_light_intensity,
+                render_context.level_light_intensity,
             );
             gl::Uniform3f(
                 uniforms.ambient_color_loc,

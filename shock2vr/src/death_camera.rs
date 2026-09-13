@@ -109,9 +109,7 @@ impl CameraPose {
             ambient_light_intensity: crate::dev_params::get(
                 crate::dev_params::AMBIENT_LIGHT_INTENSITY,
             ),
-            lightmap_light_intensity: crate::dev_params::get(
-                crate::dev_params::LIGHTMAP_LIGHT_INTENSITY,
-            ),
+            level_light_intensity: crate::dev_params::get(crate::dev_params::LEVEL_LIGHT_INTENSITY),
             camera_offset: self.pawn_position,
             camera_rotation: self.pawn_rotation,
             head_offset: self.head_offset,

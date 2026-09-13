@@ -255,16 +255,20 @@ next one, and the same registry is exposed over HTTP by the debug runtime
 (`GET`/`POST /v1/dev-params`) for headless runs.
 
 **Camera & view → Ambient intensity** (`ambient_light_intensity`) scales the
-mission's authored world ambient light floor live in flat and VR. It defaults
-to `1`, ranges from `0` to `3` in `0.05` steps, and resets on app restart.
-`0.5` halves the floor; `0` removes it. Baked lightmaps and spotlights keep
-their intensity, so already-lit surfaces may look unchanged.
+mission's authored world ambient floor and the fixed `0.5` ambient contribution
+on object and creature materials. It defaults to `1`, ranges from `0` to `3`
+in `0.05` steps, and resets on app restart. `0.5` halves those contributions;
+`0` removes them. Emissive contributions and runtime spotlights remain independent.
+UI, video, and explicitly fullbright world surfaces keep their existing brightness.
 
-**Lightmap intensity** (`lightmap_light_intensity`) independently scales baked
-world lighting, also from `0` to `3` in `0.05` steps with default `1`.
+**Camera & view → Level light intensity** (`level_light_intensity`) scales baked
+world lightmaps, also from `0` to `3` in `0.05` steps with default `1`.
 The ambient floor still applies after this scaling; lower both controls to
-darken both baked lighting and the minimum light level. Dynamic spotlights
-are unaffected by either control.
+darken both baked lighting and the minimum light level. Objects do not yet
+receive authored level lights on this branch, so this control currently affects
+only world lightmaps. When per-object level lighting lands (#1229), its authored
+light contributions should use this same multiplier, applied once independently
+of ambient, emissive contributions, and runtime spotlights (tracked in #1547).
 
 Developer parameters use category submenus. **Back** moves up one category;
 **Resume** on the pause Developer page returns directly to gameplay. Opening
