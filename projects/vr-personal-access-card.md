@@ -48,3 +48,7 @@ Author the card’s resting placement with `cargo dx ui --belt-card` in
 the mounting transform, card scale and model centering; its grab target follows
 the edited resting center. Hand-held grips and whole-belt dev parameters remain
 separate adjustments.
+
+Download particles are opt-in through the **Download particles** developer
+parameter (`vr_download_particles`, default off). It gates rendering only;
+collection, sound, haptics and download lifetime continue independently.

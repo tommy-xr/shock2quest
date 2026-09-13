@@ -270,7 +270,9 @@ impl PersonalCard {
         // Camera-facing binary fragments spiral along the transfer direction.
         // Two trailing samples make motion readable without solid geometry;
         // texture glow and fade keep the stream airy at headset distances.
-        if !self.downloads.is_empty() {
+        if crate::dev_params::get_bool(crate::dev_params::VR_DOWNLOAD_PARTICLES)
+            && !self.downloads.is_empty()
+        {
             let textures = self
                 .bit_textures
                 .get_or_init(|| [download_bit_texture(false), download_bit_texture(true)]);
