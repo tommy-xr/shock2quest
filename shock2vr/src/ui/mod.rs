@@ -71,6 +71,8 @@ pub const BUILTIN_FONT: &str = "@builtin";
 
 /// Retail MFDs use MAINAA with the cyan text palette (shkutils.cpp).
 pub const MFD_FONT: &str = "@shock-mfd";
+/// Bold cyan labels replacing the classic MFD art's baked stat headings.
+pub const MFD_LABEL_FONT: &str = "@shock-mfd-label";
 
 /// The font for a `UiElement::Text`, whichever kind it is.
 ///
@@ -80,12 +82,16 @@ pub(crate) fn resolve_font(asset_cache: &mut AssetCache, font: &str) -> Rc<Box<d
     if font == BUILTIN_FONT {
         return engine::shared_builtin_font();
     }
-    if font == MFD_FONT {
+    if font == MFD_FONT || font == MFD_LABEL_FONT {
         // Family mounts strip their prefix. The bare key resolves the canonical
         // fonts family; "fonts/mainaa.fon" instead names iface's stripped copy.
         return asset_cache.get_ext(
             &dark::importers::TINTED_FONT_IMPORTER,
-            "mainaa.fon",
+            if font == MFD_LABEL_FONT {
+                "boldaa.fon"
+            } else {
+                "mainaa.fon"
+            },
             &[0, 255, 190],
         );
     }

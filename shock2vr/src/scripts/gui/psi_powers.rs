@@ -263,6 +263,130 @@ pub fn power_index(powers: &[crate::psi::PsiPowerInfo], power_id: i32) -> Option
     powers.iter().position(|p| p.power.power_id == power_id)
 }
 
+/// Shared retail psi canvas. The character sheet browses its own tier without
+/// changing the amp selector's navigation state or selected power.
+pub(crate) fn psi_panel_components(
+    cursor: &Option<GuiCursor>,
+    world: &World,
+    tier_override: Option<i32>,
+) -> Vec<GuiComponent<PsiPowersGuiMsg>> {
+    // Archive-qualified for the same reason the settings MFD qualifies its
+    // backdrop: obj.crf and iface.crf collide on plain basenames.
+    let mut components: Vec<GuiComponent<PsiPowersGuiMsg>> = vec![
+        gui::image(BACKDROP)
+            .with_alpha(1.0)
+            .with_position(vec2(0.0, 0.0))
+            .with_size(vec2(PANEL_W, PANEL_H)),
+    ];
+
+    let (Ok(powers), Ok(known), Ok(selection), Ok(browsed)) = (
+        world.borrow::<UniqueView<GlobalPsiPowers>>(),
+        world.borrow::<UniqueView<PlayerPsiKnownPowers>>(),
+        world.borrow::<UniqueView<PsiPowerSelection>>(),
+        world.borrow::<UniqueView<PsiPanelTier>>(),
+    ) else {
+        return components;
+    };
+    // Borrowed, never cloned: the table is the whole ~120-entry
+    // `psihelp.str`, and this runs every frame the panel is visible.
+    let strings_view = world.borrow::<UniqueView<GlobalPsiStrings>>();
+    let no_strings = std::collections::HashMap::new();
+    let strings = strings_view.as_ref().map_or(&no_strings, |s| &s.0);
+
+    let tier = tier_override.unwrap_or(browsed.0).clamp(1, TIERS);
+    let selected_id = powers.0.get(selection.index).map(|p| p.power.power_id);
+
+    // The tier strip: one piece of art per browsed tier, over five
+    // invisible tabs. A zero-alpha button is the established "hit target
+    // over backdrop art" convention - the tabs are painted into the art,
+    // so they must be clickable without painting anything over them.
+    components.push(
+        gui::image(&format!("iface/psi{tier}.pcx"))
+            .with_alpha(1.0)
+            .with_position(vec2(TIER_STRIP_POS.0, TIER_STRIP_POS.1))
+            .with_size(vec2(TIER_STRIP_SIZE.0, TIER_STRIP_SIZE.1)),
+    );
+    for tab in 0..TIERS {
+        let rect = tab_rect(tab);
+        components.push(
+            gui::button(PsiPowersGuiMsg::BrowseTier(tab + 1))
+                .with_image(BACKDROP)
+                .with_alpha(0.0)
+                .with_label(&tier_tab_label(tab + 1))
+                .with_position(vec2(rect.x, rect.y))
+                .with_size(vec2(rect.w, rect.h)),
+        );
+    }
+
+    // The grid. Every cell draws its icon; only a real power is clickable,
+    // so the tier marker is art and nothing else.
+    for column in 0..2usize {
+        for row in 0..ROWS {
+            let power_id = power_id_at_cell(tier, column, row);
+            let rect = cell_rect(column, row);
+            // The tier's capacity marker is art: it names no discipline,
+            // so it is drawn and never made clickable.
+            let index = if is_tier_marker(power_id) {
+                None
+            } else {
+                power_index(&powers.0, power_id)
+            };
+            let trained = match index {
+                Some(index) => known.0.contains(&powers.0[index].template_id),
+                // A tier's capacity marker has no power behind it; it reads
+                // as earned once anything in the tier is trained.
+                None => powers
+                    .0
+                    .iter()
+                    .any(|p| p.tier() == tier && known.0.contains(&p.template_id)),
+            };
+            let kind = icon_kind(trained, Some(power_id) == selected_id);
+            components.push(
+                gui::image(&icon_texture(&icon_basename(strings, power_id), kind))
+                    .with_alpha(1.0)
+                    .with_position(vec2(rect.x, rect.y))
+                    .with_size(vec2(rect.w, rect.h)),
+            );
+            if index.is_some() {
+                components.push(
+                    gui::button(PsiPowersGuiMsg::SelectPower(power_id))
+                        .with_image(BACKDROP)
+                        .with_alpha(0.0)
+                        .with_label(&power_cell_label(power_id))
+                        .with_position(vec2(rect.x, rect.y))
+                        .with_size(vec2(rect.w, rect.h)),
+                );
+            }
+        }
+    }
+
+    // The help panel reads whatever the cursor is over - a discipline's
+    // own entry, or the strip's one line about the tabs.
+    if let Some(help) = cursor
+        .as_ref()
+        .and_then(|cursor| help_key(tier, cursor.position.x, cursor.position.y))
+        .and_then(|key| strings.get(&key))
+    {
+        let lines = (HELP.h / LINE_H).floor() as usize;
+        for (idx, line) in super::media::wrap_text(help, HELP_WRAP)
+            .iter()
+            .take(lines)
+            .enumerate()
+        {
+            if line.is_empty() {
+                continue;
+            }
+            components.push(
+                gui::text(line)
+                    .with_position(vec2(HELP.x, HELP.y + idx as f32 * LINE_H))
+                    .with_size(vec2(HELP.w, LINE_H)),
+            );
+        }
+    }
+
+    components
+}
+
 impl Gui<PsiPowersGuiState, PsiPowersGuiMsg> for PsiPowersGui {
     fn get_components(
         &self,
@@ -271,118 +395,7 @@ impl Gui<PsiPowersGuiState, PsiPowersGuiMsg> for PsiPowersGui {
         world: &World,
         _state: &PsiPowersGuiState,
     ) -> Vec<GuiComponent<PsiPowersGuiMsg>> {
-        // Archive-qualified for the same reason the settings MFD qualifies its
-        // backdrop: obj.crf and iface.crf collide on plain basenames.
-        let mut components: Vec<GuiComponent<PsiPowersGuiMsg>> = vec![
-            gui::image(BACKDROP)
-                .with_position(vec2(0.0, 0.0))
-                .with_size(vec2(PANEL_W, PANEL_H)),
-        ];
-
-        let (Ok(powers), Ok(known), Ok(selection), Ok(browsed)) = (
-            world.borrow::<UniqueView<GlobalPsiPowers>>(),
-            world.borrow::<UniqueView<PlayerPsiKnownPowers>>(),
-            world.borrow::<UniqueView<PsiPowerSelection>>(),
-            world.borrow::<UniqueView<PsiPanelTier>>(),
-        ) else {
-            return components;
-        };
-        // Borrowed, never cloned: the table is the whole ~120-entry
-        // `psihelp.str`, and this runs every frame the panel is visible.
-        let strings_view = world.borrow::<UniqueView<GlobalPsiStrings>>();
-        let no_strings = std::collections::HashMap::new();
-        let strings = strings_view.as_ref().map_or(&no_strings, |s| &s.0);
-
-        let tier = browsed.0.clamp(1, TIERS);
-        let selected_id = powers.0.get(selection.index).map(|p| p.power.power_id);
-
-        // The tier strip: one piece of art per browsed tier, over five
-        // invisible tabs. A zero-alpha button is the established "hit target
-        // over backdrop art" convention - the tabs are painted into the art,
-        // so they must be clickable without painting anything over them.
-        components.push(
-            gui::image(&format!("iface/psi{tier}.pcx"))
-                .with_position(vec2(TIER_STRIP_POS.0, TIER_STRIP_POS.1))
-                .with_size(vec2(TIER_STRIP_SIZE.0, TIER_STRIP_SIZE.1)),
-        );
-        for tab in 0..TIERS {
-            let rect = tab_rect(tab);
-            components.push(
-                gui::button(PsiPowersGuiMsg::BrowseTier(tab + 1))
-                    .with_image(BACKDROP)
-                    .with_alpha(0.0)
-                    .with_label(&tier_tab_label(tab + 1))
-                    .with_position(vec2(rect.x, rect.y))
-                    .with_size(vec2(rect.w, rect.h)),
-            );
-        }
-
-        // The grid. Every cell draws its icon; only a real power is clickable,
-        // so the tier marker is art and nothing else.
-        for column in 0..2usize {
-            for row in 0..ROWS {
-                let power_id = power_id_at_cell(tier, column, row);
-                let rect = cell_rect(column, row);
-                // The tier's capacity marker is art: it names no discipline,
-                // so it is drawn and never made clickable.
-                let index = if is_tier_marker(power_id) {
-                    None
-                } else {
-                    power_index(&powers.0, power_id)
-                };
-                let trained = match index {
-                    Some(index) => known.0.contains(&powers.0[index].template_id),
-                    // A tier's capacity marker has no power behind it; it reads
-                    // as earned once anything in the tier is trained.
-                    None => powers
-                        .0
-                        .iter()
-                        .any(|p| p.tier() == tier && known.0.contains(&p.template_id)),
-                };
-                let kind = icon_kind(trained, Some(power_id) == selected_id);
-                components.push(
-                    gui::image(&icon_texture(&icon_basename(strings, power_id), kind))
-                        .with_position(vec2(rect.x, rect.y))
-                        .with_size(vec2(rect.w, rect.h)),
-                );
-                if index.is_some() {
-                    components.push(
-                        gui::button(PsiPowersGuiMsg::SelectPower(power_id))
-                            .with_image(BACKDROP)
-                            .with_alpha(0.0)
-                            .with_label(&power_cell_label(power_id))
-                            .with_position(vec2(rect.x, rect.y))
-                            .with_size(vec2(rect.w, rect.h)),
-                    );
-                }
-            }
-        }
-
-        // The help panel reads whatever the cursor is over - a discipline's
-        // own entry, or the strip's one line about the tabs.
-        if let Some(help) = cursor
-            .as_ref()
-            .and_then(|cursor| help_key(tier, cursor.position.x, cursor.position.y))
-            .and_then(|key| strings.get(&key))
-        {
-            let lines = (HELP.h / LINE_H).floor() as usize;
-            for (idx, line) in super::media::wrap_text(help, HELP_WRAP)
-                .iter()
-                .take(lines)
-                .enumerate()
-            {
-                if line.is_empty() {
-                    continue;
-                }
-                components.push(
-                    gui::text(line)
-                        .with_position(vec2(HELP.x, HELP.y + idx as f32 * LINE_H))
-                        .with_size(vec2(HELP.w, LINE_H)),
-                );
-            }
-        }
-
-        components
+        psi_panel_components(cursor, world, None)
     }
 
     fn get_config(&self) -> GuiConfig {
@@ -525,6 +538,29 @@ mod tests {
 
     /// Every drawn element stays inside the panel, and the help panel clears
     /// the grid above it.
+    #[test]
+    fn character_sheet_browses_without_changing_amp_tier_or_selection() {
+        let world = world_with(1, 2, &[1]);
+        let before = world
+            .borrow::<UniqueView<PsiPowerSelection>>()
+            .unwrap()
+            .index;
+        let components = psi_panel_components(&None, &world, Some(5));
+        assert!(
+            images(&components)
+                .iter()
+                .any(|(texture, _)| texture == "iface/psi5.pcx")
+        );
+        assert_eq!(world.borrow::<UniqueView<PsiPanelTier>>().unwrap().0, 2);
+        assert_eq!(
+            world
+                .borrow::<UniqueView<PsiPowerSelection>>()
+                .unwrap()
+                .index,
+            before
+        );
+    }
+
     #[test]
     fn the_layout_fits_inside_the_panel() {
         for rect in [TIER_STRIP, GRID, HELP] {

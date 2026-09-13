@@ -634,6 +634,22 @@ impl FlatUiHost {
             .collect()
     }
 
+    /// Utility geometry uses the same viewport mapping as the readouts.
+    pub fn utility_elements_debug(&self) -> Vec<crate::game_scene::DebugUiElement> {
+        if self.strip.is_none() {
+            return Vec::new();
+        }
+        self.utilities
+            .debug_elements()
+            .into_iter()
+            .map(|mut element| {
+                let [x, y, w, h] = element.rect;
+                element.screen_rect = self.to_screen_rect(Rect::new(x, y, w, h));
+                element
+            })
+            .collect()
+    }
+
     /// Everything the use-mode readouts DREW on the canvas this frame - the
     /// BIOFULL/AMMOFULL backdrops, the bars, the numbers, the labels - so a
     /// client can see the readouts are present and where, not merely that some

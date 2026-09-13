@@ -10,14 +10,7 @@ use crate::{
 };
 
 const PANEL: Rect = Rect::new(450.0, 124.0, 188.0, 248.0);
-const CHARACTER_PANEL: Rect = Rect::new(450.0, 124.0, 188.0, 296.0);
-const CHARACTER_STATS: [(&str, crate::player_stats::Stat); 5] = [
-    ("STRENGTH", crate::player_stats::Stat::Strength),
-    ("ENDURANCE", crate::player_stats::Stat::Endurance),
-    ("PSIONICS", crate::player_stats::Stat::PsionicAbility),
-    ("AGILITY", crate::player_stats::Stat::Agility),
-    ("CYBER", crate::player_stats::Stat::CyberAffinity),
-];
+use super::character_sheet::{CharacterSheet, PANEL as CHARACTER_PANEL};
 const FONT: &str = "mainfont.fon";
 const PAGE_LINES: usize = 16;
 
@@ -25,6 +18,7 @@ const PAGE_LINES: usize = 16;
 enum Control {
     Inspect,
     Character,
+    AccessCards,
     Research,
     Map,
     Close,
@@ -38,7 +32,8 @@ pub(crate) struct MfdUtilities {
     research: bool,
     empty_logs: bool,
     character: bool,
-    character_stats: crate::player_stats::PlayerStats,
+    character_sheet: CharacterSheet,
+    access_cards: bool,
     map_requested: bool,
     research_catalog: super::research_overview::ResearchCatalog,
     selected: Option<EntityId>,
@@ -49,7 +44,7 @@ pub(crate) struct MfdUtilities {
 
 impl MfdUtilities {
     pub(crate) fn has_left_panel(&self) -> bool {
-        self.research || self.empty_logs
+        self.research || self.empty_logs || self.access_cards
     }
     pub(crate) fn show_empty_logs(&mut self) {
         *self = Self::default();
@@ -72,6 +67,7 @@ impl MfdUtilities {
             || self.research
             || self.empty_logs
             || self.character
+            || self.access_cards
     }
     pub(crate) fn take_map_request(&mut self) -> bool {
         std::mem::take(&mut self.map_requested)
@@ -83,6 +79,11 @@ impl MfdUtilities {
         // Retail shkiface.cpp iface_rects[2..6], on the bottom bio/ammo strips.
         // Keep art, hit testing, and debug discovery on these same canvas rects.
         let mut controls = vec![
+            (
+                Control::AccessCards,
+                Rect::new(422.0, 432.0, 38.0, 36.0),
+                "ACCESS",
+            ),
             (
                 Control::Character,
                 Rect::new(460.0, 430.0, 32.0, 40.0),
@@ -99,7 +100,7 @@ impl MfdUtilities {
         if self.character {
             controls.push((Control::Close, Rect::new(455.0, 132.0, 20.0, 21.0), ""));
         }
-        if self.empty_logs {
+        if self.empty_logs || self.access_cards {
             controls.push((Control::Close, Rect::new(165.0, 132.0, 20.0, 21.0), ""));
         }
         if self.inspecting || self.selected.is_some() {
@@ -111,10 +112,20 @@ impl MfdUtilities {
                 controls.push((Control::Next, Rect::new(490.0, 346.0, 28.0, 20.0), ">"));
             }
         }
+        if self.access_cards {
+            if self.page > 0 {
+                controls.push((Control::Previous, Rect::new(19.0, 394.0, 28.0, 20.0), "<"));
+            }
+            if (self.page + 1) * PAGE_LINES < self.lines.len() {
+                controls.push((Control::Next, Rect::new(130.0, 394.0, 28.0, 20.0), ">"));
+            }
+        }
         controls
             .into_iter()
             .map(|(control, rect, label)| {
                 let texture = match control {
+                    Control::AccessCards if self.access_cards => "iface/ifbtn11.pcx",
+                    Control::AccessCards => "iface/ifbtn10.pcx",
                     Control::Character if self.character => "iface/ifbtn21.pcx",
                     Control::Character => "iface/ifbtn20.pcx",
                     Control::Close if self.character => "iface/closeoff.pcx",
@@ -123,7 +134,7 @@ impl MfdUtilities {
                     Control::Research if self.research => "iface/ifbtn41.pcx",
                     Control::Research => "iface/ifbtn40.pcx",
                     Control::Map => "iface/ifbtn50.pcx",
-                    Control::Close if self.empty_logs => "iface/closeoff.pcx",
+                    Control::Close if self.empty_logs || self.access_cards => "iface/closeoff.pcx",
                     _ => "IFBTN00.PCX",
                 };
                 (control, rect, label, texture)
@@ -146,6 +157,11 @@ impl MfdUtilities {
         {
             if pressed {
                 match control {
+                    Control::AccessCards => {
+                        let open = !self.access_cards;
+                        *self = Self::default();
+                        self.access_cards = open;
+                    }
                     Control::Character => {
                         let open = !self.character;
                         *self = Self::default();
@@ -158,6 +174,7 @@ impl MfdUtilities {
                             self.research = false;
                             self.empty_logs = false;
                             self.character = false;
+                            self.access_cards = false;
                             self.inspecting = true;
                             self.selected = None;
                             self.set_content("Item information".into(), "Select an inventory or held item to inspect. Select ? again to cancel.".into());
@@ -179,9 +196,10 @@ impl MfdUtilities {
             return true;
         }
         if self.character {
+            self.character_sheet.update(point, pressed);
             return CHARACTER_PANEL.contains(point);
         }
-        if self.empty_logs {
+        if self.empty_logs || self.access_cards {
             return Rect::new(2.0, 124.0, 188.0, 296.0).contains(point);
         }
         if self.research {
@@ -220,20 +238,19 @@ impl MfdUtilities {
         info: &dark::ss2_entity_info::SystemShock2EntityInfo,
     ) {
         if self.character {
-            if let Ok(quests) = world.borrow::<UniqueView<crate::quest_info::QuestInfo>>() {
-                self.character_stats = quests.player_stats().clone();
-            }
-            self.title = "OS UPGRADES".into();
-            self.lines = self
-                .character_stats
-                .os_traits
-                .iter()
-                .take(4)
-                .map(|id| crate::scripts::gui::trait_name(*id).to_owned())
-                .collect();
-            if self.lines.is_empty() {
-                self.lines = vec!["No OS upgrades".into(), "installed.".into()];
-            }
+            self.character_sheet.refresh(world, assets);
+            return;
+        }
+        if self.access_cards {
+            let strings = assets.get(&dark::importers::STRINGS_IMPORTER, "misc.str");
+            self.title = "ACCESS CARDS".into();
+            self.lines = world
+                .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+                .map(|quests| access_card_names(quests.key_cards(), &strings))
+                .unwrap_or_else(|_| vec!["No access cards collected.".into()]);
+            self.page = self
+                .page
+                .min(self.lines.len().saturating_sub(1) / PAGE_LINES);
             return;
         }
         if self.research {
@@ -258,61 +275,17 @@ impl MfdUtilities {
 
     pub(crate) fn draw(&self, canvas: &mut UiCanvas) {
         if self.character {
-            canvas.image(CHARACTER_PANEL, "iface/stats.pcx");
-            for (rect, label) in self.character_labels() {
-                // 25AE removes the baked labels; cover the classic label bands
-                // too, then draw one shared layer. Cover the original glyphs'
-                // final pixel row; arrows begin immediately afterward at y=22.
-                canvas.cropped_image(
-                    Rect { h: 14.0, ..rect },
-                    "iface/stats.pcx",
-                    Rect::new(40.0, 134.0, 80.0, 6.0),
-                    Vector2::new(188.0, 296.0),
-                );
-                canvas.text_native_fit(
-                    rect,
-                    &label,
-                    crate::ui::MFD_FONT,
-                    HAlign::Left,
-                    VAlign::Top,
-                );
-            }
-            for (row, (_, stat)) in CHARACTER_STATS.iter().enumerate() {
-                for level in 0..self
-                    .character_stats
-                    .stat_level(*stat)
-                    .clamp(0, crate::player_stats::STAT_CAP)
-                {
-                    canvas.image(
-                        Rect::new(
-                            483.0 + level as f32 * 17.0,
-                            146.0 + row as f32 * 26.0,
-                            20.0,
-                            14.0,
-                        ),
-                        "iface/skilstat.pcx",
-                    );
-                }
-            }
-            for (slot, id) in self.character_stats.os_traits.iter().take(4).enumerate() {
-                canvas.image(
-                    Rect::new(487.0 + slot as f32 * 35.0, 268.0, 32.0, 32.0),
-                    &crate::scripts::gui::trait_icon(*id),
-                );
-            }
-            canvas.text_native_fit(
-                Rect::new(465.0, 314.0, 159.0, 12.0),
-                &self.title,
-                crate::ui::MFD_FONT,
-                HAlign::Left,
-                VAlign::Top,
-            );
-            for (rect, line) in self.visible_lines() {
-                canvas.text_native_fit(rect, line, crate::ui::MFD_FONT, HAlign::Left, VAlign::Top);
-            }
+            self.character_sheet.draw(canvas);
         }
-        if self.empty_logs {
-            canvas.image(Rect::new(2.0, 124.0, 188.0, 296.0), "iface/pda.pcx");
+        if self.empty_logs || self.access_cards {
+            canvas.image(
+                Rect::new(2.0, 124.0, 188.0, 296.0),
+                if self.access_cards {
+                    "iface/security.pcx"
+                } else {
+                    "iface/pda.pcx"
+                },
+            );
             canvas.text_native_fit(
                 Rect::new(17.0, 136.0, 139.0, 12.0),
                 &self.title,
@@ -346,6 +319,13 @@ impl MfdUtilities {
         }
         for (control, rect, label, texture) in self.controls() {
             canvas.image(rect, texture);
+            if control == Control::AccessCards {
+                // Gamesys fakekeys (-77) inherits PropObjIcon=passkey.
+                canvas.fitted_object_icon(
+                    Rect::new(rect.x + 3.0, rect.y + 2.0, 32.0, 32.0),
+                    "objicon/passkey.pcx",
+                );
+            }
             // Native navigation art contains its own glyphs (including the vial).
             if !label.is_empty()
                 && matches!(control, Control::Close | Control::Previous | Control::Next)
@@ -355,23 +335,6 @@ impl MfdUtilities {
         }
     }
 
-    /// Shared stat-label rectangles for rendering and debug inspection.
-    fn character_labels(&self) -> Vec<(Rect, String)> {
-        if !self.character {
-            return Vec::new();
-        }
-        CHARACTER_STATS
-            .iter()
-            .enumerate()
-            .map(|(row, (name, stat))| {
-                (
-                    Rect::new(480.0, 132.0 + row as f32 * 26.0, 148.0, 12.0),
-                    format!("{name} {}", self.character_stats.stat_level(*stat)),
-                )
-            })
-            .collect()
-    }
-
     fn visible_lines(&self) -> impl Iterator<Item = (Rect, &String)> {
         self.lines
             .iter()
@@ -379,10 +342,8 @@ impl MfdUtilities {
             .take(PAGE_LINES)
             .enumerate()
             .map(|(i, line)| {
-                let rect = if self.empty_logs {
+                let rect = if self.empty_logs || self.access_cards {
                     Rect::new(17.0, 170.0 + i as f32 * 12.0, 139.0, 12.0)
-                } else if self.character {
-                    Rect::new(465.0, 332.0 + i as f32 * 12.0, 159.0, 12.0)
                 } else {
                     Rect::new(460.0, 152.0 + i as f32 * 11.0, 168.0, 11.0)
                 };
@@ -401,6 +362,7 @@ impl MfdUtilities {
                     label: Some(
                         match control {
                             Control::Character => "character_stats",
+                            Control::AccessCards => "access_cards",
                             Control::Inspect => "inspect",
                             Control::Research => "research_overview",
                             Control::Map => "map",
@@ -420,17 +382,11 @@ impl MfdUtilities {
             } else {
                 Vec::new()
             })
-            .chain(self.character_labels().into_iter().map(|(r, text)| {
-                crate::game_scene::DebugUiElement {
-                    kind: "text".into(),
-                    texture: None,
-                    text: Some(text),
-                    label: Some("character_stat".into()),
-                    entity_id: None,
-                    rect: [r.x, r.y, r.w, r.h],
-                    screen_rect: [r.x, r.y, r.w, r.h],
-                }
-            }))
+            .chain(if self.character {
+                self.character_sheet.debug_elements()
+            } else {
+                Vec::new()
+            })
             .chain(self.visible_lines().map(|(rect, line)| {
                 let r = [rect.x, rect.y, rect.w, rect.h];
                 crate::game_scene::DebugUiElement {
@@ -445,6 +401,32 @@ impl MfdUtilities {
             }))
             .collect()
     }
+}
+
+/// Each collected region appears once, ordered like retail shksecur.cpp.
+fn access_card_names(
+    cards: &[dark::properties::KeyCard],
+    strings: &std::collections::HashMap<String, String>,
+) -> Vec<String> {
+    let access = cards.iter().fold(0u32, |mask, key| mask | key.region_id);
+    const ORDER: [u32; 32] = [
+        10, 1, 0, 3, 2, 11, 12, 4, 14, 6, 7, 8, 5, 15, 13, 19, 9, 17, 18, 16, 20, 21, 22, 23, 24,
+        25, 26, 27, 28, 29, 30, 31,
+    ];
+    let mut names: Vec<String> = ORDER
+        .into_iter()
+        .filter(|bit| access & (1u32 << bit) != 0)
+        .map(|bit| {
+            strings
+                .get(&format!("access{bit}"))
+                .cloned()
+                .unwrap_or_else(|| "Unknown access card".into())
+        })
+        .collect();
+    if names.is_empty() {
+        names.push("No access cards collected.".into());
+    }
+    names
 }
 
 fn item_description(
@@ -473,6 +455,77 @@ fn item_description(
 mod tests {
     use super::*;
     use cgmath::vec2;
+
+    #[test]
+    fn collected_credentials_show_localized_regions_once_in_deck_order_and_survive_save() {
+        let mut quests = crate::quest_info::QuestInfo::new();
+        let strings = std::collections::HashMap::from([
+            ("access10".into(), "Cryogenics".into()),
+            ("access1".into(), "Science".into()),
+        ]);
+        assert_eq!(
+            access_card_names(quests.key_cards(), &strings),
+            ["No access cards collected."]
+        );
+        for region_id in [2, 1026, 2] {
+            quests.add_key_card(dark::properties::KeyCard {
+                is_master: false,
+                region_id,
+                lock_id: 0,
+            });
+        }
+        let loaded: crate::quest_info::QuestInfo =
+            serde_json::from_str(&serde_json::to_string(&quests).unwrap()).unwrap();
+        assert_eq!(
+            access_card_names(loaded.key_cards(), &strings),
+            ["Cryogenics", "Science"]
+        );
+        quests.add_key_card(dark::properties::KeyCard {
+            is_master: false,
+            region_id: 1u32 << 31,
+            lock_id: 0,
+        });
+        assert_eq!(access_card_names(quests.key_cards(), &strings).len(), 3);
+    }
+
+    #[test]
+    fn access_and_character_buttons_switch_and_close_without_selecting_inventory() {
+        let mut ui = MfdUtilities::default();
+        let card = ui
+            .controls()
+            .into_iter()
+            .find(|c| c.0 == Control::AccessCards)
+            .unwrap()
+            .1
+            .center();
+        let mfd = ui
+            .controls()
+            .into_iter()
+            .find(|c| c.0 == Control::Character)
+            .unwrap()
+            .1
+            .center();
+        assert!(ui.update(card, false, None));
+        assert!(!ui.is_open());
+        ui.update(card, true, None);
+        assert!(ui.access_cards && ui.has_left_panel());
+        assert!(ui.update(vec2(100.0, 200.0), true, None));
+        assert!(ui.selected.is_none());
+        ui.update(mfd, true, None);
+        assert!(ui.character && !ui.has_left_panel());
+        ui.update(vec2(520.0, 405.0), true, None);
+        assert!(
+            ui.character_sheet
+                .debug_elements()
+                .iter()
+                .any(|e| e.texture.as_deref() == Some("iface/etech1.pcx"))
+        );
+        ui.update(vec2(465.0, 142.0), true, None);
+        assert!(!ui.is_open());
+        ui.update(card, true, None);
+        ui.update(card, true, None);
+        assert!(!ui.is_open());
+    }
 
     #[test]
     fn paragraph_spacing_does_not_emit_empty_text_meshes() {

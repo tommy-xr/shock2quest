@@ -193,6 +193,11 @@ impl QuestInfo {
         self.key_cards.push(key_card)
     }
 
+    /// Collected access credentials; pickups no longer exist in the inventory.
+    pub fn key_cards(&self) -> &[KeyCard] {
+        &self.key_cards
+    }
+
     pub fn can_unlock(&self, key_dst: &KeyCard) -> bool {
         let key_cards = &self.key_cards;
         key_cards.iter().any(|key| key.can_unlock(key_dst))

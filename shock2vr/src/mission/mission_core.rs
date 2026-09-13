@@ -15020,6 +15020,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             cursor: self.flat_ui.cursor_debug(),
             readout: self.flat_ui.readout_buttons_debug(),
             readout_elements: self.flat_ui.readout_elements_debug(),
+            utilities: self.flat_ui.utility_elements_debug(),
             pointer: self.flat_ui.pointer_debug(),
             // The panel a client aims a controller at, reported straight off
             // the anchor that placed it - so a test cannot aim at a placement
