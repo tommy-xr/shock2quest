@@ -153,7 +153,13 @@ impl Script for BaseEgg {
                 // mode: that path installs the template's authored projectile
                 // sphere, and the Swarm's is zero-radius, so the visible
                 // particle cloud would have nothing to shoot at.
-                options: CreateEntityOptions::default(),
+                options: CreateEntityOptions {
+                    ecology_type: world
+                        .borrow::<View<dark::properties::PropEcoType>>()
+                        .ok()
+                        .and_then(|types| types.get(entity_id).ok().map(|tag| tag.0)),
+                    ..Default::default()
+                },
             }
         }));
         Effect::Multiple(effects)
@@ -342,7 +348,10 @@ mod tests {
     #[test]
     fn each_pod_plays_one_spatial_hatch_sound_and_only_grubs_launch() {
         let mut world = World::new();
-        let pod = world.add_entity((position(vec3(0.0, 0.0, 0.0)),));
+        let pod = world.add_entity((
+            position(vec3(0.0, 0.0, 0.0)),
+            dark::properties::PropEcoType(59_000),
+        ));
         let physics = PhysicsWorld::new();
         for payload in [EggPayload::Grub, EggPayload::Goo, EggPayload::Swarmer] {
             let grub = matches!(payload, EggPayload::Grub);
@@ -355,10 +364,13 @@ mod tests {
             assert_eq!(effects.iter().filter(|e| matches!(e, Effect::PlaySound { name, spatial: true, source: Some(id), .. } if name == "pod_exp" && *id == pod)).count(), 1);
             for effect in effects {
                 if let Effect::CreateEntityByTemplateName {
-                    initial_velocity, ..
+                    initial_velocity,
+                    options,
+                    ..
                 } = effect
                 {
                     assert_eq!(initial_velocity.magnitude2() > 0.0, grub);
+                    assert_eq!(options.ecology_type, Some(59_000));
                 }
             }
             assert!(matches!(
