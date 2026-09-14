@@ -8,7 +8,7 @@ The starter backpack contains a wrench, pistol, psi amp, ammunition and medical/
 
 Corpses and their remaining contents stay lootable throughout the rest. Starting the next wave removes them; items already collected survive. Run state, rewards and purchased powers persist in saves.
 
-This is the first playable slice. Circulators, Toxin-A replenishment/infestation, eggs, optional ladders and day/night lighting are not implemented yet. Toxin-A is stocked in preparation for the ecology increment. Balance is experimental; an independent authentic playtest reached a wave-one death after killing a hybrid, confirming combat and stair traversal but not a full-run completion.
+Containment adds renewable circulators, floor/wall growth, and proximity-hatching floor eggs. Optional ladders, wall eggs, and day/night lighting remain follow-ups. Balance is experimental; an independent authentic playtest reached a wave-one death after killing a hybrid, confirming combat and stair traversal but not a full-run completion.
 
 Validation includes director unit tests for timing, final-wave/endless gating, rewards, corpse cleanup and serialization; psi purchase quote tests; and debug-runtime purchase/save checks. The short alias is a diagnostic aid, not evidence that a full-length run has been completed.
 
@@ -34,3 +34,40 @@ Endless begins at wave 11 with 44 enemies and a 2:20 minimum assault. Each furth
 `cargo dbgr --mission earth_horde_final` starts at preparation for wave 10 for diagnosis and recording. It provides the usual starter character, not an earned late-game build; any debug stat/equipment provisioning for a recording must be disclosed. This alias does not demonstrate completion of waves 1–9.
 
 Earth has 5,010 navigation cells and 20,581 links, split into multiple connected components. Spawn sites keep subway enemies separate from the street/lobby arena because enemies cannot use the player gravshafts. Stair traversal is runtime verified for hybrids; clearance and navigation of the expanded roster remain playtest targets.
+
+## Renewable containment
+
+Three Hydro air circulators protect the subway, street, and upstairs independently.
+The subway cabinet is beside the platform wall, the street cabinet is east of the
+shops, and the upstairs cabinet is on the east wall opposite the trainers.
+They begin with 180, 210, and 240 seconds of protection respectively. Protection
+counts combat time only: preparation, rest, and the completed-run screen do not
+spend it. A warning appears with 30 seconds remaining.
+
+When protection expires, six authored Hydro growth patches per zone gradually
+appear: four on floors, then two on walls. Each patch takes 15 combat seconds
+to establish. At four patches of density, the zone can produce a GrubEgg every
+45 combat seconds at an unoccupied floor site, up to four pods per zone.
+Approaching within four world units during combat hatches a pod using the normal
+egg animation, sound, and grub behavior. Eggs can be destroyed normally.
+
+New runs begin with Toxin-A research completed. Buy ready-to-use Anti-Annelid
+Toxin (Toxin-A) for 10 nanites at the supply replicator.
+In flatscreen, frob a circulator while carrying a vial; in VR, provide the held
+vial to the cabinet using the normal consumption interaction. Each vial protects
+only that zone for another 180 combat seconds, immediately stops new eggs, and
+clears accumulated patches over up to 12 seconds (recovery also runs during rest).
+The cabinet changes from inactive `air_reof` to active `air_re`. Existing eggs
+and grubs remain; servicing a circulator does not erase those threats.
+
+Containment grubs have a separate global living limit of 24. They never consume
+the director's 15 wave-enemy slots and are not required to complete a wave.
+Hatching reserves available capacity within each batch. Open shells expire after
+30 seconds; dead containment creatures join the existing end-of-rest corpse
+cleanup. Saved runs retain each zone's protection, density, egg cadence, and
+shell lifetime. The short `earth_horde_test` alias accelerates depletion, growth,
+and egg production tenfold for diagnostics, while keeping recovery/hatching rules.
+
+The first pass deliberately uses floor GrubEggs. Wall-mounted growth reuses the
+Hydro meshes with wall-facing transforms; wall eggs and additional payloads can
+follow once pacing has been playtested.
