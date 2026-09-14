@@ -15,9 +15,11 @@
 //! exactly as [`super::ammo_panel`]'s are for the ammo panel.
 
 use cgmath::{Vector2, vec2};
-use shipyard::{UniqueView, World};
+use dark::properties::{PropHitPoints, PropPsiState};
+use shipyard::{Get, UniqueView, View, World};
 
 use super::ammo_panel::{self, AmmoReadout, ReadoutButton, ReadoutButtonSpec};
+use crate::mission::PlayerInfo;
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 
 /// The font the bio numbers use (the original's HUD font).
@@ -86,13 +88,26 @@ fn system_button() -> ReadoutButtonSpec {
 /// [`AmmoReadout`].
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct BioReadout {
+    pub health_points: i32,
+    pub psi_points: i32,
     pub health_fraction: f32,
     pub psi_fraction: f32,
 }
 
 impl BioReadout {
     pub(crate) fn from_world(world: &World) -> Self {
+        let player = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
+        let health = world.borrow::<View<PropHitPoints>>().unwrap();
+        let psi = world.borrow::<View<PropPsiState>>().unwrap();
         Self {
+            health_points: health
+                .get(player)
+                .map(|hp| hp.hit_points.max(0))
+                .unwrap_or(0),
+            psi_points: psi
+                .get(player)
+                .map(|psi| psi.psi_points.max(0))
+                .unwrap_or(0),
             health_fraction: super::get_health_percentage(world),
             psi_fraction: super::get_psi_percentage(world),
         }
@@ -126,18 +141,17 @@ fn emit_bio_overlays(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &BioR
     canvas
         .bar(at(HEALTH_BAR), "HPBAR.PCX", readout.health_fraction)
         .bar(at(PSI_BAR), "PSIBAR.PCX", readout.psi_fraction);
-    let pct = |f: f32| (f.clamp(0.0, 1.0) * 100.0).round() as i32;
     canvas
         .text_native(
             at(HEALTH_TEXT),
-            &format!("{}", pct(readout.health_fraction)),
+            &readout.health_points.to_string(),
             FONT,
             HAlign::Left,
             VAlign::Middle,
         )
         .text_native(
             at(PSI_TEXT),
-            &format!("{}", pct(readout.psi_fraction)),
+            &readout.psi_points.to_string(),
             FONT,
             HAlign::Left,
             VAlign::Middle,
@@ -267,6 +281,8 @@ mod tests {
             hazards: Default::default(),
             alarm_seconds: None,
             bio: BioReadout {
+                health_points: 40,
+                psi_points: 21,
                 health_fraction: 1.0,
                 psi_fraction: 0.75,
             },
@@ -379,6 +395,8 @@ mod tests {
     #[test]
     fn the_watch_preserves_both_rows_of_the_interface_bio_layout() {
         let bio = BioReadout {
+            health_points: 16,
+            psi_points: 18,
             health_fraction: 0.4,
             psi_fraction: 0.9,
         };
@@ -396,6 +414,23 @@ mod tests {
         assert_eq!(forearm.size(), vec2(WATCH_CROP.w, WATCH_CROP.h));
         // Each canvas has one backdrop followed by the same four overlays.
         assert_eq!(forearm.element_count(), interface.element_count());
+
+        // The same absolute point values reach the interface and wrist, while
+        // their bars still express the fraction of each stat-derived pool.
+        for canvas in [&interface, &forearm] {
+            assert!(
+                matches!(&canvas.elements()[1], crate::ui::UiElement::Bar { fill, .. } if *fill == 0.4)
+            );
+            assert!(
+                matches!(&canvas.elements()[2], crate::ui::UiElement::Bar { fill, .. } if *fill == 0.9)
+            );
+            assert!(
+                matches!(&canvas.elements()[3], crate::ui::UiElement::Text { text, .. } if text == "16")
+            );
+            assert!(
+                matches!(&canvas.elements()[4], crate::ui::UiElement::Text { text, .. } if text == "18")
+            );
+        }
 
         for (on_arm, on_panel) in forearm.elements()[1..]
             .iter()

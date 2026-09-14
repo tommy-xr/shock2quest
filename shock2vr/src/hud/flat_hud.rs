@@ -11,9 +11,9 @@ use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::World;
 
 use super::ammo_panel::{self, AmmoReadout};
+use super::get_wielded_psi_charge;
 use super::message_line;
 use super::readouts::{self, BioReadout};
-use super::{get_health_percentage, get_psi_percentage, get_wielded_psi_charge};
 use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
 use crate::ui::{Rect, ScaleMode, UiCanvas};
 
@@ -63,7 +63,7 @@ const OVERLOAD_METER: Rect = Rect::new(
 );
 
 /// Build the flat HUD as a resolution-independent canvas for the given player
-/// stat fractions and (optional) wielded-weapon ammo. Pure (no asset/GL
+/// vitals and (optional) wielded-weapon ammo. Pure (no asset/GL
 /// access), so it is unit-testable.
 ///
 /// `use_mode` is the whole shooter/interface split: the original turns the
@@ -72,8 +72,7 @@ const OVERLOAD_METER: Rect = Rect::new(
 /// canvas - so in use mode this draws neither.
 pub(crate) fn build_flat_hud_canvas(
     use_mode: bool,
-    health_fraction: f32,
-    psi_fraction: f32,
+    bio: &BioReadout,
     psi_charge: Option<RuntimePropPsiCharge>,
     ammo_readout: &AmmoReadout,
     messages: &[String],
@@ -95,10 +94,7 @@ pub(crate) fn build_flat_hud_canvas(
             METERS_ORIGIN,
             "BIO.PCX",
             readouts::BIO_SIZE,
-            &BioReadout {
-                health_fraction,
-                psi_fraction,
-            },
+            bio,
         );
     }
 
@@ -149,8 +145,7 @@ pub(crate) fn create_flat_hud(
 ) -> Vec<SceneObject> {
     let mut canvas = build_flat_hud_canvas(
         use_mode,
-        get_health_percentage(world),
-        get_psi_percentage(world),
+        &BioReadout::from_world(world),
         get_wielded_psi_charge(world),
         // The compact gauge has no clickable controls: the pointer only exists
         // in use mode, where the interface canvas draws the expanded panel.
@@ -197,17 +192,18 @@ mod tests {
         }
     }
 
+    const BIO: BioReadout = BioReadout {
+        health_points: 40,
+        psi_points: 21,
+        health_fraction: 1.0,
+        psi_fraction: 0.75,
+    };
+
     #[test]
     fn canvas_has_crosshair_bio_backdrop_bars_and_readouts() {
         // Crosshair + bio backdrop + 2 bars + 2 stat numbers = 6 (no weapon).
-        let canvas = build_flat_hud_canvas(
-            false,
-            1.0,
-            0.75,
-            None,
-            &readout(None, None, None, false),
-            &[],
-        );
+        let canvas =
+            build_flat_hud_canvas(false, &BIO, None, &readout(None, None, None, false), &[]);
         assert_eq!(canvas.element_count(), 6);
     }
 
@@ -216,8 +212,7 @@ mod tests {
         // ...plus the ammo backdrop + count when a clip is present.
         let canvas = build_flat_hud_canvas(
             false,
-            1.0,
-            0.75,
+            &BIO,
             None,
             &readout(Some(12), None, None, false),
             &[],
@@ -230,8 +225,7 @@ mod tests {
         // ...plus the ammo-type icon + label when a type is selected.
         let canvas = build_flat_hud_canvas(
             false,
-            1.0,
-            0.75,
+            &BIO,
             None,
             &readout(Some(12), Some("STD_I.PCX"), Some("std"), false),
             &[],
@@ -245,8 +239,7 @@ mod tests {
         // readout is suppressed even though the amp has ammo=0.
         let canvas = build_flat_hud_canvas(
             false,
-            1.0,
-            0.75,
+            &BIO,
             None,
             &AmmoReadout {
                 psi_power: Some(("Projected Cryokinesis".to_string(), 1)),
@@ -265,21 +258,14 @@ mod tests {
     fn use_mode_leaves_the_bottom_readouts_to_the_interface_canvas() {
         let shooter = build_flat_hud_canvas(
             false,
-            1.0,
-            0.75,
+            &BIO,
             None,
             &readout(Some(12), None, None, false),
             &[],
         );
         assert_eq!(shooter.element_count(), 8);
-        let use_mode = build_flat_hud_canvas(
-            true,
-            1.0,
-            0.75,
-            None,
-            &readout(Some(12), None, None, false),
-            &[],
-        );
+        let use_mode =
+            build_flat_hud_canvas(true, &BIO, None, &readout(Some(12), None, None, false), &[]);
         assert_eq!(use_mode.element_count(), 0);
     }
 
@@ -289,8 +275,7 @@ mod tests {
     fn the_overload_meter_survives_use_mode() {
         let canvas = build_flat_hud_canvas(
             true,
-            1.0,
-            0.75,
+            &BIO,
             Some(RuntimePropPsiCharge {
                 phase: PsiChargePhase::Charging,
                 fraction: 0.5,
@@ -333,11 +318,10 @@ mod tests {
     #[test]
     fn a_status_message_adds_a_line_to_the_hud() {
         let empty = readout(None, None, None, false);
-        let base = build_flat_hud_canvas(false, 1.0, 0.75, None, &empty, &[]);
+        let base = build_flat_hud_canvas(false, &BIO, None, &empty, &[]);
         let with_message = build_flat_hud_canvas(
             false,
-            1.0,
-            0.75,
+            &BIO,
             None,
             &empty,
             &["This lift has been taken offline for repairs.".to_string()],
@@ -353,8 +337,11 @@ mod tests {
         // Fills are clamped inside `UiCanvas::bar`.
         let _ = build_flat_hud_canvas(
             false,
-            2.0,
-            -1.0,
+            &BioReadout {
+                health_fraction: 2.0,
+                psi_fraction: -1.0,
+                ..BIO
+            },
             None,
             &readout(None, None, None, false),
             &[],
