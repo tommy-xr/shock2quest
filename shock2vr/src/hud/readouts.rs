@@ -56,6 +56,15 @@ pub(crate) const AMMO_FULL_RECT: Rect = Rect::new(
     ammo_panel::PANEL_H,
 );
 
+// The right character MFD ends at y=420. Reserve the strip below it for
+// per-hand summaries, then translate the native controls four pixels down.
+// This is one shared canvas layout for flat and VR, leaving the art unchanged.
+const AMMO_CONTENT_ORIGIN: Vector2<f32> = vec2(378.0, 418.0);
+const HAND_TABS: [Rect; 2] = [
+    Rect::new(496.0, 420.0, 65.0, 12.0),
+    Rect::new(562.0, 420.0, 65.0, 12.0),
+];
+
 const LOG_BUTTON: Rect = Rect::new(383.0, 432.0, 38.0, 36.0);
 
 /// The system-menu affordance: the pause menu's only *discoverable* control in
@@ -164,6 +173,8 @@ pub(crate) struct UseModeReadouts {
     pub bio: BioReadout,
     pub ammo: AmmoReadout,
     pub weapon: Option<shipyard::EntityId>,
+    pub hands: [AmmoReadout; 2],
+    pub hand_entities: [Option<shipyard::EntityId>; 2],
     /// Spendable nanites and cyber modules, in the order of the native wells.
     pub resources: [i32; 2],
     pub hazards: Option<super::hazards::HazardReadout>,
@@ -177,6 +188,8 @@ impl UseModeReadouts {
     pub(crate) fn from_world(world: &World, weapon: Option<shipyard::EntityId>) -> Self {
         Self {
             weapon,
+            hands: Default::default(),
+            hand_entities: [None; 2],
             hazards: Some(super::hazards::HazardReadout::from_world(world)),
             alarm_seconds: crate::security_alarm::status(world).hud_seconds(),
             bio: BioReadout::from_world(world),
@@ -211,7 +224,21 @@ pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
     // The expanded strip also houses MFD navigation: keep its frame visible
     // with empty hands, while weapon controls remain conditional.
     canvas.image(AMMO_FULL_RECT, "AMMOFULL.PCX");
-    ammo_panel::emit(canvas, AMMO_ORIGIN, &readouts.ammo);
+    ammo_panel::emit(canvas, AMMO_CONTENT_ORIGIN, &readouts.ammo);
+    for (slot, tab) in hand_selectors(readouts).into_iter().enumerate() {
+        ammo_panel::draw_button(canvas, &tab, tab.rect);
+        if readouts.weapon.is_some() && readouts.weapon == readouts.hand_entities[slot] {
+            canvas.image(
+                Rect::new(
+                    tab.rect.x + 1.0,
+                    tab.rect.y + tab.rect.h - 1.0,
+                    tab.rect.w - 2.0,
+                    1.0,
+                ),
+                "iface/resprog.pcx",
+            );
+        }
+    }
     // Always: the way out of the game does not depend on what is wielded.
     let system = system_button();
     ammo_panel::draw_button(canvas, &system, system.rect);
@@ -229,6 +256,29 @@ pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
             VAlign::Top,
         );
     }
+}
+
+/// Both summaries stay visible, including when the other hand owns the controls.
+fn hand_selectors(readouts: &UseModeReadouts) -> [ReadoutButtonSpec; 2] {
+    std::array::from_fn(|slot| {
+        let hand = &readouts.hands[slot];
+        let value = if let Some(ammo) = hand.ammo {
+            ammo.to_string()
+        } else if hand.psi_power.is_some() {
+            "PSI".into()
+        } else {
+            "--".into()
+        };
+        ReadoutButtonSpec {
+            button: [
+                ReadoutButton::SelectLeftHand,
+                ReadoutButton::SelectRightHand,
+            ][slot],
+            rect: HAND_TABS[slot],
+            texture: Some("IFBTN00.PCX"),
+            text: Some(format!("{} {value}", ["LEFT", "RIGHT"][slot])),
+        }
+    })
 }
 
 /// The readout's clickable controls on the 640x480 canvas.
@@ -249,9 +299,18 @@ pub(crate) fn buttons(readouts: &UseModeReadouts) -> Vec<ReadoutButtonSpec> {
     ammo_panel::buttons(&readouts.ammo)
         .into_iter()
         .map(|spec| ReadoutButtonSpec {
-            rect: ammo_panel::at(AMMO_ORIGIN, spec.rect),
+            rect: ammo_panel::at(AMMO_CONTENT_ORIGIN, spec.rect),
             ..spec
         })
+        .chain(
+            hand_selectors(readouts)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(slot, spec)| {
+                    (!readouts.hands[slot].is_empty() && readouts.hand_entities[slot].is_some())
+                        .then_some(spec)
+                }),
+        )
         .chain([system, logs])
         .collect()
 }
@@ -263,6 +322,8 @@ mod tests {
     fn readouts(ammo: Option<i32>, cycle: bool) -> UseModeReadouts {
         UseModeReadouts {
             weapon: None,
+            hands: Default::default(),
+            hand_entities: [None; 2],
             resources: [0; 2],
             hazards: Default::default(),
             alarm_seconds: None,
@@ -279,6 +340,50 @@ mod tests {
         }
     }
 
+    #[test]
+    fn hand_summaries_share_their_hit_rects_and_do_not_overlap_native_controls_or_mfd() {
+        let mut r = readouts(Some(12), true);
+        let mut world = World::new();
+        let left = world.add_entity(());
+        let right = world.add_entity(());
+        r.hand_entities = [Some(left), Some(right)];
+        r.weapon = Some(right);
+        r.hands = [
+            AmmoReadout {
+                ammo: Some(6),
+                ..Default::default()
+            },
+            r.ammo.clone(),
+        ];
+        let tabs = hand_selectors(&r);
+        assert_eq!(tabs[0].text.as_deref(), Some("LEFT 6"));
+        assert_eq!(tabs[1].text.as_deref(), Some("RIGHT 12"));
+        let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
+        emit_use_mode(&mut canvas, &r);
+        for tab in tabs {
+            assert!(tab.rect.y >= 420.0, "clear of the right MFD and wide map");
+            let clicked = buttons(&r)
+                .into_iter()
+                .find(|b| b.button == tab.button)
+                .unwrap();
+            assert_eq!(clicked.rect, tab.rect);
+            assert!(canvas.elements().iter().any(|e| matches!(e, crate::ui::UiElement::Text { text, .. } if Some(text)==tab.text.as_ref()) && e.rect()==tab.rect));
+            for spec in ammo_panel::buttons(&r.ammo) {
+                let control = ammo_panel::at(AMMO_CONTENT_ORIGIN, spec.rect);
+                assert!(tab.rect.y + tab.rect.h <= control.y);
+                assert!(control.y + control.h <= 478.0);
+            }
+        }
+        r.hands[0] = Default::default();
+        assert!(
+            !buttons(&r)
+                .iter()
+                .any(|b| b.button == ReadoutButton::SelectLeftHand)
+        );
+        r.hands[0].psi_power = Some(("Cryokinesis".into(), 1));
+        assert_eq!(hand_selectors(&r)[0].text.as_deref(), Some("LEFT PSI"));
+    }
+
     /// The system button's art + label, drawn whatever else the canvas shows.
     const SYSTEM_ELEMENTS: usize = 2;
 
@@ -287,7 +392,7 @@ mod tests {
         // Both backdrops + 2 bars + 2 numbers, with no weapon wielded.
         let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
         emit_use_mode(&mut canvas, &readouts(None, false));
-        assert_eq!(canvas.element_count(), 12 + SYSTEM_ELEMENTS);
+        assert_eq!(canvas.element_count(), 16 + SYSTEM_ELEMENTS);
     }
 
     #[test]
@@ -295,7 +400,7 @@ mod tests {
         // ...plus the AMMOFULL backdrop + the round count.
         let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
         emit_use_mode(&mut canvas, &readouts(Some(12), false));
-        assert_eq!(canvas.element_count(), 13 + SYSTEM_ELEMENTS);
+        assert_eq!(canvas.element_count(), 17 + SYSTEM_ELEMENTS);
     }
 
     /// The interface's way to the pause menu is on the canvas whatever is
@@ -368,9 +473,14 @@ mod tests {
             ammo_panel::PSI_POWER_PREV,
             ammo_panel::PSI_POWER_NEXT,
         ] {
-            let placed = ammo_panel::at(AMMO_ORIGIN, rect);
+            let placed = ammo_panel::at(AMMO_CONTENT_ORIGIN, rect);
             assert!(AMMO_ORIGIN.x <= placed.x, "{placed:?}");
             assert!(placed.x + placed.w <= AMMO_ORIGIN.x + ammo_panel::PANEL_W);
+            assert!(AMMO_ORIGIN.y <= placed.y, "{placed:?}");
+            assert!(
+                placed.y + placed.h <= AMMO_ORIGIN.y + ammo_panel::PANEL_H,
+                "{placed:?}"
+            );
         }
     }
 

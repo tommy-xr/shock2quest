@@ -141,6 +141,8 @@ pub enum ReadoutButton {
     /// one list the host draws and hit-tests.
     SystemMenu,
     Logs,
+    SelectLeftHand,
+    SelectRightHand,
 }
 
 impl ReadoutButton {
@@ -157,6 +159,8 @@ impl ReadoutButton {
             ReadoutButton::PsiSelect => "psi_select",
             ReadoutButton::SystemMenu => "system_menu",
             ReadoutButton::Logs => "logs",
+            ReadoutButton::SelectLeftHand => "select_left_hand",
+            ReadoutButton::SelectRightHand => "select_right_hand",
         }
     }
 }

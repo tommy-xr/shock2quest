@@ -35,10 +35,12 @@ test("VR dual ammo controls bind to the selected real held entity", { skip: proc
     assert.equal(await ammo(pistol.id), 12);
     assert.equal(await ammo(shotgun.id), 6);
     await control("reload", pistol.id);
+    assert.equal((await control("select_left_hand", shotgun.id)).text, "LEFT 6");
+    assert.equal((await control("select_right_hand", pistol.id)).text, "RIGHT 12");
     await capture("dual-right");
-    await click(await arm("Left"));
+    await click(await control("select_left_hand", shotgun.id));
     const initialShotgunMode = (await control("gun_setting", shotgun.id)).text;
-    await click(await arm("Right"));
+    await click(await control("select_right_hand", pistol.id));
     await click(await control("gun_setting", pistol.id));
     const setting = (await game.ui.state()).active_panel!.elements.find(e => e.label === "setting_1");
     assert.ok(setting);
@@ -46,7 +48,7 @@ test("VR dual ammo controls bind to the selected real held entity", { skip: proc
     await click(setting);
     assert.notEqual((await control("gun_setting", pistol.id)).text, pistolSetting);
     await capture("pistol-setting");
-    await click(await arm("Left"));
+    await click(await control("select_left_hand", shotgun.id));
     assert.equal((await game.ui.state()).active_panel, null, "selecting another arm closes stale settings");
     await control("reload", shotgun.id);
     await capture("dual-left");
@@ -63,7 +65,7 @@ test("VR dual ammo controls bind to the selected real held entity", { skip: proc
     assert.equal(await ammo(shotgun.id), 6, "selected shotgun reloads its ejected shells");
     assert.equal(await ammo(pistol.id), 12);
     await capture("shotgun-reloaded");
-    await click(await arm("Right"));
+    await click(await control("select_right_hand", pistol.id));
     await click(await control("gun_setting", pistol.id));
     const unload = (await game.ui.state()).active_panel!.elements.find(e => e.label === "unload");
     assert.ok(unload);
@@ -96,7 +98,8 @@ test("VR dual ammo controls bind to the selected real held entity", { skip: proc
     await game.input.set("head.rotation", [0, 0, 0, 1]);
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
-    await click(await arm("Right"));
+    await click(await control("select_right_hand", amp.id));
+    assert.equal((await control("select_right_hand", amp.id)).text, "RIGHT PSI");
     const psi = (await game.ui.state()).readout.filter(e => e.label?.startsWith("psi_"));
     assert.ok(psi.length > 0);
     assert.ok(psi.every(e => e.entity_id === amp.id));
@@ -113,9 +116,12 @@ test("Flat ammo selection maps the internal wield slot onto the visible right ar
     const id = (await game.info()).player.wielded_entity_id;
     assert.ok(id != null);
     const ui = await game.ui.state();
-    const right = ui.strip!.elements.find(e => e.label === "Right hand");
+    const right = ui.readout.find(e => e.label === "select_right_hand");
     assert.ok(right);
     assert.equal(right.entity_id, id);
+    assert.match(right.text ?? "", /^RIGHT /);
+    assert.ok(!ui.readout.some(e => e.label === "select_left_hand"));
+    assert.ok(ui.readout_elements.some(e => e.text === "LEFT --"));
     await clickUiElement(game, right);
     assert.equal((await game.ui.state()).readout.find(e => e.label === "reload")?.entity_id, id);
     const out = process.env.ASTRA_DUAL_AMMO_CAPTURE;
