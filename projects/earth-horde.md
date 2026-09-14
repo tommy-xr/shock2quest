@@ -62,8 +62,8 @@ egg animation, sound, and grub behavior. Eggs can be destroyed normally.
 
 New runs begin with Toxin-A research completed. Buy ready-to-use Anti-Annelid
 Toxin (Toxin-A) for 10 nanites at the supply replicator.
-In flatscreen, frob a circulator while carrying a vial; in VR, provide the held
-vial to the cabinet using the normal consumption interaction. Each vial protects
+In flatscreen, frob a circulator while carrying a vial; in VR, release a held
+vial against the cabinet. Each vial protects
 only that zone for another 180 combat seconds, immediately stops new eggs, and
 clears accumulated patches over up to 12 seconds (recovery also runs during rest).
 The cabinet changes from inactive `air_reof` to active `air_re`. Existing eggs
