@@ -52,9 +52,11 @@ locked training rooms are excluded. Growth is cosmetic and does not prevent
 using the machines. Wall eggs remain a follow-up.
 
 Density reaches its maximum after 90 unprotected combat seconds. At 60 seconds,
-the zone can produce a GrubEgg every 45 combat seconds. Eight floor sites per
-zone prioritize services before extending along routes, with at most four pods
-per zone. Approaching within four world units hatches an existing pod even during
+the zone can produce a GrubEgg every 45 combat seconds, up to four pods. At
+75 seconds the cap rises to six and the interval drops to 30 seconds; at maximum
+density it reaches eight pods with a 15-second interval. Each new spawn uses the
+current interval; an already running countdown completes normally. Eight floor
+sites per zone prioritize services before extending along routes. Approaching within four world units hatches an existing pod even during
 rest, using the normal egg animation, sound, and grub behavior. Rest pauses
 new egg production and deterioration, but does not make existing traps safe.
 Eggs can be destroyed normally.

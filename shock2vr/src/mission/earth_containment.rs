@@ -19,12 +19,11 @@ const ECOLOGY: i32 = 59_000;
 const MAX_DENSITY: f32 = 6.0;
 const EGG_SITE_COUNT: usize = 8;
 const DENSE: f32 = 4.0;
-const MAX_EGGS_PER_ZONE: usize = 4;
 const MAX_HATCHLINGS: usize = 24;
 const NAMES: [&str; 3] = ["SUBWAY", "STREET", "UPSTAIRS"];
 const CIRCULATORS: [[f32; 3]; 3] = [[0.0, 2.8, 11.75], [21.0, 22.0, 31.95], [14.5, 24.4, 50.0]];
 // The first four sites concentrate traps around services and their approaches;
-// subsequent pods reach farther along travel routes. Population caps stay fixed.
+// subsequent pods reach farther along travel routes as density raises the pod cap.
 const EGG_POINTS: [[[f32; 3]; EGG_SITE_COUNT]; 3] = [
     [
         [0.0, 1.6, 4.0],
@@ -431,11 +430,19 @@ impl Containment {
                     hatchlings += 1; // reserve births emitted by this batch
                 }
             }
+            // More of the surveyed routes become traps as growth thickens.
+            let (egg_limit, egg_interval) = if zone.density >= MAX_DENSITY {
+                (EGG_SITE_COUNT, 15.0)
+            } else if zone.density >= DENSE + 1.0 {
+                (6, 30.0)
+            } else {
+                (4, 45.0)
+            };
             if active
                 && zone.density >= DENSE
                 && zone.protection <= 0.0
                 && zone.next_egg <= 0.0
-                && eggs[index].len() < MAX_EGGS_PER_ZONE
+                && eggs[index].len() < egg_limit
                 && hatchlings < MAX_HATCHLINGS
             {
                 // Never stack pods on top of one another at an occupied site.
@@ -463,7 +470,7 @@ impl Containment {
                         goto_player: false,
                     });
                     zone.next_site = (site + 1) % EGG_SITE_COUNT;
-                    zone.next_egg = 45.0;
+                    zone.next_egg = egg_interval;
                     break;
                 }
             }
@@ -659,6 +666,45 @@ mod tests {
     }
 
     #[test]
+    fn thicker_growth_fills_more_sites_and_shortens_spawn_intervals() {
+        for (density, cap, interval) in [(4.0, 4, 45.0), (5.0, 6, 30.0), (6.0, 8, 15.0)] {
+            let (mut world, _) = fixture();
+            let mut state = Containment::default();
+            state.zones[0].protection = 0.0;
+            state.zones[0].density = density;
+            // Fill the cap using real spawn effects, keeping the player far away.
+            for site in 0..cap {
+                state.zones[0].next_egg = 0.0;
+                let effects = state.update(&world, 0.5, true, false);
+                assert_eq!(egg_spawns(&effects), 1);
+                assert_eq!(state.zones[0].next_egg, interval);
+                let spawn_point = effects
+                    .iter()
+                    .find_map(|effect| match effect {
+                        Effect::SpawnEcologyEntity { spawn_point, .. } => Some(*spawn_point),
+                        _ => None,
+                    })
+                    .unwrap();
+                let position = world
+                    .borrow::<View<PropPosition>>()
+                    .unwrap()
+                    .get(spawn_point)
+                    .unwrap()
+                    .clone();
+                assert_eq!(position.position.x, site as f32 * 4.0);
+                world.add_entity((
+                    PropEcoType(ECOLOGY),
+                    PropModelName("eggcl".into()),
+                    position,
+                ));
+                assert_eq!(egg_spawns(&state.update(&world, 0.5, true, false)), 0);
+            }
+            state.zones[0].next_egg = 0.0;
+            assert_eq!(egg_spawns(&state.update(&world, 0.5, true, false)), 0);
+        }
+    }
+
+    #[test]
     fn occupied_sites_do_not_stack_eggs_and_closed_eggs_survive_replenishment() {
         let (mut world, station) = fixture();
         for site in 0..4 {
@@ -674,7 +720,7 @@ mod tests {
         }
         let mut state = Containment::default();
         state.zones[0].protection = 0.0;
-        state.zones[0].density = 6.0;
+        state.zones[0].density = DENSE;
         assert_eq!(egg_spawns(&state.update(&world, 1.0, true, false)), 0);
         state.replenish(&world, station);
         assert!(
