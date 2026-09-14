@@ -44,12 +44,20 @@ They begin with 180, 210, and 240 seconds of protection respectively. Protection
 counts combat time only: preparation, rest, and the completed-run screen do not
 spend it. A warning appears with 30 seconds remaining.
 
-When protection expires, six authored Hydro growth patches per zone gradually
-appear: four on floors, then two on walls. Each patch takes 15 combat seconds
-to establish. At four patches of density, the zone can produce a GrubEgg every
-45 combat seconds at an unoccupied floor site, up to four pods per zone.
-Approaching within four world units during combat hatches a pod using the normal
-egg animation, sound, and grub behavior. Eggs can be destroyed normally.
+When protection expires, overlapping Hydro growth spreads outward from shop and
+trainer approaches onto nearby floors and walls, then farther along travel routes.
+There are 339 surveyed patches: 110 in the subway, 155 on the street, and 74
+upstairs. Sites were checked against world geometry and reachable arena paths;
+locked training rooms are excluded. Growth is cosmetic and does not prevent
+using the machines. Wall eggs remain a follow-up.
+
+Density reaches its maximum after 90 unprotected combat seconds. At 60 seconds,
+the zone can produce a GrubEgg every 45 combat seconds. Eight floor sites per
+zone prioritize services before extending along routes, with at most four pods
+per zone. Approaching within four world units hatches an existing pod even during
+rest, using the normal egg animation, sound, and grub behavior. Rest pauses
+new egg production and deterioration, but does not make existing traps safe.
+Eggs can be destroyed normally.
 
 New runs begin with Toxin-A research completed. Buy ready-to-use Anti-Annelid
 Toxin (Toxin-A) for 10 nanites at the supply replicator.

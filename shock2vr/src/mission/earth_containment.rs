@@ -1,6 +1,6 @@
 //! The Earth experiment's renewable containment loop. Growth uses Hydro art;
 //! all runtime mutations are effects returned by the saved horde director.
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::LazyLock};
 
 use cgmath::{Deg, InnerSpace, Quaternion, Rotation3, vec3};
 use dark::properties::*;
@@ -11,44 +11,101 @@ use super::PlayerInfo;
 use crate::scripts::{Effect, Message, MessagePayload, ScriptRestoreContext};
 
 const STATIONS: i32 = 60_200;
-const PATCHES: i32 = 60_220;
+const PATCHES: i32 = 61_000;
+const PATCH_STRIDE: i32 = 1_000;
 const EGG_SITES: i32 = 60_250;
 // Below the wave tags (60_001 onward), including in endless play.
 const ECOLOGY: i32 = 59_000;
-const PATCH_COUNT: usize = 6;
+const MAX_DENSITY: f32 = 6.0;
+const EGG_SITE_COUNT: usize = 8;
 const DENSE: f32 = 4.0;
 const MAX_EGGS_PER_ZONE: usize = 4;
 const MAX_HATCHLINGS: usize = 24;
 const NAMES: [&str; 3] = ["SUBWAY", "STREET", "UPSTAIRS"];
 const CIRCULATORS: [[f32; 3]; 3] = [[0.0, 2.8, 11.75], [21.0, 22.0, 31.95], [14.5, 24.4, 50.0]];
-// Four floor sites and two wall sites per zone; walls rotate the same thin
-// Hydro mesh rather than stretching a floor patch into a vertical volume.
-const GROWTH: [[[f32; 3]; PATCH_COUNT]; 3] = [
+// The first four sites concentrate traps around services and their approaches;
+// subsequent pods reach farther along travel routes. Population caps stay fixed.
+const EGG_POINTS: [[[f32; 3]; EGG_SITE_COUNT]; 3] = [
     [
-        [0.0, 0.87, 4.0],
-        [0.0, 0.87, 7.0],
-        [21.0, 0.87, 4.0],
-        [21.0, 0.87, 7.0],
-        [20.0, 2.5, 12.73],
-        [23.0, 2.5, 12.73],
+        [0.0, 1.6, 4.0],
+        [0.0, 1.6, 9.0],
+        [21.0, 1.6, 4.0],
+        [21.0, 1.6, 9.0],
+        [-6.0, 1.6, 4.0],
+        [27.0, 1.6, 4.0],
+        [5.0, 1.6, 4.0],
+        [16.0, 1.6, 4.0],
     ],
     [
-        [-8.0, 19.87, 24.0],
-        [4.0, 19.87, 24.0],
-        [20.0, 19.87, 24.0],
-        [28.0, 19.87, 24.0],
-        [0.0, 25.5, 33.13],
-        [4.0, 25.5, 33.13],
+        [0.0, 20.8, 30.0],
+        [4.0, 20.8, 30.0],
+        [21.0, 20.8, 30.0],
+        [11.6, 20.8, 29.0],
+        [-8.0, 20.6, 24.0],
+        [20.0, 20.6, 24.0],
+        [28.0, 20.6, 24.0],
+        [40.0, 20.6, 24.0],
     ],
     [
-        [11.6, 22.47, 44.0],
-        [10.0, 22.47, 48.0],
-        [11.6, 22.47, 52.0],
-        [12.0, 22.47, 56.0],
-        [6.87, 24.0, 42.0],
-        [6.87, 24.0, 47.8],
+        [10.0, 23.2, 44.0],
+        [10.0, 23.2, 46.0],
+        [10.0, 23.2, 55.0],
+        [10.0, 23.2, 57.0],
+        [12.5, 23.2, 50.0],
+        [11.6, 23.2, 42.0],
+        [11.6, 23.2, 52.0],
+        [13.0, 23.2, 54.0],
     ],
 ];
+
+#[derive(Clone, Copy, Deserialize)]
+struct GrowthSurface {
+    position: [f32; 3],
+    normal: [f32; 3],
+}
+struct GrowthPatch {
+    surface: GrowthSurface,
+    onset: f32,
+}
+impl GrowthPatch {
+    fn alpha(&self, density: f32) -> f32 {
+        (density - self.onset).clamp(0.0, 1.0)
+    }
+}
+
+// Authored from world-ray and same-zone navigation probes. These are actual
+// surfaces in the accessible arena, not a rectangular carpet through walls.
+// Distance from service-area seeds orders the growth front: nearby patches
+// establish first; overlapping neighbors and higher walls follow. Lowering
+// density during recovery reverses that same front.
+static GROWTH: LazyLock<[Vec<GrowthPatch>; 3]> = LazyLock::new(|| {
+    let surfaces: [Vec<GrowthSurface>; 3] =
+        serde_json::from_str(include_str!("earth_containment_growth.json"))
+            .expect("authored Earth containment surfaces");
+    std::array::from_fn(|zone| {
+        let distances: Vec<f32> = surfaces[zone]
+            .iter()
+            .map(|surface| {
+                EGG_POINTS[zone][..4]
+                    .iter()
+                    .map(|seed| {
+                        let floor_seed = vec3(seed[0], seed[1] - 0.73, seed[2]);
+                        (cgmath::Vector3::from(surface.position) - floor_seed).magnitude()
+                    })
+                    .fold(f32::INFINITY, f32::min)
+            })
+            .collect();
+        let furthest = distances.iter().copied().fold(1.0_f32, f32::max);
+        surfaces[zone]
+            .iter()
+            .zip(distances)
+            .map(|(surface, distance)| GrowthPatch {
+                surface: *surface,
+                onset: (MAX_DENSITY - 1.0) * distance / furthest,
+            })
+            .collect()
+    })
+});
 
 pub(super) fn is_containment_type(tag: i32) -> bool {
     (ECOLOGY..ECOLOGY + 3).contains(&tag)
@@ -56,7 +113,7 @@ pub(super) fn is_containment_type(tag: i32) -> bool {
 
 pub(super) struct Population {
     stations: Vec<EntityId>,
-    patches: Vec<EntityId>,
+    patches: Vec<(EntityId, usize, usize)>,
     markers: Vec<EntityId>,
 }
 
@@ -76,29 +133,24 @@ pub(super) fn populate(
             CIRCULATORS[zone],
             if zone == 2 { 90.0 } else { 0.0 },
         ));
-        for patch in 0..PATCH_COUNT {
-            result.patches.push(add(
-                PATCHES + (zone * PATCH_COUNT + patch) as i32,
-                if patch >= 4 {
-                    -2499
-                } else {
-                    [-2499, -2500, -2501][patch % 3]
-                },
+        for (index, patch) in GROWTH[zone].iter().enumerate() {
+            let entity = add(
+                PATCHES + zone as i32 * PATCH_STRIDE + index as i32,
+                [-2499, -2500, -2501][index % 3],
                 &format!("{} annelid growth", NAMES[zone]),
-                GROWTH[zone][patch],
+                patch.surface.position,
+                0.0,
+            );
+            result.patches.push((entity, zone, index));
+        }
+        for (site, position) in EGG_POINTS[zone].iter().enumerate() {
+            result.markers.push(add(
+                EGG_SITES + (zone * EGG_SITE_COUNT + site) as i32,
+                -327,
+                "Containment egg site",
+                *position,
                 0.0,
             ));
-            if patch < 4 {
-                let mut pos = GROWTH[zone][patch];
-                pos[1] += 0.73; // Closed egg extends .784 below its origin.
-                result.markers.push(add(
-                    EGG_SITES + (zone * 4 + patch) as i32,
-                    -327,
-                    "Containment egg site",
-                    pos,
-                    0.0,
-                ));
-            }
         }
     }
     result
@@ -128,7 +180,7 @@ pub(super) fn configure(world: &mut World, population: Population, director: Ent
             ),
         );
     }
-    for (index, patch) in population.patches.into_iter().enumerate() {
+    for (patch, zone, index) in population.patches {
         world.delete_component::<(
             PropPhysType,
             PropPhysDimensions,
@@ -144,27 +196,23 @@ pub(super) fn configure(world: &mut World, population: Population, director: Ent
                 },
                 PropRenderType(RenderType::Normal),
                 PropRenderAlpha(0.0),
-                PropScale(if index % PATCH_COUNT >= 4 {
-                    vec3(1.0, 1.0, 1.0)
+                PropScale(if GROWTH[zone][index].surface.normal[1] > 0.7 {
+                    vec3(2.2, 1.0, 2.2)
                 } else {
-                    vec3(1.8, 1.0, 1.8)
+                    vec3(1.6, 1.0, 1.6)
                 }),
             ),
         );
-        if index % PATCH_COUNT >= 4 {
-            let mut pos = world
-                .borrow::<View<PropPosition>>()
-                .unwrap()
-                .get(patch)
-                .unwrap()
-                .clone();
-            pos.rotation = if index / PATCH_COUNT == 2 {
-                Quaternion::from_angle_z(Deg(-90.0))
-            } else {
-                Quaternion::from_angle_x(Deg(-90.0))
-            };
-            world.add_component(patch, pos);
-        }
+        let mut pos = world
+            .borrow::<View<PropPosition>>()
+            .unwrap()
+            .get(patch)
+            .unwrap()
+            .clone();
+        let normal = cgmath::Vector3::from(GROWTH[zone][index].surface.normal).normalize();
+        pos.rotation = Quaternion::from_arc(cgmath::Vector3::unit_y(), normal, None)
+            * Quaternion::from_angle_y(Deg(((index * 137 + zone * 53) % 360) as f32));
+        world.add_component(patch, pos);
     }
     for marker in population.markers {
         world.add_component(
@@ -207,7 +255,7 @@ impl Zone {
                 self.protection = (self.protection - dt * scale).max(0.0);
             }
         } else if active {
-            self.density = (self.density + dt * scale / 15.0).min(PATCH_COUNT as f32);
+            self.density = (self.density + dt * scale / 15.0).min(MAX_DENSITY);
         }
         if active && self.protection <= 0.0 && self.density >= DENSE {
             self.next_egg -= dt * scale;
@@ -346,13 +394,13 @@ impl Containment {
             }
             let shown = (zone.density * 10.0).round() as i32;
             if zone.shown != shown {
-                for patch in 0..PATCH_COUNT {
+                for (patch, growth) in GROWTH[index].iter().enumerate() {
                     if let Some(entity_id) =
-                        entities.get(&(PATCHES + (index * PATCH_COUNT + patch) as i32))
+                        entities.get(&(PATCHES + index as i32 * PATCH_STRIDE + patch as i32))
                     {
                         effects.push(Effect::SetRenderAlpha {
                             entity_id: *entity_id,
-                            alpha: (zone.density - patch as f32).clamp(0.0, 1.0),
+                            alpha: growth.alpha(zone.density),
                         });
                     }
                 }
@@ -367,8 +415,7 @@ impl Containment {
                     .is_ok_and(|m| m.0.eq_ignore_ascii_case("eggop"));
                 if open {
                     self.shells.entry(pod.inner()).or_insert(0.0);
-                } else if active
-                    && hatchlings < MAX_HATCHLINGS
+                } else if hatchlings < MAX_HATCHLINGS
                     && player.is_some_and(|player| {
                         positions
                             .get(*pod)
@@ -392,9 +439,10 @@ impl Containment {
                 && hatchlings < MAX_HATCHLINGS
             {
                 // Never stack pods on top of one another at an occupied site.
-                for offset in 0..4 {
-                    let site = (zone.next_site + offset) % 4;
-                    let Some(marker) = entities.get(&(EGG_SITES + (index * 4 + site) as i32))
+                for offset in 0..EGG_SITE_COUNT {
+                    let site = (zone.next_site + offset) % EGG_SITE_COUNT;
+                    let Some(marker) =
+                        entities.get(&(EGG_SITES + (index * EGG_SITE_COUNT + site) as i32))
                     else {
                         continue;
                     };
@@ -414,7 +462,7 @@ impl Containment {
                         ecology_type: Some(ECOLOGY + index as i32),
                         goto_player: false,
                     });
-                    zone.next_site = (site + 1) % 4;
+                    zone.next_site = (site + 1) % EGG_SITE_COUNT;
                     zone.next_egg = 45.0;
                     break;
                 }
@@ -468,7 +516,7 @@ mod tests {
         let station = world.add_entity((PropTemplateId {
             template_id: STATIONS,
         },));
-        for site in 0..4 {
+        for site in 0..EGG_SITE_COUNT as i32 {
             world.add_entity((
                 PropTemplateId {
                     template_id: EGG_SITES + site,
@@ -488,6 +536,31 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, Effect::SpawnEcologyEntity { .. }))
             .count()
+    }
+
+    #[test]
+    fn surveyed_growth_spreads_from_services_and_clears_in_reverse() {
+        for patches in GROWTH.iter() {
+            assert!(patches.len() < PATCH_STRIDE as usize);
+            let mut early = 0;
+            let mut late = 0;
+            for patch in patches {
+                assert!(patch.surface.position.iter().all(|v| v.is_finite()));
+                let normal = cgmath::Vector3::from(patch.surface.normal);
+                assert!((normal.magnitude() - 1.0).abs() < 0.01);
+                assert_eq!(patch.alpha(0.0), 0.0);
+                assert_eq!(patch.alpha(MAX_DENSITY), 1.0);
+                if patch.alpha(1.0) > 0.0 {
+                    early += 1;
+                }
+                if patch.alpha(DENSE) == 0.0 {
+                    late += 1;
+                }
+                assert!(patch.alpha(2.0) <= patch.alpha(DENSE));
+            }
+            assert!(early > 0, "service approaches grow first");
+            assert!(late > 0, "distant routes remain a later growth stage");
+        }
     }
 
     #[test]
@@ -560,6 +633,32 @@ mod tests {
     }
 
     #[test]
+    fn successive_pods_reach_route_sites_then_wrap_back_to_services() {
+        let (world, _) = fixture();
+        let mut state = Containment::default();
+        state.zones[0].protection = 0.0;
+        state.zones[0].density = MAX_DENSITY;
+        // Previously spawned pods have been destroyed/cleared from the world.
+        // All eight authored sites must be visited before returning to services.
+        for expected in (0..EGG_SITE_COUNT).chain(0..1) {
+            state.zones[0].next_egg = 0.0;
+            let effects = state.update(&world, 1.0, true, false);
+            let markers = world.borrow::<View<PropTemplateId>>().unwrap();
+            let sites: Vec<_> = effects
+                .iter()
+                .filter_map(|effect| {
+                    if let Effect::SpawnEcologyEntity { spawn_point, .. } = effect {
+                        Some(markers.get(*spawn_point).unwrap().template_id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(sites, vec![EGG_SITES + expected as i32]);
+        }
+    }
+
+    #[test]
     fn occupied_sites_do_not_stack_eggs_and_closed_eggs_survive_replenishment() {
         let (mut world, station) = fixture();
         for site in 0..4 {
@@ -587,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hatch_batch_reserves_capacity_and_preserves_other_wave_slots() {
+    fn rest_hatches_existing_traps_but_reserves_capacity_and_pauses_production() {
         let (mut world, _) = fixture();
         world
             .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
@@ -613,7 +712,11 @@ mod tests {
             ));
         }
         let mut state = Containment::default();
-        let effects = state.update(&world, 1.0, true, false);
+        state.zones[0].protection = 0.0;
+        state.zones[0].density = DENSE;
+        let effects = state.update(&world, 1.0, false, false);
+        assert_eq!(egg_spawns(&effects), 0);
+        assert_eq!(state.zones[0].density, DENSE);
         assert_eq!(
             effects
                 .iter()
