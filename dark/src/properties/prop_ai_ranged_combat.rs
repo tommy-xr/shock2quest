@@ -143,3 +143,46 @@ mod range_tests {
         assert_eq!(range.0[1..], PropAIRangedRanges::default().0[1..]);
     }
 }
+
+/// P$AI_RngSho: the final vector in the 44-byte ranged-shoot record is
+/// the default launch offset (used when AIProjectile's launch joint is 0).
+#[derive(Debug, Component, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PropAIRangedShoot {
+    pub launch_offset: cgmath::Vector3<f32>,
+}
+impl PropAIRangedShoot {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, len: u32) -> Self {
+        let start = reader.stream_position().unwrap();
+        let launch_offset = if len >= 44 {
+            reader.seek(SeekFrom::Start(start + 32)).unwrap();
+            crate::ss2_common::read_vec3(reader) / crate::SCALE_FACTOR
+        } else {
+            cgmath::vec3(0.0, 0.0, 0.0)
+        };
+        reader.seek(SeekFrom::Start(start + len as u64)).unwrap();
+        Self { launch_offset }
+    }
+}
+#[cfg(test)]
+mod shoot_tests {
+    use super::*;
+    #[test]
+    fn shoot_offset_reads_the_final_vector_and_converts_axes_and_scale_once() {
+        let mut bytes = vec![0; 32];
+        bytes.extend([2.5f32, 5.0, 7.5].into_iter().flat_map(f32::to_le_bytes));
+        bytes.extend([0; 4]);
+        let mut reader = std::io::Cursor::new(bytes);
+        let prop = PropAIRangedShoot::read(&mut reader, 48);
+        assert_eq!(prop.launch_offset, cgmath::vec3(-1.0, 3.0, 2.0));
+        assert_eq!(reader.position(), 48);
+    }
+    #[test]
+    fn short_shoot_record_defaults_to_object_origin() {
+        let mut reader = std::io::Cursor::new(vec![0; 32]);
+        assert_eq!(
+            PropAIRangedShoot::read(&mut reader, 32).launch_offset,
+            cgmath::vec3(0.0, 0.0, 0.0)
+        );
+        assert_eq!(reader.position(), 32);
+    }
+}
