@@ -2254,6 +2254,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$AI_RngSho",
+            PropAIRangedShoot::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$AIRCRange",
             PropAIRangedRanges::read,
             identity,
