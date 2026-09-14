@@ -39,6 +39,7 @@ const ECOLOGY: i32 = 60_000;
 const STATE_KEY: &str = "shock2vr.earth_horde";
 const SEED: u64 = 0x4541525448;
 const FINAL_WAVE: u32 = 10;
+const MAX_ALIVE: usize = 15;
 const WAVE_COUNTS: [u32; 10] = [6, 9, 12, 15, 18, 22, 26, 30, 34, 38];
 // Each unlocked archetype gets a guaranteed slot every wave. Pipe and shotgun
 // open every wave, so neither melee nor ranged pressure depends on RNG.
@@ -48,12 +49,15 @@ const ENEMY_INTRODUCTIONS: &[(&str, u32)] = &[
     ("Maintenance", 2),
     ("Protocol Droid", 2),
     ("Midwife", 3),
+    ("Blue Monkey", 3),
     ("Arachnid", 4),
     ("Baby Arachnid", 5),
     ("Security", 6),
+    ("Red Monkey", 6),
     ("Assassin", 7),
     ("OG-Grenade", 7),
     ("Rumbler", 8),
+    ("Assault", 8),
     ("Overlord", 9),
     ("Greater Over.", 10),
     ("SHODAN", 10),
@@ -802,7 +806,7 @@ impl Script for HordeDirector {
                 {
                     effects.push(self.clear_wave());
                 } else if self.spawned < self.quota()
-                    && self.enemies.len() < 6
+                    && self.enemies.len() < MAX_ALIVE
                     && self.next_spawn <= 0.0
                 {
                     if let Some(spawn) = self.spawn(world, physics) {
@@ -1036,6 +1040,62 @@ mod tests {
     }
 
     #[test]
+    fn fifteen_live_attackers_block_spawning_until_one_dies() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        world.add_unique(PlayerLifeState::Alive);
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::from_angle_y(Deg(0.0)),
+            entity_id: player,
+            inventory_entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+        });
+        let position = PropPosition {
+            position: vec3(20.0, 0.0, 0.0),
+            cell: 0,
+            rotation: Quaternion::from_angle_y(Deg(0.0)),
+        };
+        world.add_entity((
+            PropTemplateId {
+                template_id: MARKER_START,
+            },
+            position.clone(),
+        ));
+        let mut director = HordeDirector {
+            initialized: true,
+            wave: 10,
+            phase: Phase::Assault,
+            next_spawn: 0.0,
+            ..Default::default()
+        };
+        for _ in 0..15 {
+            let id = world.add_entity((
+                PropEcoType(ECOLOGY + 10),
+                PropHitPoints { hit_points: 10 },
+                position.clone(),
+            ));
+            director.enemies.push(Enemy {
+                id: id.inner(),
+                position: position.position.into(),
+            });
+        }
+        director.spawned = 15;
+        fn spawns(effect: Effect) -> usize {
+            match effect {
+                Effect::SpawnEcologyEntity { .. } => 1,
+                Effect::Multiple(effects) => effects.into_iter().map(spawns).sum(),
+                _ => 0,
+            }
+        }
+        assert_eq!(spawns(tick(&mut director, &world, 0.1)), 0);
+        let first = EntityId::from_inner(director.enemies[0].id).unwrap();
+        world.add_component(first, PropHitPoints { hit_points: 0 });
+        assert_eq!(spawns(tick(&mut director, &world, 0.1)), 1);
+    }
+
+    #[test]
     fn every_wave_guarantees_returning_types_and_delays_small_spiders() {
         let mut previous = Vec::new();
         for wave in 1..=FINAL_WAVE + 2 {
@@ -1051,6 +1111,9 @@ mod tests {
             }
             assert_eq!(roster.contains(&"Baby Arachnid"), wave >= 5);
             assert_eq!(roster.contains(&"Maintenance"), wave >= 2);
+            assert_eq!(roster.contains(&"Blue Monkey"), wave >= 3);
+            assert_eq!(roster.contains(&"Red Monkey"), wave >= 6);
+            assert_eq!(roster.contains(&"Assault"), wave >= 8);
             assert_eq!(roster.contains(&"Protocol Droid"), wave >= 2);
             for (index, name) in roster.iter().enumerate() {
                 director.spawned = index as u32;

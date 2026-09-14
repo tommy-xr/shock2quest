@@ -14,18 +14,18 @@ Validation includes director unit tests for timing, final-wave/endless gating, r
 
 ## Cumulative wave roster
 
-Each wave begins with a pipe hybrid and a shotgun hybrid, then introduces the new types and guarantees one of every returning type. Remaining slots are weighted random reinforcements. At most six enemies are alive at once; both the timer and all kills must finish before rest.
+Each wave begins with a pipe hybrid and a shotgun hybrid, then introduces the new types and guarantees one of every returning type. Remaining slots are weighted random reinforcements. At most 15 enemies are alive at once; both the timer and all kills must finish before rest.
 
 | Wave | Total enemies | New types | Minimum assault |
 |---|---:|---|---:|
 | 1 | 6 | Pipe and shotgun hybrids | 1:00 |
 | 2 | 9 | Maintenance and protocol droids | 1:08 |
-| 3 | 12 | Midwife | 1:16 |
+| 3 | 12 | Midwife and blue monkey | 1:16 |
 | 4 | 15 | Large spider (Arachnid) | 1:24 |
 | 5 | 18 | Small spider (Baby Arachnid) | 1:32 |
-| 6 | 22 | Security droid | 1:40 |
+| 6 | 22 | Security droid and red monkey | 1:40 |
 | 7 | 26 | Assassin and grenade hybrid | 1:48 |
-| 8 | 30 | Rumbler | 1:56 |
+| 8 | 30 | Rumbler and assault droid | 1:56 |
 | 9 | 34 | Overlord | 2:04 |
 | 10 | 38 | Greater Overlord and SHODAN avatar | 2:12 |
 
