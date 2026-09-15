@@ -5,6 +5,7 @@ mod archetypes;
 mod archives;
 mod explorer;
 mod grip_editor;
+mod model_details;
 mod model_preview;
 mod support_grip_editor;
 mod ui;

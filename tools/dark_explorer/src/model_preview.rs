@@ -91,6 +91,7 @@ pub struct ModelPreview {
     /// The scene plays an animation clip, so it re-renders every frame.
     animated: bool,
     error: Option<String>,
+    rendered_pmnm: bool,
     pub debug_skeletons: bool,
     pub debug_hit_boxes: bool,
     pub debug_articulation: bool,
@@ -131,6 +132,7 @@ impl ModelPreview {
             scene: None,
             animated: false,
             error: None,
+            rendered_pmnm: false,
             debug_skeletons: false,
             debug_hit_boxes: false,
             debug_articulation: false,
@@ -159,6 +161,13 @@ impl ModelPreview {
         if let Some(error) = &self.error {
             ui.label(format!("Cannot render this model: {error}"));
             return;
+        }
+        if matches!(scene, PreviewScene::Model) {
+            ui.label(if self.rendered_pmnm {
+                "Rendered geometry: PMNM high-detail mesh"
+            } else {
+                "Rendered geometry: base mesh from the winning file"
+            });
         }
         if self.animated && !self.paused {
             // Tick the playing clip with real dt and keep frames coming.
@@ -296,6 +305,7 @@ impl ModelPreview {
                 return;
             }
         };
+        self.rendered_pmnm = model.bind_matrices().is_some();
         // Skeleton scenes frame on their posed joints; an AI mesh has no
         // bounding box for `frame_camera` to use.
         let mut pose_bounds = None;

@@ -168,6 +168,8 @@ enum PreviewKind {
     /// is not the raw archive entry name an Archives-tab selection shows).
     Model {
         key: String,
+        details: Result<crate::model_details::ModelDetails, String>,
+        copies: Vec<(String, Result<crate::model_details::ModelDetails, String>)>,
     },
     /// A `.mc` motion clip, played as bone lines on a matching actor's skeleton.
     Motion {
@@ -702,7 +704,17 @@ fn build_preview(
         }
     };
     let size = bytes.len();
-    let kind = decode_preview(family, key, bytes, motion_db);
+    let mut kind = decode_preview(family, key, bytes, motion_db);
+    if let PreviewKind::Model { copies, .. } = &mut kind {
+        if let PreviewOrigin::Mount { shadowed, .. } = &origin {
+            for entry in shadowed {
+                let details =
+                    archives::read_entry(std::path::Path::new(&entry.source), &entry.entry_name)
+                        .and_then(|bytes| crate::model_details::ModelDetails::inspect(&bytes));
+                copies.push((explorer::short_source(&entry.source), details));
+            }
+        }
+    }
     Preview {
         key: key.to_string(),
         size,
@@ -793,6 +805,8 @@ fn decode_preview(
     if ext == "bin" && matches!(family, "obj" | "mesh") {
         return PreviewKind::Model {
             key: key.to_string(),
+            details: crate::model_details::ModelDetails::inspect(&bytes),
+            copies: Vec::new(),
         };
     }
     if ext == "mc" {
@@ -1728,7 +1742,38 @@ impl ExplorerApp {
                         );
                     });
             }
-            PreviewKind::Model { key } => {
+            PreviewKind::Model {
+                key,
+                details,
+                copies,
+            } => {
+                let source = match &preview.origin {
+                    PreviewOrigin::Mount { winner, .. } => &winner.source,
+                    PreviewOrigin::Archive { archive, .. } => archive,
+                };
+                match details {
+                    Ok(details) => details.show(ui, source),
+                    Err(error) => {
+                        ui.label(format!("Cannot inspect mesh: {error}"));
+                    }
+                }
+                if !copies.is_empty() {
+                    ui.collapsing("Compare overridden meshes", |ui| {
+                        for (source, details) in copies {
+                            match details {
+                                Ok(details) => {
+                                    ui.label(format!(
+                                        "{source}: {} — {}",
+                                        details.format, details.geometry
+                                    ));
+                                }
+                                Err(error) => {
+                                    ui.label(format!("{source}: {error}"));
+                                }
+                            }
+                        }
+                    });
+                }
                 let key = key.clone();
                 let host = preview_host(
                     &mut self.model_preview,
