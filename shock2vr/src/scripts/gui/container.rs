@@ -129,6 +129,27 @@ pub fn backpack_footprint_rect(
     )
 }
 
+/// Where a stack's count sits inside the item's footprint: the top-left
+/// corner. Decided here, once, in canvas pixels, so both presentations place
+/// it identically (AGENTS.md 3) - the panel and the flat strip render the
+/// same component list.
+pub fn stack_badge_rect(footprint: crate::ui::Rect) -> crate::ui::Rect {
+    crate::ui::Rect::new(
+        footprint.x + STACK_BADGE_INSET,
+        footprint.y + STACK_BADGE_INSET,
+        STACK_BADGE_SIZE.x,
+        STACK_BADGE_SIZE.y,
+    )
+}
+
+/// Room for three digits of `mainfont.fon`, which the badge draws at its
+/// native size, vertically centred in this rect.
+const STACK_BADGE_SIZE: Vector2<f32> = Vector2::new(22.0, 14.0);
+
+/// How far the badge sits inside its cell's top-left corner, so the glyphs
+/// clear the separators in the panel art rather than touching them.
+const STACK_BADGE_INSET: f32 = 1.0;
+
 /// `res/iface/BLOCK.PCX` is authored to cover one cell's 34x32 interior,
 /// leaving the separators in `INVBACK.PCX` visible around it.
 const BLOCK_SIZE: Vector2<f32> = Vector2::new(34.0, 32.0);
@@ -265,6 +286,9 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
         let initial_offset_x = self.inv_offset_x;
 
         let v_obj_icon = world.borrow::<View<PropObjIcon>>().unwrap();
+        let v_stack_count = world
+            .borrow::<View<dark::properties::PropStackCount>>()
+            .unwrap();
         for contained_entity_info in inventory.all_items() {
             let ent = contained_entity_info.entity;
             let maybe_obj_icon = v_obj_icon.get(ent);
@@ -301,7 +325,23 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                     slot_pixel_width * inv_dims.0 as f32,
                     slot_pixel_height * inv_dims.1 as f32,
                 )),
-            )
+            );
+
+            // A pooled stack reads its size off the icon, as the original
+            // does. One of something is just the item, so it stays bare.
+            if let Ok(stack) = v_stack_count.get(ent) {
+                if stack.0 > 1 {
+                    let footprint = crate::ui::Rect::new(
+                        initial_offset_x + position_x,
+                        initial_offset_y + position_y,
+                        slot_pixel_width * inv_dims.0 as f32,
+                        slot_pixel_height * inv_dims.1 as f32,
+                    );
+                    components.push(
+                        gui::text(&stack.0.to_string()).with_rect(stack_badge_rect(footprint)),
+                    );
+                }
+            }
         }
 
         if let Some(cursor) = maybe_cursor {
@@ -602,6 +642,62 @@ mod tests {
 
     fn loot_world() -> (World, EntityId, EntityId, EntityId) {
         loot_world_with_action(FrobFlag::MOVE)
+    }
+
+    /// A pooled stack shows its size on the icon; a single item does not.
+    /// The badge sits in the item's own footprint, so it tracks the icon
+    /// rather than being placed independently per presentation.
+    #[test]
+    fn a_pooled_stack_draws_its_count_in_the_item_footprint() {
+        let (mut world, container, item, _inventory) = loot_world();
+
+        let texts = |world: &World| -> Vec<(String, crate::ui::Rect)> {
+            ContainerGui::loot_container()
+                .get_components(&None, container, world, &ContainerGuiState::default())
+                .into_iter()
+                .filter_map(|component| match component {
+                    GuiComponent::Text {
+                        text,
+                        position,
+                        size,
+                        ..
+                    } => Some((
+                        text,
+                        crate::ui::Rect::new(position.x, position.y, size.x, size.y),
+                    )),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        assert!(
+            texts(&world).is_empty(),
+            "an item with no stack count draws no badge"
+        );
+
+        world.add_component(item, dark::properties::PropStackCount(1));
+        assert!(
+            texts(&world).is_empty(),
+            "one of something is just the item, not a stack"
+        );
+
+        world.add_component(item, dark::properties::PropStackCount(12));
+        let drawn = texts(&world);
+        assert_eq!(drawn.len(), 1, "a pooled stack draws exactly one badge");
+        assert_eq!(drawn[0].0, "12", "the badge reads the live stack count");
+
+        // The badge belongs to the icon's own cell, not to a fixed panel
+        // corner: it is `stack_badge_rect` of the footprint the item at cell
+        // (0,0) occupies.
+        let gui = ContainerGui::loot_container();
+        let expected = stack_badge_rect(crate::ui::Rect::new(
+            gui.inv_offset_x,
+            gui.inv_offset_y,
+            SLOT_PITCH.x,
+            SLOT_PITCH.y,
+        ));
+        assert_eq!(drawn[0].1.x, expected.x, "badge x tracks the icon's cell");
+        assert_eq!(drawn[0].1.y, expected.y, "badge y tracks the icon's cell");
     }
 
     fn mark_as_keycard(world: &mut World, item: EntityId) {
