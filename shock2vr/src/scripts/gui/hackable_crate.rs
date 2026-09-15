@@ -60,11 +60,12 @@ impl HackableCrateGui {
 impl HackableCrateGui {
     /// The HRM board's own canvas: the retail 188x296 MFD art `draw_hack_board`
     /// lays out, at the loot panel's world placement so the crate's two faces
-    /// appear in the same spot.
-    fn board_config(loot: &ContainerGui) -> GuiConfig {
+    /// appear in the same spot. The board art is the same in both
+    /// presentations, so only the placement is taken from the loot panel.
+    fn board_config(loot_placement: GuiConfig) -> GuiConfig {
         GuiConfig {
             screen_size_in_pixels: Vector2::new(188.0, 296.0),
-            ..loot.get_config()
+            ..loot_placement
         }
     }
 }
@@ -175,7 +176,7 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
 
     fn get_config(&self) -> GuiConfig {
         // A crate starts sealed, so the board is the default face.
-        Self::board_config(&self.loot)
+        Self::board_config(self.loot.get_config())
     }
 
     /// The crate's two faces have two canvases: the HRM board is the retail
@@ -189,9 +190,13 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
         _state: &HackableCrateState,
     ) -> GuiConfig {
         if is_open(world, entity_id) {
-            self.loot.get_config()
+            self.loot
+                .get_config_for(entity_id, world, &Default::default())
         } else {
-            Self::board_config(&self.loot)
+            Self::board_config(
+                self.loot
+                    .get_config_for(entity_id, world, &Default::default()),
+            )
         }
     }
 
@@ -431,13 +436,34 @@ mod tests {
         );
 
         assert!(
-            has_texture(&components, crate::ui::HOLOGRAM_TILE_TEXTURE),
-            "a hacked crate should draw the loot panel's hologram grid"
+            has_texture(&components, "contain.pcx"),
+            "a hacked crate should draw the flat loot panel's retail art"
         );
         assert!(
             button_for(&components, clip),
             "a hacked crate should expose its contained clip as a loot slot"
         );
+    }
+
+    /// The crate inherits the loot panel's presentation split: the same hacked
+    /// face is the hologram grid in VR.
+    #[test]
+    fn a_hacked_crate_draws_the_hologram_grid_in_vr() {
+        let (mut world, security_crate, _clip) = crate_world();
+        world.add_component(security_crate, PropObjState(ObjectState::Hacked));
+        world.add_unique(crate::mission::GlobalPresentationMode(
+            crate::PresentationMode::Vr,
+        ));
+
+        let components = HackableCrateGui::new().get_components(
+            &None,
+            security_crate,
+            &world,
+            &HackableCrateState::default(),
+        );
+
+        assert!(has_texture(&components, crate::ui::HOLOGRAM_TILE_TEXTURE));
+        assert!(!has_texture(&components, "contain.pcx"));
     }
 
     /// A live board with two nodes already lit, so lighting `target` decides
