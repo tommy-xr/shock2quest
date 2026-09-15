@@ -7002,6 +7002,8 @@ impl MissionCore {
                     return Vec::new();
                 }
                 match button {
+                    // Selection is owned by FlatUiHost, before world actions.
+                    ReadoutButton::SelectLeftHand | ReadoutButton::SelectRightHand => Vec::new(),
                     ReadoutButton::Logs => {
                         if self.flat_ui.utilities.is_empty_logs() {
                             self.flat_ui.utilities = Default::default();

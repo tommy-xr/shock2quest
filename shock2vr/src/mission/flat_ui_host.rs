@@ -596,7 +596,12 @@ impl FlatUiHost {
     }
 
     /// Set the use-mode readouts for this frame (`None` outside use mode).
-    pub(crate) fn set_readouts(&mut self, readouts: Option<UseModeReadouts>) {
+    pub(crate) fn set_readouts(&mut self, mut readouts: Option<UseModeReadouts>) {
+        if let Some(readout) = &mut readouts {
+            readout.hands = self.hand_ammo.clone();
+            readout.hand_entities =
+                std::array::from_fn(|slot| self.hand_items[slot].as_ref().map(|item| item.entity));
+        }
         self.readouts = readouts;
     }
 
@@ -619,15 +624,16 @@ impl FlatUiHost {
                 texture: spec.texture.map(str::to_string),
                 text: spec.text.clone(),
                 label: Some(spec.button.label().to_string()),
-                entity_id: if matches!(spec.button, ReadoutButton::SystemMenu | ReadoutButton::Logs)
-                {
-                    None
-                } else {
-                    self.readouts
-                        .as_ref()
-                        .and_then(|r| r.weapon)
-                        .map(|entity| entity.inner() as i32)
-                },
+                entity_id: self
+                    .readouts
+                    .as_ref()
+                    .and_then(|r| match spec.button {
+                        ReadoutButton::SystemMenu | ReadoutButton::Logs => None,
+                        ReadoutButton::SelectLeftHand => r.hand_entities[0],
+                        ReadoutButton::SelectRightHand => r.hand_entities[1],
+                        _ => r.weapon,
+                    })
+                    .map(|entity| entity.inner() as i32),
                 rect: [spec.rect.x, spec.rect.y, spec.rect.w, spec.rect.h],
                 screen_rect: self.to_screen_rect(spec.rect),
             })
@@ -1158,6 +1164,19 @@ impl FlatUiHost {
         // since the controls are disjoint from both. ---
         if pressed_edge {
             if let Some(button) = readout_hit {
+                let slot = match button {
+                    ReadoutButton::SelectLeftHand => Some(0),
+                    ReadoutButton::SelectRightHand => Some(1),
+                    _ => None,
+                };
+                if let Some(slot) = slot {
+                    // Same selection as the inventory's hand wells. No equip,
+                    // drop, reload or other world action accompanies this edge.
+                    if !self.hand_ammo[slot].is_empty() {
+                        self.selected_ammo = self.hand_items[slot].as_ref().map(|item| item.entity);
+                    }
+                    return (Vec::new(), Vec::new());
+                }
                 return (
                     Vec::new(),
                     vec![FlatUiDragAction::Readout(
@@ -3203,6 +3222,8 @@ mod tests {
     /// ((496,429) and (564,429)).
     fn readout_fixture() -> UseModeReadouts {
         UseModeReadouts {
+            hands: Default::default(),
+            hand_entities: [None; 2],
             weapon: None,
             resources: [0; 2],
             hazards: Default::default(),
@@ -3216,6 +3237,47 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    #[test]
+    fn bottom_hand_selectors_require_a_fresh_empty_cursor_click_and_name_each_weapon() {
+        let (world, mut host, left, right) = drag_world();
+        host.hand_items = [
+            Some(make_cursor_item(&world, left)),
+            Some(make_cursor_item(&world, right)),
+        ];
+        host.hand_ammo = [
+            crate::hud::ammo_panel::AmmoReadout {
+                ammo: Some(6),
+                ..Default::default()
+            },
+            crate::hud::ammo_panel::AmmoReadout {
+                ammo: Some(12),
+                ..Default::default()
+            },
+        ];
+        host.reconcile_ammo_selection();
+        let mut readouts = readout_fixture();
+        readouts.weapon = Some(right);
+        host.set_readouts(Some(readouts));
+        let tab = host
+            .readout_buttons_debug()
+            .into_iter()
+            .find(|e| e.label.as_deref() == Some("select_left_hand"))
+            .unwrap();
+        assert_eq!(tab.entity_id, Some(left.inner() as i32));
+        assert_eq!(tab.text.as_deref(), Some("LEFT 6"));
+        let point = (
+            tab.rect[0] + tab.rect[2] / 2.0,
+            tab.rect[1] + tab.rect[3] / 2.0,
+        );
+        host.cursor_item = Some(make_cursor_item(&world, left));
+        assert!(press_edge(&mut host, &world, point).is_empty());
+        assert_eq!(host.held_entity(), Some(left));
+        assert_eq!(host.ammo_selection().0, Some(right));
+        host.cursor_item = None;
+        assert!(press_edge(&mut host, &world, point).is_empty());
+        assert_eq!(host.ammo_selection().0, Some(left));
     }
 
     #[test]
@@ -3338,6 +3400,8 @@ mod tests {
     fn empty_bottom_strips_preserve_a_carried_item() {
         let (world, mut host, wrench, _) = drag_world();
         host.set_readouts(Some(UseModeReadouts {
+            hands: Default::default(),
+            hand_entities: [None; 2],
             weapon: None,
             resources: [0; 2],
             hazards: Default::default(),

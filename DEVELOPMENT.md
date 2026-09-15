@@ -156,6 +156,22 @@ VR use mode the same bio and ammo readings appear both on the arms and on the
 interface - deliberately left alone for now (issue #1268), unlike flat, which
 does drop its compact pair.
 
+#### Left and right weapon readouts
+
+The bottom-right ammo panel carries **LEFT** and **RIGHT** selectors above its
+native weapon controls. Both show their hand's loaded rounds, or `PSI` for an
+amp; `--` means the hand has no ammo readout and cannot be selected. A cyan
+underline marks the weapon whose ammo type, condition, settings, and reload
+controls are shown below. Clicking a selector does not equip or fire anything.
+The inventory's hand slots still select the same readout.
+
+Selection follows the weapon if it changes hands. Dropping the selected weapon
+falls back to the other gun or amp. Switching weapons dismisses the old gun's
+settings MFD, while the character MFD remains open. Both presentations use the
+same tab and control rectangles; `/v1/ui.readout` exposes `select_left_hand` and
+`select_right_hand`, each with its own weapon entity ID. Empty hands are
+non-clickable and appear only in `readout_elements`.
+
 #### Character MFD and access cards
 
 The card icon beside the log button opens the collected access-card reader.

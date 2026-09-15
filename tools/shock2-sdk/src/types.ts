@@ -989,7 +989,9 @@ export interface UiState {
    * `cycle_ammo`, the psi selector's `psi_tier_prev`/`psi_tier_next`/
    * `psi_power_prev`/`psi_power_next`, and `psi_select` (the badge and
    * discipline name themselves, which open the power selection MFD). Empty
-   * outside use mode. Click a control's `screen_rect` center to invoke it.
+   * outside use mode. `select_left_hand` / `select_right_hand` choose which
+   * held weapon feeds the full controls; their entity IDs name their own hand.
+   * Click a control's `screen_rect` center to invoke it.
    */
   readout: UiElement[];
   /**
