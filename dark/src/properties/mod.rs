@@ -251,6 +251,15 @@ pub struct PropImplantDesc(pub i32);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropStackCount(pub i32);
 
+/// `P$CombineTy`: the label two objects must share to stack together. The
+/// original engine gates every merge on this matching, then bumps the
+/// combinee's `PropStackCount` - so the label, not the template, decides what
+/// pools with what. Small and Large Prism are separate archetypes sharing
+/// `Prism` and do merge; Med Patch and Medical Kit share a parent archetype
+/// but carry different labels and do not.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropCombineType(pub String);
+
 /// The version of a piece of software (`P$SoftLevel`, 1..=3). Authored on the
 /// `Softs` base archetype as 1 and overridden by the V2/V3 archetypes, so a
 /// V1 soft inherits the base value. Read by the `AutoInstallSoft` script.
@@ -1545,6 +1554,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ShockWeap",
             |reader, _len| read_i32(reader),
             PropWeaponType,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$CombineTy",
+            read_prop_string,
+            PropCombineType,
             accumulator::latest,
         ),
         define_prop(

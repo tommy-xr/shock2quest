@@ -858,11 +858,11 @@ fn container_deposit_preview(
     )
 }
 
-/// The occupant of `target_cell` in `container_entity_id`'s grid, if that
-/// occupant shares `dropped_entity_id`'s template and both carry a
-/// `PropStackCount` - the "matching stackable" a targeted deposit merges
-/// into instead of claiming a cell of its own. `None` when the cell is empty,
-/// off the grid, or holds an item that cannot be merged with.
+/// The occupant of `target_cell` in `container_entity_id`'s grid, if it
+/// combines with `dropped_entity_id` (see [`can_combine`]) - the "matching
+/// stackable" a targeted deposit merges into instead of claiming a cell of its
+/// own. `None` when the cell is empty, off the grid, or holds an item that
+/// cannot be merged with.
 fn matching_stack_at_cell(
     world: &World,
     container_entity_id: EntityId,
@@ -875,27 +875,46 @@ fn matching_stack_at_cell(
     if occupant == dropped_entity_id {
         return None;
     }
-    let v_stacks = world
-        .borrow::<View<dark::properties::PropStackCount>>()
-        .ok()?;
-    let dropped_template =
-        crate::scripts::script_util::entity_class_template_id(world, dropped_entity_id)?;
-    let occupant_template = crate::scripts::script_util::entity_class_template_id(world, occupant)?;
-    if dropped_template != occupant_template {
-        return None;
-    }
-    v_stacks
-        .get(occupant)
-        .ok()
-        .and_then(|_| v_stacks.get(dropped_entity_id).ok())
-        .map(|_| occupant)
+    can_combine(world, occupant, dropped_entity_id).then_some(occupant)
 }
 
-/// Any occupant of `container_entity_id`'s grid sharing `dropped_entity_id`'s
-/// template and both carrying a `PropStackCount` - the merge target a deposit
-/// falls back to when the container has no free cell for a new item at all,
-/// mirroring [`matching_stack_at_cell`] but searching the whole grid instead
-/// of one specific cell.
+/// Whether two objects stack together: both carry a matching `P$CombineTy`
+/// label and both carry a `PropStackCount` to pool into.
+///
+/// The label - not the template - is the identity that pools, so sibling
+/// archetypes like Small and Large Prism (both `Prism`) merge, while Med Patch
+/// and Medical Kit, which share a parent archetype but not a label, stay
+/// separate.
+///
+/// Requiring a stack count on both is narrower than the original rule, which
+/// combines on the label alone and sums counts only when both objects have
+/// one. The stack count is what a merge pools into, so an object without one
+/// has nothing to merge. The shipped data's one label without a stack count is
+/// `AccessCard`, whose merge unions key region masks rather than summing - and
+/// key sources never reach a grid cell here anyway (`is_always_collected`).
+fn can_combine(world: &World, combinee: EntityId, new_entity_id: EntityId) -> bool {
+    let Ok(v_combine_types) = world.borrow::<View<dark::properties::PropCombineType>>() else {
+        return false;
+    };
+    let Ok(combinee_type) = v_combine_types.get(combinee) else {
+        return false;
+    };
+    let Ok(new_type) = v_combine_types.get(new_entity_id) else {
+        return false;
+    };
+    if combinee_type.0.is_empty() || combinee_type.0 != new_type.0 {
+        return false;
+    }
+    let Ok(v_stacks) = world.borrow::<View<dark::properties::PropStackCount>>() else {
+        return false;
+    };
+    v_stacks.get(combinee).is_ok() && v_stacks.get(new_entity_id).is_ok()
+}
+
+/// Any occupant of `container_entity_id`'s grid that combines with
+/// `dropped_entity_id` (see [`can_combine`]) - the stack an ordinary deposit
+/// pools into, mirroring [`matching_stack_at_cell`] but searching the whole
+/// grid instead of one specific cell.
 fn find_mergeable_stack_anywhere(
     world: &World,
     container_entity_id: EntityId,
@@ -903,18 +922,9 @@ fn find_mergeable_stack_anywhere(
 ) -> Option<EntityId> {
     let grid = crate::inventory::grid_for(world, container_entity_id);
     let occupied = crate::inventory::Inventory::from_container(world, container_entity_id, grid);
-    let v_stacks = world
-        .borrow::<View<dark::properties::PropStackCount>>()
-        .ok()?;
-    v_stacks.get(dropped_entity_id).ok()?;
-    let dropped_template =
-        crate::scripts::script_util::entity_class_template_id(world, dropped_entity_id)?;
     occupied.all_items().find_map(|item| {
-        (item.entity != dropped_entity_id
-            && crate::scripts::script_util::entity_class_template_id(world, item.entity)
-                == Some(dropped_template)
-            && v_stacks.get(item.entity).is_ok())
-        .then_some(item.entity)
+        (item.entity != dropped_entity_id && can_combine(world, item.entity, dropped_entity_id))
+            .then_some(item.entity)
     })
 }
 
@@ -1323,7 +1333,7 @@ mod released_item_world_refs_tests {
 
 #[cfg(test)]
 mod cell_deposit_tests {
-    use dark::properties::{PropInventoryDimensions, PropStackCount, PropTemplateId};
+    use dark::properties::{PropCombineType, PropInventoryDimensions, PropStackCount};
 
     use super::*;
 
@@ -1365,14 +1375,14 @@ mod cell_deposit_tests {
             .expect("item should be linked into the container")
     }
 
-    /// A container holding one stackable occupant at cell (0,0), plus a
-    /// dropped entity carrying `dropped_template_id` - the shared setup for
+    /// A container holding one `Prism` stack at cell (0,0), plus a dropped
+    /// entity labelled `dropped_combine_type` - the shared setup for
     /// `matching_stack_at_cell`'s matching/non-matching cases.
-    fn stack_world(dropped_template_id: i32) -> (World, EntityId, EntityId, EntityId) {
+    fn stack_world(dropped_combine_type: &str) -> (World, EntityId, EntityId, EntityId) {
         let mut world = World::new();
         let occupant = world.add_entity((
             PropHasRefs(false),
-            PropTemplateId { template_id: 42 },
+            PropCombineType("Prism".to_owned()),
             PropStackCount(3),
         ));
         let container = world.add_entity(Links {
@@ -1384,9 +1394,7 @@ mod cell_deposit_tests {
         });
         let dropped = world.add_entity((
             PropHasRefs(false),
-            PropTemplateId {
-                template_id: dropped_template_id,
-            },
+            PropCombineType(dropped_combine_type.to_owned()),
             PropStackCount(2),
         ));
         (world, container, occupant, dropped)
@@ -1461,7 +1469,7 @@ mod cell_deposit_tests {
             (preview.1.1 * 4 + preview.1.0) as u32
         );
 
-        let (world, container, _, item) = stack_world(42);
+        let (world, container, _, item) = stack_world("Prism");
         assert_eq!(
             container_deposit_preview(&world, container, item, (0, 0)).3,
             PlacementStatus::Merge
@@ -1494,12 +1502,12 @@ mod cell_deposit_tests {
         ));
     }
 
-    /// A target cell holding a same-template stack is a merge candidate, not
-    /// a claim - `MissionCore::drop_entity_into_container_at_cell` sums the
-    /// counts and destroys the dropped entity instead of placing it.
+    /// A target cell holding a stack with the same combine label is a merge
+    /// candidate, not a claim - `MissionCore::drop_entity_into_container_at_cell`
+    /// sums the counts and destroys the dropped entity instead of placing it.
     #[test]
     fn a_matching_stack_at_the_cell_is_detected_as_a_merge_target() {
-        let (world, container, occupant, dropped) = stack_world(42);
+        let (world, container, occupant, dropped) = stack_world("Prism");
 
         assert_eq!(
             matching_stack_at_cell(&world, container, dropped, (0, 0)),
@@ -1507,12 +1515,13 @@ mod cell_deposit_tests {
         );
     }
 
-    /// A same-cell item with a different template is an ordinary occupant,
-    /// not a merge target - the deposit must fall back to first-free instead
-    /// of silently folding unrelated items together.
+    /// A same-cell item with a different combine label is an ordinary
+    /// occupant, not a merge target - the deposit must fall back to first-free
+    /// instead of silently folding unrelated items together. Med Patch and
+    /// Medical Kit are the shipped example: one parent archetype, two labels.
     #[test]
-    fn a_different_template_at_the_cell_is_not_a_merge_target() {
-        let (world, container, _occupant, dropped) = stack_world(43);
+    fn a_different_combine_type_at_the_cell_is_not_a_merge_target() {
+        let (world, container, _occupant, dropped) = stack_world("MedicalKit");
 
         assert_eq!(
             matching_stack_at_cell(&world, container, dropped, (0, 0)),
@@ -1550,7 +1559,7 @@ mod cell_deposit_tests {
 
 #[cfg(test)]
 mod capacity_enforcement_tests {
-    use dark::properties::{PropStackCount, PropTemplateId};
+    use dark::properties::{PropCombineType, PropStackCount};
 
     use super::*;
 
@@ -1601,14 +1610,14 @@ mod capacity_enforcement_tests {
     }
 
     /// A full container still has nowhere for a stackable deposit to merge
-    /// into if nothing already inside shares its template - the "OR can
+    /// into if nothing already inside shares its combine label - the "OR can
     /// merge" half of the capacity check isn't a blanket pass.
     #[test]
     fn find_mergeable_stack_anywhere_is_none_without_a_matching_stack() {
         let (mut world, container) = full_container();
         let dropped = world.add_entity((
             PropHasRefs(false),
-            PropTemplateId { template_id: 99 },
+            PropCombineType("Prism".to_owned()),
             PropStackCount(1),
         ));
 
@@ -1618,16 +1627,20 @@ mod capacity_enforcement_tests {
         );
     }
 
-    /// A full container that DOES hold a matching stack (template + both
-    /// stackable) offers it as a merge target anywhere in the grid, not just
-    /// at one specific cell - `matching_stack_at_cell`'s general-purpose
+    /// A full container that DOES hold a matching stack (same combine label,
+    /// both stackable) offers it as a merge target anywhere in the grid, not
+    /// just at one specific cell - `matching_stack_at_cell`'s general-purpose
     /// sibling, used by the ordinary (non-cell-targeted) deposit path.
+    ///
+    /// The two entities deliberately carry DIFFERENT templates: Small and
+    /// Large Prism are separate archetypes sharing the `Prism` label, and the
+    /// original pools them, so the label alone must carry the match.
     #[test]
     fn find_mergeable_stack_anywhere_finds_a_matching_stack() {
         let (mut world, container) = full_container();
         // Retarget one of the sixteen filler occupants to share the dropped
-        // item's template and carry a stack count, so it becomes the merge
-        // candidate.
+        // item's combine label and carry a stack count, so it becomes the
+        // merge candidate.
         let occupant = world
             .borrow::<View<Links>>()
             .unwrap()
@@ -1637,11 +1650,11 @@ mod capacity_enforcement_tests {
             .to_entity_id
             .unwrap()
             .0;
-        world.add_component(occupant, PropTemplateId { template_id: 42 });
+        world.add_component(occupant, PropCombineType("Prism".to_owned()));
         world.add_component(occupant, PropStackCount(3));
         let dropped = world.add_entity((
             PropHasRefs(false),
-            PropTemplateId { template_id: 42 },
+            PropCombineType("Prism".to_owned()),
             PropStackCount(2),
         ));
 
@@ -1649,19 +1662,34 @@ mod capacity_enforcement_tests {
             find_mergeable_stack_anywhere(&world, container, dropped),
             Some(occupant)
         );
-        // Mission-local identity and a split archetype still share one class.
-        world.add_component(
-            occupant,
-            crate::runtime_props::RuntimePropCanonicalTemplateId(-31),
-        );
-        world.add_component(dropped, PropTemplateId { template_id: -31 });
-        assert_eq!(
-            find_mergeable_stack_anywhere(&world, container, dropped),
-            Some(occupant)
-        );
         assert_eq!(
             matching_stack_at_cell(&world, container, dropped, (3, 0)),
             Some(occupant)
+        );
+    }
+
+    /// A combine label with no stack count to pool into is not a merge
+    /// target: `AccessCard` is the shipped case, and its region-mask union is
+    /// not this path's business.
+    #[test]
+    fn a_labelled_item_without_a_stack_count_does_not_merge() {
+        let (mut world, container) = full_container();
+        let occupant = world
+            .borrow::<View<Links>>()
+            .unwrap()
+            .get(container)
+            .unwrap()
+            .to_links[0]
+            .to_entity_id
+            .unwrap()
+            .0;
+        world.add_component(occupant, PropCombineType("AccessCard".to_owned()));
+        let dropped =
+            world.add_entity((PropHasRefs(false), PropCombineType("AccessCard".to_owned())));
+
+        assert_eq!(
+            find_mergeable_stack_anywhere(&world, container, dropped),
+            None
         );
     }
 
@@ -1689,11 +1717,11 @@ mod capacity_enforcement_tests {
             .to_entity_id
             .unwrap()
             .0;
-        world.add_component(occupant, PropTemplateId { template_id: 7 });
+        world.add_component(occupant, PropCombineType("MedPatch".to_owned()));
         world.add_component(occupant, PropStackCount(1));
         let dropped = world.add_entity((
             PropHasRefs(false),
-            PropTemplateId { template_id: 7 },
+            PropCombineType("MedPatch".to_owned()),
             PropStackCount(1),
         ));
 
@@ -4723,7 +4751,7 @@ impl MissionCore {
                     .borrow::<UniqueView<PlayerInfo>>()
                     .unwrap()
                     .inventory_entity_id;
-                if !self.drop_entity_into_container(inventory, entity) {
+                if self.drop_entity_into_container(inventory, entity).is_none() {
                     let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
                     let position = player.pos
                         + player
@@ -6626,13 +6654,14 @@ impl MissionCore {
     /// cell-targeted deposit and the ordinary first-free deposit's
     /// full-container fallback.
     fn merge_dropped_stack(&mut self, occupant: EntityId, dropped_entity_id: EntityId) {
-        let dropped_count = self
+        let Some(dropped_count) = self
             .world
             .borrow::<View<dark::properties::PropStackCount>>()
-            .unwrap()
-            .get(dropped_entity_id)
-            .unwrap()
-            .0;
+            .ok()
+            .and_then(|stacks| stacks.get(dropped_entity_id).ok().map(|stack| stack.0))
+        else {
+            return;
+        };
         if let Ok(mut stacks) = self
             .world
             .borrow::<ViewMut<dark::properties::PropStackCount>>()
@@ -6648,18 +6677,32 @@ impl MissionCore {
     /// inventory): drop any prior `Contains` links to it, add a fresh one from
     /// the container, mark it referenced, and remove it from the physical world.
     ///
-    /// Returns false, leaving the item's prior links untouched, if the
-    /// container has no `Links` (nowhere to record the transfer) or has no
-    /// free cell for it and nothing to merge it into - a full backpack
-    /// refuses the deposit, retail-style, rather than absorbing it invisibly.
-    /// A full container that still holds a matching stack merges into it
-    /// instead of refusing (see [`find_mergeable_stack_anywhere`]). Shared by
-    /// the `DropEntityInfo` effect and the debug give lever.
+    /// A deposit that combines with something already inside pools into it
+    /// rather than claiming a cell of its own, so a second med hypo lands on
+    /// the first instead of beside it (see [`find_mergeable_stack_anywhere`]).
+    /// The merge is attempted before placement, as the original does.
+    ///
+    /// Returns the entity that ended up in the container: `dropped_entity_id`
+    /// itself when it claimed a cell, or the stack it merged into - a merge
+    /// destroys the dropped entity, so a caller that reports an id onwards
+    /// must use the survivor rather than the id it passed in.
+    ///
+    /// `None`, leaving the item's prior links untouched, if the container has
+    /// no `Links` (nowhere to record the transfer) or has no free cell for it
+    /// and nothing to merge it into - a full backpack refuses the deposit,
+    /// retail-style, rather than absorbing it invisibly. Shared by the
+    /// `DropEntityInfo` effect and the debug give lever.
     pub fn drop_entity_into_container(
         &mut self,
         container_entity_id: EntityId,
         dropped_entity_id: EntityId,
-    ) -> bool {
+    ) -> Option<EntityId> {
+        if let Some(occupant) =
+            find_mergeable_stack_anywhere(&self.world, container_entity_id, dropped_entity_id)
+        {
+            self.merge_dropped_stack(occupant, dropped_entity_id);
+            return Some(occupant);
+        }
         let moved = move_live_entity_into_container(
             &mut self.world,
             container_entity_id,
@@ -6667,17 +6710,19 @@ impl MissionCore {
         );
         if moved {
             self.make_un_physical(dropped_entity_id);
-            return true;
+            return Some(dropped_entity_id);
         }
-        if let Some(occupant) =
-            find_mergeable_stack_anywhere(&self.world, container_entity_id, dropped_entity_id)
-        {
-            self.merge_dropped_stack(occupant, dropped_entity_id);
-            return true;
-        }
-        false
+        None
     }
 
+    /// Unlike [`Self::drop_entity_into_container`], placement is tried BEFORE
+    /// a grid-wide merge: an explicit cell target is the player's instruction
+    /// to put the item *there*, so a free target cell wins over pooling into a
+    /// matching stack elsewhere. (An occupied target cell holding a matching
+    /// stack still merges - that IS the pointed-at destination.) The original
+    /// draws the same line, combining on the untargeted deposit but not on the
+    /// slot-targeted cursor drop.
+    ///
     /// Like [`Self::drop_entity_into_container`], but targets `target_cell`
     /// (the cyber-interface strip deposit, released over the grid cell the
     /// player is pointing at) instead of always the first free cell.
@@ -9241,7 +9286,10 @@ impl MissionCore {
                     parent_entity_id,
                     dropped_entity_id,
                 } => {
-                    if !self.drop_entity_into_container(parent_entity_id, dropped_entity_id) {
+                    if self
+                        .drop_entity_into_container(parent_entity_id, dropped_entity_id)
+                        .is_none()
+                    {
                         effects.push_front(backpack_full_feedback(dropped_entity_id));
                     }
                 }
@@ -11733,11 +11781,20 @@ impl MissionCore {
             Matrix4::identity(),
             CreateEntityOptions::default(),
         );
+        // A pooled deposit destroys the fresh entity, so resolve the stack it
+        // will merge into BEFORE giving it away - reporting the spawned id
+        // would hand the caller one that no longer resolves.
+        let inventory_entity = {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            player.inventory_entity_id
+        };
+        let merge_target =
+            find_mergeable_stack_anywhere(&self.world, inventory_entity, info.entity_id);
         if let Err(e) = self.give_item(info.entity_id) {
             self.destroy_entity(info.entity_id);
             return Err(e);
         }
-        Ok(info.entity_id)
+        Ok(merge_target.unwrap_or(info.entity_id))
     }
 
     /// Advance any running between-shots cooldown by `dt` and clear it when the
@@ -13380,6 +13437,7 @@ impl MissionCore {
                         .ok();
                     let stored = inventory_entity.is_some_and(|inventory_entity| {
                         self.drop_entity_into_container(inventory_entity, entity_id)
+                            .is_some()
                     });
                     if !stored {
                         deferred.push(backpack_full_feedback(entity_id));
@@ -15522,11 +15580,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             player.inventory_entity_id
         };
-        if self.drop_entity_into_container(inventory_entity, entity_id) {
-            Ok(())
-        } else {
-            Err("could not add item to inventory (no inventory container)".to_string())
-        }
+        self.drop_entity_into_container(inventory_entity, entity_id)
+            .map(|_| ())
+            .ok_or_else(|| "could not add item to inventory (no inventory container)".to_string())
     }
 
     fn spawn_item_for_player(
