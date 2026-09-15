@@ -45,7 +45,12 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       # Set up Android SDK
-      - uses: android-actions/setup-android@v2
+      # `packages: ''` skips the action's default `sdkmanager tools` - the
+      # legacy `tools` package is delisted and fails the install. The packages
+      # we actually need are installed explicitly below.
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: ''
       - run: sdkmanager "build-tools;33.0.0"
       - run: sdkmanager "platforms;android-26"
       - run: sdkmanager "platform-tools"
