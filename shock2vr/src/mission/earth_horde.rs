@@ -283,7 +283,9 @@ impl EntityPopulator for HordePopulation {
                 add(60_031, -327, "Ammunition outlet", [-0.5, 21.0, 31.5], 0.0),
             ),
         ];
+        let containment = super::earth_containment::populate(&mut add);
         drop(add);
+        super::earth_containment::configure(world, containment, director);
         for (shop, template, outlet) in outlets {
             world.add_component(
                 shop,
@@ -396,6 +398,12 @@ pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
         stats.psi_tier = 1;
         stats.cyber_modules = 16;
         stats.nanites = 80;
+        // This experiment supplies ready-to-use Toxin-A, not Hydro's research
+        // quest. Seed completed knowledge before any shop vial initializes;
+        // ResearchableScript normalizes every future copy, including on load.
+        let research = quests.research_mut();
+        research.begin(-1341, 0, 0);
+        research.advance(-1341, 0.0, 1, 1.0, 0.0, None, 0);
     }
     crate::difficulty::refresh_player_pools(&core.world, true);
     core.teleport_player(vec3(11.6, 21.2, 24.0))
@@ -433,7 +441,10 @@ fn expired_corpses(world: &World) -> Vec<Effect> {
     let mut ids: Vec<_> = (&types, &hp)
         .iter()
         .with_id()
-        .filter(|(_, (tag, hp))| tag.0 > ECOLOGY && hp.hit_points <= 0)
+        .filter(|(_, (tag, hp))| {
+            (tag.0 > ECOLOGY || super::earth_containment::is_containment_type(tag.0))
+                && hp.hit_points <= 0
+        })
         .map(|(id, _)| id)
         .collect();
     let mut seen: std::collections::HashSet<_> = ids.iter().copied().collect();
@@ -485,6 +496,7 @@ pub(crate) struct HordeDirector {
     next_status: f32,
     seed: u64,
     enemies: Vec<Enemy>,
+    containment: super::earth_containment::Containment,
 }
 
 impl Default for HordeDirector {
@@ -502,6 +514,7 @@ impl Default for HordeDirector {
             next_status: 0.0,
             seed: SEED,
             enemies: vec![],
+            containment: Default::default(),
         }
     }
 }
@@ -756,6 +769,12 @@ impl Script for HordeDirector {
             effects.push(self.status());
             self.next_status = 5.0;
         }
+        effects.extend(self.containment.update(
+            world,
+            dt,
+            self.phase == Phase::Assault,
+            self.quick,
+        ));
         match self.phase {
             Phase::Rest => {
                 self.clock -= dt;
@@ -828,6 +847,11 @@ impl Script for HordeDirector {
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
+        if let MessagePayload::TurnOn { from } = msg {
+            if self.phase != Phase::Failed {
+                return self.containment.replenish(world, *from);
+            }
+        }
         if matches!(msg, MessagePayload::Frob)
             && self.initialized
             && world
@@ -862,6 +886,7 @@ impl Script for HordeDirector {
                 .map(|id| id.inner())
                 .unwrap_or(0);
         }
+        self.containment.remap(context);
         self.next_status = 0.0;
         Ok(())
     }
