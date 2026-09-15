@@ -136,7 +136,9 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
             }
         }
 
-        let button_height = 60.0;
+        // Six authored slots must fit above the feedback/currency footer in
+        // the shared 296px canvas; 60px rows put the final slots off-canvas.
+        let button_height = 36.0;
         let initial_padding_y = 10.0;
         let button_width = 188.0;
         let button_padding = 4.0;
@@ -148,9 +150,9 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         let replicator_icon = |icon: &str, position: f32| GuiComponent::Image {
             position: vec2(
                 main_x + 10.0,
-                5.0 + initial_padding_y + (button_height + button_padding) * position,
+                3.0 + initial_padding_y + (button_height + button_padding) * position,
             ),
-            size: vec2(30.0, button_height - 10.0),
+            size: vec2(30.0, 30.0),
             texture: icon.to_owned(),
             alpha: 0.5,
             // Replicator catalogs use the same PropObjIcon art as inventory,
@@ -199,19 +201,28 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
 
                 components.push(replicator_icon(obj_icon, float_i));
 
-                if let Some(short_name) = metadata.obj_short_name.as_ref() {
-                    components.push(gui::text(short_name).with_position(vec2(
-                        main_x + 50.0,
-                        button_height / 2.0 + (button_height + button_padding) * float_i,
-                    )));
+                let short_name = metadata
+                    .obj_short_name
+                    .as_deref()
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or(obj_name);
+                let mut label = gui::text(short_name)
+                    .with_position(vec2(
+                        main_x + 44.0,
+                        initial_padding_y + 3.0 + (button_height + button_padding) * float_i,
+                    ))
+                    .with_size(vec2(140.0, 12.0));
+                if let GuiComponent::Text { fit_to_rect, .. } = &mut label {
+                    *fit_to_rect = true;
                 }
+                components.push(label);
 
-                // Retail draws the three-digit price beneath the item icon.
+                // Price sits below the label, beside the fitted item icon.
                 components.push(
                     gui::text(&format!("{cost:03}"))
                         .with_position(vec2(
-                            main_x + 19.0,
-                            47.0 + (button_height + button_padding) * float_i,
+                            main_x + 44.0,
+                            initial_padding_y + 20.0 + (button_height + button_padding) * float_i,
                         ))
                         .with_size(vec2(34.0, 12.0)),
                 );

@@ -14,12 +14,8 @@
 //! script round-trip: the effect handler bumps `PlayerStats` inside
 //! `QuestInfo`, so upgrades persist across save/load and level transitions.
 //!
-//! Deliberate simplifications (see the PR): the psi panel sells *tier
-//! unlocks* only (`PlayerStats::psi_tier`, sequential, from `PSICOST[t][0]`);
-//! individual power purchases within a tier are deferred until known-psi-power
-//! persistence lands. UNDO is deferred (the shared `Gui` layer has no
-//! panel-open/close lifecycle to snapshot against). Costs are Normal
-//! difficulty (no difficulty setting exists yet).
+//! The psi trainer uses the shared discipline grid in `psi_powers`; this
+//! module supplies its sequential tier-purchase validation. UNDO is deferred.
 //!
 //! A stat is only sold when it has a live gameplay consumer. Strength expands
 //! the backpack, Endurance raises maximum HP, and Cyber Affinity feeds hacking
@@ -53,7 +49,6 @@ pub enum TrainerMode {
     Stats,
     Tech,
     Weapons,
-    Psi,
 }
 
 /// Whether a stat has a real gameplay consumer and is therefore safe to sell.
@@ -197,30 +192,11 @@ impl TrainerMode {
                 }
                 rows
             }
-            TrainerMode::Psi => (1..=PSI_TIER_CAP)
-                .map(|tier| TrainerRow {
-                    label: psi_tier_label(tier),
-                    target: TrainerTarget::PsiTier(tier),
-                })
-                .collect(),
         }
     }
 
     fn backdrop(&self) -> &'static str {
-        match self {
-            TrainerMode::Psi => "psitrain.pcx",
-            _ => "train.pcx",
-        }
-    }
-}
-
-fn psi_tier_label(tier: i32) -> &'static str {
-    match tier {
-        1 => "Psi Tier 1",
-        2 => "Psi Tier 2",
-        3 => "Psi Tier 3",
-        4 => "Psi Tier 4",
-        _ => "Psi Tier 5",
+        "train.pcx"
     }
 }
 

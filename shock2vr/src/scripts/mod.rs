@@ -946,6 +946,9 @@ impl ScriptWorld {
     }
 
     fn create_script(script_name: String) -> Box<dyn Script> {
+        if script_name.eq_ignore_ascii_case("EarthHorde") {
+            return Box::new(crate::mission::earth_horde::HordeDirector::default());
+        }
         match script_name.to_ascii_lowercase().as_str() {
             // PROJECTILE stuff
             "lasershot" => Box::new(laser_shot::LaserShot::new()),
@@ -1211,7 +1214,7 @@ impl ScriptWorld {
             "triggerdestroy" => Box::new(TriggerDestroy::new()),
 
             // skill point machines
-            "psitrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Psi))),
+            "psitrainer" => gui_script(Box::new(gui::PsiTrainerGui)),
             "techtrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Tech))),
             "statstrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Stats))),
             "traitmachine" => gui_script(Box::new(TraitGui)),
