@@ -169,7 +169,10 @@ enum PreviewKind {
     Model {
         key: String,
         details: Result<crate::model_details::ModelDetails, String>,
-        copies: Vec<(String, Result<crate::model_details::ModelDetails, String>)>,
+        /// Lower-priority copies of this key, inspected on first expansion -
+        /// reading them up front would inflate every override on selection.
+        shadowed: Vec<AssetEntry>,
+        copies: Option<Vec<(String, Result<crate::model_details::ModelDetails, String>)>>,
     },
     /// A `.mc` motion clip, played as bone lines on a matching actor's skeleton.
     Motion {
@@ -705,14 +708,12 @@ fn build_preview(
     };
     let size = bytes.len();
     let mut kind = decode_preview(family, key, bytes, motion_db);
-    if let PreviewKind::Model { copies, .. } = &mut kind {
-        if let PreviewOrigin::Mount { shadowed, .. } = &origin {
-            for entry in shadowed {
-                let details =
-                    archives::read_entry(std::path::Path::new(&entry.source), &entry.entry_name)
-                        .and_then(|bytes| crate::model_details::ModelDetails::inspect(&bytes));
-                copies.push((explorer::short_source(&entry.source), details));
-            }
+    if let PreviewKind::Model { shadowed, .. } = &mut kind {
+        if let PreviewOrigin::Mount {
+            shadowed: entries, ..
+        } = &origin
+        {
+            *shadowed = entries.clone();
         }
     }
     Preview {
@@ -806,7 +807,8 @@ fn decode_preview(
         return PreviewKind::Model {
             key: key.to_string(),
             details: crate::model_details::ModelDetails::inspect(&bytes),
-            copies: Vec::new(),
+            shadowed: Vec::new(),
+            copies: None,
         };
     }
     if ext == "mc" {
@@ -1745,27 +1747,38 @@ impl ExplorerApp {
             PreviewKind::Model {
                 key,
                 details,
+                shadowed,
                 copies,
             } => {
-                let source = match &preview.origin {
-                    PreviewOrigin::Mount { winner, .. } => &winner.source,
-                    PreviewOrigin::Archive { archive, .. } => archive,
-                };
                 match details {
-                    Ok(details) => details.show(ui, source),
+                    Ok(details) => details.show(ui),
                     Err(error) => {
                         ui.label(format!("Cannot inspect mesh: {error}"));
                     }
                 }
-                if !copies.is_empty() {
+                if !shadowed.is_empty() {
                     ui.collapsing("Compare overridden meshes", |ui| {
-                        for (source, details) in copies {
+                        // First expansion pays for the reads; the cache keeps
+                        // re-opening the section free.
+                        let copies = copies.get_or_insert_with(|| {
+                            shadowed
+                                .iter()
+                                .map(|entry| {
+                                    let details = archives::read_entry(
+                                        std::path::Path::new(&entry.source),
+                                        &entry.entry_name,
+                                    )
+                                    .and_then(|bytes| {
+                                        crate::model_details::ModelDetails::inspect(&bytes)
+                                    });
+                                    (explorer::short_source(&entry.source), details)
+                                })
+                                .collect()
+                        });
+                        for (source, details) in copies.iter() {
                             match details {
                                 Ok(details) => {
-                                    ui.label(format!(
-                                        "{source}: {} — {}",
-                                        details.format, details.geometry
-                                    ));
+                                    ui.label(format!("{source}: {}", details.summary()));
                                 }
                                 Err(error) => {
                                     ui.label(format!("{source}: {error}"));

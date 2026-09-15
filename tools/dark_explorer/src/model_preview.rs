@@ -91,7 +91,9 @@ pub struct ModelPreview {
     /// The scene plays an animation clip, so it re-renders every frame.
     animated: bool,
     error: Option<String>,
-    rendered_pmnm: bool,
+    /// Which geometry the last load drew: `None` for an LGMD object, which has
+    /// no high-detail alternative to choose between.
+    rendered_pmnm: Option<bool>,
     pub debug_skeletons: bool,
     pub debug_hit_boxes: bool,
     pub debug_articulation: bool,
@@ -132,7 +134,7 @@ impl ModelPreview {
             scene: None,
             animated: false,
             error: None,
-            rendered_pmnm: false,
+            rendered_pmnm: None,
             debug_skeletons: false,
             debug_hit_boxes: false,
             debug_articulation: false,
@@ -162,11 +164,11 @@ impl ModelPreview {
             ui.label(format!("Cannot render this model: {error}"));
             return;
         }
-        if matches!(scene, PreviewScene::Model) {
-            ui.label(if self.rendered_pmnm {
+        if let (PreviewScene::Model, Some(pmnm)) = (scene, self.rendered_pmnm) {
+            ui.label(if pmnm {
                 "Rendered geometry: PMNM high-detail mesh"
             } else {
-                "Rendered geometry: base mesh from the winning file"
+                "Rendered geometry: classic LGMM mesh"
             });
         }
         if self.animated && !self.paused {
@@ -272,6 +274,7 @@ impl ModelPreview {
         self.scene = None;
         self.animated = false;
         self.error = None;
+        self.rendered_pmnm = None;
         self.articulation = None;
         // Load the model eagerly under catch_unwind — the scene itself defers
         // loading to render, and Dark parsers panic on malformed input; a
@@ -305,7 +308,7 @@ impl ModelPreview {
                 return;
             }
         };
-        self.rendered_pmnm = model.bind_matrices().is_some();
+        self.rendered_pmnm = model.is_animated().then(|| model.bind_matrices().is_some());
         // Skeleton scenes frame on their posed joints; an AI mesh has no
         // bounding box for `frame_camera` to use.
         let mut pose_bounds = None;
