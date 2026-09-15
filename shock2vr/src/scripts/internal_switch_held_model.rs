@@ -1,7 +1,7 @@
 use dark::properties::{InternalPropOriginalModelName, PropLimbModel, PropPlayerGun};
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use shipyard::{EntityId, Get, View, World};
 
-use crate::{PresentationMode, mission::GlobalPresentationMode, physics::PhysicsWorld, vr_config};
+use crate::{physics::PhysicsWorld, vr_config};
 
 use super::{Effect, MessagePayload, Script};
 
@@ -22,10 +22,7 @@ impl Script for InternalSwitchHeldModelScript {
     ) -> Effect {
         match msg {
             MessagePayload::Hold => {
-                let is_vr = world
-                    .borrow::<UniqueView<GlobalPresentationMode>>()
-                    .map(|mode| mode.0 == PresentationMode::Vr)
-                    .unwrap_or(false);
+                let is_vr = crate::mission::presentation_is_vr(world);
                 if is_vr {
                     // On a 25AE install the remastered first-person gun models
                     // resolve (mods/sshock2ee.kpf outranks the classic

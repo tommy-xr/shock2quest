@@ -1,13 +1,9 @@
 use std::collections::HashMap;
 
 use cgmath::{Vector3, vec3};
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use shipyard::{EntityId, Get, View, World};
 
-use crate::{
-    PresentationMode,
-    mission::{GlobalPresentationMode, stim_response::contact_stim_damage},
-    physics::PhysicsWorld,
-};
+use crate::{mission::stim_response::contact_stim_damage, physics::PhysicsWorld};
 
 use super::{
     Effect, Message, MessagePayload, Script,
@@ -87,7 +83,7 @@ impl Script for HeldMeleeWeapon {
         physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
-        if !is_vr(world) {
+        if !crate::mission::presentation_is_vr(world) {
             return Effect::NoEffect;
         }
 
@@ -212,13 +208,6 @@ impl HeldMeleeWeapon {
     }
 }
 
-fn is_vr(world: &World) -> bool {
-    world
-        .borrow::<UniqueView<GlobalPresentationMode>>()
-        .map(|mode| mode.0 == PresentationMode::Vr)
-        .unwrap_or(false)
-}
-
 /// How fast the two bodies were closing on each other, at the point where they
 /// touched, along the surface they touched on.
 ///
@@ -329,6 +318,8 @@ fn contact_damage_effect(
 
 #[cfg(test)]
 mod tests {
+    use crate::PresentationMode;
+    use crate::mission::GlobalPresentationMode;
     use dark::properties::{CollisionType, PropCollisionType};
     use std::collections::HashMap;
 

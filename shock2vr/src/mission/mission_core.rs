@@ -2094,6 +2094,15 @@ pub struct DebugOptions {
 #[derive(Unique, Clone, Copy)]
 pub struct GlobalPresentationMode(pub crate::PresentationMode);
 
+/// Whether this session presents in VR, for the code that has a `World` but no
+/// `GameOptions` in hand (scripts, GUIs, collision-group resolution). A world
+/// without the unique - a bare test world - reads as flat.
+pub fn presentation_is_vr(world: &World) -> bool {
+    world
+        .borrow::<UniqueView<GlobalPresentationMode>>()
+        .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr)
+}
+
 /// Whether `--experimental physical_held_items` is on: a VR-held gun keeps a
 /// swept body, like a held melee weapon, so it stops at the level's geometry
 /// instead of passing through it. Accessible from the paths that establish
@@ -14060,10 +14069,7 @@ fn drop_contains_links_to(links: &mut Links, target: EntityId) {
 /// (gamesys-wide: Wrench -928, PsiSword -2291, Crystal Shard -28, Electro
 /// Shock -24); the flat presentation swings by raycast and needs none of this.
 pub fn is_vr_melee_weapon(world: &World, entity_id: EntityId) -> bool {
-    world
-        .borrow::<UniqueView<GlobalPresentationMode>>()
-        .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr)
-        && is_melee_weapon(world, entity_id)
+    presentation_is_vr(world) && is_melee_weapon(world, entity_id)
 }
 
 /// The marker itself, without the VR gate: what the player swings rather than
@@ -14096,9 +14102,7 @@ pub fn held_item_collision_group(world: &World, entity_id: EntityId) -> Option<C
         return Some(CollisionGroup::held_melee());
     }
 
-    let is_vr = world
-        .borrow::<UniqueView<GlobalPresentationMode>>()
-        .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr);
+    let is_vr = presentation_is_vr(world);
     let physical_held_items = world
         .borrow::<UniqueView<GlobalPhysicalHeldItems>>()
         .is_ok_and(|enabled| enabled.0);

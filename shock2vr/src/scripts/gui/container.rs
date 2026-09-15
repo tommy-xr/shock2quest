@@ -18,7 +18,7 @@ use crate::scripts::{Effect, MessagePayload};
 /// What a panel draws behind its item cells.
 enum PanelBackdrop {
     /// The original panel bitmap, filling the whole panel.
-    Art(String),
+    Art(&'static str),
     /// A bare holographic grid over the item cells and nothing else - no
     /// backdrop, no chrome (see [`ImageKind::Hologram`]).
     HologramGrid,
@@ -28,7 +28,7 @@ impl PanelBackdrop {
     /// The bitmap this backdrop draws from.
     fn texture(&self) -> &str {
         match self {
-            Self::Art(texture) => texture.as_str(),
+            Self::Art(texture) => texture,
             Self::HologramGrid => crate::ui::HOLOGRAM_TILE_TEXTURE,
         }
     }
@@ -69,44 +69,38 @@ impl PanelSpec {
     /// Only the *drawing* differs. Cell pitch, slot count, take-on-click and
     /// every behavior below are shared, and both presentations lay their items
     /// out from this struct's `grid_origin`.
+    /// Both arms feed ONE struct literal, so a field added to `PanelSpec`
+    /// cannot be filled in for one presentation and forgotten for the other.
     fn loot(is_vr: bool) -> PanelSpec {
-        if is_vr {
-            PanelSpec {
-                backdrop: PanelBackdrop::HologramGrid,
-                size: Vector2::new(
-                    LOOT_PANEL_WIDTH,
-                    HOLOGRAM_GRID_ORIGIN.y + SLOT_PITCH.y * LOOT_SLOTS.1 as f32 + LOOT_GRID_MARGIN,
-                ),
-                grid_origin: HOLOGRAM_GRID_ORIGIN,
-                slots: LOOT_SLOTS,
-            }
+        let (backdrop, grid_origin, height) = if is_vr {
+            (
+                PanelBackdrop::HologramGrid,
+                HOLOGRAM_GRID_ORIGIN,
+                HOLOGRAM_GRID_ORIGIN.y + SLOT_PITCH.y * LOOT_SLOTS.1 as f32 + LOOT_GRID_MARGIN,
+            )
         } else {
-            PanelSpec {
-                backdrop: PanelBackdrop::Art("contain.pcx".to_owned()),
-                size: Vector2::new(LOOT_PANEL_WIDTH, LOOT_ART_HEIGHT),
-                grid_origin: LOOT_ART_GRID_ORIGIN,
-                slots: LOOT_SLOTS,
-            }
+            (
+                PanelBackdrop::Art("contain.pcx"),
+                LOOT_ART_GRID_ORIGIN,
+                LOOT_ART_HEIGHT,
+            )
+        };
+        PanelSpec {
+            backdrop,
+            size: Vector2::new(LOOT_PANEL_WIDTH, height),
+            grid_origin,
+            slots: LOOT_SLOTS,
         }
     }
 
     fn backpack() -> PanelSpec {
         PanelSpec {
-            backdrop: PanelBackdrop::Art("invback.pcx".to_owned()),
+            backdrop: PanelBackdrop::Art("invback.pcx"),
             size: Vector2::new(635.0, 120.0),
             grid_origin: BACKPACK_GRID_ORIGIN,
             slots: (15, 3),
         }
     }
-}
-
-/// Whether this session presents in VR. Read off the world so the panel's
-/// style follows the running presentation rather than whatever mode the
-/// script happened to be constructed under.
-fn presentation_is_vr(world: &World) -> bool {
-    world
-        .borrow::<shipyard::UniqueView<crate::mission::GlobalPresentationMode>>()
-        .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr)
 }
 
 pub struct ContainerGui {
@@ -260,8 +254,10 @@ impl ContainerGui {
     }
 
     /// This panel's style and geometry for the running presentation.
+    /// Read off the world so the panel's style follows the running
+    /// presentation rather than whatever mode the script was constructed under.
     fn spec(&self, world: &World) -> PanelSpec {
-        self.spec_for(presentation_is_vr(world))
+        self.spec_for(crate::mission::presentation_is_vr(world))
     }
 
     fn spec_for(&self, is_vr: bool) -> PanelSpec {
@@ -461,9 +457,12 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
         components
     }
 
-    /// Flat geometry. The running panel always resolves through
-    /// [`Gui::get_config_for`], which knows the presentation; this is the
-    /// trait's world-less fallback.
+    /// The trait's world-less fallback, which can only answer **flat** - it
+    /// has no world to read the presentation from. Every runtime path resolves
+    /// through [`Gui::get_config_for`] instead (`gui::gui_script` calls only
+    /// that), so nothing in VR gets flat geometry this way; a new world-less
+    /// caller would, which is why anything needing a loot panel's real size
+    /// must take a `&World`.
     fn get_config(&self) -> GuiConfig {
         self.config_for_spec(&self.spec_for(false))
     }
