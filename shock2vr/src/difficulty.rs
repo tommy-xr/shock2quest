@@ -99,6 +99,33 @@ impl GlobalDifficultyParams {
     }
 }
 
+/// Percentage of otherwise-successful loot draws the campaign difficulty
+/// throws away (0 on Easy and Normal, 30 on Hard, 75 on Impossible in the
+/// shipped table). A draw that yields nothing is unaffected - only a draw that
+/// picked a real item is subject to it.
+pub fn loot_discard_percent(world: &World) -> i32 {
+    let difficulty = campaign_difficulty(world);
+    world
+        .borrow::<UniqueView<GlobalDifficultyParams>>()
+        .ok()
+        .and_then(|p| {
+            p.difficulty
+                .as_ref()
+                .map(|d| d.loot_discard_threshold[difficulty.retail_index()])
+        })
+        .unwrap_or(0)
+}
+
+/// The campaign's difficulty, defaulting for a world without a character sheet
+/// (debug scenes).
+fn campaign_difficulty(world: &World) -> Difficulty {
+    world
+        .borrow::<UniqueView<QuestInfo>>()
+        .ok()
+        .map(|q| q.difficulty())
+        .unwrap_or_default()
+}
+
 /// Resolve from the campaign at each quote, including seeded debug scenes.
 pub fn trainer_costs(world: &World) -> Option<dark::gamesys::TrainerCostTables> {
     let authored = world
@@ -106,11 +133,7 @@ pub fn trainer_costs(world: &World) -> Option<dark::gamesys::TrainerCostTables> 
         .ok()?
         .0
         .clone()?;
-    let difficulty = world
-        .borrow::<UniqueView<QuestInfo>>()
-        .ok()
-        .map(|q| q.difficulty())
-        .unwrap_or_default();
+    let difficulty = campaign_difficulty(world);
     Some(
         world
             .borrow::<UniqueView<GlobalDifficultyParams>>()

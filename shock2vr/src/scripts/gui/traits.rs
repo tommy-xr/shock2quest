@@ -54,6 +54,9 @@ pub const TRAIT_PACK_RAT: u8 = 3;
 pub const TRAIT_PHARMO_FRIENDLY: u8 = 2;
 pub const TRAIT_TANK: u8 = 8;
 pub const TRAIT_REPLICATOR_EXPERT: u8 = 13;
+/// Cyber-Assimilation: unlocks a creature's `P$GuarLoot` drop on top of its
+/// ordinary loot table.
+pub const TRAIT_CYBER_ASSIMILATION: u8 = 12;
 
 /// Tank: "+5 maximum hit points" (TRAITS.STR Trait8). The original raises the
 /// ceiling AND current HP by the bonus on purchase (buying at 25/30 yields

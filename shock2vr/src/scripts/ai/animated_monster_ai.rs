@@ -937,7 +937,10 @@ impl AnimatedMonsterAI {
         // survives a frame.
         if crate::scripts::script_util::has_death_links(world, entity_id) {
             self.handoff_emitted = true;
-            return Effect::SlayEntity { entity_id };
+            return Effect::combine(vec![
+                Effect::GenerateLoot { entity_id },
+                Effect::SlayEntity { entity_id },
+            ]);
         }
 
         let death_sound_effect = if let Some(voice_index) =
@@ -974,7 +977,13 @@ impl AnimatedMonsterAI {
             selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
         };
 
-        Effect::combine(vec![death_sound_effect, death_animation])
+        Effect::combine(vec![
+            // Before the crumple, so the corpse is already stocked by the
+            // time anything can search it.
+            Effect::GenerateLoot { entity_id },
+            death_sound_effect,
+            death_animation,
+        ])
     }
 
     /// Publish the current behavior name for debug introspection. Update
