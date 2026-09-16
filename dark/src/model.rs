@@ -176,6 +176,11 @@ impl AnimatedModel {
     fn bounding_box(&self) -> Option<Aabb3<f32>> {
         self.posed_bounds
             .or_else(|| joint_box_bounds(&self.skeleton.get_transforms(), &self.hit_boxes))
+            // A jointed *object* model (a trainer console, a turret) is
+            // Animated only because it has sub-objects; it carries no hit
+            // boxes, so fall back to the mesh's own bounds rather than to the
+            // caller's tiny default.
+            .or(self.object_bounds)
     }
 
     fn to_scene_objects(&self) -> &Vec<SceneObject> {
@@ -855,16 +860,36 @@ mod tests {
         assert_eq!(bounds.max, Point3::new(5.5, 0.5, 0.5));
     }
 
-    /// A jointed object mesh (`from_obj_bin`'s animated branch) carries no
-    /// per-joint boxes; reporting an empty box would be worse than reporting
-    /// nothing, which callers already handle.
+    /// A skinned mesh with neither joint boxes nor mesh bounds has nothing to
+    /// report; an empty box would be worse than nothing, which callers already
+    /// handle.
     #[test]
-    fn an_animated_model_without_joint_boxes_has_no_bounds() {
+    fn an_animated_model_without_joint_boxes_or_mesh_bounds_has_no_bounds() {
         assert!(
             animated_model(HashMap::new(), Vec::new())
                 .bounding_box()
                 .is_none()
         );
+    }
+
+    /// Negative-first: a jointed *object* mesh (a trainer console, a turret) is
+    /// Animated only because it has sub-objects, and carries no per-joint
+    /// boxes - so it used to report no bounds at all and its selection collider
+    /// collapsed to the caller's default half-foot box.
+    #[test]
+    fn a_jointed_object_model_is_bounded_by_its_mesh() {
+        let mut model = animated_model(HashMap::new(), Vec::new());
+        let mesh_bounds = Aabb3::new(Point3::new(-0.5, -0.7, -0.4), Point3::new(0.5, 0.7, 0.4));
+        if let InnerModel::Animated(ref mut animated) = model.inner {
+            animated.object_bounds = Some(mesh_bounds);
+        }
+
+        let bounds = model
+            .bounding_box()
+            .expect("a jointed object model is bounded by its mesh");
+
+        assert_eq!(bounds.min, mesh_bounds.min);
+        assert_eq!(bounds.max, mesh_bounds.max);
     }
 
     fn winding(model: &Model) -> Option<FrontFaceWinding> {
