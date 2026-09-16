@@ -51,7 +51,12 @@ impl GrubAI {
             return Effect::NoEffect;
         }
         self.state.dead = true;
-        Effect::SlayEntity { entity_id }
+        // This AI has no death animation, so its authored loot table is drawn
+        // here rather than in the animated crumple path.
+        Effect::combine(vec![
+            Effect::GenerateLoot { entity_id },
+            Effect::SlayEntity { entity_id },
+        ])
     }
 }
 
