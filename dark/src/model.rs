@@ -577,8 +577,9 @@ impl Model {
         }
     }
 
-    /// Rest bounds for physical support of articulated object actors. This
-    /// does not change the legacy interaction bounds of other jointed props.
+    /// The rest mesh's own bounds, for physical support of articulated object
+    /// actors. Unlike `bounding_box`, it ignores per-joint hit boxes - the two
+    /// differ for a model that has both (a grub).
     pub fn object_model_bounds(&self) -> Option<Aabb3<f32>> {
         match &self.inner {
             InnerModel::Static(model) => Some(model.bounding_box),
@@ -787,6 +788,15 @@ mod tests {
         bones: Vec<Bone>,
         posed_joints: Option<[Matrix4<f32>; 40]>,
     ) -> Model {
+        model_with_object_bounds(hit_boxes, bones, posed_joints, None)
+    }
+
+    fn model_with_object_bounds(
+        hit_boxes: HashMap<u32, Aabb3<f32>>,
+        bones: Vec<Bone>,
+        posed_joints: Option<[Matrix4<f32>; 40]>,
+        object_bounds: Option<Aabb3<f32>>,
+    ) -> Model {
         let posed_bounds = posed_joints.and_then(|joints| joint_box_bounds(&joints, &hit_boxes));
         Model {
             transform: Matrix4::identity(),
@@ -799,7 +809,7 @@ mod tests {
                 sub_objects: Vec::new(),
                 bind: None,
                 posed_bounds,
-                object_bounds: None,
+                object_bounds,
                 object_articulation: None,
             }),
         }
@@ -878,18 +888,40 @@ mod tests {
     /// collapsed to the caller's default half-foot box.
     #[test]
     fn a_jointed_object_model_is_bounded_by_its_mesh() {
-        let mut model = animated_model(HashMap::new(), Vec::new());
         let mesh_bounds = Aabb3::new(Point3::new(-0.5, -0.7, -0.4), Point3::new(0.5, 0.7, 0.4));
-        if let InnerModel::Animated(ref mut animated) = model.inner {
-            animated.object_bounds = Some(mesh_bounds);
-        }
 
-        let bounds = model
+        let bounds = model_with_object_bounds(HashMap::new(), Vec::new(), None, Some(mesh_bounds))
             .bounding_box()
             .expect("a jointed object model is bounded by its mesh");
 
         assert_eq!(bounds.min, mesh_bounds.min);
         assert_eq!(bounds.max, mesh_bounds.max);
+    }
+
+    /// The grub is the one model carrying both, and `object_model_bounds` (its
+    /// sphere's support plane) reads the mesh box precisely because the
+    /// selection box does not. Pin the order so a later reshuffle can't quietly
+    /// swap the two.
+    #[test]
+    fn joint_boxes_outrank_the_mesh_bounds() {
+        let bones = vec![Bone {
+            joint_id: 0,
+            parent_id: None,
+            local_transform: Matrix4::identity(),
+        }];
+        let mesh_bounds = Aabb3::new(Point3::new(-9.0, -9.0, -9.0), Point3::new(9.0, 9.0, 9.0));
+
+        let bounds = model_with_object_bounds(
+            HashMap::from([(0, unit_box())]),
+            bones,
+            None,
+            Some(mesh_bounds),
+        )
+        .bounding_box()
+        .expect("a model with joint boxes has bounds");
+
+        assert_eq!(bounds.min, Point3::new(-0.5, -0.5, -0.5));
+        assert_eq!(bounds.max, Point3::new(0.5, 0.5, 0.5));
     }
 
     fn winding(model: &Model) -> Option<FrontFaceWinding> {
