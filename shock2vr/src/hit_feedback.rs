@@ -656,10 +656,10 @@ mod tests {
         assert_eq!(forward, vec3(0.0, 0.0, -1.0));
     }
 
-    /// [`vignette_layer`] is the shared geometry `hit_layer` and the cyber
-    /// interface's own rim tint both build on - a caller with different
-    /// color/fractions/source gets a layer tagged and colored as its own,
-    /// not silently relabeled as hit feedback.
+    /// [`vignette_layer`] is shared geometry `hit_layer` builds on, and is
+    /// parameterized for any other rim effect: a caller with a different
+    /// color/intensity/source gets a layer tagged and colored as its own, not
+    /// silently relabeled as hit feedback.
     #[test]
     fn vignette_layer_carries_the_callers_own_color_and_source() {
         let color = vec3(0.05, 0.35, 0.55);
@@ -669,11 +669,11 @@ mod tests {
             vec3(0.0, 0.0, -1.0),
             color,
             0.4,
-            "use_mode_vignette",
+            "a_caller_of_its_own",
         );
         assert_eq!(
             object.debug_tag().and_then(|tag| tag.source.clone()),
-            Some("use_mode_vignette".to_owned())
+            Some("a_caller_of_its_own".to_owned())
         );
         let transparency = object
             .effective_transparency()

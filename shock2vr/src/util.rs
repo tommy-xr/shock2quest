@@ -365,7 +365,6 @@ pub mod render_source {
     /// The cyber interface's own rim vignette, eased in/out with its
     /// entry/exit ramp - layered alongside (not merged with) [`HIT_FEEDBACK`],
     /// so a hit still reads while the interface is open.
-    pub const USE_MODE_VIGNETTE: &str = "use_mode_vignette";
     /// The Menu button's hold-progress ring, promising the pause menu.
     pub const MENU_HOLD_RING: &str = "menu_hold_ring";
     /// The `show_position` readout's VR panel. Labelled so the pause/death

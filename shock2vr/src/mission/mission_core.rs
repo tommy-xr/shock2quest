@@ -2662,11 +2662,10 @@ pub struct MissionCore {
     /// frame of the held jump channel; see where it is consumed in `update`.
     button_jump: bool,
 
-    /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the rim
-    /// vignette (both presentations), the VR comfort dim's strength, and the
-    /// flat FOV pull - see [`crate::ui::entry_ramp`]. Advanced every update
-    /// regardless of presentation or `use_mode` itself, so it keeps easing
-    /// out after the panel has already been put away.
+    /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the VR
+    /// comfort dim's strength - see [`crate::ui::entry_ramp`]. Advanced every
+    /// update regardless of presentation or `use_mode` itself, so it keeps
+    /// easing out after the panel has already been put away.
     use_mode_ramp: crate::ui::entry_ramp::EntryExitRamp,
 
     /// Where the VR cyber-interface panel hangs: placed once on entry from
@@ -4564,9 +4563,9 @@ impl MissionCore {
         }
 
         // Entry/exit ramp: advanced every update regardless of presentation
-        // or `use_mode` itself, so the vignette/dim/FOV pull keeps easing out
-        // after the panel has already been put away (see `render`'s
-        // `is_settled_closed()` gate).
+        // or `use_mode` itself, so the dim keeps easing out after the panel
+        // has already been put away (see `render`'s `is_settled_closed()`
+        // gate).
         self.use_mode_ramp.update(time.elapsed.as_secs_f32());
 
         // Landing can change the physical stance too. Use that same rig for
@@ -12339,14 +12338,21 @@ impl MissionCore {
     /// Whether the shared `show_position` readout is visible during gameplay.
     ///
     /// The cyber interface is excluded here because its panel owns the view
-    /// while it is up (and keeps owning it through the exit ramp). The pause
-    /// menu and the death camera are *not* checked here - `MissionCore` cannot
-    /// see them; they are covered centrally by `Game::render`'s
-    /// `DEBUG_OVERLAY` drop, the same drop that removes the player's hands.
+    /// while it is up. In VR it keeps owning it through the exit ramp - the
+    /// comfort dim is still drawn there - so the readout waits for the ramp to
+    /// settle; flat draws nothing from the ramp, so it comes straight back.
+    /// The pause menu and the death camera are *not* checked here -
+    /// `MissionCore` cannot see them; they are covered centrally by
+    /// `Game::render`'s `DEBUG_OVERLAY` drop, the same drop that removes the
+    /// player's hands.
     fn show_position_readout_visible(&self) -> bool {
+        let is_vr = self
+            .world
+            .borrow::<UniqueView<GlobalPresentationMode>>()
+            .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr);
         crate::dev_params::get_bool(crate::dev_params::SHOW_POSITION)
             && !self.use_mode
-            && self.use_mode_ramp.is_settled_closed()
+            && (!is_vr || self.use_mode_ramp.is_settled_closed())
     }
 
     fn render_vr_use_mode(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
@@ -13102,22 +13108,6 @@ impl MissionCore {
     /// it, so the mode's truthy answer there is inert.
     pub fn wants_pointer(&self) -> bool {
         self.flat_ui.active_panel().is_some() || self.use_mode
-    }
-
-    /// See [`crate::game_scene::GameScene::fov_pull_deg`]. VR must not react
-    /// to the cyber interface's ramp - OpenXR view FOVs are used as-is - so
-    /// this is gated on presentation even though the ramp itself runs in
-    /// both.
-    pub fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
-        if game_options.presentation_mode == crate::PresentationMode::Vr {
-            return 0.0;
-        }
-        self.use_mode_ramp.fov_pull_deg()
-    }
-
-    /// See [`crate::game_scene::GameScene::use_mode_vignette_intensity`].
-    pub fn use_mode_vignette_intensity(&self) -> f32 {
-        self.use_mode_ramp.vignette_intensity()
     }
 
     /// Actual crouch state of the player collider (stand-up can be refused
