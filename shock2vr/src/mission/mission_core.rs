@@ -4599,7 +4599,7 @@ impl MissionCore {
         // is not being drawn the anchor is reset, so the next time it comes up
         // it places in front of the player rather than wherever they last were.
         if game_options.presentation_mode == crate::PresentationMode::Vr
-            && self.show_position_readout_visible()
+            && self.show_position_readout_visible(game_options.presentation_mode)
         {
             self.show_position_anchor.update(
                 input_context.head.position,
@@ -7772,8 +7772,8 @@ impl MissionCore {
         // flat (the consumption site is VR-gated) and self-clearing once
         // nothing is pressed.
         self.vr_trigger_swallow = true;
-        // The panel disappears immediately; the ramp keeps easing the
-        // vignette/dim/FOV pull back to nothing on its own release timing
+        // The panel disappears immediately; the ramp keeps easing the dim
+        // back to nothing on its own release timing
         // (see `render`'s `use_mode_ramp.is_settled_closed()` gate).
         self.use_mode_ramp.close();
         Effect::PlaySound {
@@ -8445,8 +8445,8 @@ impl MissionCore {
                         // suspends the scene from the next frame, so nothing
                         // would call `use_mode_ramp.update` again until it
                         // closes - a graceful release would otherwise hang
-                        // the vignette/dim/FOV pull at whatever strength they
-                        // were at for the whole pause.
+                        // the dim at whatever strength it was at for the whole
+                        // pause.
                         self.use_mode_ramp.snap_closed();
                     }
                 }
@@ -12208,7 +12208,7 @@ impl MissionCore {
 
             // `show_position` readout (flat). VR presents the same canvas on a
             // head-anchored panel in `render`.
-            if self.show_position_readout_visible() {
+            if self.show_position_readout_visible(options.presentation_mode) {
                 let pos = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
                 ret.extend(
                     crate::hud::build_debug_overlay_canvas(pos).render_screen_space(
@@ -12345,11 +12345,8 @@ impl MissionCore {
     /// `MissionCore` cannot see them; they are covered centrally by
     /// `Game::render`'s `DEBUG_OVERLAY` drop, the same drop that removes the
     /// player's hands.
-    fn show_position_readout_visible(&self) -> bool {
-        let is_vr = self
-            .world
-            .borrow::<UniqueView<GlobalPresentationMode>>()
-            .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr);
+    fn show_position_readout_visible(&self, presentation_mode: crate::PresentationMode) -> bool {
+        let is_vr = presentation_mode == crate::PresentationMode::Vr;
         crate::dev_params::get_bool(crate::dev_params::SHOW_POSITION)
             && !self.use_mode
             && (!is_vr || self.use_mode_ramp.is_settled_closed())
@@ -13052,7 +13049,7 @@ impl MissionCore {
         // `Game::render`'s pause/death filter drops it exactly as the flat
         // readout is dropped with the per-eye scene.
         if let Some(placement) = self
-            .show_position_readout_visible()
+            .show_position_readout_visible(options.presentation_mode)
             .then(|| self.show_position_anchor.placement())
             .flatten()
         {

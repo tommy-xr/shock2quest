@@ -2367,10 +2367,9 @@ impl Game {
         // pawn transform the runtime builds its camera from.
         let pawn_to_world = Matrix4::from_translation(pos) * Matrix4::from(rot);
 
-        // Eye pose shared by both view-locked rim layers below (the hit tint
-        // and the cyber interface's vignette) - both occupy the explicit
-        // scene-overlay layer: over the world, behind scene UI and the pause
-        // menu, identically in flat and VR.
+        // Eye pose for the view-locked hit tint below, which occupies the
+        // explicit scene-overlay layer: over the world, behind scene UI and
+        // the pause menu, identically in flat and VR.
         // Through the death camera first: these layers are view-LOCKED, and
         // while the player is dying the rendered view is no longer the tracked
         // head. Anchored to the raw tracked pose, the damage tint would slide

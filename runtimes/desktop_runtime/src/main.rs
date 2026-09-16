@@ -503,9 +503,8 @@ pub fn main() {
             window.set_should_close(true);
         }
 
-        // Built after `game.update` so this frame's `desired_fov_deg()` (game-
-        // driven, e.g. the planned cyber-interface FOV pull) is reflected
-        // immediately rather than lagging a frame.
+        // Built after `game.update` so this frame's `desired_fov_deg()` is
+        // reflected immediately rather than lagging a frame.
         let ratio = SCR_WIDTH as f32 / SCR_HEIGHT as f32;
         let projection_matrix: cgmath::Matrix4<f32> =
             cgmath::perspective(cgmath::Deg(game.desired_fov_deg()), ratio, 0.1, 1000.0);

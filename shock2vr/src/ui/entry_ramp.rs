@@ -2,10 +2,10 @@
 //! the "the world becomes UI now" cue - the VR comfort dim's strength -
 //! instead of it snapping on with the panel.
 //!
-//! [`RampParams`] packages *how strong* and *how long*, so a future caller
-//! (the plan's `ReadLastUnreadLog` shortcut, which wants a softer, shorter
-//! ramp straight into the log reader) only has to build a different
-//! `RampParams` rather than touch [`EntryExitRamp`] itself.
+//! [`RampParams`] packages *how long*, so a future caller (the plan's
+//! `ReadLastUnreadLog` shortcut, which wants a shorter ramp straight into the
+//! log reader) only has to build a different `RampParams` rather than touch
+//! [`EntryExitRamp`] itself.
 
 /// How a ramp attacks/releases.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -25,9 +25,8 @@ pub const DEFAULT_ENTRY_EXIT: RampParams = RampParams {
 /// Opening straight onto the log reader (Quest's Y button): the same
 /// interface, but reached in passing rather than deliberately jacked into.
 /// Reading a log is something the player does mid-corridor, often repeatedly,
-/// so the ramp is shorter and lighter than [`DEFAULT_ENTRY_EXIT`] on every
-/// axis - enough to say "the world stepped back", not enough to feel like a
-/// scene change each time.
+/// so the ramp is shorter than [`DEFAULT_ENTRY_EXIT`] - enough to say "the
+/// world stepped back", not enough to feel like a scene change each time.
 pub const LOG_READER_ENTRY_EXIT: RampParams = RampParams {
     attack_secs: 0.18,
     release_secs: 0.14,
@@ -63,8 +62,8 @@ impl EntryExitRamp {
     }
 
     /// Start (or continue) opening, adopting `params` for this ramp - so a
-    /// re-open while still closing can pick different timing/peaks than the
-    /// ramp it interrupts.
+    /// re-open while still closing can pick different timing than the ramp it
+    /// interrupts.
     pub fn open(&mut self, params: RampParams) {
         self.params = params;
         self.target = 1.0;

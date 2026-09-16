@@ -300,14 +300,11 @@ fn hit_layer(
     )
 }
 
-/// One view-locked, double-sided rim-vignette quad - the shared geometry
-/// behind both [`hit_layer`] (the damage tint) and the cyber interface's own
-/// entry/exit vignette ([`crate::ui::entry_ramp`]). The two are drawn as
-/// separate layers with their own color/intensity rather than merged into one
-/// number, so a hit still reads while the interface is open (they blend
-/// naturally, being translucent). Both callers want the same field-of-view
-/// geometry ([`CLEAR_FIELD_FRACTION`]/[`FULL_FIELD_FRACTION`]) - only the
-/// color and intensity differ, so those two stay the only variables.
+/// One view-locked, double-sided rim-vignette quad - the geometry
+/// [`hit_layer`] (the damage tint) builds on. The field-of-view geometry
+/// ([`CLEAR_FIELD_FRACTION`]/[`FULL_FIELD_FRACTION`]) is fixed; color,
+/// intensity and debug source are the caller's, so a second rim effect can
+/// share the quad without being relabelled as hit feedback.
 pub fn vignette_layer(
     view_extents: (f32, f32),
     eye_position: Vector3<f32>,

@@ -20,7 +20,7 @@ struct Binding {
 /// Maps polled keyboard state to discrete input actions.
 ///
 /// The desktop runtime polls key state every frame (rather than consuming
-/// key events), so the mapper tracks which bindings were down last frame
+/// key events), so the mapper tracks which actions were down last frame
 /// and triggers actions only on rising edges.
 pub struct DesktopInputMapper {
     bindings: Vec<Binding>,
@@ -252,8 +252,10 @@ mod tests {
         mapper.resolve(|key| held.contains(&key), state);
     }
 
-    /// The flicker bug: Tab and I share `ToggleUseMode`, so a per-binding edge
-    /// released and re-triggered the action on every frame Tab stayed down.
+    /// The baseline every binding relies on: hold a key, get one edge. This
+    /// holds under the old per-binding logic too - the flicker only needed a
+    /// second binding, which `twin_bindings_for_one_action_do_not_fight`
+    /// builds.
     #[test]
     fn a_held_key_triggers_its_action_once_not_every_frame() {
         let mut mapper = DesktopInputMapper::new();
@@ -286,10 +288,14 @@ mod tests {
         assert!(state.just_triggered(InputAction::ToggleUseMode));
     }
 
-    /// Two keys on one action: either alone works, and handing off from one to
-    /// the other while the action stays down mints no second edge. Nothing in
-    /// the shipped table shares an action today, so this builds the pair - the
-    /// rule has to hold the moment one is added back.
+    /// The flicker regression test. Two keys on one action: either alone
+    /// works, and handing off from one to the other while the action stays
+    /// down mints no second edge. Keying edges per *binding* fails here - the
+    /// unpressed twin releases the action every frame while the pressed one
+    /// re-triggers it, which is exactly what `Tab` did while `I` was bound to
+    /// `ToggleUseMode` as well. Nothing in the shipped table shares an action
+    /// today, so this builds the pair: the rule has to hold the moment one is
+    /// added back.
     #[test]
     fn twin_bindings_for_one_action_do_not_fight() {
         let mut mapper = DesktopInputMapper::new();
