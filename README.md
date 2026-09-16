@@ -41,7 +41,7 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `Q` `E` - control left hand or right hand, respectively. Mouse look will move the hand, left click will 'trigger', and right click will 'grab'.
 - `Ctrl` - crouch
 - `Space` - jump
-- `Tab` / `I` - toggle the cyber interface ("use" mode): a cursor-driven UI over the 3D view
+- `Tab` - toggle the cyber interface ("use" mode): a cursor-driven UI over the 3D view
 - `Alt+S` / `Alt+L` - quick save / quick load
 - Quest VR: press the left controller's `Menu` button to toggle the cyber
   interface; hold it for half a second - a ring fills in front of you - to open

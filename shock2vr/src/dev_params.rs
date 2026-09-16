@@ -254,8 +254,8 @@ dev_params! {
     EYE_HEIGHT_OFFSET = Camera::float("eye_offset", "Eye height (m)", 0.0, -0.5, 0.5, 0.02),
     /// Live override for the flat runtimes' projection FOV, in degrees. `0`
     /// (the default) means "no override - use `Game::desired_fov_deg()`";
-    /// any positive value forces that FOV instead, for verifying the
-    /// game-driven FOV seam (issue #1088) without a rebuild. `oculus_runtime`
+    /// any positive value forces that FOV instead, for checking the flat
+    /// projection without a rebuild. `oculus_runtime`
     /// is untouched: OpenXR view FOVs must be used as-is. (`debug_runtime`
     /// shares its single flat projection between flat and `--vr` mode, so this
     /// override reaches both there.)

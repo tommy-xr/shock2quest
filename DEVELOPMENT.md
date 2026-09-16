@@ -125,7 +125,7 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 | `F` | `CycleGunSetting` | switch the wielded gun's fire mode (e.g. NORM / BURST); Quest: the gun hand's *upper* face button |
 | `U` | `ReadLastUnreadLog` | on Quest a free hand's *upper* face button resolves to this - see below |
 | `M` | `ToggleMap` | flat only |
-| `Tab` / `I` | `ToggleUseMode` | the cyber interface; Quest: a **short** press of left `Menu` |
+| `Tab` | `ToggleUseMode` | the cyber interface; Quest: a **short** press of left `Menu` |
 | `Space` | `Jump` | the flat key is the held jump channel, not this action; Quest: either *lower* face button |
 | `Esc` | `TogglePauseMenu` | Quest: left `Menu` held ~0.5 s, or the interface's MENU button |
 | `Alt+S` / `Alt+L` | `QuickSave` / `QuickLoad` | |

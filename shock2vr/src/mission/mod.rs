@@ -295,14 +295,6 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.player_is_gripping()
     }
 
-    fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
-        self.mission_core.fov_pull_deg(game_options)
-    }
-
-    fn use_mode_vignette_intensity(&self) -> f32 {
-        self.mission_core.use_mode_vignette_intensity()
-    }
-
     fn death_camera(&self) -> Option<crate::death_camera::DeathCameraSample> {
         self.mission_core.death_camera()
     }

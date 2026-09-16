@@ -339,14 +339,6 @@ impl GameScene for DebugScene {
         self.core.player_is_gripping()
     }
 
-    fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
-        self.core.fov_pull_deg(game_options)
-    }
-
-    fn use_mode_vignette_intensity(&self) -> f32 {
-        self.core.use_mode_vignette_intensity()
-    }
-
     fn player_save_position(&self) -> Result<Vector3<f32>, crate::game_scene::PlayerSavePoseError> {
         self.core.player_save_position()
     }
@@ -577,14 +569,6 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
 
     fn player_is_gripping(&self) -> bool {
         self.core.player_is_gripping()
-    }
-
-    fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
-        self.core.fov_pull_deg(game_options)
-    }
-
-    fn use_mode_vignette_intensity(&self) -> f32 {
-        self.core.use_mode_vignette_intensity()
     }
 
     fn player_save_position(&self) -> Result<Vector3<f32>, crate::game_scene::PlayerSavePoseError> {

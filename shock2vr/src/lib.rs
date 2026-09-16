@@ -109,9 +109,8 @@ pub const PLAYER_EYE_HEIGHT: f32 = physics::PLAYER_HEAD_POS + physics::PLAYER_EY
 pub const PLAYER_CROUCH_EYE_HEIGHT: f32 = 1.2;
 
 /// Default vertical FOV, in degrees, for the flat runtimes' projection
-/// matrix. `Game::desired_fov_deg` starts here and is driven game-side each
-/// frame (see `Game::set_desired_fov_deg`) by the cyber interface's FOV pull
-/// while its overlay is open. `oculus_runtime` is untouched: OpenXR view
+/// matrix - what `Game::desired_fov_deg` reports unless the dev-param
+/// override forces another value. `oculus_runtime` is untouched: OpenXR view
 /// FOVs must be used as-is.
 pub const DEFAULT_FOV_DEG: f32 = 45.0;
 
@@ -654,16 +653,9 @@ pub struct Game {
     /// the host knows that (a Quest eye is roughly twice a 45-degree flat
     /// screen, and much closer to square). Carried a frame, because `render`
     /// runs before `render_per_eye` and the projection does not change between
-    /// them - true whenever `desired_fov_deg` is held steady, but a caller
-    /// that changes it every frame (a hypothetical unsmoothed FOV animation)
-    /// would see the rim sized one frame stale. Not a concern for the
-    /// dev-param override (a one-off manual poke) or the planned
-    /// cyber-interface consumer (a single step, not a per-frame tween).
+    /// them - true whenever `desired_fov_deg` is held steady, which it is
+    /// except for the dev-param override (a one-off manual poke).
     view_extents: (f32, f32),
-
-    /// Per-frame desired FOV (vertical, degrees) for the flat runtimes'
-    /// projection matrix. See [`Game::desired_fov_deg`].
-    desired_fov_deg: f32,
 
     /// The detached debug camera. Purely a render-layer override: while it is
     /// detached the pawn stays put and every system that reads the player's
@@ -1447,7 +1439,6 @@ impl Game {
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
             ),
             view_extents: hit_feedback::DEFAULT_VIEW_EXTENTS,
-            desired_fov_deg: DEFAULT_FOV_DEG,
             free_camera: free_camera::FreeCamera::new(),
             free_camera_view_fixup: None,
         }
@@ -1592,15 +1583,6 @@ impl Game {
             &mut self.asset_cache,
             &self.options,
             action_effects,
-        );
-
-        // A personal-UI mode (the cyber interface) can pull the flat FOV in a
-        // little while it is open, eased over its own entry/exit ramp -
-        // `fov_pull_deg` already smooths this, so nothing further is needed
-        // here. VR scenes return 0 (OpenXR view FOVs are used as-is), making
-        // this a no-op there.
-        self.set_desired_fov_deg(
-            DEFAULT_FOV_DEG - self.active_game_scene.fov_pull_deg(&self.options),
         );
 
         // Handle ambient audio
@@ -2284,30 +2266,14 @@ impl Game {
     }
 
     /// Vertical FOV (degrees) the flat runtimes should build their projection
-    /// matrix with this frame. Defaults to [`DEFAULT_FOV_DEG`] and is driven
-    /// each frame by [`Game::set_desired_fov_deg`] - the active scene's
-    /// `GameScene::fov_pull_deg` (the cyber-interface overlay's FOV pull is
-    /// the first consumer). `dev_params::FOV_OVERRIDE_DEG` can force a value
-    /// live for testing without a rebuild.
+    /// matrix with this frame: [`DEFAULT_FOV_DEG`], unless
+    /// `dev_params::FOV_OVERRIDE_DEG` forces a value live for testing without
+    /// a rebuild.
     ///
     /// VR is explicitly out of scope: OpenXR view FOVs must be used as-is, so
     /// `oculus_runtime` does not read this.
     pub fn desired_fov_deg(&self) -> f32 {
-        resolve_fov_deg(self.desired_fov_deg)
-    }
-
-    /// Internal seam for gameplay/UI code to drive [`Game::desired_fov_deg`].
-    /// Driven once per frame from [`Game::update`] by the active scene's
-    /// `GameScene::fov_pull_deg` (the cyber interface's entry/exit ramp is
-    /// the first consumer). Smoothing/easing is the caller's responsibility.
-    /// Rejects non-finite or out-of-range degrees (valid input to
-    /// `cgmath::perspective` is strictly between 0 and 180) by leaving the
-    /// current value unchanged, so a bad caller can't poison the flat
-    /// runtimes' projection into a panic.
-    pub(crate) fn set_desired_fov_deg(&mut self, fov_deg: f32) {
-        if fov_deg.is_finite() && fov_deg > 0.0 && fov_deg < 180.0 {
-            self.desired_fov_deg = fov_deg;
-        }
+        resolve_fov_deg(DEFAULT_FOV_DEG)
     }
 
     /// Height (world units) of the player collider's center above the surface
@@ -2401,10 +2367,9 @@ impl Game {
         // pawn transform the runtime builds its camera from.
         let pawn_to_world = Matrix4::from_translation(pos) * Matrix4::from(rot);
 
-        // Eye pose shared by both view-locked rim layers below (the hit tint
-        // and the cyber interface's vignette) - both occupy the explicit
-        // scene-overlay layer: over the world, behind scene UI and the pause
-        // menu, identically in flat and VR.
+        // Eye pose for the view-locked hit tint below, which occupies the
+        // explicit scene-overlay layer: over the world, behind scene UI and
+        // the pause menu, identically in flat and VR.
         // Through the death camera first: these layers are view-LOCKED, and
         // while the player is dying the rendered view is no longer the tracked
         // head. Anchored to the raw tracked pose, the damage tint would slide
@@ -2427,29 +2392,6 @@ impl Game {
         // rim by ~13 degrees and drag the ramp onto the crosshair. The same
         // clamp the cameras use is a no-op standing.
         eye_position.y = eye_position.y.min(self.player_eye_cap_above_center());
-
-        // The cyber interface's own entry/exit vignette: a second, separately
-        // colored rim layer rather than merged into the hit tint's intensity,
-        // so a hit still reads while the interface is open or easing shut.
-        // Same view-locked geometry as the hit tint
-        // (`hit_feedback::vignette_layer`), identically in flat and VR - only
-        // the eye pose differs. Pushed *before* the hit tint below: within one
-        // render layer the renderer draws in push order (`gl_engine.rs`), so
-        // the damage red always ends up painted on top of the interface cyan
-        // rather than the reverse.
-        let use_mode_vignette = self.active_game_scene.use_mode_vignette_intensity();
-        if use_mode_vignette > 0.0 {
-            let mut layer = hit_feedback::vignette_layer(
-                self.view_extents,
-                eye_position,
-                eye_forward,
-                ui::entry_ramp::VIGNETTE_COLOR,
-                use_mode_vignette,
-                util::render_source::USE_MODE_VIGNETTE,
-            );
-            layer.set_transform(pawn_to_world * layer.get_transform());
-            scene.push(layer);
-        }
 
         // The hit tint occupies the explicit scene-overlay layer: over the
         // world, behind scene UI and the pause menu, identically in flat and

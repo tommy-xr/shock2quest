@@ -1,54 +1,35 @@
 //! The cyber interface's entry/exit ramp: a single eased 0..1 value driving
-//! every "the world becomes UI now" cue - the rim vignette (both
-//! presentations), the VR comfort dim's strength, and the flat FOV pull -
-//! instead of each snapping on with the panel.
+//! the "the world becomes UI now" cue - the VR comfort dim's strength -
+//! instead of it snapping on with the panel.
 //!
-//! [`RampParams`] packages *how strong* and *how long*, so a future caller
-//! (the plan's `ReadLastUnreadLog` shortcut, which wants a softer, shorter
-//! ramp straight into the log reader) only has to build a different
-//! `RampParams` rather than touch [`EntryExitRamp`] itself.
+//! [`RampParams`] packages *how long*, so a future caller (the plan's
+//! `ReadLastUnreadLog` shortcut, which wants a shorter ramp straight into the
+//! log reader) only has to build a different `RampParams` rather than touch
+//! [`EntryExitRamp`] itself.
 
-/// How a ramp attacks/releases and what it drives at full strength.
+/// How a ramp attacks/releases.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RampParams {
     /// Seconds to go from closed to fully open.
     pub attack_secs: f32,
     /// Seconds to go from open back to closed.
     pub release_secs: f32,
-    /// Peak rim-vignette intensity (0..1) at full ramp.
-    pub vignette_peak: f32,
-    /// Flat FOV pulled in by this many degrees at full ramp (VR ignores it).
-    pub fov_pull_deg: f32,
 }
 
 /// The deliberate cyber-interface open: a real "jacking in" moment.
 pub const DEFAULT_ENTRY_EXIT: RampParams = RampParams {
     attack_secs: 0.35,
     release_secs: 0.25,
-    vignette_peak: 0.45,
-    fov_pull_deg: 6.0,
 };
 
 /// Opening straight onto the log reader (Quest's Y button): the same
 /// interface, but reached in passing rather than deliberately jacked into.
 /// Reading a log is something the player does mid-corridor, often repeatedly,
-/// so the ramp is shorter and lighter than [`DEFAULT_ENTRY_EXIT`] on every
-/// axis - enough to say "the world stepped back", not enough to feel like a
-/// scene change each time.
+/// so the ramp is shorter than [`DEFAULT_ENTRY_EXIT`] - enough to say "the
+/// world stepped back", not enough to feel like a scene change each time.
 pub const LOG_READER_ENTRY_EXIT: RampParams = RampParams {
     attack_secs: 0.18,
     release_secs: 0.14,
-    vignette_peak: 0.28,
-    fov_pull_deg: 3.0,
-};
-
-/// The rim tint blended in for the cyber interface - a cool cyan rather than
-/// [`crate::hit_feedback`]'s arterial red, so the two read as different
-/// things when they land on screen together.
-pub const VIGNETTE_COLOR: cgmath::Vector3<f32> = cgmath::Vector3 {
-    x: 0.05,
-    y: 0.35,
-    z: 0.55,
 };
 
 /// A single-target, eased attack/release envelope.
@@ -81,8 +62,8 @@ impl EntryExitRamp {
     }
 
     /// Start (or continue) opening, adopting `params` for this ramp - so a
-    /// re-open while still closing can pick different timing/peaks than the
-    /// ramp it interrupts.
+    /// re-open while still closing can pick different timing than the ramp it
+    /// interrupts.
     pub fn open(&mut self, params: RampParams) {
         self.params = params;
         self.target = 1.0;
@@ -98,8 +79,8 @@ impl EntryExitRamp {
     /// rather than a graceful exit (the pause menu forcing the interface
     /// shut via `Effect::CloseUseMode`). Without this the release keeps
     /// `update` un-advanced while the scene is suspended for the pause, so
-    /// the vignette/dim/FOV pull would otherwise hang at whatever strength
-    /// they were at for the entire pause.
+    /// the dim would otherwise hang at whatever strength it was at for the
+    /// entire pause.
     pub fn snap_closed(&mut self) {
         self.progress = 0.0;
         self.target = 0.0;
@@ -138,17 +119,6 @@ impl EntryExitRamp {
         t * t * (3.0 - 2.0 * t)
     }
 
-    /// Peak rim-vignette intensity scaled by the current ramp.
-    pub fn vignette_intensity(&self) -> f32 {
-        self.eased() * self.params.vignette_peak
-    }
-
-    /// Flat FOV pull (degrees, to subtract from the base FOV) scaled by the
-    /// current ramp.
-    pub fn fov_pull_deg(&self) -> f32 {
-        self.eased() * self.params.fov_pull_deg
-    }
-
     /// True once the ramp has fully released and nothing is targeting open -
     /// the point at which a renderer can stop drawing anything for it.
     pub fn is_settled_closed(&self) -> bool {
@@ -163,8 +133,6 @@ mod tests {
     const FAST: RampParams = RampParams {
         attack_secs: 1.0,
         release_secs: 0.5,
-        vignette_peak: 0.5,
-        fov_pull_deg: 10.0,
     };
 
     /// Negative test: an untouched ramp must already read as closed and
@@ -174,8 +142,6 @@ mod tests {
         let ramp = EntryExitRamp::new();
         assert_eq!(ramp.progress(), 0.0);
         assert_eq!(ramp.eased(), 0.0);
-        assert_eq!(ramp.vignette_intensity(), 0.0);
-        assert_eq!(ramp.fov_pull_deg(), 0.0);
         assert!(ramp.is_settled_closed());
     }
 
@@ -289,15 +255,13 @@ mod tests {
         assert_eq!(ramp.progress(), before);
     }
 
-    /// The log-reader shortcut must actually be the softer, shorter variant -
-    /// if it ever equals the deliberate open, the "different `RampParams`"
-    /// the caller builds is decoration.
+    /// The log-reader shortcut must actually be the shorter variant - if it
+    /// ever equals the deliberate open, the "different `RampParams`" the
+    /// caller builds is decoration.
     #[test]
-    fn the_log_reader_ramp_is_shorter_and_softer_than_the_deliberate_open() {
+    fn the_log_reader_ramp_is_shorter_than_the_deliberate_open() {
         assert!(LOG_READER_ENTRY_EXIT.attack_secs < DEFAULT_ENTRY_EXIT.attack_secs);
         assert!(LOG_READER_ENTRY_EXIT.release_secs < DEFAULT_ENTRY_EXIT.release_secs);
-        assert!(LOG_READER_ENTRY_EXIT.vignette_peak < DEFAULT_ENTRY_EXIT.vignette_peak);
-        assert!(LOG_READER_ENTRY_EXIT.fov_pull_deg < DEFAULT_ENTRY_EXIT.fov_pull_deg);
         assert!(LOG_READER_ENTRY_EXIT.attack_secs > 0.0);
         assert!(LOG_READER_ENTRY_EXIT.release_secs > 0.0);
     }
@@ -311,20 +275,7 @@ mod tests {
         ramp.open(LOG_READER_ENTRY_EXIT);
         ramp.update(LOG_READER_ENTRY_EXIT.attack_secs);
         assert_eq!(ramp.progress(), 1.0);
-        assert_eq!(
-            ramp.vignette_intensity(),
-            LOG_READER_ENTRY_EXIT.vignette_peak
-        );
-    }
-
-    #[test]
-    fn vignette_and_fov_scale_with_the_eased_ramp_and_its_own_params() {
-        let mut ramp = EntryExitRamp::new();
-        ramp.open(FAST);
-        ramp.update(FAST.attack_secs);
         assert_eq!(ramp.eased(), 1.0);
-        assert_eq!(ramp.vignette_intensity(), FAST.vignette_peak);
-        assert_eq!(ramp.fov_pull_deg(), FAST.fov_pull_deg);
     }
 
     /// The eased curve must actually ease (sit at or above the linear ramp
