@@ -16,7 +16,9 @@ use dark::{properties::*, ss2_entity_info::SystemShock2EntityInfo};
 use engine::assets::asset_cache::AssetCache;
 use rand::{Rng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, UniqueViewMut, View, World};
+use shipyard::{
+    EntitiesView, EntityId, Get, IntoIter, IntoWithId, UniqueView, UniqueViewMut, View, World,
+};
 
 use super::{
     MissionCore, PlayerInfo, PlayerLifeState,
@@ -424,6 +426,22 @@ pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
     // the pistol and amp are available from the outset, without maxed stats.
 }
 
+/// The slain enemy's own entity, when it is still around to hold loot. A
+/// creature keeps its entity (and its `creaturecontainer` loot panel) as a
+/// corpse; one replaced by its Corpse/Flinderize gibs does not.
+fn corpse_container(world: &World, id: u64) -> Option<EntityId> {
+    let entity = EntityId::from_inner(id)?;
+    if !world
+        .borrow::<EntitiesView>()
+        .is_ok_and(|entities| entities.is_alive(entity))
+    {
+        return None;
+    }
+    // Without `Links` there is nowhere to record the `Contains`.
+    world.borrow::<View<Links>>().ok()?.get(entity).ok()?;
+    Some(entity)
+}
+
 /// Only unlooted contents still owned by expired corpses are removed. Picked
 /// up items have left those Contains links, so inventory and held loot survive.
 fn expired_corpses(world: &World) -> Vec<Effect> {
@@ -640,18 +658,31 @@ impl HordeDirector {
             },
         ])
     }
-    fn bonus_loot(&mut self, position: [f32; 3]) -> Effect {
+    /// Roll this kill's drop into the corpse's own loot container, so it is
+    /// searched like any authored creature's loot (and expires with the corpse,
+    /// see `expired_corpses`) instead of landing on the floor. The roll happens
+    /// first either way, so a corpse-less kill does not shift the seeded stream.
+    fn bonus_loot(&mut self, world: &World, corpse: u64, position: [f32; 3]) -> Effect {
         let template_id = match self.roll(5) {
             0 => -938,
             1 | 2 => -87,
             _ => return Effect::NoEffect,
         };
-        Effect::CreateEntity {
-            template_id,
-            position: Point3::from(position),
-            orientation: Quaternion::from_angle_y(Deg(0.0)),
-            root_transform: Matrix4::identity(),
-            options: CreateEntityOptions::default(),
+        match corpse_container(world, corpse) {
+            Some(container_entity_id) => Effect::CreateEntityInContainer {
+                template_id,
+                container_entity_id,
+            },
+            // Nothing survived the kill to loot (a droid replaced by its
+            // Corpse/Flinderize gibs): drop it where the enemy fell rather
+            // than losing the reward.
+            None => Effect::CreateEntity {
+                template_id,
+                position: Point3::from(position),
+                orientation: Quaternion::from_angle_y(Deg(0.0)),
+                root_transform: Matrix4::identity(),
+                options: CreateEntityOptions::default(),
+            },
         }
     }
     fn spawn(&mut self, world: &World, physics: &PhysicsWorld) -> Option<Effect> {
@@ -790,11 +821,11 @@ impl Script for HordeDirector {
                     .enemies
                     .iter()
                     .filter(|old| !live.iter().any(|now| now.id == old.id))
-                    .map(|old| old.position)
+                    .map(|old| (old.id, old.position))
                     .collect();
-                for position in defeated {
+                for (corpse, position) in defeated {
                     self.kills += 1;
-                    effects.push(self.bonus_loot(position));
+                    effects.push(self.bonus_loot(world, corpse, position));
                 }
                 self.enemies = live;
                 // Creation applies after this update. Count only observed
@@ -925,6 +956,74 @@ mod tests {
         }
         assert_eq!(rewards(effects), 1);
         assert_eq!(rewards(tick(&mut director, &world, 1.0)), 0);
+    }
+
+    /// A dead enemy's kill effects, as the director emits them for one tick.
+    fn loot_effects(corpses: usize, keep_entities: bool) -> Vec<Effect> {
+        let mut world = World::new();
+        world.add_unique(PlayerLifeState::Alive);
+        let mut enemies = Vec::new();
+        for index in 0..corpses {
+            let enemy = world.add_entity((
+                PropEcoType(ECOLOGY + 1),
+                PropHitPoints { hit_points: 0 },
+                PropPosition {
+                    position: vec3(index as f32, 2.0, 3.0),
+                    cell: 0,
+                    rotation: Quaternion::from_angle_y(Deg(0.0)),
+                },
+                Links::empty(),
+            ));
+            enemies.push(Enemy {
+                id: enemy.inner(),
+                position: [index as f32, 2.0, 3.0],
+            });
+            if !keep_entities {
+                world.delete_entity(enemy);
+            }
+        }
+        let mut director = HordeDirector {
+            initialized: true,
+            quick: true,
+            phase: Phase::Assault,
+            wave: 1,
+            spawned: 3,
+            clock: 100.0,
+            enemies,
+            ..Default::default()
+        };
+        let mut out = Effect::flatten(vec![tick(&mut director, &world, 1.0)]);
+        out.retain(|effect| {
+            matches!(
+                effect,
+                Effect::CreateEntity { .. } | Effect::CreateEntityInContainer { .. }
+            )
+        });
+        out
+    }
+
+    #[test]
+    fn kill_loot_goes_into_the_corpses_own_container() {
+        let loot = loot_effects(8, true);
+        assert!(!loot.is_empty(), "eight kills must roll at least one drop");
+        for effect in loot {
+            assert!(
+                matches!(effect, Effect::CreateEntityInContainer { .. }),
+                "loot must be created inside the corpse, not in the world: {effect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn kill_loot_falls_back_to_the_world_when_no_corpse_remains() {
+        let loot = loot_effects(8, false);
+        assert!(!loot.is_empty(), "eight kills must roll at least one drop");
+        for effect in loot {
+            assert!(
+                matches!(effect, Effect::CreateEntity { .. }),
+                "a gibbed enemy has no container, so the drop stays in the world: {effect:?}"
+            );
+        }
     }
 
     #[test]

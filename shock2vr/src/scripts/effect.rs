@@ -643,6 +643,26 @@ pub enum Effect {
         options: CreateEntityOptions,
     },
 
+    /// Fill `entity_id`'s corpse from its authored loot table (`P$LootInfo`),
+    /// the moment it dies. The roll needs the gamesys archetype names, the
+    /// campaign difficulty and the player's O/S upgrades, none of which a
+    /// script can reach, so the whole generation lives in the applier.
+    GenerateLoot {
+        entity_id: EntityId,
+    },
+
+    /// Create `template_id` directly inside `container_entity_id`'s grid - the
+    /// script cannot do this itself, because the fresh entity's id only exists
+    /// once creation has run. The deposit follows the ordinary container rules
+    /// (stack merge, then first cell that fits the item's footprint), so loot
+    /// added this way reconciles with whatever the container already holds. A
+    /// container with no room refuses it and the fresh entity is destroyed
+    /// rather than left lying in the world.
+    CreateEntityInContainer {
+        template_id: i32,
+        container_entity_id: EntityId,
+    },
+
     /// `TrapSpawn` creation with the Dark ecology bookkeeping that cannot be
     /// expressed until the fresh runtime entity id exists.
     SpawnEcologyEntity {

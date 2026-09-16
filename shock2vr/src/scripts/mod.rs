@@ -1170,6 +1170,11 @@ impl ScriptWorld {
             "riflemodify" => Box::new(NoopScript::new()),
             "stasismodify" => Box::new(NoopScript::new()),
             "shotgunmodify" => Box::new(NoopScript::new()),
+            // The shotgun a hybrid drops (`Hybrid_Shotgun`, gamesys -4073).
+            // Its archetype already authors `PropGunState { condition: 0.0 }`,
+            // so the trashed weapon needs no runtime behavior - only a script
+            // that exists, now that a dead grunt actually drops one.
+            "trashedshotgun" => Box::new(NoopScript::new()),
             "energyweapon" => Box::new(EnergyWeapon::new()),
             "grenademodify" => Box::new(NoopScript::new()),
             "weapontrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Weapons))),

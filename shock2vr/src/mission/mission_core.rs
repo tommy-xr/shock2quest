@@ -464,6 +464,138 @@ fn presentation_world_panel_size(
     }
 }
 
+/// One corpse's worth of draws against a loot table: `picks` independent
+/// draws, each landing on the slot its rarity covers. A blank slot is the
+/// table's own "nothing" outcome and is never subject to the difficulty
+/// discard on top of it; every draw that picked a real item is.
+fn roll_loot_table(
+    table: &dark::properties::PropLootInfo,
+    discard_percent: i32,
+    rng: &mut impl Rng,
+) -> Vec<String> {
+    let total_rarity = table.total_rarity();
+    if total_rarity == 0 {
+        return Vec::new();
+    }
+    (0..table.picks)
+        .filter_map(|_| {
+            let slot = table.slot_for_roll(rng.gen_range(0..total_rarity))?;
+            if slot.item.is_empty() || rng.gen_range(0..100) < discard_percent {
+                return None;
+            }
+            Some(slot.item.clone())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod loot_table_tests {
+    use super::*;
+    use dark::properties::{LootSlot, PropLootInfo};
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    /// The shipped OG-Pipe table: two draws over five real items and a
+    /// 45-weight "nothing" slot.
+    fn og_pipe() -> PropLootInfo {
+        PropLootInfo {
+            picks: 2,
+            slots: [
+                ("5 Nanites", 20),
+                ("", 0),
+                ("Med Patch", 5),
+                ("Soda Can", 25),
+                ("", 45),
+                ("OG Organ", 5),
+            ]
+            .into_iter()
+            .map(|(item, rarity)| LootSlot {
+                item: item.to_owned(),
+                rarity,
+                value: 0.0,
+            })
+            .collect(),
+        }
+    }
+
+    /// Across many deaths every drawn name comes from the table, no death
+    /// exceeds its pick count, and the blank slot never becomes an item.
+    #[test]
+    fn draws_stay_within_the_table_and_its_pick_count() {
+        let table = og_pipe();
+        let mut rng = StdRng::seed_from_u64(7);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..500 {
+            let drops = roll_loot_table(&table, 0, &mut rng);
+            assert!(drops.len() <= table.picks as usize);
+            for drop in drops {
+                assert!(!drop.is_empty(), "the blank slot must not become an item");
+                assert!(
+                    table.slots.iter().any(|slot| slot.item == drop),
+                    "{drop:?} is not in the table"
+                );
+                seen.insert(drop);
+            }
+        }
+        // Every weighted item is reachable; the zero-weight slot is not.
+        assert_eq!(seen.len(), 4);
+    }
+
+    /// The difficulty discard thins real drops without touching the table:
+    /// Impossible's 75 keeps far less than Normal's 0, and a 100 keeps none.
+    #[test]
+    fn difficulty_discards_a_share_of_real_drops() {
+        let table = og_pipe();
+        let count = |discard| {
+            let mut rng = StdRng::seed_from_u64(11);
+            (0..500)
+                .map(|_| roll_loot_table(&table, discard, &mut rng).len())
+                .sum::<usize>()
+        };
+        let normal = count(0);
+        let impossible = count(75);
+        assert!(normal > 0);
+        assert!(
+            impossible * 3 < normal,
+            "75% discard kept {impossible} of {normal}"
+        );
+        assert_eq!(count(100), 0);
+    }
+
+    /// A zero discard threshold keeps every real draw - the boundary the
+    /// shipped Easy and Normal columns sit on.
+    #[test]
+    fn a_zero_discard_threshold_keeps_every_real_draw() {
+        let table = PropLootInfo {
+            picks: 1,
+            slots: vec![LootSlot {
+                item: "Med Patch".to_owned(),
+                rarity: 100,
+                value: 0.0,
+            }],
+        };
+        let mut rng = StdRng::seed_from_u64(3);
+        for _ in 0..500 {
+            assert_eq!(roll_loot_table(&table, 0, &mut rng), vec!["Med Patch"]);
+        }
+    }
+
+    /// A table nothing can be drawn from yields nothing rather than panicking
+    /// on an empty range.
+    #[test]
+    fn a_zero_weight_table_draws_nothing() {
+        let table = PropLootInfo {
+            picks: 3,
+            slots: vec![LootSlot {
+                item: "Med Patch".to_owned(),
+                rarity: 0,
+                value: 0.0,
+            }],
+        };
+        assert!(roll_loot_table(&table, 0, &mut StdRng::seed_from_u64(1)).is_empty());
+    }
+}
+
 /// Move a VR overlay built in the tracked pawn space (the cyber interface, the
 /// `show_position` readout) into world coordinates, and put it in the system-
 /// overlay group. The pawn transform is the same one the runtime builds its
@@ -6722,6 +6854,136 @@ impl MissionCore {
         None
     }
 
+    /// Create `template_id` inside `container_entity_id`'s grid, in the cell
+    /// the ordinary deposit rules pick (an existing stack to merge into, else
+    /// the first cell the item's footprint fits). Returns the entity that
+    /// ended up in the container.
+    ///
+    /// The creation happens at the container's own position so the item is
+    /// never briefly visible anywhere else; the deposit removes it from the
+    /// world either way. A container with no room for it refuses the deposit,
+    /// and the fresh entity is destroyed rather than left lying in the world.
+    fn create_entity_in_container(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        template_id: i32,
+        container_entity_id: EntityId,
+    ) -> Option<EntityId> {
+        let position = self
+            .world
+            .borrow::<View<PropPosition>>()
+            .ok()
+            .and_then(|positions| positions.get(container_entity_id).ok().map(|p| p.position))
+            .unwrap_or_else(Vector3::zero);
+        let created = self.create_entity_with_position(
+            asset_cache,
+            template_id,
+            Point3::from_vec(position),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Matrix4::identity(),
+            CreateEntityOptions::default(),
+        );
+        let placed = self.drop_entity_into_container(container_entity_id, created.entity_id);
+        if placed.is_none() {
+            warn!(
+                "template {template_id} could not be placed in {container_entity_id:?} - no room"
+            );
+            self.destroy_entity(created.entity_id);
+        }
+        placed
+    }
+
+    /// Fill a corpse from its authored loot table (`P$LootInfo`).
+    ///
+    /// The table holds six slots, each with a relative rarity; a slot with a
+    /// blank item name is a real outcome, and means the draw yielded nothing.
+    /// It is drawn `picks` times, independently, so the same slot can come up
+    /// twice. Every draw that picked a real item is then subject to the
+    /// campaign difficulty's discard percentage (see
+    /// [`crate::difficulty::loot_discard_percent`]) - which is how a higher
+    /// difficulty thins out loot without editing a single table.
+    ///
+    /// On top of the table, `P$RGuarLoot` always drops, and `P$GuarLoot` drops
+    /// only for a player carrying the Cyber-Assimilation O/S upgrade.
+    ///
+    /// Items land in the dead entity's own container, which is what its
+    /// `creaturecontainer` loot panel shows. A creature that bursts instead of
+    /// leaving a body (a droid's explosion, an Overlord's gibs - see
+    /// [`has_death_links`]) has no container to fill, so its drops are placed
+    /// where it fell; authored droid tables carry real ammo, and deleting it
+    /// with the body would make those tables unreachable.
+    fn generate_loot(&mut self, asset_cache: &mut AssetCache, entity_id: EntityId) {
+        // The guaranteed drops are independent of the randomized table: the
+        // droid archetype carries `P$GuarLoot` with no `P$LootInfo` of its own.
+        let table = self
+            .world
+            .borrow::<View<dark::properties::PropLootInfo>>()
+            .ok()
+            .and_then(|tables| tables.get(entity_id).ok().cloned());
+        let discard_percent = crate::difficulty::loot_discard_percent(&self.world);
+        let mut drops = table
+            .map(|table| roll_loot_table(&table, discard_percent, &mut thread_rng()))
+            .unwrap_or_default();
+
+        let has_borg_trait = self
+            .world
+            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+            .map(|quests| {
+                quests
+                    .player_stats()
+                    .has_os_trait(crate::scripts::gui::TRAIT_CYBER_ASSIMILATION)
+            })
+            .unwrap_or(false);
+        if has_borg_trait {
+            if let Some(guaranteed) = self
+                .world
+                .borrow::<View<dark::properties::PropGuaranteedLoot>>()
+                .ok()
+                .and_then(|v| v.get(entity_id).ok().map(|loot| loot.0.clone()))
+            {
+                drops.push(guaranteed);
+            }
+        }
+        if let Some(guaranteed) = self
+            .world
+            .borrow::<View<dark::properties::PropReallyGuaranteedLoot>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|loot| loot.0.clone()))
+        {
+            drops.push(guaranteed);
+        }
+
+        let gibs = has_death_links(&self.world, entity_id);
+        let position = self
+            .world
+            .borrow::<View<PropPosition>>()
+            .ok()
+            .and_then(|positions| positions.get(entity_id).ok().map(|p| p.position))
+            .unwrap_or_else(Vector3::zero);
+        for name in drops {
+            let Some(template_id) = self
+                .template_name_to_template_id
+                .get(&name.to_ascii_lowercase())
+                .map(|metadata| metadata.template_id)
+            else {
+                warn!("loot table names unknown archetype {name:?}");
+                continue;
+            };
+            if gibs {
+                self.create_entity_with_position(
+                    asset_cache,
+                    template_id,
+                    Point3::from_vec(position),
+                    Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                    Matrix4::identity(),
+                    CreateEntityOptions::default(),
+                );
+            } else {
+                self.create_entity_in_container(asset_cache, template_id, entity_id);
+            }
+        }
+    }
+
     /// Unlike [`Self::drop_entity_into_container`], placement is tried BEFORE
     /// a grid-wide merge: an explicit cell target is the player's instruction
     /// to put the item *there*, so a free target cell wins over pooling into a
@@ -9303,6 +9565,15 @@ impl MissionCore {
                         root_transform,
                         options,
                     );
+                }
+                Effect::CreateEntityInContainer {
+                    template_id,
+                    container_entity_id,
+                } => {
+                    self.create_entity_in_container(asset_cache, template_id, container_entity_id);
+                }
+                Effect::GenerateLoot { entity_id } => {
+                    self.generate_loot(asset_cache, entity_id);
                 }
                 Effect::SpawnEcologyEntity {
                     template_name,
