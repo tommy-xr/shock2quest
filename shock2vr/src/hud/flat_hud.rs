@@ -78,11 +78,21 @@ pub(crate) fn build_flat_hud_canvas(
     ammo_readout: &AmmoReadout,
     messages: &[String],
     banner: Option<&super::ActiveBanner>,
+    reticle: super::reticle::ReticleState,
+    fov_y_degrees: f32,
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(VIRTUAL_W, VIRTUAL_H));
 
     if !use_mode {
-        canvas.image(CROSSHAIR, "CROSSHAI.PCX");
+        super::reticle::emit(
+            &mut canvas,
+            CROSSHAIR.center(),
+            CROSSHAIR_SIZE,
+            "CROSSHAI.PCX",
+            reticle,
+            fov_y_degrees,
+            VIRTUAL_H,
+        );
     }
 
     // Shooter mode draws the compact readouts here. In use mode both expand to
@@ -151,6 +161,8 @@ pub(crate) fn create_flat_hud(
     use_mode: bool,
     messages: &[String],
     banner: Option<&super::ActiveBanner>,
+    reticle: super::reticle::ReticleState,
+    fov_y_degrees: f32,
 ) -> Vec<SceneObject> {
     let mut canvas = build_flat_hud_canvas(
         use_mode,
@@ -161,6 +173,8 @@ pub(crate) fn create_flat_hud(
         &AmmoReadout::from_world(world, false),
         messages,
         banner,
+        reticle,
+        fov_y_degrees,
     );
     if !use_mode {
         super::hazards::emit(
@@ -182,6 +196,29 @@ pub(crate) fn create_flat_hud(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The reticle's own geometry is covered in `hud::reticle`; these cases are
+    /// about the rest of the HUD, so they draw it at rest at the default FOV.
+    /// Shadows the real builder so each case keeps its original arguments.
+    fn build_flat_hud_canvas(
+        use_mode: bool,
+        bio: &BioReadout,
+        psi_charge: Option<RuntimePropPsiCharge>,
+        ammo_readout: &AmmoReadout,
+        messages: &[String],
+        banner: Option<&crate::hud::ActiveBanner>,
+    ) -> UiCanvas {
+        super::build_flat_hud_canvas(
+            use_mode,
+            bio,
+            psi_charge,
+            ammo_readout,
+            messages,
+            banner,
+            crate::hud::reticle::ReticleState::default(),
+            crate::DEFAULT_FOV_DEG,
+        )
+    }
 
     /// `AmmoReadout` for the common test shapes. `cycle` stands in for a
     /// multi-ammo weapon; nothing else offers a button.
@@ -210,7 +247,8 @@ mod tests {
 
     #[test]
     fn canvas_has_crosshair_bio_backdrop_bars_and_readouts() {
-        // Crosshair + bio backdrop + 2 bars + 2 stat numbers = 6 (no weapon).
+        // Crosshair (4 arms + fixed centre) + bio backdrop + 2 bars + 2 stat
+        // numbers = 10 (no weapon).
         let canvas = build_flat_hud_canvas(
             false,
             &BIO,
@@ -219,7 +257,7 @@ mod tests {
             &[],
             None,
         );
-        assert_eq!(canvas.element_count(), 6);
+        assert_eq!(canvas.element_count(), 10);
     }
 
     #[test]
@@ -233,7 +271,7 @@ mod tests {
             &[],
             None,
         );
-        assert_eq!(canvas.element_count(), 8);
+        assert_eq!(canvas.element_count(), 12);
     }
 
     #[test]
@@ -247,12 +285,12 @@ mod tests {
             &[],
             None,
         );
-        assert_eq!(canvas.element_count(), 10);
+        assert_eq!(canvas.element_count(), 14);
     }
 
     #[test]
     fn psi_amp_shows_discipline_instead_of_clip() {
-        // Base 6 + gauge backdrop + tier badge + discipline name = 9; the clip
+        // Base 10 + gauge backdrop + tier badge + discipline name = 13; the clip
         // readout is suppressed even though the amp has ammo=0.
         let canvas = build_flat_hud_canvas(
             false,
@@ -266,7 +304,7 @@ mod tests {
             &[],
             None,
         );
-        assert_eq!(canvas.element_count(), 9);
+        assert_eq!(canvas.element_count(), 13);
     }
 
     /// Use mode hands the bottom readouts to the interface canvas and turns
@@ -282,7 +320,7 @@ mod tests {
             &[],
             None,
         );
-        assert_eq!(shooter.element_count(), 8);
+        assert_eq!(shooter.element_count(), 12);
         let use_mode = build_flat_hud_canvas(
             true,
             &BIO,
