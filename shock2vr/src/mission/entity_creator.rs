@@ -1462,7 +1462,15 @@ fn create_physics_representation_with_options(
                 shape,
                 // TODO: Kinematic experiment
                 //is_sensor,
-                entity_group,
+                // The player steps through a carryable item rather than
+                // colliding with it. Their capsule is kinematic, so Rapier
+                // solves a contact against this dynamic body as infinite mass
+                // against finite: brushing a mug launches it across the room
+                // instead of nudging it. Only the player is dropped -
+                // creatures are ordinary dynamic bodies that cannot kick, and
+                // the item stays solid to them so a *thrown* one still
+                // reports the contact it damages on.
+                entity_group.non_solid_to_player(),
                 false,
                 dynamics_options,
             );
@@ -2968,6 +2976,64 @@ mod tests {
             assert!(!bodies[0].blocks_player);
             assert!(!bodies[0].blocks_actor);
         }
+    }
+
+    /// A carryable item - the Mug, a Soda Can, a wrench lying on the floor -
+    /// is a dynamic body, and the player capsule is kinematic. Solid to each
+    /// other, Rapier solves that contact as infinite mass against finite and
+    /// walking into the item launches it across the room. The player steps
+    /// through it instead.
+    ///
+    /// Creatures stay solid to it deliberately: they are dynamic bodies that
+    /// cannot kick, and a thrown item's damage is driven by the very contact
+    /// an ACTOR-passable group would suppress (`ThrownItems::launch` sets
+    /// velocity only, never the collision group).
+    ///
+    /// Negative-first: before the fix a MOVE item blocked the player.
+    #[test]
+    fn carryable_items_do_not_block_the_player_but_stay_solid_to_creatures() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = world.add_entity((
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE,
+                inventory_action: FrobFlag::SCRIPT,
+                tool_action: FrobFlag::empty(),
+            },
+            PropPhysType {
+                phys_type: PhysicsModelType::SPHERE,
+                num_submodels: 1,
+                remove_on_sleep: false,
+                is_special: false,
+            },
+        ));
+
+        let handle = create_physics_representation(
+            &mut world,
+            &mut physics,
+            &Some(&ladder_model()),
+            entity_id,
+        )
+        .expect("a carryable item should still get a body");
+
+        assert_eq!(
+            physics.debug_list_bodies()[0].body_type,
+            "dynamic",
+            "a carryable item keeps its dynamic model-bounds body"
+        );
+        assert!(
+            !physics.collider_blocks_player(handle),
+            "the player must step through a carryable item, not kick it"
+        );
+        assert!(
+            physics.collider_blocks_actor(handle),
+            "a carryable item must stay solid to creatures, or a thrown one deals no damage"
+        );
     }
 
     /// Model scale is a render transform, while `P$PhysDims` is the separately
