@@ -332,6 +332,16 @@ pub struct RuntimePropFlatAim {
     pub forward: Vector3<f32>,
 }
 
+/// Whether `entity` is the FLATSCREEN player's wielded weapon: the flat
+/// controller sets its crosshair aim ray on it every frame, and nothing else
+/// carries one. The shared answer to "is this the flat presentation's gun?".
+pub fn is_flat_aimed(world: &shipyard::World, entity: shipyard::EntityId) -> bool {
+    use shipyard::Get;
+    world
+        .borrow::<shipyard::View<RuntimePropFlatAim>>()
+        .is_ok_and(|aims| aims.get(entity).is_ok())
+}
+
 /// Camera-origin ray for a fast projectile fired through the flat crosshair.
 ///
 /// Flat projectiles still spawn ahead of the camera so slow physics projectiles
