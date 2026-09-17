@@ -54,20 +54,13 @@ impl HudBanner {
     }
 }
 
-/// The lines a banner draws: trimmed (the shipped string pads its first line
-/// with spaces to fake centering, which we do for real) and capped at
-/// [`MAX_LINES`].
-///
-/// A break is a real newline or the two-character `\n` the Dark `.STR` tables
-/// write it as - CHARGEN.STR's card carries the escape verbatim, so a banner
-/// that only split on `'\n'` would draw both lines as one.
-fn lines(text: &str) -> Vec<String> {
-    text.replace("\\n", "\n")
-        .split('\n')
-        .map(|line| line.trim().to_owned())
-        .filter(|line| !line.is_empty())
-        .take(MAX_LINES)
-        .collect()
+/// The lines a banner draws: the shared string-table split (which handles the
+/// two-character `\n` a `.STR` value writes its break as, and trims the
+/// padding shipped strings use to fake centering), capped at [`MAX_LINES`].
+fn lines(text: &str) -> Vec<&str> {
+    let mut lines = crate::ui::label_lines(text);
+    lines.truncate(MAX_LINES);
+    lines
 }
 
 /// The plate's rect on a canvas, given the plate's center.
@@ -113,7 +106,7 @@ pub(crate) fn flat_center() -> Vector2<f32> {
 
 /// The plate's own canvas size for `text`, used by the VR panel.
 pub(crate) fn panel_size(text: &str) -> Vector2<f32> {
-    let rect = plate(CENTER, lines(text).len().max(1));
+    let rect = plate(vec2(0.0, 0.0), lines(text).len().max(1));
     vec2(rect.w, rect.h)
 }
 
@@ -202,6 +195,16 @@ mod tests {
     #[test]
     fn an_empty_banner_draws_nothing() {
         assert_eq!(build_banner_canvas("   \n  ").element_count(), 0);
+    }
+
+    /// The VR panel hangs off the head panel, which spans the same 640x480
+    /// canvas the flat HUD does, so its offset from that panel's centre is
+    /// read straight off the shared layout - there is no second placement
+    /// decision to drift (`render_vr_banner`).
+    #[test]
+    fn the_vr_offset_is_the_shared_layouts_own_distance_below_canvas_centre() {
+        let canvas_centre_y = 480.0 / 2.0;
+        assert_eq!(flat_center().y - canvas_centre_y, 89.0);
     }
 
     #[test]

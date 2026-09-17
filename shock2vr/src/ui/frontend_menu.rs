@@ -62,6 +62,21 @@ pub fn resolve_menu_rects(layout: Option<&[MapRect]>, fallback: &[Rect]) -> Vec<
         .collect()
 }
 
+/// Split a string-table value into its display lines.
+///
+/// A `.STR` table writes a break as the two characters `\n` and the importer
+/// passes that escape through verbatim, so a caller that only split on `'\n'`
+/// would draw every line as one. Each line is trimmed (shipped strings pad
+/// them to fake centering, which the canvas does for real) and empties drop.
+pub fn label_lines(label: &str) -> Vec<&str> {
+    label
+        .split("\\n")
+        .flat_map(|part| part.split('\n'))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
 /// Resolve a string-table value without allowing a missing/empty localized
 /// entry to blank a widget.
 pub fn resolve_menu_label(

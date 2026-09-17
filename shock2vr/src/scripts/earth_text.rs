@@ -17,8 +17,11 @@ const CARD_KEY: &str = "earthtext0";
 const FALLBACK_CARD: &str = "4 Years Earlier\nRamsey Recruitment Ctr.";
 
 /// The original schedules the card 100 ms into the sim and clears it 7 s in.
+/// The card's own duration is whatever is left of that deadline once the delay
+/// has actually elapsed, so an overlong first frame shortens the card instead
+/// of pushing its removal past 7 s.
 const SHOW_DELAY: Duration = Duration::from_millis(100);
-const CARD_DURATION: Duration = Duration::from_millis(6900);
+const REMOVE_AT: Duration = Duration::from_millis(7000);
 
 const SCRIPT_STATE_KEY: &str = "shock2vr.earth_text";
 
@@ -39,11 +42,7 @@ impl CharGenStrings {
 
     /// The Earth mission's title card.
     fn card(&self) -> String {
-        self.0
-            .get(CARD_KEY)
-            .filter(|text| !text.is_empty())
-            .cloned()
-            .unwrap_or_else(|| FALLBACK_CARD.to_owned())
+        crate::ui::resolve_menu_label(Some(&self.0), CARD_KEY, FALLBACK_CARD)
     }
 }
 
@@ -94,12 +93,19 @@ impl Script for EarthText {
         }
 
         self.delay_remaining = None;
+        // `remaining` is now zero or negative: the overshoot past the 100 ms
+        // mark comes off the card, keeping its removal at the original's 7 s.
+        let Some(duration) =
+            (REMOVE_AT - SHOW_DELAY).checked_sub(Duration::from_secs_f32(-remaining))
+        else {
+            return Effect::NoEffect;
+        };
         Effect::ShowBanner {
             text: world
                 .borrow::<UniqueView<CharGenStrings>>()
                 .map(|strings| strings.card())
                 .unwrap_or_else(|_| FALLBACK_CARD.to_owned()),
-            duration: CARD_DURATION,
+            duration,
         }
     }
 
@@ -166,7 +172,9 @@ mod tests {
             panic!("expected the card");
         };
         assert_eq!(text, "         4 Years Earlier\nRamsey Recruitment Ctr.");
-        assert_eq!(duration, CARD_DURATION);
+        // The delay elapsed exactly on time, so the card gets the whole
+        // remainder of the original's 7 s removal deadline.
+        assert_eq!(duration, REMOVE_AT - SHOW_DELAY);
     }
 
     /// The card is a one-shot: nothing re-shows it for the rest of the mission.
@@ -197,6 +205,29 @@ mod tests {
             .restore_state(&saved, &ScriptRestoreContext::new(&HashMap::new()))
             .unwrap();
         assert!(matches!(tick(&mut restored, &world, 1.0), Effect::NoEffect));
+    }
+
+    /// A frame long enough to overshoot the 100 ms mark shortens the card by
+    /// the overshoot, so its removal still lands on the original's 7 s.
+    #[test]
+    fn a_late_first_frame_comes_off_the_card_not_off_its_deadline() {
+        let world = world_with_strings(Some("card"));
+        let mut script = EarthText::new();
+        script.initialize(EntityId::dead(), &world);
+        let Effect::ShowBanner { duration, .. } = tick(&mut script, &world, 1.0) else {
+            panic!("expected the card");
+        };
+        // The countdown is in f32 seconds, so compare to the millisecond.
+        assert_eq!(duration.as_millis(), (REMOVE_AT.as_millis()) - 1000);
+    }
+
+    /// A first frame past the whole 7 s deadline shows nothing at all.
+    #[test]
+    fn a_frame_past_the_removal_deadline_shows_no_card() {
+        let world = world_with_strings(Some("card"));
+        let mut script = EarthText::new();
+        script.initialize(EntityId::dead(), &world);
+        assert!(matches!(tick(&mut script, &world, 9.0), Effect::NoEffect));
     }
 
     /// A data install with no CHARGEN.STR still gets the shipped English card.

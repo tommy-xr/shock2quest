@@ -12637,58 +12637,66 @@ impl MissionCore {
             .and_then(|mut banner| banner.active(now))
     }
 
-    /// The interstitial banner in VR: the same canvas flat draws into its HUD,
-    /// on a small panel hung off the head, at the centre of the gaze rather
-    /// than above it - a title card is the thing being looked at.
-    fn render_vr_banner(&self, asset_cache: &mut AssetCache, text: &str) -> Vec<SceneObject> {
+    /// Hang a small HUD canvas on a head-anchored panel - the VR half of a
+    /// canvas flat draws into its 2D HUD.
+    ///
+    /// `size` is the canvas's own pixel size; `offset` turns the canvas->world
+    /// scale into where the canvas hangs relative to the head panel's centre,
+    /// in metres. The panel is sized off the frontend panel (which is
+    /// FRONTEND_PANEL_SIZE wide for a 640-pixel canvas), so a glyph subtends
+    /// the same angle it would on a frontend screen. Head-locked rather than
+    /// world-locked (a `FrontendPanelAnchor` placement) because these are read
+    /// at a glance and then gone, not inspected.
+    fn render_vr_head_canvas(
+        &self,
+        asset_cache: &mut AssetCache,
+        canvas: &crate::ui::UiCanvas,
+        size: Vector2<f32>,
+        offset: impl FnOnce(f32) -> Vector3<f32>,
+    ) -> Vec<SceneObject> {
         let placement =
             crate::ui::PanelPlacement::from_head(self.last_head_position, self.last_head_rotation);
         let panel = placement.panel();
-        let size = crate::hud::banner::panel_size(text);
         let scale = panel.size.x / crate::mission::flat_ui_host::CANVAS_SIZE.x;
-        let root = Matrix4::from_translation(panel.center)
+        let root = Matrix4::from_translation(panel.center + panel.rotation * offset(scale))
             * Matrix4::from(panel.rotation)
             * Matrix4::from_nonuniform_scale(size.x * scale, size.y * scale, 1.0);
-        crate::hud::banner::build_banner_canvas(text).render_world_space(
+        canvas.render_world_space(asset_cache, root, None, None, 0.001)
+    }
+
+    /// The interstitial banner in VR.
+    ///
+    /// Where it hangs is not a decision made here: the head panel spans the
+    /// same 640x480 canvas the flat HUD does, so the plate is offset from the
+    /// panel's centre by exactly the distance the shared layout puts it below
+    /// the canvas's centre. Flat and VR therefore sit it at the same height.
+    fn render_vr_banner(&self, asset_cache: &mut AssetCache, text: &str) -> Vec<SceneObject> {
+        let below_centre =
+            crate::hud::banner::flat_center().y - crate::mission::flat_ui_host::CANVAS_SIZE.y / 2.0;
+        self.render_vr_head_canvas(
             asset_cache,
-            root,
-            None,
-            None,
-            0.001,
+            &crate::hud::banner::build_banner_canvas(text),
+            crate::hud::banner::panel_size(text),
+            |scale| vec3(0.0, -below_centre * scale, 0.0),
         )
     }
 
-    /// The status-message block in VR: the same canvas flat draws into its HUD,
-    /// on a small panel hung off the head. The original's placement is a line
-    /// near the top of a 640x480 screen, which has no world position - so the
-    /// one thing this presentation decides for itself is where to hang the
-    /// block; everything on it is placed by the shared `message_line` layout.
-    /// Head-locked rather than world-locked (a `FrontendPanelAnchor` placement)
-    /// because a message is read at a glance and then gone, not inspected.
+    /// The status-message block in VR. The original's placement is a line near
+    /// the top of a 640x480 screen, which has no world position - so the one
+    /// thing this presentation decides for itself is to lift the block above
+    /// the gaze, so it does not sit over what the player is aiming at;
+    /// everything on it is placed by the shared `message_line` layout.
     fn render_vr_messages(
         &self,
         asset_cache: &mut AssetCache,
         messages: &[String],
     ) -> Vec<SceneObject> {
-        let placement =
-            crate::ui::PanelPlacement::from_head(self.last_head_position, self.last_head_rotation);
-        let panel = placement.panel();
         let size = crate::hud::message_line::PANEL_SIZE;
-        // Sized off the frontend panel (which is FRONTEND_PANEL_SIZE wide for a
-        // 640-pixel canvas), so a message glyph subtends the same angle it
-        // would on a frontend screen, and lifted above the gaze so it does not
-        // sit over what the player is aiming at.
-        let scale = panel.size.x / crate::mission::flat_ui_host::CANVAS_SIZE.x;
-        let root = Matrix4::from_translation(
-            panel.center + panel.rotation * vec3(0.0, size.y * scale * 0.5 + 0.2, 0.0),
-        ) * Matrix4::from(panel.rotation)
-            * Matrix4::from_nonuniform_scale(size.x * scale, size.y * scale, 1.0);
-        crate::hud::message_line::build_message_canvas(messages).render_world_space(
+        self.render_vr_head_canvas(
             asset_cache,
-            root,
-            None,
-            None,
-            0.001,
+            &crate::hud::message_line::build_message_canvas(messages),
+            size,
+            |scale| vec3(0.0, size.y * scale * 0.5 + 0.2, 0.0),
         )
     }
 

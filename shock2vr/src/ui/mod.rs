@@ -46,8 +46,8 @@ pub mod world_dim;
 #[cfg(test)]
 pub use frontend_menu::resolve_flat_click;
 pub use frontend_menu::{
-    FrontendMenu, FrontendMenuItem, flat_pointer_state, hit_menu_item, resolve_click_at,
-    resolve_menu_label, resolve_menu_labels, resolve_menu_rects,
+    FrontendMenu, FrontendMenuItem, flat_pointer_state, hit_menu_item, label_lines,
+    resolve_click_at, resolve_menu_label, resolve_menu_labels, resolve_menu_rects,
 };
 #[cfg(test)]
 pub use frontend_pointer::test_support;
@@ -1298,12 +1298,11 @@ fn present_world(
             SceneObject::new(material, Box::new(engine::scene::quad::create()))
         }
         PlacedContent::Fill { color } => {
+            // The same conversion the screen presenter uses, so the two cannot
+            // disagree about a plate's colour.
+            let rgba = fill_color(*color, alpha);
             let mut object = SceneObject::new(
-                engine::scene::color_material::create(vec3(
-                    color[0] as f32 / 255.0,
-                    color[1] as f32 / 255.0,
-                    color[2] as f32 / 255.0,
-                )),
+                engine::scene::color_material::create(vec3(rgba.x, rgba.y, rgba.z)),
                 Box::new(engine::scene::quad::create()),
             );
             // `color_material` authors itself opaque; a blended plate is a
