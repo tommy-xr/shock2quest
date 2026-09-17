@@ -3526,6 +3526,10 @@ impl MissionCore {
         // Preload the elevator floor labels (MISC.STR) + current mission so the
         // AssetCache-less ElevatorGui can label/gate floors at draw time.
         world.add_unique(crate::hud::HudStrings::load(asset_cache));
+        // CHARGEN.STR, which EarthText resolves its title card against.
+        world.add_unique(crate::scripts::earth_text::CharGenStrings::load(
+            asset_cache,
+        ));
         // USEMSG.STR, which TrapMessage resolves its P$UseMsg key against.
         world.add_unique(crate::scripts::trap_message::UseMessageStrings::load(
             asset_cache,

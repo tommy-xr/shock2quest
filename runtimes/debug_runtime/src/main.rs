@@ -1354,6 +1354,7 @@ fn process_command(
                         pointer: ui.pointer,
                         panel_pose: ui.panel_pose,
                         messages: ui.messages,
+                        banner: ui.banner,
                         security_alarm: ui.security_alarm,
                     }
                 })
@@ -1369,6 +1370,7 @@ fn process_command(
                     pointer: None,
                     panel_pose: None,
                     messages: Vec::new(),
+                    banner: None,
                     security_alarm: None,
                 });
             if reply.send(result).is_err() {

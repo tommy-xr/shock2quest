@@ -29,7 +29,9 @@ const LINE_HEIGHT: f32 = 20.0;
 const CENTER: Vector2<f32> = vec2(320.0, 329.0);
 
 const PLATE_COLOR: [u8; 3] = [0, 0, 0];
-const FONT: &str = "mainfont.fon";
+/// The card's text is the game's own teal MFD face - the colour every other
+/// in-world readout is drawn in, and the one the original's card uses.
+const FONT: &str = crate::ui::MFD_FONT;
 
 /// The banner showing right now, with the mission time it stops being shown.
 #[derive(Unique, Default)]
@@ -52,12 +54,17 @@ impl HudBanner {
     }
 }
 
-/// The lines a banner draws: `\n`-separated, trimmed (the shipped string pads
-/// its first line with spaces to fake centering, which we do for real), and
-/// capped at [`MAX_LINES`].
-fn lines(text: &str) -> Vec<&str> {
-    text.split('\n')
-        .map(str::trim)
+/// The lines a banner draws: trimmed (the shipped string pads its first line
+/// with spaces to fake centering, which we do for real) and capped at
+/// [`MAX_LINES`].
+///
+/// A break is a real newline or the two-character `\n` the Dark `.STR` tables
+/// write it as - CHARGEN.STR's card carries the escape verbatim, so a banner
+/// that only split on `'\n'` would draw both lines as one.
+fn lines(text: &str) -> Vec<String> {
+    text.replace("\\n", "\n")
+        .split('\n')
+        .map(|line| line.trim().to_owned())
         .filter(|line| !line.is_empty())
         .take(MAX_LINES)
         .collect()
@@ -125,7 +132,9 @@ mod tests {
     use super::*;
     use crate::ui::UiElement;
 
-    const EARTH: &str = "         4 Years Earlier\nRamsey Recruitment Ctr.";
+    /// CHARGEN.STR `EarthText0`, verbatim: padded first line, and the break
+    /// written as the two characters `\n`.
+    const EARTH: &str = r"         4 Years Earlier\nRamsey Recruitment Ctr.";
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
