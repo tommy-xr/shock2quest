@@ -185,6 +185,21 @@ impl SceneObject {
         let material = materials::ScreenSpaceMaterial::create(texture, vec4(1.0, 1.0, 1.0, 1.0));
         Self::screen_space_quad_object(material, position, size)
     }
+    /// A screen-space quad of one flat colour - no art. `color` is linear
+    /// RGBA; alpha below 1 blends. Drawn as the tint over the shared white
+    /// pixel, so it goes through the same material every other screen-space
+    /// element uses and needs no new shader.
+    pub fn screen_space_color_quad(
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        color: cgmath::Vector4<f32>,
+    ) -> SceneObject {
+        let material = materials::ScreenSpaceMaterial::create(
+            crate::texture::shared_white_pixel() as Rc<dyn TextureTrait>,
+            color,
+        );
+        Self::screen_space_quad_object(material, position, size)
+    }
     /// A screen-space quad whose texture is *clipped* at `clip` (0..1) of its
     /// width rather than scaled to it: the bitmap draws at `size` and
     /// everything past `clip` is discarded. This is what a fill bar wants -

@@ -3181,6 +3181,7 @@ impl MissionCore {
         ));
         world.add_unique(DamageFlash::default());
         world.add_unique(crate::hud::HudMessages::default());
+        world.add_unique(crate::hud::HudBanner::default());
 
         // ** Entity creation
 
@@ -10828,6 +10829,14 @@ impl MissionCore {
                         .push(text, now);
                 }
 
+                Effect::ShowBanner { text, duration } => {
+                    let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+                    self.world
+                        .borrow::<UniqueViewMut<crate::hud::HudBanner>>()
+                        .unwrap()
+                        .show(text, now, duration);
+                }
+
                 Effect::ShowWeaponSkillRequirement {
                     entity_id,
                     requirement,
@@ -12504,12 +12513,14 @@ impl MissionCore {
             // Use mode replaces the crosshair with the cursor and hands the
             // bottom readouts to the interface canvas, so the HUD draws neither.
             let messages = self.hud_messages();
+            let banner = self.hud_banner();
             ret.extend(crate::hud::create_flat_hud(
                 asset_cache,
                 &self.world,
                 screen_size,
                 self.use_mode,
                 &messages,
+                banner.as_deref(),
             ));
 
             // `show_position` readout (flat). VR presents the same canvas on a
@@ -12605,6 +12616,42 @@ impl MissionCore {
             }
         }
         messages
+    }
+
+    /// The interstitial banner showing this frame, if any. Expired banners are
+    /// dropped here (the `hud_messages` pattern), so one clears itself whether
+    /// or not it is being drawn.
+    fn hud_banner(&self) -> Option<String> {
+        let now = self
+            .world
+            .borrow::<UniqueView<Time>>()
+            .map(|time| time.total)
+            .unwrap_or_default();
+        self.world
+            .borrow::<UniqueViewMut<crate::hud::HudBanner>>()
+            .ok()
+            .and_then(|mut banner| banner.active(now))
+    }
+
+    /// The interstitial banner in VR: the same canvas flat draws into its HUD,
+    /// on a small panel hung off the head, at the centre of the gaze rather
+    /// than above it - a title card is the thing being looked at.
+    fn render_vr_banner(&self, asset_cache: &mut AssetCache, text: &str) -> Vec<SceneObject> {
+        let placement =
+            crate::ui::PanelPlacement::from_head(self.last_head_position, self.last_head_rotation);
+        let panel = placement.panel();
+        let size = crate::hud::banner::panel_size(text);
+        let scale = panel.size.x / crate::mission::flat_ui_host::CANVAS_SIZE.x;
+        let root = Matrix4::from_translation(panel.center)
+            * Matrix4::from(panel.rotation)
+            * Matrix4::from_nonuniform_scale(size.x * scale, size.y * scale, 1.0);
+        crate::hud::banner::build_banner_canvas(text).render_world_space(
+            asset_cache,
+            root,
+            None,
+            None,
+            0.001,
+        )
     }
 
     /// The status-message block in VR: the same canvas flat draws into its HUD,
@@ -13328,6 +13375,11 @@ impl MissionCore {
             let messages = self.hud_messages();
             if !messages.is_empty() {
                 let mut objects = self.render_vr_messages(asset_cache, &messages);
+                rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
+                scene.extend(objects);
+            }
+            if let Some(text) = self.hud_banner() {
+                let mut objects = self.render_vr_banner(asset_cache, &text);
                 rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
                 scene.extend(objects);
             }
@@ -15701,6 +15753,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 }
             }),
             messages: self.hud_messages(),
+            banner: self.hud_banner(),
             security_alarm: {
                 let alarm = crate::security_alarm::status(&self.world);
                 alarm

@@ -11,6 +11,7 @@ use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::World;
 
 use super::ammo_panel::{self, AmmoReadout};
+use super::banner;
 use super::get_wielded_psi_charge;
 use super::message_line;
 use super::readouts::{self, BioReadout};
@@ -76,6 +77,7 @@ pub(crate) fn build_flat_hud_canvas(
     psi_charge: Option<RuntimePropPsiCharge>,
     ammo_readout: &AmmoReadout,
     messages: &[String],
+    banner_text: Option<&str>,
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(VIRTUAL_W, VIRTUAL_H));
 
@@ -130,6 +132,12 @@ pub(crate) fn build_flat_hud_canvas(
     // panel draws with.
     message_line::emit(&mut canvas, message_line::flat_origin(), messages);
 
+    // The interstitial banner, placed by the shared `banner` layout the VR
+    // head panel draws with. Last, so its plate covers the view centre.
+    if let Some(text) = banner_text {
+        banner::emit(&mut canvas, banner::flat_center(), text);
+    }
+
     canvas
 }
 
@@ -142,6 +150,7 @@ pub(crate) fn create_flat_hud(
     screen_size: cgmath::Vector2<f32>,
     use_mode: bool,
     messages: &[String],
+    banner_text: Option<&str>,
 ) -> Vec<SceneObject> {
     let mut canvas = build_flat_hud_canvas(
         use_mode,
@@ -151,6 +160,7 @@ pub(crate) fn create_flat_hud(
         // in use mode, where the interface canvas draws the expanded panel.
         &AmmoReadout::from_world(world, false),
         messages,
+        banner_text,
     );
     if !use_mode {
         super::hazards::emit(
@@ -202,8 +212,14 @@ mod tests {
     #[test]
     fn canvas_has_crosshair_bio_backdrop_bars_and_readouts() {
         // Crosshair + bio backdrop + 2 bars + 2 stat numbers = 6 (no weapon).
-        let canvas =
-            build_flat_hud_canvas(false, &BIO, None, &readout(None, None, None, false), &[]);
+        let canvas = build_flat_hud_canvas(
+            false,
+            &BIO,
+            None,
+            &readout(None, None, None, false),
+            &[],
+            None,
+        );
         assert_eq!(canvas.element_count(), 6);
     }
 
@@ -216,6 +232,7 @@ mod tests {
             None,
             &readout(Some(12), None, None, false),
             &[],
+            None,
         );
         assert_eq!(canvas.element_count(), 8);
     }
@@ -229,6 +246,7 @@ mod tests {
             None,
             &readout(Some(12), Some("STD_I.PCX"), Some("std"), false),
             &[],
+            None,
         );
         assert_eq!(canvas.element_count(), 10);
     }
@@ -247,6 +265,7 @@ mod tests {
                 ..Default::default()
             },
             &[],
+            None,
         );
         assert_eq!(canvas.element_count(), 9);
     }
@@ -262,10 +281,17 @@ mod tests {
             None,
             &readout(Some(12), None, None, false),
             &[],
+            None,
         );
         assert_eq!(shooter.element_count(), 8);
-        let use_mode =
-            build_flat_hud_canvas(true, &BIO, None, &readout(Some(12), None, None, false), &[]);
+        let use_mode = build_flat_hud_canvas(
+            true,
+            &BIO,
+            None,
+            &readout(Some(12), None, None, false),
+            &[],
+            None,
+        );
         assert_eq!(use_mode.element_count(), 0);
     }
 
@@ -282,6 +308,7 @@ mod tests {
             }),
             &readout(Some(12), None, None, false),
             &[],
+            None,
         );
         // The charging meter is a backdrop + its fill.
         assert_eq!(canvas.element_count(), 2);
@@ -318,18 +345,39 @@ mod tests {
     #[test]
     fn a_status_message_adds_a_line_to_the_hud() {
         let empty = readout(None, None, None, false);
-        let base = build_flat_hud_canvas(false, &BIO, None, &empty, &[]);
+        let base = build_flat_hud_canvas(false, &BIO, None, &empty, &[], None);
         let with_message = build_flat_hud_canvas(
             false,
             &BIO,
             None,
             &empty,
             &["This lift has been taken offline for repairs.".to_string()],
+            None,
         );
 
         assert_eq!(with_message.element_count(), base.element_count() + 1);
         let line = with_message.elements().last().unwrap().rect();
         assert_eq!(vec2(line.x, line.y), message_line::flat_origin());
+    }
+
+    /// A banner adds its plate plus one text element per line, centered on the
+    /// HUD canvas by the shared `banner` layout.
+    #[test]
+    fn a_banner_adds_a_centered_plate_and_its_lines() {
+        let empty = readout(None, None, None, false);
+        let base = build_flat_hud_canvas(false, &BIO, None, &empty, &[], None);
+        let with_banner = build_flat_hud_canvas(
+            false,
+            &BIO,
+            None,
+            &empty,
+            &[],
+            Some("4 Years Earlier\nRamsey Recruitment Ctr."),
+        );
+
+        assert_eq!(with_banner.element_count(), base.element_count() + 3);
+        let plate = with_banner.elements()[base.element_count()].rect();
+        assert_eq!(plate.center(), banner::flat_center());
     }
 
     #[test]
@@ -345,6 +393,7 @@ mod tests {
             None,
             &readout(None, None, None, false),
             &[],
+            None,
         );
     }
 }

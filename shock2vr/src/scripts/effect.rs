@@ -9,6 +9,7 @@ use dark::{
 };
 use engine::audio::AudioHandle;
 use shipyard::EntityId;
+use std::time::Duration;
 
 use crate::{
     gui::{GuiComponentRenderInfo, GuiHandle},
@@ -1088,6 +1089,14 @@ pub enum Effect {
     /// original's five-second message time.
     ShowMessage {
         text: String,
+    },
+
+    /// Show a centered interstitial banner - the black title card the original
+    /// opens the Earth mission with. `text` may hold two `\n`-separated lines.
+    /// Replaces any banner already up.
+    ShowBanner {
+        text: String,
+        duration: Duration,
     },
 
     ShowWeaponSkillRequirement {

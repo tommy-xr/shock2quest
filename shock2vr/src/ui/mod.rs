@@ -492,6 +492,10 @@ pub enum PlacedContent {
         text: String,
         font: String,
     },
+    /// A flat colour over the whole rect. `color` is sRGB 0..255.
+    Fill {
+        color: [u8; 3],
+    },
 }
 
 /// One item in the shared 2D UI description language.
@@ -552,6 +556,14 @@ where
         /// text the same way (see [`UiCanvas::text_native_fit`]).
         fit_to_rect: bool,
     },
+    /// A flat colour rectangle - no art. The plate a banner's text sits on,
+    /// a divider, a scrim. `color` is sRGB 0..255; `alpha` blends it.
+    Fill {
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        color: [u8; 3],
+        alpha: f32,
+    },
 }
 
 impl<TEvent> UiElement<TEvent>
@@ -563,7 +575,8 @@ where
             Self::Image { position, size, .. }
             | Self::Bar { position, size, .. }
             | Self::Button { position, size, .. }
-            | Self::Text { position, size, .. } => (*position, *size),
+            | Self::Text { position, size, .. }
+            | Self::Fill { position, size, .. } => (*position, *size),
         };
         Rect::new(position.x, position.y, size.x, size.y)
     }
@@ -645,9 +658,22 @@ where
                 UiElement::Image { alpha, .. }
                 | UiElement::Bar { alpha, .. }
                 | UiElement::Button { alpha, .. }
-                | UiElement::Text { alpha, .. } => *alpha = o,
+                | UiElement::Text { alpha, .. }
+                | UiElement::Fill { alpha, .. } => *alpha = o,
             }
         }
+        self
+    }
+
+    /// A flat colour rectangle covering `rect`, opaque. Chain
+    /// [`opacity`](Self::opacity) to blend it.
+    pub fn fill(&mut self, rect: Rect, color: [u8; 3]) -> &mut Self {
+        self.elements.push(UiElement::Fill {
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
+            color,
+            alpha: 1.0,
+        });
         self
     }
 
@@ -901,6 +927,16 @@ where
                         fill: *fill,
                     },
                 },
+                UiElement::Fill {
+                    position,
+                    size,
+                    color,
+                    alpha,
+                } => PlacedElement {
+                    rect: Rect::new(position.x, position.y, size.x, size.y),
+                    alpha: *alpha,
+                    content: PlacedContent::Fill { color: *color },
+                },
                 UiElement::Text {
                     position,
                     size,
@@ -1143,6 +1179,17 @@ fn place_text(
     }
 }
 
+/// A [`PlacedContent::Fill`] colour as the screen-space material's tint:
+/// sRGB 0..255 to 0..1, with the element's alpha in the fourth channel.
+fn fill_color(color: [u8; 3], alpha: f32) -> cgmath::Vector4<f32> {
+    cgmath::vec4(
+        color[0] as f32 / 255.0,
+        color[1] as f32 / 255.0,
+        color[2] as f32 / 255.0,
+        alpha.clamp(0.0, 1.0),
+    )
+}
+
 /// Canvas rect -> screen pixels, under a canvas->screen `fit`.
 fn canvas_rect_to_screen_px(rect: Rect, scale: Vector2<f32>, offset: Vector2<f32>) -> Rect {
     Rect::new(
@@ -1190,6 +1237,11 @@ fn present_screen(
                 *fill,
             )
         }
+        PlacedContent::Fill { color } => SceneObject::screen_space_color_quad(
+            vec2(rect.x, rect.y),
+            vec2(rect.w, rect.h),
+            fill_color(*color, element.alpha),
+        ),
         PlacedContent::Text { text, font, .. } => {
             let font_obj = resolve_font(asset_cache, font);
             // `screen_space_text` anchors on the glyph box's top-left and takes
@@ -1244,6 +1296,20 @@ fn present_world(
                 *fill,
             );
             SceneObject::new(material, Box::new(engine::scene::quad::create()))
+        }
+        PlacedContent::Fill { color } => {
+            let mut object = SceneObject::new(
+                engine::scene::color_material::create(vec3(
+                    color[0] as f32 / 255.0,
+                    color[1] as f32 / 255.0,
+                    color[2] as f32 / 255.0,
+                )),
+                Box::new(engine::scene::quad::create()),
+            );
+            // `color_material` authors itself opaque; a blended plate is a
+            // per-object override, as the image path's fixed ambient is.
+            object.set_transparency(Some((1.0 - alpha).clamp(0.0, 1.0)));
+            object
         }
         PlacedContent::Text { text, font, .. } => {
             let font_obj = resolve_font(asset_cache, font);
