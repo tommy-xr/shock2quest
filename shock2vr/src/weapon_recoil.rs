@@ -134,9 +134,11 @@ pub fn flat_impulse(
     )
 }
 
-/// The pure gain behind [`flat_impulse`]. Caps scale with the kick so the knob
-/// keeps biting past the authored ceiling; recovery rates are left alone, so
-/// scaling changes how far the gun throws, not how long it takes to settle.
+/// The pure gain behind [`flat_impulse`]. Deliberately separate from
+/// [`vr_impulses`]'s per-axis gain: this one is uniform and also scales the
+/// travel caps, so the knob keeps biting past the authored ceiling. Recovery
+/// rates are left alone, so scaling changes how far the gun throws, not how
+/// long it takes to settle. A new impulse field needs adding in both.
 fn scaled_flat(base: RecoilImpulse, scale: f32) -> RecoilImpulse {
     // `f32::MAX` is the "no ceiling" sentinel (heading has none); scaling it
     // would only turn an unlimited axis into a merely enormous one.
@@ -158,20 +160,12 @@ fn scaled_flat(base: RecoilImpulse, scale: f32) -> RecoilImpulse {
     }
 }
 
-/// Whether `gun` is the flatscreen player's wielded viewmodel: `mission_core`
-/// sets the crosshair aim ray on it every frame (see `RuntimePropFlatAim`).
-fn is_flat_viewmodel(world: &World, gun: EntityId) -> bool {
-    world
-        .borrow::<View<crate::runtime_props::RuntimePropFlatAim>>()
-        .is_ok_and(|aims| aims.get(gun).is_ok())
-}
-
 /// Called only after the shared firing gate succeeds, once per shell (not pellet).
 pub fn shot_impulse(world: &World, gun: EntityId) -> Option<(RecoilImpulse, RecoilImpulse)> {
     // Player guns only: a physical VR held body, or the flat viewmodel. AI
     // weapons never draw recoil RNG.
     if crate::mission::mission_core::held_item_collision_group(world, gun).is_none()
-        && !is_flat_viewmodel(world, gun)
+        && !crate::runtime_props::is_flat_aimed(world, gun)
     {
         return None;
     }

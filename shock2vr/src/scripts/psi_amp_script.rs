@@ -107,10 +107,7 @@ impl Script for PsiAmpScript {
                 // RuntimePropFlatAim). In VR the amp keeps cast-on-pull until
                 // a VR meter exists - charging blind would spend points with
                 // no feedback.
-                let is_flat = world
-                    .borrow::<View<crate::runtime_props::RuntimePropFlatAim>>()
-                    .map(|v| v.get(entity_id).is_ok())
-                    .unwrap_or(false);
+                let is_flat = crate::runtime_props::is_flat_aimed(world, entity_id);
                 if power.overloadable && is_flat {
                     // No points, no charge: gate up front so a broke caster
                     // can't charge into a burnout (which spends points and
