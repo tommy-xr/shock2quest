@@ -66,6 +66,26 @@ const FALLBACK_DONE: Rect = Rect::new(527.0, 405.0, 95.0, 62.0);
 /// launcher - stops its own rows at the same painted border.
 pub const FIELD_TOP_Y: f32 = 323.0;
 
+/// The interior of the backdrop's painted name field - the one line of text
+/// below the list. Its borders are at y=323 and y=344, so the text is inset on
+/// every side rather than straddling that rule or the curved footer.
+///
+/// Shared, because both pages drawn on this backdrop put a line here: the
+/// parameter rows show the category breadcrumb, the Cheats page shows what it
+/// just applied.
+pub fn field_line_rect(rects: PanelRects) -> Rect {
+    Rect::new(
+        rects.list.x + TEXT_INSET,
+        FIELD_TOP_Y + 3.0,
+        rects.list.w - TEXT_INSET * 2.0,
+        14.0,
+    )
+}
+
+/// Font and size the field line is drawn at, so every page matches.
+pub const FIELD_LINE_FONT: &str = ROW_FONT;
+pub const FIELD_LINE_SIZE: f32 = PARAM_FONT_SIZE;
+
 /// The panel's widget rects, resolved from `GAMELODR.BIN`.
 ///
 /// Read from the layout file rather than hardcoded, for the same reason the
@@ -339,18 +359,10 @@ fn emit(
         HAlign::Center,
         VAlign::Middle,
     );
-    // Use the interior of the backdrop's name field. Its borders are at
-    // y=323 and y=344; inset the text on every side rather than straddling
-    // that rule or the curved footer. The header already names this category.
     let breadcrumb = navigation.breadcrumb();
     if let Some((parents, _)) = breadcrumb.rsplit_once(" > ") {
         canvas.text_fit(
-            Rect::new(
-                rects.list.x + TEXT_INSET,
-                FIELD_TOP_Y + 3.0,
-                rects.list.w - TEXT_INSET * 2.0,
-                14.0,
-            ),
+            field_line_rect(rects),
             parents,
             ROW_FONT,
             PARAM_FONT_SIZE,

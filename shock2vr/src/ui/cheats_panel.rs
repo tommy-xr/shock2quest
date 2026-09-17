@@ -26,7 +26,9 @@ use dark::properties::AIAlertLevel;
 
 use super::{
     HAlign, UiCanvas, VAlign,
-    dev_params_panel::{FIELD_TOP_Y, PanelRects},
+    dev_params_panel::{
+        FIELD_LINE_FONT, FIELD_LINE_SIZE, FIELD_TOP_Y, PanelRects, field_line_rect,
+    },
     list_scroll::{self, ListGeometry, ListHit, ScrollHalf},
 };
 
@@ -138,6 +140,44 @@ pub static CHEATS: &[Cheat] = &[
     },
 ];
 
+/// The last cheat applied while this page has been open, so the page can say
+/// so. Clicking a cheat is otherwise silent: the click sound fires either way,
+/// and half these rows (the stats and the alertness trio) change nothing you
+/// can see while the sim is paused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CheatAck {
+    /// Index into [`CHEATS`].
+    pub index: usize,
+    /// How many times in a row - firing the same row twice would otherwise
+    /// look exactly as dead as firing it never.
+    pub count: u32,
+}
+
+impl CheatAck {
+    /// Record another click of `index`, counting a repeat of the same row.
+    pub fn apply(previous: Option<Self>, index: usize) -> Self {
+        match previous {
+            Some(ack) if ack.index == index => Self {
+                index,
+                count: ack.count.saturating_add(1),
+            },
+            _ => Self { index, count: 1 },
+        }
+    }
+
+    /// The line the page shows, e.g. `Max out stats applied` or
+    /// `Rain weapons applied x3`. Derived from the row's own label so a new
+    /// cheat gets feedback for free and the two can never drift.
+    pub fn line(self) -> String {
+        let label = CHEATS[self.index.min(CHEATS.len() - 1)].label;
+        if self.count > 1 {
+            format!("{label} applied x{}", self.count)
+        } else {
+            format!("{label} applied")
+        }
+    }
+}
+
 /// What a click on the page resolves to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheatsEvent {
@@ -177,6 +217,7 @@ pub fn draw(
     rects: PanelRects,
     scroll: usize,
     pointer_canvas: Option<Vector2<f32>>,
+    ack: Option<CheatAck>,
 ) {
     let geometry = list(rects);
     let len = CHEATS.len();
@@ -223,6 +264,19 @@ pub fn draw(
                 Some(CheatsEvent::Scroll(half)) => Some(half),
                 _ => None,
             },
+        );
+    }
+
+    // The backdrop's painted name field, where the parameter rows put their
+    // breadcrumb. Empty until something has been applied.
+    if let Some(ack) = ack {
+        canvas.text_fit(
+            field_line_rect(rects),
+            &ack.line(),
+            FIELD_LINE_FONT,
+            FIELD_LINE_SIZE,
+            HAlign::Center,
+            VAlign::Middle,
         );
     }
 
@@ -298,6 +352,80 @@ mod tests {
         }
     }
 
+    /// A click is otherwise silent - the sound fires either way, and half
+    /// these rows change nothing visible while the sim is paused - so the page
+    /// reports what it applied, in the field the parameter rows use for their
+    /// breadcrumb.
+    #[test]
+    fn the_page_reports_what_it_applied() {
+        let text = |ack| {
+            let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
+            draw(&mut canvas, PanelRects::default(), 0, None, ack);
+            canvas
+                .elements()
+                .iter()
+                .filter_map(|element| match element {
+                    UiElement::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let quiet = text(None);
+        assert!(
+            !quiet.iter().any(|line| line.contains("applied")),
+            "nothing is applied until something is clicked: {quiet:?}"
+        );
+
+        // The line names the row's own label, so a new cheat needs no second
+        // string and the two cannot drift.
+        for (index, cheat) in CHEATS.iter().enumerate() {
+            let ack = CheatAck { index, count: 1 };
+            assert_eq!(ack.line(), format!("{} applied", cheat.label));
+            assert!(
+                text(Some(ack)).contains(&ack.line()),
+                "row {index} not reported"
+            );
+        }
+
+        // Firing the same row again must not look identical to firing nothing.
+        let once = CheatAck::apply(None, 0);
+        let twice = CheatAck::apply(Some(once), 0);
+        assert_eq!(twice, CheatAck { index: 0, count: 2 });
+        assert_eq!(twice.line(), format!("{} applied x2", CHEATS[0].label));
+        assert_ne!(once.line(), twice.line());
+        // ...while a different row restarts the count rather than adding to it.
+        assert_eq!(
+            CheatAck::apply(Some(twice), 1),
+            CheatAck { index: 1, count: 1 }
+        );
+        // A saturating count cannot panic or wrap back to "applied".
+        let many = CheatAck {
+            index: 0,
+            count: u32::MAX,
+        };
+        assert_eq!(CheatAck::apply(Some(many), 0).count, u32::MAX);
+    }
+
+    /// It occupies the backdrop's painted name field - the same line the
+    /// parameter rows put their breadcrumb in - so it never covers a row or
+    /// runs over the frame.
+    #[test]
+    fn the_report_sits_in_the_shared_field_line() {
+        let rects = PanelRects::default();
+        let field = crate::ui::dev_params_panel::field_line_rect(rects);
+        assert!(field.y >= FIELD_TOP_Y, "the field line sits below the rows");
+        let geometry = list(rects);
+        for slot in 0..CHEATS.len() {
+            let row = geometry.row_rect(CHEATS.len(), slot);
+            assert!(
+                row.y + row.h <= field.y,
+                "slot {slot} overlaps the field line"
+            );
+        }
+        assert!(field.x >= rects.list_rect().x);
+        assert!(field.x + field.w <= rects.list_rect().x + rects.list_rect().w);
+    }
+
     /// "Done" is the host's business; scrolling is not.
     #[test]
     fn done_leaves_and_scrolling_is_absorbed() {
@@ -349,7 +477,7 @@ mod tests {
     #[test]
     fn the_page_draws_a_row_per_cheat() {
         let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
-        draw(&mut canvas, PanelRects::default(), 0, None);
+        draw(&mut canvas, PanelRects::default(), 0, None, None);
         let drawn: Vec<&str> = canvas
             .elements()
             .iter()

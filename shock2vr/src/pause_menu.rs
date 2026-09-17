@@ -327,6 +327,9 @@ pub struct PauseMenu {
     /// Index of the cheat in the Cheats page's top row - the same stateless
     /// list geometry as the developer parameter panel.
     cheats_scroll: usize,
+    /// What the Cheats page last applied, so it can say so. Lives here rather
+    /// than in the panel because the page is redrawn from scratch each frame.
+    cheats_ack: Option<cheats_panel::CheatAck>,
 }
 
 impl Default for PauseMenu {
@@ -348,6 +351,7 @@ impl PauseMenu {
             closed_under_a_held_press: false,
             panel_rects: dev_params_panel::PanelRects::default(),
             navigation: Default::default(),
+            cheats_ack: None,
             cheats_scroll: 0,
         }
     }
@@ -551,9 +555,21 @@ impl PauseMenu {
         &mut self,
         event: Option<cheats_panel::CheatsEvent>,
     ) -> Option<PauseAction> {
-        match cheats_panel::activate(self.panel_rects, event?, &mut self.cheats_scroll)? {
-            cheats_panel::CheatsOutcome::Act(action) => Some(PauseAction::Cheat(action)),
+        let event = event?;
+        let row = match event {
+            cheats_panel::CheatsEvent::Row(index) => Some(index),
+            _ => None,
+        };
+        match cheats_panel::activate(self.panel_rects, event, &mut self.cheats_scroll)? {
+            cheats_panel::CheatsOutcome::Act(action) => {
+                if let Some(index) = row {
+                    self.cheats_ack = Some(cheats_panel::CheatAck::apply(self.cheats_ack, index));
+                }
+                Some(PauseAction::Cheat(action))
+            }
             cheats_panel::CheatsOutcome::Done => {
+                // Leaving the page ends the run of cheats it was reporting on.
+                self.cheats_ack = None;
                 self.page = PauseMenuPage::Developer;
                 None
             }
@@ -675,6 +691,7 @@ impl PauseMenu {
                     self.panel_rects,
                     self.cheats_scroll,
                     pointer_canvas,
+                    self.cheats_ack,
                 ),
                 _ => {
                     dev_params_panel::draw(
