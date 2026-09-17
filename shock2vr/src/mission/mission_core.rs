@@ -15021,6 +15021,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 serde_json::json!({
                     "spread_radians": state.spread,
                     "bias_radians": [state.bias.x, state.bias.y],
+                    "projectile_template": crate::hud::reticle::selected_projectile(&self.world, id),
                 })
                 .to_string()
             });
