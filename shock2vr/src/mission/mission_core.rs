@@ -12524,7 +12524,7 @@ impl MissionCore {
                 screen_size,
                 self.use_mode,
                 &messages,
-                banner.as_deref(),
+                banner.as_ref(),
             ));
 
             // `show_position` readout (flat). VR presents the same canvas on a
@@ -12625,7 +12625,7 @@ impl MissionCore {
     /// The interstitial banner showing this frame, if any. Expired banners are
     /// dropped here (the `hud_messages` pattern), so one clears itself whether
     /// or not it is being drawn.
-    fn hud_banner(&self) -> Option<String> {
+    fn hud_banner(&self) -> Option<crate::hud::ActiveBanner> {
         let now = self
             .world
             .borrow::<UniqueView<Time>>()
@@ -12670,13 +12670,17 @@ impl MissionCore {
     /// same 640x480 canvas the flat HUD does, so the plate is offset from the
     /// panel's centre by exactly the distance the shared layout puts it below
     /// the canvas's centre. Flat and VR therefore sit it at the same height.
-    fn render_vr_banner(&self, asset_cache: &mut AssetCache, text: &str) -> Vec<SceneObject> {
+    fn render_vr_banner(
+        &self,
+        asset_cache: &mut AssetCache,
+        banner: &crate::hud::ActiveBanner,
+    ) -> Vec<SceneObject> {
         let below_centre =
             crate::hud::banner::flat_center().y - crate::mission::flat_ui_host::CANVAS_SIZE.y / 2.0;
         self.render_vr_head_canvas(
             asset_cache,
-            &crate::hud::banner::build_banner_canvas(text),
-            crate::hud::banner::panel_size(text),
+            &crate::hud::banner::build_banner_canvas(&banner.text, banner.alpha),
+            crate::hud::banner::panel_size(&banner.text),
             |scale| vec3(0.0, -below_centre * scale, 0.0),
         )
     }
@@ -13390,8 +13394,8 @@ impl MissionCore {
                 rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
                 scene.extend(objects);
             }
-            if let Some(text) = self.hud_banner() {
-                let mut objects = self.render_vr_banner(asset_cache, &text);
+            if let Some(banner) = self.hud_banner() {
+                let mut objects = self.render_vr_banner(asset_cache, &banner);
                 rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
                 scene.extend(objects);
             }
@@ -15765,7 +15769,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 }
             }),
             messages: self.hud_messages(),
-            banner: self.hud_banner(),
+            banner: self.hud_banner().map(|banner| banner.text),
             security_alarm: {
                 let alarm = crate::security_alarm::status(&self.world);
                 alarm

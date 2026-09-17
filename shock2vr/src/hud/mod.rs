@@ -18,7 +18,7 @@ pub(crate) mod message_line;
 pub use message_line::HudMessages;
 
 pub(crate) mod banner;
-pub use banner::HudBanner;
+pub use banner::{ActiveBanner, HudBanner};
 
 mod debug_overlay;
 pub(crate) use debug_overlay::*;

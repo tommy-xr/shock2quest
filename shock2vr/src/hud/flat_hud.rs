@@ -77,7 +77,7 @@ pub(crate) fn build_flat_hud_canvas(
     psi_charge: Option<RuntimePropPsiCharge>,
     ammo_readout: &AmmoReadout,
     messages: &[String],
-    banner_text: Option<&str>,
+    banner: Option<&super::ActiveBanner>,
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(VIRTUAL_W, VIRTUAL_H));
 
@@ -134,8 +134,8 @@ pub(crate) fn build_flat_hud_canvas(
 
     // The interstitial banner, placed by the shared `banner` layout the VR
     // head panel draws with. Last, so its plate covers the view centre.
-    if let Some(text) = banner_text {
-        banner::emit(&mut canvas, banner::flat_center(), text);
+    if let Some(shown) = banner {
+        banner::emit(&mut canvas, banner::flat_center(), &shown.text, shown.alpha);
     }
 
     canvas
@@ -150,7 +150,7 @@ pub(crate) fn create_flat_hud(
     screen_size: cgmath::Vector2<f32>,
     use_mode: bool,
     messages: &[String],
-    banner_text: Option<&str>,
+    banner: Option<&super::ActiveBanner>,
 ) -> Vec<SceneObject> {
     let mut canvas = build_flat_hud_canvas(
         use_mode,
@@ -160,7 +160,7 @@ pub(crate) fn create_flat_hud(
         // in use mode, where the interface canvas draws the expanded panel.
         &AmmoReadout::from_world(world, false),
         messages,
-        banner_text,
+        banner,
     );
     if !use_mode {
         super::hazards::emit(
@@ -372,7 +372,10 @@ mod tests {
             None,
             &empty,
             &[],
-            Some("4 Years Earlier\nRamsey Recruitment Ctr."),
+            Some(&crate::hud::ActiveBanner {
+                text: "4 Years Earlier\nRamsey Recruitment Ctr.".to_string(),
+                alpha: 1.0,
+            }),
         );
 
         assert_eq!(with_banner.element_count(), base.element_count() + 3);
