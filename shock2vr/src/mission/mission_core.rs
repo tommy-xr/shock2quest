@@ -10457,12 +10457,19 @@ impl MissionCore {
                     one_hand,
                 } => {
                     let strength = crate::weapon_recoil::handling_strength(&self.world);
+                    // Exactly one of these applies: VR kicks the held rigid
+                    // body (a no-op unless the gun is a held-inert body), flat
+                    // kicks its viewmodel spring.
                     self.physics.kick_held_gun(
                         entity_id,
                         impulse,
                         one_hand,
                         strength,
                         self.interaction.is_supported(entity_id),
+                    );
+                    self.interaction.kick_viewmodel(
+                        entity_id,
+                        crate::weapon_recoil::flat_impulse(impulse, one_hand, strength),
                     );
                 }
                 Effect::PlayImpactSound {
