@@ -2405,6 +2405,27 @@ impl CollisionGroup {
         })
     }
 
+    /// The same membership as this group, with only the *player* dropped from
+    /// its filter. Creature capsules, props, projectiles and rays keep it.
+    ///
+    /// This is the narrower sibling of [`non_solid_to_characters`], for a
+    /// *dynamic* body the player must not shove. The player capsule is the
+    /// one character Rapier treats as infinite mass
+    /// (`kinematic_position_based`), so its contact against a light dynamic
+    /// prop launches the prop instead of nudging it. Creatures are ordinary
+    /// dynamic bodies and never do that, and keeping them solid is what lets
+    /// a thrown item still report the contact it damages on.
+    ///
+    /// [`non_solid_to_characters`]: CollisionGroup::non_solid_to_characters
+    pub fn non_solid_to_player(self) -> CollisionGroup {
+        let filter = self.collision.filter.bits() & !InternalCollisionGroups::PLAYER.bits;
+        Self::solid(InteractionGroups {
+            memberships: self.collision.memberships,
+            filter: filter.into(),
+            test_mode: self.collision.test_mode,
+        })
+    }
+
     /// Collision group for ragdoll limb bodies. Members are `SELECTABLE` (so
     /// they remain raycast/selectable) and collide with `WORLD` geometry *and*
     /// each other (`SELECTABLE`), so limbs don't pass through the torso/head.
@@ -8435,6 +8456,51 @@ mod tests {
         assert!(
             obstacle.collision.test(generic_entity_ray),
             "selection/projectile rays must still hit the obstacle"
+        );
+    }
+
+    /// Walking into a loose simulated prop must step through it, not launch
+    /// it. The player capsule is kinematic, so an ordinary contact solves as
+    /// infinite mass against the prop's finite mass and a brushed mug flies
+    /// across the room.
+    ///
+    /// Negative-first: the `CollisionGroup::entity()` half of this test is the
+    /// old behavior, and it kicks the prop several units away.
+    #[test]
+    fn walking_into_a_loose_prop_steps_through_it_instead_of_kicking_it() {
+        fn prop_displacement_after_walking_through(group: CollisionGroup) -> f32 {
+            let (mut world, mut player) = world_with_floor();
+            world.set_player_translation(vec3(0.0, 1.2, 0.0), &mut player);
+
+            let start = vec3(0.0, 0.2, 1.0);
+            let prop = world.add_dynamic(
+                EntityId::from_inner(2001).unwrap(),
+                start,
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                PhysicsShape::Sphere(0.2),
+                group,
+                false,
+                DynamicPhysicsOptions::default(),
+            );
+
+            walk_player_toward(&mut world, &mut player, vec3(0.0, 0.0, 3.0), 240);
+
+            let end = world.rigid_body_set[prop].translation();
+            vec3(end.x - start.x, 0.0, end.z - start.z).magnitude()
+        }
+
+        let kicked = prop_displacement_after_walking_through(CollisionGroup::entity());
+        assert!(
+            kicked > 0.5,
+            "a prop solid to the player is shoved by the walk (got {kicked})"
+        );
+
+        let stepped_through =
+            prop_displacement_after_walking_through(CollisionGroup::entity().non_solid_to_player());
+        assert!(
+            stepped_through < 0.05,
+            "the player must pass through a loose prop without moving it (got {stepped_through})"
         );
     }
 
