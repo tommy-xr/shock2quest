@@ -94,26 +94,16 @@ pub(crate) fn from_world(
     weapon: Option<shipyard::EntityId>,
     bias: Vector2<f32>,
 ) -> ReticleState {
-    use shipyard::{Get, UniqueView, View};
+    use shipyard::UniqueView;
     let Some(weapon) = weapon else {
         return ReticleState::default();
     };
-    let pellet_spread = crate::scripts::script_util::ordered_projectile_links(world, weapon)
-        .get(
-            world
-                .borrow::<View<crate::runtime_props::RuntimePropSelectedAmmo>>()
-                .ok()
-                .and_then(|v| v.get(weapon).ok().map(|s| s.0))
-                .unwrap_or(0)
-                % crate::scripts::script_util::ordered_projectile_links(world, weapon)
-                    .len()
-                    .max(1),
-        )
-        .and_then(|(template, _)| {
+    let pellet_spread = selected_projectile(world, weapon)
+        .and_then(|template| {
             world
                 .borrow::<UniqueView<crate::mission::projectile_spray::GlobalProjectileSprays>>()
                 .ok()
-                .and_then(|sprays| sprays.0.get(template).map(|p| p.spread))
+                .and_then(|sprays| sprays.0.get(&template).map(|p| p.spread))
         })
         .unwrap_or(0);
     ReticleState::from_units(
@@ -121,6 +111,23 @@ pub(crate) fn from_world(
         pellet_spread,
         bias,
     )
+}
+
+/// The projectile archetype this weapon would launch right now: its
+/// setting-filtered ammo list indexed by the selected ammo, exactly as the
+/// firing path picks it.
+pub(crate) fn selected_projectile(
+    world: &shipyard::World,
+    weapon: shipyard::EntityId,
+) -> Option<i32> {
+    use shipyard::{Get, View};
+    let links = crate::scripts::script_util::ordered_projectile_links(world, weapon);
+    let selected = world
+        .borrow::<View<crate::runtime_props::RuntimePropSelectedAmmo>>()
+        .ok()
+        .and_then(|v| v.get(weapon).ok().map(|s| s.0))
+        .unwrap_or(0);
+    links.get(selected % links.len().max(1)).map(|(id, _)| *id)
 }
 
 /// Project an angle off the view axis onto the HUD canvas, in canvas pixels.
