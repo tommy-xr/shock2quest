@@ -132,7 +132,7 @@ impl FlatPlayerController {
         }
         self.wielded_entity = Some(entity_id);
         self.last_fire_pressed = false;
-        // A new gun starts at rest; the outgoing one's kick is not its own.
+        // A new gun starts at rest: the outgoing one's kick is not its own.
         self.recoil = crate::weapon_recoil::RecoilState::default();
         effects.push(VirtualHandEffect::HoldItem { entity_id });
         effects
@@ -154,18 +154,18 @@ impl FlatPlayerController {
     /// frame of the firing recoil spring pivoted around the gun's OWN origin
     /// (muzzle rise + kickback). The spring works in the held model's frame,
     /// which the base yaw is exactly the rotation into, so it composes on the
-    /// right of that yaw. Returns (rotation, world position).
+    /// right of that yaw. Takes this frame's already-stepped spring pose, so
+    /// the spring advances on every frame rather than only on frames that
+    /// happen to place a gun. Returns (rotation, world position).
     fn gun_pose(
-        &mut self,
         look: Quaternion<f32>,
         camera_pos: Vector3<f32>,
         offset: Vector3<f32>,
         pitch_deg: f32,
-        step_dt: f32,
+        (kickback, kick_rotation): (Vector3<f32>, Quaternion<f32>),
     ) -> (Quaternion<f32>, Vector3<f32>) {
         let pitch = Quaternion::from_angle_x(Deg(pitch_deg));
         let model = look * pitch * Quaternion::from_angle_y(Deg(VIEWMODEL_BASE_YAW_DEG));
-        let (kickback, kick_rotation) = self.recoil.step(step_dt);
         (
             model * kick_rotation,
             camera_pos
@@ -193,6 +193,9 @@ impl FlatPlayerController {
 
         let look = player_rotation * head_rotation;
         let camera_pos = player_pos + vec3(0.0, eye_height / SCALE_FACTOR, 0.0);
+        // Unconditional, so a kick cannot freeze mid-flight while a melee
+        // weapon (or nothing) is wielded and thaw on the next gun frame.
+        let kick = self.recoil.step(step_dt);
 
         // Crosshair raycast: the frobbable entity under the reticle (resolving
         // hitbox proxies to their parent, and ignoring the weapon we hold).
@@ -274,7 +277,7 @@ impl FlatPlayerController {
                     }
                     _ => GUN_CARRY_PITCH_DEG,
                 };
-                self.gun_pose(look, camera_pos, offset, pitch_deg, step_dt)
+                Self::gun_pose(look, camera_pos, offset, pitch_deg, kick)
             };
             effects.push(VirtualHandEffect::SetPositionRotation {
                 entity_id,
@@ -377,7 +380,9 @@ mod tests {
         let camera = vec3(0.0, 5.0, 0.0);
         let mut controller = FlatPlayerController::new();
         let pose = |c: &mut FlatPlayerController, dt| {
-            let (rotation, position) = c.gun_pose(look, camera, VIEWMODEL_OFFSET, -11.25, dt);
+            let kick = c.recoil.step(dt);
+            let (rotation, position) =
+                FlatPlayerController::gun_pose(look, camera, VIEWMODEL_OFFSET, -11.25, kick);
             (rotation.rotate_vector(BARREL), position)
         };
 
@@ -409,6 +414,37 @@ mod tests {
         let (settled_muzzle, settled_pos) = pose(&mut controller, 0.0);
         assert!((settled_muzzle - rest_muzzle).magnitude() < 1e-4);
         assert!((settled_pos - rest_pos).magnitude() < 1e-4);
+    }
+
+    /// The spring advances with `update`, not with gun placement, so a kick
+    /// cannot freeze mid-flight while a melee weapon (or nothing) is wielded
+    /// and thaw when a gun comes back out.
+    #[test]
+    fn recoil_keeps_settling_while_no_gun_is_being_placed() {
+        use cgmath::InnerSpace;
+        let mut controller = FlatPlayerController::new();
+        controller.wield(EntityId::dead());
+        controller.kick(EntityId::dead(), impulse());
+        let mut world = World::new();
+        let physics = PhysicsWorld::new();
+        for _ in 0..600 {
+            controller.update(
+                &Hand::default(),
+                vec3(0.0, 0.0, 0.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                0.0,
+                1.0 / 60.0,
+                &mut world,
+                &physics,
+            );
+        }
+        let (kickback, rotation) = controller.recoil.step(0.0);
+        assert!(kickback.magnitude() < 1e-5, "kickback should have settled");
+        assert!(
+            (rotation.s.abs() - 1.0).abs() < 1e-5,
+            "rotation should have settled"
+        );
     }
 
     fn impulse() -> crate::weapon_recoil::RecoilImpulse {

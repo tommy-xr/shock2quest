@@ -10469,7 +10469,7 @@ impl MissionCore {
                     );
                     self.interaction.kick_viewmodel(
                         entity_id,
-                        crate::weapon_recoil::flat_impulse(impulse, one_hand, strength),
+                        crate::weapon_recoil::flat_impulse(impulse, strength),
                     );
                 }
                 Effect::PlayImpactSound {
