@@ -6,13 +6,21 @@
 //!
 //! - a **random** square of heading/pitch error - the authored weapon error
 //!   (`CalcRandAngle`, zero in stock data) plus the per-pellet spread of a
-//!   multi-pellet shell - which the arms show as an outward *bloom*;
+//!   multi-pellet shell;
 //! - a **deterministic** directional bias - the recoil the shot rides
-//!   (`weapon_recoil`) - which the whole reticle shows as a *shift*.
+//!   (`weapon_recoil`).
 //!
-//! Drawing them as one number would be a lying reticle: a bloom says "somewhere
-//! in here at random", a shift says "there". The centre dot never moves, so the
-//! camera axis stays readable underneath both.
+//! Both open the four arms evenly. The reticle only ever *opens*; it never
+//! translates, so it keeps marking the camera axis instead of sliding off the
+//! centre of the screen, and the whole readout stays "how far from the dot can
+//! this shot land".
+//!
+//! Two deliberate imprecisions come with that. Recoil is directional, so a
+//! symmetric ring over-reports the directions it is NOT pushing (upward recoil
+//! opens the bottom arm too); and a large bias means the shot can no longer
+//! land near the dot, which an expansion cannot say. Both are the price of a
+//! crosshair that stays put, which reads far better in motion than one that
+//! slides.
 //!
 //! Every number here is read from the same state the shot itself uses, never
 //! recomputed in parallel - see `reticle_matches_the_shot` in the e2e suite.
@@ -52,7 +60,7 @@ pub(crate) struct ReticleState {
     /// than approximating a cone.
     pub spread: f32,
     /// Where recoil has pushed the shot relative to the camera axis, in
-    /// radians: +x right, +y up.
+    /// radians: +x right, +y up. Only its magnitude reaches the arms.
     pub bias: Vector2<f32>,
 }
 
@@ -157,14 +165,18 @@ pub(crate) fn emit(
     canvas_height: f32,
 ) {
     let scale = size / ART.x;
-    let bloom = angle_to_canvas_px(state.spread, fov_y_degrees, canvas_height).max(0.0);
-    let shift = vec2(
-        angle_to_canvas_px(state.bias.x, fov_y_degrees, canvas_height),
-        // Canvas y grows downward; a shot pushed UP draws higher on screen.
-        -angle_to_canvas_px(state.bias.y, fov_y_degrees, canvas_height),
-    );
-    // The sprite's own top-left if it were drawn undivided and unbloomed.
-    let origin = centre - vec2(size, size) / 2.0 + shift;
+    // How far every arm opens: the random half-width, plus how far recoil has
+    // pushed the shot off the axis in any direction. Taking the bias as a
+    // magnitude is what keeps the reticle symmetric and centred.
+    let open = angle_to_canvas_px(
+        state.spread + (state.bias.x.hypot(state.bias.y)),
+        fov_y_degrees,
+        canvas_height,
+    )
+    .max(0.0);
+    // The sprite's own top-left if it were drawn undivided and unopened. The
+    // reticle never translates, so this is always the screen centre.
+    let origin = centre - vec2(size, size) / 2.0;
     let mut piece = |source: Rect, push: Vector2<f32>| {
         canvas.cropped_image(
             Rect::new(
@@ -178,12 +190,12 @@ pub(crate) fn emit(
             ART,
         );
     };
-    piece(ARM_TOP, vec2(0.0, -bloom));
-    piece(ARM_BOTTOM, vec2(0.0, bloom));
-    piece(ARM_LEFT, vec2(-bloom, 0.0));
-    piece(ARM_RIGHT, vec2(bloom, 0.0));
-    // The dot marks true camera aim, so it takes neither the bloom nor the
-    // shift: it is the fixed reference the other four are read against.
+    piece(ARM_TOP, vec2(0.0, -open));
+    piece(ARM_BOTTOM, vec2(0.0, open));
+    piece(ARM_LEFT, vec2(-open, 0.0));
+    piece(ARM_RIGHT, vec2(open, 0.0));
+    // The dot marks true camera aim: it never opens and never moves, so it
+    // stays the fixed reference the other four are read against.
     canvas.cropped_image(
         Rect::new(
             centre.x - size / 2.0 + CENTRE_DOT.x * scale,
@@ -279,26 +291,48 @@ mod tests {
         }
     }
 
-    /// Recoil shifts the four arms together - the shot really did go one way -
-    /// while the dot stays on the camera axis as the reference to read against.
+    /// Recoil opens all four arms evenly, by its magnitude, and never moves
+    /// the reticle or the centre dot: it is an expansion, not a shift.
     #[test]
-    fn recoil_bias_shifts_the_arms_but_never_the_centre_dot() {
+    fn recoil_bias_opens_the_arms_evenly_without_moving_the_reticle() {
         let rest = draw(ReticleState::default());
         let up = 2.0_f32.to_radians();
-        let shifted = draw(ReticleState {
-            spread: 0.0,
-            bias: vec2(0.0, up),
-        });
         let push = angle_to_canvas_px(up, 45.0, 480.0);
         assert!(push > 1.0);
-        for (i, (r, s)) in rest.iter().zip(&shifted).enumerate() {
-            let expected = if i == 4 { 0.0 } else { -push };
-            assert!(
-                (s.1 - r.1 - expected).abs() < 1e-3,
-                "piece {i}: {r:?} -> {s:?}"
-            );
-            assert!((s.0 - r.0).abs() < 1e-3, "an upward bias must not move x");
+        // top, bottom, left, right, dot
+        let expected = [
+            (0.0, -push),
+            (0.0, push),
+            (-push, 0.0),
+            (push, 0.0),
+            (0.0, 0.0),
+        ];
+
+        // Direction does not matter, only magnitude - that is what "symmetric"
+        // means here, and it is why the reticle stays centred.
+        for bias in [
+            vec2(0.0, up),
+            vec2(0.0, -up),
+            vec2(up, 0.0),
+            vec2(-up / 2.0f32.sqrt(), up / 2.0f32.sqrt()),
+        ] {
+            let biased = draw(ReticleState { spread: 0.0, bias });
+            for (i, ((r, b), (dx, dy))) in rest.iter().zip(&biased).zip(expected).enumerate() {
+                assert!((b.0 - r.0 - dx).abs() < 1e-3, "piece {i} x: {r:?} -> {b:?}");
+                assert!((b.1 - r.1 - dy).abs() < 1e-3, "piece {i} y: {r:?} -> {b:?}");
+            }
         }
+
+        // Bias and spread add: both are distances the shot can be from the dot.
+        let spread = 1.0_f32.to_radians();
+        let both = draw(ReticleState {
+            spread,
+            bias: vec2(0.0, up),
+        });
+        let open = angle_to_canvas_px(spread + up, 45.0, 480.0);
+        assert!((rest[0].1 - both[0].1 - open).abs() < 1e-3);
+        assert!((both[1].1 - rest[1].1 - open).abs() < 1e-3);
+        assert_eq!(both[4], rest[4], "the dot never moves");
     }
 
     /// The projection is the inverse of the world's: an arm at the drawn offset
