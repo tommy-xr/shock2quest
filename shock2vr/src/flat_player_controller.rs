@@ -9,7 +9,7 @@
 //!
 //! See `projects/flatscreen-and-vr-architecture.md` (Slices 5-6).
 
-use cgmath::{Deg, Point3, Quaternion, Rotation, Rotation3, Vector3, point3, vec3};
+use cgmath::{Deg, Point3, Quaternion, Rotation, Rotation3, Vector2, Vector3, point3, vec2, vec3};
 use shipyard::{EntityId, Get, View, World};
 
 use dark::{
@@ -62,6 +62,10 @@ pub struct FlatPlayerController {
     /// Camera/crosshair fire ray (world space) from the last `update`, so the
     /// firing path can spawn projectiles along the crosshair (camera-origin aim).
     last_aim: Option<(Point3<f32>, Vector3<f32>)>,
+    /// Where recoil has pushed the fire ray off the camera axis this frame, in
+    /// radians (+x right, +y up). Recorded rather than recomputed, so the
+    /// reticle draws the exact deflection the shot takes.
+    last_aim_bias: Vector2<f32>,
     /// Firing kick for the viewmodel only - the same spring the VR held gun
     /// uses. The camera and `last_aim` are deliberately untouched, so recoil
     /// never moves the crosshair or the shot (see `weapon_recoil::flat_impulse`).
@@ -75,6 +79,7 @@ impl FlatPlayerController {
             last_fire_pressed: false,
             last_use_pressed: false,
             last_aim: None,
+            last_aim_bias: vec3(0.0, 0.0, 0.0).truncate(),
             recoil: crate::weapon_recoil::RecoilState::default(),
         }
     }
@@ -97,6 +102,12 @@ impl FlatPlayerController {
     /// The camera/crosshair fire ray (origin, forward) from the last `update`.
     pub fn aim_ray(&self) -> Option<(Point3<f32>, Vector3<f32>)> {
         self.last_aim
+    }
+
+    /// Recoil's deflection of that ray off the camera axis, in radians
+    /// (+x right, +y up) - what the reticle shifts by.
+    pub fn aim_bias(&self) -> Vector2<f32> {
+        self.last_aim_bias
     }
 
     /// Stop wielding `entity_id` if it was the held weapon (e.g. it was
@@ -289,14 +300,13 @@ impl FlatPlayerController {
                 // fires exactly on the crosshair. The crosshair RAYCAST above
                 // is untouched - recoil must not move what you can frob.
                 self.last_aim = self.last_aim.map(|(origin, forward)| {
-                    (
-                        origin,
-                        recoil_aim(
-                            forward,
-                            aim_kick,
-                            crate::dev_params::get(crate::dev_params::FLAT_RECOIL_AIM),
-                        ),
-                    )
+                    let bent = recoil_aim(
+                        forward,
+                        aim_kick,
+                        crate::dev_params::get(crate::dev_params::FLAT_RECOIL_AIM),
+                    );
+                    self.last_aim_bias = aim_bias(look, bent);
+                    (origin, bent)
                 });
                 (rotation, position)
             };
@@ -364,6 +374,23 @@ fn recoil_aim(forward: Vector3<f32>, kick: Quaternion<f32>, fraction: f32) -> Ve
     } else {
         forward
     }
+}
+
+/// Decompose a bent fire ray into yaw/pitch away from the camera axis, in
+/// radians (+x right, +y up) - the reticle's shift. Taken from the ray the
+/// shot actually uses rather than recomputed from the spring, so the two can
+/// never disagree.
+fn aim_bias(look: Quaternion<f32>, bent: Vector3<f32>) -> Vector2<f32> {
+    use cgmath::InnerSpace;
+    if bent.magnitude2() < 1e-8 {
+        return vec2(0.0, 0.0);
+    }
+    // Into camera space, where the axis is -z, +x right and +y up.
+    let local = look.invert().rotate_vector(bent.normalize());
+    if !local.x.is_finite() || !local.y.is_finite() || !local.z.is_finite() {
+        return vec2(0.0, 0.0);
+    }
+    vec2(local.x.atan2(-local.z), local.y.atan2(-local.z))
 }
 
 fn out_message(to: EntityId, payload: MessagePayload) -> VirtualHandEffect {
