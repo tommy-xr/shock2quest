@@ -59,7 +59,7 @@ use super::{
     burst_fire::{BurstState, BurstStep},
     script_util::{
         active_gun_setting, get_all_links_with_template, gun_condition, ordered_projectile_links,
-        play_environmental_sound,
+        play_environmental_sound, play_impact_sound,
     },
 };
 
@@ -430,7 +430,7 @@ impl Script for WeaponScript {
                 else {
                     return Effect::NoEffect;
                 };
-                flat_melee_hit(physics, aim, world)
+                flat_melee_hit(physics, aim, world, entity_id)
             }
             // The maintenance tool, offered to this weapon on the port's tool
             // channel: a VR hand releasing it onto the gun, or the flat
@@ -664,7 +664,12 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
 /// Resolve the authored hit event of a flat melee swing: raycast a short
 /// distance along the current crosshair ray and damage the hit entity (hitbox
 /// proxies resolve to their parent).
-fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World) -> Effect {
+fn flat_melee_hit(
+    physics: &PhysicsWorld,
+    aim: RuntimePropFlatAim,
+    world: &World,
+    weapon_id: EntityId,
+) -> Effect {
     // `ray_cast` normalizes its direction and casts a fixed 100 units, so the
     // reach has to be passed as `ray_cast2`'s max_toi - scaling the direction
     // bounds nothing.
@@ -689,7 +694,13 @@ fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World
     }) = hit
     {
         let target = resolve_proxy_entity(world, target);
-        return Effect::Send {
+        // A landed swing is audible: the weapon's collision schema tagged with
+        // what it struck (`weapontype:wrench` + `material:fleshtarget` ->
+        // `hwrefle*`). The VR physical path already does this from real
+        // contacts; the flat path resolves its hit by raycast, so it has to
+        // say so itself.
+        let sound = play_impact_sound(world, weapon_id, target, hit_point.to_vec());
+        let damage = Effect::Send {
             msg: Message {
                 to: target,
                 payload: MessagePayload::Damage {
@@ -710,6 +721,7 @@ fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World
                 },
             },
         };
+        return Effect::Multiple(vec![damage, sound]);
     }
     Effect::NoEffect
 }
@@ -1070,6 +1082,7 @@ mod tests {
         let mut player =
             physics.create_player(vec3(10.0, 10.0, 10.0), EntityId::from_inner(1000).unwrap());
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let weapon = world.add_entity(());
         let strike = |x, y| {
             flat_melee_hit(
                 &physics,
@@ -1078,10 +1091,11 @@ mod tests {
                     forward: vec3(0.0, 0.0, -1.0),
                 },
                 &world,
+                weapon,
             )
         };
         assert!(matches!(strike(0.0, 0.3), Effect::NoEffect));
-        assert!(matches!(strike(0.4, 0.0), Effect::Send { msg: Message { to, .. } } if to == grub));
+        assert!(includes_damage_to(strike(0.4, 0.0), grub));
     }
 
     fn flat_melee_fixture() -> (World, PhysicsWorld, EntityId, EntityId) {
@@ -1120,6 +1134,7 @@ mod tests {
                         forward: vec3(0.0, 0.0, 1.0),
                     },
                     &world,
+                    weapon,
                 ),
                 target,
             ),
@@ -1127,6 +1142,71 @@ mod tests {
         );
 
         (world, physics, weapon, target)
+    }
+
+    /// A flat melee swing that lands must be audible: the weapon's collision
+    /// schema, tagged with what it struck. A wrench on a hybrid resolves
+    /// `event:collision` + `weapontype:wrench` + `material:fleshtarget` ->
+    /// `hwrefle*`; before this the flat path returned damage alone and
+    /// hitting a creature made no sound at all.
+    #[test]
+    fn a_flat_melee_hit_plays_the_weapon_impact_schema() {
+        use crate::physics::{CollisionGroup, PhysicsWorld};
+        use cgmath::vec3;
+
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+
+        let weapon = world.add_entity((
+            Links::empty(),
+            dark::properties::PropClassTag::from_string("weapontype wrench"),
+        ));
+        let target = world.add_entity(dark::properties::PropMaterial(
+            "Material FleshTarget".to_owned(),
+        ));
+        physics.add_kinematic(
+            target,
+            vec3(0.0, 0.0, 0.6),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.2, 0.2, 0.2),
+            CollisionGroup::selectable(),
+            false,
+        );
+        let player = world.add_entity(());
+        let mut player_handle = physics.create_player(vec3(100.0, 100.0, 100.0), player);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        let effect = flat_melee_hit(
+            &physics,
+            RuntimePropFlatAim {
+                origin: point3(0.0, 0.0, 0.0),
+                forward: vec3(0.0, 0.0, 1.0),
+            },
+            &world,
+            weapon,
+        );
+
+        let tags = Effect::flatten(vec![effect])
+            .into_iter()
+            .find_map(|effect| match effect {
+                Effect::PlayImpactSound { query, .. }
+                | Effect::PlayEnvironmentalSound { query, .. } => Some(query.tag_values()),
+                _ => None,
+            })
+            .expect("a landed swing plays an impact sound");
+        assert!(
+            tags.contains(&("event".to_owned(), "collision".to_owned())),
+            "{tags:?}"
+        );
+        assert!(
+            tags.contains(&("weapontype".to_owned(), "wrench".to_owned())),
+            "{tags:?}"
+        );
+        assert!(
+            tags.contains(&("material".to_owned(), "fleshtarget".to_owned())),
+            "{tags:?}"
+        );
     }
 
     fn includes_damage_to(effect: Effect, target: EntityId) -> bool {
@@ -1587,6 +1667,7 @@ mod tests {
         );
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
 
+        let weapon = world.add_entity(());
         let aim = RuntimePropFlatAim {
             origin: point3(0.0, 0.0, 0.0),
             forward: vec3(0.0, 0.0, -1.0),
@@ -1610,7 +1691,10 @@ mod tests {
         );
 
         assert!(
-            matches!(flat_melee_hit(&physics, aim, &world), Effect::NoEffect),
+            matches!(
+                flat_melee_hit(&physics, aim, &world, weapon),
+                Effect::NoEffect
+            ),
             "a target 8x past MELEE_RANGE must not be hit"
         );
     }
@@ -1626,6 +1710,7 @@ mod tests {
         let mut physics = PhysicsWorld::new();
 
         let near = world.add_entity(PropWeaponType(0));
+        let weapon = world.add_entity(());
         physics.add_kinematic(
             near,
             vec3(0.0, 0.0, -MELEE_RANGE / 2.0),
@@ -1647,15 +1732,7 @@ mod tests {
         };
 
         assert!(
-            matches!(
-                flat_melee_hit(&physics, aim, &world),
-                Effect::Send {
-                    msg: Message {
-                        to,
-                        payload: MessagePayload::Damage { .. },
-                    },
-                } if to == near
-            ),
+            includes_damage_to(flat_melee_hit(&physics, aim, &world, weapon), near),
             "a target inside MELEE_RANGE must still take the swing"
         );
     }
