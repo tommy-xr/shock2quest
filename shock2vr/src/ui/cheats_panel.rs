@@ -58,6 +58,9 @@ pub enum CheatAction {
     /// Set every AI's alertness. `pin` holds it there instead of letting it
     /// decay, so the level is a floor rather than a nudge.
     Alertness { level: AIAlertLevel, pin: bool },
+    /// Raise every stat, skill and psi tier to its cap, as if bought from the
+    /// trainers. Raises only - it can never undo a character.
+    MaxStats,
 }
 
 /// One entry in the list: the row's label and what clicking it does.
@@ -126,6 +129,12 @@ pub static CHEATS: &[Cheat] = &[
             level: AIAlertLevel::Lowest,
             pin: false,
         },
+    },
+    // Everything the trainers sell, without the modules. Reaching a late-game
+    // character on the Quest otherwise means playing there.
+    Cheat {
+        label: "Max out stats",
+        action: CheatAction::MaxStats,
     },
 ];
 

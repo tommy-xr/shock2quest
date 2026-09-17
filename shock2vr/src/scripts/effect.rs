@@ -790,6 +790,11 @@ pub enum Effect {
         concept: String,
         tags: Vec<(String, String)>,
     },
+    /// Raise every stat, skill and psi tier to its cap (the "Max out stats"
+    /// cheat). Applied through the same provisioning path the debug HTTP API
+    /// uses, so capping, the backpack resize and the health/psi pool refresh
+    /// all behave exactly as a trainer purchase would.
+    MaxPlayerStats,
     KickHeldGun {
         entity_id: EntityId,
         impulse: crate::weapon_recoil::RecoilImpulse,

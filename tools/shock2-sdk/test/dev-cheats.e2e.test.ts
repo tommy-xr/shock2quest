@@ -31,6 +31,7 @@ const RAIN_WEAPONS = row(0);
 const RAIN_MODULES = row(1);
 const HUNT_ME = row(2);
 const CALM_ALL = row(4);
+const MAX_STATS = row(5);
 
 /**
  * Open the Cheats page from a running mission, click one row, close back out
@@ -166,6 +167,40 @@ test(
       await clickCheatAndResume(game, CALM_ALL, alertness),
       calmed,
       '"Calm all" must put it back',
+    );
+
+    // "Max out stats" provisions the sheet through the same path the debug
+    // HTTP API uses, so every stat, skill and the psi tier come back at cap.
+    const before = (await game.info()).player.stats;
+    assert.ok(before, "the player should expose a character sheet");
+    assert.ok(
+      before.strength < 6 || before.skills.hack < 6,
+      "a fresh medsci1 character should not already be maxed",
+    );
+    const after = await clickCheatAndResume(
+      game,
+      MAX_STATS,
+      async () => (await game.info()).player.stats,
+    );
+    assert.ok(after, "the player should still expose a character sheet");
+    for (const [name, value] of [
+      ["strength", after.strength],
+      ["endurance", after.endurance],
+      ["agility", after.agility],
+      ["psionic_ability", after.psionic_ability],
+      ["cyber_affinity", after.cyber_affinity],
+    ] as const) {
+      assert.equal(value, 6, `${name} should be at its cap`);
+    }
+    for (const [name, value] of Object.entries(after.skills)) {
+      assert.equal(value, 6, `skill ${name} should be at its cap`);
+    }
+    assert.equal(after.psi_tier, 5, "psi tier should be at its cap");
+    // Modules are their own cheat - maxing the sheet must not mint currency.
+    assert.equal(
+      after.cyber_modules,
+      before.cyber_modules,
+      "maxing stats must not award cyber modules",
     );
   },
 );

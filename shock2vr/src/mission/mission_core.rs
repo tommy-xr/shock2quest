@@ -11242,6 +11242,20 @@ impl MissionCore {
                         });
                     }
                 }
+                Effect::MaxPlayerStats => {
+                    // Reuse the debug provisioning path rather than writing the
+                    // sheet directly: it caps each field, raises one level at a
+                    // time exactly as a trainer purchase does, resizes the
+                    // backpack and refreshes the health/psi pools. Asking for
+                    // every cap is a raise-only request, so it cannot fail on a
+                    // character that is already stronger.
+                    let request = crate::game_scene::max_stats_request();
+                    if let Err(error) =
+                        crate::game_scene::DebuggableScene::set_player_stats(self, &request)
+                    {
+                        warn!("Max stats cheat could not provision the player: {error}");
+                    }
+                }
                 Effect::SetPositionRotation {
                     entity_id,
                     rotation,
