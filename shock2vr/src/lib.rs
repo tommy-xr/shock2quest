@@ -1807,6 +1807,7 @@ impl Game {
                     CheatAction::Alertness { level, pin } => {
                         Effect::SetAllAIAlertness { level, pin }
                     }
+                    CheatAction::MaxStats => Effect::MaxPlayerStats,
                 };
                 self.apply_scene_effects(vec![effect]);
             }
