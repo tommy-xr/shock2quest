@@ -612,7 +612,7 @@ impl HordeDirector {
         // the view for. The periodic `status` line keeps reporting the wave on
         // the message channel from four seconds in.
         effects.push(Effect::ShowBanner {
-            text: format!("Wave {}\nSurvive the assault", self.wave),
+            text: format!("Wave {}", self.wave),
             duration: WAVE_CARD_DURATION,
         });
         Effect::Multiple(effects)
@@ -942,7 +942,7 @@ mod tests {
             }
         }
         let (text, duration) = banner(director.start_wave(&world)).expect("a wave card");
-        assert_eq!(text, "Wave 3\nSurvive the assault");
+        assert_eq!(text, "Wave 3");
         assert_eq!(duration, WAVE_CARD_DURATION);
     }
 
