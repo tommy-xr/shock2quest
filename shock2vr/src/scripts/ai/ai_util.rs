@@ -14,7 +14,10 @@ use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
 use crate::{
     creature,
-    mission::{GlobalPathfinding, PlayerInfo, entity_creator::CreateEntityOptions},
+    mission::{
+        GlobalPathfinding, PlayerInfo, entity_creator::CreateEntityOptions,
+        mission_core::GlobalTemplateClassTags,
+    },
     pathfinding::MovementHold,
     physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropProxyEntity, RuntimePropTransform},
@@ -645,15 +648,51 @@ pub fn fire_ranged_projectile(
         let projectile_transform =
             projectile_transform_aimed_at_player(world, muzzle_position, muzzle_transform);
 
-        Effect::CreateEntity {
-            template_id: projectile_id,
-            position: point3(0.0, 0.0, 0.0),
-            orientation: Quaternion::from_angle_y(Deg(90.0)),
-            root_transform: projectile_transform,
-            options: CreateEntityOptions::default(),
-        }
+        Effect::combine(vec![
+            Effect::CreateEntity {
+                template_id: projectile_id,
+                position: point3(0.0, 0.0, 0.0),
+                orientation: Quaternion::from_angle_y(Deg(90.0)),
+                root_transform: projectile_transform,
+                options: CreateEntityOptions::default(),
+            },
+            projectile_launch_sound(world, projectile_id, muzzle_position.to_vec()),
+        ])
     } else {
         Effect::NoEffect
+    }
+}
+
+/// The report of an AI's weapon going off.
+///
+/// Dark keys creature fire on `event:launch` plus the *projectile*
+/// archetype's own class tag - `Grunt Shotgun Slug` carries
+/// `enemyammotype ogslug`, which resolves the `fire_og_shotgun` schema - not
+/// on the player's `event:shoot`/`weapontype` query. The projectile entity
+/// does not exist yet at launch, so the tags come from the template map
+/// rather than a live `PropClassTag`.
+fn projectile_launch_sound(
+    world: &World,
+    projectile_template_id: i32,
+    position: Vector3<f32>,
+) -> Effect {
+    let Ok(class_tags) = world.borrow::<UniqueView<GlobalTemplateClassTags>>() else {
+        return Effect::NoEffect;
+    };
+    let Some(tags) = class_tags.0.get(&projectile_template_id) else {
+        return Effect::NoEffect;
+    };
+
+    let mut query = vec![("event", "launch")];
+    query.extend(
+        tags.iter()
+            .map(|(tag, value)| (tag.as_str(), value.as_str())),
+    );
+
+    Effect::PlayEnvironmentalSound {
+        audio_handle: AudioHandle::new(),
+        query: EnvSoundQuery::from_tag_values(query),
+        position,
     }
 }
 
@@ -2204,9 +2243,9 @@ mod muzzle_tests {
                     }],
                 },
             );
-            let Effect::CreateEntity { root_transform, .. } =
-                fire_ranged_projectile(&world, &PhysicsWorld::new(), shooter)
-            else {
+            let Some(Effect::CreateEntity { root_transform, .. }) = created_entity(
+                fire_ranged_projectile(&world, &PhysicsWorld::new(), shooter),
+            ) else {
                 panic!("expected projectile");
             };
             let muzzle = root_transform.transform_point(point3(0.0, 0.0, 0.0));
@@ -2215,6 +2254,86 @@ mod muzzle_tests {
                 "joint {joint}: {muzzle:?}"
             );
         }
+    }
+
+    /// The single `CreateEntity` inside a fire effect, whatever else it is
+    /// combined with.
+    fn created_entity(effect: Effect) -> Option<Effect> {
+        match effect {
+            Effect::CreateEntity { .. } => Some(effect),
+            Effect::Multiple(effects) | Effect::Combined { effects } => {
+                effects.into_iter().find_map(created_entity)
+            }
+            _ => None,
+        }
+    }
+
+    /// The tags of the single `PlayEnvironmentalSound` inside a fire effect.
+    fn sound_query_tags(effect: Effect) -> Option<Vec<(String, String)>> {
+        match effect {
+            Effect::PlayEnvironmentalSound { query, .. } => Some(query.tag_values()),
+            Effect::Multiple(effects) | Effect::Combined { effects } => {
+                effects.into_iter().find_map(sound_query_tags)
+            }
+            _ => None,
+        }
+    }
+
+    /// An AI firing its weapon must be audible: Dark resolves the report from
+    /// `event:launch` plus the projectile archetype's class tag (a shotgun
+    /// hybrid's `enemyammotype ogslug` -> `fire_og_shotgun`).
+    #[test]
+    fn firing_plays_the_projectile_archetype_launch_schema() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 2.0, 10.0),
+            rotation: Quaternion::from_angle_y(Deg(0.0)),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: player,
+        });
+        world.add_unique(GlobalTemplateClassTags(HashMap::from([(
+            -676,
+            HashMap::from([("enemyammotype".to_owned(), "ogslug".to_owned())]),
+        )])));
+        let shooter = world.add_entity((
+            PropCreature(0),
+            PropPosition {
+                position: vec3(0.0, 2.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::from_angle_y(Deg(0.0)),
+            },
+            RuntimePropTransform(Matrix4::from_translation(vec3(0.0, 2.0, 0.0))),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: -676,
+                    to_entity_id: None,
+                    link: Link::AIProjectile(AIProjectileOptions {
+                        targeting_method: AITargetMethod::StraightLine,
+                        delay: 0.0,
+                        should_lead_target: false,
+                        ammo: 0,
+                        accuracy: 0,
+                        select_time: 0.0,
+                        joint: 0,
+                        vhot: 0,
+                    }),
+                }],
+            },
+        ));
+
+        let effect = fire_ranged_projectile(&world, &PhysicsWorld::new(), shooter);
+        let tags = sound_query_tags(effect).expect("fire plays a launch sound");
+        assert!(
+            tags.contains(&("event".to_owned(), "launch".to_owned())),
+            "{tags:?}"
+        );
+        assert!(
+            tags.contains(&("enemyammotype".to_owned(), "ogslug".to_owned())),
+            "{tags:?}"
+        );
     }
 
     /// At ordinary firing range the muzzle keeps its full clearance, so the
