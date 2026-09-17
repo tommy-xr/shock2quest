@@ -1616,11 +1616,6 @@ impl PlayerInteraction for FlatInteraction {
         self.controller.kick(entity, impulse);
     }
 
-    /// The flat viewmodel is braced in both hands, whatever the model shows.
-    fn is_supported(&self, _entity: EntityId) -> bool {
-        true
-    }
-
     fn wield(&mut self, entity_id: EntityId) -> Vec<VirtualHandEffect> {
         self.controller.wield(entity_id)
     }

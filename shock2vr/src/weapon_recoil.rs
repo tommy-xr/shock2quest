@@ -123,13 +123,11 @@ pub fn handling_strength(world: &World) -> i32 {
 /// `flat_recoil_scale` then rescales the whole kick - caps included, unlike
 /// the VR per-axis gains - because the flat kick is purely presentational:
 /// it moves the viewmodel, never the camera or the crosshair the shot follows.
-pub fn flat_impulse(
-    impulse: RecoilImpulse,
-    one_hand: RecoilImpulse,
-    strength: i32,
-) -> RecoilImpulse {
+pub fn flat_impulse(impulse: RecoilImpulse, strength: i32) -> RecoilImpulse {
+    // Supported, so the one-hand argument is never consumed - pass the
+    // baseline rather than advertise a dependency that does not exist.
     scaled_flat(
-        vr_impulses(impulse, one_hand, strength, true).0,
+        vr_impulses(impulse, impulse, strength, true).0,
         crate::dev_params::get(crate::dev_params::FLAT_RECOIL_SCALE),
     )
 }
@@ -142,9 +140,11 @@ pub fn flat_impulse(
 fn scaled_flat(base: RecoilImpulse, scale: f32) -> RecoilImpulse {
     // `f32::MAX` is the "no ceiling" sentinel (heading has none); scaling it
     // would only turn an unlimited axis into a merely enormous one.
+    // Saturate rather than overflow: an infinite cap would fail `kick`'s
+    // finiteness check and silently drop the whole impulse.
     let cap = |limit: f32| {
         if limit.is_finite() && limit < f32::MAX {
-            limit * scale
+            (limit * scale).min(f32::MAX)
         } else {
             limit
         }
@@ -655,6 +655,7 @@ mod tests {
         };
         // Support is assumed, so the one-hand profile never reaches flat.
         let base = scaled_flat(vr_impulses(authored, one_hand, 1, true).0, 1.0);
+        assert_eq!(base.pitch, flat_impulse(authored, 1).pitch);
         assert_eq!((base.pitch, base.heading, base.back), (6.0, 2.0, -0.1));
         for scale in [0.25, 5.0] {
             let scaled = scaled_flat(base, scale);
