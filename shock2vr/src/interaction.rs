@@ -116,6 +116,12 @@ pub trait PlayerInteraction {
         false
     }
 
+    /// Kick a firing weapon's presentation-owned recoil spring. VR kicks the
+    /// held rigid body instead (`PhysicsWorld::kick_held_gun`), so only the
+    /// flat viewmodel implements this.
+    fn kick_viewmodel(&mut self, _entity: EntityId, _impulse: crate::weapon_recoil::RecoilImpulse) {
+    }
+
     /// Primary palm anchor in scaled held-model coordinates, when fitted.
     fn held_grip_anchor(&self, _entity: EntityId) -> Option<Vector3<f32>> {
         None
@@ -1561,6 +1567,7 @@ impl PlayerInteraction for FlatInteraction {
             ctx.player_rotation,
             ctx.head_rotation,
             ctx.eye_height,
+            ctx.step_dt,
             ctx.world,
             ctx.physics,
         );
@@ -1603,6 +1610,15 @@ impl PlayerInteraction for FlatInteraction {
 
     fn holding_hand(&self, entity_id: EntityId) -> Option<Handedness> {
         (self.controller.wielded_entity() == Some(entity_id)).then_some(Handedness::Right)
+    }
+
+    fn kick_viewmodel(&mut self, entity: EntityId, impulse: crate::weapon_recoil::RecoilImpulse) {
+        self.controller.kick(entity, impulse);
+    }
+
+    /// The flat viewmodel is braced in both hands, whatever the model shows.
+    fn is_supported(&self, _entity: EntityId) -> bool {
+        true
     }
 
     fn wield(&mut self, entity_id: EntityId) -> Vec<VirtualHandEffect> {

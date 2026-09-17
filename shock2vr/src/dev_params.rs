@@ -295,6 +295,11 @@ dev_params! {
     /// Additional one-handed recoil only; support already removes this spring.
     /// Applied alongside per-axis gains after Strength, without changing weight.
     GUN_ONE_HAND_SCALE = Recoil::float("gun_one_hand_scale", "1-hand scale", 4.0, 0.0, 10.0, 0.1),
+    /// Flatscreen viewmodel recoil gain, applied after the per-axis gains and
+    /// Strength. The flat gun is a camera-anchored viewmodel rather than a
+    /// tracked object, so the same authored kick reads at a different size on
+    /// screen; this rescales it (caps included) without touching VR.
+    FLAT_RECOIL_SCALE = Recoil::float("flat_recoil_scale", "Flat scale", 1.0, 0.25, 5.0, 0.25),
     /// Ceiling on how fast a physically simulated held melee weapon may be
     /// driven onto its tracked-hand target, in world units per second.
     ///
