@@ -45,21 +45,17 @@ impl ObjConsumeButton {
         receptor: EntityId,
         candidate: EntityId,
     ) -> Effect {
-        let one_shot = receptor_has_final_model(world, receptor);
-        if (one_shot && self.one_shot_phase != OneShotPhase::Idle)
+        if self.one_shot_phase != OneShotPhase::Idle
             || !can_consume_entity(world, receptor, candidate)
         {
             return Effect::NoEffect;
         }
 
-        // The TurnOn/model-change effects apply after this message batch. Latch
-        // immediately so two VR hands cannot provision distinct vials before
-        // the authored final model becomes observable in the ECS. Reusable
-        // consumers without a final model retain their original behavior.
-        if one_shot {
-            self.one_shot_phase = OneShotPhase::PendingDelivery;
-            self.activation_sent = true;
-        }
+        // The item is destroyed before its queued activation is delivered.
+        // Renewable consumers need the same saved delivery latch as one-shot
+        // consumers; otherwise a save in that gap loses a paid replenishment.
+        self.one_shot_phase = OneShotPhase::PendingDelivery;
+        self.activation_sent = true;
         consume(world, receptor, candidate)
     }
 }
@@ -97,7 +93,12 @@ impl Script for ObjConsumeButton {
                 // This acknowledgement is handled in the same batch as every
                 // linked recipient. Persist it separately from the final model
                 // so a mid-animation save does not replay the plot activation.
-                self.one_shot_phase = OneShotPhase::AwaitingFinalModel;
+                self.one_shot_phase = if receptor_has_final_model(world, entity_id) {
+                    OneShotPhase::AwaitingFinalModel
+                } else {
+                    OneShotPhase::Idle
+                };
+                self.activation_sent = false;
                 Effect::NoEffect
             }
             _ => Effect::NoEffect,
@@ -281,9 +282,12 @@ mod tests {
         AfterFinalModel,
     }
 
-    fn round_trip_consumption_at(window: SaveWindow) -> (u32, u32) {
+    fn round_trip_consumption_at(window: SaveWindow, renewable: bool) -> (u32, u32) {
         let mut world = World::new();
         let receptor = one_shot_receptor(&mut world);
+        if renewable {
+            world.delete_component::<(PropTweqModelConfig,)>(receptor);
+        }
         let objective = world.add_entity(());
         world.add_component(
             receptor,
@@ -450,6 +454,23 @@ mod tests {
             &physics,
             &MessagePayload::ProvideForConsumption { entity: first_card },
         )]);
+        assert!(matches!(
+            script.handle_message(
+                receptor,
+                &world,
+                &physics,
+                &MessagePayload::ProvideForConsumption {
+                    entity: second_card
+                }
+            ),
+            Effect::NoEffect
+        ));
+        script.handle_message(
+            receptor,
+            &world,
+            &physics,
+            &MessagePayload::TurnOn { from: receptor },
+        );
         let second = Effect::flatten(vec![script.handle_message(
             receptor,
             &world,
@@ -476,15 +497,17 @@ mod tests {
             SaveWindow::AfterDelivery,
             SaveWindow::AfterFinalModel,
         ] {
-            let (before, after) = round_trip_consumption_at(window);
-            assert_eq!(
-                (before, after),
-                match window {
-                    SaveWindow::BeforeDelivery => (0, 1),
-                    SaveWindow::AfterDelivery | SaveWindow::AfterFinalModel => (1, 0),
-                },
-                "activation count mismatch for {window:?}"
-            );
+            for renewable in [false, true] {
+                let (before, after) = round_trip_consumption_at(window, renewable);
+                assert_eq!(
+                    (before, after),
+                    match window {
+                        SaveWindow::BeforeDelivery => (0, 1),
+                        SaveWindow::AfterDelivery | SaveWindow::AfterFinalModel => (1, 0),
+                    },
+                    "activation count mismatch for {window:?}, renewable={renewable}"
+                );
+            }
         }
     }
 }
