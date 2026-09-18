@@ -465,6 +465,45 @@ For debugging visual/rendering changes without a full interactive session:
    advance via `/v1/step`; physics also advances while free-running because it
    uses its own fixed substep.)
 
+   **Driving the 2D UI headlessly.** Two traps cost a whole verification pass
+   each; neither is a runtime limitation.
+
+   - **A frobbed object panel auto-closes unless the player is standing next to
+     it.** `POST /v1/entities/:id/message '{"type":"Frob"}'` on a keypad,
+     replicator or corpse really does open its panel - and `FlatUiHost` then
+     closes it on the very next frame when the object is further than
+     `PANEL_AUTO_CLOSE_DISTANCE` (4.0 world units, the original's per-overlay
+     `distance` check). So `/v1/ui` reports `active_panel: null` and the frob
+     looks like it did nothing. **Teleport within ~4 units first**, then frob;
+     one `/v1/step` frame is enough:
+
+     ```bash
+     curl -X POST .../v1/player/teleport -d '{"x":-25.2,"y":0.9,"z":-11.4}'
+     curl -X POST .../v1/entities/195/message -d '{"type":"Frob"}'
+     curl -X POST .../v1/step -d '{"frames":1}'      # active_panel is now the keypad
+     ```
+
+   - **`pointer.pressed` is a NUMBER channel, not a boolean.** `{"pointer.pressed":
+     true}` is rejected with `channel 'pointer.pressed' expects a number, got true`
+     in the response body - and since `curl` still exits 0, a script that does not
+     read the body sees a silent no-op and concludes the button is unimplemented.
+     Use `1.0` / `0.0`, and press *and release* to make a click edge. This is how
+     the use-mode utility buttons (`ACCESS`, `MFD`, `RES`, `MAP`, `?`) open the
+     character sheet, research overview and access-card list:
+
+     ```bash
+     curl -X POST .../v1/input/action -d '{"action":"ToggleUseMode"}'
+     # rects come from /v1/ui `utilities`; normalize by the 640x480 canvas
+     curl -X POST .../v1/control/input -d '{"pointer.position":[0.74375,0.9375]}'
+     curl -X POST .../v1/control/input -d '{"pointer.pressed":1.0}'
+     curl -X POST .../v1/step -d '{"frames":2}'
+     curl -X POST .../v1/control/input -d '{"pointer.pressed":0.0}'
+     curl -X POST .../v1/step -d '{"frames":5}'      # character sheet is up
+     ```
+
+   In general: **read the response body of `/v1/control/input`.** It reports
+   per-channel rejections, and every channel is a float.
+
 3. **TypeScript SDK (`tools/shock2-sdk`)** — **preferred for multi-step testing and verification**. A Playwright-style wrapper over the debug runtime HTTP API that handles the full lifecycle: spawning the runtime, waiting for readiness, capturing logs, and automatic shutdown via `await using`. See `tools/shock2-sdk/README.md` for the full API.
 
    ```bash
