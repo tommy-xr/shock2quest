@@ -29,6 +29,10 @@ pub struct Font {
 
 const SPACING: f32 = 1.0;
 
+/// Empty texels reserved around each glyph in the atlas, so linear sampling at
+/// a non-integer scale cannot reach a neighbouring glyph.
+const GLYPH_PADDING: u32 = 1;
+
 #[derive(Debug)]
 struct FontHeader {
     format: u16,
@@ -458,7 +462,10 @@ impl Font {
                     ])
                 });
 
-            let texture_pack_result = texture_packer.pack(&img);
+            // One texel of empty space around every glyph: cells packed flush
+            // together bleed into each other under linear sampling (see
+            // `pack_padded`).
+            let texture_pack_result = texture_packer.pack_padded(&img, GLYPH_PADDING);
             let char_info = CharInfo {
                 width: (width as f32),
                 texture_pack_result,
@@ -467,7 +474,14 @@ impl Font {
             char_to_info.insert(ascii, char_info);
         }
 
-        let textures = texture_packer.generate_textures();
+        // Nearest sampling: a glyph's letter spacing is a single blank texel
+        // column, and blending it with its neighbours at a fractional canvas
+        // scale smears adjacent letters together.
+        let textures = texture_packer.generate_textures_with(&engine::texture::TextureOptions {
+            wrap: false,
+            filter: engine::texture::TextureFilter::Nearest,
+            ..Default::default()
+        });
 
         assert!(textures.len() == 1);
         let texture = textures[0].clone();
@@ -504,13 +518,21 @@ impl engine::Font for Font {
         maybe_info?;
 
         let info = maybe_info.unwrap();
-        let half_pixel = self.get_half_pixel();
-        let min_uv_x = info.texture_pack_result.uv_offset_x;
-        let min_uv_y = info.texture_pack_result.uv_offset_y;
-        let max_uv_x = info.texture_pack_result.uv_offset_x + info.texture_pack_result.uv_width
-            - (half_pixel * 2.0);
-        let max_uv_y = info.texture_pack_result.uv_offset_y + info.texture_pack_result.uv_height
-            - (half_pixel * 2.0);
+        // The cell maps 1:1 onto its quad: the quad is `advance` wide and the
+        // cell IS the advance, bearings included (every glyph's last column is
+        // blank - that is the letter spacing, authored into the font).
+        //
+        // The inset this replaces took a whole texel off `max` while leaving
+        // `min` on the cell boundary, which squeezed the same ink into a
+        // narrower UV range and then stretched it back over the full quad -
+        // so the ink grew into its own bearing and neighbouring letters
+        // touched. `lvl` came out as `M`. Sampling outside the cell is now
+        // harmless anyway: `GLYPH_PADDING` keeps the next glyph a texel away.
+        let result = &info.texture_pack_result;
+        let min_uv_x = result.uv_offset_x;
+        let min_uv_y = result.uv_offset_y;
+        let max_uv_x = result.uv_offset_x + result.uv_width;
+        let max_uv_y = result.uv_offset_y + result.uv_height;
 
         let advance = info.width;
         Some(FontCharacterInfo {
