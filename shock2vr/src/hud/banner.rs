@@ -19,10 +19,13 @@ use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 pub const MAX_LINES: usize = 2;
 
 /// The plate's fixed width, and the vertical padding above and below the text.
-const PLATE_WIDTH: f32 = 172.0;
-const PAD_Y: f32 = 7.0;
-/// One line's box: the bitmap font's native height plus inter-line spacing.
-const LINE_HEIGHT: f32 = 20.0;
+/// Sized for BLUEAA at its native height: the card's longest shipped line,
+/// "Ramsey Recruitment Ctr.", measures ~215 canvas px in that face.
+const PLATE_WIDTH: f32 = 240.0;
+const PAD_Y: f32 = 8.0;
+/// One line's box: the bitmap font's native height (BLUEAA is 20 rows) plus
+/// inter-line spacing.
+const LINE_HEIGHT: f32 = 26.0;
 
 /// Where the plate's center sits on the 640x480 HUD canvas - horizontally
 /// centered, a little below the crosshair, as the original's card is.
@@ -41,9 +44,11 @@ const PLATE_OPACITY: f32 = 0.6;
 /// once here. Either may be zero for an instant cut.
 const FADE_IN: Duration = Duration::from_millis(300);
 const FADE_OUT: Duration = Duration::from_millis(500);
-/// The card's text is the game's own teal MFD face - the colour every other
-/// in-world readout is drawn in, and the one the original's card uses.
-const FONT: &str = crate::ui::MFD_FONT;
+/// The original draws this card in the engine's large overlay face, BLUEAA -
+/// measurably so: in a 25AE capture the card's cap height is 1.35x the PA
+/// subtitle's, and the shipped vector-font table sizes BLUEAA at 16 against
+/// subtitles' 12 (1.33x). MAINAA, at 9, would be 0.75x.
+const FONT: &str = crate::ui::TITLE_FONT;
 
 /// A banner as the HUD draws it this frame.
 #[derive(Clone, Debug, PartialEq)]

@@ -73,6 +73,11 @@ pub const BUILTIN_FONT: &str = "@builtin";
 pub const MFD_FONT: &str = "@shock-mfd";
 /// Bold cyan labels replacing the classic MFD art's baked stat headings.
 pub const MFD_LABEL_FONT: &str = "@shock-mfd-label";
+/// The engine's large overlay face (BLUEAA), for a title card. Its tint is the
+/// colour the 25AE vector-font table assigns BLUEAA (`vector_blueaa.fon`),
+/// which is dimmer and greener than the MFD cyan.
+pub const TITLE_FONT: &str = "@shock-title";
+const TITLE_TINT: [u8; 3] = [1, 194, 147];
 
 /// The font for a `UiElement::Text`, whichever kind it is.
 ///
@@ -81,6 +86,13 @@ pub const MFD_LABEL_FONT: &str = "@shock-mfd-label";
 pub(crate) fn resolve_font(asset_cache: &mut AssetCache, font: &str) -> Rc<Box<dyn engine::Font>> {
     if font == BUILTIN_FONT {
         return engine::shared_builtin_font();
+    }
+    if font == TITLE_FONT {
+        return asset_cache.get_ext(
+            &dark::importers::TINTED_FONT_IMPORTER,
+            "blueaa.fon",
+            &TITLE_TINT,
+        );
     }
     if font == MFD_FONT || font == MFD_LABEL_FONT {
         // Family mounts strip their prefix. The bare key resolves the canonical
