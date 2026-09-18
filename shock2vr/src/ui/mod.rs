@@ -73,11 +73,18 @@ pub const BUILTIN_FONT: &str = "@builtin";
 pub const MFD_FONT: &str = "@shock-mfd";
 /// Bold cyan labels replacing the classic MFD art's baked stat headings.
 pub const MFD_LABEL_FONT: &str = "@shock-mfd-label";
-/// The engine's large overlay face (BLUEAA), for a title card. Its tint is the
-/// colour the 25AE vector-font table assigns BLUEAA (`vector_blueaa.fon`),
-/// which is dimmer and greener than the MFD cyan.
+/// The engine's large overlay face (BLUEAA), for a title card.
 pub const TITLE_FONT: &str = "@shock-title";
+
+/// The tints below are FALLBACKS. An antialiased `.FON` carries its own colour
+/// per texel, as indices into `res/iface/fontpal.pcx`, and the font importer
+/// resolves them - so a tint only applies to a data install missing that
+/// palette. Each is the palette entry its font actually draws in, so the
+/// fallback lands close: BLUEAA's body is index 130 `(0,191,143)` (the colour
+/// 25AE's `vector_blueaa.fon` also declares), and MAINAA tops out at index 209
+/// `(0,255,191)`.
 const TITLE_TINT: [u8; 3] = [1, 194, 147];
+const MFD_TINT: [u8; 3] = [0, 255, 190];
 
 /// The font for a `UiElement::Text`, whichever kind it is.
 ///
@@ -104,7 +111,7 @@ pub(crate) fn resolve_font(asset_cache: &mut AssetCache, font: &str) -> Rc<Box<d
             } else {
                 "mainaa.fon"
             },
-            &[0, 255, 190],
+            &MFD_TINT,
         );
     }
     asset_cache.get(&FONT_IMPORTER, font).clone()
