@@ -93,6 +93,14 @@ where
                 alpha,
                 fit_to_rect,
             },
+            Self::Fill {
+                size, color, alpha, ..
+            } => Self::Fill {
+                position: new_position,
+                size,
+                color,
+                alpha,
+            },
         }
     }
 
@@ -167,6 +175,17 @@ where
                 v,
                 alpha,
                 fit_to_rect,
+            },
+            Self::Fill {
+                position,
+                color,
+                alpha,
+                ..
+            } => Self::Fill {
+                position,
+                size: new_size,
+                color,
+                alpha,
             },
         }
     }
@@ -272,6 +291,17 @@ where
                 alpha,
                 fit_to_rect,
             },
+            Self::Fill {
+                position,
+                size,
+                color,
+                ..
+            } => Self::Fill {
+                position,
+                size,
+                color,
+                alpha,
+            },
         }
     }
 
@@ -355,7 +385,7 @@ where
                 label,
                 kind,
             },
-            Self::Text { .. } => self,
+            Self::Text { .. } | Self::Fill { .. } => self,
         }
     }
     /// Declare this element's art to be Dark object-icon art: keyed on
@@ -557,6 +587,17 @@ where
                 entity,
                 label,
             },
+            Self::Fill {
+                position,
+                size,
+                color,
+                alpha,
+            } => GuiComponent::Fill {
+                position,
+                size,
+                color,
+                alpha,
+            },
         }
     }
 }
@@ -657,6 +698,13 @@ pub enum GuiComponentRenderInfo {
         text: String,
         alpha: f32,
     },
+    /// A flat colour rectangle (see [`UiElement::Fill`]).
+    Fill {
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        color: [u8; 3],
+        alpha: f32,
+    },
 }
 
 impl GuiComponentRenderInfo {
@@ -664,6 +712,7 @@ impl GuiComponentRenderInfo {
         match self {
             Self::Image { position, .. } => *position,
             Self::Text { position, .. } => *position,
+            Self::Fill { position, .. } => *position,
         }
     }
 
@@ -671,6 +720,7 @@ impl GuiComponentRenderInfo {
         match self {
             Self::Image { size, .. } => *size,
             Self::Text { size, .. } => *size,
+            Self::Fill { size, .. } => *size,
         }
     }
 
@@ -729,6 +779,12 @@ impl GuiComponentRenderInfo {
                 v: VAlign::Middle,
                 alpha: *alpha,
                 fit_to_rect: false,
+            },
+            Self::Fill { color, alpha, .. } => UiElement::Fill {
+                position: vec2(rect.x, rect.y),
+                size: vec2(rect.w, rect.h),
+                color: *color,
+                alpha: *alpha,
             },
         }
     }
@@ -862,6 +918,17 @@ where
                     kind: *kind,
                 }
             }
+            GuiComponent::Fill {
+                position,
+                size,
+                color,
+                alpha,
+            } => GuiComponentRenderInfo::Fill {
+                position: vec2(position.x / screen_size.x, position.y / screen_size.y),
+                size: vec2(size.x / screen_size.x, size.y / screen_size.y),
+                color: *color,
+                alpha: *alpha,
+            },
         }
     }
 
@@ -874,6 +941,7 @@ where
             GuiComponent::Text { .. } => None,
             GuiComponent::Image { .. } => None,
             GuiComponent::Bar { .. } => None,
+            GuiComponent::Fill { .. } => None,
             GuiComponent::Button { on_click, .. } => {
                 let is_pressed = !last_input.is_pressed && current_input.is_pressed;
                 let is_grabbed = current_input.is_grabbed;

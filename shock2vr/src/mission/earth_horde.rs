@@ -9,6 +9,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use cgmath::{Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, vec3};
@@ -474,6 +475,10 @@ fn expired_corpses(world: &World) -> Vec<Effect> {
         .collect()
 }
 
+/// How long a wave's opening card stays up. Shorter than the mission's own
+/// title card: it interrupts a fight that is already starting.
+const WAVE_CARD_DURATION: Duration = Duration::from_secs(3);
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 enum Phase {
     #[default]
@@ -602,8 +607,13 @@ impl HordeDirector {
         self.clock = 0.0;
         self.next_spawn = 0.0;
         self.next_status = 4.0;
-        effects.push(Effect::ShowMessage {
-            text: format!("Wave {} - survive the assault", self.wave),
+        // The wave card, on the same centered banner the Earth mission opens
+        // with - a wave boundary is the one moment in a run worth interrupting
+        // the view for. The periodic `status` line keeps reporting the wave on
+        // the message channel from four seconds in.
+        effects.push(Effect::ShowBanner {
+            text: format!("Wave {}", self.wave),
+            duration: WAVE_CARD_DURATION,
         });
         Effect::Multiple(effects)
     }
@@ -913,6 +923,27 @@ mod tests {
                 total: Duration::ZERO,
             },
         )
+    }
+
+    /// Each wave opens with the centered card, not just a status line.
+    #[test]
+    fn a_wave_opens_with_its_own_banner() {
+        let world = World::new();
+        let mut director = HordeDirector {
+            initialized: true,
+            wave: 2,
+            ..Default::default()
+        };
+        fn banner(effect: Effect) -> Option<(String, Duration)> {
+            match effect {
+                Effect::ShowBanner { text, duration } => Some((text, duration)),
+                Effect::Multiple(effects) => effects.into_iter().find_map(banner),
+                _ => None,
+            }
+        }
+        let (text, duration) = banner(director.start_wave(&world)).expect("a wave card");
+        assert_eq!(text, "Wave 3");
+        assert_eq!(duration, WAVE_CARD_DURATION);
     }
 
     #[test]

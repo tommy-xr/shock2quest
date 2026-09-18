@@ -679,6 +679,7 @@ impl FlatUiHost {
                     UiElement::Bar { texture, .. } => ("bar", Some(texture), None),
                     UiElement::Text { text, .. } => ("text", None, Some(text)),
                     UiElement::Button { texture, .. } => ("button", Some(texture), None),
+                    UiElement::Fill { .. } => ("fill", None, None),
                 };
                 let rect = element.rect();
                 crate::game_scene::DebugUiElement {
@@ -1700,6 +1701,7 @@ impl FlatUiHost {
                 GuiComponentRenderInfo::Text { text, .. } => {
                     ("text", None, Some(text.clone()), None, None)
                 }
+                GuiComponentRenderInfo::Fill { .. } => ("fill", None, None, None, None),
             };
             out.push(crate::game_scene::DebugUiElement {
                 kind: kind.to_string(),
@@ -1910,7 +1912,7 @@ fn item_at(
 fn component_entity(info: &GuiComponentRenderInfo) -> Option<EntityId> {
     match info {
         GuiComponentRenderInfo::Image { entity, .. } => *entity,
-        GuiComponentRenderInfo::Text { .. } => None,
+        GuiComponentRenderInfo::Text { .. } | GuiComponentRenderInfo::Fill { .. } => None,
     }
 }
 

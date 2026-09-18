@@ -28,6 +28,7 @@ mod dead_power_cell;
 mod delay_grenade;
 mod destroy_all_by_name;
 mod die_shodan_die;
+pub mod earth_text;
 mod egg_goo_cloud;
 mod energy_station;
 mod energy_weapon;
@@ -131,6 +132,7 @@ use self::choose_mission::ChooseMissionScript;
 use self::choose_service::ChooseServiceScript;
 use self::comestible::Comestible;
 use self::delay_grenade::DelayGrenade;
+use self::earth_text::EarthText;
 /// Preloaded elevator floor labels (from MISC.STR) + current mission, added as
 /// a world unique at mission load so the (`AssetCache`-less) `ElevatorGui` can
 /// read them at draw time.
@@ -1047,8 +1049,9 @@ impl ScriptWorld {
             "teleportpath" => Box::new(NoopScript::new()), // end cutscene!
             "translucebydamage" => Box::new(NoopScript::new()), // end cutscene!
 
+            "earthtext" => Box::new(EarthText::new()),
+
             // TODO: Should these actually be implemented?
-            "earthtext" => Box::new(NoopScript::new()),
             "trapgravity" => Box::new(NoopScript {}), // medsci1 - vent that falls
             "trapmessage" => Box::new(TrapMessage::new()),
             "charmable" => Box::new(NoopScript::new()),

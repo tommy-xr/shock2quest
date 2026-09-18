@@ -370,6 +370,7 @@ impl GuiManager {
                     GuiComponentRenderInfo::Text { text, .. } => {
                         ("text", None, Some(text.clone()), None, None)
                     }
+                    GuiComponentRenderInfo::Fill { .. } => ("fill", None, None, None, None),
                 };
                 crate::game_scene::DebugUiElement {
                     kind: kind.to_owned(),

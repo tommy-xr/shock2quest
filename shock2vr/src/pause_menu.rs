@@ -34,7 +34,7 @@ use crate::{
     input_context::InputContext,
     ui::{
         FrontendCanvasPresenter, FrontendMenu, FrontendMenuItem, HAlign, Rect, ScaleMode, UiCanvas,
-        VAlign, cheats_panel, dev_params_panel, hit_menu_item,
+        VAlign, cheats_panel, dev_params_panel, hit_menu_item, label_lines,
     },
 };
 
@@ -234,15 +234,6 @@ fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
 /// authored as `"    Quit to \nMain Menu"` - a literal backslash-n escape the
 /// string importer passes through verbatim - and the canvas has no multi-line
 /// text element, so the break is resolved here, once, in shared layout.
-fn label_lines(label: &str) -> Vec<&str> {
-    label
-        .split("\\n")
-        .flat_map(|part| part.split('\n'))
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect()
-}
-
 /// The menu entry at a canvas point, if any. Both the click and the hover
 /// highlight go through this, so the two can never disagree about where an
 /// entry is - or about which entries are live at all.

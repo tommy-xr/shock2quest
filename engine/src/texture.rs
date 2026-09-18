@@ -260,3 +260,32 @@ pub fn init2(buffer: &[u8], format: &dyn TextureFormat) -> Texture {
     let raw_texture_data = format.load(buffer);
     init_from_memory(raw_texture_data)
 }
+
+thread_local! {
+    /// Uploaded once per thread, on first use. Needs a live GL context, which
+    /// rules out a `const`/`static` (the `shared_builtin_font` pattern).
+    static WHITE_PIXEL: std::cell::RefCell<Option<Rc<Texture>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A 1x1 opaque white texture, uploaded on first use.
+///
+/// The screen-space and panel materials all multiply a tint by a sampled
+/// texel, so a solid-colour quad is just that tint over this texture - no
+/// second shader, and one shared upload rather than a 1x1 bitmap per caller.
+///
+/// Requires a current GL context.
+pub fn shared_white_pixel() -> Rc<Texture> {
+    WHITE_PIXEL.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        cell.get_or_insert_with(|| {
+            Rc::new(init_from_memory(RawTextureData {
+                bytes: vec![255, 255, 255, 255],
+                width: 1,
+                height: 1,
+                format: texture_format::PixelFormat::RGBA,
+            }))
+        })
+        .clone()
+    })
+}

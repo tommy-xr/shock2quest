@@ -658,6 +658,9 @@ pub struct DebugUiState {
     /// The HUD status-message lines showing right now, oldest first (the
     /// channel `TrapMessage` and friends write to). Empty when none are up.
     pub messages: Vec<String>,
+    /// The interstitial banner showing right now (the centered title card),
+    /// `\n`-separated lines as authored. `None` when none is up.
+    pub banner: Option<String>,
     /// The station security alarm - `Some` exactly while one is up, which is
     /// when the HUD shows its badge and countdown.
     pub security_alarm: Option<DebugSecurityAlarm>,
@@ -1025,6 +1028,7 @@ pub trait DebuggableScene {
             pointer: None,
             panel_pose: None,
             messages: Vec::new(),
+            banner: None,
             security_alarm: None,
         }
     }
