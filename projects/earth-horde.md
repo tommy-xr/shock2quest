@@ -157,3 +157,25 @@ used stations. Skipped waves grant no nanites or cyber modules. Existing
 infestation remains. Jumps require a living player in Earth horde; changing the
 selector alone never rewinds a loaded or running game. The selector resets on
 process restart, while the actual run's wave is saved normally.
+## Combat supplies prototype
+
+Every wave scatters two small supplies among surveyed sites in the player's
+current arena: ammo or psi, plus healing or nanites. Uncollected loose supplies
+expire at the next wave; inventory, held items, and container contents survive.
+
+Twenty combat seconds into each even-numbered wave, a TriOptimum supply cache
+arrives at a random surveyed site in the current arena (three seconds in the
+short diagnostic mode). Its message names the subway, street, or upstairs
+landing. Search it normally for ammunition, healing, psi, and a random nanite/
+cyber-module bonus. Only one unclaimed cache exists at a time; empty caches are
+removed. A pending delivery waits for the previous cache to be looted, and rest
+pauses delivery timers. Cache fill state, contents, timers, and random streams
+persist across save/load.
+
+Four additional spawn sites extend street and subway approaches. New sites were
+checked for ground, headroom, and navigation to their respective arena centers.
+Enemy spawning avoids the previous site whenever another eligible site exists,
+still prefers cover, keeps eight units from the player, and respects the subway/
+street separation. Fresh runs receive fresh random seeds; loaded runs continue
+saved streams. The wave roster, quota, and live-enemy cap remain independently
+controlled by the existing director.
