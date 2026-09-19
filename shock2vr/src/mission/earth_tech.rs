@@ -19,7 +19,7 @@ const BOX: i32 = 57_010;
 const TURRET: i32 = 57_020;
 // Street-only, surveyed floor sites. Flying segments are additionally checked
 // against world geometry; a blocked route never teleports through a wall.
-const SITES: [[f32; 3]; 3] = [[-4.0, 20.0, 28.0], [25.0, 20.0, 28.0], [4.0, 19.8, 24.0]];
+const SITES: [[f32; 3]; 3] = [[-4.0, 20.0, 24.0], [25.0, 20.0, 24.0], [4.0, 19.8, 24.0]];
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 enum Phase {
