@@ -23,11 +23,12 @@ async function hitPoints(game: GameServer, entityId: number): Promise<number> {
   return Number(hp.value);
 }
 
+for (const difficulty of ["easy", "normal", "hard", "impossible"] as const) {
 test(
-  "Immolate burns creatures in its radius and leaves the caster unharmed",
+  `Immolate burns creatures and preserves its caster on ${difficulty}`,
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
-    await using game = await GameServer.launch({ mission: "debug_psi" });
+    await using game = await GameServer.launch({ mission: "debug_psi", difficulty });
 
     // The scene auto-equips the Psi Amp on the first update.
     await game.step({ frames: 10 });
@@ -40,6 +41,7 @@ test(
     // Cast it: 2 psi and the power joins the active list.
     await selectPsiPower(game, "Immolate");
     const startPlayer = (await game.info()).player;
+    assert.equal(startPlayer.difficulty, difficulty);
     await pullTrigger(game);
     await game.step({ frames: 30 });
     let player = (await game.info()).player;
@@ -77,5 +79,10 @@ test(
       "the caster is immune to their own fire (Amplify 0.0)",
     );
     assert.deepEqual(player.active_psi_powers, ["Immolate"], "still burning");
+    await game.player.teleport({ x: 0, y: 2, z: 0 });
+    await game.step({ frames: 55 * 60 });
+    assert.ok(!(await game.info()).player.active_psi_powers.includes("Immolate"), "PSI6 aura expires at55s");
   },
 );
+
+}

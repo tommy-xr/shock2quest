@@ -115,6 +115,8 @@ pub fn tick_immolate_aura(world: &World, elapsed_secs: f32) -> Option<Effect> {
         .ok()?
         .secs_since_pulse -= IMMOLATE_PULSE_INTERVAL_SECS;
     Some(Effect::RadiusStim {
+        source_entity_id: None,
+        linear_falloff: true,
         center,
         radius,
         intensity,
@@ -237,6 +239,7 @@ mod tests {
                         radius: 4.0,
                         intensity: 5.0,
                         stim_template_id: INCENDIARY,
+                        ..
                     } if center == vec3(1.0, 2.0, 3.0)
                 ));
                 pulses += 1;
