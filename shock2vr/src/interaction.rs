@@ -116,6 +116,13 @@ pub trait PlayerInteraction {
         false
     }
 
+    /// Recoil's deflection of the flat fire ray off the camera axis, in
+    /// radians (+x right, +y up) - what the reticle shifts by. VR aims with the
+    /// gun itself and has no crosshair to deflect.
+    fn flat_aim_bias(&self) -> cgmath::Vector2<f32> {
+        cgmath::vec2(0.0, 0.0)
+    }
+
     /// Kick a firing weapon's presentation-owned recoil spring. VR kicks the
     /// held rigid body instead (`PhysicsWorld::kick_held_gun`), so only the
     /// flat viewmodel implements this.
@@ -1626,6 +1633,10 @@ impl PlayerInteraction for FlatInteraction {
 
     fn flat_aim_ray(&self) -> Option<(Point3<f32>, Vector3<f32>)> {
         self.controller.aim_ray()
+    }
+
+    fn flat_aim_bias(&self) -> cgmath::Vector2<f32> {
+        self.controller.aim_bias()
     }
 }
 

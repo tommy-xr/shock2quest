@@ -118,7 +118,7 @@ pub const DEFAULT_FOV_DEG: f32 = 45.0;
 /// means "no override - use `base`"; any positive value forces that FOV
 /// instead. Shared by `Game::desired_fov_deg` and the `App::MissingAssets`
 /// fallback so the override rule lives in exactly one place.
-fn resolve_fov_deg(base: f32) -> f32 {
+pub(crate) fn resolve_fov_deg(base: f32) -> f32 {
     let override_deg = dev_params::get(dev_params::FOV_OVERRIDE_DEG);
     if override_deg > 0.0 {
         override_deg
