@@ -289,12 +289,12 @@ dev_params! {
     /// Per-axis gain for new physical gun recoil impulses (baseline and extra
     /// one-hand spring). 1 preserves the profile; 0 disables new kick on that
     /// axis. Existing displacement caps and recovery rates remain unchanged.
-    GUN_KICKBACK_SCALE = Recoil::float("gun_kickback_scale", "Back scale", 1.0, 0.0, 3.0, 0.1),
-    GUN_PITCH_SCALE = Recoil::float("gun_pitch_scale", "Pitch scale", 1.0, 0.0, 3.0, 0.1),
-    GUN_YAW_SCALE = Recoil::float("gun_yaw_scale", "Yaw scale", 1.0, 0.0, 3.0, 0.1),
+    GUN_KICKBACK_SCALE = Recoil::float("gun_kickback_scale", "Back scale", 4.0, 0.0, 10.0, 0.1),
+    GUN_PITCH_SCALE = Recoil::float("gun_pitch_scale", "Pitch scale", 6.0, 0.0, 10.0, 0.1),
+    GUN_YAW_SCALE = Recoil::float("gun_yaw_scale", "Yaw scale", 5.0, 0.0, 10.0, 0.1),
     /// Additional one-handed recoil only; support already removes this spring.
     /// Applied alongside per-axis gains after Strength, without changing weight.
-    GUN_ONE_HAND_SCALE = Recoil::float("gun_one_hand_scale", "1-hand scale", 1.0, 0.0, 3.0, 0.1),
+    GUN_ONE_HAND_SCALE = Recoil::float("gun_one_hand_scale", "1-hand scale", 4.0, 0.0, 10.0, 0.1),
     /// Ceiling on how fast a physically simulated held melee weapon may be
     /// driven onto its tracked-hand target, in world units per second.
     ///
@@ -340,10 +340,10 @@ dev_params! {
     MELEE_VOLUMES = Combat::bool("melee_volumes", "Melee contact volumes", false),
     /// Visualize shoulder backpack stow zones (cyan; green while reached).
     VR_BACKPACK_ZONES = Interaction::bool("vr_backpack_zones", "Backpack zones", false),
-    VR_BACKPACK_RADIUS = Body::float("vr_backpack_radius", "Backpack reach radius (m)", 0.28, 0.18, 0.35, 0.01),
-    VR_HOLSTER_RADIUS = Body::float("vr_holster_radius", "Holster reach radius (m)", 0.35, 0.14, 0.45, 0.01),
+    VR_BACKPACK_RADIUS = Body::float("vr_backpack_radius", "Backpack reach radius (m)", 0.25, 0.18, 0.5, 0.01),
+    VR_HOLSTER_RADIUS = Body::float("vr_holster_radius", "Holster reach radius (m)", 0.15, 0.14, 0.5, 0.01),
     VR_GLOVE_SPHERES = Interaction::bool("vr_glove_spheres", "Glove contact spheres", false),
-    VR_GLOVE_RADIUS = Body::float("vr_glove_radius", "Glove contact radius (m)", 0.05, 0.02, 0.09, 0.005),
+    VR_GLOVE_RADIUS = Body::float("vr_glove_radius", "Glove contact radius (m)", 0.1, 0.02, 0.1, 0.005),
     VR_AMMO_POUCH_ZONES = Interaction::bool("vr_ammo_pouch_zones", "Ammo pouch zone", false),
     VR_HOLSTER_ZONES = Interaction::bool("vr_holster_zones", "Holster zones", false),
     /// Actual front of the curved belt, including the asset's authored offset.
