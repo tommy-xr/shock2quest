@@ -23,7 +23,7 @@ for (const difficulty of ["easy", "normal", "hard", "impossible"] as const) {
       assert.equal(after.psi_points, before.psi_points! - 5);
       assert.equal(after.max_psi_points, initial.max_psi_points);
       while (after.hit_points! < after.max_hit_points!) {
-        const psi = after.psi_points!;
+        const psi: number = after.psi_points!;
         await pullTrigger(game);
         after = (await game.info()).player;
         assert.equal(after.psi_points, psi - 5);
