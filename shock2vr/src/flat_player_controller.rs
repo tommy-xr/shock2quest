@@ -145,6 +145,7 @@ impl FlatPlayerController {
         self.last_fire_pressed = false;
         // A new gun starts at rest: the outgoing one's kick is not its own.
         self.recoil = crate::weapon_recoil::RecoilState::default();
+        self.last_aim_bias = vec2(0.0, 0.0);
         effects.push(VirtualHandEffect::HoldItem { entity_id });
         effects
     }
@@ -216,6 +217,9 @@ impl FlatPlayerController {
         // hitbox proxies to their parent, and ignoring the weapon we hold).
         let forward = look.rotate_vector(vec3(0.0, 0.0, -1.0));
         self.last_aim = Some((point3(camera_pos.x, camera_pos.y, camera_pos.z), forward));
+        // Melee and empty hands keep this unbent ray, so they must also start
+        // with no bias. Gun recoil below updates the ray and bias together.
+        self.last_aim_bias = vec2(0.0, 0.0);
         let highlighted = physics
             .ray_cast2(
                 point3(camera_pos.x, camera_pos.y, camera_pos.z),
@@ -577,6 +581,43 @@ mod tests {
             (rotation.s.abs() - 1.0).abs() < 1e-5,
             "rotation should have settled"
         );
+    }
+
+    #[test]
+    fn switching_to_melee_clears_the_previous_guns_aim_bias() {
+        let mut world = World::new();
+        let gun = world.add_entity(pistol());
+        let melee = world.add_entity(PropLimbModel("wrench".to_owned()));
+        let physics = PhysicsWorld::new();
+        let mut controller = FlatPlayerController::new();
+        let update = |controller: &mut FlatPlayerController| {
+            controller.update(
+                &Hand::default(),
+                vec3(0.0, 0.0, 0.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                0.0,
+                1.0 / 60.0,
+                &world,
+                &physics,
+            );
+        };
+
+        controller.wield(gun);
+        controller.kick(gun, impulse());
+        update(&mut controller);
+        assert!(
+            controller.aim_bias().y > 0.01,
+            "the gun must actually recoil"
+        );
+
+        controller.wield(melee);
+        assert_eq!(controller.aim_bias(), vec2(0.0, 0.0));
+        for _ in 0..60 {
+            update(&mut controller);
+            assert_eq!(controller.aim_bias(), vec2(0.0, 0.0));
+            assert_eq!(controller.aim_ray().unwrap().1, vec3(0.0, 0.0, -1.0));
+        }
     }
 
     fn impulse() -> crate::weapon_recoil::RecoilImpulse {
