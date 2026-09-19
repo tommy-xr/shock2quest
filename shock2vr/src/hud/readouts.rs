@@ -226,7 +226,7 @@ pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
         super::alarm_panel::emit(canvas, super::alarm_panel::FLAT_ORIGIN, seconds);
     }
     if let Some(hazards) = &readouts.hazards {
-        super::hazards::emit(canvas, super::hazards::SCREEN_ORIGIN, hazards, true);
+        super::hazards::emit(canvas, super::hazards::SCREEN_ORIGIN, hazards);
     }
     emit_bio(
         canvas,

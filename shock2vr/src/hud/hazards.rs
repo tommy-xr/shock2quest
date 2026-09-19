@@ -33,41 +33,22 @@ impl HazardReadout {
     }
 }
 
-pub fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, state: &HazardReadout, always: bool) {
-    emit_layout(canvas, origin, state, always, false);
+pub fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, state: &HazardReadout) {
+    emit_layout(canvas, origin, state, false);
 }
 
-// The wrist groups active hazards above the bio bracelet; flat/cyber retain
-// their authored positions. This is the single named layout conversion at
-// the wrist boundary: both renderers still consume resolved canvas pixels.
-fn emit_layout(
-    canvas: &mut UiCanvas,
-    origin: Vector2<f32>,
-    state: &HazardReadout,
-    always: bool,
-    wrist: bool,
-) {
-    if !always && !state.active() {
+// All presentations stack active hazards from the bottom. The wrist only
+// centers toxin icons and adds a frame at this named layout boundary; both
+// renderers consume the same resolved canvas pixels.
+fn emit_layout(canvas: &mut UiCanvas, origin: Vector2<f32>, state: &HazardReadout, wrist: bool) {
+    if !state.active() {
         return;
     }
     let at = |x, y, w, h| Rect::new(origin.x + x, origin.y + y, w, h);
     // shkHazrd: toxin at (10,345), radiation at (10,379), icon spacing 22.
     let pips = state.toxin.ceil().clamp(0.0, 5.0) as usize;
-    if pips == 0 && always {
-        canvas.text_native(
-            at(0.0, 0.0, 128.0, 32.0),
-            "TOX 0",
-            "mainfont.fon",
-            HAlign::Left,
-            VAlign::Middle,
-        );
-    }
-    let radiation_visible = !wrist || state.exposed || state.radiation > 0.0;
-    let toxin_y = if wrist && !radiation_visible {
-        34.0
-    } else {
-        0.0
-    };
+    let radiation_visible = state.exposed || state.radiation > 0.0;
+    let toxin_y = if radiation_visible { 0.0 } else { 34.0 };
     let overflow = state.toxin > 5.0;
     let toxin_width = if overflow {
         128.0
@@ -135,7 +116,7 @@ fn emit_layout(
 
 pub fn wrist_canvas(state: &HazardReadout) -> UiCanvas {
     let mut canvas = UiCanvas::new(SIZE);
-    emit_layout(&mut canvas, vec2(0.0, 0.0), state, false, true);
+    emit_layout(&mut canvas, vec2(0.0, 0.0), state, true);
     canvas
 }
 
@@ -145,7 +126,30 @@ mod tests {
     use crate::ui::UiElement;
 
     #[test]
-    fn wrist_conversion_centers_active_toxins_and_keeps_flat_authored() {
+    fn clear_hazards_hide_and_exposure_alone_shows_radiation() {
+        let mut canvas = UiCanvas::new(SIZE);
+        emit(&mut canvas, SCREEN_ORIGIN, &HazardReadout::default());
+        assert_eq!(canvas.element_count(), 0);
+        emit(
+            &mut canvas,
+            SCREEN_ORIGIN,
+            &HazardReadout {
+                exposed: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(canvas.element_count(), 3);
+        assert_eq!(
+            canvas.elements()[0].rect(),
+            Rect::new(10.0, 379.0, 128.0, 32.0)
+        );
+        assert!(
+            matches!(&canvas.elements()[1], UiElement::Image { texture, .. } if texture == "radicon.pcx")
+        );
+    }
+
+    #[test]
+    fn active_hazards_stack_from_the_bottom_in_flat_and_wrist_layouts() {
         for (toxin, radiation, x, y) in [
             (1.0, 0.0, 51.5, 34.0),
             (3.0, 0.0, 29.5, 34.0),
@@ -176,17 +180,19 @@ mod tests {
                 radiation > 0.0
             );
             let mut flat = UiCanvas::new(SIZE);
-            emit(&mut flat, vec2(0.0, 0.0), &state, false);
-            assert_eq!(flat.elements()[0].rect(), Rect::new(0.0, 0.0, 25.0, 32.0));
+            emit(&mut flat, vec2(0.0, 0.0), &state);
+            assert_eq!(flat.elements()[0].rect(), Rect::new(0.0, y, 25.0, 32.0));
             let flat_pips = toxin.ceil().min(5.0) as usize;
             assert_eq!(
                 flat.element_count(),
-                flat_pips + usize::from(toxin > 5.0) + 3
+                flat_pips + usize::from(toxin > 5.0) + if radiation > 0.0 { 3 } else { 0 }
             );
-            assert_eq!(
-                flat.elements()[flat.element_count() - 3].rect(),
-                Rect::new(0.0, 34.0, 128.0, 32.0)
-            );
+            if radiation > 0.0 {
+                assert_eq!(
+                    flat.elements()[flat.element_count() - 3].rect(),
+                    Rect::new(0.0, 34.0, 128.0, 32.0)
+                );
+            }
         }
         assert_eq!(wrist_canvas(&HazardReadout::default()).element_count(), 0);
         let radiation_only = wrist_canvas(&HazardReadout {
