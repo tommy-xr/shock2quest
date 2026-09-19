@@ -660,7 +660,7 @@ impl HordeDirector {
     fn status(&self) -> Effect {
         let text = match self.phase {
             Phase::Rest => format!(
-                "Rest: {}s | Supplies: street | Upgrades: upstairs | READY button skips wait",
+                "Rest: {}s | Supplies: street | Trainers: subway | READY button skips wait",
                 self.clock.ceil() as u32
             ),
             Phase::Assault => format!(
