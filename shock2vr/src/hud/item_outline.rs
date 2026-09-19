@@ -7,7 +7,8 @@ use dark::{
     },
     properties::{
         ObjectNameType, ObjectState, PropHUDSelect, PropHitPoints, PropLog, PropMaxHitPoints,
-        PropObjName, PropObjectNameType, PropShowHP, PropStackCount, PropSymName, PropTemplateId,
+        PropObjName, PropObjShortName, PropObjectNameType, PropShowHP, PropStackCount, PropSymName,
+        PropTemplateId,
     },
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
@@ -196,16 +197,51 @@ pub fn resolve_item_name(
     world: &World,
     entity_id: EntityId,
 ) -> Option<String> {
+    resolve_named_item(asset_cache, world, entity_id, false)
+}
+
+/// Query/research name plate: authored short name and substitutions, without
+/// the long rollover's appended working-order suffix (shkprop.cpp).
+pub(crate) fn resolve_item_short_name(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+) -> Option<String> {
+    resolve_named_item(asset_cache, world, entity_id, true)
+}
+
+fn resolve_named_item(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+    short: bool,
+) -> Option<String> {
     // Own property present (even empty) vs. absent entirely - only the
     // latter falls back to SymName, matching the original: an empty
     // P$ObjName resolves to "" (caught by the emptiness check below) rather
     // than borrowing a name from elsewhere.
-    let obj_name = world
+    let mut obj_name = world
         .borrow::<View<PropObjName>>()
         .ok()
         .and_then(|v_prop_obj_name| v_prop_obj_name.get(entity_id).ok().map(|p| p.0.clone()));
 
-    let object_name_strings = asset_cache.get(&STRINGS_IMPORTER, "objname.str");
+    let short_name = short
+        .then(|| {
+            world
+                .borrow::<View<PropObjShortName>>()
+                .ok()
+                .and_then(|v| v.get(entity_id).ok().map(|p| p.0.clone()))
+        })
+        .flatten();
+    let table = if short_name.is_some() {
+        "objshort.str"
+    } else {
+        "objname.str"
+    };
+    if short_name.is_some() {
+        obj_name = short_name;
+    }
+    let object_name_strings = asset_cache.get(&STRINGS_IMPORTER, table);
     let localized_name = match &obj_name {
         Some(obj_name) => resolve_localized_property_string(obj_name, &object_name_strings),
         None => resolve_symname_fallback(world, entity_id, &object_name_strings)?,
@@ -239,6 +275,9 @@ pub fn resolve_item_name(
         log_title.as_deref(),
         weapon_condition.as_deref(),
     );
+    if short {
+        return Some(named);
+    }
     Some(append_object_state(
         named,
         object_state_suffix(asset_cache, world, entity_id).as_deref(),
