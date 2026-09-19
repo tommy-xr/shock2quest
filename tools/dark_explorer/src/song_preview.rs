@@ -347,6 +347,16 @@ mod tests {
             }
             assert_eq!(status.borrow().history.len(), 32);
             assert_eq!(status.borrow().clips_played, 40);
+            // Every authored theme is accepted and retained, including quiet,
+            // quietlo, restart, soft, and song-specific variants.
+            for event in song.all_schemas().into_iter().filter(|s| !s.is_empty()) {
+                player.next_clip(Some(event.clone())).unwrap();
+                player.next_clip(None).unwrap();
+                assert_eq!(
+                    status.borrow().history.back().unwrap().cue.as_ref(),
+                    Some(&event)
+                );
+            }
         }
     }
 }

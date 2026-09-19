@@ -607,7 +607,6 @@ pub struct Game {
     // id_to_physics: HashMap<EntityId, RigidBodyHandle>,
     // scene_objects: Vec<RefCell<SceneObject>>,
     //world: World,
-    last_music_cue: Option<String>,
     last_env_sound: Option<String>,
 
     mission_to_save_data: HashMap<String, EntitySaveData>,
@@ -1422,7 +1421,6 @@ impl Game {
             pending_transition: None,
             preserved_scene_state: None,
             global_context: Arc::new(global_context),
-            last_music_cue: None,
             last_env_sound: None,
             options,
             mission_to_save_data,
@@ -1609,7 +1607,11 @@ impl Game {
 
         let ambient_sounds = if let Some(state) = ambient_state {
             if let Some(cue) = state.music_cue {
-                self.update_music_cue_if_necessary(cue);
+                // Markers contain bare theme names. Re-supply while inside so a
+                // newly loaded song also receives the same theme as the old one.
+                // SongPlayer retains it after the player leaves the marker.
+                self.audio_context
+                    .set_background_music_cue(format!("theme {}", cue.to_ascii_lowercase()));
             }
 
             if let Some(cue_schema) = state.environmental_cue {
@@ -2573,15 +2575,6 @@ impl Game {
         };
         self.active_game_scene
             .finish_render(&mut self.asset_cache, view, projection, screen_size)
-    }
-
-    fn update_music_cue_if_necessary(&mut self, new_cue: String) {
-        if self.last_music_cue.is_none() || !self.last_music_cue.as_ref().unwrap().eq(&new_cue) {
-            info!("updating music cue: {}", new_cue);
-            self.audio_context
-                .set_background_music_cue(new_cue.to_owned());
-            self.last_music_cue = Some(new_cue);
-        }
     }
 
     /// Snapshot real live looping sinks; duration follows rodio's wall clock.
