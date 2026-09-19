@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
-import { ammoOf, fireOnce } from "./helpers/weapon.js";
+import { ammoOf, cycleToWeapon, fireOnce } from "./helpers/weapon.js";
 
 /** What the crosshair is advertising for the wielded weapon: the half-width of
  * the random error square and recoil's deflection, both in radians - the same
@@ -31,6 +31,40 @@ const SHOTGUN = -19;
 const PELLET_BOX = -42;
 /** The bullet-impact marker the shot spawns where it lands. */
 const IMPACT = -3544;
+
+test(
+  "switching from a recoiling gun to melee closes the crosshair immediately",
+  { skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_weapons" });
+    await game.step({ frames: 60 });
+    await game.devParams.set("gun_agility_override", 1);
+    const gun = await cycleToWeapon(game, (e) => e.template_id === -17, {
+      settleFrames: 60,
+    });
+    await game.player.spawnItem(-928); // The carried player wrench.
+    await fireOnce(game);
+    await game.step({ frames: 3 });
+    assert.ok(
+      Math.hypot(...(await reticle(game, gun.id)).bias_radians) > 0.01,
+      "the outgoing gun must have visible recoil bloom",
+    );
+
+    await game.input.trigger("EquipWrench");
+    await game.step({ frames: 1 });
+    const wrench = (await game.info()).player.wielded_entity_id;
+    assert.ok(wrench && wrench !== gun.id, "the wrench must replace the gun");
+    const checkClosed = async () => {
+      const state = await reticle(game, wrench);
+      assert.equal(state.projectile_template, null, "the wielded item is melee");
+      assert.equal(state.spread_radians, 0);
+      assert.deepEqual(state.bias_radians, [0, 0], "melee must not inherit recoil bloom");
+    };
+    await checkClosed();
+    await game.step({ frames: 600 });
+    await checkClosed();
+  },
+);
 
 test(
   "the crosshair advertises the cone the pellets actually fly in",
