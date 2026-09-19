@@ -186,6 +186,11 @@ pub enum AIPropertyUpdate {
 #[derive(Clone, Debug)]
 pub enum Effect {
     NoEffect,
+    /// Cheat: add stored contamination directly, regardless of protection.
+    AddPlayerHazard {
+        toxin: bool,
+        amount: f32,
+    },
     ApplyHazard {
         entity_id: EntityId,
         toxin: bool,

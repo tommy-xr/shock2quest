@@ -204,3 +204,33 @@ test(
     );
   },
 );
+
+test(
+  "exposure cheats accumulate independently and clear both while paused",
+  { skip: !e2eEnabled, timeout: 120_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_minimal" });
+    await game.step({ frames: 1 });
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 2 });
+    await click(game, PAUSE_DEVELOPER);
+    await click(game, DEV_ACTION);
+
+    for (const [index, radiation, toxin] of [
+      [6, 10, 0],
+      [6, 20, 0],
+      [7, 20, 10],
+      [7, 20, 20],
+      [8, 0, 0],
+      [8, 0, 0],
+      [7, 0, 10],
+      [6, 10, 10],
+    ]) {
+      await click(game, row(index));
+      const info = await game.info();
+      assert.equal(info.paused, true);
+      assert.equal(info.player.radiation_level, radiation);
+      assert.equal(info.player.toxin_level, toxin);
+    }
+  },
+);

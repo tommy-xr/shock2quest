@@ -8190,6 +8190,19 @@ impl MissionCore {
         while let Some(effect) = effects.pop_front() {
             let toxin_patch = matches!(&effect, Effect::UseToxinPatch { .. });
             match effect {
+                Effect::AddPlayerHazard { toxin, amount } => {
+                    if let Ok(mut status) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+                    {
+                        let level = if toxin {
+                            status.toxin_level()
+                        } else {
+                            status.level()
+                        };
+                        status.expose(toxin, level + amount);
+                    }
+                }
                 Effect::ApplyHazard {
                     entity_id,
                     toxin,
