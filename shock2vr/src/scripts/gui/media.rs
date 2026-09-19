@@ -13,9 +13,11 @@ use dark::properties::PropLog;
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
+use super::PanelText;
 use crate::gui::{self, Gui, GuiComponent, GuiConfig, GuiCursor};
 use crate::quest_info::QuestInfo;
 use crate::runtime_props::RuntimePropLogData;
+use crate::ui::Rect;
 
 /// Acknowledgement cue played when a disc is collected.
 ///
@@ -51,20 +53,13 @@ const ICON_POS: (f32, f32) = (83.0, 13.0);
 const ICON_SIZE: (f32, f32) = (68.0, 84.0);
 const TEXT_X: f32 = 15.0;
 const TEXT_W: f32 = 136.0;
-/// The header (sender/date) draws at the top of the text rect...
 const HEADER_TOP: f32 = 105.0;
-const HEADER_LINES: usize = 2;
-const LINE_H: f32 = 11.0;
-/// ...and the transcript flows below it: (175 - 2*11) / 11 = 13 lines/page.
-const BODY_TOP: f32 = HEADER_TOP + HEADER_LINES as f32 * LINE_H;
+const TEXT_H: f32 = 175.0;
+#[cfg(test)]
 const PAGE_LINES: usize = 13;
 const SCROLL_X: f32 = 159.0;
 const PGUP_Y: f32 = 174.0;
 const PGDN_Y: f32 = 203.0;
-/// Approx characters per line at the 136px rect width (mainfont is
-/// variable-width; this is a conservative greedy-wrap budget).
-const BODY_WRAP: usize = 26;
-const NAME_WRAP: usize = 26;
 
 /// `PropLog` bitmask fields decode as `trailing_zeros + 1`, so a zero (unset)
 /// mask reads as 33 - the "no entry" sentinel (research gap #3).
@@ -80,8 +75,10 @@ pub struct MediaGuiState {
 
 #[derive(Clone)]
 pub enum MediaGuiMsg {
+    LineUp,
     PageUp,
     PageDown,
+    LineDown,
 }
 
 /// Greedy word-wrap that honors explicit `\n` paragraph breaks. A single word
@@ -165,12 +162,24 @@ fn is_downgrade(world: &World, effect: &Effect) -> bool {
         .unwrap_or(false)
 }
 
-fn transcript_line_count(world: &World, entity_id: EntityId) -> usize {
-    let v = world.borrow::<View<RuntimePropLogData>>().unwrap();
-    v.get(entity_id)
-        .ok()
-        .and_then(|d| d.text.as_ref().map(|t| wrap_text(t, BODY_WRAP).len()))
-        .unwrap_or(0)
+fn transcript_lines(world: &World, entity_id: EntityId) -> Vec<String> {
+    let data = world.borrow::<View<RuntimePropLogData>>().unwrap();
+    let Ok(data) = data.get(entity_id) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    if let Some(name) = data.name.as_ref().filter(|name| !name.is_empty()) {
+        lines.extend(PanelText::wrap(world, name, TEXT_W));
+        lines.push(String::new());
+    }
+    if let Some(text) = &data.text {
+        lines.extend(PanelText::wrap(world, text, TEXT_W));
+    }
+    lines
+}
+
+fn page_lines(world: &World) -> usize {
+    (TEXT_H / PanelText::line_height(world)).floor().max(1.0) as usize
 }
 
 impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
@@ -187,7 +196,8 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
             // "iface/" pins the 188x296 MFD frame from the interface archive.
             gui::image("iface/log.pcx")
                 .with_position(vec2(0.0, 0.0))
-                .with_size(vec2(PANEL_W, PANEL_H)),
+                .with_size(vec2(PANEL_W, PANEL_H))
+                .with_alpha(1.0),
         ];
 
         let v_data = world.borrow::<View<RuntimePropLogData>>().unwrap();
@@ -196,64 +206,52 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
                 components.push(
                     gui::image(portrait)
                         .with_position(vec2(PORTRAIT_POS.0, PORTRAIT_POS.1))
-                        .with_size(vec2(PORTRAIT_SIZE.0, PORTRAIT_SIZE.1)),
+                        .with_size(vec2(PORTRAIT_SIZE.0, PORTRAIT_SIZE.1))
+                        .with_alpha(1.0),
                 );
             }
             if let Some(icon) = &data.icon {
                 components.push(
                     gui::image(icon)
                         .with_position(vec2(ICON_POS.0, ICON_POS.1))
-                        .with_size(vec2(ICON_SIZE.0, ICON_SIZE.1)),
+                        .with_size(vec2(ICON_SIZE.0, ICON_SIZE.1))
+                        .with_alpha(1.0),
                 );
             }
-            if let Some(name) = &data.name {
-                for (idx, line) in wrap_text(name, NAME_WRAP)
-                    .iter()
-                    .take(HEADER_LINES)
-                    .enumerate()
-                {
-                    // Blank lines keep their slot for spacing but must not
-                    // become components - an empty string panics the glyph
-                    // mesh builder (`SceneObject::screen_space_text`).
-                    if line.is_empty() {
-                        continue;
-                    }
-                    components.push(
-                        gui::text(line)
-                            .with_position(vec2(TEXT_X, HEADER_TOP + idx as f32 * LINE_H))
-                            .with_size(vec2(TEXT_W, LINE_H)),
-                    );
-                }
-            }
-            if let Some(text) = &data.text {
-                let lines = wrap_text(text, BODY_WRAP);
-                let start = state.scroll.min(lines.len());
-                for (idx, line) in lines[start..].iter().take(PAGE_LINES).enumerate() {
-                    if line.is_empty() {
-                        continue;
-                    }
-                    components.push(
-                        gui::text(line)
-                            .with_position(vec2(TEXT_X, BODY_TOP + idx as f32 * LINE_H))
-                            .with_size(vec2(TEXT_W, LINE_H)),
-                    );
-                }
+        }
+        drop(v_data);
+        let lines = transcript_lines(world, entity_id);
+        let start = state
+            .scroll
+            .min(lines.len().saturating_sub(page_lines(world)));
+        let height = PanelText::line_height(world);
+        for (index, line) in lines.iter().skip(start).take(page_lines(world)).enumerate() {
+            if !line.is_empty() {
+                components.push(PanelText::text(
+                    line,
+                    Rect::new(TEXT_X, HEADER_TOP + index as f32 * height, TEXT_W, height),
+                ));
             }
         }
 
-        // Scroll column (the original's PGUP/PGDN gadgets at x=159).
-        components.push(
-            gui::button(MediaGuiMsg::PageUp)
-                .with_image("pgup0.pcx")
-                .with_position(vec2(SCROLL_X, PGUP_Y))
-                .with_size(vec2(18.0, 26.0)),
-        );
-        components.push(
-            gui::button(MediaGuiMsg::PageDown)
-                .with_image("pgdn0.pcx")
-                .with_position(vec2(SCROLL_X, PGDN_Y))
-                .with_size(vec2(18.0, 26.0)),
-        );
+        // shkemail.cpp: line and page scrolling have distinct authored gadgets.
+        for (msg, art, label, y, height) in [
+            (MediaGuiMsg::LineUp, "up", "Previous line", 154.0, 17.0),
+            (MediaGuiMsg::PageUp, "pgup", "Previous page", PGUP_Y, 26.0),
+            (MediaGuiMsg::PageDown, "pgdn", "Next page", PGDN_Y, 26.0),
+            (MediaGuiMsg::LineDown, "down", "Next line", 232.0, 17.0),
+        ] {
+            components.push(
+                gui::button(msg)
+                    .with_image(&format!("iface/{art}0.pcx"))
+                    .with_hover(gui::ButtonHoverBehavior::Texture(format!(
+                        "iface/{art}1.pcx"
+                    )))
+                    .with_label(label)
+                    .with_alpha(1.0)
+                    .with_rect(Rect::new(SCROLL_X, y, 18.0, height)),
+            );
+        }
 
         components
     }
@@ -274,10 +272,14 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
     ) -> (MediaGuiState, Effect) {
         // Clamp to the last full page: a transcript that fits on one page never
         // scrolls, and PageDown never lands on a near-empty tail page.
-        let max_scroll = transcript_line_count(world, entity_id).saturating_sub(PAGE_LINES);
+        let max_scroll = transcript_lines(world, entity_id)
+            .len()
+            .saturating_sub(page_lines(world));
         let scroll = match msg {
-            MediaGuiMsg::PageUp => state.scroll.saturating_sub(PAGE_LINES),
-            MediaGuiMsg::PageDown => (state.scroll + PAGE_LINES).min(max_scroll),
+            MediaGuiMsg::LineUp => state.scroll.saturating_sub(1),
+            MediaGuiMsg::PageUp => state.scroll.saturating_sub(page_lines(world)),
+            MediaGuiMsg::PageDown => (state.scroll + page_lines(world)).min(max_scroll),
+            MediaGuiMsg::LineDown => (state.scroll + 1).min(max_scroll),
         };
         (MediaGuiState { scroll }, Effect::NoEffect)
     }

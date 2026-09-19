@@ -36,6 +36,17 @@ pub fn measure_text_width(font: &dyn Font, text: &str, font_size: f32) -> f32 {
 /// Wrap without discarding text, using the same advances as rendering.
 /// Paragraph gaps are retained; an overlong word continues on the next line.
 pub fn wrap_text_to_width(font: &dyn Font, text: &str, font_size: f32, width: f32) -> Vec<String> {
+    wrap_text_with_measure(text, width, |text| {
+        measure_text_width(font, text, font_size)
+    })
+}
+
+/// The same wrapping algorithm for callers holding CPU-only glyph metrics.
+pub fn wrap_text_with_measure(
+    text: &str,
+    width: f32,
+    measure: impl Fn(&str) -> f32,
+) -> Vec<String> {
     let mut lines = Vec::new();
     for paragraph in text.split('\n') {
         let mut line = String::new();
@@ -45,7 +56,7 @@ pub fn wrap_text_to_width(font: &dyn Font, text: &str, font_size: f32, width: f3
             } else {
                 format!("{line} {word}")
             };
-            if measure_text_width(font, &candidate, font_size) <= width {
+            if measure(&candidate) <= width {
                 line = candidate;
                 continue;
             }
@@ -54,7 +65,7 @@ pub fn wrap_text_to_width(font: &dyn Font, text: &str, font_size: f32, width: f3
             }
             for ch in word.chars() {
                 let candidate = format!("{line}{ch}");
-                if !line.is_empty() && measure_text_width(font, &candidate, font_size) > width {
+                if !line.is_empty() && measure(&candidate) > width {
                     lines.push(std::mem::take(&mut line));
                 }
                 line.push(ch);
