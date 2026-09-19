@@ -534,12 +534,13 @@ mod tests {
             let still = shotgun(setting, 1, true, false);
             assert_eq!((still.pitch, still.heading), (0.0, 0.0));
             assert!(shotgun(setting, 1, false, true).pitch < low.pitch);
+            let (baseline, weaker) = vr_impulses(authored, low, 1, false);
             let (_, stronger) = vr_impulses(authored, low, 6, false);
-            assert!(stronger.unwrap().pitch < low.pitch);
+            assert!(stronger.unwrap().pitch < weaker.unwrap().pitch);
             let (supported, extra) = vr_impulses(authored, low, 1, true);
             assert!(extra.is_none());
-            assert_eq!(supported.pitch, authored.pitch);
-            assert_eq!(supported.back, authored.back);
+            assert_eq!(supported.pitch, baseline.pitch);
+            assert_eq!(supported.back, baseline.back);
             let mut spring = RecoilState::default();
             for _ in 0..300 {
                 spring.kick(low);
@@ -563,7 +564,14 @@ mod tests {
         assert_eq!((still.pitch, still.heading), (0.0, 0.0));
         assert_eq!(still.back, authored.back);
         let (base, penalty) = vr_impulses(authored, ar, 1, true);
-        assert_eq!((base.pitch, base.heading, base.back), (3.0, 0.0, -0.1));
+        assert_eq!(
+            (base.pitch, base.heading, base.back),
+            (
+                authored.pitch * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE),
+                0.0,
+                authored.back * crate::dev_params::get(crate::dev_params::GUN_KICKBACK_SCALE),
+            )
+        );
         assert!(penalty.is_none());
         let low = vr_impulses(authored, ar, 1, false).1.unwrap();
         let high = vr_impulses(authored, ar, 6, false).1.unwrap();
@@ -608,11 +616,11 @@ mod tests {
         }
         assert_eq!(
             vr_impulses(authored, authored, 1, true).0.pitch,
-            authored.pitch
+            authored.pitch * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE)
         );
         assert_eq!(
             vr_impulses(authored, authored, -2, true).0.pitch,
-            authored.pitch
+            authored.pitch * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE)
         );
         assert_eq!(
             vr_impulses(authored, authored, 99, true).0.pitch,
