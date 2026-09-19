@@ -167,7 +167,6 @@ pub(crate) fn create_flat_hud(
             &mut canvas,
             super::hazards::SCREEN_ORIGIN,
             &super::hazards::HazardReadout::from_world(world),
-            false,
         );
     }
     if let Some(seconds) = crate::security_alarm::status(world)
