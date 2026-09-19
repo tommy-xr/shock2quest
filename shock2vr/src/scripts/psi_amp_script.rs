@@ -531,6 +531,7 @@ fn cast_self_heal(
             delta: heal,
         },
     ];
+    effects.push(Effect::HealingPulse { amp: amp_entity });
     effects.extend(amp_cast_flashes(world, amp_entity));
 
     game_log!(
