@@ -2715,6 +2715,7 @@ pub struct MissionCore {
     pub id_to_bitmap: HashMap<EntityId, Rc<BitmapAnimation>>,
     pub id_to_physics: HashMap<EntityId, RigidBodyHandle>,
     pub id_to_particle_system: HashMap<EntityId, ParticleSystem>,
+    immolate_flames: Option<ParticleSystem>,
     #[allow(dead_code)]
     pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub template_name_to_template_id: HashMap<String, EntityMetadata>,
@@ -3738,6 +3739,7 @@ impl MissionCore {
             failed_animation_queries: HashMap::new(),
             id_to_bitmap,
             id_to_particle_system: HashMap::new(),
+            immolate_flames: None,
             template_name_to_template_id,
             mission_object_name_to_id,
             rains_landed: 0,
@@ -4274,6 +4276,29 @@ impl MissionCore {
             crate::scripts::immolate::tick_immolate_aura(&self.world, time.elapsed.as_secs_f32())
         {
             effects.push(aura);
+        }
+        // Spell feedback follows the active power, including expiry/death/load.
+        let burning = self
+            .world
+            .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
+            .is_ok_and(|powers| powers.is_active(crate::psi::IMMOLATE_TEMPLATE_ID));
+        if burning {
+            let pos = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
+            let flames = self.immolate_flames.get_or_insert_with(|| {
+                ParticleSystem::new()
+                    .with_num_particles(48)
+                    .with_color(vec3(1.0, 0.24, 0.025))
+                    .with_alpha(0.8)
+                    .with_particle_size(0.35, 0.65)
+                    .with_lifetime(0.35, 0.7)
+                    .with_fade_time(0.35)
+                    .with_launch_time(std::time::Duration::from_secs_f32(0.012))
+                    .with_launch_bounding_box(vec3(-0.65, -1.0, -0.65), vec3(0.65, -0.5, 0.65))
+                    .with_velocity(vec3(-0.15, 1.3, -0.15), vec3(0.15, 2.3, 0.15))
+            });
+            flames.update(time.elapsed, Matrix4::from_translation(pos));
+        } else {
+            self.immolate_flames = None;
         }
         effects.extend(command_effects);
 
@@ -13020,6 +13045,9 @@ impl MissionCore {
                 scene_obj.set_transform(xform);
                 scene.push(scene_obj);
             }
+        }
+        if let Some(flames) = &self.immolate_flames {
+            scene.extend(flames.render());
         }
         // Render particle systems
         if options.render_particles {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { selectPsiPower } from "./helpers/psi.js";
 import { pullTrigger } from "./helpers/weapon.js";
 
 // Localized Pyrokinesis ("Immolate" in the gamesys, tier 2 sustained power):
@@ -14,16 +15,6 @@ import { pullTrigger } from "./helpers/weapon.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const IMMOLATE_COST = 2;
-
-/** Cycle the psi power selection until Immolate is selected (bounded). */
-async function selectImmolate(game: GameServer): Promise<void> {
-  for (let i = 0; i < 40; i++) {
-    if ((await game.info()).player.selected_psi_power === "Immolate") return;
-    await game.input.trigger("CyclePsiPower");
-    await game.step({ frames: 1 });
-  }
-  assert.fail("could not cycle the psi power selection to Immolate");
-}
 
 async function hitPoints(game: GameServer, entityId: number): Promise<number> {
   const detail = await game.entities.detail(entityId);
@@ -47,7 +38,7 @@ test(
     const farStart = await hitPoints(game, far.id);
 
     // Cast it: 2 psi and the power joins the active list.
-    await selectImmolate(game);
+    await selectPsiPower(game, "Immolate");
     const startPlayer = (await game.info()).player;
     await pullTrigger(game);
     await game.step({ frames: 30 });
