@@ -121,6 +121,27 @@ pub fn create_entity_with_position(
         world.add_component(entity_id, InternalPropOriginalModelName(model_name.clone()));
     }
 
+    if let Some(name) = &additional_options.name_override {
+        world.add_component(
+            entity_id,
+            (
+                dark::properties::PropSymName(name.clone()),
+                dark::properties::PropObjName(format!("horde_object: \"{name}\"")),
+            ),
+        );
+    }
+    if let Some(hit_points) = additional_options.hit_points_override {
+        let hit_points = hit_points.max(1);
+        world.add_component(
+            entity_id,
+            (
+                dark::properties::PropHitPoints { hit_points },
+                dark::properties::PropMaxHitPoints {
+                    hit_points: hit_points as u32,
+                },
+            ),
+        );
+    }
     if let Some(ecology_type) = additional_options.ecology_type {
         world.add_component(entity_id, dark::properties::PropEcoType(ecology_type));
     }
@@ -1817,6 +1838,9 @@ pub struct CreateEntityOptions {
     /// Instance-specific appearance, for archetypes whose model is assigned
     /// by a mission rather than the gamesys. Applied before visuals/physics.
     pub model_override: Option<String>,
+    /// Instance labels and durability, installed before scripts/physics initialize.
+    pub name_override: Option<String>,
+    pub hit_points_override: Option<i32>,
     /// Population membership for children of an ecology-owned egg.
     pub ecology_type: Option<i32>,
     /// Bolt the new entity to this parent's transform for its lifetime (see
@@ -1862,6 +1886,8 @@ impl Default for CreateEntityOptions {
         CreateEntityOptions {
             force_visible: false,
             model_override: None,
+            name_override: None,
+            hit_points_override: None,
             ecology_type: None,
             attach_to: None,
             transient_fx: false,
