@@ -13,9 +13,9 @@ import { pullTrigger } from "./helpers/weapon.js";
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-/** SomaDrain's authored data `[10, 5, 5]`: damage / transfer / range. */
-const DAMAGE = 10;
-const TRANSFER = 5;
+/** SomaDrain's authored data `[10, 5, 5]`: base / per-PSI / PSI threshold. */
+const DAMAGE = 15; // PSI 6: 10 + 5 * (6 - 5)
+const TRANSFER = 15;
 const PSI_COST = 5;
 
 async function hitPoints(game: GameServer, entityId: number): Promise<number> {
@@ -26,7 +26,7 @@ async function hitPoints(game: GameServer, entityId: number): Promise<number> {
 }
 
 /** Spawn a hybrid ~4 world units ahead of the player - inside the drain's
- * authored 5-unit range - and return it. */
+ * port 5-unit range - and return it. */
 async function spawnTarget(game: GameServer) {
   const known = new Set(
     (await game.entities.list({ filter: "OG-Pipe", limit: 50 })).entities.map((e) => e.id),
@@ -50,7 +50,7 @@ test(
     await game.step({ frames: 10 });
     const monster = await spawnTarget(game);
     const monsterStartHp = await hitPoints(game, monster.id);
-    assert.ok(monsterStartHp > DAMAGE, "the drain should not kill the target outright");
+    assert.ok(monsterStartHp > 0);
 
     // Hurt the player so the transferred health is observable.
     const playerId = (await game.info()).player.entity_id;
@@ -75,19 +75,19 @@ test(
     assert.equal(player.psi_points, startPsi! - PSI_COST, "a tier 5 cast costs five psi points");
     assert.equal(
       await hitPoints(game, monster.id),
-      monsterStartHp - DAMAGE,
+      Math.max(0, monsterStartHp - DAMAGE),
       "the drained creature loses the authored damage",
     );
     assert.equal(
       player.hit_points,
-      hurtHp! + TRANSFER,
+      hurtHp! + Math.min(TRANSFER, monsterStartHp),
       "the caster gains the transferred health",
     );
   },
 );
 
 test(
-  "a creature beyond the authored range is out of reach",
+  "a creature beyond the interaction range is out of reach",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({ mission: "debug_psi" });
@@ -104,7 +104,7 @@ test(
     await selectPsiPower(game, "SomaDrain");
 
     // The scene faces -X and the hybrid spawned ~4 units that way. Backing up
-    // along +X leaves it dead ahead but past the authored 5-unit reach - the
+    // along +X leaves it dead ahead but past the port 5-unit reach - the
     // case a raycast that ignored the range would silently still drain. Cast
     // immediately: the hybrid aggros on the spawn and closes the gap.
     const start = await game.player.position();

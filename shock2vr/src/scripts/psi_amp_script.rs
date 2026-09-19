@@ -476,7 +476,9 @@ fn cast_instant_power(
         // both restore the caster's health from the same authored data.
         id if is_self_heal_power(id) => cast_self_heal(world, amp_entity, power, effective_psi),
         // Soma Transference: drain the creature under the amp's aim.
-        psi::SOMA_DRAIN_TEMPLATE_ID => cast_soma_drain(world, physics, amp_entity, power),
+        psi::SOMA_DRAIN_TEMPLATE_ID => {
+            cast_soma_drain(world, physics, amp_entity, power, effective_psi)
+        }
         _ => {
             game_log!(
                 INFO,
@@ -554,13 +556,14 @@ fn cast_soma_drain(
     physics: &PhysicsWorld,
     amp_entity: EntityId,
     power: &PsiPowerInfo,
+    effective_psi: i32,
 ) -> Effect {
     let Some(drain) = drain_target(world, physics, amp_entity, power) else {
         game_log!(
             INFO,
             "{} found no living target within {} units of the aim",
             power.name,
-            drain_range(&power.power.data)
+            SOMA_DRAIN_RANGE
         );
         return Effect::NoEffect;
     };
@@ -570,10 +573,16 @@ fn cast_soma_drain(
         return Effect::NoEffect;
     };
 
-    let damage = drain_damage(&power.power.data);
+    let available = world
+        .borrow::<View<dark::properties::PropHitPoints>>()
+        .unwrap()
+        .get(drain.target)
+        .map(|hp| hp.hit_points.max(0))
+        .unwrap_or(0);
+    let damage = drain_damage(&power.power.data, effective_psi).min(available as f32);
     // The applier does not clamp to the maximum, so clamp the transfer to the
     // caster's missing health (a drain at full health still damages).
-    let heal = drain_heal(&power.power.data).min((max_hp - current_hp).max(0));
+    let heal = whole_hit_points(damage).min((max_hp - current_hp).max(0));
 
     let mut effects = vec![
         play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
@@ -605,6 +614,11 @@ fn cast_soma_drain(
             delta: heal,
         });
     }
+    let to = world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
+    effects.push(Effect::PsiDrainVisual {
+        from: drain.hit_point.to_vec(),
+        to,
+    });
     effects.extend(amp_cast_flashes(world, amp_entity));
 
     game_log!(
@@ -630,9 +644,9 @@ fn drain_target(
     world: &World,
     physics: &PhysicsWorld,
     amp_entity: EntityId,
-    power: &PsiPowerInfo,
+    _power: &PsiPowerInfo,
 ) -> Option<DrainTarget> {
-    let range = drain_range(&power.power.data);
+    let range = SOMA_DRAIN_RANGE;
     if range <= 0.0 {
         return None;
     }
@@ -675,7 +689,17 @@ fn is_live_creature(world: &World, entity_id: EntityId) -> bool {
         .borrow::<View<dark::properties::PropAI>>()
         .map(|v_ai| v_ai.get(entity_id).is_ok())
         .unwrap_or(false);
+    let organic = world
+        .borrow::<View<dark::properties::PropMaterial>>()
+        .ok()
+        .and_then(|v| {
+            v.get(entity_id)
+                .ok()
+                .map(|m| m.0.to_ascii_lowercase().contains("flesh"))
+        })
+        .unwrap_or(false);
     has_ai
+        && organic
         && world
             .borrow::<View<dark::properties::PropHitPoints>>()
             .map(|v_hp| v_hp.get(entity_id).is_ok_and(|hp| hp.hit_points > 0))
@@ -716,28 +740,16 @@ fn amp_aim_ray(world: &World, amp_entity: EntityId) -> Option<(Point3<f32>, Vect
     ))
 }
 
-/// The three authored `data` floats of Soma Transference (`[10, 5, 5]`).
-///
-/// Assumption: damage / transferred health / range in world units - the
-/// reading the retail behavior suggests (the target loses more than the caster
-/// gains, over a short reach). Unlike the heals, no term scales with PSI:
-/// three floats leave no base/per-PSI pair once one of them is the range. So
-/// an overload's +2 effective PSI buys this power nothing, which is what its
-/// data authors.
-fn drain_damage(data: &[f32; 4]) -> f32 {
-    positive_or_zero(data[0])
+/// Manual: transfer 10 HP + 5 HP per PSI above 5. All three floats
+/// are the amount curve; none is the aiming range.
+fn drain_damage(data: &[f32; 4], effective_psi: i32) -> f32 {
+    if !data[..3].iter().all(|v| v.is_finite() && *v >= 0.0) {
+        return 0.0;
+    }
+    positive_or_zero(data[0] + data[1] * (effective_psi as f32 - data[2]).max(0.0))
 }
-
-/// Health transferred to the caster, in whole hit points (the caller clamps it
-/// to the caster's missing health).
-fn drain_heal(data: &[f32; 4]) -> i32 {
-    whole_hit_points(data[1])
-}
-
-/// How far the aimed drain reaches, in world units.
-fn drain_range(data: &[f32; 4]) -> f32 {
-    positive_or_zero(data[2])
-}
+/// Port interaction reach, separate from the authored amount curve.
+const SOMA_DRAIN_RANGE: f32 = 5.0;
 
 /// A `data` float as a usable positive quantity; 0 for anything unusable
 /// (NaN, infinite, zero or negative).
@@ -859,18 +871,10 @@ mod tests {
     #[test]
     fn soma_drain_reads_its_authored_data() {
         let data = [10.0, 5.0, 5.0, 0.0];
-        assert_eq!(drain_damage(&data), 10.0);
-        assert_eq!(drain_heal(&data), 5);
-        assert_eq!(drain_range(&data), 5.0);
-    }
-
-    #[test]
-    fn soma_drain_ignores_unusable_data() {
-        let data = [f32::NAN, -3.0, 0.0, 0.0];
-        assert_eq!(drain_damage(&data), 0.0);
-        assert_eq!(drain_heal(&data), 0);
-        // A power with no authored range reaches nothing at all.
-        assert_eq!(drain_range(&data), 0.0);
+        for (psi, amount) in [(1, 10.0), (5, 10.0), (6, 15.0), (8, 25.0), (10, 35.0)] {
+            assert_eq!(drain_damage(&data, psi), amount);
+        }
+        assert_eq!(drain_damage(&[f32::NAN, 5.0, 5.0, 0.0], 6), 0.0);
     }
 
     /// The drain takes only living creatures: an authored corpse prop carries
@@ -880,14 +884,22 @@ mod tests {
         let mut world = World::new();
         let alive = world.add_entity((
             dark::properties::PropAI("Grunt".to_owned()),
+            dark::properties::PropMaterial("Flesh".to_owned()),
             dark::properties::PropHitPoints { hit_points: 12 },
         ));
         let dead = world.add_entity((
             dark::properties::PropAI("Grunt".to_owned()),
+            dark::properties::PropMaterial("Flesh".to_owned()),
             dark::properties::PropHitPoints { hit_points: 0 },
         ));
         let prop = world.add_entity((dark::properties::PropHitPoints { hit_points: 5 },));
 
+        let robot = world.add_entity((
+            dark::properties::PropAI("Robot".into()),
+            dark::properties::PropMaterial("Metal".into()),
+            dark::properties::PropHitPoints { hit_points: 40 },
+        ));
+        assert!(!is_live_creature(&world, robot));
         assert!(is_live_creature(&world, alive));
         assert!(!is_live_creature(&world, dead));
         assert!(!is_live_creature(&world, prop));
