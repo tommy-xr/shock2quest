@@ -118,6 +118,8 @@ test(
       await game.input.set("pointer.pressed", 1);
       await game.step({ frames: 2 });
       await game.input.set("pointer.pressed", 0);
+      // Leave the row to expose transaction feedback; hovering shows its help.
+      await game.input.set("pointer.position", [0.5, 0.5]);
       await game.step({ frames: 2 });
     };
     await clickElement(rowButton("Agility", els));
