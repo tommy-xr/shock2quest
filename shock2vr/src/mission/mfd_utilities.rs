@@ -540,6 +540,13 @@ fn access_card_names(
         .into_iter()
         .filter(|bit| access & (1u32 << bit) != 0)
         .map(|bit| {
+            if let Some(name) = cards
+                .iter()
+                .filter(|key| key.region_id == 1u32 << bit)
+                .find_map(super::earth_horde::access_room_name)
+            {
+                return name.to_owned();
+            }
             strings
                 .get(&format!("access{bit}"))
                 .cloned()

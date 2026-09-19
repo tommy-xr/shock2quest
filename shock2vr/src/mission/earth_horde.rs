@@ -43,6 +43,27 @@ const STATE_KEY: &str = "shock2vr.earth_horde";
 const SEED: u64 = 0x4541525448;
 const FINAL_WAVE: u32 = 10;
 const MAX_ALIVE: usize = 15;
+// Reserved high region bits and lock id keep horde credentials independent of
+// the campaign's authored cards. Each station retains its own used quest bit.
+const ACCESS_WAVES: [u32; 3] = [2, 4, 6];
+const ACCESS_NAMES: [&str; 3] = ["Subway office", "Street office", "Recruitment office"];
+const ACCESS_DOORS: [&[i32]; 3] = [&[564], &[563], &[365, 367]];
+fn room_key(room: usize) -> KeyCard {
+    KeyCard {
+        is_master: false,
+        region_id: 1 << (29 + room),
+        lock_id: 228,
+    }
+}
+pub(super) fn access_room_name(key: &KeyCard) -> Option<&'static str> {
+    (0..3)
+        .find(|&room| {
+            let expected = room_key(room);
+            key.region_id == expected.region_id && key.lock_id == expected.lock_id
+        })
+        .map(|room| ACCESS_NAMES[room])
+}
+
 const WAVE_COUNTS: [u32; 10] = [6, 9, 12, 15, 18, 22, 26, 30, 34, 38];
 // Each unlocked archetype gets a guaranteed slot every wave. Pipe and shotgun
 // open every wave, so neither melee nor ranged pressure depends on RNG.
@@ -202,6 +223,26 @@ impl EntityPopulator for HordePopulation {
             );
         }
 
+        for (room, doors) in ACCESS_DOORS.iter().enumerate() {
+            for id in *doors {
+                let door = population.template_to_entity_id[id].0;
+                world.add_component(
+                    door,
+                    (
+                        PropScripts {
+                            scripts: vec!["StdDoor".into()],
+                            inherits: false,
+                        },
+                        PropKeyDst(room_key(room)),
+                        PropSymName(format!(
+                            "{} — wave {} access",
+                            ACCESS_NAMES[room], ACCESS_WAVES[room]
+                        )),
+                    ),
+                );
+            }
+        }
+
         let mut add = |id: i32, template: i32, name: &str, pos: [f32; 3], yaw: f32| {
             let entity = world.add_entity(());
             entity_creator::initialize_entity_with_props(
@@ -249,41 +290,51 @@ impl EntityPopulator for HordePopulation {
                 0.0,
             ));
         }
-        let supply = add(60_010, -463, "Containment supplies", [2.0, 22.0, 32.5], 0.0);
+        let supply = add(60_010, -463, "Containment supplies", [3.0, 22.0, 32.5], 0.0);
         let specialty = add(
             60_011,
             -463,
             "Containment ammunition",
-            [-0.5, 22.0, 32.5],
+            [20.0, 22.0, 32.5],
             0.0,
         );
-        for (index, (template, name)) in [
-            (-581, "Stats Trainer"),
-            (-1436, "Tech Trainer"),
-            (-1437, "Weapon Trainer"),
-            (-1583, "Psi Trainer"),
+        for (index, (template, name, position, yaw)) in [
+            (-581, "Stats Trainer", [-11.2, 2.8, 4.0], -90.0),
+            (-1436, "Tech Trainer", [32.8, 2.8, 4.0], 90.0),
+            (-1437, "Weapon Trainer", [-2.0, 2.8, 12.4], 0.0),
+            (-1583, "Psi Trainer", [24.0, 2.8, 12.4], 0.0),
         ]
         .iter()
         .enumerate()
         {
+            add(60_020 + index as i32, *template, name, *position, *yaw);
+        }
+        for (room, (position, yaw)) in [
+            ([-7.0, 3.0, -7.2], 180.0),
+            ([46.0, 22.0, 11.6], 180.0),
+            ([27.2, 24.4, 64.8], 90.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             add(
-                60_020 + index as i32,
-                *template,
-                name,
-                [8.2, 24.0, [44.0, 46.0, 55.0, 57.0][index]],
-                -90.0,
+                60_300 + room as i32,
+                -2307,
+                &format!("{} OS upgrade", ACCESS_NAMES[room]),
+                position,
+                yaw,
             );
         }
         let outlets = [
             (
                 supply,
                 60_030,
-                add(60_030, -327, "Supply outlet", [2.0, 21.0, 31.5], 0.0),
+                add(60_030, -327, "Supply outlet", [3.0, 21.0, 31.5], 0.0),
             ),
             (
                 specialty,
                 60_031,
-                add(60_031, -327, "Ammunition outlet", [-0.5, 21.0, 31.5], 0.0),
+                add(60_031, -327, "Ammunition outlet", [20.0, 21.0, 31.5], 0.0),
             ),
         ];
         let containment = super::earth_containment::populate(&mut add);
@@ -409,8 +460,12 @@ pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
         research.advance(-1341, 0.0, 1, 1.0, 0.0, None, 0);
     }
     crate::difficulty::refresh_player_pools(&core.world, true);
-    core.teleport_player(vec3(11.6, 21.2, 24.0))
+    core.teleport_player(vec3(11.6, 23.36, 42.0))
         .expect("surveyed Earth horde start");
+    core.world
+        .borrow::<UniqueViewMut<PlayerInfo>>()
+        .unwrap()
+        .rotation = Quaternion::from_angle_y(Deg(0.0));
     for template in [-928, -17, -247, -1358, -1358, -52, -57, -57] {
         core.spawn_into_backpack(assets, template)
             .expect("horde starter item fits backpack");
@@ -685,7 +740,7 @@ impl HordeDirector {
         };
         self.clock = self.rest_seconds();
         self.next_status = 5.0;
-        Effect::Multiple(vec![
+        let mut effects = vec![
             self.music(),
             Effect::AwardNanites {
                 amount: 30 + self.wave.min(20) as i32 * 5,
@@ -701,7 +756,19 @@ impl HordeDirector {
                     8 + self.wave.min(20) * 2
                 ),
             },
-        ])
+        ];
+        if let Some(room) = ACCESS_WAVES.iter().position(|wave| *wave == self.wave) {
+            effects.push(Effect::AcquireKeyCard {
+                key_card: room_key(room),
+            });
+            effects.push(Effect::ShowMessage {
+                text: format!(
+                    "{} access card received. One free OS upgrade inside.",
+                    ACCESS_NAMES[room]
+                ),
+            });
+        }
+        Effect::Multiple(effects)
     }
     /// Roll this kill's drop into the corpse's own loot container, so it is
     /// searched like any authored creature's loot (and expires with the corpse,
@@ -811,7 +878,7 @@ impl Script for HordeDirector {
             }
             self.clock = self.rest_seconds();
             self.next_status = 5.0;
-            effects.push(Effect::ShowMessage { text: "EARTH: CONTAINMENT | Pistol + psi amp in inventory | Shops ahead, trainers upstairs".into() });
+            effects.push(Effect::ShowMessage { text: "EARTH: CONTAINMENT | Pistol + psi amp in inventory | Trainers in subway; shops on street; office cards after waves 2/4/6".into() });
         }
         if !self.music_synced {
             effects.push(self.music());
@@ -997,6 +1064,34 @@ mod tests {
         let (text, duration) = banner(director.start_wave(&world)).expect("a wave card");
         assert_eq!(text, "Wave 3");
         assert_eq!(duration, WAVE_CARD_DURATION);
+    }
+
+    #[test]
+    fn office_cards_are_awarded_at_milestones_and_unlock_only_their_room() {
+        for wave in 1..=10 {
+            let mut director = HordeDirector {
+                wave,
+                ..Default::default()
+            };
+            let Effect::Multiple(effects) = director.clear_wave() else {
+                panic!()
+            };
+            let cards: Vec<_> = effects
+                .iter()
+                .filter_map(|effect| match effect {
+                    Effect::AcquireKeyCard { key_card } => Some(key_card),
+                    _ => None,
+                })
+                .collect();
+            let expected = ACCESS_WAVES.iter().position(|milestone| *milestone == wave);
+            assert_eq!(cards.len(), usize::from(expected.is_some()));
+            if let Some(room) = expected {
+                assert_eq!(access_room_name(cards[0]), Some(ACCESS_NAMES[room]));
+                for other in 0..3 {
+                    assert_eq!(cards[0].can_unlock(&room_key(other)), room == other);
+                }
+            }
+        }
     }
 
     #[test]
