@@ -106,7 +106,7 @@ mod tweq_depressable;
 mod tweqable;
 mod use_sound;
 mod vaporize_inventory;
-mod weapon_script;
+pub(crate) mod weapon_script;
 use std::{
     collections::{HashMap, HashSet},
     fmt,

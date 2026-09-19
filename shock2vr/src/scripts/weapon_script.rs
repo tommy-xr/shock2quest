@@ -186,7 +186,7 @@ fn weapon_skill_level(world: &World, entity_id: EntityId) -> i32 {
 /// Dark CalcRandAngle: authored error per missing weapon-skill level. Stock
 /// SKILLPARAM sets this to zero. Strength and Sharpshooter do not enter this
 /// calculation (Sharpshooter is a stimulus multiplier in the original).
-fn weapon_inaccuracy(world: &World, entity_id: EntityId) -> u16 {
+pub(crate) fn weapon_inaccuracy(world: &World, entity_id: EntityId) -> u16 {
     let per_level = world
         .borrow::<UniqueView<GlobalSkillParams>>()
         .ok()

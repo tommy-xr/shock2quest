@@ -12532,6 +12532,12 @@ impl MissionCore {
                 self.use_mode,
                 &messages,
                 banner.as_ref(),
+                crate::hud::reticle::from_world(
+                    &self.world,
+                    self.interaction.viewmodel_entity(),
+                    self.interaction.flat_aim_bias(),
+                ),
+                crate::resolve_fov_deg(crate::DEFAULT_FOV_DEG),
             ));
 
             // `show_position` readout (flat). VR presents the same canvas on a
@@ -14998,6 +15004,28 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             },
         );
 
+        // What the crosshair is advertising for this weapon, in radians: the
+        // half-width of the random error square and recoil's deflection. Lets a
+        // test compare the reticle against the shots it promises (the reticle
+        // is drawn from these same numbers).
+        let reticle = self
+            .interaction
+            .viewmodel_entity()
+            .filter(|w| *w == id)
+            .map(|_| {
+                let state = crate::hud::reticle::from_world(
+                    &self.world,
+                    Some(id),
+                    self.interaction.flat_aim_bias(),
+                );
+                serde_json::json!({
+                    "spread_radians": state.spread,
+                    "bias_radians": [state.bias.x, state.bias.y],
+                    "projectile_template": crate::hud::reticle::selected_projectile(&self.world, id),
+                })
+                .to_string()
+            });
+
         // The flat crosshair fire ray this weapon actually shoots along -
         // which recoil bends away from the camera forward. The only headless
         // view of where a flat shot is going (`WeaponMuzzle` is the gun's own
@@ -15246,6 +15274,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "FlatAim".to_string(),
                         value: aim,
+                    });
+                }
+                if let Some(reticle) = reticle {
+                    properties.push(DebugPropertyInfo {
+                        name: "Reticle".to_string(),
+                        value: reticle,
                     });
                 }
 
