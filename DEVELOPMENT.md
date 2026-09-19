@@ -295,6 +295,12 @@ and replicator prices, mission object masks, and Easy ecology and hypo bonuses.
 
 ### Developer options
 
+While a mission is running, **Pause → Developer → Cheats** includes
+**Add radiation (+10)**, **Add toxin (+10)**, and **Clear radiation + toxin**.
+Repeated clicks add another 10 points, even with protective equipment equipped.
+Clear resets both stored exposure levels to zero; environmental hazards can
+expose you again after resuming. These cheats work in flatscreen and VR.
+
 The **Developer** screen (from the main menu, or the pause overlay's Developer
 page) hosts the live-tunable parameters registered in
 `shock2vr/src/dev_params.rs` - panel distance, pause dim, FOV override, and the

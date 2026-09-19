@@ -1808,8 +1808,16 @@ impl Game {
                         Effect::SetAllAIAlertness { level, pin }
                     }
                     CheatAction::MaxStats => Effect::MaxPlayerStats,
+                    CheatAction::AddRadiation | CheatAction::AddToxin => Effect::AddPlayerHazard {
+                        toxin: action == CheatAction::AddToxin,
+                        amount: 10.0,
+                    },
+                    CheatAction::ClearExposure => Effect::Multiple(vec![
+                        Effect::ClearHazard { toxin: false },
+                        Effect::ClearHazard { toxin: true },
+                    ]),
                 };
-                self.apply_scene_effects(vec![effect]);
+                self.apply_scene_effects(Effect::flatten(vec![effect]));
             }
             None => {}
         }

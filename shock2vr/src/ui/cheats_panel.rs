@@ -59,10 +59,18 @@ pub enum CheatAction {
     Rain(&'static [i32]),
     /// Set every AI's alertness. `pin` holds it there instead of letting it
     /// decay, so the level is a floor rather than a nudge.
-    Alertness { level: AIAlertLevel, pin: bool },
+    Alertness {
+        level: AIAlertLevel,
+        pin: bool,
+    },
     /// Raise every stat, skill and psi tier to its cap, as if bought from the
     /// trainers. Raises only - it can never undo a character.
     MaxStats,
+    /// Add ten points of contamination, bypassing protective equipment.
+    AddRadiation,
+    AddToxin,
+    /// Clear accumulated contamination without disabling environmental sources.
+    ClearExposure,
 }
 
 /// One entry in the list: the row's label and what clicking it does.
@@ -137,6 +145,18 @@ pub static CHEATS: &[Cheat] = &[
     Cheat {
         label: "Max out stats",
         action: CheatAction::MaxStats,
+    },
+    Cheat {
+        label: "Add radiation (+10)",
+        action: CheatAction::AddRadiation,
+    },
+    Cheat {
+        label: "Add toxin (+10)",
+        action: CheatAction::AddToxin,
+    },
+    Cheat {
+        label: "Clear radiation + toxin",
+        action: CheatAction::ClearExposure,
     },
 ];
 
