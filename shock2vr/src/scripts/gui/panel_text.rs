@@ -24,16 +24,18 @@ impl PanelText {
             })
             .collect();
         let height = font.base_height();
-        let strings = ["misc", "stathelp", "skilhelp", "research"]
-            .into_iter()
-            .map(|name| {
-                let table = assets
-                    .get_opt(&dark::importers::STRINGS_IMPORTER, &format!("{name}.str"))
-                    .map(|table| (*table).clone())
-                    .unwrap_or_default();
-                (name.to_owned(), table)
-            })
-            .collect();
+        let strings = [
+            "misc", "stathelp", "skilhelp", "research", "rsrchtxt", "objshort",
+        ]
+        .into_iter()
+        .map(|name| {
+            let table = assets
+                .get_opt(&dark::importers::STRINGS_IMPORTER, &format!("{name}.str"))
+                .map(|table| (*table).clone())
+                .unwrap_or_default();
+            (name.to_owned(), table)
+        })
+        .collect();
         Self {
             advances,
             height,
@@ -70,7 +72,7 @@ impl PanelText {
     pub fn line_height(world: &World) -> f32 {
         world
             .borrow::<UniqueView<Self>>()
-            .map(|m| m.height.max(13.0))
+            .map(|m| m.height.max(1.0))
             .unwrap_or(13.0)
     }
 
@@ -89,17 +91,30 @@ impl PanelText {
     }
 
     pub fn paragraph<T: Clone>(world: &World, text: &str, rect: Rect) -> Vec<GuiComponent<T>> {
-        let height = Self::line_height(world);
-        Self::wrap(world, text, rect.w)
+        let native = Self::line_height(world);
+        let mut scale = 1.0;
+        let mut lines = Self::wrap(world, text, rect.w);
+        // Remaster descriptions can be longer than their original help well.
+        // Fit the whole paragraph in shared layout rather than losing its tail.
+        while lines.len() as f32 * native * scale > rect.h && scale > 0.65 {
+            scale -= 0.05;
+            lines = Self::wrap(world, text, rect.w / scale);
+        }
+        let height = native * scale;
+        lines
             .iter()
             .take((rect.h / height) as usize)
             .enumerate()
             .filter(|(_, line)| !line.is_empty())
             .map(|(i, line)| {
-                Self::text(
+                let mut component = Self::text(
                     line,
                     Rect::new(rect.x, rect.y + i as f32 * height, rect.w, height),
-                )
+                );
+                if let GuiComponent::Text { font_size, .. } = &mut component {
+                    *font_size = height;
+                }
+                component
             })
             .collect()
     }
@@ -108,6 +123,28 @@ impl PanelText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_help_fits_without_losing_the_last_words() {
+        let world = World::new();
+        world.add_unique(PanelText {
+            advances: HashMap::from([('W', 12.0), (' ', 3.0)]),
+            height: 12.0,
+            strings: HashMap::new(),
+        });
+        let components: Vec<GuiComponent<()>> =
+            PanelText::paragraph(&world, "WW WW WW WW WW", Rect::new(0.0, 0.0, 60.0, 24.0));
+        let text = components
+            .iter()
+            .filter_map(|e| match e {
+                GuiComponent::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(text, "WW WW WW WW WW");
+        assert!(components.iter().all(|e| e.rect().y + e.rect().h <= 24.0));
+    }
 
     #[test]
     fn wrapping_uses_glyph_widths_and_keeps_long_words_and_paragraphs() {

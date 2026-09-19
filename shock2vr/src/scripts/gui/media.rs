@@ -169,11 +169,11 @@ fn transcript_lines(world: &World, entity_id: EntityId) -> Vec<String> {
     };
     let mut lines = Vec::new();
     if let Some(name) = data.name.as_ref().filter(|name| !name.is_empty()) {
-        lines.extend(PanelText::wrap(world, name, TEXT_W));
+        lines.extend(PanelText::wrap(world, name.trim(), TEXT_W));
         lines.push(String::new());
     }
     if let Some(text) = &data.text {
-        lines.extend(PanelText::wrap(world, text, TEXT_W));
+        lines.extend(PanelText::wrap(world, text.trim(), TEXT_W));
     }
     lines
 }
