@@ -842,6 +842,7 @@ impl Script for HordeDirector {
             dt,
             self.phase == Phase::Assault,
             self.quick,
+            self.wave,
         ));
         match self.phase {
             Phase::Rest => {

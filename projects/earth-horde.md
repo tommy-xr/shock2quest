@@ -53,16 +53,18 @@ They begin with 180, 210, and 240 seconds of protection respectively. Protection
 counts combat time only: preparation, rest, and the completed-run screen do not
 spend it. A warning appears with 30 seconds remaining.
 
-When protection expires, overlapping Hydro growth spreads outward from shop and
+Growth and new pods are gated until wave 4, even if the opening waves take a long
+time. Protection still counts down during those waves. Once the wave gate is
+open and protection expires, overlapping Hydro growth spreads outward from shop and
 trainer approaches onto nearby floors and walls, then farther along travel routes.
 There are 339 surveyed patches: 110 in the subway, 155 on the street, and 74
 upstairs. Sites were checked against world geometry and reachable arena paths;
 locked training rooms are excluded. Growth is cosmetic and does not prevent
 using the machines. Wall eggs remain a follow-up.
 
-Density reaches its maximum after 90 unprotected combat seconds. At 60 seconds,
+Density reaches its maximum after 180 eligible unprotected combat seconds. At 120 seconds,
 the zone can produce a GrubEgg every 45 combat seconds, up to four pods. At
-75 seconds the cap rises to six and the interval drops to 30 seconds; at maximum
+150 seconds the cap rises to six and the interval drops to 30 seconds; at maximum
 density it reaches eight pods with a 15-second interval. Each new spawn uses the
 current interval; an already running countdown completes normally. Eight floor
 sites per zone prioritize services before extending along routes. Approaching within four world units hatches an existing pod even during
@@ -85,8 +87,34 @@ Hatching reserves available capacity within each batch. Open shells expire after
 30 seconds; dead containment creatures join the existing end-of-rest corpse
 cleanup. Saved runs retain each zone's protection, density, egg cadence, and
 shell lifetime. The short `earth_horde_test` alias accelerates depletion, growth,
-and egg production tenfold for diagnostics, while keeping recovery/hatching rules.
+and egg production tenfold and bypasses the wave gate for diagnostics, while
+keeping recovery/hatching rules.
 
 The first pass deliberately uses floor GrubEggs. Wall-mounted growth reuses the
 Hydro meshes with wall-facing transforms; wall eggs and additional payloads can
 follow once pacing has been playtested.
+
+## Pacing prototype controls
+
+Open **Developer → Earth horde** in the pause menu or main menu. Both controls
+apply live through the existing shared flat/VR developer menu and debug API:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `horde_growth_wave` | 4 | First wave allowing growth and new pods (1–20). Protection still drains in earlier combat. |
+| `horde_growth_seconds` | 180 | Unprotected combat seconds from bare to maximum growth (30–600). Larger is slower. |
+
+Set these to `1` and `90` to compare the previous containment pacing. Increasing
+the first-wave setting mid-run pauses new growth/pods below that wave; it does
+not remove existing growth, pods, or grubs. Growth speed changes apply to remaining
+growth immediately; Toxin-A recovery and egg cadence retain their existing speeds.
+The diagnostic alias ignores only the wave gate, not the growth speed setting.
+
+These are developer overrides: they reset when the application restarts and are
+not stored in saves. Saved protection, density, and egg timers still resume; the
+current process's tuning controls their subsequent progression.
+
+Horde pressure is separate from campaign difficulty. Campaign difficulty feeds
+player health/psi pools and authored shop/training costs and loot; the director's
+wave roster, quotas, living-enemy cap, and assault schedule are fixed independently.
+A debug run accepts `--difficulty easy|normal|hard|impossible` at launch.
