@@ -105,6 +105,26 @@ Example:
 cargo run --release -p desktop_runtime -- --vr --experimental physical_held_items
 ```
 
+### Song explorer
+
+Open `cargo dx ui --select song/engsong.snc` (or select a `.snc` in the
+explorer's song family or Archives tab). **Play song** sends the authored start
+event; **Stop** cuts off the current WAV immediately. Event buttons queue the
+latest event for the next clip boundary. Send the start event again when a theme
+returns to its silent section.
+
+The view lists section WAVs, event branches and normalized branch probabilities.
+Green marks the playing section; blue marks the branch the player actually took.
+Recent transitions show the requested event, matched/default option and selected
+weight. **Audition WAV** stops the song and plays that sample alone. Changing
+assets or tabs stops playback.
+
+For native-window capture, `--play-song --screenshot /tmp/song.png
+--screenshot-after 1` starts the selected song and captures after one second.
+Playback uses the audio device clock; these captures are not fixed-timestep.
+The installed-asset regression can be run with
+`cargo test -p dark_explorer mounted_songs -- --ignored`.
+
 ### Debug & developer keys
 
 Player-facing controls are listed in [README.md](README.md#controls). The keys

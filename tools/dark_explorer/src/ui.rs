@@ -35,6 +35,8 @@ pub struct UiOptions {
     pub grip_view: String,
     pub grip_library: Option<PathBuf>,
     pub screenshot: Option<PathBuf>,
+    pub play_song: bool,
+    pub screenshot_after: f32,
     pub select: Option<String>,
     pub search: Option<String>,
     /// Open the Files tab in grid (thumbnail) view.
@@ -163,6 +165,7 @@ enum PreviewKind {
         bytes: Vec<u8>,
         duration: Option<std::time::Duration>,
     },
+    Song(crate::song_preview::SongPreview),
     Text(String),
     /// A `.bin` 3D model, rendered by `ModelPreview` from the mount key (which
     /// is not the raw archive entry name an Archives-tab selection shows).
@@ -279,6 +282,7 @@ pub struct ExplorerApp {
     model_preview: Option<ModelPreview>,
     /// Initial overlay toggles for the model preview (from the CLI).
     initial_overlays: (bool, bool, bool),
+    screenshot_not_before: std::time::Instant,
     frames_rendered: u32,
     /// Whether the screenshot viewport command was already sent (grid mode
     /// delays it until the visible thumbnails have decoded).
@@ -377,6 +381,7 @@ impl ExplorerApp {
             screenshot: options.screenshot,
             model_preview: None,
             initial_overlays: (options.skeletons, options.hitboxes, options.articulation),
+            screenshot_not_before: std::time::Instant::now(),
             frames_rendered: 0,
             screenshot_sent: false,
             scroll_frames: 0,
@@ -476,6 +481,23 @@ impl ExplorerApp {
                 }
             }
         }
+        if options.play_song {
+            match app.preview.as_mut().map(|p| &mut p.kind) {
+                Some(PreviewKind::Song(song)) => song.play(),
+                _ => {
+                    eprintln!("--play-song needs a selected .snc file");
+                    std::process::exit(2);
+                }
+            }
+        }
+        if !options.screenshot_after.is_finite()
+            || !(0.0..=300.0).contains(&options.screenshot_after)
+        {
+            eprintln!("--screenshot-after must be between 0 and 300 seconds");
+            std::process::exit(2);
+        }
+        app.screenshot_not_before = std::time::Instant::now()
+            + std::time::Duration::from_secs_f32(options.screenshot_after);
         app
     }
 
@@ -513,7 +535,15 @@ impl ExplorerApp {
             .or_insert_with(|| LoadedFamily::load(name))
     }
 
+    fn stop_wav(&mut self) {
+        if let (Some(audio), Some(handle)) = (&mut self.audio, self.audio_handle.take()) {
+            engine::audio::stop_audio(audio, handle);
+        }
+        self.audio_error = None;
+    }
+
     fn select(&mut self, family: String, key: String) {
+        self.stop_wav();
         self.family(&family);
         self.ensure_motion_db(&key);
         let loaded = self.families.get(&family).expect("just loaded");
@@ -633,6 +663,7 @@ impl ExplorerApp {
     }
 
     fn select_archive_entry(&mut self, archive: String, entry_name: String) {
+        self.stop_wav();
         self.ensure_archives();
         self.ensure_motion_db(&entry_name);
         let Some(path) = self
@@ -789,6 +820,12 @@ fn decode_preview(
             },
             Ok(None) => raw_fallback(&bytes, format!("no decoder for .{ext}")),
             Err(msg) => raw_fallback(&bytes, format!(".{ext} decode failed: {msg}")),
+        };
+    }
+    if ext == "snc" {
+        return match quiet_catch(|| dark::audio::Song::read(&mut std::io::Cursor::new(&bytes))) {
+            Ok(song) => PreviewKind::Song(crate::song_preview::SongPreview::new(song)),
+            Err(msg) => raw_fallback(&bytes, format!("song decode failed: {msg}")),
         };
     }
     if ext == "wav" {
@@ -1051,6 +1088,7 @@ impl eframe::App for ExplorerApp {
                 // The preview belongs to the tab that selected it; a Files
                 // asset must not keep showing under the Archives tab.
                 if self.tab != previous_tab {
+                    self.stop_wav();
                     self.preview = None;
                 }
                 ui.separator();
@@ -1733,6 +1771,7 @@ impl ExplorerApp {
                     ui.colored_label(egui::Color32::RED, error);
                 }
             }
+            PreviewKind::Song(song) => song.show(ui),
             PreviewKind::Text(text) => {
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])
@@ -1901,6 +1940,10 @@ impl ExplorerApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
             return;
         }
+        if std::time::Instant::now() < self.screenshot_not_before {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+            return;
+        }
         self.frames_rendered += 1;
         ctx.request_repaint();
         // The scene exists after the first frame's show; step it before the
@@ -1918,6 +1961,16 @@ impl ExplorerApp {
             if self.tab == Tab::Grips {
                 if let Some(error) = self.grip_editor.error() {
                     eprintln!("cannot render grip: {error}");
+                    std::process::exit(2);
+                }
+            }
+            if let Some(Preview {
+                kind: PreviewKind::Song(song),
+                ..
+            }) = &self.preview
+            {
+                if let Some(error) = song.error() {
+                    eprintln!("cannot play song: {error}");
                     std::process::exit(2);
                 }
             }
@@ -2114,7 +2167,7 @@ fn dimmable(text: &str, mounted: bool) -> egui::RichText {
     if mounted { text } else { text.weak() }
 }
 
-fn play_wav(
+pub(crate) fn play_wav(
     audio: &mut Option<AudioContext<(), String>>,
     audio_handle: &mut Option<AudioHandle>,
     audio_error: &mut Option<String>,
