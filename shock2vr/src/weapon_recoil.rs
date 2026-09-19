@@ -639,9 +639,9 @@ mod tests {
     #[test]
     fn flat_recoil_is_two_handed_and_scales_kick_with_its_caps() {
         let authored = RecoilImpulse {
-            pitch: 6.0,
-            heading: 2.0,
-            back: -0.1,
+            pitch: 0.6,
+            heading: 0.2,
+            back: -0.01,
             pitch_limit: 8.0,
             back_limit: 0.2,
             heading_limit: f32::MAX,
@@ -656,12 +656,21 @@ mod tests {
         // Support is assumed, so the one-hand profile never reaches flat.
         let base = scaled_flat(vr_impulses(authored, one_hand, 1, true).0, 1.0);
         assert_eq!(base.pitch, flat_impulse(authored, 1).pitch);
-        assert_eq!((base.pitch, base.heading, base.back), (6.0, 2.0, -0.1));
+        let expected_pitch =
+            authored.pitch * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE);
+        let expected_heading =
+            authored.heading * crate::dev_params::get(crate::dev_params::GUN_YAW_SCALE);
+        let expected_back =
+            authored.back * crate::dev_params::get(crate::dev_params::GUN_KICKBACK_SCALE);
+        assert_eq!(
+            (base.pitch, base.heading, base.back),
+            (expected_pitch, expected_heading, expected_back)
+        );
         for scale in [0.25, 5.0] {
             let scaled = scaled_flat(base, scale);
-            assert!((scaled.pitch - 6.0 * scale).abs() < 1e-5);
-            assert!((scaled.heading - 2.0 * scale).abs() < 1e-5);
-            assert!((scaled.back + 0.1 * scale).abs() < 1e-6);
+            assert!((scaled.pitch - expected_pitch * scale).abs() < 1e-5);
+            assert!((scaled.heading - expected_heading * scale).abs() < 1e-5);
+            assert!((scaled.back - expected_back * scale).abs() < 1e-6);
             assert!((scaled.pitch_limit - 8.0 * scale).abs() < 1e-5);
             assert!((scaled.back_limit - 0.2 * scale).abs() < 1e-6);
             assert_eq!(scaled.heading_limit, f32::MAX);
@@ -674,7 +683,10 @@ mod tests {
                 let (_, _) = spring.step(1.0 / 120.0);
                 peak.max(spring.pitch.position)
             });
-            assert!((peak - 6.0 * scale).abs() < 0.05, "peak {peak} at {scale}");
+            assert!(
+                (peak - expected_pitch * scale).abs() < 0.05,
+                "peak {peak} at {scale}"
+            );
         }
         // Strength still applies underneath the flat gain.
         assert!(scaled_flat(vr_impulses(authored, one_hand, 6, true).0, 1.0).pitch < base.pitch);
