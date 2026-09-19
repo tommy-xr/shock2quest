@@ -826,6 +826,11 @@ pub enum Effect {
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
     },
+    /// Standalone-mode music: start the named song and repeat its initial
+    /// theme event at clip boundaries, or stop immediately with None.
+    SetBackgroundMusic {
+        song: Option<String>,
+    },
     StopSound {
         handle: AudioHandle,
     },
