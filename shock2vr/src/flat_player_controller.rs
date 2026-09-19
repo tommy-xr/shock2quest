@@ -156,14 +156,15 @@ impl FlatPlayerController {
     /// which the base yaw is exactly the rotation into, so it composes on the
     /// right of that yaw. Takes this frame's already-stepped spring pose, so
     /// the spring advances on every frame rather than only on frames that
-    /// happen to place a gun. Returns (rotation, world position).
+    /// happen to place a gun. Returns (rotation, world position, and the same
+    /// kick expressed in WORLD space, for [`recoil_aim`]).
     fn gun_pose(
         look: Quaternion<f32>,
         camera_pos: Vector3<f32>,
         offset: Vector3<f32>,
         pitch_deg: f32,
         (kickback, kick_rotation): (Vector3<f32>, Quaternion<f32>),
-    ) -> (Quaternion<f32>, Vector3<f32>) {
+    ) -> (Quaternion<f32>, Vector3<f32>, Quaternion<f32>) {
         let pitch = Quaternion::from_angle_x(Deg(pitch_deg));
         let model = look * pitch * Quaternion::from_angle_y(Deg(VIEWMODEL_BASE_YAW_DEG));
         (
@@ -173,6 +174,9 @@ impl FlatPlayerController {
                 // Already in world units (the authored kick divides by
                 // SCALE_FACTOR), unlike the framing offset above.
                 + model.rotate_vector(kickback),
+            // Same rotation, world frame: conjugating by the model transform
+            // turns a model-space rotation into the world-space one.
+            model * kick_rotation * model.conjugate(),
         )
     }
 
@@ -277,7 +281,24 @@ impl FlatPlayerController {
                     }
                     _ => GUN_CARRY_PITCH_DEG,
                 };
-                Self::gun_pose(look, camera_pos, offset, pitch_deg, kick)
+                let (rotation, position, aim_kick) =
+                    Self::gun_pose(look, camera_pos, offset, pitch_deg, kick);
+                // VR shots leave along the physically displaced muzzle; flat
+                // reproduces that by riding the same kick, so firing faster
+                // than the spring recovers walks the shot up. A settled gun
+                // fires exactly on the crosshair. The crosshair RAYCAST above
+                // is untouched - recoil must not move what you can frob.
+                self.last_aim = self.last_aim.map(|(origin, forward)| {
+                    (
+                        origin,
+                        recoil_aim(
+                            forward,
+                            aim_kick,
+                            crate::dev_params::get(crate::dev_params::FLAT_RECOIL_AIM),
+                        ),
+                    )
+                });
+                (rotation, position)
             };
             effects.push(VirtualHandEffect::SetPositionRotation {
                 entity_id,
@@ -320,6 +341,28 @@ impl FlatPlayerController {
 impl Default for FlatPlayerController {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Bend the flat fire ray by `fraction` of the viewmodel's current recoil.
+/// `fraction` 0 leaves the shot on the crosshair (recoil stays cosmetic), 1
+/// makes it ride the full kick. Always identity for a settled gun, so the
+/// reticle only ever lies while the gun is visibly displaced.
+fn recoil_aim(forward: Vector3<f32>, kick: Quaternion<f32>, fraction: f32) -> Vector3<f32> {
+    use cgmath::InnerSpace;
+    let fraction = if fraction.is_finite() {
+        fraction.clamp(0.0, 1.0)
+    } else {
+        return forward;
+    };
+    let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+    // nlerp, not slerp: the kick is a small rotation, so the two agree to well
+    // under a degree, and nlerp cannot divide by a near-zero sine at identity.
+    let bent = identity.nlerp(kick, fraction).rotate_vector(forward);
+    if bent.magnitude2() > 1e-8 {
+        bent.normalize() * forward.magnitude()
+    } else {
+        forward
     }
 }
 
@@ -381,7 +424,7 @@ mod tests {
         let mut controller = FlatPlayerController::new();
         let pose = |c: &mut FlatPlayerController, dt| {
             let kick = c.recoil.step(dt);
-            let (rotation, position) =
+            let (rotation, position, _) =
                 FlatPlayerController::gun_pose(look, camera, VIEWMODEL_OFFSET, -11.25, kick);
             (rotation.rotate_vector(BARREL), position)
         };
@@ -414,6 +457,68 @@ mod tests {
         let (settled_muzzle, settled_pos) = pose(&mut controller, 0.0);
         assert!((settled_muzzle - rest_muzzle).magnitude() < 1e-4);
         assert!((settled_pos - rest_pos).magnitude() < 1e-4);
+    }
+
+    /// The shot rides the same kick the viewmodel does, scaled by the knob,
+    /// and a settled gun always fires exactly on the crosshair.
+    #[test]
+    fn the_fire_ray_follows_the_kick_by_the_tuned_fraction() {
+        use cgmath::InnerSpace;
+        const BARREL: Vector3<f32> = vec3(-1.0, 0.0, 0.0);
+        let look = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let crosshair = look.rotate_vector(vec3(0.0, 0.0, -1.0));
+        let mut controller = FlatPlayerController::new();
+        controller.wield(EntityId::dead());
+        controller.kick(EntityId::dead(), impulse());
+        let kick = controller.recoil.step(0.1);
+        let (rotation, _, aim_kick) = FlatPlayerController::gun_pose(
+            look,
+            vec3(0.0, 5.0, 0.0),
+            VIEWMODEL_OFFSET,
+            -11.25,
+            kick,
+        );
+
+        // The bend is the muzzle's own rise, not some independent number.
+        let muzzle_rise = rotation.rotate_vector(BARREL).y
+            - Quaternion::from_angle_x(Deg(-11.25))
+                .rotate_vector(
+                    Quaternion::from_angle_y(Deg(VIEWMODEL_BASE_YAW_DEG)).rotate_vector(BARREL),
+                )
+                .y;
+        assert!(muzzle_rise > 0.01, "the fixture should actually kick");
+        let full = recoil_aim(crosshair, aim_kick, 1.0);
+        assert!(
+            (full.magnitude() - 1.0).abs() < 1e-5,
+            "aim stays unit length"
+        );
+        assert!(full.y > crosshair.y + 0.01, "the shot should ride upward");
+        assert!(
+            (full.y - muzzle_rise).abs() < 1e-3,
+            "the shot should ride the muzzle: {} vs {muzzle_rise}",
+            full.y
+        );
+
+        // 0 restores the purely cosmetic behaviour; the knob is monotonic.
+        assert_eq!(recoil_aim(crosshair, aim_kick, 0.0), crosshair);
+        let half = recoil_aim(crosshair, aim_kick, 0.5);
+        assert!(half.y > crosshair.y && half.y < full.y);
+        // Out-of-range/NaN fractions must never poison the fire ray.
+        assert_eq!(recoil_aim(crosshair, aim_kick, f32::NAN), crosshair);
+        assert_eq!(recoil_aim(crosshair, aim_kick, 5.0), full);
+
+        // A settled gun fires exactly on the crosshair at every setting.
+        for _ in 0..600 {
+            controller.recoil.step(1.0 / 60.0);
+        }
+        let (_, _, settled) = FlatPlayerController::gun_pose(
+            look,
+            vec3(0.0, 5.0, 0.0),
+            VIEWMODEL_OFFSET,
+            -11.25,
+            controller.recoil.step(0.0),
+        );
+        assert!((recoil_aim(crosshair, settled, 1.0) - crosshair).magnitude() < 1e-4);
     }
 
     /// The spring advances with `update`, not with gun placement, so a kick
