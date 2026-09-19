@@ -9,7 +9,9 @@ use crate::{
     ui::{HAlign, Rect, UiCanvas, VAlign},
 };
 
-const PANEL: Rect = Rect::new(450.0, 124.0, 188.0, 248.0);
+// shklooko.cpp: left MFD; the text well is 138 - 15 = 123 pixels wide.
+const PANEL: Rect = Rect::new(2.0, 124.0, 188.0, 296.0);
+const QUERY_BODY: Rect = Rect::new(17.0, 277.0, 123.0, 132.0);
 use super::character_sheet::{CharacterSheet, PANEL as CHARACTER_PANEL};
 const FONT: &str = "mainfont.fon";
 const PAGE_LINES: usize = 16;
@@ -24,6 +26,8 @@ enum Control {
     Close,
     Previous,
     Next,
+    LineUp,
+    LineDown,
 }
 
 #[derive(Default)]
@@ -40,11 +44,15 @@ pub(crate) struct MfdUtilities {
     title: String,
     lines: Vec<String>,
     page: usize,
+    query_offset: usize,
+    font: Option<std::rc::Rc<Box<dyn engine::Font>>>,
+    icon: Option<String>,
+    hover: Option<Vector2<f32>>,
 }
 
 impl MfdUtilities {
     pub(crate) fn has_left_panel(&self) -> bool {
-        self.research || self.empty_logs || self.access_cards
+        self.research || self.empty_logs || self.access_cards || self.selected.is_some()
     }
     pub(crate) fn show_empty_logs(&mut self) {
         *self = Self::default();
@@ -103,14 +111,14 @@ impl MfdUtilities {
         if self.empty_logs || self.access_cards {
             controls.push((Control::Close, Rect::new(165.0, 132.0, 20.0, 21.0), ""));
         }
-        if self.inspecting || self.selected.is_some() {
-            controls.push((Control::Close, Rect::new(570.0, 346.0, 60.0, 20.0), "CLOSE"));
-            if self.page > 0 {
-                controls.push((Control::Previous, Rect::new(458.0, 346.0, 28.0, 20.0), "<"));
-            }
-            if (self.page + 1) * PAGE_LINES < self.lines.len() {
-                controls.push((Control::Next, Rect::new(490.0, 346.0, 28.0, 20.0), ">"));
-            }
+        if self.selected.is_some() {
+            controls.extend([
+                (Control::Close, Rect::new(165.0, 132.0, 20.0, 21.0), ""),
+                (Control::LineUp, Rect::new(161.0, 278.0, 18.0, 17.0), ""),
+                (Control::Previous, Rect::new(161.0, 298.0, 18.0, 26.0), ""),
+                (Control::Next, Rect::new(161.0, 327.0, 18.0, 26.0), ""),
+                (Control::LineDown, Rect::new(161.0, 356.0, 18.0, 17.0), ""),
+            ]);
         }
         if self.access_cards {
             if self.page > 0 {
@@ -123,7 +131,43 @@ impl MfdUtilities {
         controls
             .into_iter()
             .map(|(control, rect, label)| {
+                let hovered = self.hover.is_some_and(|point| rect.contains(point));
                 let texture = match control {
+                    Control::Close if self.selected.is_some() => {
+                        if hovered {
+                            "iface/closeon.pcx"
+                        } else {
+                            "iface/closeoff.pcx"
+                        }
+                    }
+                    Control::LineUp => {
+                        if hovered {
+                            "iface/up1.pcx"
+                        } else {
+                            "iface/up0.pcx"
+                        }
+                    }
+                    Control::LineDown => {
+                        if hovered {
+                            "iface/down1.pcx"
+                        } else {
+                            "iface/down0.pcx"
+                        }
+                    }
+                    Control::Previous if self.selected.is_some() => {
+                        if hovered {
+                            "iface/pgup1.pcx"
+                        } else {
+                            "iface/pgup0.pcx"
+                        }
+                    }
+                    Control::Next if self.selected.is_some() => {
+                        if hovered {
+                            "iface/pgdn1.pcx"
+                        } else {
+                            "iface/pgdn0.pcx"
+                        }
+                    }
                     Control::AccessCards if self.access_cards => "iface/ifbtn11.pcx",
                     Control::AccessCards => "iface/ifbtn10.pcx",
                     Control::Character if self.character => "iface/ifbtn21.pcx",
@@ -149,7 +193,9 @@ impl MfdUtilities {
         point: Vector2<f32>,
         pressed: bool,
         candidate: Option<EntityId>,
+        dragging: bool,
     ) -> bool {
+        self.hover = Some(point);
         if let Some((control, _, _, _)) = self
             .controls()
             .into_iter()
@@ -168,16 +214,10 @@ impl MfdUtilities {
                         self.character = open;
                     }
                     Control::Inspect => {
-                        if self.inspecting {
-                            *self = Self::default();
-                        } else {
-                            self.research = false;
-                            self.empty_logs = false;
-                            self.character = false;
-                            self.access_cards = false;
-                            self.inspecting = true;
-                            self.selected = None;
-                            self.set_content("Item information".into(), "Select an inventory or held item to inspect. Select ? again to cancel.".into());
+                        // Query mode changes only the cursor. The existing panel
+                        // stays until an item is selected (shklooko.cpp).
+                        if !dragging {
+                            self.inspecting = !self.inspecting;
                         }
                     }
                     Control::Research => {
@@ -189,9 +229,35 @@ impl MfdUtilities {
                         self.map_requested = true;
                     }
                     Control::Close => *self = Self::default(),
+                    Control::LineUp => self.query_offset = self.query_offset.saturating_sub(1),
+                    Control::LineDown => {
+                        self.query_offset = (self.query_offset + 1).min(self.max_query_offset())
+                    }
+                    Control::Previous if self.selected.is_some() => {
+                        self.query_offset =
+                            self.query_offset.saturating_sub(self.query_page_lines())
+                    }
+                    Control::Next if self.selected.is_some() => {
+                        self.query_offset = (self.query_offset + self.query_page_lines())
+                            .min(self.max_query_offset())
+                    }
                     Control::Previous => self.page = self.page.saturating_sub(1),
                     Control::Next => self.page += 1,
                 }
+            }
+            return true;
+        }
+        // Own all selection edges before any panel/item behavior can use them.
+        if self.inspecting {
+            if pressed && let Some(entity) = candidate {
+                self.selected = Some(entity);
+                self.inspecting = false;
+                self.research = false;
+                self.empty_logs = false;
+                self.character = false;
+                self.access_cards = false;
+                self.query_offset = 0;
+                self.lines.clear();
             }
             return true;
         }
@@ -209,22 +275,39 @@ impl MfdUtilities {
             }
             return consumed;
         }
-        if self.inspecting {
-            if pressed && let Some(entity) = candidate {
-                self.selected = Some(entity);
-                self.inspecting = false;
-                self.page = 0;
-            }
-            return true;
-        }
-        (self.selected.is_some() || self.research) && PANEL.contains(point)
+        self.selected.is_some() && PANEL.contains(point)
+    }
+
+    fn query_line_height(&self) -> f32 {
+        self.font
+            .as_ref()
+            .map(|font| font.base_height().max(1.0))
+            .unwrap_or(12.0)
+    }
+
+    fn query_page_lines(&self) -> usize {
+        (QUERY_BODY.h / self.query_line_height()).floor().max(1.0) as usize
+    }
+
+    fn max_query_offset(&self) -> usize {
+        self.lines.len().saturating_sub(self.query_page_lines())
     }
 
     fn set_content(&mut self, title: String, body: String) {
-        let lines = wrap_text(&body, 23);
+        let lines = if self.selected.is_some() {
+            self.font
+                .as_ref()
+                .map(|font| {
+                    engine::wrap_text_to_width(&***font, &body, font.base_height(), QUERY_BODY.w)
+                })
+                .unwrap_or_else(|| wrap_text(&body, 20))
+        } else {
+            wrap_text(&body, 23)
+        };
         if self.title != title || self.lines != lines {
             self.title = title;
             self.lines = lines;
+            self.query_offset = self.query_offset.min(self.max_query_offset());
             self.page = self
                 .page
                 .min(self.lines.len().saturating_sub(1) / PAGE_LINES);
@@ -267,10 +350,15 @@ impl MfdUtilities {
             *self = Self::default();
             return;
         }
-        let title = crate::hud::resolve_item_name(assets, world, entity)
-            .unwrap_or_else(|| "Item information".into());
-        let strings = assets.get(&dark::importers::STRINGS_IMPORTER, "objlooks.str");
-        self.set_content(title, item_description(world, entity, &strings));
+        self.font = Some(crate::ui::resolve_font(assets, crate::ui::MFD_FONT));
+        self.icon = world
+            .borrow::<View<dark::properties::PropObjIcon>>()
+            .unwrap()
+            .get(entity)
+            .ok()
+            .map(|p| format!("{}.pcx", p.0));
+        let (title, body) = query_content(world, entity, assets);
+        self.set_content(title, body);
     }
 
     pub(crate) fn draw(&self, canvas: &mut UiCanvas) {
@@ -300,21 +388,28 @@ impl MfdUtilities {
         if self.research {
             self.research_catalog.draw(canvas);
         }
-        if self.inspecting || self.selected.is_some() {
-            canvas.image(PANEL, "IFBTN00.PCX");
+        if self.selected.is_some() {
+            canvas.image(PANEL, "iface/query.pcx");
+            if let Some(icon) = &self.icon {
+                canvas.fitted_object_icon(Rect::new(17.0, 138.0, 138.0, 109.0), icon);
+            }
             canvas.text_native_fit(
-                Rect::new(458.0, 130.0, 172.0, 16.0),
+                Rect::new(26.0, 257.0, 129.0, 12.0),
                 &self.title,
-                FONT,
+                crate::ui::MFD_FONT,
                 HAlign::Left,
-                VAlign::Middle,
+                VAlign::Top,
             );
             for (rect, line) in self.visible_lines() {
-                // Paragraph gaps occupy a line but have no glyph mesh.
-                if line.trim().is_empty() {
-                    continue;
+                if !line.trim().is_empty() {
+                    canvas.text_native_fit(
+                        rect,
+                        line,
+                        crate::ui::MFD_FONT,
+                        HAlign::Left,
+                        VAlign::Top,
+                    );
                 }
-                canvas.text_native_fit(rect, line, FONT, HAlign::Left, VAlign::Middle);
             }
         }
         for (control, rect, label, texture) in self.controls() {
@@ -338,14 +433,27 @@ impl MfdUtilities {
     fn visible_lines(&self) -> impl Iterator<Item = (Rect, &String)> {
         self.lines
             .iter()
-            .skip(self.page * PAGE_LINES)
-            .take(PAGE_LINES)
+            .skip(if self.selected.is_some() {
+                self.query_offset
+            } else {
+                self.page * PAGE_LINES
+            })
+            .take(if self.selected.is_some() {
+                self.query_page_lines()
+            } else {
+                PAGE_LINES
+            })
             .enumerate()
             .map(|(i, line)| {
                 let rect = if self.empty_logs || self.access_cards {
                     Rect::new(17.0, 170.0 + i as f32 * 12.0, 139.0, 12.0)
                 } else {
-                    Rect::new(460.0, 152.0 + i as f32 * 11.0, 168.0, 11.0)
+                    Rect::new(
+                        QUERY_BODY.x,
+                        QUERY_BODY.y + i as f32 * self.query_line_height(),
+                        QUERY_BODY.w,
+                        self.query_line_height(),
+                    )
                 };
                 (rect, line)
             })
@@ -367,6 +475,8 @@ impl MfdUtilities {
                             Control::Research => "research_overview",
                             Control::Map => "map",
                             Control::Close => "utility_close",
+                            Control::LineUp => "query_line_up",
+                            Control::LineDown => "query_line_down",
                             Control::Previous => "utility_previous",
                             Control::Next => "utility_next",
                         }
@@ -377,6 +487,19 @@ impl MfdUtilities {
                     screen_rect: [r.x, r.y, r.w, r.h],
                 },
             )
+            .chain(if self.selected.is_some() {
+                vec![crate::game_scene::DebugUiElement {
+                    kind: "text".into(),
+                    texture: None,
+                    text: Some(self.title.clone()),
+                    label: Some("query_title".into()),
+                    entity_id: self.selected.map(|e| e.inner() as i32),
+                    rect: [26.0, 257.0, 129.0, 12.0],
+                    screen_rect: [26.0, 257.0, 129.0, 12.0],
+                }]
+            } else {
+                Vec::new()
+            })
             .chain(if self.research {
                 self.research_catalog.elements()
             } else {
@@ -429,11 +552,43 @@ fn access_card_names(
     names
 }
 
+fn query_content(world: &World, entity: EntityId, assets: &mut AssetCache) -> (String, String) {
+    use dark::{
+        importers::STRINGS_IMPORTER,
+        properties::{ObjectState, PropObjState},
+    };
+    let unresearched = world
+        .borrow::<View<PropObjState>>()
+        .unwrap()
+        .get(entity)
+        .is_ok_and(|state| state.0 == ObjectState::Unresearched);
+    if unresearched {
+        let strings = assets.get(&STRINGS_IMPORTER, "research.str");
+        return (
+            strings
+                .get("nameunresearched")
+                .cloned()
+                .unwrap_or_else(|| "Unresearched object".into()),
+            strings
+                .get("queryunresearched")
+                .cloned()
+                .unwrap_or_else(|| "Research this object to learn more about it.".into()),
+        );
+    }
+    let title = crate::hud::resolve_item_short_name(assets, world, entity)
+        .unwrap_or_else(|| "Item information".into());
+    let strings = assets.get(&STRINGS_IMPORTER, "objlooks.str");
+    let body = item_description(world, entity, &strings)
+        .or_else(|| crate::hud::resolve_item_name(assets, world, entity))
+        .unwrap_or_else(|| "No description available.".into());
+    (title, body)
+}
+
 fn item_description(
     world: &World,
     entity: EntityId,
     strings: &std::collections::HashMap<String, String>,
-) -> String {
+) -> Option<String> {
     use dark::properties::{PropObjLookString, PropObjName, PropSymName};
     let (looks, names, symbols) = world
         .borrow::<(
@@ -448,7 +603,6 @@ fn item_description(
         symbols.get(entity).ok().map(|p| p.0.as_str()),
         strings,
     )
-    .unwrap_or_else(|| "No description available.".into())
 }
 
 #[cfg(test)]
@@ -505,44 +659,45 @@ mod tests {
             .unwrap()
             .1
             .center();
-        assert!(ui.update(card, false, None));
+        assert!(ui.update(card, false, None, false));
         assert!(!ui.is_open());
-        ui.update(card, true, None);
+        ui.update(card, true, None, false);
         assert!(ui.access_cards && ui.has_left_panel());
-        assert!(ui.update(vec2(100.0, 200.0), true, None));
+        assert!(ui.update(vec2(100.0, 200.0), true, None, false));
         assert!(ui.selected.is_none());
-        ui.update(mfd, true, None);
+        ui.update(mfd, true, None, false);
         assert!(ui.character && !ui.has_left_panel());
-        ui.update(vec2(520.0, 405.0), true, None);
+        ui.update(vec2(520.0, 405.0), true, None, false);
         assert!(
             ui.character_sheet
                 .debug_elements()
                 .iter()
                 .any(|e| e.texture.as_deref() == Some("iface/etech1.pcx"))
         );
-        ui.update(vec2(465.0, 142.0), true, None);
+        ui.update(vec2(465.0, 142.0), true, None, false);
         assert!(!ui.is_open());
-        ui.update(card, true, None);
-        ui.update(card, true, None);
+        ui.update(card, true, None, false);
+        ui.update(card, true, None, false);
         assert!(!ui.is_open());
     }
 
     #[test]
     fn paragraph_spacing_does_not_emit_empty_text_meshes() {
         let mut ui = MfdUtilities::default();
-        ui.inspecting = true;
+        ui.selected = Some(EntityId::dead());
         ui.set_content("Title".into(), "First\n\nSecond".into());
         let mut canvas = UiCanvas::new(Vector2::new(640.0, 480.0));
         ui.draw(&mut canvas);
         assert!(canvas.elements().iter().all(|element| !matches!(element, crate::ui::UiElement::Text { text, .. } if text.trim().is_empty())));
         let lines: Vec<_> = ui.visible_lines().collect();
-        assert_eq!(lines[2].0.y - lines[0].0.y, 22.0);
+        assert_eq!(lines[2].0.y - lines[0].0.y, 24.0);
     }
 
     #[test]
     fn pages_cover_every_line_and_clamp_when_content_shrinks() {
         let mut ui = MfdUtilities::default();
-        ui.update(vec2(166.0, 440.0), true, None);
+        ui.update(vec2(166.0, 440.0), true, None, false);
+        ui.selected = Some(EntityId::dead());
         ui.set_content(
             "Long description".into(),
             (0..40).map(|i| format!("Line {i}\n")).collect(),
@@ -550,7 +705,14 @@ mod tests {
         let all = ui.lines.clone();
         let mut seen = Vec::new();
         loop {
-            seen.extend(ui.visible_lines().map(|(_, line)| line.clone()));
+            for (_, line) in ui.visible_lines() {
+                if !seen.contains(line) {
+                    seen.push(line.clone());
+                }
+            }
+            if ui.query_offset == ui.max_query_offset() {
+                break;
+            }
             let Some((_, rect, _, _)) = ui
                 .controls()
                 .into_iter()
@@ -558,13 +720,37 @@ mod tests {
             else {
                 break;
             };
-            ui.update(rect.center(), true, None);
+            ui.update(rect.center(), true, None, false);
         }
         assert_eq!(seen, all);
-        assert!(ui.page > 0);
+        assert!(ui.query_offset > 0);
         ui.set_content("Short".into(), "Only one line".into());
-        assert_eq!(ui.page, 0);
+        assert_eq!(ui.query_offset, 0);
         assert_eq!(ui.visible_lines().count(), 1);
+    }
+
+    #[test]
+    fn arming_query_preserves_the_panel_and_rejects_empty_selections() {
+        let mut ui = MfdUtilities::default();
+        ui.update(vec2(166.0, 440.0), true, None, true);
+        assert!(
+            !ui.is_inspecting(),
+            "dragging an item cannot enter query mode"
+        );
+        ui.selected = Some(EntityId::dead());
+        ui.set_content("Name".into(), "Description".into());
+        ui.update(vec2(166.0, 440.0), true, None, false);
+        assert!(ui.is_inspecting());
+        assert!(ui.has_left_panel());
+        assert!(ui.update(vec2(320.0, 240.0), true, None, false));
+        assert!(
+            ui.is_inspecting(),
+            "empty world selection neither exits nor uses anything"
+        );
+        ui.update(vec2(166.0, 440.0), true, None, false);
+        assert!(!ui.is_inspecting());
+        assert_eq!(ui.title, "Name");
+        assert_eq!(ui.lines, ["Description"]);
     }
 
     #[test]
@@ -574,18 +760,18 @@ mod tests {
             "hypo: \"Restores health.\"".into(),
         ));
         let mut ui = MfdUtilities::default();
-        assert!(ui.update(vec2(166.0, 440.0), true, None));
+        assert!(ui.update(vec2(166.0, 440.0), true, None, false));
         assert!(ui.inspecting);
-        assert!(ui.update(vec2(10.0, 40.0), false, Some(hypo)));
+        assert!(ui.update(vec2(10.0, 40.0), false, Some(hypo), false));
         assert_eq!(ui.selected, None);
-        assert!(ui.update(vec2(10.0, 40.0), true, Some(hypo)));
+        assert!(ui.update(vec2(10.0, 40.0), true, Some(hypo), false));
         assert_eq!(ui.selected, Some(hypo));
         assert_eq!(
             item_description(&world, hypo, &Default::default()),
-            "Restores health."
+            Some("Restores health.".into())
         );
         assert!(world.borrow::<EntitiesView>().unwrap().is_alive(hypo));
-        assert!(ui.update(vec2(600.0, 355.0), true, None));
+        assert!(ui.update(vec2(175.0, 142.0), true, None, false));
         assert_eq!(ui.selected, None);
         assert!(!ui.inspecting);
     }
