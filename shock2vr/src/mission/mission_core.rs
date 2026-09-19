@@ -15026,6 +15026,23 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             },
         );
 
+        // The flat crosshair fire ray this weapon actually shoots along -
+        // which recoil bends away from the camera forward. The only headless
+        // view of where a flat shot is going (`WeaponMuzzle` is the gun's own
+        // geometry, not the fire ray).
+        let flat_aim = self
+            .world
+            .run(|aims: View<crate::runtime_props::RuntimePropFlatAim>| {
+                let aim = aims.get(id).ok()?;
+                Some(
+                    serde_json::json!({
+                        "origin": [aim.origin.x, aim.origin.y, aim.origin.z],
+                        "forward": [aim.forward.x, aim.forward.y, aim.forward.z],
+                    })
+                    .to_string(),
+                )
+            });
+
         let hearing_rating = self
             .world
             .run(|v_hearing: View<dark::properties::PropAIHearing>| {
@@ -15251,6 +15268,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "WeaponMuzzle".to_string(),
                         value: muzzle,
+                    });
+                }
+                if let Some(aim) = flat_aim {
+                    properties.push(DebugPropertyInfo {
+                        name: "FlatAim".to_string(),
+                        value: aim,
                     });
                 }
 

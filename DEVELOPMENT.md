@@ -504,6 +504,16 @@ actually follows never move - so it cannot change your accuracy. Note that at
 AGI `6` the authored angular kick is zero (as in the original), leaving only
 kickback: drop **Gun AGI ovrd** to `1` to see muzzle rise at all.
 
+**Flat aim follow** (`flat_recoil_aim`, 0-1, step 0.1, default 1) decides how
+much of that kick the *shot* rides. VR shots leave along the physically
+displaced muzzle, which is why firing faster than the spring recovers walks
+your aim up; flat reproduces that by bending the crosshair fire ray by the
+viewmodel's own kick. `0` restores purely cosmetic recoil (the shot always
+leaves along the crosshair). A settled gun fires exactly on the crosshair at
+every setting, so the reticle only ever lies while the gun is visibly
+displaced - and the camera never moves. This is a **balance-affecting** knob,
+unlike **Flat scale**: it stacks on top of the existing weapon-skill spread.
+
 Quest enables physical held guns, downward gun weight, and particles by default.
 Desktop/debug VR testing needs
 `--vr --experimental physical_held_items,physical_gun_weight`. Automated tests

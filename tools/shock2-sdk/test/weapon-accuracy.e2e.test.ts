@@ -23,6 +23,12 @@ for (const synthetic of [false, true])
             mission: "medsci1.mis",
           });
           await game.step({ frames: 5 });
+          // This measures SKILL-driven spread. Recoil aim-follow is a separate,
+          // deterministic source of error (a shot fired while the viewmodel is
+          // still displaced rides that displacement), and these samples are
+          // fired faster than the spring settles - so turn it off to isolate the
+          // variable under test. Its own coverage is `flat-recoil-aim.e2e`.
+          await game.devParams.set("flat_recoil_aim", 0);
           await game.player.setStats({ strength });
           await game.player.teleport({ x: -34.96759, y: -4.7559557, z: 20.9 });
           await game.input.set("head.look", [-90, 0]);

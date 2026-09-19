@@ -300,6 +300,12 @@ dev_params! {
     /// tracked object, so the same authored kick reads at a different size on
     /// screen; this rescales it (caps included) without touching VR.
     FLAT_RECOIL_SCALE = Recoil::float("flat_recoil_scale", "Flat scale", 1.0, 0.25, 5.0, 0.25),
+    /// How much of the flat viewmodel's recoil the shot itself follows, the
+    /// flat stand-in for VR's muzzle-launched shots. 0 keeps recoil purely
+    /// cosmetic (the shot always leaves along the crosshair); 1 makes a shot
+    /// fired mid-kick ride the full displacement, so sustained fire walks up.
+    /// A settled gun fires exactly on the crosshair at every setting.
+    FLAT_RECOIL_AIM = Recoil::float("flat_recoil_aim", "Flat aim follow", 1.0, 0.0, 1.0, 0.1),
     /// Ceiling on how fast a physically simulated held melee weapon may be
     /// driven onto its tracked-hand target, in world units per second.
     ///
