@@ -105,6 +105,7 @@ enum MenuAction {
     NewGame,
     ChooseDifficulty(dark::gamesys::Difficulty),
     StartCampaign,
+    Survive,
     Back,
     LoadGame,
     Developer,
@@ -205,9 +206,9 @@ const MENU_ITEMS: &[FrontendMenuItem<MenuAction>] = &[
     },
     FrontendMenuItem {
         string_key: "intro",
-        fallback_label: "Intro",
-        action: None,
-        label_override: None,
+        fallback_label: "Survive",
+        action: Some(MenuAction::Survive),
+        label_override: Some("Survive"),
     },
     FrontendMenuItem {
         string_key: "quit",
@@ -479,6 +480,11 @@ impl GameScene for MainMenuScene {
                 vec![Effect::GlobalEffect(GlobalEffect::StartNewCampaign {
                     difficulty: self.difficulty,
                 })]
+            }
+            Some(MenuAction::Survive) => {
+                vec![Effect::GlobalEffect(GlobalEffect::new_game_transition(
+                    "earth_horde".to_owned(),
+                ))]
             }
             Some(MenuAction::LoadGame) => {
                 vec![Effect::GlobalEffect(GlobalEffect::ShowLoadGame)]
@@ -824,6 +830,13 @@ mod tests {
     }
 
     #[test]
+    fn rising_edge_over_survive_activates_it() {
+        let rects = menu_rects(None);
+        let (action, _, _) = resolve_click(pointer_at(0.8, 0.7375, true), false, SCREEN, &rects);
+        assert_eq!(action, Some(MenuAction::Survive));
+    }
+
+    #[test]
     fn click_over_an_unimplemented_item_does_nothing() {
         // Rect 3 is "Credits", still unimplemented: canvas y 248..308.
         let rects = menu_rects(None);
@@ -866,7 +879,7 @@ mod tests {
         assert_eq!(labels[5], "Quit");
         // Missing key and empty value both fall back to the shipped English.
         assert_eq!(labels[1], "Load Game");
-        assert_eq!(labels[4], "Intro");
+        assert_eq!(labels[4], "Survive");
         // The repurposed Options slot reads what it does, whatever the string
         // table says (the override wins even over a shipped "Options").
         assert_eq!(labels[2], "Developer");
@@ -912,7 +925,7 @@ mod tests {
                 "Load Game",
                 "Developer",
                 "Credits",
-                "Intro",
+                "Survive",
                 "Quit"
             ]
         );
@@ -928,7 +941,7 @@ mod tests {
                 "Load Game",
                 "Developer",
                 "Credits",
-                "Intro",
+                "Survive",
                 "Quit"
             ]
         );
