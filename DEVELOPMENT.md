@@ -425,6 +425,18 @@ it. The axis gains still apply to both baseline and extra recoil; supported
 shots retain baseline recoil regardless of this setting. Downward weight is
 separate. Return all four scales to `1` to restore the profiles.
 
+**Flat scale** is the flatscreen equivalent, and the only recoil row that is
+flat-*specific*: the same spring drives the first-person viewmodel, which
+kicks back along its own barrel and pitches its muzzle up before settling. It
+ranges from `0.25` to `5` in `0.25` steps (default `1`) and rescales the kick
+together with its travel caps, so the knob keeps biting at the top of its
+range. Flat holds the gun in both hands, so the one-hand penalty never applies
+there; **Back/Pitch/Yaw scale**, Strength and Agility still do, underneath.
+The flat kick is presentation only - the camera and the crosshair the shot
+actually follows never move - so it cannot change your accuracy. Note that at
+AGI `6` the authored angular kick is zero (as in the original), leaving only
+kickback: drop **Gun AGI ovrd** to `1` to see muzzle rise at all.
+
 Quest enables physical held guns, downward gun weight, and particles by default.
 Desktop/debug VR testing needs
 `--vr --experimental physical_held_items,physical_gun_weight`. Automated tests

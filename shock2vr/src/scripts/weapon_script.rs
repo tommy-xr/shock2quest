@@ -490,12 +490,7 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
     // visible impact. (VR has no flat aim and damages through its
     // trigger-gated physical contact handler.)
     if maybe_projectile.is_none() {
-        if world
-            .borrow::<View<RuntimePropFlatAim>>()
-            .unwrap()
-            .get(entity_id)
-            .is_ok()
-        {
+        if crate::runtime_props::is_flat_aimed(world, entity_id) {
             return ShotOutcome::FlatMeleeSwing;
         }
     }
