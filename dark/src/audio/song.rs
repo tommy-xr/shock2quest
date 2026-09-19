@@ -7,7 +7,7 @@
 ///
 use std::io::{Read, Seek};
 
-use rand::{distributions::WeightedIndex, prelude::Distribution, thread_rng};
+use rand::{Rng, distributions::WeightedIndex, prelude::Distribution};
 use tracing::trace;
 
 use crate::ss2_common::{read_string_with_size, read_u32};
@@ -19,50 +19,15 @@ pub struct Song {
 
 #[derive(Debug, Clone)]
 pub struct SongSection {
-    #[allow(dead_code)]
-    name: String,
-    wav_file: String,
-    options: Vec<SongSectionOption>,
-}
-
-impl SongSection {
-    pub fn get_next_option(&self, maybe_cue: Option<String>) -> u32 {
-        // Figure out which option to try...
-        let mut section_opt = 0;
-        if let Some(cue) = maybe_cue {
-            let normalized_cue = cue.to_ascii_lowercase();
-            for (idx, option) in self.options.iter().enumerate() {
-                if option.schema.contains(&normalized_cue) {
-                    section_opt = idx as u32;
-                    break;
-                }
-            }
-        }
-
-        let option = &self.options[section_opt as usize];
-        option.choose_random()
-    }
+    pub name: String,
+    pub wav_file: String,
+    pub options: Vec<SongSectionOption>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SongSectionOption {
     pub schema: String,
     pub sub_options: Vec<SubOption>,
-}
-
-impl SongSectionOption {
-    pub fn choose_random(&self) -> u32 {
-        let mut rng = thread_rng();
-        let weights = self
-            .sub_options
-            .iter()
-            .map(|s| s.probability)
-            .collect::<Vec<u32>>();
-        let weight_index = WeightedIndex::new(weights).unwrap();
-        let idx = weight_index.sample(&mut rng);
-
-        self.sub_options[idx].next_index
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -73,7 +38,7 @@ pub struct SubOption {
 
 #[derive(Debug, Clone)]
 pub struct SongPlayContext {
-    current_section: u32,
+    pub current_section: usize,
 }
 
 impl Song {
@@ -134,22 +99,73 @@ impl Song {
         SongPlayContext { current_section: 0 }
     }
 
-    pub fn play_next(
-        &self,
-        current_context: SongPlayContext,
-        cue: Option<String>,
-    ) -> (SongPlayContext, String) {
-        // For the current song, check if any of the options
-
-        let current_section = &self.sections[current_context.current_section as usize];
-        let new_section = current_section.get_next_option(cue);
-        (
-            SongPlayContext {
-                current_section: new_section,
-            },
-            self.sections[new_section as usize].wav_file.to_owned(),
-        )
+    pub fn sections(&self) -> &[SongSection] {
+        &self.sections
     }
+
+    /// A useful initial event for auditioning: most songs wait in empty.wav
+    /// for "theme begin"; others (e.g. song09) use a different authored event.
+    pub fn start_event(&self) -> Option<String> {
+        let options = &self.sections.first()?.options;
+        options
+            .iter()
+            .find(|o| o.schema == "theme begin")
+            .or_else(|| options.iter().find(|o| !o.schema.is_empty()))
+            .map(|o| o.schema.clone())
+    }
+
+    /// Resolve once, returning the exact event and random branch that selected
+    /// the next WAV. Playback and inspector consume the same decision.
+    pub fn transition(
+        &self,
+        context: &SongPlayContext,
+        cue: Option<&str>,
+        rng: &mut impl Rng,
+    ) -> Result<SongTransition, String> {
+        let from = context.current_section;
+        let section = self
+            .sections
+            .get(from)
+            .ok_or("Song has no current section")?;
+        let cue = cue.map(str::to_ascii_lowercase);
+        let option_index = cue
+            .as_ref()
+            .filter(|c| !c.is_empty())
+            .and_then(|cue| section.options.iter().position(|o| o.schema.contains(cue)))
+            .unwrap_or(0);
+        let option = section
+            .options
+            .get(option_index)
+            .ok_or("Section has no event options")?;
+        let weights = option
+            .sub_options
+            .iter()
+            .map(|o| o.probability)
+            .collect::<Vec<_>>();
+        let distribution =
+            WeightedIndex::new(&weights).map_err(|e| format!("Invalid branch weights: {e}"))?;
+        let branch_index = distribution.sample(rng);
+        let to = option.sub_options[branch_index].next_index as usize;
+        if to >= self.sections.len() {
+            return Err(format!("Branch targets missing section {to}"));
+        }
+        Ok(SongTransition {
+            from,
+            to,
+            option_index,
+            branch_index,
+            cue,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SongTransition {
+    pub from: usize,
+    pub to: usize,
+    pub option_index: usize,
+    pub branch_index: usize,
+    pub cue: Option<String>,
 }
 
 fn read_section<T: Read + Seek>(reader: &mut T) -> SongSection {
@@ -207,5 +223,128 @@ fn read_sub_option<T: Read + Seek>(reader: &mut T) -> SubOption {
     SubOption {
         next_index,
         probability,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::{SeedableRng, rngs::StdRng};
+
+    fn song() -> Song {
+        Song {
+            sections: vec![
+                SongSection {
+                    name: "empty".into(),
+                    wav_file: "empty.wav".into(),
+                    options: vec![
+                        SongSectionOption {
+                            schema: "".into(),
+                            sub_options: vec![SubOption {
+                                next_index: 0,
+                                probability: 100,
+                            }],
+                        },
+                        SongSectionOption {
+                            schema: "theme begin".into(),
+                            sub_options: vec![
+                                SubOption {
+                                    next_index: 0,
+                                    probability: 0,
+                                },
+                                SubOption {
+                                    next_index: 1,
+                                    probability: 25,
+                                },
+                                SubOption {
+                                    next_index: 2,
+                                    probability: 75,
+                                },
+                            ],
+                        },
+                    ],
+                },
+                SongSection {
+                    name: "a".into(),
+                    wav_file: "a.wav".into(),
+                    options: vec![],
+                },
+                SongSection {
+                    name: "b".into(),
+                    wav_file: "b.wav".into(),
+                    options: vec![],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn events_select_an_option_and_unmatched_events_use_default() {
+        let song = song();
+        let mut rng = StdRng::seed_from_u64(7);
+        for cue in [None, Some(""), Some("unknown")] {
+            let t = song
+                .transition(&song.start_playing(), cue, &mut rng)
+                .unwrap();
+            assert_eq!((t.from, t.to, t.option_index), (0, 0, 0));
+        }
+        for cue in ["THEME BEGIN", "Begin"] {
+            let t = song
+                .transition(&song.start_playing(), Some(cue), &mut rng)
+                .unwrap();
+            assert_eq!(t.option_index, 1);
+            assert_ne!(t.to, 0);
+        }
+        assert_eq!(song.start_event().as_deref(), Some("theme begin"));
+    }
+
+    #[test]
+    fn weighted_branches_report_the_actual_destination_and_never_choose_zero() {
+        let song = song();
+        let mut rng = StdRng::seed_from_u64(23);
+        let mut counts = [0; 3];
+        for _ in 0..10000 {
+            let t = song
+                .transition(&song.start_playing(), Some("begin"), &mut rng)
+                .unwrap();
+            assert_eq!(t.to, t.branch_index);
+            counts[t.to] += 1;
+        }
+        assert_eq!(counts[0], 0);
+        assert!((2300..2700).contains(&counts[1]), "{counts:?}");
+        assert!((7300..7700).contains(&counts[2]), "{counts:?}");
+    }
+
+    #[test]
+    fn invalid_sections_weights_and_targets_report_errors() {
+        let mut song = song();
+        let mut rng = StdRng::seed_from_u64(1);
+        assert!(
+            song.transition(
+                &SongPlayContext {
+                    current_section: 30
+                },
+                None,
+                &mut rng
+            )
+            .is_err()
+        );
+        assert!(
+            song.transition(&SongPlayContext { current_section: 1 }, None, &mut rng)
+                .is_err()
+        );
+        song.sections[0].options[0].sub_options[0].probability = 0;
+        assert!(
+            song.transition(&song.start_playing(), None, &mut rng)
+                .is_err()
+        );
+        song.sections[0].options[0].sub_options[0] = SubOption {
+            next_index: 100,
+            probability: 1,
+        };
+        assert!(
+            song.transition(&song.start_playing(), None, &mut rng)
+                .is_err()
+        );
     }
 }
