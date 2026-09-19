@@ -237,34 +237,18 @@ fn hack_diff_for_entity(world: &World, entity_id: EntityId) -> Option<PropHackDi
         .and_then(|view| view.get(entity_id).ok().copied())
 }
 
-fn get_texture_for_char(char: char) -> String {
-    format!("key{}0.pcx", char)
-}
-
 fn draw_number(num: u32) -> Vec<GuiComponent<KeyPadMsg>> {
-    let num_str = num.to_string();
-
-    let offset_left = 10.0;
-    let offset_top = 10.0;
-    let padding = 1.5;
-    let mut x = 0.0;
-    let numeral_width = 22.5;
-    let numeral_height = 30.0;
-
-    let reversed_chars: Vec<char> = num_str.chars().collect();
-
-    let mut ret = Vec::new();
-    for ch in reversed_chars {
-        ret.push(GuiComponent::Image {
-            position: vec2(x + offset_left, offset_top),
-            size: vec2(numeral_width, numeral_height),
-            texture: get_texture_for_char(ch),
-            alpha: 0.5,
-            kind: crate::ui::ImageKind::Ui,
-        });
-        x += numeral_width + padding;
-    }
-    ret
+    vec![GuiComponent::Text {
+        position: vec2(14.0, 14.0),
+        size: vec2(139.0, 25.0),
+        text: num.to_string(),
+        font: "keyfonta.fon".to_owned(),
+        font_size: 0.0,
+        h: crate::ui::HAlign::Left,
+        v: crate::ui::VAlign::Top,
+        alpha: 1.0,
+        fit_to_rect: false,
+    }]
 }
 
 pub(crate) fn draw_hack_board<TMsg, F>(
@@ -538,109 +522,42 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
             return draw_hack_board(&_state.hack, hack_diff, |msg| msg);
         }
 
-        let button_width = 45.0;
-        let button_height = 60.0;
-        let left_margin = 15.0;
-        let top_margin = 42.0;
-        let padding = 1.5;
-
-        let mut components: Vec<GuiComponent<KeyPadMsg>> = vec![
+        // Retail shkkeypd.cpp draws the complete keypad2 artwork and puts
+        // invisible hit regions over it. The old key?0 images obscure the
+        // remaster's higher-resolution digits. The eleven keysel overlays
+        // are pixel-identical; assign one per button in layout order.
+        let mut components = vec![
             gui::image("keypad2.pcx")
                 .with_position(vec2(0.0, 0.0))
-                .with_size(vec2(188.0, 296.0)),
-            // First row of buttons
-            gui::button(KeyPadMsg::ButtonPressed(1))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 0.0,
-                    top_margin,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key10.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key11.pcx".to_owned())),
-            gui::button(KeyPadMsg::ButtonPressed(2))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 1.0,
-                    top_margin,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key20.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key21.pcx".to_owned())),
-            gui::button(KeyPadMsg::ButtonPressed(3))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 2.0,
-                    top_margin,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key30.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key31.pcx".to_owned())),
-            // Second row of buttons
-            gui::button(KeyPadMsg::ButtonPressed(4))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 0.0,
-                    top_margin + (button_height + padding) * 1.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key40.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key41.pcx".to_owned())),
-            gui::button(KeyPadMsg::ButtonPressed(5))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 1.0,
-                    top_margin + (button_height + padding) * 1.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key50.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key51.pcx".to_owned())),
-            gui::button(KeyPadMsg::ButtonPressed(6))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 2.0,
-                    top_margin + (button_height + padding) * 1.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key60.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key61.pcx".to_owned())),
-            // Third row of buttons
-            gui::button(KeyPadMsg::ButtonPressed(7))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 0.0,
-                    top_margin + (button_height + padding) * 2.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key70.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key71.pcx".to_owned())),
-            gui::button(KeyPadMsg::ButtonPressed(8))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 1.0,
-                    top_margin + (button_height + padding) * 2.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key80.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key81.pcx".to_owned())),
-            gui::button(KeyPadMsg::ButtonPressed(9))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 2.0,
-                    top_margin + (button_height + padding) * 2.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key90.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key91.pcx".to_owned())),
-            // Fourth row of buttons
-            gui::button(KeyPadMsg::ButtonPressed(0))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 0.0,
-                    top_margin + (button_height + padding) * 3.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key00.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key01.pcx".to_owned())),
-            gui::button(KeyPadMsg::Clear)
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 1.0,
-                    top_margin + (button_height + padding) * 3.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("keyn0.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("keyn1.pcx".to_owned())),
+                .with_size(vec2(188.0, 296.0))
+                .with_alpha(1.0),
         ];
+        for (index, digit) in [1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 10].into_iter().enumerate() {
+            let rect = crate::ui::Rect::new(
+                15.0 + (index % 3) as f32 * 47.0,
+                43.0 + (index / 3) as f32 * 61.0,
+                44.0,
+                59.0,
+            );
+            let hovered = _cursor
+                .as_ref()
+                .is_some_and(|cursor| rect.contains(vec2(cursor.position.x, cursor.position.y)));
+            let (msg, label) = if digit == 10 {
+                (KeyPadMsg::Clear, "clear".to_owned())
+            } else {
+                (KeyPadMsg::ButtonPressed(digit), digit.to_string())
+            };
+            components.push(
+                gui::button(msg)
+                    .with_rect(rect)
+                    .with_image(&format!("keysel{index}.png"))
+                    .with_label(&label)
+                    // Selection tint over the authored key, shared by flat
+                    // mouse and VR ray pointing. The PNG supplies translucency;
+                    // clicks retain bkeypad audio.
+                    .with_alpha(if hovered { 1.0 } else { 0.0 }),
+            );
+        }
 
         if let Some(v) = _state.current_value {
             components.extend(draw_number(v))
