@@ -643,6 +643,12 @@ pub enum Effect {
         options: CreateEntityOptions,
     },
 
+    /// Create and deposit through the normal container placement/stacking path.
+    CreateEntityInContainer {
+        template_id: i32,
+        container_entity_id: EntityId,
+    },
+
     /// `TrapSpawn` creation with the Dark ecology bookkeeping that cannot be
     /// expressed until the fresh runtime entity id exists.
     SpawnEcologyEntity {
