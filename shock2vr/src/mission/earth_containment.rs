@@ -233,18 +233,20 @@ struct Zone {
     shown: i32,
 }
 impl Zone {
-    fn stage(&self) -> u8 {
+    fn stage(&self, growth_allowed: bool) -> u8 {
         if self.protection > 30.0 {
             0
         } else if self.protection > 0.0 {
             1
+        } else if !growth_allowed {
+            4
         } else if self.density < DENSE {
             2
         } else {
             3
         }
     }
-    fn advance(&mut self, dt: f32, active: bool, quick: bool) {
+    fn advance(&mut self, dt: f32, active: bool, quick: bool, growth_allowed: bool) {
         let scale = if quick { 10.0 } else { 1.0 };
         if self.protection > 0.0 {
             // Replenishment clears accumulated patches even during rest;
@@ -253,10 +255,11 @@ impl Zone {
             if active {
                 self.protection = (self.protection - dt * scale).max(0.0);
             }
-        } else if active {
-            self.density = (self.density + dt * scale / 15.0).min(MAX_DENSITY);
+        } else if active && growth_allowed {
+            let seconds = crate::dev_params::get(crate::dev_params::HORDE_GROWTH_SECONDS);
+            self.density = (self.density + dt * scale * MAX_DENSITY / seconds).min(MAX_DENSITY);
         }
-        if active && self.protection <= 0.0 && self.density >= DENSE {
+        if active && growth_allowed && self.protection <= 0.0 && self.density >= DENSE {
             self.next_egg -= dt * scale;
         }
     }
@@ -265,6 +268,8 @@ impl Zone {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct Containment {
     zones: [Zone; 3],
+    // Previous gate, so unlocking emits a status even without a density change.
+    growth_allowed: bool,
     // Open shells expire independently of waves; closed eggs remain a threat.
     shells: HashMap<u64, f32>,
     poll: f32,
@@ -279,6 +284,7 @@ impl Default for Containment {
                 next_site: 0,
                 shown: -1,
             }),
+            growth_allowed: false,
             shells: HashMap::new(),
             poll: 0.0,
         }
@@ -319,23 +325,28 @@ impl Containment {
         dt: f32,
         active: bool,
         quick: bool,
+        wave: u32,
     ) -> Vec<Effect> {
+        let growth_allowed =
+            quick || wave >= crate::dev_params::get(crate::dev_params::HORDE_GROWTH_WAVE) as u32;
         let mut effects = vec![];
         for (index, zone) in self.zones.iter_mut().enumerate() {
-            let before = zone.stage();
-            zone.advance(dt, active, quick);
-            if before != zone.stage() {
+            let before = zone.stage(self.growth_allowed);
+            zone.advance(dt, active, quick, growth_allowed);
+            if before != zone.stage(growth_allowed) {
                 let status = [
                     "PROTECTED",
                     "Toxin-A LOW",
                     "GROWTH SPREADING",
                     "DENSE GROWTH - EGGS",
-                ][zone.stage() as usize];
+                    "GROWTH DORMANT",
+                ][zone.stage(growth_allowed) as usize];
                 effects.push(Effect::ShowMessage {
                     text: format!("{}: {status}", NAMES[index]),
                 });
             }
         }
+        self.growth_allowed = growth_allowed;
         for age in self.shells.values_mut() {
             *age += dt;
         }
@@ -439,6 +450,7 @@ impl Containment {
                 (4, 45.0)
             };
             if active
+                && growth_allowed
                 && zone.density >= DENSE
                 && zone.protection <= 0.0
                 && zone.next_egg <= 0.0
@@ -571,6 +583,53 @@ mod tests {
     }
 
     #[test]
+    fn slow_opening_waves_cannot_grow_or_produce_pods() {
+        let (world, _) = fixture();
+        let mut state = Containment::default();
+        for wave in 1..=3 {
+            for _ in 0..600 {
+                assert_eq!(egg_spawns(&state.update(&world, 1.0, true, false, wave)), 0);
+            }
+            assert!(state.zones.iter().all(|zone| zone.density == 0.0));
+        }
+        assert!(state.zones.iter().all(|zone| zone.protection == 0.0));
+        state.update(&world, 90.0, true, false, 4);
+        assert_eq!(state.zones[0].density, 3.0);
+        assert_eq!(egg_spawns(&state.update(&world, 30.0, true, false, 4)), 1);
+        assert_eq!(state.zones[0].density, DENSE);
+    }
+
+    #[test]
+    fn wave_gate_freezes_existing_growth_and_announces_unlock_once_after_load() {
+        let (world, _) = fixture();
+        let mut state = Containment::default();
+        state.zones[0].protection = 0.0;
+        state.zones[0].density = DENSE;
+        state.zones[0].next_egg = 10.0;
+        assert_eq!(egg_spawns(&state.update(&world, 60.0, true, false, 3)), 0);
+        assert_eq!(state.zones[0].density, DENSE);
+        assert_eq!(state.zones[0].next_egg, 10.0);
+        let mut loaded: Containment =
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        let unlocked = loaded.update(&world, 1.0, true, false, 4);
+        assert!(unlocked.iter().any(|effect| matches!(effect,
+            Effect::ShowMessage { text } if text == "SUBWAY: DENSE GROWTH - EGGS")));
+        assert_eq!(loaded.zones[0].next_egg, 9.0);
+        let next = loaded.update(&world, 1.0, true, false, 4);
+        assert!(!next.iter().any(|effect| matches!(effect,
+            Effect::ShowMessage { text } if text == "SUBWAY: DENSE GROWTH - EGGS")));
+    }
+
+    #[test]
+    fn diagnostic_mode_bypasses_the_wave_gate() {
+        let (world, _) = fixture();
+        let mut state = Containment::default();
+        state.zones[0].protection = 0.0;
+        state.update(&world, 9.0, true, true, 1);
+        assert_eq!(state.zones[0].density, 3.0);
+    }
+
+    #[test]
     fn grace_is_staggered_and_rest_does_not_spend_it() {
         let mut state = Containment::default();
         assert_eq!(
@@ -578,17 +637,17 @@ mod tests {
             [180.0, 210.0, 240.0]
         );
         for zone in &mut state.zones {
-            zone.advance(120.0, false, false);
+            zone.advance(120.0, false, false, true);
             assert_eq!(zone.density, 0.0);
         }
         assert_eq!(state.zones[0].protection, 180.0);
-        state.zones[0].advance(179.0, true, false);
+        state.zones[0].advance(179.0, true, false, true);
         assert_eq!(state.zones[0].density, 0.0);
-        assert_eq!(state.zones[0].stage(), 1);
-        state.zones[0].advance(1.0, true, false);
-        state.zones[0].advance(60.0, true, false);
+        assert_eq!(state.zones[0].stage(true), 1);
+        state.zones[0].advance(1.0, true, false, true);
+        state.zones[0].advance(120.0, true, false, true);
         assert_eq!(state.zones[0].density, DENSE);
-        state.zones[0].advance(120.0, false, false);
+        state.zones[0].advance(120.0, false, false, true);
         assert_eq!(state.zones[0].density, DENSE);
     }
 
@@ -606,7 +665,7 @@ mod tests {
         ));
         assert_eq!(state.zones[0].protection, 180.0);
         assert_eq!(state.zones[1].protection, 0.0);
-        state.zones[0].advance(12.0, false, false);
+        state.zones[0].advance(12.0, false, false, true);
         assert_eq!(state.zones[0].density, 0.0);
         assert_eq!(state.zones[0].protection, 180.0);
     }
@@ -616,9 +675,9 @@ mod tests {
         let (mut world, _) = fixture();
         let mut state = Containment::default();
         state.zones[0].protection = 0.0;
-        assert_eq!(egg_spawns(&state.update(&world, 1.0, true, false)), 0);
+        assert_eq!(egg_spawns(&state.update(&world, 1.0, true, false, 4)), 0);
         state.zones[0].density = 6.0;
-        assert_eq!(egg_spawns(&state.update(&world, 1.0, false, false)), 0);
+        assert_eq!(egg_spawns(&state.update(&world, 1.0, false, false, 4)), 0);
         // Fifteen ordinary wave enemies do not consume containment capacity.
         for _ in 0..15 {
             world.add_entity((
@@ -627,7 +686,7 @@ mod tests {
                 PropAI("Grub".into()),
             ));
         }
-        assert_eq!(egg_spawns(&state.update(&world, 1.0, true, false)), 1);
+        assert_eq!(egg_spawns(&state.update(&world, 1.0, true, false, 4)), 1);
         for _ in 0..MAX_HATCHLINGS {
             world.add_entity((
                 PropEcoType(ECOLOGY),
@@ -636,7 +695,7 @@ mod tests {
             ));
         }
         state.zones[0].next_egg = 0.0;
-        assert_eq!(egg_spawns(&state.update(&world, 1.0, true, false)), 0);
+        assert_eq!(egg_spawns(&state.update(&world, 1.0, true, false, 4)), 0);
     }
 
     #[test]
@@ -649,7 +708,7 @@ mod tests {
         // All eight authored sites must be visited before returning to services.
         for expected in (0..EGG_SITE_COUNT).chain(0..1) {
             state.zones[0].next_egg = 0.0;
-            let effects = state.update(&world, 1.0, true, false);
+            let effects = state.update(&world, 1.0, true, false, 4);
             let markers = world.borrow::<View<PropTemplateId>>().unwrap();
             let sites: Vec<_> = effects
                 .iter()
@@ -675,7 +734,7 @@ mod tests {
             // Fill the cap using real spawn effects, keeping the player far away.
             for site in 0..cap {
                 state.zones[0].next_egg = 0.0;
-                let effects = state.update(&world, 0.5, true, false);
+                let effects = state.update(&world, 0.5, true, false, 4);
                 assert_eq!(egg_spawns(&effects), 1);
                 assert_eq!(state.zones[0].next_egg, interval);
                 let spawn_point = effects
@@ -697,10 +756,10 @@ mod tests {
                     PropModelName("eggcl".into()),
                     position,
                 ));
-                assert_eq!(egg_spawns(&state.update(&world, 0.5, true, false)), 0);
+                assert_eq!(egg_spawns(&state.update(&world, 0.5, true, false, 4)), 0);
             }
             state.zones[0].next_egg = 0.0;
-            assert_eq!(egg_spawns(&state.update(&world, 0.5, true, false)), 0);
+            assert_eq!(egg_spawns(&state.update(&world, 0.5, true, false, 4)), 0);
         }
     }
 
@@ -721,11 +780,11 @@ mod tests {
         let mut state = Containment::default();
         state.zones[0].protection = 0.0;
         state.zones[0].density = DENSE;
-        assert_eq!(egg_spawns(&state.update(&world, 1.0, true, false)), 0);
+        assert_eq!(egg_spawns(&state.update(&world, 1.0, true, false, 4)), 0);
         state.replenish(&world, station);
         assert!(
             !state
-                .update(&world, 1.0, true, false)
+                .update(&world, 1.0, true, false, 4)
                 .iter()
                 .any(|e| matches!(e, Effect::DestroyEntity { .. }))
         );
@@ -760,7 +819,7 @@ mod tests {
         let mut state = Containment::default();
         state.zones[0].protection = 0.0;
         state.zones[0].density = DENSE;
-        let effects = state.update(&world, 1.0, false, false);
+        let effects = state.update(&world, 1.0, false, false, 4);
         assert_eq!(egg_spawns(&effects), 0);
         assert_eq!(state.zones[0].density, DENSE);
         assert_eq!(
@@ -784,10 +843,10 @@ mod tests {
     fn containment_timers_round_trip_without_reissuing_protection() {
         let (world, _) = fixture();
         let mut state = Containment::default();
-        state.update(&world, 179.0, true, false);
+        state.update(&world, 179.0, true, false, 4);
         let saved = serde_json::to_string(&state).unwrap();
         let mut loaded: Containment = serde_json::from_str(&saved).unwrap();
-        loaded.update(&world, 1.0, true, false);
+        loaded.update(&world, 1.0, true, false, 4);
         assert_eq!(loaded.zones[0].protection, 0.0);
         assert_eq!(loaded.zones[1].protection, 30.0);
     }

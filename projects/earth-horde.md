@@ -2,9 +2,11 @@
 
 Run `cargo dbgr --mission earth_horde` (or launch that mission in the desktop runtime). `earth_horde_test` uses three short waves for iteration. The aliases load Earth geometry; ordinary `earth.mis` keeps its original behavior.
 
-Ten escalating waves have about 26 minutes of minimum scheduled combat and rest. Clearing enemies can take longer. After the final wave, use the ready button beside the shops to begin optional endless play. The same button skips a rest. Doors are closed and locked and the training trigger graph is disabled.
+The player starts at the top of the stairs, facing the subway gravshaft.
 
-The starter backpack contains a wrench, pistol, psi amp, ammunition and medical/psi supplies. Shops are on the street, trainers upstairs. Buy psi tiers and individual powers separately; only powers supported by the current runtime are sold. Replicated items dispense in front of the machines. Random equipment and currency supplement normal enemy loot and wave rewards.
+Ten escalating waves have about 26 minutes of minimum scheduled combat and rest. Clearing enemies can take longer. After the final wave, use the ready button beside the shops to begin optional endless play. The same button skips a rest. The training trigger graph is disabled. Three existing office rooms use access-card locks; other training doors remain sealed.
+
+The starter backpack contains a wrench, pistol, psi amp, ammunition and medical/psi supplies. Two shops are spread across the street; four trainers are spread around the subway. Buy psi tiers and individual powers separately; only powers supported by the current runtime are sold. Replicated items dispense in front of the machines. Random equipment and currency supplement normal enemy loot and wave rewards.
 
 Corpses and their remaining contents stay lootable throughout the rest. Starting the next wave removes them; items already collected survive. Run state, rewards and purchased powers persist in saves.
 
@@ -44,16 +46,18 @@ They begin with 180, 210, and 240 seconds of protection respectively. Protection
 counts combat time only: preparation, rest, and the completed-run screen do not
 spend it. A warning appears with 30 seconds remaining.
 
-When protection expires, overlapping Hydro growth spreads outward from shop and
+Growth and new pods are gated until wave 4, even if the opening waves take a long
+time. Protection still counts down during those waves. Once the wave gate is
+open and protection expires, overlapping Hydro growth spreads outward from shop and
 trainer approaches onto nearby floors and walls, then farther along travel routes.
 There are 339 surveyed patches: 110 in the subway, 155 on the street, and 74
 upstairs. Sites were checked against world geometry and reachable arena paths;
 locked training rooms are excluded. Growth is cosmetic and does not prevent
 using the machines. Wall eggs remain a follow-up.
 
-Density reaches its maximum after 90 unprotected combat seconds. At 60 seconds,
+Density reaches its maximum after 180 eligible unprotected combat seconds. At 120 seconds,
 the zone can produce a GrubEgg every 45 combat seconds, up to four pods. At
-75 seconds the cap rises to six and the interval drops to 30 seconds; at maximum
+150 seconds the cap rises to six and the interval drops to 30 seconds; at maximum
 density it reaches eight pods with a 15-second interval. Each new spawn uses the
 current interval; an already running countdown completes normally. Eight floor
 sites per zone prioritize services before extending along routes. Approaching within four world units hatches an existing pod even during
@@ -76,8 +80,51 @@ Hatching reserves available capacity within each batch. Open shells expire after
 30 seconds; dead containment creatures join the existing end-of-rest corpse
 cleanup. Saved runs retain each zone's protection, density, egg cadence, and
 shell lifetime. The short `earth_horde_test` alias accelerates depletion, growth,
-and egg production tenfold for diagnostics, while keeping recovery/hatching rules.
+and egg production tenfold and bypasses the wave gate for diagnostics, while
+keeping recovery/hatching rules.
 
 The first pass deliberately uses floor GrubEggs. Wall-mounted growth reuses the
 Hydro meshes with wall-facing transforms; wall eggs and additional payloads can
 follow once pacing has been playtested.
+
+## Pacing prototype controls
+
+Open **Developer → Earth horde** in the pause menu or main menu. Both controls
+apply live through the existing shared flat/VR developer menu and debug API:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `horde_growth_wave` | 4 | First wave allowing growth and new pods (1–20). Protection still drains in earlier combat. |
+| `horde_growth_seconds` | 180 | Unprotected combat seconds from bare to maximum growth (30–600). Larger is slower. |
+
+Set these to `1` and `90` to compare the previous containment pacing. Increasing
+the first-wave setting mid-run pauses new growth/pods below that wave; it does
+not remove existing growth, pods, or grubs. Growth speed changes apply to remaining
+growth immediately; Toxin-A recovery and egg cadence retain their existing speeds.
+The diagnostic alias ignores only the wave gate, not the growth speed setting.
+
+These are developer overrides: they reset when the application restarts and are
+not stored in saves. Saved protection, density, and egg timers still resume; the
+current process's tuning controls their subsequent progression.
+
+Horde pressure is separate from campaign difficulty. Campaign difficulty feeds
+player health/psi pools and authored shop/training costs and loot; the director's
+wave roster, quotas, living-enemy cap, and assault schedule are fixed independently.
+A debug run accepts `--difficulty easy|normal|hard|impossible` at launch.
+
+## Exploration rewards
+
+Clearing waves 2, 4, and 6 delivers the Subway office, Street office, and
+Recruitment office access cards respectively. Cards appear in ACCESS and survive
+save/load; each opens only its own existing door(s). The subway room uses mission
+object 564, the street room 563, and the upstairs east room 365/367. The original
+training trigger graph stays disabled inside them.
+
+Each room contains one normal Trait Machine: choose one available OS upgrade
+for free, once per station. The existing per-machine quest bit prevents another
+purchase after leaving the room or loading a save. Essential ammo, healing, and
+ordinary training remain outside these optional reward rooms.
+
+Placement was surveyed against world walls. Trainers occupy west/east subway
+ends and two separated back-wall sites; replicators use the street's west/east
+wall panels, with their item outlets moved alongside them.
