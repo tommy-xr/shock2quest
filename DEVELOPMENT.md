@@ -110,8 +110,9 @@ cargo run --release -p desktop_runtime -- --vr --experimental physical_held_item
 Open `cargo dx ui --select song/engsong.snc` (or select a `.snc` in the
 explorer's song family or Archives tab). **Play song** sends the authored start
 event; **Stop** cuts off the current WAV immediately. Event buttons queue the
-latest event for the next clip boundary. Send the start event again when a theme
-returns to its silent section.
+latest event for the next clip boundary. `theme ...` events persist across clip
+boundaries until another theme is selected; other events are one-shot. Restart
+clears the previous theme and selects the authored start event.
 
 The view lists section WAVs, event branches and normalized branch probabilities.
 Green marks the playing section; blue marks the branch the player actually took.
@@ -124,6 +125,30 @@ For native-window capture, `--play-song --screenshot /tmp/song.png
 Playback uses the audio device clock; these captures are not fixed-timestep.
 The installed-asset regression can be run with
 `cargo test -p dark_explorer mounted_songs -- --ignored`.
+
+### Gameplay music themes
+
+Mission music is driven by `PropAmbientHacked` markers with the `MUSIC` flag.
+Entering a marker's radius selects its schema as a theme: `quiet` becomes
+`theme quiet`, `restart` becomes `theme restart`, etc. The shared song player
+retains that theme after leaving the marker and reapplies it at each WAV
+boundary, falling back to the section's default branch when unhandled. A new
+song starts fresh; standing inside a marker supplies its theme again after a
+level load. Events match complete names, case-insensitively (`quiet` and
+`quietlo`, or `begin` and `begin2`, are distinct).
+
+For example, MedSci 1 object 2014 (`music quiet turret1`) selects `quiet`;
+2026 selects `restart`, and 2013 selects `end`. These are location triggers,
+not automatic reactions to AI alertness or combat. Their musical effects come
+from each `.snc` graph: not every song supports every theme. The installed
+songs also use `quietlo`, `soft`, `bass`, `windy`, `beet`, `break`, `begin2`,
+and `begin3`. An unhandled event follows the default branch, not a guessed
+musical equivalent. Horde has no authored spatial theme markers and continues
+using each wave song's start theme; rest/preparation stop playback.
+
+The persistence behavior follows the original `sound/ambient.c` →
+`SongUtilSetTheme` → `cSongPlayer::SetTheme` / `_DoSegmentCallback` path.
+Sample offsets, branch randomness, and themes outside markers are not saved.
 
 ### Debug & developer keys
 

@@ -131,7 +131,12 @@ impl Song {
         let option_index = cue
             .as_ref()
             .filter(|c| !c.is_empty())
-            .and_then(|cue| section.options.iter().position(|o| o.schema.contains(cue)))
+            .and_then(|cue| {
+                section
+                    .options
+                    .iter()
+                    .position(|o| o.schema.eq_ignore_ascii_case(cue))
+            })
             .unwrap_or(0);
         let option = section
             .options
@@ -282,13 +287,19 @@ mod tests {
     fn events_select_an_option_and_unmatched_events_use_default() {
         let song = song();
         let mut rng = StdRng::seed_from_u64(7);
-        for cue in [None, Some(""), Some("unknown")] {
+        for cue in [
+            None,
+            Some(""),
+            Some("unknown"),
+            Some("begin"),
+            Some("theme"),
+        ] {
             let t = song
                 .transition(&song.start_playing(), cue, &mut rng)
                 .unwrap();
             assert_eq!((t.from, t.to, t.option_index), (0, 0, 0));
         }
-        for cue in ["THEME BEGIN", "Begin"] {
+        for cue in ["THEME BEGIN", "theme begin"] {
             let t = song
                 .transition(&song.start_playing(), Some(cue), &mut rng)
                 .unwrap();
@@ -299,13 +310,32 @@ mod tests {
     }
 
     #[test]
+    fn similar_theme_names_do_not_shadow_each_other() {
+        let mut song = song();
+        let mut quietlo = song.sections[0].options[1].clone();
+        quietlo.schema = "theme quietlo".into();
+        let mut quiet = quietlo.clone();
+        quiet.schema = "theme quiet".into();
+        song.sections[0].options = vec![song.sections[0].options[0].clone(), quietlo, quiet];
+        let mut rng = StdRng::seed_from_u64(3);
+        for (cue, expected) in [("theme quiet", 2), ("theme quietlo", 1)] {
+            assert_eq!(
+                song.transition(&song.start_playing(), Some(cue), &mut rng)
+                    .unwrap()
+                    .option_index,
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn weighted_branches_report_the_actual_destination_and_never_choose_zero() {
         let song = song();
         let mut rng = StdRng::seed_from_u64(23);
         let mut counts = [0; 3];
         for _ in 0..10000 {
             let t = song
-                .transition(&song.start_playing(), Some("begin"), &mut rng)
+                .transition(&song.start_playing(), Some("theme begin"), &mut rng)
                 .unwrap();
             assert_eq!(t.to, t.branch_index);
             counts[t.to] += 1;
