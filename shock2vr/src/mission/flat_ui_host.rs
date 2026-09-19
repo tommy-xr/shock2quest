@@ -1041,10 +1041,12 @@ impl FlatUiHost {
                 .held_entity()
                 .or(hand_item)
                 .or_else(|| self.strip_item_at(canvas_pos));
-            if self
-                .utilities
-                .update(canvas_pos, pressed_edge || grab_edge, candidate)
-            {
+            if self.utilities.update(
+                canvas_pos,
+                pressed_edge || grab_edge,
+                candidate,
+                self.cursor_item.is_some(),
+            ) {
                 if self.utilities.has_left_panel() {
                     self.close();
                 }
@@ -1490,6 +1492,10 @@ impl FlatUiHost {
             // arrow (the original's `SCM_DRAGOBJ`, §2.4). Fall back to the
             // arrow when the held item has no icon or nothing is held.
             match self.cursor_item.as_ref().and_then(|c| c.icon.as_deref()) {
+                _ if self.utilities.is_inspecting() => canvas.image(
+                    Rect::new(cursor.x, cursor.y, 32.0, 32.0),
+                    "iface/lookcur.pcx",
+                ),
                 // No slot rect: object icons draw at their authored size, and
                 // any rect bigger than the art would only center the icon
                 // inside it - i.e. slide it off the pointer.

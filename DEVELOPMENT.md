@@ -188,6 +188,22 @@ These controls share their layout in flat and VR. `GET /v1/ui` exposes their
 buttons and current contents in `utilities`, including `access_cards`,
 `character_stats`, `character_tab_0` through `character_tab_3`, and `psi_tier_N`.
 
+#### Query item information
+
+Select **?** in the cyber interface to arm the inspection cursor, then select
+an inventory item or a held-item readout. The left QUERY panel shows its short
+name and authored description without using, moving, or consuming the item.
+Selection returns the cursor to normal; select **?** again to cancel before
+selecting anything. An item already being dragged keeps ownership of the cursor.
+The four arrow buttons scroll by line or page, and the top-right X closes the
+reader. Unresearched items show the original research-required message until
+identified. The preview currently uses the inventory icon, not the original
+rotating 3D model.
+
+Flat and VR use the same canvas, selection logic, and text bounds. Debug UI labels
+include `inspect`, `query_title`, `query_line_up`, `query_line_down`,
+`utility_previous`, `utility_next`, and `utility_close`.
+
 #### Quest face buttons are per-hand and contextual
 
 The four face buttons are bound raw, by hand and position - lower is left `X` /
