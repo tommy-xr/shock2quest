@@ -6722,6 +6722,36 @@ impl MissionCore {
         None
     }
 
+    fn create_entity_in_container(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        template_id: i32,
+        container_entity_id: EntityId,
+    ) -> Option<EntityId> {
+        let position = self
+            .world
+            .borrow::<View<PropPosition>>()
+            .ok()
+            .and_then(|positions| positions.get(container_entity_id).ok().map(|p| p.position))
+            .unwrap_or_else(Vector3::zero);
+        let created = self.create_entity_with_position(
+            asset_cache,
+            template_id,
+            Point3::from_vec(position),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Matrix4::identity(),
+            CreateEntityOptions::default(),
+        );
+        let placed = self.drop_entity_into_container(container_entity_id, created.entity_id);
+        if placed.is_none() {
+            warn!(
+                "template {template_id} could not be placed in {container_entity_id:?} - no room"
+            );
+            self.destroy_entity(created.entity_id);
+        }
+        placed
+    }
+
     /// Unlike [`Self::drop_entity_into_container`], placement is tried BEFORE
     /// a grid-wide merge: an explicit cell target is the player's instruction
     /// to put the item *there*, so a free target cell wins over pooling into a
@@ -9301,6 +9331,12 @@ impl MissionCore {
                         root_transform,
                         options,
                     );
+                }
+                Effect::CreateEntityInContainer {
+                    template_id,
+                    container_entity_id,
+                } => {
+                    self.create_entity_in_container(asset_cache, template_id, container_entity_id);
                 }
                 Effect::SpawnEcologyEntity {
                     template_name,

@@ -86,7 +86,7 @@ const ENEMY_INTRODUCTIONS: &[(&str, u32)] = &[
 
 // Floor positions surveyed against Earth's actual collision geometry. The
 // subway is a separate AI arena: creatures cannot ride the player gravshafts.
-const SITES: &[[f32; 3]] = &[
+pub(super) const SITES: &[[f32; 3]] = &[
     [-8.0, 19.8, 24.0],
     [4.0, 19.8, 24.0],
     [20.0, 19.8, 24.0],
@@ -99,6 +99,10 @@ const SITES: &[[f32; 3]] = &[
     [21.0, 0.8, 4.0],
     [0.0, 0.8, 10.0],
     [21.0, 0.8, 10.0],
+    [-4.0, 20.0, 24.0],
+    [25.0, 20.0, 24.0],
+    [-6.0, 0.8, 4.0],
+    [28.0, 0.8, 4.0],
 ];
 
 pub(crate) fn asset_mission(name: &str) -> &str {
@@ -467,7 +471,7 @@ pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
         core.spawn_into_backpack(assets, template)
             .expect("horde starter item fits backpack");
     }
-    let mut rng = rand::rngs::StdRng::seed_from_u64(SEED);
+    let mut rng = rand::thread_rng();
     for name in [
         "Shotgun",
         "Laser Pistol",
@@ -552,6 +556,8 @@ pub(crate) struct HordeDirector {
     seed: u64,
     enemies: Vec<Enemy>,
     containment: super::earth_containment::Containment,
+    supplies: super::earth_supplies::SupplyDrops,
+    last_spawn_site: Option<i32>,
 }
 
 impl Default for HordeDirector {
@@ -570,6 +576,8 @@ impl Default for HordeDirector {
             seed: SEED,
             enemies: vec![],
             containment: Default::default(),
+            supplies: Default::default(),
+            last_spawn_site: None,
         }
     }
 }
@@ -647,6 +655,7 @@ impl HordeDirector {
     fn start_wave(&mut self, world: &World) -> Effect {
         let mut effects = expired_corpses(world);
         self.wave = self.wave.saturating_add(1);
+        effects.extend(self.supplies.start_wave(world, self.wave, self.quick));
         self.phase = Phase::Assault;
         self.spawned = 0;
         self.clock = 0.0;
@@ -769,15 +778,19 @@ impl HordeDirector {
             .collect();
         // Open street sightlines may cover all markers. The existing SpawnSFX
         // telegraphs a distant fallback; never spawn at the player's feet.
-        let sites = if hidden.is_empty() {
-            &candidates
+        let mut sites = if hidden.is_empty() {
+            candidates
         } else {
-            &hidden
+            hidden
         };
         if sites.is_empty() {
             return None;
         }
-        let (_, marker, _) = sites[self.roll(sites.len())];
+        if sites.len() > 1 {
+            sites.retain(|(id, _, _)| Some(*id) != self.last_spawn_site);
+        }
+        let (site, marker, _) = sites[self.roll(sites.len())];
+        self.last_spawn_site = Some(site);
         let template_name = self.next_enemy().to_owned();
         Some(Effect::SpawnEcologyEntity {
             template_name,
@@ -803,6 +816,7 @@ impl Script for HordeDirector {
         let mut effects = Vec::new();
         if !self.initialized {
             self.initialized = true;
+            self.seed = rand::random();
             let mode = world
                 .borrow::<View<PropEcoType>>()
                 .unwrap()
@@ -836,6 +850,10 @@ impl Script for HordeDirector {
             effects.push(self.status());
             self.next_status = 5.0;
         }
+        effects.extend(
+            self.supplies
+                .update(world, dt, self.phase == Phase::Assault),
+        );
         effects.extend(self.containment.update(
             world,
             dt,

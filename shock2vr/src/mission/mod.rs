@@ -6,6 +6,7 @@ mod body_inventory;
 mod character_sheet;
 pub(crate) mod earth_containment;
 pub(crate) mod earth_horde;
+mod earth_supplies;
 pub mod entity_populator;
 pub mod flat_ui_host;
 mod holsters;
