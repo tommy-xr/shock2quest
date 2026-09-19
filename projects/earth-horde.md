@@ -2,9 +2,11 @@
 
 Run `cargo dbgr --mission earth_horde` (or launch that mission in the desktop runtime). `earth_horde_test` uses three short waves for iteration. The aliases load Earth geometry; ordinary `earth.mis` keeps its original behavior.
 
-Ten escalating waves have about 26 minutes of minimum scheduled combat and rest. Clearing enemies can take longer. After the final wave, use the ready button beside the shops to begin optional endless play. The same button skips a rest. Doors are closed and locked and the training trigger graph is disabled.
+The player starts at the top of the stairs, facing the subway gravshaft.
 
-The starter backpack contains a wrench, pistol, psi amp, ammunition and medical/psi supplies. Shops are on the street, trainers upstairs. Buy psi tiers and individual powers separately; only powers supported by the current runtime are sold. Replicated items dispense in front of the machines. Random equipment and currency supplement normal enemy loot and wave rewards.
+Ten escalating waves have about 26 minutes of minimum scheduled combat and rest. Clearing enemies can take longer. After the final wave, use the ready button beside the shops to begin optional endless play. The same button skips a rest. The training trigger graph is disabled. Three existing office rooms use access-card locks; other training doors remain sealed.
+
+The starter backpack contains a wrench, pistol, psi amp, ammunition and medical/psi supplies. Two shops are spread across the street; four trainers are spread around the subway. Buy psi tiers and individual powers separately; only powers supported by the current runtime are sold. Replicated items dispense in front of the machines. Random equipment and currency supplement normal enemy loot and wave rewards.
 
 Corpses and their remaining contents stay lootable throughout the rest. Starting the next wave removes them; items already collected survive. Run state, rewards and purchased powers persist in saves.
 
@@ -109,3 +111,20 @@ Horde pressure is separate from campaign difficulty. Campaign difficulty feeds
 player health/psi pools and authored shop/training costs and loot; the director's
 wave roster, quotas, living-enemy cap, and assault schedule are fixed independently.
 A debug run accepts `--difficulty easy|normal|hard|impossible` at launch.
+
+## Exploration rewards
+
+Clearing waves 2, 4, and 6 delivers the Subway office, Street office, and
+Recruitment office access cards respectively. Cards appear in ACCESS and survive
+save/load; each opens only its own existing door(s). The subway room uses mission
+object 564, the street room 563, and the upstairs east room 365/367. The original
+training trigger graph stays disabled inside them.
+
+Each room contains one normal Trait Machine: choose one available OS upgrade
+for free, once per station. The existing per-machine quest bit prevents another
+purchase after leaving the room or loading a save. Essential ammo, healing, and
+ordinary training remain outside these optional reward rooms.
+
+Placement was surveyed against world walls. Trainers occupy west/east subway
+ends and two separated back-wall sites; replicators use the street's west/east
+wall panels, with their item outlets moved alongside them.
