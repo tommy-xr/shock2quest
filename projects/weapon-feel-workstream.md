@@ -962,3 +962,40 @@ bypass Agility/Still Hand suppression. `gun_one_hand_scale` (**1-hand scale**, s
 only the extra one-handed spring after Strength. Zero removes the penalty;
 support and baseline recoil are unchanged, and per-axis gains still apply.
 Values are process-local like other dev parameters; restart resets them.
+
+
+### Flatscreen viewmodel recoil
+
+The flat gun stayed rigid while the VR one kicked. The same spring now drives
+the first-person viewmodel: it pivots around its own origin (muzzle rise)
+and travels back along its barrel, then settles. The carry/reload pitch keeps
+pivoting around the eye as before; recoil composes on top of it in the held
+model's frame, which the viewmodel base yaw is exactly the rotation into.
+
+Flat braces the gun in both hands whatever the model shows, so only the
+baseline impulse applies and the one-hand penalty spring never runs. Agility,
+Still Hand, the aiming implant, Strength and the per-axis gains all apply
+first; `flat_recoil_scale` (**Flat scale**, 0.25-5, step 0.25, default 1) then
+rescales the whole kick. Unlike the VR per-axis gains it scales the travel
+caps too, so the knob keeps biting instead of saturating at the authored
+ceiling; recovery rates are untouched, so it changes how far the gun throws,
+not how long it settles.
+
+Recoil is presentation only. Flat shots spawn along the camera/crosshair ray
+(`RuntimePropFlatAim`), which recoil never touches, so accuracy and balance are
+unchanged - the flat analogue of VR's fixed tracked head. Recoil resets when
+the wielded weapon changes.
+
+Open issues:
+
+- At Agility 6 the authored angular kick is zero (original `CalcKickAngle`), so
+  a maxed character sees kickback only. `flat_recoil_scale` cannot restore it -
+  it multiplies an impulse Agility has already zeroed. Faithful, but it means
+  the feature is near-invisible for a late-game character; whether flat should
+  keep a floor of muzzle rise is a tuning question for playtesting.
+- The knob's default of 1 is the VR-tuned magnitude, not a flat-tuned one. The
+  authored kick was sized for a 3D-tracked gun; the screen-space framing reads
+  it differently and the default likely wants revisiting after play.
+- No camera kick. The original pitches the view on firing; that was deliberately
+  left out here (it would change accuracy and mouse feel) and would be a
+  separate, opt-in change.

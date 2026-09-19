@@ -118,10 +118,57 @@ pub fn handling_strength(world: &World) -> i32 {
         .unwrap_or(1)
 }
 
+/// Flatscreen viewmodel recoil. The flat gun is held in both hands, so only
+/// the baseline impulse applies and the one-hand penalty spring never runs.
+/// `flat_recoil_scale` then rescales the whole kick - caps included, unlike
+/// the VR per-axis gains - because the flat kick is purely presentational:
+/// it moves the viewmodel, never the camera or the crosshair the shot follows.
+pub fn flat_impulse(impulse: RecoilImpulse, strength: i32) -> RecoilImpulse {
+    // Supported, so the one-hand argument is never consumed - pass the
+    // baseline rather than advertise a dependency that does not exist.
+    scaled_flat(
+        vr_impulses(impulse, impulse, strength, true).0,
+        crate::dev_params::get(crate::dev_params::FLAT_RECOIL_SCALE),
+    )
+}
+
+/// The pure gain behind [`flat_impulse`]. Deliberately separate from
+/// [`vr_impulses`]'s per-axis gain: this one is uniform and also scales the
+/// travel caps, so the knob keeps biting past the authored ceiling. Recovery
+/// rates are left alone, so scaling changes how far the gun throws, not how
+/// long it takes to settle. A new impulse field needs adding in both.
+fn scaled_flat(base: RecoilImpulse, scale: f32) -> RecoilImpulse {
+    // `f32::MAX` is the "no ceiling" sentinel (heading has none); scaling it
+    // would only turn an unlimited axis into a merely enormous one.
+    // Saturate rather than overflow: an infinite cap would fail `kick`'s
+    // finiteness check and silently drop the whole impulse.
+    let cap = |limit: f32| {
+        if limit.is_finite() && limit < f32::MAX {
+            (limit * scale).min(f32::MAX)
+        } else {
+            limit
+        }
+    };
+    RecoilImpulse {
+        pitch: base.pitch * scale,
+        heading: base.heading * scale,
+        back: base.back * scale,
+        pitch_limit: cap(base.pitch_limit),
+        heading_limit: cap(base.heading_limit),
+        back_limit: cap(base.back_limit),
+        ..base
+    }
+}
+
 /// Called only after the shared firing gate succeeds, once per shell (not pellet).
 pub fn shot_impulse(world: &World, gun: EntityId) -> Option<(RecoilImpulse, RecoilImpulse)> {
-    // Keep the flat/nonphysical firing path free of recoil RNG draws.
-    crate::mission::mission_core::held_item_collision_group(world, gun)?;
+    // Player guns only: a physical VR held body, or the flat viewmodel. AI
+    // weapons never draw recoil RNG.
+    if crate::mission::mission_core::held_item_collision_group(world, gun).is_none()
+        && !crate::runtime_props::is_flat_aimed(world, gun)
+    {
+        return None;
+    }
     let (kicks, states, guns) = world
         .borrow::<(View<PropGunKick>, View<PropGunState>, View<PropPlayerGun>)>()
         .ok()?;
@@ -584,6 +631,65 @@ mod tests {
             assert!(state.heading.position.abs() <= ar.heading_limit);
             assert!(state.pitch.position.abs() <= ar.pitch_limit);
         }
+    }
+
+    /// Flat holds the gun in both hands, so only the baseline spring runs; the
+    /// flat gain then rescales kick AND caps (a capped axis would otherwise
+    /// stop responding to the knob), leaving recovery rates untouched.
+    #[test]
+    fn flat_recoil_is_two_handed_and_scales_kick_with_its_caps() {
+        let authored = RecoilImpulse {
+            pitch: 0.6,
+            heading: 0.2,
+            back: -0.01,
+            pitch_limit: 8.0,
+            back_limit: 0.2,
+            heading_limit: f32::MAX,
+            angular_rate: 2.0,
+            back_rate: 3.0,
+            forward: -Vector3::unit_x(),
+        };
+        let one_hand = RecoilImpulse {
+            pitch: 30.0,
+            ..authored
+        };
+        // Support is assumed, so the one-hand profile never reaches flat.
+        let base = scaled_flat(vr_impulses(authored, one_hand, 1, true).0, 1.0);
+        assert_eq!(base.pitch, flat_impulse(authored, 1).pitch);
+        let expected_pitch =
+            authored.pitch * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE);
+        let expected_heading =
+            authored.heading * crate::dev_params::get(crate::dev_params::GUN_YAW_SCALE);
+        let expected_back =
+            authored.back * crate::dev_params::get(crate::dev_params::GUN_KICKBACK_SCALE);
+        assert_eq!(
+            (base.pitch, base.heading, base.back),
+            (expected_pitch, expected_heading, expected_back)
+        );
+        for scale in [0.25, 5.0] {
+            let scaled = scaled_flat(base, scale);
+            assert!((scaled.pitch - expected_pitch * scale).abs() < 1e-5);
+            assert!((scaled.heading - expected_heading * scale).abs() < 1e-5);
+            assert!((scaled.back - expected_back * scale).abs() < 1e-6);
+            assert!((scaled.pitch_limit - 8.0 * scale).abs() < 1e-5);
+            assert!((scaled.back_limit - 0.2 * scale).abs() < 1e-6);
+            assert_eq!(scaled.heading_limit, f32::MAX);
+            assert_eq!(scaled.angular_rate, authored.angular_rate);
+            assert_eq!(scaled.back_rate, authored.back_rate);
+            // The scaled kick must survive its own (scaled) ceiling.
+            let mut spring = RecoilState::default();
+            spring.kick(scaled);
+            let peak = (0..120).fold(0.0_f32, |peak, _| {
+                let (_, _) = spring.step(1.0 / 120.0);
+                peak.max(spring.pitch.position)
+            });
+            assert!(
+                (peak - expected_pitch * scale).abs() < 0.05,
+                "peak {peak} at {scale}"
+            );
+        }
+        // Strength still applies underneath the flat gain.
+        assert!(scaled_flat(vr_impulses(authored, one_hand, 6, true).0, 1.0).pitch < base.pitch);
     }
 
     #[test]

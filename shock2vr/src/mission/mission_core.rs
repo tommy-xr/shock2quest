@@ -10476,12 +10476,19 @@ impl MissionCore {
                     one_hand,
                 } => {
                     let strength = crate::weapon_recoil::handling_strength(&self.world);
+                    // Exactly one of these applies: VR kicks the held rigid
+                    // body (a no-op unless the gun is a held-inert body), flat
+                    // kicks its viewmodel spring.
                     self.physics.kick_held_gun(
                         entity_id,
                         impulse,
                         one_hand,
                         strength,
                         self.interaction.is_supported(entity_id),
+                    );
+                    self.interaction.kick_viewmodel(
+                        entity_id,
+                        crate::weapon_recoil::flat_impulse(impulse, strength),
                     );
                 }
                 Effect::PlayImpactSound {
@@ -12631,12 +12638,7 @@ impl MissionCore {
         // including expiry and immediate removal after training/equipping.
         if let Some(requirement) =
             crate::wielded_weapon::held_by_hand(&self.world, crate::vr_config::Handedness::Left)
-                .filter(|weapon| {
-                    self.world
-                        .borrow::<View<crate::runtime_props::RuntimePropFlatAim>>()
-                        .ok()
-                        .is_some_and(|aims| aims.get(*weapon).is_ok())
-                })
+                .filter(|weapon| crate::runtime_props::is_flat_aimed(&self.world, *weapon))
                 .and_then(|weapon| {
                     crate::weapon_requirements::active_weapon_skill_notice(&self.world, weapon)
                 })
