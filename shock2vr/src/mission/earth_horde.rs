@@ -462,7 +462,7 @@ pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
     core.world
         .borrow::<UniqueViewMut<PlayerInfo>>()
         .unwrap()
-        .rotation = Quaternion::from_angle_y(Deg(0.0));
+        .rotation = Quaternion::from_angle_y(Deg(-90.0));
     for template in [-928, -17, -247, -1358, -1358, -52, -57, -57] {
         core.spawn_into_backpack(assets, template)
             .expect("horde starter item fits backpack");
