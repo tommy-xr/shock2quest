@@ -673,6 +673,10 @@ pub enum Effect {
         goto_player: bool,
     },
 
+    HealingPulse {
+        amp: EntityId,
+    },
+
     DrawDebugLines {
         lines: Vec<(Point3<f32>, Point3<f32>, Vector4<f32>)>,
     },
