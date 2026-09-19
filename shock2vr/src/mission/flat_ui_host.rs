@@ -2040,6 +2040,10 @@ mod tests {
             font: "mainfont.fon".to_owned(),
             text: "451".to_owned(),
             alpha: 1.0,
+            font_size: 0.0,
+            h: HAlign::Left,
+            v: VAlign::Middle,
+            fit_to_rect: false,
         };
         let r = info.canvas_rect(panel);
         assert!((r.y - (124.0 + 20.0)).abs() < 1e-3);
