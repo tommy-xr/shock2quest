@@ -3537,6 +3537,7 @@ impl MissionCore {
         world.add_unique(crate::scripts::ElevatorContext::load(asset_cache, &mission));
         world.add_unique(crate::scripts::gui::TraitsContext::load(asset_cache));
         world.add_unique(crate::scripts::gui::ComputerContext::load(asset_cache));
+        world.add_unique(crate::scripts::gui::PanelText::load(asset_cache));
 
         world.add_unique(EffectQueue {
             effects: Vec::new(),

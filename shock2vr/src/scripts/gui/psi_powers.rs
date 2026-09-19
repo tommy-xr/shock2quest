@@ -312,68 +312,136 @@ impl Gui<PsiTrainerState, PsiPowersGuiMsg> for PsiTrainerGui {
         world: &World,
         state: &PsiTrainerState,
     ) -> Vec<GuiComponent<PsiPowersGuiMsg>> {
-        let mut components = psi_panel_components(cursor, world, Some(state.tier));
-        let marker = cell_rect(0, 0);
+        // The purchase panel has its own authored geometry (shktrpsi.cpp):
+        // row-major icons at x=15/80, points at y=167, help at y=190.
+        // The amp/character selector uses a different, column-major layout.
+        let mut components = vec![
+            gui::image("iface/psitrain.pcx")
+                .with_size(vec2(PANEL_W, PANEL_H))
+                .with_alpha(1.0),
+        ];
         components.push(
-            gui::button(PsiPowersGuiMsg::SelectPower(
-                (state.tier - 1) * POWERS_PER_TIER,
-            ))
-            .with_image(BACKDROP)
-            .with_alpha(0.0)
-            .with_label(&format!("buy_psi_tier_{}", state.tier))
-            .with_position(vec2(marker.x, marker.y))
-            .with_size(vec2(marker.w, marker.h)),
+            gui::image(&format!("iface/psi{}.pcx", state.tier))
+                .with_rect(Rect::new(12.0, 11.0, 144.0, 24.0))
+                .with_alpha(1.0),
         );
+        for tab in 0..TIERS {
+            components.push(
+                gui::button(PsiPowersGuiMsg::BrowseTier(tab + 1))
+                    .with_image("iface/psitrain.pcx")
+                    .with_alpha(0.0)
+                    .with_label(&tier_tab_label(tab + 1))
+                    .with_rect(Rect::new(
+                        12.0 + tab as f32 * 142.0 / 5.0,
+                        10.0,
+                        142.0 / 5.0,
+                        18.0,
+                    )),
+            );
+        }
         let quests = world
             .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
             .unwrap();
         let stats = quests.player_stats();
         let powers = world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
         let known = world.borrow::<UniqueView<PlayerPsiKnownPowers>>().unwrap();
-        let hovered = cursor
-            .as_ref()
-            .and_then(|c| cell_at(c.position.x, c.position.y))
-            .map(|(col, row)| power_id_at_cell(state.tier, col, row));
-        let detail = if let Some(id) = hovered {
-            if is_tier_marker(id) {
-                let cost = crate::difficulty::trainer_costs(world).and_then(|costs| {
-                    super::upgrade_quote(&costs, stats, super::TrainerTarget::PsiTier(state.tier))
-                });
-                match cost {
-                    Some(cost) => format!("Buy tier {}: {} cm", state.tier, cost),
-                    None if stats.psi_tier >= state.tier => "Tier already unlocked".into(),
-                    _ => "Unlock previous tier first".into(),
-                }
-            } else if let Some(index) = power_index(&powers.0, id) {
-                let power = &powers.0[index];
-                if known.0.contains(&power.template_id) {
-                    "Power already learned".into()
-                } else if !purchasable_power(power) {
-                    "Power unavailable".into()
-                } else if let Some(cost) = psi_power_quote(world, power.template_id) {
-                    format!("Buy power: {} cm", cost)
-                } else {
-                    "Unlock this tier first".into()
-                }
+        let strings_view = world.borrow::<UniqueView<GlobalPsiStrings>>();
+        let empty = std::collections::HashMap::new();
+        let strings = strings_view.as_ref().map_or(&empty, |s| &s.0);
+        let costs = crate::difficulty::trainer_costs(world);
+        let mut help = None;
+        for slot in 0..POWERS_PER_TIER {
+            let id = (state.tier - 1) * POWERS_PER_TIER + slot;
+            let rect = Rect::new(
+                15.0 + (slot % 2) as f32 * 65.0,
+                34.0 + (slot / 2) as f32 * 30.0,
+                66.0,
+                30.0,
+            );
+            let power = power_index(&powers.0, id).map(|index| &powers.0[index]);
+            let owned = if slot == 0 {
+                stats.psi_tier >= state.tier
             } else {
-                "Power unavailable".into()
+                power.is_some_and(|p| known.0.contains(&p.template_id))
+            };
+            let quote = if slot == 0 {
+                costs.as_ref().and_then(|c| {
+                    super::upgrade_quote(c, stats, super::TrainerTarget::PsiTier(state.tier))
+                })
+            } else {
+                power.and_then(|p| psi_power_quote(world, p.template_id))
+            };
+            let kind = if owned {
+                2
+            } else if quote.is_some_and(|cost| cost <= stats.cyber_modules) {
+                1
+            } else {
+                0
+            };
+            components.push(
+                gui::image(&icon_texture(&icon_basename(strings, id), kind))
+                    .with_rect(rect)
+                    .with_alpha(1.0),
+            );
+            // One-pixel artwork overlap between columns is not a second hit:
+            // each button stops at the next column's start.
+            components.push(
+                gui::button(PsiPowersGuiMsg::SelectPower(id))
+                    .with_image("iface/psitrain.pcx")
+                    .with_alpha(0.0)
+                    .with_label(&if slot == 0 {
+                        format!("buy_psi_tier_{}", state.tier)
+                    } else {
+                        power_cell_label(id)
+                    })
+                    .with_rect(Rect { w: 65.0, ..rect }),
+            );
+            if !owned {
+                let price = costs
+                    .as_ref()
+                    .map(|c| c.psi_cost[(state.tier - 1) as usize][slot as usize]);
+                if let Some(price) = price.filter(|price| *price >= 0) {
+                    components.push(super::PanelText::text(
+                        &price.to_string(),
+                        Rect::new(rect.x + 44.0, rect.y + 15.0, 21.0, 14.0),
+                    ));
+                }
             }
-        } else {
-            state
-                .message
-                .clone()
-                .unwrap_or_else(|| "Click a power or tier to buy".into())
-        };
-        components.push(
-            gui::text(&detail)
-                .with_position(vec2(13.0, 266.0))
-                .with_size(vec2(170.0, 11.0)),
-        );
-        components.push(
-            gui::text(&format!("Modules: {}", stats.cyber_modules))
-                .with_position(vec2(13.0, 280.0))
-                .with_size(vec2(170.0, 11.0)),
-        );
+            if stats.psi_tier >= state.tier && kind == 1 {
+                components.push(
+                    gui::image("iface/psit10.pcx")
+                        .with_rect(rect)
+                        .with_alpha(1.0),
+                );
+            }
+            if cursor.as_ref().is_some_and(|c| {
+                Rect { w: 65.0, ..rect }.contains_half_open(vec2(c.position.x, c.position.y))
+            }) {
+                help = strings.get(&format!("psi{id}")).cloned();
+            }
+        }
+        if stats.psi_tier < state.tier {
+            components.push(
+                gui::image("iface/psibuy10.pcx")
+                    .with_rect(Rect::new(15.0, 34.0, 139.0, 123.0))
+                    .with_alpha(1.0),
+            );
+        }
+        components.push(super::PanelText::text(
+            &super::PanelText::string(world, "misc", "TrainPoints", "Modules"),
+            Rect::new(16.0, 167.0, 50.0, 14.0),
+        ));
+        components.push(super::PanelText::text(
+            &stats.cyber_modules.to_string(),
+            Rect::new(68.0, 167.0, 80.0, 14.0),
+        ));
+        if let Some(help) = help.as_ref().or(state.message.as_ref()) {
+            components.extend(super::PanelText::paragraph(
+                world,
+                help,
+                Rect::new(12.0, 190.0, 159.0, 97.0),
+            ));
+        }
         components
     }
     fn get_config(&self) -> GuiConfig {

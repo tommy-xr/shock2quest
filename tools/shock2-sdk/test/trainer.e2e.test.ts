@@ -92,17 +92,17 @@ test(
       els.find((e) => e.kind === "text" && e.text?.includes(needle));
     const els = opened.active_panel.elements;
     for (const label of ["Strength", "Endurance", "Agility", "Psionics", "Cybernetics"]) {
-      assert.ok(textEl(label, els), `panel should list a "${label}" row`);
+      assert.ok(els.some(e => e.kind === "button" && e.label === label), `panel should expose a "${label}" buy row`);
     }
-    const enduranceDetail = textEl("lvl 1 > 2: 3 cm", els);
-    assert.ok(
-      enduranceDetail,
-      `the Endurance row should quote the STATCOST cost (3 cm), got: ${JSON.stringify(
-        els.filter((e) => e.kind === "text").map((e) => e.text),
-      )}`,
-    );
-    assert.ok(textEl("unavailable", els), "storage-only stats are marked unavailable");
-    assert.ok(textEl("modules: 29", els), "panel shows the module pool");
+    for (const label of ["STR", "END", "PSI", "AGI", "CYB"]) {
+      assert.ok(textEl(label, els), `panel should use the authored "${label}" abbreviation`);
+    }
+    const endurance = els.find(e => e.kind === "button" && e.label === "Endurance")!;
+    const rowText = els.filter(e => e.kind === "text" && e.rect[1] >= endurance.rect[1] && e.rect[1] < endurance.rect[1] + endurance.rect[3]).map(e => e.text);
+    assert.ok(rowText.includes("1") && rowText.includes("2") && rowText.includes("3"),
+      `Endurance should show current/next levels and STATCOST price separately: ${rowText}`);
+    assert.ok(textEl("N/A", els), "unsupported stats are visibly unavailable");
+    assert.ok(textEl("Modules:", els) && textEl("29", els), "panel shows the module pool");
 
     // --- A storage-only stat refuses without taking currency. The same
     // machine then remains usable for a supported purchase. ---
@@ -118,6 +118,8 @@ test(
       await game.input.set("pointer.pressed", 1);
       await game.step({ frames: 2 });
       await game.input.set("pointer.pressed", 0);
+      // Leave the row to expose transaction feedback; hovering shows its help.
+      await game.input.set("pointer.position", [0.5, 0.5]);
       await game.step({ frames: 2 });
     };
     await clickElement(rowButton("Agility", els));

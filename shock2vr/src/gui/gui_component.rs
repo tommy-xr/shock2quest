@@ -697,6 +697,10 @@ pub enum GuiComponentRenderInfo {
         font: String,
         text: String,
         alpha: f32,
+        font_size: f32,
+        h: HAlign,
+        v: VAlign,
+        fit_to_rect: bool,
     },
     /// A flat colour rectangle (see [`UiElement::Fill`]).
     Fill {
@@ -764,21 +768,24 @@ impl GuiComponentRenderInfo {
                 kind: *kind,
             },
             Self::Text {
-                text, font, alpha, ..
+                text,
+                font,
+                alpha,
+                font_size,
+                h,
+                v,
+                fit_to_rect,
+                ..
             } => UiElement::Text {
                 position: vec2(rect.x, rect.y),
                 size: vec2(rect.w, rect.h),
                 text: text.clone(),
                 font: font.clone(),
-                // Render at the font's native pixel height (the Dark engine
-                // draws its bitmap fonts 1:1), not the component's box height -
-                // the `size` on a GUI text component is its bounding box, not a
-                // font size. Vertically center the native-height text in that box.
-                font_size: 0.0,
-                h: HAlign::Left,
-                v: VAlign::Middle,
+                font_size: *font_size,
+                h: *h,
+                v: *v,
                 alpha: *alpha,
-                fit_to_rect: false,
+                fit_to_rect: *fit_to_rect,
             },
             Self::Fill { color, alpha, .. } => UiElement::Fill {
                 position: vec2(rect.x, rect.y),
@@ -836,13 +843,20 @@ where
                 font,
                 text,
                 alpha,
-                ..
+                font_size,
+                h,
+                v,
+                fit_to_rect,
             } => GuiComponentRenderInfo::Text {
                 position: vec2(position.x / screen_size.x, (-position.y) / screen_size.y),
                 size: vec2(size.x / screen_size.x, size.y / screen_size.y),
                 font: font.clone(),
                 text: text.clone(),
                 alpha: *alpha,
+                font_size: *font_size,
+                h: *h,
+                v: *v,
+                fit_to_rect: *fit_to_rect,
             },
             GuiComponent::Image {
                 position,
@@ -972,6 +986,33 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_layout_survives_the_effect_boundary() {
+        let element: GuiComponent<()> = GuiComponent::Text {
+            position: vec2(15.0, 20.0),
+            size: vec2(136.0, 14.0),
+            text: "bounded text".into(),
+            font: "mainaa.fon".into(),
+            font_size: 9.0,
+            h: HAlign::Center,
+            v: VAlign::Top,
+            alpha: 1.0,
+            fit_to_rect: true,
+        };
+        let info = element.to_render_info(vec2(188.0, 296.0), cgmath::point2(-1.0, -1.0));
+        let restored = info.to_ui_element(Rect::new(0.0, 0.0, 188.0, 296.0));
+        assert!(matches!(
+            restored,
+            GuiComponent::Text {
+                font_size: 9.0,
+                h: HAlign::Center,
+                v: VAlign::Top,
+                fit_to_rect: true,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn gui_buttons_are_canvas_elements() {
