@@ -7,6 +7,7 @@ mod explorer;
 mod grip_editor;
 mod model_details;
 mod model_preview;
+mod song_preview;
 mod support_grip_editor;
 mod ui;
 
@@ -68,6 +69,14 @@ enum Commands {
         /// Write a PNG of the first rendered frame to this path and exit
         #[arg(long)]
         screenshot: Option<std::path::PathBuf>,
+
+        /// Start the selected song immediately (including its initial theme event)
+        #[arg(long)]
+        play_song: bool,
+
+        /// Seconds to wait before a screenshot, for capturing live song playback
+        #[arg(long, default_value_t = 0.0)]
+        screenshot_after: f32,
 
         /// Open with an asset selected, as "<family>/<key>" (e.g. "obj/txt16/arm.pcx")
         #[arg(long)]
@@ -248,6 +257,8 @@ fn main() {
             grip_view,
             grip_library,
             screenshot,
+            play_song,
+            screenshot_after,
             select,
             search,
             grid,
@@ -267,6 +278,8 @@ fn main() {
             grip_view,
             grip_library,
             screenshot,
+            play_song,
+            screenshot_after,
             select,
             search,
             grid,

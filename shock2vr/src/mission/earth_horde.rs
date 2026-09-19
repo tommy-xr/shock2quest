@@ -479,6 +479,14 @@ fn expired_corpses(world: &World) -> Vec<Effect> {
 /// title card: it interrupts a fight that is already starting.
 const WAVE_CARD_DURATION: Duration = Duration::from_secs(3);
 
+// One song per authored level with a music bed, in deck progression order:
+// MedSci 1/2, Engineering 1/2, Hydroponics 1/2, Operations 2/3/4,
+// Recreation 1, Command 1/2, Rickenbacker 1 (their SONGPARAMS values).
+const WAVE_SONGS: &[&str] = &[
+    "song08", "song06", "engsong", "engsong2", "song02", "song09", "song04", "song03", "song10",
+    "song07", "song13", "song11", "song14",
+];
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 enum Phase {
     #[default]
@@ -497,6 +505,9 @@ struct Enemy {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct HordeDirector {
     initialized: bool,
+    // Audio is scene-local and must be re-established after loading a save.
+    #[serde(skip)]
+    music_synced: bool,
     quick: bool,
     phase: Phase,
     wave: u32,
@@ -514,6 +525,7 @@ impl Default for HordeDirector {
     fn default() -> Self {
         Self {
             initialized: false,
+            music_synced: false,
             quick: false,
             phase: Phase::Rest,
             wave: 0,
@@ -599,10 +611,19 @@ impl HordeDirector {
         self.seed = rng.next_u64();
         rng.gen_range(0..count)
     }
+    fn music(&self) -> Effect {
+        Effect::SetBackgroundMusic {
+            song: (self.phase == Phase::Assault).then(|| {
+                WAVE_SONGS[self.wave.saturating_sub(1) as usize % WAVE_SONGS.len()].to_owned()
+            }),
+        }
+    }
+
     fn start_wave(&mut self, world: &World) -> Effect {
         let mut effects = expired_corpses(world);
         self.wave = self.wave.saturating_add(1);
         self.phase = Phase::Assault;
+        effects.push(self.music());
         self.spawned = 0;
         self.clock = 0.0;
         self.next_spawn = 0.0;
@@ -652,6 +673,7 @@ impl HordeDirector {
         self.clock = self.rest_seconds();
         self.next_status = 5.0;
         Effect::Multiple(vec![
+            self.music(),
             Effect::AwardNanites {
                 amount: 30 + self.wave.min(20) as i32 * 5,
             },
@@ -778,12 +800,17 @@ impl Script for HordeDirector {
             self.next_status = 5.0;
             effects.push(Effect::ShowMessage { text: "EARTH: CONTAINMENT | Pistol + psi amp in inventory | Shops ahead, trainers upstairs".into() });
         }
+        if !self.music_synced {
+            effects.push(self.music());
+            self.music_synced = true;
+        }
         if self.phase != Phase::Failed
             && world
                 .borrow::<UniqueView<PlayerLifeState>>()
                 .is_ok_and(|life| !life.is_alive())
         {
             self.phase = Phase::Failed;
+            effects.push(self.music());
             effects.push(self.status());
         }
         if self.phase == Phase::Failed {
@@ -1305,5 +1332,54 @@ mod tests {
         assert_eq!(seconds, 26.0 * 60.0);
         assert_eq!(asset_mission("EARTH_HORDE"), "earth.mis");
         assert_eq!(asset_mission("medsci1.mis"), "medsci1.mis");
+    }
+    fn music_changes(effect: Effect) -> Vec<Option<String>> {
+        match effect {
+            Effect::SetBackgroundMusic { song } => vec![song],
+            Effect::Multiple(effects) => effects.into_iter().flat_map(music_changes).collect(),
+            _ => vec![],
+        }
+    }
+
+    #[test]
+    fn waves_rotate_level_songs_and_rest_stops_music() {
+        let mut director = HordeDirector::default();
+        let world = World::new();
+        for wave in 1..=WAVE_SONGS.len() * 2 {
+            assert_eq!(
+                music_changes(director.start_wave(&world)),
+                vec![Some(WAVE_SONGS[(wave - 1) % WAVE_SONGS.len()].to_owned())]
+            );
+            assert_eq!(music_changes(director.clear_wave()), vec![None]);
+        }
+    }
+
+    #[test]
+    fn music_sync_is_transient_and_restored_from_the_saved_wave_and_phase() {
+        for phase in [Phase::Assault, Phase::Rest, Phase::Victory, Phase::Failed] {
+            let original = HordeDirector {
+                phase,
+                initialized: true,
+                next_spawn: 100.0,
+                next_status: 100.0,
+                wave: 17,
+                music_synced: true,
+                ..Default::default()
+            };
+            let saved = serde_json::to_value(&original).unwrap();
+            assert!(saved.get("music_synced").is_none());
+            let mut restored: HordeDirector = serde_json::from_value(saved).unwrap();
+            assert!(!restored.music_synced);
+            assert_eq!(
+                music_changes(restored.music()),
+                music_changes(original.music())
+            );
+            let world = World::new();
+            assert_eq!(
+                music_changes(tick(&mut restored, &world, 0.01)),
+                music_changes(original.music())
+            );
+            assert!(music_changes(tick(&mut restored, &world, 0.01)).is_empty());
+        }
     }
 }

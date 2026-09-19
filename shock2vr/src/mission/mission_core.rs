@@ -3345,7 +3345,12 @@ impl MissionCore {
         );
 
         // Start background music
-        initialize_background_music(&abstract_mission.song_params, asset_cache, audio_context);
+        initialize_background_music(
+            &abstract_mission.song_params.song,
+            asset_cache,
+            audio_context,
+            false,
+        );
 
         let mut entities_to_instantiate = HashSet::new();
 
@@ -10627,6 +10632,14 @@ impl MissionCore {
                             .set_collision_group(entity_id, CollisionGroup::corpse());
                     }
                 }
+                Effect::SetBackgroundMusic { song } => {
+                    initialize_background_music(
+                        song.as_deref().unwrap_or(""),
+                        asset_cache,
+                        audio_context,
+                        true,
+                    );
+                }
                 Effect::StopSound { handle } => {
                     // Observability: mark the matching play as stopped so
                     // `still_playing` in the audio log stops reporting it.
@@ -14169,11 +14182,11 @@ fn create_template_class_tag_map(
 ///
 /// Helper function to set up the music player for the level
 fn initialize_background_music(
-    song_params: &SongParams,
+    song_file_name: &str,
     asset_cache: &mut AssetCache,
     audio_context: &mut AudioContext<EntityId, String>,
+    repeat_theme: bool,
 ) {
-    let song_file_name = &song_params.song;
     info!("loading music for level: {}", song_file_name);
     if !song_file_name.is_empty() {
         let song = {
@@ -14181,7 +14194,8 @@ fn initialize_background_music(
                 .get(&SONG_IMPORTER, &format!("{song_file_name}.snc"))
                 .clone()
         };
-        let background_music_player = SongPlayer::new(&song, asset_cache);
+        let cue = repeat_theme.then(|| song.start_event()).flatten();
+        let background_music_player = SongPlayer::new(&song, asset_cache).with_default_cue(cue);
         audio_context.set_background_music(Box::new(background_music_player));
     } else {
         audio_context.stop_background_music();

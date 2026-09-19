@@ -292,11 +292,15 @@ where
         &mut self,
         background_music_player: Box<dyn BackgroundMusic<TCue>>,
     ) {
+        self.stop_background_music();
         self.background_music_player = Some(background_music_player);
         self.next_music_cue = None;
     }
 
     pub fn stop_background_music(&mut self) {
+        if let Some(sink) = self.background_music.take() {
+            sink.stop();
+        }
         self.background_music_player = None;
         self.next_music_cue = None;
     }
@@ -873,6 +877,43 @@ mod tests {
         wav_duration,
     };
     use cgmath::vec3;
+
+    #[test]
+    #[ignore = "requires an audio output device"]
+    fn stopping_and_replacing_music_retires_the_current_clip() {
+        struct Bed;
+        impl super::BackgroundMusic<String> for Bed {
+            fn next_clip(&mut self, _: Option<String>) -> Option<std::rc::Rc<AudioClip>> {
+                // Silence makes this a device-backed lifecycle test without
+                // an audible test tone. Keep it long enough to still be queued.
+                Some(std::rc::Rc::new(AudioClip::from_raw(
+                    1,
+                    8000,
+                    vec![0; 80000],
+                )))
+            }
+        }
+        let mut audio = super::AudioContext::<(), String>::new();
+        audio.set_background_music(Box::new(Bed));
+        audio.update_background_music();
+        assert!(!audio.background_music.as_ref().unwrap().empty());
+        audio.set_background_music_cue("old event".into());
+        audio.set_background_music(Box::new(Bed));
+        assert!(
+            audio.background_music.is_none(),
+            "replacement must retire the old clip immediately"
+        );
+        assert!(audio.next_music_cue.is_none());
+        audio.update_background_music();
+        assert!(!audio.background_music.as_ref().unwrap().empty());
+        audio.stop_background_music();
+        audio.update_background_music();
+        assert!(
+            audio.background_music.is_none(),
+            "stop must leave no queued audio"
+        );
+        assert!(audio.background_music_player.is_none());
+    }
 
     #[test]
     fn environmental_bed_repeats_without_game_updates() {

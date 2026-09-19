@@ -34,3 +34,13 @@ Endless begins at wave 11 with 44 enemies and a 2:20 minimum assault. Each furth
 `cargo dbgr --mission earth_horde_final` starts at preparation for wave 10 for diagnosis and recording. It provides the usual starter character, not an earned late-game build; any debug stat/equipment provisioning for a recording must be disclosed. This alias does not demonstrate completion of waves 1–9.
 
 Earth has 5,010 navigation cells and 20,581 links, split into multiple connected components. Spawn sites keep subway enemies separate from the street/lobby arena because enemies cannot use the player gravshafts. Stair traversal is runtime verified for hybrids; clearance and navigation of the expanded roster remain playtest targets.
+
+## Wave music
+
+Combat waves rotate the authored music from MedSci 1/2, Engineering 1/2,
+Hydroponics 1/2, Operations 2/3/4, Recreation 1, Command 1/2 and Rickenbacker 1.
+Wave 1 uses MedSci 1; selection is `(wave - 1) % 13`, so endless wave 14 returns
+to MedSci 1. The start event repeats as needed to keep music going during a wave.
+Preparation, rest, victory and failure stop the current clip immediately.
+Loading a save restarts the saved assault's song from its beginning; other phases
+load silently. Sample offsets and random music branches are not serialized.
