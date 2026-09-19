@@ -175,3 +175,26 @@ Wave attackers choose among sixteen surveyed sites, avoid their previous site
 when alternatives exist, prefer cover, and keep eight units from the player.
 Subway and street spawn arenas remain separate because enemies cannot ride the
 gravshafts. Fresh runs randomize the stream; saves continue it.
+## Tech builder prototype
+
+From wave 5, one Talon installer appears on the street during combat. It uses
+`talond` on a non-AI, 20-HP prop, so the installer cannot attack. It flies between
+three surveyed street sites at two world units per second, checking each route
+against world geometry. At a free site it places a 12-HP junction and visibly
+works for 25 combat seconds, then commissions a normal hostile slug turret.
+The construction box becomes opaque as work progresses; the installer rotates
+while working. Three sites bound the number of powered installations.
+
+Destroy the installer to cancel its unfinished job and receive five nanites.
+A replacement cannot appear until the next wave; completed installations remain.
+Destroy a junction to remove its paired turret, including during rest. Shooting
+a turret alone leaves its junction occupying that site. Rest pauses construction
+and movement but existing turrets remain dangerous. Builder phase, progress,
+site ownership, and wave replacement gating survive save/load.
+
+Developer → Earth horde adds `horde_tech_enabled`, `horde_tech_wave` (default 5),
+and `horde_tech_build_seconds` (default 25). These live controls pause future work
+or adjust its pacing; they do not erase existing threats. Diagnostic mode bypasses
+the wave gate and runs construction five times faster, while travel stays at
+normal speed. This is a street-only first prototype; there are no drones or
+procedurally placed junctions in this version.

@@ -218,6 +218,11 @@ macro_rules! dev_params {
 dev_params! {
     /// Applied once to fresh horde runs; the cheat explicitly applies it mid-run.
     HORDE_START_WAVE = Horde::float("horde_start_wave", "Start / jump to wave", 1.0, 1.0, 100.0, 1.0),
+    /// Pauses new installer movement/construction; existing turrets remain threats.
+    HORDE_TECH_ENABLED = Horde::bool("horde_tech_enabled", "Tech builders", true),
+    HORDE_TECH_WAVE = Horde::float("horde_tech_wave", "Builder first wave", 5.0, 1.0, 20.0, 1.0),
+    /// Read live during construction; changing it adjusts remaining work.
+    HORDE_TECH_BUILD_SECONDS = Horde::float("horde_tech_build_seconds", "Build seconds", 25.0, 5.0, 120.0, 5.0),
     /// Earliest normal-mode wave that permits growth and new pods. Protection
     /// still counts down during earlier combat; diagnostic mode bypasses this gate.
     HORDE_GROWTH_WAVE = Horde::float("horde_growth_wave", "Growth first wave", 4.0, 1.0, 20.0, 1.0),
