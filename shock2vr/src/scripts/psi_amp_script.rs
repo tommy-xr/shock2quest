@@ -401,7 +401,7 @@ fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) 
 }
 
 /// Cast a sustained (activation type 1) power: spend the tier, activate the
-/// player status for `duration_base + duration_per_psi × PSI` seconds (from
+/// player status for `duration_base + duration_per_psi × max(PSI - baseline_psi, 0)` seconds (from
 /// the power's `P$PsiShield` data), and play the amp's cast flash/sound like
 /// a projectile cast. Re-casting an active power spends again and refreshes
 /// the duration.
@@ -419,7 +419,7 @@ fn cast_sustained_power(
         );
         return Effect::NoEffect;
     };
-    let duration_secs = (duration.duration_base + duration.duration_per_psi * effective_psi) as f32;
+    let duration_secs = duration.duration_for_psi(effective_psi);
 
     let mut effects = vec![
         play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),

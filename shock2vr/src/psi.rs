@@ -45,7 +45,7 @@ pub const STABILITY_TEMPLATE_ID: i32 = -3148;
 
 /// `PropPsiPower::activation_type` for sustained/timed self effects - the
 /// power activates for a duration given by its `P$PsiShield` data
-/// (`duration_base + duration_per_psi × PSI` seconds).
+/// (`duration_base + duration_per_psi × max(PSI - baseline_psi, 0)` seconds).
 pub const ACTIVATION_TYPE_SUSTAINED: i32 = 1;
 
 /// `PropPsiPower::activation_type` for instant/special powers - they resolve
@@ -141,7 +141,7 @@ pub struct PsiPowerInfo {
     /// Whether the power supports hold-to-overload.
     pub overloadable: bool,
     /// The sustained-power duration formula (`P$PsiShield`:
-    /// `duration_base + duration_per_psi × PSI` seconds). `None` for powers
+    /// `duration_base + duration_per_psi × max(PSI - baseline_psi, 0)` seconds). `None` for powers
     /// without timed data.
     pub duration: Option<PropPsiShield>,
 }
