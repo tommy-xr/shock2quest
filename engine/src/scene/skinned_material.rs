@@ -91,6 +91,8 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform float emissivity;
         uniform float ambientIntensity;
         uniform float transparency;
+        uniform vec3 silhouetteColor;
+        uniform vec3 eyePosition;
 
         // A light painted onto part of the mesh: the mask's red channel says
         // where, `emissiveTint` says what colour and how bright. A zero tint
@@ -153,6 +155,12 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             vec4 texColor = texture(texture1, texCoord);
             if (texColor.a < 0.1) discard;
 
+            if (silhouetteColor.x >= 0.0) {
+                float rim = pow(1.0 - abs(dot(normalize(worldNormal), normalize(eyePosition - worldPos))), 2.0);
+                fragColor = vec4(silhouetteColor, texColor.a * (1.0 - transparency) * (0.18 + 0.82 * rim));
+                return;
+            }
+
             // Base material color (ambient)
             vec3 finalColor = texColor.rgb * 0.5 * ambientIntensity;
 
@@ -186,6 +194,8 @@ struct UnifiedUniforms {
     ambient_intensity_loc: i32,
     transparency_loc: i32,
     emissive_tint_loc: i32,
+    silhouette_color_loc: i32,
+    eye_position_loc: i32,
 
     // Bone matrices for skeletal animation
     bone_matrices_loc: i32,
@@ -201,7 +211,9 @@ struct UnifiedUniforms {
 
 static UNIFIED_SHADER_PROGRAM: OnceCell<(ShaderProgram, UnifiedUniforms)> = OnceCell::new();
 
+#[derive(Clone)]
 pub struct SkinnedMaterial {
+    silhouette_color: Option<Vector3<f32>>,
     has_initialized: bool,
     diffuse_texture: Rc<dyn TextureTrait>,
     emissivity: f32,
@@ -216,6 +228,14 @@ pub struct SkinnedMaterial {
 }
 
 impl SkinnedMaterial {
+    /// Reuse the animated mesh and skinning shader for an unlit rim silhouette.
+    /// The source material and other instances of the model stay unchanged.
+    pub fn silhouette(&self, color: Vector3<f32>) -> Box<dyn Material> {
+        let mut material = self.clone();
+        material.silhouette_color = Some(color);
+        Box::new(material)
+    }
+
     pub fn is_transparent(&self) -> bool {
         self.transparency > 0.01
     }
@@ -253,6 +273,19 @@ impl SkinnedMaterial {
             gl::UniformMatrix4fv(uniforms.world_loc, 1, gl::FALSE, world_matrix.as_ptr());
             gl::UniformMatrix4fv(uniforms.view_loc, 1, gl::FALSE, view_matrix.as_ptr());
             gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
+
+            let color = self
+                .silhouette_color
+                .unwrap_or(Vector3::new(-1.0, -1.0, -1.0));
+            gl::Uniform3fv(uniforms.silhouette_color_loc, 1, color.as_ptr());
+            if self.silhouette_color.is_some() {
+                let eye = view_matrix
+                    .invert()
+                    .unwrap_or_else(Matrix4::identity)
+                    .w
+                    .truncate();
+                gl::Uniform3fv(uniforms.eye_position_loc, 1, eye.as_ptr());
+            }
 
             // Set material properties
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
@@ -420,6 +453,15 @@ impl Material for SkinnedMaterial {
                     emissive_tint_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("emissiveTint").as_ptr(),
+                    ),
+
+                    silhouette_color_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("silhouetteColor").as_ptr(),
+                    ),
+                    eye_position_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("eyePosition").as_ptr(),
                     ),
 
                     // Bone matrices
@@ -641,6 +683,7 @@ impl SkinnedMaterial {
         emissive_tint: Vector3<f32>,
     ) -> Box<dyn Material> {
         Box::new(SkinnedMaterial {
+            silhouette_color: None,
             diffuse_texture,
             has_initialized: false,
             emissivity,

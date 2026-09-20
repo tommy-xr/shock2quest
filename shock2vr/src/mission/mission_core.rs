@@ -3176,6 +3176,7 @@ impl MissionCore {
         world.add_unique(crate::psi::PsiPanelTier(default_browsed_tier));
         world.add_unique(known_powers);
         world.add_unique(crate::psi::ActivePsiPowers::default());
+        world.add_unique(crate::psi_radar::Radar::default());
         world.add_unique(crate::scripts::healing_item::ActiveHealing::default());
         world.add_unique(crate::scripts::radiation::ActiveRadiation::default());
         world.add_unique(crate::scripts::radiation::RadiationRooms::default());
@@ -4731,6 +4732,7 @@ impl MissionCore {
                 });
             });
 
+        crate::psi_radar::update(&self.world, time.elapsed.as_secs_f32());
         effects.extend(update_research(&self.world, time.elapsed.as_secs_f32()));
 
         let (player_pos, player_rot) = {
@@ -13052,6 +13054,16 @@ impl MissionCore {
             HashSet::new()
         };
 
+        let radar = self
+            .world
+            .borrow::<UniqueView<crate::psi_radar::Radar>>()
+            .unwrap();
+        let radar_contacts: HashMap<_, _> = radar
+            .contacts
+            .iter()
+            .map(|c| (c.entity_id, c.strength))
+            .collect();
+
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
@@ -13070,7 +13082,9 @@ impl MissionCore {
                 };
             }
 
-            if !self.visibility_engine.is_visible(*entity_id) {
+            let visible = self.visibility_engine.is_visible(*entity_id);
+            let echo = radar_contacts.get(&entity_id.inner()).copied();
+            if !visible && echo.is_none() {
                 continue;
             }
 
@@ -13124,7 +13138,16 @@ impl MissionCore {
                     if invisible_items.contains(entity_id) {
                         crate::psi_invisibility::apply(&mut xformed_obj, invisibility);
                     }
-                    scene.push(xformed_obj);
+                    if let Some(strength) = echo {
+                        scene.push(crate::psi_radar::silhouette(
+                            &xformed_obj,
+                            strength,
+                            *entity_id,
+                        ));
+                    }
+                    if visible {
+                        scene.push(xformed_obj);
+                    }
                 }
 
                 if options.debug_skeletons {
