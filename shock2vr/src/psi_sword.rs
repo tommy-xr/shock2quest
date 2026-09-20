@@ -1,6 +1,6 @@
 //! The blade is an addition to the original amp, never a replacement item.
 use cgmath::{Matrix4, Point3, Quaternion, Transform, Vector3, vec3};
-use dark::importers::GLOVE_WEAPON_IMPORTER;
+use dark::importers::WEAPON_SURFACE_IMPORTER;
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{Component, EntityId, Get, UniqueView, View, World};
 pub const POWER: i32 = -1119;
@@ -37,7 +37,7 @@ pub fn render(world: &World, cache: &mut AssetCache, amp: EntityId) -> Vec<Scene
     let Some(frame) = frame(world, amp) else {
         return vec![];
     };
-    let Some(source) = cache.get_opt(&GLOVE_WEAPON_IMPORTER, "psword_h.bin") else {
+    let Some(source) = cache.get_opt(&WEAPON_SURFACE_IMPORTER, "psword_h.bin") else {
         return vec![];
     };
     let Some(source) = source.as_ref().as_ref() else {
@@ -63,19 +63,12 @@ pub fn render(world: &World, cache: &mut AssetCache, amp: EntityId) -> Vec<Scene
     let local = Matrix4::from(Quaternion::from_arc(direction, Vector3::unit_y(), None))
         * Matrix4::from_scale(LENGTH / size[axis])
         * Matrix4::from_translation(-base);
-    source
-        .model
-        .to_scene_objects()
-        .iter()
-        .map(|object| {
-            let mut object = object.clone();
-            object.set_transform(frame * local);
-            object.material = std::rc::Rc::new(std::cell::RefCell::new(
-                engine::scene::color_material::create(vec3(0.12, 0.8, 1.0)),
-            ));
-            object.set_depth_write(false);
-            object.set_transparency(Some(0.15));
-            object
-        })
-        .collect()
+    let mut object = source.object.clone();
+    object.set_transform(frame * local);
+    object.material = std::rc::Rc::new(std::cell::RefCell::new(
+        engine::scene::color_material::create(vec3(0.12, 0.8, 1.0)),
+    ));
+    object.set_depth_write(false);
+    object.set_transparency(Some(0.15));
+    vec![object]
 }

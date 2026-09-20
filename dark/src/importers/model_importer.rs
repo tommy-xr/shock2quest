@@ -627,3 +627,50 @@ mod tests {
         assert!(!is_melee_arm_material("ND-wrench.psd"));
     }
 }
+
+/// Cached, posed weapon surface without the authored first-person forearm.
+/// Uses the same material/terminal-joint split as held-weapon fitting, including
+/// classic LGMM meshes that do not contain a high-detail PMNM extension.
+pub struct WeaponSurface {
+    pub triangles: Vec<[Point3<f32>; 3]>,
+    pub object: engine::scene::SceneObject,
+}
+
+pub static WEAPON_SURFACE_IMPORTER: Lazy<
+    AssetImporter<SystemShockContentModel, Option<WeaponSurface>, ()>,
+> = Lazy::new(|| {
+    AssetImporter::define(load_model, |content, cache, _| {
+        use cgmath::EuclideanSpace;
+        let geometry = weapon_geometry(&content)?;
+        let clip = cache.get_opt(&super::ANIMATION_CLIP_IMPORTER, "ph212203_.mc")?;
+        let player = AnimationPlayer::with_root_motion_cancelled(
+            &AnimationPlayer::from_completed_animation(clip),
+        );
+        let joints = player.get_transforms(&geometry.skeleton);
+        let palette =
+            crate::model::build_palette(&joints, &geometry.skeleton, geometry.bind.as_ref());
+        let mut triangles = Vec::new();
+        for tri in geometry.vertices.chunks_exact(3) {
+            triangles.push([
+                skinned_point(&tri[0], &palette)?,
+                skinned_point(&tri[1], &palette)?,
+                skinned_point(&tri[2], &palette)?,
+            ]);
+        }
+        if triangles.is_empty() {
+            return None;
+        }
+        let vertices = triangles
+            .iter()
+            .flatten()
+            .map(|p| engine::scene::VertexPosition {
+                position: p.to_vec(),
+            })
+            .collect();
+        let object = engine::scene::SceneObject::new(
+            engine::scene::color_material::create(Vector3::new(1.0, 1.0, 1.0)),
+            Box::new(engine::scene::mesh::create(vertices)),
+        );
+        Some(WeaponSurface { triangles, object })
+    })
+});

@@ -36,6 +36,13 @@ for (const difficulty of ["easy", "normal", "hard", "impossible"] as const) {
       const expired = (await game.info()).player;
       assert.ok(!expired.active_psi_powers.includes("Psi Sword"));
       assert.equal(expired.wielded_entity_id, before.wielded_entity_id, "expiry leaves the same amp");
+      await pullTrigger(game);
+      await game.step({ frames: 5 });
+      assert.ok((await game.info()).player.active_psi_powers.includes("Psi Sword"));
+      await game.input.trigger("DebugCycleWeapon");
+      await game.step({ frames: 10 });
+      assert.ok(!(await game.info()).player.active_psi_powers.includes("Psi Sword"), "holstering cancels the blade");
+      assert.equal((await game.entities.byTemplate(-247)).length, 1, "no duplicate amp was created");
     });
 }
 
