@@ -157,25 +157,21 @@ used stations. Skipped waves grant no nanites or cyber modules. Existing
 infestation remains. Jumps require a living player in Earth horde; changing the
 selector alone never rewinds a loaded or running game. The selector resets on
 process restart, while the actual run's wave is saved normally.
-## Combat supplies prototype
+## Intermission supplies
 
-Every wave scatters two small supplies among surveyed sites in the player's
-current arena: ammo or psi, plus healing or nanites. Uncollected loose supplies
-expire at the next wave; inventory, held items, and container contents survive.
+At initial preparation and each rest, two loose supplies and one cache appear
+at random reachable sites on **each** floor. Caches randomly use an ordinary
+TriOptimum crate or a security crate (one-third chance), with the existing hack
+board, nanite/skill requirements, critical failures and ICE Pick support.
+Every crate holds ammo, healing, psi and a nanite/cyber-module bonus.
 
-Twenty combat seconds into each even-numbered wave, a TriOptimum supply cache
-arrives at a random surveyed site in the current arena (three seconds in the
-short diagnostic mode). Its message names the subway, street, or upstairs
-landing. Search it normally for ammunition, healing, psi, and a random nanite/
-cyber-module bonus. Only one unclaimed cache exists at a time; empty caches are
-removed. A pending delivery waits for the previous cache to be looted, and rest
-pauses delivery timers. Cache fill state, contents, timers, and random streams
-persist across save/load.
+Unclaimed drops last 90 simulation seconds, including time after you start the
+next wave early. Pause freezes the clock. Collected/held items survive expiry;
+remaining contents disappear with their expired crate. A new intermission
+replaces older unclaimed drops. Saves retain the claim timer, contents, random
+stream and one-time fill state. Fully emptied crates disappear immediately.
 
-Four additional spawn sites extend street and subway approaches. New sites were
-checked for ground, headroom, and navigation to their respective arena centers.
-Enemy spawning avoids the previous site whenever another eligible site exists,
-still prefers cover, keeps eight units from the player, and respects the subway/
-street separation. Fresh runs receive fresh random seeds; loaded runs continue
-saved streams. The wave roster, quota, and live-enemy cap remain independently
-controlled by the existing director.
+Wave attackers choose among sixteen surveyed sites, avoid their previous site
+when alternatives exist, prefer cover, and keep eight units from the player.
+Subway and street spawn arenas remain separate because enemies cannot ride the
+gravshafts. Fresh runs randomize the stream; saves continue it.

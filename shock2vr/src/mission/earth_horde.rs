@@ -1008,10 +1008,7 @@ impl Script for HordeDirector {
             effects.push(self.status());
             self.next_status = 5.0;
         }
-        effects.extend(
-            self.supplies
-                .update(world, dt, self.phase == Phase::Assault),
-        );
+        effects.extend(self.supplies.update(world, dt, self.phase == Phase::Rest));
         effects.extend(self.containment.update(
             world,
             dt,
