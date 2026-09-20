@@ -38,6 +38,7 @@ pub mod pause_menu;
 mod physics;
 pub mod player_stats;
 mod psi;
+mod psi_sword;
 pub mod quest_info;
 pub mod research;
 mod runtime_props;

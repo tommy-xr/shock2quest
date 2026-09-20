@@ -664,7 +664,7 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
 /// Resolve the authored hit event of a flat melee swing: raycast a short
 /// distance along the current crosshair ray and damage the hit entity (hitbox
 /// proxies resolve to their parent).
-fn flat_melee_hit(
+pub(super) fn flat_melee_hit(
     physics: &PhysicsWorld,
     aim: RuntimePropFlatAim,
     world: &World,
@@ -706,7 +706,15 @@ fn flat_melee_hit(
                 payload: MessagePayload::Damage {
                     // Adrenaline Overproduction scales the player's melee
                     // damage while it is active (1.0 otherwise).
-                    amount: MELEE_DAMAGE * crate::scripts::berserk::melee_damage_multiplier(world),
+                    amount: (if crate::psi_sword::active(world, weapon_id) {
+                        crate::mission::stim_response::contact_stim_damage(
+                            world,
+                            crate::psi_sword::WEAPON,
+                            target,
+                        )
+                    } else {
+                        MELEE_DAMAGE
+                    }) * crate::scripts::berserk::melee_damage_multiplier(world),
                     // Swing direction + contact point seed the victim's
                     // death-ragdoll reaction. No bone: melee resolves a hitbox
                     // proxy to its parent BEFORE sending (so HitBoxScript
