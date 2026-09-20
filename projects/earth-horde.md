@@ -191,3 +191,21 @@ through walls. Developer → Earth horde offers builder enable, first wave and
 build seconds. The diagnostic alias bypasses the wave gate and accelerates work
 fivefold while travel remains normal. This prototype installs street turrets;
 it does not deploy drones or choose arbitrary locations.
+
+## Wave 10 survival report
+
+Finishing wave 10 opens a **SURVIVED** battle report and pauses simulation until
+an explicit choice. It shows enemies killed, actual damage taken, and enemy HP
+lost. Enemy damage is an aggregate from all sources: the engine does not yet
+attribute every damage event to a player. Healing, overkill and hits on dead
+bodies do not inflate the totals. The same report canvas and buttons render in
+flatscreen and VR; live gameplay messages are hidden while the menu is open.
+
+**Continue — endless waves** keeps the character, equipment and arena, starts
+wave 11, and resumes the existing ever-increasing schedule (six extra enemies
+and eight extra assault seconds per subsequent wave). **Return to main menu**
+ends the session. The report does not repeat after each endless wave. Battle
+totals are updated with HP mutations and saved in the campaign state; loading
+a victory save reopens the report. A fresh horde run resets its totals, while
+wave-jump cheats preserve the totals actually earned and invent no statistics
+for skipped waves. The short diagnostic alias reports survival after wave 3.

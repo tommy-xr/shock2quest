@@ -106,6 +106,7 @@ use crate::ui::world_dim::{WORLD_DIM_EXTENT_RATIO, world_dim_min_distance, world
 pub enum PauseAction {
     /// Close the menu and let the simulation run again.
     Resume,
+    ContinueHorde,
     /// Abandon the run and go back to the main menu.
     QuitToMainMenu,
     /// Carry out a developer cheat. The overlay stays up - a cheat sets a
@@ -119,6 +120,7 @@ pub enum PauseAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseMenuPage {
     Root,
+    HordeReport,
     Developer,
     /// The Developer screen's [`cheats_panel`] page. It lives here rather than
     /// on the main menu's Developer scene because a cheat acts on the running
@@ -137,6 +139,7 @@ enum PauseMenuEntry {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseMenuTarget {
+    HordeReport(bool),
     Root(PauseMenuEntry),
     Developer(dev_params_panel::DevParamsEvent),
     /// The Developer page's upper framed button - the slot the main menu's
@@ -251,6 +254,9 @@ fn target_at(
 ) -> Option<PauseMenuTarget> {
     match page {
         PauseMenuPage::Root => hit(point, rects).map(PauseMenuTarget::Root),
+        PauseMenuPage::HordeReport => {
+            crate::ui::horde_report::continue_at(point).map(PauseMenuTarget::HordeReport)
+        }
         PauseMenuPage::Developer => {
             if panel_rects.action_rect().contains(point) {
                 return Some(PauseMenuTarget::OpenCheats);
@@ -298,6 +304,7 @@ fn resolve_click(
 
 /// The pause overlay. Closed by default; [`PauseMenu::open`] arms it.
 pub struct PauseMenu {
+    horde_report: Option<(u32, crate::horde_stats::HordeBattleStats)>,
     open: bool,
     /// Which page the overlay is showing; reset to the root on every open.
     page: PauseMenuPage,
@@ -333,6 +340,7 @@ impl PauseMenu {
     pub fn new() -> Self {
         Self {
             open: false,
+            horde_report: None,
             page: PauseMenuPage::Root,
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
             head: (
@@ -383,6 +391,16 @@ impl PauseMenu {
         }
     }
 
+    pub fn is_horde_report(&self) -> bool {
+        self.open && self.page == PauseMenuPage::HordeReport
+    }
+
+    pub fn show_horde_report(&mut self, wave: u32, stats: crate::horde_stats::HordeBattleStats) {
+        self.open();
+        self.horde_report = Some((wave, stats));
+        self.page = PauseMenuPage::HordeReport;
+    }
+
     /// Open the menu in front of the player.
     ///
     /// The panel anchor is reset so the menu is placed from the head pose it is
@@ -393,6 +411,7 @@ impl PauseMenu {
     /// frame - the game-over screen shipped with exactly that bug.
     pub fn open(&mut self) {
         self.open = true;
+        self.horde_report = None;
         // Always land on the root page: reopening straight onto a parameter
         // list the player forgot they left would read as a broken menu.
         self.page = PauseMenuPage::Root;
@@ -412,6 +431,7 @@ impl PauseMenu {
 
     pub fn close(&mut self) {
         self.open = false;
+        self.horde_report = None;
         self.menu.clear_pointer();
     }
 
@@ -500,6 +520,11 @@ impl PauseMenu {
 
     fn handle_target(&mut self, target: Option<PauseMenuTarget>) -> Option<PauseAction> {
         match target {
+            Some(PauseMenuTarget::HordeReport(continue_run)) => Some(if continue_run {
+                PauseAction::ContinueHorde
+            } else {
+                PauseAction::QuitToMainMenu
+            }),
             Some(PauseMenuTarget::Root(entry)) => self.handle_root_entry(Some(entry)),
             Some(PauseMenuTarget::Developer(event)) => self.handle_developer_event(Some(event)),
             Some(PauseMenuTarget::OpenCheats) => {
@@ -674,6 +699,10 @@ impl PauseMenu {
         pointer_canvas: Option<Vector2<f32>>,
     ) -> UiCanvas {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
+        if let Some((wave, stats)) = &self.horde_report {
+            crate::ui::horde_report::draw(&mut canvas, *wave, stats, pointer_canvas);
+            return canvas;
+        }
 
         if matches!(self.page, PauseMenuPage::Developer | PauseMenuPage::Cheats) {
             // The Developer screen: a shared panel on its own backdrop.
@@ -814,6 +843,25 @@ mod tests {
             position: vec2(center.x / CANVAS_W, center.y / CANVAS_H),
             pressed,
         })
+    }
+
+    #[test]
+    fn survival_report_ignores_held_click_and_continue_requires_a_fresh_edge() {
+        let mut menu = PauseMenu::new();
+        menu.show_horde_report(10, crate::horde_stats::HordeBattleStats::default());
+        let point = Some(cgmath::vec2(320.0, 342.0));
+        assert!(menu.consume_pointer(point, true, &FALLBACK_RECTS).is_none());
+        assert!(
+            menu.consume_pointer(point, false, &FALLBACK_RECTS)
+                .is_none()
+        );
+        assert_eq!(
+            menu.consume_pointer(point, true, &FALLBACK_RECTS),
+            Some(PauseAction::ContinueHorde)
+        );
+        assert!(menu.consume_pointer(point, true, &FALLBACK_RECTS).is_none());
+        menu.close_after_click();
+        assert!(!menu.is_horde_report());
     }
 
     #[test]

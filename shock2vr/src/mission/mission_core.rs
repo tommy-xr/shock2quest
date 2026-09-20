@@ -8563,6 +8563,26 @@ impl MissionCore {
                         // total so a mysterious death is attributable.
                         let hp = hit_points.hit_points;
                         drop(v_hit_points);
+                        if hp < previous && super::earth_horde::is_horde(&self.level_name) {
+                            let hostile = self
+                                .world
+                                .borrow::<View<dark::properties::PropEcoType>>()
+                                .is_ok_and(|tags| {
+                                    tags.get(entity_id).is_ok_and(|tag| {
+                                        tag.0 > 60_000
+                                            || (59_000..59_003).contains(&tag.0)
+                                            || tag.0 == 57_000
+                                            || (57_020..57_023).contains(&tag.0)
+                                    })
+                                });
+                            if entity_id == player_entity || hostile {
+                                self.world
+                                    .borrow::<UniqueViewMut<QuestInfo>>()
+                                    .unwrap()
+                                    .horde_battle
+                                    .record(entity_id == player_entity, previous, hp);
+                            }
+                        }
                         tracing::debug!(
                             "hp: {} {:+} -> {}",
                             debug_entity(&self.world, entity_id),
@@ -10100,6 +10120,12 @@ impl MissionCore {
                     }
                 }
 
+                Effect::ContinueHorde => {
+                    effects.push_front(super::earth_horde::director_message(
+                        &self.world,
+                        MessagePayload::Frob,
+                    ));
+                }
                 Effect::StartHordeWave { wave } => {
                     effects.push_front(super::earth_horde::wave_jump_message(&self.world, wave));
                 }
@@ -13864,11 +13890,19 @@ impl MissionCore {
             let messages = self.hud_messages();
             if !messages.is_empty() {
                 let mut objects = self.render_vr_messages(asset_cache, &messages);
+                crate::util::tag_render_source(
+                    &mut objects,
+                    crate::util::render_source::GAMEPLAY_HUD,
+                );
                 rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
                 scene.extend(objects);
             }
             if let Some(banner) = self.hud_banner() {
                 let mut objects = self.render_vr_banner(asset_cache, &banner);
+                crate::util::tag_render_source(
+                    &mut objects,
+                    crate::util::render_source::GAMEPLAY_HUD,
+                );
                 rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
                 scene.extend(objects);
             }

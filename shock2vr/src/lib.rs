@@ -5,6 +5,7 @@ pub mod hand_pose;
 pub mod hand_pose_library;
 pub mod haptics;
 pub mod hit_feedback;
+pub mod horde_stats;
 pub mod implants;
 pub mod input;
 pub mod input_context;
@@ -1796,7 +1797,9 @@ impl Game {
 
         // `just_triggered` is a rising edge by construction (mappers trigger on
         // key/button down), so holding the menu button cannot re-toggle.
-        if actions.just_triggered(InputAction::TogglePauseMenu) {
+        if actions.just_triggered(InputAction::TogglePauseMenu)
+            && !self.pause_menu.is_horde_report()
+        {
             if self.pause_menu.is_open() {
                 self.close_pause_menu(false);
             } else {
@@ -1817,6 +1820,10 @@ impl Game {
         self.pause_menu
             .pump_sfx(&mut self.asset_cache, &mut self.audio_context);
         match action {
+            Some(PauseAction::ContinueHorde) => {
+                self.close_pause_menu(true);
+                self.apply_scene_effects(vec![Effect::ContinueHorde]);
+            }
             Some(PauseAction::Resume) => self.close_pause_menu(true),
             Some(PauseAction::QuitToMainMenu) => {
                 self.close_pause_menu(true);
@@ -2079,6 +2086,12 @@ impl Game {
                     entities_to_trigger,
                     vitals_transition,
                 );
+            }
+            GlobalEffect::ShowHordeReport { wave, stats } => {
+                if self.pause_is_allowed() {
+                    self.open_pause_menu();
+                    self.pause_menu.show_horde_report(wave, stats);
+                }
             }
             GlobalEffect::OpenPauseMenu => {
                 if self.pause_is_allowed() && !self.pause_menu.is_open() {
@@ -2421,6 +2434,7 @@ impl Game {
                 let source = object.debug_tag().and_then(|tag| tag.source.as_deref());
                 source != Some(util::render_source::PLAYER_HANDS)
                     && source != Some(util::render_source::DEBUG_OVERLAY)
+                    && source != Some(util::render_source::GAMEPLAY_HUD)
             });
         }
 
