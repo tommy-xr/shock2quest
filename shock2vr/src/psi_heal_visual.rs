@@ -10,12 +10,7 @@ pub(crate) fn render(world: &World, amp: EntityId, age: f32) -> Vec<SceneObject>
     let Ok(transform) = transforms.get(amp) else {
         return vec![];
     };
-    let Ok(muzzles) = world.borrow::<View<crate::weapon_muzzle::MuzzleFallback>>() else {
-        return vec![];
-    };
-    let Ok(muzzle) = muzzles.get(amp) else {
-        return vec![];
-    };
+    let muzzle = crate::weapon_muzzle::resolve(world, amp);
     let center = transform.0.transform_point(muzzle.point);
     let mut objects = Vec::new();
     for i in 0..24 {
