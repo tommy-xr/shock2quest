@@ -29,7 +29,6 @@ test("VR dual ammo controls bind to the selected real held entity", { skip: proc
         await aimVrHandAtCanvas(game, requirePanelPose(await game.ui.state()), canvasCenter(e), { hand: "right", squeeze: 1, trigger });
         await game.step({ frames: 3 });
     } };
-    const arm = async (hand: string) => { const e = (await game.ui.state()).strip!.elements.find(e => e.label === `${hand} hand`); assert.ok(e); return e; };
     const control = async (label: string, target: number) => { const e = (await game.ui.state()).readout.find(e => e.label === label); assert.ok(e, label); assert.equal(e.entity_id, target, `${label} binds selected entity`); return e; };
     const ammo = async (id: number) => ammoOf(await game.entities.detail(id));
     assert.equal(await ammo(pistol.id), 12);
@@ -103,7 +102,10 @@ test("VR dual ammo controls bind to the selected real held entity", { skip: proc
     const psi = (await game.ui.state()).readout.filter(e => e.label?.startsWith("psi_"));
     assert.ok(psi.length > 0);
     assert.ok(psi.every(e => e.entity_id === amp.id));
-    assert.match((await arm("Right")).text ?? "", /: PSI$/);
+    const rightHolster = (await game.ui.state()).strip!.elements.find(e => e.label === "Right holster");
+    assert.ok(rightHolster);
+    assert.equal(rightHolster.entity_id, null, "holding the amp does not put it in the holster");
+    assert.equal(rightHolster.text, "Empty", "the paperdoll shows holster contents separately from held controls");
     await capture("gun-psi");
 });
 test("Flat ammo selection maps the internal wield slot onto the visible right arm", { skip: process.env.SHOCK2_E2E !== "1", timeout: 90000 }, async () => {
