@@ -100,29 +100,31 @@ impl PropPsiPowerLearned2 {
     }
 }
 
-/// `P$PsiShield` - duration formula for sustained psi powers, carried by
-/// the same power meta-prop templates as [`PropPsiPower`] (12 bytes:
-/// three ints). Despite the chunk name it is not shield-specific: the
-/// active duration is `base + per_psi × PSI` seconds, matching the
-/// published tables - e.g. Psychogenic Agility `[120, 60]` = "120 +
-/// 60×PSI sec", Photonic Redirection (`Inviso`) `[5, 5]` = "5 + 5×PSI
-/// sec".
+/// `P$PsiShield`: base seconds, seconds per PSI above the authored baseline,
+/// and baseline PSI. Dark's `PsiPowerGetTime` in `shkpsipw.cpp` subtracts
+/// `m_baseInt` before scaling; the third integer is not a flag.
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPsiShield {
     /// Base duration in seconds.
     pub duration_base: i32,
     /// Additional seconds per point of the player's PSI stat.
     pub duration_per_psi: i32,
-    /// Observed 0 or 1; meaning not yet established.
-    pub flags: i32,
+    /// PSI threshold subtracted before applying the per-PSI increment.
+    pub baseline_psi: i32,
 }
 
 impl PropPsiShield {
+    pub fn duration_for_psi(&self, psi: i32) -> f32 {
+        let above_baseline = (i64::from(psi) - i64::from(self.baseline_psi)).max(0);
+        (i64::from(self.duration_base) + i64::from(self.duration_per_psi) * above_baseline).max(0)
+            as f32
+    }
+
     pub fn read<T: io::Read>(reader: &mut T, _len: u32) -> PropPsiShield {
         PropPsiShield {
             duration_base: read_i32(reader),
             duration_per_psi: read_i32(reader),
-            flags: read_i32(reader),
+            baseline_psi: read_i32(reader),
         }
     }
 }
@@ -148,5 +150,35 @@ impl PropPsiState {
             max_psi_points: read_i32(reader),
             unknown: read_i32(reader),
         }
+    }
+}
+
+#[cfg(test)]
+mod shield_tests {
+    use super::*;
+
+    #[test]
+    fn shield_duration_subtracts_the_authored_psi_baseline() {
+        let bytes: Vec<u8> = [10_i32, 10, 1]
+            .into_iter()
+            .flat_map(i32::to_le_bytes)
+            .collect();
+        let sword = PropPsiShield::read(&mut std::io::Cursor::new(bytes), 12);
+        assert_eq!(sword.baseline_psi, 1);
+        for (psi, seconds) in [(0, 10.0), (1, 10.0), (6, 60.0), (8, 80.0)] {
+            assert_eq!(sword.duration_for_psi(psi), seconds);
+        }
+        let immolate = PropPsiShield {
+            duration_base: 15,
+            duration_per_psi: 8,
+            baseline_psi: 1,
+        };
+        assert_eq!(immolate.duration_for_psi(6), 55.0);
+        let shield = PropPsiShield {
+            duration_base: 10,
+            duration_per_psi: 5,
+            baseline_psi: 0,
+        };
+        assert_eq!(shield.duration_for_psi(6), 40.0);
     }
 }
