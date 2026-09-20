@@ -115,6 +115,10 @@ These are developer overrides: they reset when the application restarts and are
 not stored in saves. Saved protection, density, and egg timers still resume; the
 current process's tuning controls their subsequent progression.
 
+Choose **Survive** on the main menu, select **Easy / Normal / Hard / Impossible**,
+then **Start Game**. **Cancel** returns to the main menu. The choice initializes a
+fresh horde run and stays fixed in its saves.
+
 Horde pressure is separate from campaign difficulty. Campaign difficulty feeds
 player health/psi pools and authored shop/training costs and loot; the director's
 wave roster, quotas, living-enemy cap, and assault schedule are fixed independently.

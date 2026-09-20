@@ -2123,12 +2123,14 @@ impl Game {
                 self.pending_transition = None;
                 self.set_active_scene(Box::new(LoadGameScene::new()));
             }
-            GlobalEffect::StartNewCampaign { difficulty } => {
+            GlobalEffect::StartNewCampaign { difficulty }
+            | GlobalEffect::StartNewHorde { difficulty } => {
+                let horde = matches!(global_effect, GlobalEffect::StartNewHorde { .. });
                 self.pending_transition = None;
                 self.campaign_completed = false;
                 self.mission_to_save_data.clear();
-                // Seed the movie's carried state explicitly: the previous
-                // campaign and the cutscene's empty world must both be irrelevant.
+                // Seed fresh run state explicitly; neither the previous campaign
+                // nor the frontend/cutscene world contributes inventory or difficulty.
                 self.preserved_scene_state = Some(PreservedSceneState {
                     quest_info: QuestInfo::with_difficulty(difficulty),
                     held_data: HeldItemSaveData::empty(),
@@ -2136,12 +2138,15 @@ impl Game {
                     hazards: Default::default(),
                     active_psi: Default::default(),
                 });
-                self.handle_global_effect(
+                let next = if horde {
+                    GlobalEffect::new_game_transition("earth_horde".to_owned())
+                } else {
                     GlobalEffect::new_game_transition(
                         scenes::main_menu::NEW_GAME_MISSION.to_owned(),
                     )
-                    .after_cutscene(scenes::main_menu::NEW_GAME_CUTSCENE),
-                );
+                    .after_cutscene(scenes::main_menu::NEW_GAME_CUTSCENE)
+                };
+                self.handle_global_effect(next);
             }
             GlobalEffect::ShowMainMenu => {
                 self.pending_transition = None;
