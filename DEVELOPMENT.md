@@ -16,6 +16,11 @@
     - `save_load` - serializing, deserializing game state
     - `creature` - constants and hitboxes for creature definitions
 
+## Releases
+
+See [Publishing releases](.github/RELEASING.md) for signing setup and the manual
+release workflow. Users installing an APK should follow [INSTALL.md](INSTALL.md).
+
 ## Set up
 
 ### 1. Clone Repoo
@@ -25,12 +30,12 @@
 
 ### 2. Provide data files
 
-shock2quest reads an unmodified **25th Anniversary Remaster** install. You need
-two things from it:
+shock2quest reads an unmodified **25th Anniversary Remaster** install. Copy these from it:
 
 - `sshock2.kpf` — the base game data.
 - the `mods/` folder — the remaster's upgraded models and textures, which the
   VR hands and weapons are built against.
+- the `cutscenes/` folder, with its subfolders intact — the game's videos.
 
 Skip `sshock2ee-vault.kpf` (a bonus gallery) and the root `sshock2ee.kpf`
 (frontend-only) — nothing reads either, and together they are ~1.5 GB.
@@ -619,15 +624,9 @@ one-impact rule stay fixed.
 - Make sure [Developer Mode is enabled on your Quest device](https://www.reddit.com/r/OculusQuest/comments/17sa8n6/tutorial_quest_3_developer_mode_4_easy_steps/)
 - Make sure `adb` is installed and working. With Oculus connected, run `adb devices` and verify your headset shows up
 - Tweak `runtimes/oculus_runtime/set_up_android_sdk.sh` to match your paths
-- Before running for the first time, you'll need to copy over the System Shock 2
-  data files. From your install directory (~1.2 GB):
-  ```sh
-  adb shell mkdir -p /sdcard/shock2quest/mods
-  adb push sshock2.kpf /sdcard/shock2quest/
-  for f in sshock2ee 400 shtup scp patch_ext; do
-    adb push "mods/$f.kpf" /sdcard/shock2quest/mods/
-  done
-  ```
+- Before running for the first time, copy your Remaster KPF archives, mods, and
+  cutscenes to the headset. Follow [Copy your game files](INSTALL.md#copy-your-game-files)
+  for macOS/Linux and Windows commands.
   The runtime switches to the remaster as soon as `sshock2.kpf` is present, and
   does not mount the legacy `.crf` archives at all in that mode — so pushing
   these over an older install is safe and needs no cleanup first.
