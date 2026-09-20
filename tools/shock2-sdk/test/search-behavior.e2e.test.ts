@@ -113,9 +113,14 @@ test(
       type: "SetAlertness",
       level: "Moderate",
     });
-    await game.step({ frames: 60 });
+    // Leave while it is chasing. Waiting a full second lets it enter a
+    // non-preemptible melee animation, which can span the alertness decay
+    // and turns this into an animation-timing test instead of a search test.
+    await game.step({ frames: 10 });
     let detail = await game.entities.detail(monster.id);
     assert.equal(aiProp(detail, "AIAlertness"), "Moderate");
+    assert.equal(aiProp(detail, "AIBehavior"), "Chase");
+    assert.equal(aiProp(detail, "AITargetVisible"), "true");
 
     // Teleport the player to the farthest native OG-Pipe's spawn position:
     // guaranteed floor-valid, and far enough through multiple rooms that the
