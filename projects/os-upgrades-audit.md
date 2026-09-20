@@ -1,6 +1,6 @@
 # O/S upgrade audit
 
-Audited 2026-09-20. Scope: panel parity, description containment, and implementation feasibility for every disabled upgrade. Gameplay unlocks/balance changes are follow-ups, not part of the layout fix.
+Audited 2026-09-20. Scope: panel parity, description containment, and implementation feasibility for every disabled upgrade. The findings below record the initial audit; the implementation follow-up table records the resulting PRs.
 
 ## Reference and asset provenance
 
@@ -25,7 +25,7 @@ Remaining parity differences (not changed in this increment):
 - Original draws one empty slot after the installed traits; ours draws all four empty placeholders.
 - Original matrix spacing is 35×34 pixels (`TRAIT_W`/`TRAIT_H`); ours uses 34.5×33.5 pitches. Check art/hit geometry before changing this.
 - A medsci2 VR capture shows the machine model/hologram overlapping the top of its panel. This is a placement issue separate from text wrapping.
-- Pack-Rat intentionally advertises the port's extra VR holster, beyond classic retail.
+- Both VR holsters are now available by default, independent of Pack-Rat. Pack-Rat grants only the classic three backpack slots.
 
 The sixteen-choice ordering, four stored slots, free single-use acquisition, stable machine identity, save/load, and cross-deck accumulation already have implementation and SDK coverage.
 
@@ -54,7 +54,7 @@ Suggested sequence: fix text/provenance, then Power Psi and Speedy, Cyber-Assimi
 | --- | --- | --- |
 | Strong Metabolism | Radiation/toxin consumer applies -25% radiation / -50% toxin | Classic and SCP text promise -25% for both. SCP also promises immunity to harmful recreational-substance effects. Follow-up: `projects/radiation-toxins.md` records original September 1999 OSM disassembly proving toxin ×0.5; retain that actual retail behavior and describe it explicitly. |
 | Pharmo-Friendly | Healing/hazard item consumers apply a 20% bonus | `PsiKitScript` and `apply_psi_kit_use` do not apply it to psi hypos, despite classic text saying all hypos. SCP additionally promises faster healing. |
-| Pack-Rat | Three inventory slots and an extra VR holster | Deliberate port extension; custom description reflects it. |
+| Pack-Rat | Three inventory slots | Both holsters are now independent of this upgrade. |
 | Naturally Able | Eight modules, once | Matches classic text. Mounted SCP text promises twenty. |
 | Tank | Five maximum and current HP | Matches classic text. Mounted SCP text promises ten. |
 | Replicator Expert | 20% price discount | Matches classic text. Mounted SCP additionally promises easier replicator hacking, which is not supplied by the trait. |
@@ -76,3 +76,27 @@ A coherent follow-up should derive supported descriptions and effect values from
 Cybernetically Enhanced now enables two independent powered implant sockets. Standard stat/technical/research implants equip through inventory use, obey duplicate and research restrictions, drain authored energy, and preserve slot, charge and drain timer through save/load and deck transitions. Recharge capacity follows the shipped BaseImplant script: `100 + 10 × base Maintenance`. Temporary bonuses remain separate from trained stats; Brawn changes backpack capacity safely and Endurance changes HP capacity. The paperdoll's two lower wells display equipment and charge and allow removal in both presentations. The arm wells remain holsters.
 
 This supplies the second-slot prerequisite with the standard implant family and the pre-existing WormHeart immunity path. It does not claim implementation of the other organic implant scripts or WormHeart regeneration/withdrawal. The paid-acquisition SDK scenario covers second-slot refusal/unlock, duplicate refusal, drain, save/load, transition and Maintenance recharge; headless flat/VR captures additionally exercise occupied-well removal.
+
+## Implementation follow-up: paid modification and final status
+
+Tinker now halves the real paid Modify board cost (truncate after division, minimum one nanite). The board uses the same HRM payment/randomness/connected-three rules as hacking, with Modify skill and the original first/second modification difficulties. Eligibility uses trained skill; the second modification requires two additional levels. A failed red node breaks the weapon. Normal failures can be retried with another paid board. The gun target and expected modification level are validated again before applying a success.
+
+The two successive weapon changes alter saved gun properties used by firing/reload/recoil. The original engine `shkgun.cpp::GunSetModification` establishes sequential Modify1/Modify2; `shkhrm.cpp::FindCost` establishes the discount and skill gates. Per-weapon operations were cross-checked with Telliamed's script reference and the September 1999 `allobjs.osm` handlers at `0x100261fc–0x100270ec` (also matching the remaster), including RootModify's add-integer, multiply-float and divide-integer helpers. Both selectable fire modes change; the unused third setting is untouched. Pistol, shotgun, rifle, laser, EMP, fusion, stasis, grenade, annelid and viral handlers are covered. The disposable FreeModify item remains separate from the paid Tinker flow.
+
+| Upgrade / change | Implemented PR |
+| --- | --- |
+| Description containment, installed hover, purchased icons removed | #1613 |
+| Always-on dual holsters, psi amps, paperdoll holster contents | #1614 |
+| Classic descriptions, Pharmo-Friendly psi hypo bonus | #1617 |
+| Power Psi | #1618 |
+| Speedy | #1619 |
+| Cyber-Assimilation | #1622 |
+| Security Expert | #1623 |
+| Spatially Aware | #1624 |
+| Sharpshooter | #1625 |
+| Lethal Weapon | #1626 |
+| Smasher (held-trigger charge, including VR) | #1627 |
+| Cybernetically Enhanced | #1629 |
+| Tinker and paid modification | Current stack tip |
+
+All sixteen trait IDs have live consumers and are selectable. The deliberately classic rules include Sharpshooter's actual 35% multiplier and Strong Metabolism's actual 50% toxin reduction, even where old tooltips disagreed. SCP-only extensions are not advertised. Initial UI parity differences above remain documented; headless flat/VR verification does not establish physical headset comfort.

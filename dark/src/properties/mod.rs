@@ -435,6 +435,11 @@ pub struct PropGunSettingText1(pub String);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropGunSettingText2(pub String);
 
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropModifyDiff(pub PropHackDiff);
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropModify2Diff(pub PropHackDiff);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropGunSettingHeader1(pub String);
 
@@ -1693,6 +1698,18 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$GunReliab",
             PropGunReliability::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$ModifyDif",
+            PropHackDiff::read,
+            PropModifyDiff,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Modify2Di",
+            PropHackDiff::read,
+            PropModify2Diff,
             accumulator::latest,
         ),
         define_prop(

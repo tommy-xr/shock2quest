@@ -215,6 +215,10 @@ pub enum Effect {
     ToggleHazardArmor {
         entity_id: EntityId,
     },
+    ModifyWeapon {
+        entity_id: EntityId,
+        expected_level: i32,
+    },
     ToggleImplant {
         entity_id: EntityId,
     },

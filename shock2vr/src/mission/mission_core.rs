@@ -8393,6 +8393,12 @@ impl MissionCore {
                         rooms.0.clear();
                     }
                 }
+                Effect::ModifyWeapon {
+                    entity_id,
+                    expected_level,
+                } => {
+                    crate::weapon_modification::apply(&mut self.world, entity_id, expected_level);
+                }
                 Effect::ToggleImplant { entity_id } => {
                     match crate::implants::toggle_slot(&self.world, entity_id) {
                         Ok(Some(slot)) => {
@@ -15656,6 +15662,21 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     });
                 }
                 if let Ok(gun_state) = v_gun_state.get(id) {
+                    properties.push(DebugPropertyInfo {
+                        name: "Modification".into(),
+                        value: gun_state.modification.to_string(),
+                    });
+                    if let Ok(desc) = self
+                        .world
+                        .borrow::<View<dark::properties::PropBaseGunDesc>>()
+                        .unwrap()
+                        .get(id)
+                    {
+                        properties.push(DebugPropertyInfo {
+                            name: "GunDescription".into(),
+                            value: serde_json::to_string(desc).unwrap(),
+                        });
+                    }
                     properties.push(DebugPropertyInfo {
                         name: "Ammo".to_string(),
                         value: gun_state.ammo.to_string(),

@@ -64,6 +64,7 @@ pub mod ui;
 mod util;
 mod virtual_hand;
 mod vr_config;
+pub mod weapon_modification;
 mod weapon_muzzle;
 pub mod weapon_recoil;
 mod weapon_requirements;
