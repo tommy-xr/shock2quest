@@ -679,7 +679,12 @@ pub(super) fn flat_melee_hit(
         MELEE_RANGE,
         InternalCollisionGroups::ENTITIES
             | InternalCollisionGroups::HITBOX
-            | InternalCollisionGroups::SELECTABLE,
+            | InternalCollisionGroups::SELECTABLE
+            | if crate::psi_sword::active(world, weapon_id) {
+                InternalCollisionGroups::WORLD
+            } else {
+                InternalCollisionGroups::empty()
+            },
         None,
         true,
         &|entity| {
