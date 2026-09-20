@@ -3,30 +3,16 @@ description: Shared SDK, cargo-apk and FFmpeg setup for Linux CI and releases
 runs:
   using: composite
   steps:
+    - name: Install Android Rust toolchain
+      shell: bash
+      run: |
+        rustup toolchain install 1.98.0 --profile minimal
+        rustup override set 1.98.0
     # Install Linux-specific dependencies
     - name: Install ALSA and libclang (Linux only)
       if: runner.os == 'Linux'
       shell: bash
       run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libclang-dev llvm-dev
-
-    # Cache cargo build artifacts
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Cache cargo index
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Cache cargo build
-      uses: actions/cache@v4
-      with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
     # Set up Android SDK
     # `packages: ''` skips the action's default `sdkmanager tools` - the

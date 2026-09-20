@@ -52,7 +52,7 @@ signed with a different key requires uninstalling the old app first. Existing
    ```
 
 3. Watch the run. It stamps the Android crate and matching Cargo.lock entry in
-   its disposable checkout, builds with locked dependencies, verifies signature,
+   its disposable checkout, checks dependency-lock freshness, builds, verifies signature,
    alignment, package ID, versions, ABI, and non-debuggable status, then uploads
    the checked payload as the **release-apk** Actions artifact (retained for 14
    days). Download and extract it from the run's summary page.

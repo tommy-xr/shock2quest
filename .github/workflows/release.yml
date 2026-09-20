@@ -34,17 +34,6 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: python3 .github/scripts/prepare-release.py "$RELEASE_VERSION"
-      - name: Reject existing or older releases
-        if: inputs.publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-          RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          tags=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")
-          test -z "$tags" || { echo "Tag already exists: $RELEASE_TAG"; exit 1; }
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases" > "$RUNNER_TEMP/releases.json"
-          python3 .github/scripts/prepare-release.py "$RELEASE_VERSION" --published-releases "$RUNNER_TEMP/releases.json"
       - name: Check signing configuration
         env:
           KEYSTORE: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
@@ -54,10 +43,6 @@ jobs:
             echo 'Configure ANDROID_RELEASE_KEYSTORE_BASE64 and ANDROID_RELEASE_KEYSTORE_PASSWORD first.'
             exit 1
           }
-      - name: Install release Rust toolchain
-        run: |
-          rustup toolchain install 1.98.0 --profile minimal
-          rustup override set 1.98.0
       - uses: ./.github/actions/setup-android
       - name: Build signed APK
         working-directory: runtimes/oculus_runtime
@@ -69,7 +54,8 @@ jobs:
           export CARGO_APK_RELEASE_KEYSTORE="$RUNNER_TEMP/release.keystore"
           trap 'rm -f "$CARGO_APK_RELEASE_KEYSTORE"' EXIT
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$CARGO_APK_RELEASE_KEYSTORE"
-          cargo apk build --release --locked
+          cargo metadata --locked --format-version 1 > /dev/null
+          cargo apk build --release
       - name: Verify and package APK
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
@@ -110,6 +96,17 @@ jobs:
       RELEASE_VERSION: ${{ needs.apk.outputs.version }}
       RELEASE_TAG: ${{ needs.apk.outputs.tag }}
     steps:
+      - uses: actions/checkout@v4
+      - name: Reject existing or older releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.apk.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.apk.outputs.version }}
+        run: |
+          tags=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")
+          test -z "$tags" || { echo "Tag already exists: $RELEASE_TAG"; exit 1; }
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases" > "$RUNNER_TEMP/releases.json"
+          python3 .github/scripts/prepare-release.py "$RELEASE_VERSION" --published-releases "$RUNNER_TEMP/releases.json"
       - uses: actions/download-artifact@v4
         with:
           name: release-apk
