@@ -52,6 +52,7 @@ pub mod player_stats;
 mod psi;
 mod psi_heal_visual;
 mod psi_invisibility;
+pub mod psi_pull;
 pub mod psi_radar;
 pub mod psi_seekersense;
 pub mod psi_sense;

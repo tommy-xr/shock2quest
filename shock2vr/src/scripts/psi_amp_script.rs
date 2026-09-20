@@ -266,7 +266,7 @@ impl Script for PsiAmpScript {
 }
 
 /// The player's current psi points (0 when the player has no psi pool).
-fn player_psi_points(world: &World) -> i32 {
+pub(crate) fn player_psi_points(world: &World) -> i32 {
     let player_info = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
     let v_psi = world
         .borrow::<View<dark::properties::PropPsiState>>()
@@ -364,6 +364,16 @@ fn cast_selected_power(
             power.power.psi_cost
         );
         return Effect::NoEffect;
+    }
+
+    // Pull is authored as sustained but is a one-shot interaction with no shield duration.
+    if power.template_id == crate::psi_pull::POWER {
+        return crate::psi_pull::resolve(world, physics, amp_entity)
+            .map(|_| Effect::PsiPull {
+                amp: amp_entity,
+                cost: power.power.psi_cost,
+            })
+            .unwrap_or(Effect::NoEffect);
     }
 
     // Sustained (timed) powers activate a player status for a data-driven
@@ -731,7 +741,10 @@ fn is_live_creature(world: &World, entity_id: EntityId) -> bool {
 /// muzzle and barrel axis (VR, where the amp is a physical object in the
 /// hand). The same two sources `create_projectile` uses, so an aimed cast goes
 /// where a psi bolt would.
-fn amp_aim_ray(world: &World, amp_entity: EntityId) -> Option<(Point3<f32>, Vector3<f32>)> {
+pub(crate) fn amp_aim_ray(
+    world: &World,
+    amp_entity: EntityId,
+) -> Option<(Point3<f32>, Vector3<f32>)> {
     if let Ok(v_flat_aim) = world.borrow::<View<crate::runtime_props::RuntimePropFlatAim>>()
         && let Ok(aim) = v_flat_aim.get(amp_entity)
     {

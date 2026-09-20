@@ -10116,6 +10116,57 @@ impl MissionCore {
                 Effect::HealingPulse { amp } => {
                     self.healing_pulses.insert(amp, 0.0);
                 }
+                Effect::PsiPull { amp, cost } => {
+                    if cost < 0 || crate::scripts::player_psi_points(&self.world) < cost {
+                        continue;
+                    }
+                    let Some(target) = crate::psi_pull::resolve(&self.world, &self.physics, amp)
+                    else {
+                        continue;
+                    };
+                    let player = self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .unwrap()
+                        .clone();
+                    let acquired = match target.destination {
+                        crate::psi_pull::Destination::Inventory => self
+                            .drop_entity_into_container(player.inventory_entity_id, target.entity)
+                            .is_some(),
+                        crate::psi_pull::Destination::Hand(hand) => {
+                            effects.extend(self.grab_entity_into_hand(
+                                asset_cache,
+                                target.entity,
+                                hand,
+                            ));
+                            self.interaction.is_holding(target.entity)
+                        }
+                        crate::psi_pull::Destination::Script => {
+                            self.script_world.dispatch(Message {
+                                to: target.entity,
+                                payload: MessagePayload::Frob,
+                            });
+                            true
+                        }
+                    };
+                    if acquired {
+                        update_player_psi_points(&self.world, |current| {
+                            current.saturating_sub(cost)
+                        });
+                        effects.push_back(Effect::PsiDrainVisual {
+                            from: target.origin,
+                            to: player.pos,
+                        });
+                        effects.push_back(crate::scripts::script_util::play_environmental_sound(
+                            &self.world,
+                            amp,
+                            "shoot",
+                            vec![],
+                            engine::audio::AudioHandle::new(),
+                        ));
+                    }
+                }
+
                 Effect::PsiDrainVisual { from, to } => {
                     if self.psi_drain_trails.len() < 8 {
                         self.psi_drain_trails
