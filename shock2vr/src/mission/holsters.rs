@@ -33,6 +33,19 @@ mod tests {
     }
 
     #[test]
+    fn psi_amp_fits_without_being_a_pistol() {
+        let mut world = World::new();
+        let amp = world.add_entity((dark::properties::PropTemplateId { template_id: -247 },));
+        world.add_unique(super::super::mission_core::GlobalTemplateClassTags(
+            std::collections::HashMap::from([(
+                -247,
+                std::collections::HashMap::from([("weapontype".to_owned(), "psiamp".to_owned())]),
+            )]),
+        ));
+        assert!(accepts(&world, amp));
+    }
+
+    #[test]
     fn only_melee_and_compact_pistols_fit() {
         let mut world = World::new();
         let melee = world.add_entity((dark::properties::PropLimbModel("wrench_h".to_owned()),));
@@ -362,9 +375,10 @@ pub(super) fn occupants(world: &World) -> [Option<EntityId>; 2] {
     slots
 }
 
-/// The thigh slots accept melee arms and the two compact pistols only.
+/// The thigh slots accept melee arms, compact pistols, and psi amps.
 pub(super) fn accepts(world: &World, entity: EntityId) -> bool {
     super::mission_core::is_melee_weapon(world, entity)
+        || crate::wielded_weapon::is_psi_amp(world, entity)
         || world
             .borrow::<View<dark::properties::PropPlayerGun>>()
             .is_ok_and(|guns| {

@@ -197,3 +197,37 @@ test("drawing a holstered wrench restores its physical melee body", { skip: !ena
   assert.equal((await game.info()).player.hand_feedback?.holsters?.items[0], null);
   assert.ok((await game.physics.bodies({ entityId: wrench.id })).bodies.length > 0);
 });
+
+for (const slot of [0, 1]) {
+  test(`psi amp uses holster ${slot} and paperdoll shows storage, not held items`, { skip: !enabled, timeout: 180_000 }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    const amp = (await game.entities.list()).entities.find(e => e.template_id === -247);
+    assert.ok(amp);
+    assert.deepEqual((await game.info()).player.stats?.os_traits, []);
+    await aimVrHandAt(game, amp.position, 0.2, 1);
+    await game.step({ frames: 5 });
+    assert.equal((await game.info()).player.right_hand_entity_id, amp.id);
+    await reach(game, "right", slot);
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 8 });
+    assert.equal((await game.info()).player.right_hand_entity_id, null);
+    assert.equal((await game.info()).player.hand_feedback?.holsters?.items[slot], amp.id);
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    const label = slot === 0 ? "Right holster" : "Left holster";
+    const icon = (await game.ui.state()).strip?.elements.find(e => e.label === label);
+    assert.equal(icon?.entity_id, amp.id, "the paperdoll names the physically matching holster");
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    await reach(game, "right", slot);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 8 });
+    assert.equal((await game.info()).player.right_hand_entity_id, amp.id);
+    assert.equal((await game.info()).player.hand_feedback?.holsters?.items[slot], null);
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    const empty = (await game.ui.state()).strip?.elements.find(e => e.label === label);
+    assert.equal(empty?.entity_id, null, "holding the amp must not refill the holster display");
+  });
+}

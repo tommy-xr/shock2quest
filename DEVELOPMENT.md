@@ -765,5 +765,9 @@ alone does not move the pawn or generate steps.
 
 Both left and right thigh holsters are available from the start, independently
 of O/S upgrades. Pack-Rat adds three backpack slots only. Either hand can stow
-a melee weapon or compact pistol in either holster with a deliberate release,
+a melee weapon, compact pistol, or psi amp in either holster with a deliberate release,
 and retrieve it with a fresh squeeze.
+
+The cyber interface's left and right paperdoll arm wells show the corresponding
+holstered items. They are read-only storage indicators; the weapon selectors
+below still operate on the items actually held in each hand.

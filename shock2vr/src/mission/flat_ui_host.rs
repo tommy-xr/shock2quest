@@ -263,6 +263,8 @@ pub struct FlatUiHost {
     /// Read-only snapshots in physical left/right order. A support hand owns
     /// no item; flat wielding is mapped to its visible right hand by the caller.
     hand_items: [Option<CursorItem>; 2],
+    /// Read-only paperdoll contents, in physical left/right holster order.
+    holster_items: [Option<CursorItem>; 2],
     hand_ammo: [crate::hud::ammo_panel::AmmoReadout; 2],
     selected_ammo: Option<EntityId>,
     pub(crate) utilities: super::mfd_utilities::MfdUtilities,
@@ -343,6 +345,7 @@ impl FlatUiHost {
             name_strip: None,
             shoulder_weapons: [None; 2],
             hand_items: [None, None],
+            holster_items: [None, None],
             hand_ammo: Default::default(),
             selected_ammo: None,
             utilities: Default::default(),
@@ -476,24 +479,30 @@ impl FlatUiHost {
         self.shoulder_weapons = weapons;
     }
 
-    pub(crate) fn set_hand_items(
+    pub(crate) fn set_equipment_items(
         &mut self,
         world: &World,
         asset_cache: &mut AssetCache,
         items: [Option<EntityId>; 2],
+        holsters: [Option<EntityId>; 2],
     ) {
         self.hand_ammo = items
             .map(|entity| crate::hud::ammo_panel::AmmoReadout::for_weapon(world, entity, true));
-        self.hand_items = items.map(|entity| {
-            let entity = entity.filter(|entity| {
-                world
-                    .borrow::<EntitiesView>()
-                    .is_ok_and(|entities| entities.is_alive(*entity))
-            })?;
-            let mut item = make_cursor_item(world, entity);
-            item.label = crate::hud::resolve_item_name(asset_cache, world, entity).or(item.label);
-            Some(item)
+        let [held, holstered] = [items, holsters].map(|items| {
+            items.map(|entity| {
+                let entity = entity.filter(|entity| {
+                    world
+                        .borrow::<EntitiesView>()
+                        .is_ok_and(|entities| entities.is_alive(*entity))
+                })?;
+                let mut item = make_cursor_item(world, entity);
+                item.label =
+                    crate::hud::resolve_item_name(asset_cache, world, entity).or(item.label);
+                Some(item)
+            })
         });
+        self.hand_items = held;
+        self.holster_items = holstered;
         self.reconcile_ammo_selection();
     }
 
@@ -530,17 +539,17 @@ impl FlatUiHost {
         (self.selected_ammo, hand)
     }
 
-    pub(crate) fn pointed_hand_name(&self) -> Option<String> {
+    pub(crate) fn pointed_holster_name(&self) -> Option<String> {
         if self.cursor_item.is_some() {
             return None;
         }
         let pointer = self.cursor_canvas?;
-        let rects = hand_readout_rects(self.strip_rect()?);
+        let rects = holster_readout_rects(self.strip_rect()?);
         let slot = rects.iter().position(|rect| rect.contains(pointer))?;
-        let side = ["Left hand", "Right hand"][slot];
-        let name = self.hand_items[slot]
+        let side = ["Left holster", "Right holster"][slot];
+        let name = self.holster_items[slot]
             .as_ref()
-            .map(|item| item.label.as_deref().unwrap_or("Held item"))
+            .map(|item| item.label.as_deref().unwrap_or("Holstered item"))
             .unwrap_or("Empty");
         Some(format!("{side}: {name}"))
     }
@@ -718,7 +727,11 @@ impl FlatUiHost {
     /// a recycled `EntityId`. The destruction effect pipeline calls this before
     /// deleting the world entity.
     pub fn on_entity_destroyed(&mut self, entity: EntityId) {
-        for item in &mut self.hand_items {
+        for item in self
+            .hand_items
+            .iter_mut()
+            .chain(self.holster_items.iter_mut())
+        {
             if item.as_ref().is_some_and(|item| item.entity == entity) {
                 *item = None;
             }
@@ -1033,13 +1046,13 @@ impl FlatUiHost {
             .map(strip_canvas_rect);
         let over_strip = strip_rect.map(|r| r.contains(canvas_pos)).unwrap_or(false);
         if let Some(rect) = strip_rect {
-            let hand_item = hand_readout_rects(rect)
+            let holster_item = holster_readout_rects(rect)
                 .iter()
                 .position(|r| r.contains(canvas_pos))
-                .and_then(|slot| self.hand_items[slot].as_ref().map(|item| item.entity));
+                .and_then(|slot| self.holster_items[slot].as_ref().map(|item| item.entity));
             let candidate = self
                 .held_entity()
-                .or(hand_item)
+                .or(holster_item)
                 .or_else(|| self.strip_item_at(canvas_pos));
             if self.utilities.update(
                 canvas_pos,
@@ -1068,15 +1081,14 @@ impl FlatUiHost {
                 return (Vec::new(), actions);
             }
         }
-        if let Some(slot) = strip_rect.and_then(|r| {
-            hand_readout_rects(r)
+        if strip_rect.is_some_and(|r| {
+            holster_readout_rects(r)
                 .iter()
-                .position(|r| r.contains(canvas_pos))
+                .any(|r| r.contains(canvas_pos))
         }) {
-            // Select only with an empty cursor; the arm never equips or drops.
-            if pressed_edge && self.cursor_item.is_none() && !self.hand_ammo[slot].is_empty() {
-                self.selected_ammo = self.hand_items[slot].as_ref().map(|item| item.entity);
-            }
+            // These are read-only holster snapshots. Hand weapon controls use
+            // their own selectors below; a paperdoll click must not select a
+            // different, currently held object or transfer storage ownership.
             self.hover_close = false;
             return (Vec::new(), Vec::new());
         }
@@ -1359,18 +1371,9 @@ impl FlatUiHost {
                     VAlign::Middle,
                 );
             }
-            for (slot, arm) in hand_readout_rects(rect).into_iter().enumerate() {
+            for (slot, arm) in holster_readout_rects(rect).into_iter().enumerate() {
                 let title = Rect::new(arm.x + 1.0, arm.y + 16.0, arm.w - 2.0, 12.0);
-                let selected = self.hand_items[slot]
-                    .as_ref()
-                    .is_some_and(|item| Some(item.entity) == self.selected_ammo);
                 canvas.image(title, "frame.pcx");
-                if selected {
-                    canvas.image(
-                        Rect::new(title.x, title.y + title.h - 1.0, title.w, 1.0),
-                        "iface/resprog.pcx",
-                    );
-                }
                 canvas.text_native_fit(
                     title,
                     ["LEFT", "RIGHT"][slot],
@@ -1378,35 +1381,8 @@ impl FlatUiHost {
                     HAlign::Center,
                     VAlign::Middle,
                 );
-                let content = Rect::new(
-                    arm.x + 3.0,
-                    arm.y + 30.0,
-                    arm.w - 6.0,
-                    arm.h
-                        - if self.hand_ammo[slot].is_empty() {
-                            34.0
-                        } else {
-                            48.0
-                        },
-                );
-                if let Some(ammo) = self.hand_ammo[slot].ammo {
-                    canvas.text_native_fit(
-                        Rect::new(arm.x + 1.0, arm.y + arm.h - 16.0, arm.w - 2.0, 12.0),
-                        &ammo.to_string(),
-                        crate::ui::MFD_FONT,
-                        HAlign::Center,
-                        VAlign::Top,
-                    );
-                } else if self.hand_ammo[slot].psi_power.is_some() {
-                    canvas.text_native_fit(
-                        Rect::new(arm.x + 1.0, arm.y + arm.h - 16.0, arm.w - 2.0, 12.0),
-                        "PSI",
-                        crate::ui::MFD_FONT,
-                        HAlign::Center,
-                        VAlign::Top,
-                    );
-                }
-                match self.hand_items[slot].as_ref() {
+                let content = Rect::new(arm.x + 3.0, arm.y + 30.0, arm.w - 6.0, arm.h - 34.0);
+                match self.holster_items[slot].as_ref() {
                     Some(item) => match item.icon.as_deref() {
                         Some(icon) => {
                             canvas.fitted_object_icon(content, icon);
@@ -1612,26 +1588,19 @@ impl FlatUiHost {
                         screen_rect: self.to_screen_rect(r),
                     },
                 ));
-                elements.extend(hand_readout_rects(rect).into_iter().enumerate().map(
+                elements.extend(holster_readout_rects(rect).into_iter().enumerate().map(
                     |(slot, r)| {
-                        let item = self.hand_items[slot].as_ref();
+                        let item = self.holster_items[slot].as_ref();
                         crate::game_scene::DebugUiElement {
                             kind: "readout".to_owned(),
                             texture: item.and_then(|item| item.icon.clone()),
                             text: Some({
                                 let name = item
-                                    .map(|item| item.label.as_deref().unwrap_or("Held item"))
+                                    .map(|item| item.label.as_deref().unwrap_or("Holstered item"))
                                     .unwrap_or("Empty");
-                                if self.hand_ammo[slot].psi_power.is_some() {
-                                    format!("{name}: PSI")
-                                } else {
-                                    match self.hand_ammo[slot].ammo {
-                                        Some(ammo) => format!("{name}: {ammo}"),
-                                        None => name.to_owned(),
-                                    }
-                                }
+                                name.to_owned()
                             }),
-                            label: Some(["Left hand", "Right hand"][slot].to_owned()),
+                            label: Some(["Left holster", "Right holster"][slot].to_owned()),
                             entity_id: item.map(|item| item.entity.inner() as i32),
                             rect: [r.x, r.y, r.w, r.h],
                             screen_rect: self.to_screen_rect(r),
@@ -1774,7 +1743,7 @@ fn mirrored_arm_rect(strip: Rect) -> Rect {
 
 /// The paperdoll faces the viewer: its right arm is on the viewer's left.
 /// These same rectangles draw, describe and consume input for the readouts.
-fn hand_readout_rects(strip: Rect) -> [Rect; 2] {
+fn holster_readout_rects(strip: Rect) -> [Rect; 2] {
     [
         mirrored_arm_rect(strip),
         Rect::new(
@@ -2862,20 +2831,23 @@ mod tests {
     }
 
     #[test]
-    fn hand_readouts_name_physical_sides_and_do_not_take_ownership() {
-        let (world, mut host, item, _) = drag_world();
-        host.hand_items[1] = Some(make_cursor_item(&world, item));
-        let [left, right] = hand_readout_rects(host.strip_rect().unwrap());
+    fn holster_readouts_name_physical_sides_and_do_not_take_ownership() {
+        let (mut world, mut host, item, _) = drag_world();
+        let held = world.add_entity(());
+        host.hand_items[1] = Some(make_cursor_item(&world, held));
+        host.selected_ammo = Some(held);
+        host.holster_items[1] = Some(make_cursor_item(&world, item));
+        let [left, right] = holster_readout_rects(host.strip_rect().unwrap());
         assert!(right.x < left.x, "paperdoll faces the viewer");
         host.cursor_canvas = Some(right.center());
         assert_eq!(
-            host.pointed_hand_name().as_deref(),
-            Some("Right hand: Wrench")
+            host.pointed_holster_name().as_deref(),
+            Some("Right holster: Wrench")
         );
         host.cursor_canvas = Some(left.center());
         assert_eq!(
-            host.pointed_hand_name().as_deref(),
-            Some("Left hand: Empty")
+            host.pointed_holster_name().as_deref(),
+            Some("Left holster: Empty")
         );
         let readouts: Vec<_> = host
             .strip_debug_elements(&world)
@@ -2889,23 +2861,28 @@ mod tests {
             assert_eq!(host.strip_cell_at(rect.center(), &world), None);
             assert!(press_edge(&mut host, &world, (rect.center().x, rect.center().y)).is_empty());
         }
+        assert_eq!(
+            host.selected_ammo,
+            Some(held),
+            "paperdoll clicks do not select a held item"
+        );
         host.on_entity_destroyed(item);
         host.cursor_canvas = Some(right.center());
         assert_eq!(
-            host.pointed_hand_name().as_deref(),
-            Some("Right hand: Empty")
+            host.pointed_holster_name().as_deref(),
+            Some("Right holster: Empty")
         );
     }
 
     #[test]
-    fn hand_readouts_preserve_the_cursor_item_on_both_sides() {
+    fn holster_readouts_preserve_the_cursor_item_on_both_sides() {
         let (world, mut host, item, _) = drag_world();
         host.cursor_item = Some(make_cursor_item(&world, item));
-        for rect in hand_readout_rects(host.strip_rect().unwrap()) {
+        for rect in holster_readout_rects(host.strip_rect().unwrap()) {
             let point = rect.center();
             assert!(press_edge(&mut host, &world, (point.x, point.y)).is_empty());
             assert_eq!(host.held_entity(), Some(item));
-            assert_eq!(host.pointed_hand_name(), None);
+            assert_eq!(host.pointed_holster_name(), None);
         }
     }
 
@@ -3293,7 +3270,7 @@ mod tests {
     }
 
     #[test]
-    fn arm_selection_preserves_weapon_identity_and_carries_the_drawn_target() {
+    fn hand_selector_preserves_weapon_identity_and_carries_the_drawn_target() {
         let (mut world, mut host, left, _) = drag_world();
         let right = world.add_entity(());
         host.hand_items = [
@@ -3312,8 +3289,25 @@ mod tests {
         ];
         host.reconcile_ammo_selection();
         assert_eq!(host.ammo_selection().0, Some(right));
-        let arm = hand_readout_rects(host.strip_rect().unwrap())[0].center();
-        assert!(press_edge(&mut host, &world, (arm.x, arm.y)).is_empty());
+        let mut readouts = readout_fixture();
+        readouts.weapon = Some(right);
+        host.set_readouts(Some(readouts));
+        let tab = host
+            .readout_buttons_debug()
+            .into_iter()
+            .find(|e| e.label.as_deref() == Some("select_left_hand"))
+            .unwrap();
+        assert!(
+            press_edge(
+                &mut host,
+                &world,
+                (
+                    tab.rect[0] + tab.rect[2] / 2.0,
+                    tab.rect[1] + tab.rect[3] / 2.0
+                )
+            )
+            .is_empty()
+        );
         assert_eq!(host.ammo_selection().0, Some(left));
         let mut readouts = readout_fixture();
         readouts.weapon = Some(left);
