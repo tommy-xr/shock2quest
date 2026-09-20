@@ -1,0 +1,184 @@
+name: Set up Android build
+description: Shared SDK, cargo-apk and FFmpeg setup for Linux CI and releases
+runs:
+  using: composite
+  steps:
+    # Install Linux-specific dependencies
+    - name: Install ALSA and libclang (Linux only)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libclang-dev llvm-dev
+
+    # Cache cargo build artifacts
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo index
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo build
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+    # Set up Android SDK
+    # `packages: ''` skips the action's default `sdkmanager tools` - the
+    # legacy `tools` package is delisted and fails the install. The packages
+    # we actually need are installed explicitly below.
+    - uses: android-actions/setup-android@v3
+      with:
+        packages: ''
+    - shell: bash
+      run: sdkmanager "build-tools;33.0.0"
+    - shell: bash
+      run: sdkmanager "platforms;android-26"
+    - shell: bash
+      run: sdkmanager "platform-tools"
+    - shell: bash
+      run: sdkmanager "ndk;24.0.8215888"
+
+    # Check Android SDK
+    - name: Check Android SDK location
+      shell: bash
+      run: echo $ANDROID_HOME
+    - name: Check sdkmanager location
+      shell: bash
+      run: which sdkmanager
+
+    # Set up Rust build tools for Android
+    - name: Install Cargo APK
+      shell: bash
+      run: cargo install cargo-apk --version 0.9.7 --locked
+    - name: Install Rustup target
+      shell: bash
+      run: rustup target add aarch64-linux-android
+
+    # Fix pkgconfig files for CI environment and set up ffmpeg environment
+    - name: Set up FFmpeg environment
+      shell: bash
+      run: |
+        cd runtimes/oculus_runtime
+
+        # Fix pkgconfig files to use CI paths instead of local hardcoded paths
+        CI_WORKSPACE="${GITHUB_WORKSPACE}/runtimes/oculus_runtime"
+        sed -i "s|prefix=.*|prefix=${CI_WORKSPACE}/ffmpeg|g" ffmpeg/pkgconfig/*.pc
+        sed -i "s|libdir=.*|libdir=${CI_WORKSPACE}/lib/arm64-v8a|g" ffmpeg/pkgconfig/*.pc
+        sed -i "s|includedir=.*|includedir=${CI_WORKSPACE}/ffmpeg/include|g" ffmpeg/pkgconfig/*.pc
+
+        # Set Android SDK paths to match GitHub Actions environment
+        export SDK="$ANDROID_HOME"
+        export ANDROID_SDK_ROOT="$ANDROID_HOME"
+        export BUILD_TOOLS="${SDK}/build-tools/33.0.0"
+        export PLATFORM="${SDK}/platforms/android-26"
+        export NDK="${SDK}/ndk/24.0.8215888"
+        export ANDROID_NDK_ROOT="${NDK}"
+        export ARM64_TOOLCHAIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64"
+
+        # Set up ffmpeg environment variables
+        export FFMPEG_ROOT="$(pwd)/ffmpeg"
+        export PKG_CONFIG_ALLOW_CROSS=1
+        export PKG_CONFIG_PATH="${FFMPEG_ROOT}/pkgconfig"
+        export PKG_CONFIG_SYSROOT_DIR="${FFMPEG_ROOT}"
+        export PKG_CONFIG_ALLOW_CROSS_aarch64_linux_android=1
+        export PKG_CONFIG_PATH_aarch64_linux_android="${FFMPEG_ROOT}/pkgconfig"
+        export PKG_CONFIG_SYSROOT_DIR_aarch64_linux_android="${FFMPEG_ROOT}"
+
+        # Set target-specific compiler settings
+        export CC_aarch64_linux_android="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android26-clang"
+        export CXX_aarch64_linux_android="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android26-clang++"
+        export CFLAGS_aarch64_linux_android="--sysroot=${ARM64_TOOLCHAIN}/sysroot -fPIC"
+        export CXXFLAGS_aarch64_linux_android="--sysroot=${ARM64_TOOLCHAIN}/sysroot -fPIC"
+
+        # Set host compiler settings for build scripts (to find ffmpeg headers)
+        export CFLAGS_x86_64_unknown_linux_gnu="-I${FFMPEG_ROOT}/include"
+        export CXXFLAGS_x86_64_unknown_linux_gnu="-I${FFMPEG_ROOT}/include"
+
+        # Set bindgen environment for header discovery
+        export FFMPEG_INCLUDE_DIR="${FFMPEG_ROOT}/include"
+        export BINDGEN_EXTRA_CLANG_ARGS="-I${FFMPEG_ROOT}/include --sysroot=${ARM64_TOOLCHAIN}/sysroot --target=aarch64-linux-android"
+
+        # Find libclang path dynamically with better fallbacks
+        echo "Searching for libclang..."
+
+        # Try multiple common locations
+        LIBCLANG_PATH=""
+        for search_dir in "/usr/lib" "/usr/local/lib" "/opt" "/usr/lib/x86_64-linux-gnu"; do
+          echo "Searching in $search_dir..."
+          # Look specifically for the actual libclang shared library
+          FOUND_FILE=$(find "$search_dir" -name "libclang.so*" -o -name "libclang-*.so*" 2>/dev/null | head -1)
+          if [ -n "$FOUND_FILE" ] && [ -f "$FOUND_FILE" ]; then
+            LIBCLANG_PATH=$(dirname "$FOUND_FILE")
+            echo "Found libclang.so in: $LIBCLANG_PATH (file: $FOUND_FILE)"
+            break
+          fi
+        done
+
+        # Fallback to llvm directories
+        if [ -z "$LIBCLANG_PATH" ]; then
+          echo "Searching for LLVM directories..."
+          for search_dir in "/usr/lib" "/usr/local/lib"; do
+            for llvm_dir in $(find "$search_dir" -name "llvm-*" -type d 2>/dev/null); do
+              echo "Checking LLVM directory: $llvm_dir"
+              # Look for libclang.so in the LLVM lib directory
+              if [ -f "$llvm_dir/lib/libclang.so" ] || [ -f "$llvm_dir/lib/libclang-*.so" ]; then
+                LIBCLANG_PATH="$llvm_dir/lib"
+                echo "Found libclang in LLVM directory: $LIBCLANG_PATH"
+                break 2
+              fi
+            done
+          done
+        fi
+
+        # Final fallback
+        if [ -z "$LIBCLANG_PATH" ]; then
+          echo "No libclang found, using default path"
+          LIBCLANG_PATH="/usr/lib/llvm-14/lib"
+        fi
+
+        echo "Using LIBCLANG_PATH: $LIBCLANG_PATH"
+
+        # Verify the path exists and contains libclang.so
+        if [ -d "$LIBCLANG_PATH" ]; then
+          echo "LIBCLANG_PATH directory exists: $LIBCLANG_PATH"
+          echo "Looking for libclang.so files:"
+          ls -la "$LIBCLANG_PATH"/libclang*.so* 2>/dev/null || echo "No libclang.so files found!"
+          echo "Directory contents:"
+          ls -la "$LIBCLANG_PATH" | head -5
+        else
+          echo "WARNING: LIBCLANG_PATH directory does not exist!"
+          echo "Available LLVM directories in /usr/lib:"
+          ls -la /usr/lib | grep llvm || echo "No LLVM directories found"
+        fi
+
+        export LIBCLANG_PATH
+
+        # Save environment for next step
+        echo "SDK=${SDK}" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> $GITHUB_ENV
+        echo "NDK=${NDK}" >> $GITHUB_ENV
+        echo "ANDROID_NDK_ROOT=${NDK}" >> $GITHUB_ENV
+        echo "ARM64_TOOLCHAIN=${ARM64_TOOLCHAIN}" >> $GITHUB_ENV
+        echo "FFMPEG_ROOT=${FFMPEG_ROOT}" >> $GITHUB_ENV
+        echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+        echo "PKG_CONFIG_PATH=${FFMPEG_ROOT}/pkgconfig" >> $GITHUB_ENV
+        echo "PKG_CONFIG_SYSROOT_DIR=${FFMPEG_ROOT}" >> $GITHUB_ENV
+        echo "PKG_CONFIG_ALLOW_CROSS_aarch64_linux_android=1" >> $GITHUB_ENV
+        echo "PKG_CONFIG_PATH_aarch64_linux_android=${FFMPEG_ROOT}/pkgconfig" >> $GITHUB_ENV
+        echo "PKG_CONFIG_SYSROOT_DIR_aarch64_linux_android=${FFMPEG_ROOT}" >> $GITHUB_ENV
+        echo "CC_aarch64_linux_android=${ARM64_TOOLCHAIN}/bin/aarch64-linux-android26-clang" >> $GITHUB_ENV
+        echo "CXX_aarch64_linux_android=${ARM64_TOOLCHAIN}/bin/aarch64-linux-android26-clang++" >> $GITHUB_ENV
+        echo "CFLAGS_aarch64_linux_android=--sysroot=${ARM64_TOOLCHAIN}/sysroot -fPIC" >> $GITHUB_ENV
+        echo "CXXFLAGS_aarch64_linux_android=--sysroot=${ARM64_TOOLCHAIN}/sysroot -fPIC" >> $GITHUB_ENV
+        echo "CFLAGS_x86_64_unknown_linux_gnu=-I${FFMPEG_ROOT}/include" >> $GITHUB_ENV
+        echo "CXXFLAGS_x86_64_unknown_linux_gnu=-I${FFMPEG_ROOT}/include" >> $GITHUB_ENV
+        echo "FFMPEG_INCLUDE_DIR=${FFMPEG_ROOT}/include" >> $GITHUB_ENV
+        echo "BINDGEN_EXTRA_CLANG_ARGS=-I${FFMPEG_ROOT}/include --sysroot=${ARM64_TOOLCHAIN}/sysroot --target=aarch64-linux-android" >> $GITHUB_ENV
+        echo "LIBCLANG_PATH=${LIBCLANG_PATH}" >> $GITHUB_ENV
+

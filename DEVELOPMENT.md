@@ -16,6 +16,11 @@
     - `save_load` - serializing, deserializing game state
     - `creature` - constants and hitboxes for creature definitions
 
+## Releases
+
+See [Publishing releases](.github/RELEASING.md) for signing setup and the manual
+release workflow. Users installing an APK should follow [INSTALL.md](INSTALL.md).
+
 ## Set up
 
 ### 1. Clone Repoo

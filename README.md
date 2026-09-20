@@ -2,6 +2,7 @@
 # shock2quest
 
 [![Build & Unit Test](https://github.com/tommy-xr/shock2quest/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/tommy-xr/shock2quest/actions/workflows/build.yml) [![Build Android](https://github.com/tommy-xr/shock2quest/actions/workflows/build-android.yml/badge.svg)](https://github.com/tommy-xr/shock2quest/actions/workflows/build-android.yml)
+[![Latest release](https://img.shields.io/github/v/release/tommy-xr/shock2quest)](https://github.com/tommy-xr/shock2quest/releases/latest)
 
 A project to experience System Shock 2 in virtual reality. System Shock 2 is one of my favorite games of all time, and the story and ambience would be great for VR. 
 
@@ -29,7 +30,9 @@ Once installed, copy `sshock2.kpf` and the `mods/` folder from it - see [DEVELOP
 
 ## Running
 
-> TODO: Provide binaries
+Download the signed Quest APK from the [latest release](https://github.com/tommy-xr/shock2quest/releases/latest),
+then follow the [installation instructions](INSTALL.md) to sideload it and copy
+your Remaster game files. Desktop downloads are planned for v0.0.2.
 
 ### Controls
 
