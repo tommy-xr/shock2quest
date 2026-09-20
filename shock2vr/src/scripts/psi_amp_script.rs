@@ -108,13 +108,9 @@ impl Script for PsiAmpScript {
                     game_log!(INFO, "Psi power {} is not trained", power.name);
                     return Effect::NoEffect;
                 }
-                // Hold-to-overload runs only in flat presentation (the meter
-                // renders on the flat HUD; a flat-aimed amp carries
-                // RuntimePropFlatAim). In VR the amp keeps cast-on-pull until
-                // a VR meter exists - charging blind would spend points with
-                // no feedback.
-                let is_flat = crate::runtime_props::is_flat_aimed(world, entity_id);
-                if power.overloadable && is_flat {
+                // Both presentations show the per-amp charge on their shared
+                // ammo readout, so the same trigger timing applies in VR.
+                if power.overloadable {
                     // No points, no charge: gate up front so a broke caster
                     // can't charge into a burnout (which spends points and
                     // deals damage) they couldn't afford as a cast.
@@ -293,7 +289,18 @@ fn burnout(world: &World, amp_entity: EntityId) -> Effect {
         };
     };
     let player_entity = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
-    let damage = psi::BURNOUT_DAMAGE_PER_TIER * power.power.psi_cost;
+    let protected = world
+        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+        .is_ok_and(|quests| {
+            quests
+                .player_stats()
+                .has_os_trait(super::gui::TRAIT_POWER_PSI)
+        });
+    let damage = if protected {
+        0
+    } else {
+        psi::BURNOUT_DAMAGE_PER_TIER * power.power.psi_cost
+    };
     game_log!(
         WARN,
         "Psi burnout! {} failed ({} damage)",
@@ -846,6 +853,72 @@ fn amp_cast_flashes(world: &World, amp_entity: EntityId) -> Vec<Effect> {
 mod tests {
     use super::*;
     use crate::quest_info::QuestInfo;
+
+    #[test]
+    fn power_psi_prevents_burnout_damage_but_keeps_cost_and_failed_cast() {
+        for owned in [false, true] {
+            let mut world = World::new();
+            let player = world.add_entity(());
+            let amp = world.add_entity(());
+            world.add_unique(PlayerInfo {
+                pos: cgmath::vec3(0.0, 0.0, 0.0),
+                rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                entity_id: player,
+                left_hand_entity_id: Some(amp),
+                right_hand_entity_id: None,
+                inventory_entity_id: player,
+            });
+            let mut quests = QuestInfo::new();
+            if owned {
+                quests.player_stats_mut().add_os_trait(14);
+            }
+            world.add_unique(quests);
+            world.add_unique(GlobalPsiPowers(vec![PsiPowerInfo {
+                template_id: -1,
+                name: "Test power".into(),
+                display_name: None,
+                power: dark::properties::PropPsiPower {
+                    power_id: 1,
+                    activation_type: 0,
+                    psi_cost: 1,
+                    data: [0.0; 4],
+                },
+                projectiles: vec![],
+                overloadable: true,
+                duration: None,
+            }]));
+            world.add_unique(PsiPowerSelection { index: 0 });
+            let Effect::Multiple(effects) = burnout(&world, amp) else {
+                panic!("burnout effects");
+            };
+            assert!(
+                effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::SpendPsiPoints { amount: 1 }))
+            );
+            assert!(effects.iter().any(|e| matches!(
+                e,
+                Effect::SetPsiCharge {
+                    phase: PsiChargePhase::Burnout,
+                    ..
+                }
+            )));
+            let damage: i32 = effects
+                .iter()
+                .filter_map(|e| match e {
+                    Effect::AdjustHitPoints { delta, .. } => Some(*delta),
+                    _ => None,
+                })
+                .sum();
+            assert_eq!(damage, if owned { 0 } else { -3 });
+            assert!(effects.iter().all(|e| matches!(
+                e,
+                Effect::AdjustHitPoints { .. }
+                    | Effect::SpendPsiPoints { .. }
+                    | Effect::SetPsiCharge { .. }
+            )));
+        }
+    }
 
     #[test]
     fn self_heal_scales_with_psi() {
