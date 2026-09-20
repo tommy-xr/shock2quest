@@ -12449,6 +12449,7 @@ impl MissionCore {
             // last; the depth buffer is cleared before its first object so it
             // renders over geometry while still depth-testing within itself.
             if let Some(weapon) = self.interaction.viewmodel_entity() {
+                let invisibility = crate::psi_invisibility::transparency(&self.world);
                 let maybe_xform = {
                     let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
                     v_transform.get(weapon).map(|p| p.0).ok()
@@ -12568,6 +12569,7 @@ impl MissionCore {
                     for obj in scene_objs {
                         let mut o = obj.clone();
                         o.set_transform(squish * xform);
+                        crate::psi_invisibility::apply(&mut o, invisibility);
                         ret.push(o);
                     }
 
@@ -12613,6 +12615,7 @@ impl MissionCore {
                             for obj in objs {
                                 let mut o = obj.clone();
                                 o.set_transform(squish * attached_xform);
+                                crate::psi_invisibility::apply(&mut o, invisibility);
                                 o.set_debug_tag(Some(Rc::new(
                                     engine::scene::SceneObjectDebugTag {
                                         entity_id: Some(attached_id.inner()),
@@ -13016,6 +13019,28 @@ impl MissionCore {
                 HashSet::new()
             };
 
+        let invisibility = crate::psi_invisibility::transparency(&self.world);
+        let invisible_items: HashSet<EntityId> = if invisibility.is_some() {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            let held: HashSet<_> = [player.left_hand_entity_id, player.right_hand_entity_id]
+                .into_iter()
+                .flatten()
+                .collect();
+            let attachments = self.world.borrow::<View<RuntimePropAttachment>>().unwrap();
+            held.iter()
+                .copied()
+                .chain(
+                    attachments
+                        .iter()
+                        .with_id()
+                        .filter(|(_, a)| held.contains(&a.parent))
+                        .map(|(id, _)| id),
+                )
+                .collect()
+        } else {
+            HashSet::new()
+        };
+
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
@@ -13084,6 +13109,9 @@ impl MissionCore {
                     } else {
                         xformed_obj.set_depth_write(true);
                         xformed_obj.set_skinned_transparency(None);
+                    }
+                    if invisible_items.contains(entity_id) {
+                        crate::psi_invisibility::apply(&mut xformed_obj, invisibility);
                     }
                     scene.push(xformed_obj);
                 }
