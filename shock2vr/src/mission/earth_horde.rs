@@ -286,14 +286,14 @@ impl EntityPopulator for HordePopulation {
             60_010,
             -463,
             "West street supplies",
-            [-5.0, 23.55, 32.2],
+            [0.0, 23.55, 32.2],
             0.0,
         );
         let specialty = add(
             60_011,
             -463,
             "East street ammunition",
-            [27.0, 23.55, 32.2],
+            [27.0, 22.6, 24.0],
             0.0,
         );
         let east_supply = add(
@@ -306,8 +306,8 @@ impl EntityPopulator for HordePopulation {
         // Retail replicators are an assembly: RepBase is only the cabinet.
         // Match the separate RepScreen and its authored local offset.
         for (index, position, yaw) in [
-            (0, [-5.0, 23.40, 32.54], 0.0),
-            (1, [27.0, 23.40, 32.54], 0.0),
+            (0, [0.0, 23.40, 32.54], 0.0),
+            (1, [27.0, 22.45, 24.34], 0.0),
             (2, [54.54, 23.40, 24.0], 90.0),
         ] {
             add(60_040 + index, -464, "Replicator display", position, yaw);
@@ -315,7 +315,7 @@ impl EntityPopulator for HordePopulation {
         for (index, (template, name, position, yaw)) in [
             (-581, "Stats Trainer", [-11.2, 2.8, 4.0], -90.0),
             (-1436, "Tech Trainer", [32.8, 2.8, 4.0], 90.0),
-            (-1437, "Weapon Trainer", [21.0, 2.8, 12.4], 0.0),
+            (-1437, "Weapon Trainer", [19.3, 2.8, 12.4], 0.0),
             (-1583, "Psi Trainer", [24.0, 2.8, 12.4], 0.0),
         ]
         .iter()
@@ -344,12 +344,12 @@ impl EntityPopulator for HordePopulation {
             (
                 supply,
                 60_030,
-                add(60_030, -327, "Supply outlet", [-5.0, 21.0, 30.8], 0.0),
+                add(60_030, -327, "Supply outlet", [0.0, 21.0, 30.8], 0.0),
             ),
             (
                 specialty,
                 60_031,
-                add(60_031, -327, "Ammunition outlet", [27.0, 21.0, 30.8], 0.0),
+                add(60_031, -327, "Ammunition outlet", [27.0, 21.0, 22.6], 0.0),
             ),
             (
                 east_supply,

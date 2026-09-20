@@ -133,7 +133,8 @@ Trainers remain in the subway: stats at the west end, tech at the east end,
 and weapons/psi on the east platform's back wall. The weapons trainer is clear
 of the large containment cabinet. Three replicators serve the street: west,
 east, and far east end. Their separate RepScreen displays and wall-mounted
-height match authored MedSci machines; outlets face the accessible approach.
+height follow authored MedSci machines for wall units; the central street kiosk
+sits on the floor clear of the sloped walls. Outlets face accessible approaches.
 
 ## Start at a wave / jump cheat
 
