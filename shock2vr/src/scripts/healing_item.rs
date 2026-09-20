@@ -45,7 +45,7 @@ impl HealingItemScript {
         Self { kind }
     }
 
-    fn pharmo_friendly(world: &World) -> bool {
+    pub(crate) fn pharmo_friendly(world: &World) -> bool {
         world
             .borrow::<UniqueView<QuestInfo>>()
             .is_ok_and(|quests| quests.player_stats().has_os_trait(TRAIT_PHARMO_FRIENDLY))
@@ -53,7 +53,7 @@ impl HealingItemScript {
 
     /// The original multiplies both values by 1.2 and converts back to an
     /// integer. Integer arithmetic preserves that truncation exactly.
-    fn retail_amount(base: i32, pharmo_friendly: bool) -> i32 {
+    pub(crate) fn retail_amount(base: i32, pharmo_friendly: bool) -> i32 {
         if pharmo_friendly {
             base.saturating_mul(6) / 5
         } else {

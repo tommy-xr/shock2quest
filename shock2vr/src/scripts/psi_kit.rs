@@ -36,14 +36,17 @@ impl Script for PsiKitScript {
 
         Effect::UsePsiKit {
             entity_id,
-            amount: if world
-                .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
-                .is_ok_and(|q| q.difficulty() == dark::gamesys::Difficulty::Easy)
-            {
-                30
-            } else {
-                Self::RESTORE_AMOUNT
-            },
+            amount: super::healing_item::HealingItemScript::retail_amount(
+                if world
+                    .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+                    .is_ok_and(|q| q.difficulty() == dark::gamesys::Difficulty::Easy)
+                {
+                    30
+                } else {
+                    Self::RESTORE_AMOUNT
+                },
+                super::healing_item::HealingItemScript::pharmo_friendly(world),
+            ),
         }
     }
 }
@@ -88,6 +91,23 @@ mod tests {
                 _ => panic!("expected psi kit use"),
             }
         }
+    }
+
+    #[test]
+    fn pharmo_friendly_increases_psi_hypo_by_twenty_percent() {
+        let (world, booster) = world_with_booster();
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests
+            .player_stats_mut()
+            .add_os_trait(crate::scripts::gui::TRAIT_PHARMO_FRIENDLY);
+        world.add_unique(quests);
+        let effect = PsiKitScript::new().handle_message(
+            booster,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        );
+        assert!(matches!(effect, Effect::UsePsiKit { amount: 24, .. }));
     }
 
     #[test]
