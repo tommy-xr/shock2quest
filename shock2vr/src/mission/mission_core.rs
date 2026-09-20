@@ -3177,6 +3177,7 @@ impl MissionCore {
         world.add_unique(known_powers);
         world.add_unique(crate::psi::ActivePsiPowers::default());
         world.add_unique(crate::psi_radar::Radar::default());
+        world.add_unique(crate::psi_seekersense::Seekersense::default());
         world.add_unique(crate::scripts::healing_item::ActiveHealing::default());
         world.add_unique(crate::scripts::radiation::ActiveRadiation::default());
         world.add_unique(crate::scripts::radiation::RadiationRooms::default());
@@ -4733,6 +4734,7 @@ impl MissionCore {
             });
 
         crate::psi_radar::update(&self.world, time.elapsed.as_secs_f32());
+        crate::psi_seekersense::update(&self.world, time.elapsed.as_secs_f32());
         effects.extend(update_research(&self.world, time.elapsed.as_secs_f32()));
 
         let (player_pos, player_rot) = {
@@ -13064,6 +13066,16 @@ impl MissionCore {
             .map(|c| (c.entity_id, c.strength))
             .collect();
 
+        let seekersense = self
+            .world
+            .borrow::<UniqueView<crate::psi_seekersense::Seekersense>>()
+            .unwrap();
+        let item_contacts: HashMap<_, _> = seekersense
+            .contacts
+            .iter()
+            .map(|c| (c.entity_id, c.strength))
+            .collect();
+
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
@@ -13084,7 +13096,8 @@ impl MissionCore {
 
             let visible = self.visibility_engine.is_visible(*entity_id);
             let echo = radar_contacts.get(&entity_id.inner()).copied();
-            if !visible && echo.is_none() {
+            let item_echo = item_contacts.get(&entity_id.inner()).copied();
+            if !visible && echo.is_none() && item_echo.is_none() {
                 continue;
             }
 
@@ -13139,10 +13152,21 @@ impl MissionCore {
                         crate::psi_invisibility::apply(&mut xformed_obj, invisibility);
                     }
                     if let Some(strength) = echo {
-                        scene.push(crate::psi_radar::silhouette(
+                        scene.push(crate::psi_sense::silhouette(
                             &xformed_obj,
                             strength,
                             *entity_id,
+                            vec3(0.1, 0.8, 1.0),
+                            "psi_radar",
+                        ));
+                    }
+                    if let Some(strength) = item_echo {
+                        scene.push(crate::psi_sense::silhouette(
+                            &xformed_obj,
+                            strength,
+                            *entity_id,
+                            vec3(1.0, 0.65, 0.08),
+                            "psi_seekersense",
                         ));
                     }
                     if visible {

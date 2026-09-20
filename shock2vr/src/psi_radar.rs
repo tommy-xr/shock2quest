@@ -1,17 +1,13 @@
 //! Motion sensitivity: short-lived world-space echoes, shared by flat and VR.
 use crate::{mission::PlayerInfo, psi::ActivePsiPowers};
-use cgmath::{InnerSpace, Vector3, vec3};
+#[cfg(test)]
+use cgmath::vec3;
+use cgmath::{InnerSpace, Vector3};
 use dark::properties::{AITeam, PropAI, PropAITeam, PropHitPoints, PropPosition};
-use engine::scene::{RenderLayer, SceneObject, SceneObjectDebugTag, SkinnedMaterial};
-use serde::Serialize;
 use shipyard::{
     EntityId, Get, IntoIter, IntoWithId, Unique, UniqueView, UniqueViewMut, View, World,
 };
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    rc::Rc,
-};
+use std::collections::{HashMap, HashSet};
 
 pub const POWER: i32 = -1134;
 // Original shkradar.cpp's 80 Dark units, converted to the port's world units.
@@ -19,14 +15,6 @@ const RANGE: f32 = 80.0 / dark::SCALE_FACTOR;
 const ECHO_SECS: f32 = 0.75;
 const MIN_SPEED: f32 = 0.08;
 const MAX_CONTACTS: usize = 32;
-
-#[derive(Clone, Debug, Serialize)]
-pub struct RadarContact {
-    pub entity_id: u64,
-    pub position: [f32; 3],
-    pub distance: f32,
-    pub strength: f32,
-}
 
 #[derive(Default)]
 struct MotionSample {
@@ -56,7 +44,7 @@ impl MotionSample {
 #[derive(Default, Unique)]
 pub struct Radar {
     samples: HashMap<EntityId, MotionSample>,
-    pub contacts: Vec<RadarContact>,
+    pub contacts: Vec<crate::psi_sense::PsiSenseContact>,
 }
 
 pub fn update(world: &World, dt: f32) {
@@ -104,7 +92,7 @@ pub fn update(world: &World, dt: f32) {
         candidates.insert(id);
         if strength > 0.0 {
             // Filled below after the mutable sample borrow ends.
-            radar.contacts.push(RadarContact {
+            radar.contacts.push(crate::psi_sense::PsiSenseContact {
                 entity_id: id.inner(),
                 position: position.position.into(),
                 distance,
@@ -119,29 +107,6 @@ pub fn update(world: &World, dt: f32) {
             .then(a.entity_id.cmp(&b.entity_id))
     });
     radar.contacts.truncate(MAX_CONTACTS);
-}
-
-pub fn silhouette(object: &SceneObject, strength: f32, id: EntityId) -> SceneObject {
-    let color = vec3(0.1, 0.8, 1.0);
-    let material = object.material.borrow();
-    let replacement = if let Some(skinned) = material.as_any().downcast_ref::<SkinnedMaterial>() {
-        skinned.silhouette(color)
-    } else {
-        engine::scene::color_material::create(color)
-    };
-    let mut echo = object.clone();
-    echo.material = Rc::new(RefCell::new(replacement));
-    echo.set_transparency(Some(1.0 - 0.75 * strength));
-    echo.set_depth_write(false);
-    // SceneOverlay has its own depth, so walls cannot hide the echo. SceneUi
-    // follows it, preserving viewmodels and readable HUDs on both runtimes.
-    echo.set_render_layer(RenderLayer::SceneOverlay);
-    echo.set_debug_tag(Some(Rc::new(SceneObjectDebugTag {
-        entity_id: Some(id.inner()),
-        source: Some("psi_radar".into()),
-        ..Default::default()
-    })));
-    echo
 }
 
 #[cfg(test)]
