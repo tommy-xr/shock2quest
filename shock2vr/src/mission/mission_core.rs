@@ -9957,33 +9957,6 @@ impl MissionCore {
                                 .and_then(|v| v.get(entity_id).ok().map(|t| t.0))
                         });
                     if let Some(xform) = maybe_xform {
-                        let sword_active = crate::psi_sword::active(&self.world, weapon);
-                        let swing_angle = if sword_active {
-                            self.flat_melee_anim
-                                .as_ref()
-                                .filter(|(e, _)| *e == weapon)
-                                .map(|(_, p)| {
-                                    let state = p.snapshot();
-                                    let frames = state
-                                        .queue
-                                        .first()
-                                        .map(|c| c.num_frames)
-                                        .unwrap_or(1)
-                                        .max(1);
-                                    -65.0
-                                        * (std::f32::consts::PI * state.current_frame as f32
-                                            / frames as f32)
-                                            .sin()
-                                })
-                                .unwrap_or(0.0)
-                        } else {
-                            0.0
-                        };
-                        // Move the amp and its additive blade as one rigid assembly.
-                        let swing = xform
-                            * Matrix4::from_angle_x(Deg(swing_angle))
-                            * xform.invert().unwrap();
-                        let xform = swing * xform;
                         let _ext_name = model_name.clone();
                         // Any model swap invalidates a computed grip; only the
                         // melee `_h` branch below re-derives one. Without this
@@ -12431,6 +12404,33 @@ impl MissionCore {
                 let is_melee = limb_model.is_some();
                 let fp_model_name = gun_model.or(limb_model);
                 if let Some(xform) = maybe_xform {
+                    let sword_active = crate::psi_sword::active(&self.world, weapon);
+                    let swing_angle = if sword_active {
+                        self.flat_melee_anim
+                            .as_ref()
+                            .filter(|(e, _)| *e == weapon)
+                            .map(|(_, p)| {
+                                let state = p.snapshot();
+                                let frames = state
+                                    .queue
+                                    .first()
+                                    .map(|c| c.num_frames)
+                                    .unwrap_or(1)
+                                    .max(1);
+                                -65.0
+                                    * (std::f32::consts::PI * state.current_frame as f32
+                                        / frames as f32)
+                                        .sin()
+                            })
+                            .unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+                    // Move the amp and its additive blade as one rigid assembly.
+                    let swing = xform
+                        * Matrix4::from_angle_x(cgmath::Deg(swing_angle))
+                        * xform.invert().unwrap();
+                    let xform = swing * xform;
                     // The reload tilt is part of the entity transform itself:
                     // the flat controller folds the reload pitch into the gun's
                     // camera-pivot pitch (see `FlatPlayerController::update`),
@@ -12458,7 +12458,7 @@ impl MissionCore {
                             .map(|(_, p)| p.clone());
                         let player = match (is_melee, swing_player) {
                             (_, Some(p)) if !sword_active => p,
-                            (false, Some(_)) => AnimationPlayer::empty(),
+                            (_, Some(_)) => AnimationPlayer::empty(),
                             (true, None) => asset_cache
                                 .get_opt(
                                     &ANIMATION_CLIP_IMPORTER,
