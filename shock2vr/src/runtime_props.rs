@@ -321,6 +321,14 @@ pub struct RuntimePropPsiCharge {
     pub phase: PsiChargePhase,
 }
 
+/// Presentation state only; the charging script owns the transient attack.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropMeleeCharge(pub f32);
+
+/// Bonus belonging to the accepted flat animation, immune to trigger chatter.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropFlatMeleeBonus(pub f32);
+
 // RuntimePropFlatAim - the flatscreen camera/crosshair fire ray (world space),
 // set each frame on the player's wielded weapon. When present, weapon firing
 // spawns projectiles from `origin` along `forward` (camera-origin aim) instead

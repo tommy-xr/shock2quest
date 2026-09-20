@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use cgmath::{Vector3, vec3};
 use shipyard::{EntityId, Get, View, World};
 
-use crate::{mission::stim_response::contact_stim_damage, physics::PhysicsWorld};
+use crate::{mission::stim_response::contact_stim_damage_with_bonus, physics::PhysicsWorld};
 
 use super::{
     Effect, Message, MessagePayload, Script,
@@ -49,6 +49,7 @@ pub struct HeldMeleeWeapon {
     /// partner again. Independent of the damage cooldowns above: a wall makes
     /// a noise whether or not the contact is billable.
     sound_guard: ImpactSoundGuard,
+    charge: super::melee_charge::MeleeCharge,
 }
 
 impl HeldMeleeWeapon {
@@ -56,6 +57,7 @@ impl HeldMeleeWeapon {
         Self {
             free_swing_cooldowns: HashMap::new(),
             sound_guard: ImpactSoundGuard::default(),
+            charge: Default::default(),
         }
     }
 }
@@ -75,8 +77,8 @@ impl Script for HeldMeleeWeapon {
     /// Expire the per-victim cooldowns (free-swing damage, impact sound).
     fn update(
         &mut self,
-        _entity_id: EntityId,
-        _world: &World,
+        entity_id: EntityId,
+        world: &World,
         _physics: &PhysicsWorld,
         time: &crate::time::Time,
     ) -> Effect {
@@ -86,7 +88,8 @@ impl Script for HeldMeleeWeapon {
             *remaining > 0.0
         });
         self.sound_guard.tick(elapsed);
-        Effect::NoEffect
+        self.charge
+            .tick(entity_id, elapsed, self.is_held(world, entity_id))
     }
 
     fn handle_message(
@@ -101,6 +104,16 @@ impl Script for HeldMeleeWeapon {
         }
 
         match msg {
+            MessagePayload::Drop => self.charge.cancel(entity_id),
+            MessagePayload::TriggerPull
+                if self.is_held(world, entity_id) && super::melee_charge::owned(world) =>
+            {
+                self.charge.begin(entity_id)
+            }
+            MessagePayload::TriggerRelease if self.is_held(world, entity_id) => self
+                .charge
+                .release(entity_id, true)
+                .unwrap_or(Effect::NoEffect),
             MessagePayload::Collided { with, contact } => {
                 // A creature is struck through its hitboxes: the contact
                 // arrives from the limb proxy, and the *creature* is what owns
@@ -139,13 +152,14 @@ impl Script for HeldMeleeWeapon {
                 };
                 // Released weapons use the same capped throw damage as other props.
                 let damage = (is_held
+                    && !self.charge.charging()
                     && self.may_damage(entity_id, owner, physics, *contact, player_velocity))
-                .then(|| authored_contact_damage(world, entity_id, owner))
-                .flatten()
-                .map(|amount| amount * player_melee_damage_scale(world));
+                .then(|| authored_contact_damage(world, entity_id, owner, self.charge.bonus()))
+                .flatten();
 
                 let mut effects = Vec::new();
                 if let Some(amount) = damage {
+                    effects.push(self.charge.landed(entity_id));
                     // In VR a qualifying strike is the attack gesture; merely
                     // repositioning a tracked hand must not break stealth.
                     effects.push(crate::psi_invisibility::attack_effect(world, entity_id));
@@ -297,9 +311,20 @@ fn closing_speed(
 /// `None` means "this contact does no authored damage" (a wall, a victim with
 /// no receptron for the stim): the caller emits nothing at all, so a swing at
 /// scenery is silent rather than a free 1-point tap.
-fn authored_contact_damage(world: &World, weapon: EntityId, victim: EntityId) -> Option<f32> {
+fn authored_contact_damage(
+    world: &World,
+    weapon: EntityId,
+    victim: EntityId,
+    bonus: f32,
+) -> Option<f32> {
     let template_id = entity_class_template_id(world, weapon)?;
-    let damage = contact_stim_damage(world, template_id, victim);
+    let damage = contact_stim_damage_with_bonus(
+        world,
+        template_id,
+        victim,
+        player_melee_damage_scale(world),
+        bonus,
+    );
     (damage > 0.0).then_some(damage)
 }
 
@@ -728,6 +753,42 @@ mod tests {
         assert!(
             (amount - WEAPON_BASH_INTENSITY).abs() < f32::EPSILON,
             "got {amount}"
+        );
+    }
+
+    #[test]
+    fn smasher_vr_blocks_windup_then_bonuses_only_one_landed_strike() {
+        let (world, weapon, target) = test_world(PresentationMode::Vr);
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(11);
+        world.add_unique(quests);
+        let mut script = HeldMeleeWeapon::new();
+        let physics = swinging(weapon);
+        script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerPull);
+        script.update(
+            weapon,
+            &world,
+            &physics,
+            &crate::time::Time {
+                elapsed: std::time::Duration::from_millis(400),
+                total: std::time::Duration::from_millis(400),
+            },
+        );
+        assert_eq!(
+            damage_count(&collide(&mut script, &world, weapon, target)),
+            0
+        );
+        script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerRelease);
+        let effect = collide(&mut script, &world, weapon, target);
+        let Effect::Multiple(effects) = effect else {
+            panic!("charged strike missing");
+        };
+        assert!(effects.iter().any(|e| matches!(e, Effect::Send { msg } if matches!(msg.payload,
+            MessagePayload::Damage { amount, .. } if (amount - (WEAPON_BASH_INTENSITY + 6.0)).abs() < 0.00001))));
+        assert_eq!(script.charge.bonus(), 0.0);
+        assert_eq!(
+            damage_count(&collide(&mut script, &world, weapon, target)),
+            0
         );
     }
 

@@ -13,6 +13,7 @@ pub struct PsiSwordController {
     bound: bool,
     previous: Option<(Point3<f32>, Vector3<f32>)>,
     cooldown: f32,
+    charge: super::melee_charge::MeleeCharge,
 }
 impl PsiSwordController {
     fn sample_tip(
@@ -45,12 +46,23 @@ impl Script for PsiSwordController {
                     enabled: true,
                 }
             }
+            MessagePayload::Drop => self.charge.cancel(id),
+            MessagePayload::TriggerRelease if psi_sword::active(world, id) => self
+                .charge
+                .release(id, crate::mission::presentation_is_vr(world))
+                .unwrap_or(Effect::NoEffect),
             MessagePayload::TriggerPull if psi_sword::active(world, id) => {
+                if super::melee_charge::owned(world) {
+                    return self.charge.begin(id);
+                }
                 if world
                     .borrow::<View<crate::runtime_props::RuntimePropFlatAim>>()
                     .is_ok_and(|v| v.contains(id))
                 {
-                    Effect::FlatMeleeSwing { entity_id: id }
+                    Effect::FlatMeleeSwing {
+                        entity_id: id,
+                        bonus_damage: 0.0,
+                    }
                 } else {
                     Effect::NoEffect
                 }
@@ -88,10 +100,22 @@ impl Script for PsiSwordController {
         if !held || !active {
             self.bound = false;
             self.previous = None;
-            return Effect::SetPsiSword {
-                amp: id,
-                enabled: false,
-            };
+            return Effect::combine(vec![
+                self.charge.cancel(id),
+                Effect::SetPsiSword {
+                    amp: id,
+                    enabled: false,
+                },
+            ]);
+        }
+        self.cooldown = (self.cooldown - time.elapsed.as_secs_f32()).max(0.0);
+        let charge_effect = self.charge.tick(id, time.elapsed.as_secs_f32(), held);
+        if self.charge.charging() {
+            // Never replay hand motion accumulated during the blocked windup.
+            self.previous = None;
+        }
+        if !matches!(charge_effect, Effect::NoEffect) {
+            return charge_effect;
         }
         if !world
             .borrow::<View<psi_sword::BoundBlade>>()
@@ -112,7 +136,6 @@ impl Script for PsiSwordController {
             return Effect::NoEffect;
         };
         let previous = self.sample_tip(tip, player.pos, time.elapsed.as_secs_f32());
-        self.cooldown = (self.cooldown - time.elapsed.as_secs_f32()).max(0.0);
         let Some((last_tip, last_player)) = previous else {
             return Effect::NoEffect;
         };
@@ -153,9 +176,13 @@ impl Script for PsiSwordController {
             return Effect::NoEffect;
         };
         let target = crate::util::resolve_proxy_entity(world, target);
-        let damage =
-            crate::mission::stim_response::contact_stim_damage(world, psi_sword::WEAPON, target)
-                * crate::scripts::melee_weapon::player_melee_damage_scale(world);
+        let damage = crate::mission::stim_response::contact_stim_damage_with_bonus(
+            world,
+            psi_sword::WEAPON,
+            target,
+            crate::scripts::melee_weapon::player_melee_damage_scale(world),
+            self.charge.bonus(),
+        );
         if damage <= 0.0 {
             return Effect::NoEffect;
         }
@@ -173,7 +200,12 @@ impl Script for PsiSwordController {
                 },
             },
         };
-        Effect::combine(vec![crate::psi_invisibility::attack_effect(world, id), hit])
+        Effect::combine(vec![
+            self.charge.landed(id),
+            charge_effect,
+            crate::psi_invisibility::attack_effect(world, id),
+            hit,
+        ])
     }
     fn script_state_key(&self) -> Option<&'static str> {
         Some("shock2vr.psi_sword_amp")
