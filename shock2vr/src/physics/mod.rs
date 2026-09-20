@@ -3167,6 +3167,24 @@ impl PhysicsWorld {
         }
     }
 
+    /// Levitate a loose dynamic item without bypassing its collision shape.
+    /// Returns the previous gravity scale for restoration on arrival/cancellation.
+    pub(crate) fn begin_psi_pull(&mut self, entity: EntityId) -> Option<f32> {
+        let body = self
+            .entity_id_to_body
+            .get(&entity)
+            .and_then(|h| self.rigid_body_set.get_mut(*h))?;
+        if !body.is_dynamic() {
+            return None;
+        }
+        let gravity = body.gravity_scale();
+        body.set_gravity_scale(0.0, true);
+        body.set_linvel(Vector::zeros(), true);
+        body.set_angvel(Vector::zeros(), true);
+        body.enable_ccd(true);
+        Some(gravity)
+    }
+
     pub fn set_gravity(&mut self, entity_id: EntityId, percent: f32) {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
             let maybe_rigid_body = self.rigid_body_set.get_mut(*handle);

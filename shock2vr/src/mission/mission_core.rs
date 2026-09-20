@@ -2706,6 +2706,7 @@ pub struct MissionCore {
     pub rag_doll_manager: RagDollManager,
     pub debug_lines: Vec<DebugLine>,
     psi_drain_trails: Vec<crate::psi_visuals::DrainTrail>,
+    psi_pull: Option<crate::psi_pull::Flight>,
     healing_pulses: HashMap<EntityId, f32>,
     pub entity_info: Arc<SystemShock2EntityInfo>,
     pub physics: PhysicsWorld,
@@ -3790,6 +3791,7 @@ impl MissionCore {
             spatial_data: abstract_mission.spatial_data,
             debug_lines: Vec::new(),
             psi_drain_trails: Vec::new(),
+            psi_pull: None,
             healing_pulses: HashMap::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
@@ -4923,6 +4925,8 @@ impl MissionCore {
             let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             (player_info.pos, player_info.rotation)
         };
+
+        effects.extend(self.update_psi_pull(time.elapsed, input_context, asset_cache));
 
         self.healing_pulses.retain(|_, age| {
             *age += time.elapsed.as_secs_f32();
@@ -7581,6 +7585,130 @@ impl MissionCore {
         true
     }
 
+    /// Fly the actual loose body. Rapier keeps its normal collision shape and
+    /// CCD; acquisition happens only once that body reaches the receiver.
+    fn update_psi_pull(
+        &mut self,
+        elapsed: std::time::Duration,
+        input: &input_context::InputContext,
+        asset_cache: &mut AssetCache,
+    ) -> Vec<Effect> {
+        if elapsed.is_zero() {
+            return vec![];
+        }
+        let Some(mut flight) = self.psi_pull.take() else {
+            return vec![];
+        };
+        flight.age += elapsed.as_secs_f32();
+        flight.trail_age += elapsed.as_secs_f32();
+        let item = flight.target.entity;
+        let player = self
+            .world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .unwrap()
+            .clone();
+        let position = self
+            .id_to_physics
+            .get(&item)
+            .and_then(|h| self.physics.get_position(*h));
+        let receiver_free = match flight.target.destination {
+            crate::psi_pull::Destination::Hand(hand) => {
+                let index = if hand == crate::Handedness::Left {
+                    0
+                } else {
+                    1
+                };
+                self.interaction.hand_available_for_body_slot(hand)
+                    && input
+                        .pose_tracking
+                        .is_none_or(|tracking| tracking.head && tracking.hands[index])
+            }
+            crate::psi_pull::Destination::Inventory => backpack_accepts_deposit(&self.world, item),
+            crate::psi_pull::Destination::Script => true,
+        };
+        let destination = match flight.target.destination {
+            crate::psi_pull::Destination::Hand(hand) => {
+                let tracked = if hand == crate::Handedness::Left {
+                    &input.left_hand
+                } else {
+                    &input.right_hand
+                };
+                crate::virtual_hand::hand_world_position(
+                    player.pos,
+                    player.rotation,
+                    tracked.position,
+                )
+            }
+            _ => player.pos + player.rotation.rotate_vector(vec3(0.0, 0.35, -0.4)),
+        };
+        let valid = self.player_is_alive()
+            && self.interaction.is_holding(flight.amp)
+            && !self.interaction.is_holding(item)
+            && crate::psi_pull::eligible(&self.world, item)
+            && receiver_free
+            && flight.age < crate::psi_pull::FLIGHT_TIMEOUT;
+        let Some(position) = position.filter(|_| valid) else {
+            self.physics.set_gravity(item, flight.gravity);
+            self.physics.set_velocity(item, Vector3::zero());
+            return vec![];
+        };
+        let delta = destination - position;
+        let distance = delta.magnitude();
+        let held = self.interaction.held_entities();
+        let blocked = distance > crate::psi_pull::RANGE * 1.5
+            || crate::psi_pull::route_blocked(
+                &self.physics,
+                position,
+                destination,
+                &[
+                    item,
+                    player.entity_id,
+                    held.0.unwrap_or(player.entity_id),
+                    held.1.unwrap_or(player.entity_id),
+                ],
+            );
+        if blocked {
+            self.physics.set_gravity(item, flight.gravity);
+            self.physics.set_velocity(item, Vector3::zero());
+            return vec![];
+        }
+        if distance <= crate::psi_pull::ARRIVAL_DISTANCE {
+            self.physics.set_gravity(item, flight.gravity);
+            self.physics.set_velocity(item, Vector3::zero());
+            return match flight.target.destination {
+                crate::psi_pull::Destination::Inventory => {
+                    self.drop_entity_into_container(player.inventory_entity_id, item);
+                    vec![]
+                }
+                crate::psi_pull::Destination::Hand(hand) => {
+                    self.grab_entity_into_hand(asset_cache, item, hand)
+                }
+                crate::psi_pull::Destination::Script => {
+                    self.script_world.dispatch(Message {
+                        to: item,
+                        payload: MessagePayload::Frob,
+                    });
+                    vec![]
+                }
+            };
+        }
+        self.physics.set_velocity(
+            item,
+            delta / distance * crate::psi_pull::FLIGHT_SPEED.min(distance * 10.0),
+        );
+        let visual = if flight.trail_age >= 0.1 {
+            flight.trail_age = 0.0;
+            vec![Effect::PsiDrainVisual {
+                from: position,
+                to: destination,
+            }]
+        } else {
+            vec![]
+        };
+        self.psi_pull = Some(flight);
+        visual
+    }
+
     pub fn make_physical(&mut self, entity_id: EntityId) {
         let current_entity = self.id_to_physics.get(&entity_id);
         if current_entity.is_some() {
@@ -10117,54 +10245,47 @@ impl MissionCore {
                     self.healing_pulses.insert(amp, 0.0);
                 }
                 Effect::PsiPull { amp, cost } => {
-                    if cost < 0 || crate::scripts::player_psi_points(&self.world) < cost {
+                    if self.psi_pull.is_some()
+                        || cost < 0
+                        || crate::scripts::player_psi_points(&self.world) < cost
+                    {
                         continue;
                     }
                     let Some(target) = crate::psi_pull::resolve(&self.world, &self.physics, amp)
                     else {
                         continue;
                     };
-                    let player = self
-                        .world
-                        .borrow::<UniqueView<PlayerInfo>>()
-                        .unwrap()
-                        .clone();
-                    let acquired = match target.destination {
-                        crate::psi_pull::Destination::Inventory => self
-                            .drop_entity_into_container(player.inventory_entity_id, target.entity)
-                            .is_some(),
+                    let can_receive = match target.destination {
+                        crate::psi_pull::Destination::Inventory => {
+                            backpack_accepts_deposit(&self.world, target.entity)
+                        }
                         crate::psi_pull::Destination::Hand(hand) => {
-                            effects.extend(self.grab_entity_into_hand(
-                                asset_cache,
-                                target.entity,
-                                hand,
-                            ));
-                            self.interaction.is_holding(target.entity)
+                            self.interaction.hand_available_for_body_slot(hand)
                         }
-                        crate::psi_pull::Destination::Script => {
-                            self.script_world.dispatch(Message {
-                                to: target.entity,
-                                payload: MessagePayload::Frob,
-                            });
-                            true
-                        }
+                        crate::psi_pull::Destination::Script => true,
                     };
-                    if acquired {
-                        update_player_psi_points(&self.world, |current| {
-                            current.saturating_sub(cost)
-                        });
-                        effects.push_back(Effect::PsiDrainVisual {
-                            from: target.origin,
-                            to: player.pos,
-                        });
-                        effects.push_back(crate::scripts::script_util::play_environmental_sound(
-                            &self.world,
-                            amp,
-                            "shoot",
-                            vec![],
-                            engine::audio::AudioHandle::new(),
-                        ));
+                    if !can_receive {
+                        continue;
                     }
+                    let Some(gravity) = self.physics.begin_psi_pull(target.entity) else {
+                        continue;
+                    };
+                    self.thrown_items.cancel(target.entity);
+                    update_player_psi_points(&self.world, |current| current.saturating_sub(cost));
+                    self.psi_pull = Some(crate::psi_pull::Flight {
+                        target,
+                        amp,
+                        gravity,
+                        age: 0.0,
+                        trail_age: 0.1,
+                    });
+                    effects.push_back(crate::scripts::script_util::play_environmental_sound(
+                        &self.world,
+                        amp,
+                        "shoot",
+                        vec![],
+                        engine::audio::AudioHandle::new(),
+                    ));
                 }
 
                 Effect::PsiDrainVisual { from, to } => {

@@ -24,7 +24,45 @@ pub enum Destination {
 pub struct PullTarget {
     pub entity: EntityId,
     pub destination: Destination,
-    pub origin: cgmath::Vector3<f32>,
+}
+
+pub struct Flight {
+    pub target: PullTarget,
+    pub amp: EntityId,
+    pub gravity: f32,
+    pub age: f32,
+    pub trail_age: f32,
+}
+
+pub const FLIGHT_SPEED: f32 = 6.0;
+pub const ARRIVAL_DISTANCE: f32 = 0.25;
+pub const FLIGHT_TIMEOUT: f32 = 5.0;
+
+/// Recheck the route even inside the arrival radius: a thin entity door must
+/// not turn the final hand/inventory transfer into a teleport through it.
+pub fn route_blocked(
+    physics: &PhysicsWorld,
+    from: cgmath::Vector3<f32>,
+    to: cgmath::Vector3<f32>,
+    ignored: &[EntityId],
+) -> bool {
+    use cgmath::{EuclideanSpace, InnerSpace, Point3};
+    let delta = to - from;
+    let distance = delta.magnitude();
+    distance > 0.001
+        && physics
+            .ray_cast2_with_entity_filter(
+                Point3::from_vec(from),
+                delta / distance,
+                distance,
+                InternalCollisionGroups::WORLD
+                    | InternalCollisionGroups::ENTITIES
+                    | InternalCollisionGroups::HITBOX,
+                None,
+                true,
+                &|id| !ignored.contains(&id),
+            )
+            .is_some()
 }
 
 pub(crate) fn eligible(world: &World, item: EntityId) -> bool {
@@ -62,7 +100,6 @@ pub(crate) fn eligible(world: &World, item: EntityId) -> bool {
 }
 
 pub fn resolve(world: &World, physics: &PhysicsWorld, amp: EntityId) -> Option<PullTarget> {
-    use cgmath::EuclideanSpace;
     let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
     if player.left_hand_entity_id != Some(amp) && player.right_hand_entity_id != Some(amp) {
         return None;
@@ -103,13 +140,39 @@ pub fn resolve(world: &World, physics: &PhysicsWorld, amp: EntityId) -> Option<P
     Some(PullTarget {
         entity,
         destination,
-        origin: hit.hit_point.to_vec(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn thin_entity_door_blocks_even_inside_the_arrival_radius() {
+        use cgmath::{Quaternion, vec3};
+        let mut entities = World::new();
+        let door = entities.add_entity(());
+        let player_id = entities.add_entity(());
+        let mut physics = PhysicsWorld::new();
+        physics.add_kinematic(
+            door,
+            vec3(0.0, 2.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.02, 2.0, 2.0),
+            crate::physics::CollisionGroup::entity(),
+            false,
+        );
+        let mut player = physics.create_player(vec3(100.0, 100.0, 100.0), player_id);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let from = vec3(-0.1, 2.0, 0.0);
+        let to = vec3(0.1, 2.0, 0.0);
+        assert!(route_blocked(&physics, from, to, &[]));
+        assert!(
+            !route_blocked(&physics, from, to, &[door]),
+            "own equipment can be excluded"
+        );
+    }
+
     #[test]
     fn only_loose_authored_pullable_items_are_eligible() {
         let mut world = World::new();
