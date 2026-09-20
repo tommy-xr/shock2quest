@@ -5,6 +5,7 @@ pub mod hand_pose;
 pub mod hand_pose_library;
 pub mod haptics;
 pub mod hit_feedback;
+pub mod implants;
 pub mod input;
 pub mod input_context;
 pub mod install;
@@ -749,6 +750,7 @@ pub struct PlayerStateSnapshot {
     /// psi disciplines), accumulated from career + training tours. `None` when
     /// the scene has no `QuestInfo` (e.g. a menu). See `crate::player_stats`.
     pub stats: Option<crate::player_stats::PlayerStats>,
+    pub effective_stats: Option<crate::player_stats::PlayerStats>,
     /// The audio logs the player has collected (frobbed), in pickup order. Empty
     /// when the scene has no `QuestInfo`. Persisted in `QuestInfo`, so it
     /// survives level transitions and save/load. See `crate::quest_info`.
@@ -932,6 +934,7 @@ impl Game {
                 .borrow::<UniqueView<crate::psi_radar::Radar>>()
                 .map(|radar| radar.contacts.clone())
                 .unwrap_or_default(),
+            effective_stats: crate::implants::effective_stats(world),
             stats: world
                 .borrow::<UniqueView<QuestInfo>>()
                 .ok()

@@ -657,6 +657,8 @@ export interface PlayerSnapshot {
    * mastered psi disciplines), accumulated from career + station training
    * tours; null when the scene has no player. */
   stats: PlayerStats | null;
+  /** Current stats including powered equipped implants; training is unchanged. */
+  effective_stats: PlayerStats | null;
   /** The audio logs the player has collected (frobbed), in pickup order.
    * Persisted in QuestInfo; survives level transitions and save/load. */
   collected_logs: CollectedLog[];

@@ -215,6 +215,17 @@ pub enum Effect {
     ToggleHazardArmor {
         entity_id: EntityId,
     },
+    ToggleImplant {
+        entity_id: EntityId,
+    },
+    UnequipImplant {
+        entity_id: EntityId,
+    },
+    AdjustImplantEnergy {
+        entity_id: EntityId,
+        amount: f32,
+        recharge: bool,
+    },
 
     AwardXP {
         amount: i32,

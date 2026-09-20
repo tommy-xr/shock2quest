@@ -2484,6 +2484,7 @@ fn capture_frame_snapshot(
                     .map(|s| s.radar_contacts.clone())
                     .unwrap_or_default(),
                 stats: state.as_ref().and_then(|s| s.stats.clone()),
+                effective_stats: state.as_ref().and_then(|s| s.effective_stats.clone()),
                 collected_logs: state
                     .as_ref()
                     .map(|s| s.collected_logs.clone())

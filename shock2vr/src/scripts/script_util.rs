@@ -449,9 +449,8 @@ pub fn can_cycle_gun_setting(world: &World, weapon: EntityId) -> bool {
 /// permanent career upgrades. Dark stores both in its player property; our
 /// split runtime/persistent sheet combines them here. Missing data means zero.
 pub(crate) fn player_skill_level(world: &World, skill: crate::player_stats::Skill) -> i32 {
-    let trained = world
-        .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
-        .map(|quests| quests.player_stats().skill_level(skill))
+    let trained = crate::implants::effective_stats(world)
+        .map(|stats| stats.skill_level(skill))
         .unwrap_or(0);
     use crate::player_stats::Skill;
     let index = match skill {

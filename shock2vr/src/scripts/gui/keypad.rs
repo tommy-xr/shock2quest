@@ -192,7 +192,15 @@ fn effective_hack_values(world: &World, diff: PropHackDiff, security_computer: b
             } else {
                 0
             };
-            (base + bonus, stats.cyber_affinity)
+            (
+                base + bonus
+                    + if base > 0 && crate::implants::active(world, 7) {
+                        1
+                    } else {
+                        0
+                    },
+                stats.cyber_affinity,
+            )
         })
         .unwrap_or((0, 0));
     world

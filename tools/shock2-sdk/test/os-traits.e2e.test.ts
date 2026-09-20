@@ -66,7 +66,7 @@ test(
 
     // --- A storage-only trait refuses clearly and leaves this one-shot
     // machine available for a live choice. ---
-    await clickElement(game, traitButton("Cybernetically Enhanced", els));
+    await clickElement(game, traitButton("Tinker", els));
     await game.step({ frames: 3 });
     assert.deepEqual((await stats()).os_traits, [], "unsupported trait is not recorded");
     let refreshed = await game.ui.state();

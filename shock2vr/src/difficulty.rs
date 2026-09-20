@@ -156,7 +156,11 @@ pub fn refresh_player_pools(world: &World, fill: bool) {
     let Ok(params) = world.borrow::<UniqueView<GlobalDifficultyParams>>() else {
         return;
     };
-    let (max_hp, max_psi) = params.limits(quests.difficulty(), quests.player_stats());
+    let effective =
+        crate::implants::effective_stats(world).unwrap_or_else(|| quests.player_stats().clone());
+    let (max_hp, _) = params.limits(quests.difficulty(), &effective);
+    // Retail psi capacity uses trained PSI; SmartBoost affects casting only.
+    let (_, max_psi) = params.limits(quests.difficulty(), quests.player_stats());
     world.run(
         |mut hp: ViewMut<dark::properties::PropHitPoints>,
          mut maximum: ViewMut<dark::properties::PropMaxHitPoints>,

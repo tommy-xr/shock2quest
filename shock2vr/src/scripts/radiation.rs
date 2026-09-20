@@ -336,7 +336,10 @@ pub fn tick_player_radiation(world: &World, elapsed_secs: f32) -> Option<Effect>
         .borrow::<UniqueView<QuestInfo>>()
         .map(|q| {
             (
-                q.player_stats().endurance.clamp(1, 8) as usize,
+                crate::implants::effective_stats(world)
+                    .unwrap_or_else(|| q.player_stats().clone())
+                    .endurance
+                    .clamp(1, 8) as usize,
                 q.player_stats()
                     .has_os_trait(crate::scripts::gui::TRAIT_STRONG_METABOLISM),
             )
@@ -363,16 +366,7 @@ pub fn tick_player_radiation(world: &World, elapsed_secs: f32) -> Option<Effect>
         }
         absorb = rate;
     }
-    let wormheart = super::script_util::player_carried_items(world)
-        .into_iter()
-        .any(|id| {
-            world
-                .borrow::<View<crate::runtime_props::RuntimePropHazardEquipment>>()
-                .is_ok_and(|v| v.get(id).is_ok())
-                && world
-                    .borrow::<View<dark::properties::PropImplantDesc>>()
-                    .is_ok_and(|v| v.get(id).is_ok_and(|v| v.0 == 12))
-        });
+    let wormheart = crate::implants::active(world, 12);
     let protection = hazard_protection(world);
     // Retail armor slows accumulation; it does not lower the room ceiling.
     absorb *= 1.0 - protection.radiation / 100.0;
@@ -613,9 +607,8 @@ fn psi_hazard_protection(world: &World) -> dark::properties::PropArmor {
     let Ok(registry) = world.borrow::<UniqueView<crate::psi::GlobalPsiPowers>>() else {
         return armor;
     };
-    let psi = world
-        .borrow::<UniqueView<QuestInfo>>()
-        .map(|q| q.player_stats().psionic_ability)
+    let psi = crate::implants::effective_stats(world)
+        .map(|stats| stats.psionic_ability)
         .unwrap_or(1);
     for power in registry
         .0

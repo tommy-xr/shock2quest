@@ -324,9 +324,8 @@ impl ThrownItems {
                 .and_then(|v| v.get(entity).ok().map(|p| p.mass)),
         );
         let tuning = ThrowTuning::current();
-        let strength = world
-            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
-            .map(|q| q.player_stats().strength)
+        let strength = crate::implants::effective_stats(world)
+            .map(|stats| stats.strength)
             .unwrap_or(1);
         let strength = if tuning.strength_override > 0.0 {
             tuning.strength_override as i32

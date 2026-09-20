@@ -32,6 +32,7 @@ pub struct EntitySaveData {
     /// Equipped hazard armor/implant identities; remapped with carried entities.
     #[serde(default)]
     pub hazard_equipment: Vec<u64>,
+    pub implant_slots: HashMap<u64, crate::runtime_props::RuntimePropImplantSlot>,
     /// Selected projectile-link index for weapons whose ammo type has been
     /// changed. Persisted separately because runtime components are not part of
     /// the Dark property registry.
@@ -82,6 +83,7 @@ impl EntitySaveData {
             links: HashMap::new(),
             death_poses: HashMap::new(),
             hazard_equipment: Vec::new(),
+            implant_slots: HashMap::new(),
             selected_ammo: HashMap::new(),
             holstered: HashMap::new(),
             shoulder_weapons: HashMap::new(),
@@ -149,6 +151,13 @@ impl EntitySaveData {
             }
         }
 
+        for (id, slot) in &self.implant_slots {
+            if let Some(old) = EntityId::from_inner(*id) {
+                if let Some(new) = old_entity_id_to_new_entity_id.get(&old) {
+                    world.add_component(*new, *slot);
+                }
+            }
+        }
         for id in &self.hazard_equipment {
             if let Some(old) = EntityId::from_inner(*id) {
                 if let Some(new) = old_entity_id_to_new_entity_id.get(&old) {
@@ -353,6 +362,7 @@ mod tests {
                 "all_entities": [],
                 "template_id_to_entity_id": {},
                 "properties": {},
+                "implant_slots": {},
                 "links": {}
             }"#,
         )
@@ -487,6 +497,7 @@ mod tests {
             "all_entities": [],
             "template_id_to_entity_id": {},
             "properties": {},
+            "implant_slots": {},
             "links": {}
         }))
         .unwrap();
