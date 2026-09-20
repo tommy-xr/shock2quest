@@ -2687,6 +2687,8 @@ pub struct MissionCore {
     pub hit_boxes: HitBoxManager,
     pub rag_doll_manager: RagDollManager,
     pub debug_lines: Vec<DebugLine>,
+    psi_drain_trails: Vec<crate::psi_visuals::DrainTrail>,
+    healing_pulses: HashMap<EntityId, f32>,
     pub entity_info: Arc<SystemShock2EntityInfo>,
     pub physics: PhysicsWorld,
     pub script_world: ScriptWorld,
@@ -3752,6 +3754,8 @@ impl MissionCore {
             player_handle,
             spatial_data: abstract_mission.spatial_data,
             debug_lines: Vec::new(),
+            psi_drain_trails: Vec::new(),
+            healing_pulses: HashMap::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
             rag_doll_manager: RagDollManager::new(),
@@ -4734,6 +4738,12 @@ impl MissionCore {
             (player_info.pos, player_info.rotation)
         };
 
+        self.healing_pulses.retain(|_, age| {
+            *age += time.elapsed.as_secs_f32();
+            *age < 1.0
+        });
+        self.psi_drain_trails
+            .retain_mut(|trail| trail.advance(time.elapsed));
         self.debug_lines.iter_mut().for_each(|p| {
             p.remaining_life_in_seconds -= time.elapsed.as_secs_f32();
         });
@@ -9518,6 +9528,15 @@ impl MissionCore {
                     }
                 }
 
+                Effect::HealingPulse { amp } => {
+                    self.healing_pulses.insert(amp, 0.0);
+                }
+                Effect::PsiDrainVisual { from, to } => {
+                    if self.psi_drain_trails.len() < 8 {
+                        self.psi_drain_trails
+                            .push(crate::psi_visuals::DrainTrail::new(from, to));
+                    }
+                }
                 Effect::DrawDebugLines { lines } => {
                     if game_options.debug_draw {
                         for line in lines {
@@ -12511,6 +12530,12 @@ impl MissionCore {
                         ret.push(o);
                     }
 
+                    if let Some(age) = self.healing_pulses.get(&weapon) {
+                        for mut pulse in crate::psi_heal_visual::render(&self.world, weapon, *age) {
+                            pulse.set_transform(squish * pulse.get_transform());
+                            ret.push(pulse);
+                        }
+                    }
                     // Entities bolted to the viewmodel (muzzle flash etc.,
                     // skipped in the world pass) draw here too so they share
                     // the viewmodel-FOV scale - otherwise they keep their true
@@ -13048,6 +13073,14 @@ impl MissionCore {
         }
         if let Some(flames) = &self.immolate_flames {
             scene.extend(flames.render());
+        }
+        for (amp, age) in &self.healing_pulses {
+            if self.interaction.viewmodel_entity() != Some(*amp) {
+                scene.extend(crate::psi_heal_visual::render(&self.world, *amp, *age));
+            }
+        }
+        for trail in &self.psi_drain_trails {
+            scene.extend(trail.render());
         }
         // Render particle systems
         if options.render_particles {
