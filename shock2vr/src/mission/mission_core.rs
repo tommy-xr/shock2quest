@@ -10100,6 +10100,9 @@ impl MissionCore {
                     }
                 }
 
+                Effect::StartHordeWave { wave } => {
+                    effects.push_front(super::earth_horde::wave_jump_message(&self.world, wave));
+                }
                 Effect::Send { msg } => {
                     println!("handling Effect::Send event: {:?}", msg);
                     self.script_world.dispatch(msg);
@@ -11340,6 +11343,9 @@ impl MissionCore {
                 }
 
                 Effect::AcquireOsTrait { trait_id, machine } => {
+                    if crate::scripts::gui::trait_machine_locked(&self.world, machine) {
+                        continue;
+                    }
                     use crate::scripts::gui::{
                         NATURALLY_ABLE_MODULES, TRAIT_NATURALLY_ABLE, live_effect_note, trait_name,
                         used_bit_name,

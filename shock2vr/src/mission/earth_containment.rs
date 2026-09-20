@@ -21,7 +21,7 @@ const EGG_SITE_COUNT: usize = 8;
 const DENSE: f32 = 4.0;
 const MAX_HATCHLINGS: usize = 24;
 const NAMES: [&str; 3] = ["SUBWAY", "STREET", "UPSTAIRS"];
-const CIRCULATORS: [[f32; 3]; 3] = [[0.0, 2.8, 11.75], [21.0, 22.0, 31.95], [14.5, 24.4, 50.0]];
+const CIRCULATORS: [[f32; 3]; 2] = [[0.0, 2.8, 11.75], [21.0, 22.0, 31.95]];
 // The first four sites concentrate traps around services and their approaches;
 // subsequent pods reach farther along travel routes as density raises the pod cap.
 const EGG_POINTS: [[[f32; 3]; EGG_SITE_COUNT]; 3] = [
@@ -125,13 +125,19 @@ pub(super) fn populate(
         markers: vec![],
     };
     for zone in 0..3 {
-        result.stations.push(add(
-            STATIONS + zone as i32,
-            -1151,
-            &format!("{} Air Circulator - Toxin-A", NAMES[zone]),
-            CIRCULATORS[zone],
-            if zone == 2 { 90.0 } else { 0.0 },
-        ));
+        if zone < CIRCULATORS.len() {
+            result.stations.push(add(
+                STATIONS + zone as i32,
+                -1151,
+                if zone == 0 {
+                    "Subway air circulator — Toxin-A"
+                } else {
+                    "Upper level air circulator — Toxin-A"
+                },
+                CIRCULATORS[zone],
+                0.0,
+            ));
+        }
         for (index, patch) in GROWTH[zone].iter().enumerate() {
             let entity = add(
                 PATCHES + zone as i32 * PATCH_STRIDE + index as i32,
@@ -278,7 +284,7 @@ impl Default for Containment {
     fn default() -> Self {
         Self {
             zones: std::array::from_fn(|zone| Zone {
-                protection: 180.0 + zone as f32 * 30.0,
+                protection: 180.0 + zone.min(1) as f32 * 30.0,
                 density: 0.0,
                 next_egg: 0.0,
                 next_site: 0,
@@ -299,12 +305,15 @@ impl Containment {
             return Effect::NoEffect;
         };
         let zone = id.template_id - STATIONS;
-        if !(0..3).contains(&zone) {
+        if !(0..2).contains(&zone) {
             return Effect::NoEffect;
         }
-        let state = &mut self.zones[zone as usize];
-        state.protection = 180.0;
-        state.next_egg = 45.0;
+        // One upper-level device protects both the street and recruitment lobby.
+        let covered = if zone == 0 { 0..1 } else { 1..3 };
+        for index in covered {
+            self.zones[index].protection = 180.0;
+            self.zones[index].next_egg = 45.0;
+        }
         Effect::Multiple(vec![
             Effect::ChangeModel {
                 entity_id: from,
@@ -313,7 +322,7 @@ impl Containment {
             Effect::ShowMessage {
                 text: format!(
                     "{}: Toxin-A replenished. Growth receding; eggs remain.",
-                    NAMES[zone as usize]
+                    if zone == 0 { "SUBWAY" } else { "UPPER LEVEL" }
                 ),
             },
         ])
@@ -634,7 +643,7 @@ mod tests {
         let mut state = Containment::default();
         assert_eq!(
             state.zones.each_ref().map(|z| z.protection),
-            [180.0, 210.0, 240.0]
+            [180.0, 210.0, 210.0]
         );
         for zone in &mut state.zones {
             zone.advance(120.0, false, false, true);
@@ -668,6 +677,24 @@ mod tests {
         state.zones[0].advance(12.0, false, false, true);
         assert_eq!(state.zones[0].density, 0.0);
         assert_eq!(state.zones[0].protection, 180.0);
+    }
+
+    #[test]
+    fn upper_device_replenishes_street_and_lobby_together() {
+        let mut world = World::new();
+        let station = world.add_entity((PropTemplateId {
+            template_id: STATIONS + 1,
+        },));
+        let mut state = Containment::default();
+        for zone in &mut state.zones {
+            zone.protection = 0.0;
+        }
+        state.replenish(&world, station);
+        assert_eq!(
+            state.zones.each_ref().map(|z| z.protection),
+            [0.0, 180.0, 180.0]
+        );
+        assert_eq!(state.zones[1].next_egg, state.zones[2].next_egg);
     }
 
     #[test]

@@ -66,6 +66,7 @@ pub enum CheatAction {
     /// Raise every stat, skill and psi tier to its cap, as if bought from the
     /// trainers. Raises only - it can never undo a character.
     MaxStats,
+    StartHordeWave,
     /// Add ten points of contamination, bypassing protective equipment.
     AddRadiation,
     AddToxin,
@@ -88,6 +89,10 @@ impl Cheat {
 /// Every cheat, in screen order. Template ids come from `cargo dq` against the
 /// gamesys.
 pub static CHEATS: &[Cheat] = &[
+    Cheat {
+        label: "Start selected horde wave",
+        action: CheatAction::StartHordeWave,
+    },
     Cheat {
         label: "Rain weapons",
         // The four workhorse weapons, plus a clip for each gun that takes one.

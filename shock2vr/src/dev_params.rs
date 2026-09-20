@@ -216,6 +216,8 @@ macro_rules! dev_params {
 }
 
 dev_params! {
+    /// Applied once to fresh horde runs; the cheat explicitly applies it mid-run.
+    HORDE_START_WAVE = Horde::float("horde_start_wave", "Start / jump to wave", 1.0, 1.0, 100.0, 1.0),
     /// Earliest normal-mode wave that permits growth and new pods. Protection
     /// still counts down during earlier combat; diagnostic mode bypasses this gate.
     HORDE_GROWTH_WAVE = Horde::float("horde_growth_wave", "Growth first wave", 4.0, 1.0, 20.0, 1.0),

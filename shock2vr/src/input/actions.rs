@@ -83,6 +83,8 @@ pub enum InputAction {
     /// monster keeps hunting the player's live position until DebugCalmAll.
     /// The demo cheat - "everything on the map converges on the player".
     DebugForceChase,
+    /// Begin the wave selected under Developer → Earth horde.
+    DebugStartHordeWave,
 
     /// Toggle the flat-mode "use" (metagame) mode: cursor-driven UI over the
     /// 3D view, as the original game does on Tab. Shooter mode is restored on
@@ -177,6 +179,7 @@ impl InputAction {
             InputAction::DebugAlertAll,
             InputAction::DebugCalmAll,
             InputAction::DebugForceChase,
+            InputAction::DebugStartHordeWave,
             InputAction::ToggleUseMode,
             InputAction::ReadLastUnreadLog,
             InputAction::ToggleMap,
@@ -224,6 +227,7 @@ impl InputAction {
             InputAction::DebugAlertAll => "DebugAlertAll",
             InputAction::DebugCalmAll => "DebugCalmAll",
             InputAction::DebugForceChase => "DebugForceChase",
+            InputAction::DebugStartHordeWave => "DebugStartHordeWave",
             InputAction::ToggleUseMode => "ToggleUseMode",
             InputAction::ReadLastUnreadLog => "ReadLastUnreadLog",
             InputAction::ToggleMap => "ToggleMap",

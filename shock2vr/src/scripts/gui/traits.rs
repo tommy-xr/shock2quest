@@ -110,6 +110,14 @@ fn machine_template_id(world: &World, machine: EntityId) -> Option<i32> {
         .and_then(|v| v.get(machine).ok().map(|t| t.template_id))
 }
 
+/// Offline machines remain inspectable but cannot vend an upgrade.
+pub fn trait_machine_locked(world: &World, machine: EntityId) -> bool {
+    world
+        .borrow::<View<dark::properties::PropLocked>>()
+        .is_ok_and(|locked| locked.get(machine).is_ok_and(|lock| lock.0))
+}
+const OFFLINE_LABEL: &str = "Station offline. Check its wave requirement.";
+
 /// Whether the machine bound to this panel has already vended (its used bit
 /// is set). Machines without a stable id read as unused here (the display
 /// path); the pick path refuses them outright.
@@ -312,7 +320,9 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
         if let Some(text) = description.as_ref().or(state.message.as_ref()) {
             components.extend(PanelText::paragraph(world, text, DESC_RECT));
         }
-        let status = if machine_used(world, entity_id) {
+        let status = if trait_machine_locked(world, entity_id) {
+            Some(OFFLINE_LABEL.to_owned())
+        } else if machine_used(world, entity_id) {
             Some(used_label(world))
         } else if hovered.is_some_and(|id| live_effect_note(id).is_none()) {
             Some(UNAVAILABLE_LABEL.to_owned())
@@ -348,6 +358,8 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
             let stats = quests.player_stats();
             if machine_template_id(world, entity_id).is_none() {
                 Some("This upgrade unit is not responding.".to_string())
+            } else if trait_machine_locked(world, entity_id) {
+                Some(OFFLINE_LABEL.into())
             } else if machine_used(world, entity_id) {
                 Some(used_label(world))
             } else if live_effect_note(*trait_id).is_none() {
@@ -503,6 +515,28 @@ mod tests {
             }
         }
         assert_eq!(description_lines.join(" "), description);
+    }
+
+    #[test]
+    fn offline_station_refuses_supported_trait_until_unlocked() {
+        let mut world = World::new();
+        world.add_unique(QuestInfo::new());
+        let machine = world.add_entity((
+            dark::properties::PropTemplateId { template_id: 60301 },
+            dark::properties::PropLocked(true),
+        ));
+        let (state, effect) = TraitGui.handle_msg(
+            machine,
+            &world,
+            &TraitGuiState::default(),
+            &TraitGuiMsg::Pick(TRAIT_TANK),
+        );
+        assert!(matches!(effect, Effect::NoEffect));
+        assert_eq!(state.message.as_deref(), Some(OFFLINE_LABEL));
+        world.add_component(machine, dark::properties::PropLocked(false));
+        let (_, effect) =
+            TraitGui.handle_msg(machine, &world, &state, &TraitGuiMsg::Pick(TRAIT_TANK));
+        assert!(matches!(effect, Effect::AcquireOsTrait { .. }));
     }
 
     #[test]

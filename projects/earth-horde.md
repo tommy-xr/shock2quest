@@ -4,9 +4,9 @@ Run `cargo dbgr --mission earth_horde` (or launch that mission in the desktop ru
 
 The player starts at the top of the stairs, facing the subway gravshaft.
 
-Ten escalating waves have about 26 minutes of minimum scheduled combat and rest. Clearing enemies can take longer. After the final wave, use the ready button beside the shops to begin optional endless play. The same button skips a rest. The training trigger graph is disabled. Three existing office rooms use access-card locks; other training doors remain sealed.
+Ten escalating waves have about 26 minutes of minimum scheduled combat and rest. Clearing enemies can take longer. After the final wave, use the ready button beside the shops to begin optional endless play. The same button skips a rest. The training trigger graph is disabled. The original training doors remain sealed; OS rewards are available from the landing bank.
 
-The starter backpack contains a wrench, pistol, psi amp, ammunition and medical/psi supplies. Two shops are spread across the street; four trainers are spread around the subway. Buy psi tiers and individual powers separately; only powers supported by the current runtime are sold. Replicated items dispense in front of the machines. Random equipment and currency supplement normal enemy loot and wave rewards.
+The starter backpack contains a wrench, pistol, psi amp, ammunition and medical/psi supplies. Three shops are spread across the street; four trainers are spread around the subway. Buy psi tiers and individual powers separately; only powers supported by the current runtime are sold. Replicated items dispense in front of the machines. Random equipment and currency supplement normal enemy loot and wave rewards.
 
 Corpses and their remaining contents stay lootable throughout the rest. Starting the next wave removes them; items already collected survive. Run state, rewards and purchased powers persist in saves.
 
@@ -48,10 +48,9 @@ Loading a save restarts the saved assault's song from its beginning; other phase
 load silently. Sample offsets and random music branches are not serialized.
 ## Renewable containment
 
-Three Hydro air circulators protect the subway, street, and upstairs independently.
-The subway cabinet is beside the platform wall, the street cabinet is east of the
-shops, and the upstairs cabinet is on the east wall opposite the trainers.
-They begin with 180, 210, and 240 seconds of protection respectively. Protection
+Two Hydro air circulators protect the two levels. The subway cabinet protects
+only the subway; the street cabinet protects both the street and upstairs lobby.
+They begin with 180 and 210 seconds of protection respectively. Protection
 counts combat time only: preparation, rest, and the completed-run screen do not
 spend it. A warning appears with 30 seconds remaining.
 
@@ -78,7 +77,7 @@ New runs begin with Toxin-A research completed. Buy ready-to-use Anti-Annelid
 Toxin (Toxin-A) for 10 nanites at the supply replicator.
 In flatscreen, frob a circulator while carrying a vial; in VR, release a held
 vial against the cabinet. Each vial protects
-only that zone for another 180 combat seconds, immediately stops new eggs, and
+that device’s level for another 180 combat seconds, immediately stops new eggs, and
 clears accumulated patches over up to 12 seconds (recovery also runs during rest).
 The cabinet changes from inactive `air_reof` to active `air_re`. Existing eggs
 and grubs remain; servicing a circulator does not erase those threats.
@@ -121,19 +120,33 @@ player health/psi pools and authored shop/training costs and loot; the director'
 wave roster, quotas, living-enemy cap, and assault schedule are fixed independently.
 A debug run accepts `--difficulty easy|normal|hard|impossible` at launch.
 
-## Exploration rewards
+## OS bank and service placement
 
-Clearing waves 2, 4, and 6 delivers the Subway office, Street office, and
-Recruitment office access cards respectively. Cards appear in ACCESS and survive
-save/load; each opens only its own existing door(s). The subway room uses mission
-object 564, the street room 563, and the upstairs east room 365/367. The original
-training trigger graph stays disabled inside them.
+Four single-use OS stations share the west side of the upstairs landing. The
+first is available immediately; the others activate at the beginning of waves
+3, 6, and 9. Offline stations are dimmed, show their wave requirement in the
+object name, and refuse purchases until activated. Each grants one supported
+OS trait for free. Used and unlocked state survives save/load. There are no
+horde access cards or reward-room locks.
 
-Each room contains one normal Trait Machine: choose one available OS upgrade
-for free, once per station. The existing per-machine quest bit prevents another
-purchase after leaving the room or loading a save. Essential ammo, healing, and
-ordinary training remain outside these optional reward rooms.
+Trainers remain in the subway: stats at the west end, tech at the east end,
+and weapons/psi on the east platform's back wall. The weapons trainer is clear
+of the large containment cabinet. Three replicators serve the street: west,
+east, and far east end. Their separate RepScreen displays and wall-mounted
+height match authored MedSci machines; outlets face the accessible approach.
 
-Placement was surveyed against world walls. Trainers occupy west/east subway
-ends and two separated back-wall sites; replicators use the street's west/east
-wall panels, with their item outlets moved alongside them.
+## Start at a wave / jump cheat
+
+Set **Developer → Earth horde → Start / jump to wave** (`horde_start_wave`,
+1–100, default 1) before starting a fresh run. You begin with preparation for
+that wave and the usual starter character. Alternatively, while playing, set
+the same value and click **Developer → Cheats → Start selected horde wave**.
+`DebugStartHordeWave` exposes the same action to the debug runtime input API.
+
+A jump clears current wave attackers and their uncollected contents, resets
+the wave schedule, starts the selected wave and its music, and enables any OS
+stations due by that wave. It preserves inventory, bought upgrades and already
+used stations. Skipped waves grant no nanites or cyber modules. Existing
+infestation remains. Jumps require a living player in Earth horde; changing the
+selector alone never rewinds a loaded or running game. The selector resets on
+process restart, while the actual run's wave is saved normally.

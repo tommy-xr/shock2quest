@@ -802,6 +802,10 @@ pub enum Effect {
         template_id: i32,
     },
 
+    StartHordeWave {
+        wave: u32,
+    },
+
     Send {
         msg: Message,
     },

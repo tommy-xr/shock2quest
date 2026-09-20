@@ -1834,6 +1834,9 @@ impl Game {
                         Effect::SetAllAIAlertness { level, pin }
                     }
                     CheatAction::MaxStats => Effect::MaxPlayerStats,
+                    CheatAction::StartHordeWave => Effect::StartHordeWave {
+                        wave: dev_params::get(dev_params::HORDE_START_WAVE) as u32,
+                    },
                     CheatAction::AddRadiation | CheatAction::AddToxin => Effect::AddPlayerHazard {
                         toxin: action == CheatAction::AddToxin,
                         amount: 10.0,
