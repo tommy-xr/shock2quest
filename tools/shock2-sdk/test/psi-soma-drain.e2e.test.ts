@@ -40,11 +40,14 @@ async function spawnTarget(game: GameServer) {
   return monster;
 }
 
+for (const difficulty of ["easy", "normal", "hard", "impossible"] as const) {
+}
+
 test(
-  "Soma Transference drains the creature under the aim and heals the caster",
+  `Soma Transference drains and heals on ${difficulty}`,
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
-    await using game = await GameServer.launch({ mission: "debug_psi" });
+    await using game = await GameServer.launch({ mission: "debug_psi", difficulty });
 
     // The scene auto-equips the Psi Amp on the first update.
     await game.step({ frames: 10 });
