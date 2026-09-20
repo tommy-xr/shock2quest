@@ -23,7 +23,7 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::{
     mission::PlayerInfo,
     physics::{InternalCollisionGroups, PhysicsWorld},
-    psi::{self, GlobalPsiPowers, PsiPowerInfo, PsiPowerSelection, charge_duration_secs},
+    psi::{self, PsiPowerInfo, charge_duration_secs},
     runtime_props::PsiChargePhase,
     time::Time,
     util::resolve_proxy_entity,
@@ -97,7 +97,7 @@ impl Script for PsiAmpScript {
                 Effect::NoEffect
             }
             MessagePayload::TriggerPull => {
-                let Some(power) = selected_power(world) else {
+                let Some(power) = crate::psi_amp_selection::selected_power(world, entity_id) else {
                     return Effect::NoEffect;
                 };
                 // Untrained powers can't be cast (selection gating should
@@ -170,7 +170,9 @@ impl Script for PsiAmpScript {
                 // held power - the selection step is an effect applied after
                 // message dispatch - which matches the player's intent: they
                 // charged that power the whole hold.)
-                if selected_power(world).map(|p| p.template_id) != Some(power_template_id) {
+                if crate::psi_amp_selection::selected_power(world, entity_id).map(|p| p.template_id)
+                    != Some(power_template_id)
+                {
                     self.charge = None;
                     return Effect::ClearPsiCharge { entity_id };
                 }
@@ -199,7 +201,7 @@ impl Script for PsiAmpScript {
             // Losing the amp mid-charge (weapon swap, drop, holster) cancels
             // the charge - otherwise the holstered amp would keep charging
             // and later "burn out" on its own.
-            MessagePayload::Drop => {
+            MessagePayload::Drop | MessagePayload::CancelPsiCharge => {
                 if self.charge.is_some() {
                     self.charge = None;
                     Effect::ClearPsiCharge { entity_id }
@@ -229,7 +231,9 @@ impl Script for PsiAmpScript {
                 let power_template_id = *power_template_id;
                 *elapsed += dt;
                 let fraction = *elapsed / *duration;
-                if selected_power(world).map(|p| p.template_id) != Some(power_template_id) {
+                if crate::psi_amp_selection::selected_power(world, entity_id).map(|p| p.template_id)
+                    != Some(power_template_id)
+                {
                     // Selection changed mid-hold: the charge fizzles.
                     self.charge = None;
                     Effect::ClearPsiCharge { entity_id }
@@ -261,12 +265,6 @@ impl Script for PsiAmpScript {
     }
 }
 
-fn selected_power(world: &World) -> Option<PsiPowerInfo> {
-    let powers = world.borrow::<UniqueView<GlobalPsiPowers>>().ok()?;
-    let selection = world.borrow::<UniqueView<PsiPowerSelection>>().ok()?;
-    powers.0.get(selection.index).cloned()
-}
-
 /// The player's current psi points (0 when the player has no psi pool).
 fn player_psi_points(world: &World) -> i32 {
     let player_info = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
@@ -283,7 +281,7 @@ fn player_psi_points(world: &World) -> i32 {
 /// player takes damage (3 per tier - PSI/Endurance mitigation comes later
 /// with player stats). The meter flashes red.
 fn burnout(world: &World, amp_entity: EntityId) -> Effect {
-    let Some(power) = selected_power(world) else {
+    let Some(power) = crate::psi_amp_selection::selected_power(world, amp_entity) else {
         return Effect::ClearPsiCharge {
             entity_id: amp_entity,
         };
@@ -344,7 +342,7 @@ fn cast_selected_power(
     amp_entity: EntityId,
     effective_psi: i32,
 ) -> Effect {
-    let Some(power) = selected_power(world) else {
+    let Some(power) = crate::psi_amp_selection::selected_power(world, amp_entity) else {
         return Effect::NoEffect;
     };
     if !power_is_known(world, power.template_id) {

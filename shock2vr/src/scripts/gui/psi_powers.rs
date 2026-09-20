@@ -148,7 +148,7 @@ fn is_tier_marker(power_id: i32) -> bool {
 }
 
 /// The icon variant a cell draws: `_2` selected, `_1` trained, `_0` otherwise.
-fn icon_kind(trained: bool, selected: bool) -> u8 {
+pub(crate) fn icon_kind(trained: bool, selected: bool) -> u8 {
     if selected {
         2
     } else if trained {
@@ -165,7 +165,10 @@ fn icon_kind(trained: bool, selected: bool) -> u8 {
 /// last-resort guess for a data install missing the entry, right for some ids
 /// and wrong for others. Every shipped install carries all forty entries, so it
 /// does not fire in practice.
-fn icon_basename(strings: &std::collections::HashMap<String, String>, power_id: i32) -> String {
+pub(crate) fn icon_basename(
+    strings: &std::collections::HashMap<String, String>,
+    power_id: i32,
+) -> String {
     strings
         .get(&format!("psiicon{power_id}"))
         .map(|name| name.trim().to_owned())
@@ -174,7 +177,7 @@ fn icon_basename(strings: &std::collections::HashMap<String, String>, power_id: 
 }
 
 /// The full texture path for a power's icon.
-fn icon_texture(basename: &str, kind: u8) -> String {
+pub(crate) fn icon_texture(basename: &str, kind: u8) -> String {
     format!("iface/{basename}_{kind}.pcx")
 }
 
@@ -559,7 +562,10 @@ pub(crate) fn psi_panel_components(
     let strings = strings_view.as_ref().map_or(&no_strings, |s| &s.0);
 
     let tier = tier_override.unwrap_or(browsed.0).clamp(1, TIERS);
-    let selected_id = powers.0.get(selection.index).map(|p| p.power.power_id);
+    let selected_id = crate::psi_amp_selection::target(world)
+        .and_then(|amp| crate::psi_amp_selection::selected_power(world, amp))
+        .map(|p| p.power.power_id)
+        .or_else(|| powers.0.get(selection.index).map(|p| p.power.power_id));
 
     // The tier strip: one piece of art per browsed tier, over five
     // invisible tabs. A zero-alpha button is the established "hit target

@@ -412,6 +412,12 @@ pub enum Effect {
     ReadLastUnreadLog,
 
     /// Apply a completed tap/hold only while this exact gun remains in this hand.
+    PsiAmpButton {
+        hand: crate::Handedness,
+        amp: EntityId,
+        long_press: bool,
+        epoch: u64,
+    },
     HeldGunButton {
         hand: Handedness,
         weapon: EntityId,

@@ -2814,6 +2814,10 @@ pub struct MissionCore {
     /// capture, so a stale flag would silently eat locomotion.
     psi_powers_open: bool,
 
+    /// Transient amp-local preview and per-hand trigger release latches.
+    psi_carousel: Option<crate::psi_carousel::Carousel>,
+    psi_carousel_swallow: [bool; 2],
+
     /// Whether the psi MFD's captured thumbstick is currently pushed past the
     /// step threshold. Edge state for [`crate::scripts::gui::stick_nav`], so a
     /// held stick steps once rather than every frame.
@@ -3799,6 +3803,8 @@ impl MissionCore {
             thrown_items: Default::default(),
             use_mode: false,
             weapon_settings_gun: None,
+            psi_carousel: None,
+            psi_carousel_swallow: [false; 2],
             psi_powers_open: false,
             psi_nav_latched: false,
             button_jump: false,
@@ -4342,6 +4348,97 @@ impl MissionCore {
             let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             player_info.clone()
         };
+
+        for amp in [player.left_hand_entity_id, player.right_hand_entity_id]
+            .into_iter()
+            .flatten()
+        {
+            if crate::wielded_weapon::is_psi_amp(&self.world, amp) {
+                crate::psi_amp_selection::initialize(&mut self.world, amp);
+            }
+        }
+        // The lightweight selector owns only its amp hand's stick and trigger.
+        // Swallow the confirming trigger until physical release, including the close frame.
+        let mut carousel_input = input_context.clone();
+        if self.use_mode || !self.player_is_alive() {
+            self.dismiss_amp_carousel();
+        }
+        if let Some(mut menu) = self.psi_carousel.take() {
+            let held = crate::wielded_weapon::weapon_in_hand(&self.world, menu.hand);
+            let tracked = input_context
+                .pose_tracking
+                .is_none_or(|t| t.head && t.hands[hand_slot(menu.hand)]);
+            if tracked
+                && (held == Some(menu.amp)
+                    || game_options.presentation_mode == crate::PresentationMode::Flat
+                        && self.interaction.is_holding(menu.amp))
+                && !self.use_mode
+            {
+                let input = if menu.hand == crate::Handedness::Left {
+                    &mut carousel_input.left_hand
+                } else {
+                    &mut carousel_input.right_hand
+                };
+                let pressed = input.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD;
+                let confirm = menu.trigger_armed && pressed;
+                menu.trigger_armed |= !pressed;
+                self.psi_carousel_swallow[hand_slot(menu.hand)] = pressed;
+                let (step, latched) =
+                    crate::scripts::gui::stick_nav(input.thumbstick, menu.stick_latched);
+                menu.stick_latched = latched;
+                input.thumbstick = cgmath::vec2(0.0, 0.0);
+                input.trigger_value = 0.0;
+                if let Some(step) = step {
+                    if let Effect::StepPsiSelection { axis, forward } = step.effect() {
+                        let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+                        let known = self
+                            .world
+                            .borrow::<UniqueView<PlayerPsiKnownPowers>>()
+                            .unwrap();
+                        menu.index = crate::psi::step_selection(
+                            &powers.0, &known.0, menu.index, axis, forward,
+                        );
+                    }
+                }
+                menu.anchor.update(
+                    input_context.head.position,
+                    input_context.head.rotation,
+                    time.elapsed,
+                );
+                if confirm {
+                    crate::psi_carousel::advance_input_epoch(&mut self.world, menu.amp);
+                    self.commit_amp_selection(menu.amp, menu.index);
+                } else {
+                    self.psi_carousel = Some(menu);
+                }
+            } else {
+                crate::psi_carousel::advance_input_epoch(&mut self.world, menu.amp);
+                self.psi_carousel_swallow[hand_slot(menu.hand)] = true;
+            }
+        }
+        for (i, hand) in [
+            &mut carousel_input.left_hand,
+            &mut carousel_input.right_hand,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if hand.trigger_value <= crate::ui::VR_TRIGGER_THRESHOLD {
+                // Consult raw input: the menu above deliberately zeroed its trigger.
+                let raw = if i == 0 {
+                    input_context.left_hand.trigger_value
+                } else {
+                    input_context.right_hand.trigger_value
+                };
+                if raw <= crate::ui::VR_TRIGGER_THRESHOLD {
+                    self.psi_carousel_swallow[i] = false;
+                }
+            }
+            if self.psi_carousel_swallow[i] {
+                hand.trigger_value = 0.0;
+            }
+        }
+        let input_context = &carousel_input;
 
         // Player movement logic
         let delta_time = time.elapsed.as_secs_f32();
@@ -8270,10 +8367,65 @@ impl MissionCore {
         }
     }
 
-    /// Page the selection MFD to the tier of the power at `index`. The browsed
-    /// tier follows the selection wherever the selection moves - a stick flick,
-    /// a click, `CyclePsiPower` - so the panel never shows a tier the amp is
-    /// not on.
+    fn dismiss_amp_carousel(&mut self) {
+        if let Some(menu) = self.psi_carousel.take() {
+            crate::psi_carousel::advance_input_epoch(&mut self.world, menu.amp);
+            self.psi_carousel_swallow[hand_slot(menu.hand)] = true;
+        }
+    }
+
+    fn open_amp_carousel(&mut self, amp: EntityId, hand: crate::Handedness) {
+        if self.use_mode || !self.player_is_alive() {
+            return;
+        }
+        self.dismiss_amp_carousel();
+        // Flatscreen stores its weapon in the left slot but casts with the right trigger.
+        let hand = if crate::mission::presentation_is_vr(&self.world) {
+            hand
+        } else {
+            crate::Handedness::Right
+        };
+        self.psi_carousel = crate::psi_carousel::Carousel::new(&self.world, amp, hand);
+        if self.psi_carousel.is_some() {
+            crate::psi_carousel::advance_input_epoch(&mut self.world, amp);
+            self.script_world.dispatch(Message {
+                to: amp,
+                payload: MessagePayload::CancelPsiCharge,
+            });
+        }
+    }
+
+    fn commit_amp_selection(&mut self, amp: EntityId, index: usize) {
+        let template = {
+            let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+            let known = self
+                .world
+                .borrow::<UniqueView<PlayerPsiKnownPowers>>()
+                .unwrap();
+            powers
+                .0
+                .get(index)
+                .filter(|p| known.0.contains(&p.template_id))
+                .map(|p| p.template_id)
+        };
+        if let Some(template) = template {
+            let mut pair = crate::psi_amp_selection::selection(&self.world, amp).unwrap_or(
+                crate::psi_amp_selection::AmpSelection {
+                    current: template,
+                    alternate: None,
+                },
+            );
+            pair.select(template);
+            self.world.add_component(amp, pair);
+            self.world
+                .borrow::<UniqueViewMut<PsiPowerSelection>>()
+                .unwrap()
+                .index = index;
+            self.snap_psi_panel_tier(index);
+        }
+    }
+
+    /// Page the full MFD to the selected power's tier.
     fn snap_psi_panel_tier(&mut self, index: usize) {
         let tier = self
             .world
@@ -8836,6 +8988,41 @@ impl MissionCore {
                 // and the physics controller wants a rising edge, not a level.
                 Effect::Jump => self.button_jump = true,
 
+                Effect::PsiAmpButton {
+                    hand,
+                    amp,
+                    long_press,
+                    epoch,
+                } => {
+                    if self.use_mode
+                        || !self.player_is_alive()
+                        || crate::wielded_weapon::weapon_in_hand(&self.world, hand) != Some(amp)
+                        || crate::psi_carousel::input_epoch(&self.world, amp) != epoch
+                    {
+                        continue;
+                    }
+                    if self.psi_carousel.as_ref().is_some_and(|m| m.amp == amp) {
+                        let menu = self.psi_carousel.take().unwrap();
+                        crate::psi_carousel::advance_input_epoch(&mut self.world, amp);
+                        self.commit_amp_selection(amp, menu.index);
+                    } else if long_press {
+                        self.open_amp_carousel(amp, hand);
+                    } else if let Some(mut pair) =
+                        crate::psi_amp_selection::selection(&self.world, amp)
+                    {
+                        pair.swap();
+                        let index = self
+                            .world
+                            .borrow::<UniqueView<GlobalPsiPowers>>()
+                            .unwrap()
+                            .0
+                            .iter()
+                            .position(|p| p.template_id == pair.current);
+                        if let Some(index) = index {
+                            self.commit_amp_selection(amp, index);
+                        }
+                    }
+                }
                 Effect::HeldGunButton {
                     hand,
                     weapon,
@@ -9299,6 +9486,24 @@ impl MissionCore {
                 }
 
                 Effect::StepPsiSelection { axis, forward } => {
+                    if let Some(amp) = crate::psi_amp_selection::target(&self.world) {
+                        if let Some(power) =
+                            crate::psi_amp_selection::selected_power(&self.world, amp)
+                        {
+                            let index = self
+                                .world
+                                .borrow::<UniqueView<GlobalPsiPowers>>()
+                                .unwrap()
+                                .0
+                                .iter()
+                                .position(|p| p.template_id == power.template_id)
+                                .unwrap_or(0);
+                            self.world
+                                .borrow::<UniqueViewMut<PsiPowerSelection>>()
+                                .unwrap()
+                                .index = index;
+                        }
+                    }
                     let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
                     let known = self
                         .world
@@ -9327,6 +9532,9 @@ impl MissionCore {
                     drop(selection);
                     drop(known);
                     drop(powers);
+                    if let Some(amp) = crate::psi_amp_selection::target(&self.world) {
+                        self.commit_amp_selection(amp, selected);
+                    }
                     self.snap_psi_panel_tier(selected);
                 }
 
@@ -9343,6 +9551,9 @@ impl MissionCore {
                             .filter(|index| known.0.contains(&powers.0[*index].template_id))
                     };
                     if let Some(index) = selected {
+                        if let Some(amp) = crate::psi_amp_selection::target(&self.world) {
+                            self.commit_amp_selection(amp, index);
+                        }
                         self.world
                             .borrow::<UniqueViewMut<PsiPowerSelection>>()
                             .unwrap()
@@ -9362,6 +9573,29 @@ impl MissionCore {
                 }
 
                 Effect::OpenPsiPowers => {
+                    if !self.use_mode
+                        && game_options.presentation_mode == crate::PresentationMode::Vr
+                    {
+                        if let Some(menu) = self.psi_carousel.take() {
+                            crate::psi_carousel::advance_input_epoch(&mut self.world, menu.amp);
+                            self.commit_amp_selection(menu.amp, menu.index);
+                        } else if let Some(amp) = crate::psi_amp_selection::target(&self.world) {
+                            let hand = if game_options.presentation_mode
+                                == crate::PresentationMode::Vr
+                                && crate::wielded_weapon::weapon_in_hand(
+                                    &self.world,
+                                    crate::Handedness::Left,
+                                ) == Some(amp)
+                            {
+                                crate::Handedness::Left
+                            } else {
+                                crate::Handedness::Right
+                            };
+                            self.open_amp_carousel(amp, hand);
+                        }
+                        continue;
+                    }
+
                     let panel = self
                         .world
                         .borrow::<UniqueView<PsiPowersPanelEntity>>()
@@ -9403,10 +9637,16 @@ impl MissionCore {
 
                     // Open on the tier the selection is already in, so the
                     // player lands looking at their own power.
-                    let selected = self
-                        .world
-                        .borrow::<UniqueView<PsiPowerSelection>>()
-                        .map(|selection| selection.index)
+                    let selected = crate::psi_amp_selection::target(&self.world)
+                        .and_then(|amp| crate::psi_amp_selection::selected_power(&self.world, amp))
+                        .and_then(|p| {
+                            self.world
+                                .borrow::<UniqueView<GlobalPsiPowers>>()
+                                .unwrap()
+                                .0
+                                .iter()
+                                .position(|entry| entry.template_id == p.template_id)
+                        })
                         .unwrap_or(0);
                     self.snap_psi_panel_tier(selected);
 
@@ -12970,6 +13210,13 @@ impl MissionCore {
                 );
             }
 
+            if let Some(menu) = &self.psi_carousel {
+                ret.extend(menu.canvas(&self.world, asset_cache).render_screen_space(
+                    asset_cache,
+                    screen_size,
+                    crate::ui::ScaleMode::PreserveAspect,
+                ));
+            }
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
             // the HUD. Also records the render-target size the pointer ->
             // canvas mapping needs.
@@ -13910,6 +14157,27 @@ impl MissionCore {
             scene.extend(use_mode_objects);
         }
 
+        if options.presentation_mode == crate::PresentationMode::Vr {
+            if let Some(menu) = &self.psi_carousel {
+                let panel = menu.anchor.panel();
+                let root = Matrix4::from_translation(panel.center)
+                    * Matrix4::from(panel.rotation)
+                    * Matrix4::from_nonuniform_scale(
+                        panel.size.x * 0.8,
+                        panel.size.x * 0.8 * 340.0 / 480.0,
+                        1.0,
+                    );
+                let mut objects = menu.canvas(&self.world, asset_cache).render_world_space(
+                    asset_cache,
+                    root,
+                    None,
+                    None,
+                    0.001,
+                );
+                rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
+                scene.extend(objects);
+            }
+        }
         // Status messages in VR: flat draws them into its 2D HUD above, so this
         // is the VR half of the same shared canvas.
         if options.presentation_mode == crate::PresentationMode::Vr {
@@ -15831,6 +16099,17 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     });
                 }
 
+                if crate::wielded_weapon::is_psi_amp(&self.world, id) {
+                    if let Some(pair) = crate::psi_amp_selection::selection(&self.world, id) {
+                        properties.push(DebugPropertyInfo {
+                            name: "PsiAmpSelection".into(),
+                            value: serde_json::to_string(&pair).unwrap(),
+                        });
+                    }
+                }
+                if let Some(menu) = self.psi_carousel.as_ref().filter(|m| m.amp == id) {
+                    properties.push(DebugPropertyInfo { name: "PsiCarousel".into(), value: serde_json::json!({"preview_index": menu.index, "hand": format!("{:?}", menu.hand)}).to_string() });
+                }
                 if let Some(muzzle) = weapon_muzzle {
                     properties.push(DebugPropertyInfo {
                         name: "WeaponMuzzle".to_string(),
@@ -18523,6 +18802,10 @@ fn wildcard_match(text: &str, pattern: &str) -> bool {
 }
 
 impl crate::game_scene::GameScene for MissionCore {
+    fn cancel_transient_input(&mut self) {
+        self.dismiss_amp_carousel();
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }

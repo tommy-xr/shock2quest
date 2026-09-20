@@ -140,6 +140,9 @@ pub trait GameScene {
     /// player-visible feedback; every other scene deliberately ignores it.
     fn on_load_failed(&mut self) {}
 
+    /// Cancel scene-local input gestures when a system overlay takes ownership.
+    fn cancel_transient_input(&mut self) {}
+
     /// Whether this scene wants a 2D mouse cursor (e.g. a menu). Flat runtimes
     /// show the OS cursor and populate `InputContext::pointer` when true; by
     /// default scenes capture the mouse for look.

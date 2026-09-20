@@ -89,8 +89,12 @@ However, you can play with a keyboard and a mouse, using the following hard-code
   switch a gun's fire mode, or hold for half a second to drop its loaded clip
   into the world. A thin line fills left to right along the bottom of the cuff
   ammo meter, which shows `EJECT` during the hold. A completed hold does not
-  also switch modes. The psi amp keeps
-  its power selector.
+  also switch modes. With a psi amp, tap the same button to swap its current
+  and alternate powers, or hold for half a second to open a lightweight selector.
+  Move that hand's stick up/down for tiers and left/right for trained powers;
+  press its upper button or trigger to confirm and close. Choosing a new power
+  makes the previous one the alternate. Each amp remembers its own pair through
+  storage, level changes and saves.
 - Directly equip a matching carried weapon with the original number-row bindings:
   `1` Wrench, `2` Pistol, `3` Shotgun, `4` Assault Rifle, `5` Laser Pistol,
   `6` EMP Rifle, `7` Electro Shock, `8` Grenade Launcher, `9` Stasis Field

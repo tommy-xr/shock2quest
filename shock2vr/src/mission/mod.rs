@@ -209,6 +209,10 @@ impl Mission {
 
 // Implementation of GameScene trait for Mission
 impl crate::game_scene::GameScene for Mission {
+    fn cancel_transient_input(&mut self) {
+        self.mission_core.cancel_transient_input();
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }
