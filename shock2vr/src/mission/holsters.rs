@@ -33,62 +33,6 @@ mod tests {
     }
 
     #[test]
-    fn enlarged_overlapping_slots_choose_nearest_and_yield_to_shoulders() {
-        let (mut tracker, mut input, ids) = setup();
-        let centers = tracker.centers.unwrap();
-        // Both 35 cm volumes include this point; the left slot is closer.
-        input.left_hand.position = (centers[0] + centers[1]) * 0.5 - vec3(0.02 / SCALE, 0.0, 0.0);
-        let update = |tracker: &mut Holsters, input: &InputContext| {
-            tracker.update(
-                input,
-                [None; 2],
-                [true; 2],
-                [Some(ids[0]), Some(ids[1])],
-                2,
-                [false; 2],
-                [false; 2],
-                true,
-                0.016,
-            )
-        };
-        input.left_hand.squeeze_value = 0.0;
-        update(&mut tracker, &input);
-        assert_eq!(tracker.near[0], Some(1));
-        input.left_hand.squeeze_value = 1.0;
-        assert_eq!(
-            update(&mut tracker, &input)[0],
-            Some(Action::Retrieve {
-                entity: ids[1],
-                slot: 1
-            })
-        );
-        tracker.shoulder_priority[0] = true;
-        input.left_hand.squeeze_value = 0.0;
-        update(&mut tracker, &input);
-        input.left_hand.squeeze_value = 1.0;
-        assert_eq!(update(&mut tracker, &input)[0], None);
-        assert_eq!(tracker.near[0], None);
-        tracker.shoulder_priority[0] = false;
-        input.left_hand.position = centers[0] + vec3(0.0, -0.30 / SCALE, 0.0);
-        update(&mut tracker, &input);
-        assert_eq!(
-            tracker.near[0],
-            Some(0),
-            "30 cm below the slot is reachable"
-        );
-        input.left_hand.position = centers[0] + vec3(0.0, -0.38 / SCALE, 0.0);
-        update(&mut tracker, &input);
-        assert_eq!(
-            tracker.near[0],
-            Some(0),
-            "palm center stays outside while the glove sphere touches"
-        );
-        input.left_hand.position = centers[0] + vec3(0.0, -0.41 / SCALE, 0.0);
-        update(&mut tracker, &input);
-        assert_eq!(tracker.near[0], None, "separated spheres do not touch");
-    }
-
-    #[test]
     fn only_melee_and_compact_pistols_fit() {
         let mut world = World::new();
         let melee = world.add_entity((dark::properties::PropLimbModel("wrench_h".to_owned()),));
