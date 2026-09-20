@@ -57,6 +57,7 @@ pub const TRAIT_PACK_RAT: u8 = 3;
 pub const TRAIT_PHARMO_FRIENDLY: u8 = 2;
 pub const TRAIT_TANK: u8 = 8;
 pub const TRAIT_SPEEDY: u8 = 4;
+pub const TRAIT_SHARPSHOOTER: u8 = 5;
 pub const TRAIT_SPATIALLY_AWARE: u8 = 16;
 pub const TRAIT_SECURITY_EXPERT: u8 = 10;
 pub const TRAIT_POWER_PSI: u8 = 14;
@@ -150,7 +151,7 @@ impl TraitsContext {
             "Pharmo-Friendly: 20% more benefit from healing, psi and hazard-treatment items.",
             "Pack-Rat: Adds three extra inventory slots.",
             "Speedy: Movement speed increased by 15%.",
-            "Sharpshooter: Ranged, non-psionic weapons deal 15% more damage.",
+            "Sharpshooter: Ranged, non-psionic weapons deal 35% more damage.",
             "Naturally Able: One-time bonus of 8 cyber modules.",
             "Cybernetically Enhanced: Allows two implants of different types at once.",
             "Tank: Adds 5 maximum and current hit points.",
@@ -400,6 +401,7 @@ pub fn live_effect_note(trait_id: u8) -> Option<&'static str> {
         TRAIT_CYBER_ASSIMILATION => Some("Robots drop diagnostic modules that heal 15 HP"),
         TRAIT_SECURITY_EXPERT => Some("+2 effective Hack at security computers"),
         TRAIT_SPATIALLY_AWARE => Some("Full map layout on every deck"),
+        TRAIT_SHARPSHOOTER => Some("35% more ranged damage (classic retail behavior)"),
         TRAIT_TANK => Some("+5 max hit points"),
         TRAIT_NATURALLY_ABLE => Some("+8 cyber modules"),
         TRAIT_PACK_RAT => Some("+3 pack slots"),

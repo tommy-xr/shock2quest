@@ -106,9 +106,23 @@ fn shot_multiplier(raw: f32) -> f32 {
 /// The damage and speed multipliers this fire setting puts on the projectile it
 /// launches (the EMP rifle's overcharge hits 3x; the fusion cannon's DEATH lob
 /// travels at 0.4x).
-fn shot_modifiers(setting: &GunSettingDesc) -> RuntimePropShotModifiers {
+fn shot_modifiers(
+    world: &World,
+    weapon: EntityId,
+    setting: &GunSettingDesc,
+) -> RuntimePropShotModifiers {
+    // Classic shkplgun.cpp uses the Lethal Weapon multiplier here: 1.35,
+    // despite its 15% tooltip. Preserve actual retail behavior. Applying at
+    // launch lets every impact path consume the bonus exactly once.
+    let sharpshooter = crate::wielded_weapon::held_in_hand(world, weapon)
+        && world
+            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+            .is_ok_and(|q| {
+                q.player_stats()
+                    .has_os_trait(crate::scripts::gui::TRAIT_SHARPSHOOTER)
+            });
     RuntimePropShotModifiers {
-        stim: shot_multiplier(setting.stim_modifier),
+        stim: shot_multiplier(setting.stim_modifier) * if sharpshooter { 1.35 } else { 1.0 },
         speed: shot_multiplier(setting.speed_modifier),
     }
 }
@@ -583,7 +597,7 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
                     entity_id,
                     template_id,
                     &options,
-                    shot_modifiers(setting),
+                    shot_modifiers(world, entity_id, setting),
                 )
             })
             .collect(),
@@ -1399,13 +1413,46 @@ mod tests {
     }
 
     #[test]
+    fn sharpshooter_scales_only_the_players_ranged_damage() {
+        for owned in [false, true] {
+            let mut world = World::new();
+            let player = world.add_entity(());
+            let gun = world.add_entity(());
+            let other_gun = world.add_entity(());
+            world.add_unique(crate::mission::PlayerInfo {
+                pos: cgmath::vec3(0.0, 0.0, 0.0),
+                rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                entity_id: player,
+                left_hand_entity_id: Some(gun),
+                right_hand_entity_id: None,
+                inventory_entity_id: player,
+            });
+            let mut quests = crate::quest_info::QuestInfo::new();
+            if owned {
+                quests.player_stats_mut().add_os_trait(5);
+            }
+            world.add_unique(quests);
+            let setting = GunSettingDesc {
+                stim_modifier: 3.0,
+                speed_modifier: 0.4,
+                ..Default::default()
+            };
+            for (weapon, bonus) in [(gun, if owned { 1.35 } else { 1.0 }), (other_gun, 1.0)] {
+                let shot = shot_modifiers(&world, weapon, &setting);
+                assert!((shot.stim - 3.0 * bonus).abs() < 0.00001);
+                assert_eq!(shot.speed, 0.4);
+            }
+        }
+    }
+
+    #[test]
     fn only_a_positive_multiplier_modifies_a_shot() {
         let emp_over = GunSettingDesc {
             stim_modifier: 3.0,
             speed_modifier: 0.8,
             ..GunSettingDesc::default()
         };
-        let modifiers = shot_modifiers(&emp_over);
+        let modifiers = shot_modifiers(&World::new(), EntityId::dead(), &emp_over);
         assert_eq!(modifiers.stim, 3.0);
         assert_eq!(modifiers.speed, 0.8);
 
@@ -1416,7 +1463,7 @@ mod tests {
             speed_modifier: 0.0,
             ..GunSettingDesc::default()
         };
-        let modifiers = shot_modifiers(&unauthored);
+        let modifiers = shot_modifiers(&World::new(), EntityId::dead(), &unauthored);
         assert_eq!(modifiers.stim, 1.0);
         assert_eq!(modifiers.speed, 1.0);
     }
