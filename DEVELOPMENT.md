@@ -345,6 +345,19 @@ and replicator prices, mission object masks, and Easy ecology and hypo bonuses.
 
 ### Developer options
 
+The main menu's bottom-left build label shows `dev | <commit>` for local builds
+and `v<version> | <commit>` for release builds. Click it three times to enable
+Developer. In VR, point at the label and press/release the trigger three times.
+The extra bottom-left Developer button then appears; the pause menu's Developer
+entry is enabled too. The build label moves into the Developer menu UI while
+developer mode is active. A held press counts only once.
+
+Developer mode survives restarts via the `developer-mode` sentinel in the game
+data directory (`/sdcard/shock2quest/developer-mode` on Quest). Choose **Disable
+developer mode** on the main-menu Developer screen to remove the sentinel and
+hide those entries again. A failed write/removal leaves the current mode intact
+and displays an error. This preference is independent of campaign saves.
+
 While a mission is running, **Pause → Developer → Cheats** includes
 **Add radiation (+10)**, **Add toxin (+10)**, and **Clear radiation + toxin**.
 Repeated clicks add another 10 points, even with protective equipment equipped.

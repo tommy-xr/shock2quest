@@ -87,6 +87,7 @@ const ACTIVE_OPACITY: f32 = 1.0;
 const OPEN_SCENES_LABEL: &str = "Scenes";
 const LAUNCH_LABEL: &str = "Launch";
 const DONE_LABEL: &str = "Done";
+const DISABLE_DEVELOPER_RECT: Rect = Rect::new(16.0, 350.0, 225.0, 32.0);
 
 /// Which page of the screen is showing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +133,8 @@ impl SceneTab {
 /// What a click on the screen asks for, whichever page it landed on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeveloperAction {
+    /// Remove the persistent developer-mode sentinel and return to the main menu.
+    DisableDeveloperMode,
     /// Something on the parameter page: a step, its scroll, or "Done".
     Param(DevParamsEvent),
     /// Open the launcher.
@@ -220,6 +223,9 @@ fn scene_text_rect(rects: PanelRects, len: usize, slot: usize) -> Rect {
 fn hit(state: ScreenState, point: Vector2<f32>) -> Option<DeveloperAction> {
     match state.page {
         DeveloperPage::Params => {
+            if DISABLE_DEVELOPER_RECT.contains(point) {
+                return Some(DeveloperAction::DisableDeveloperMode);
+            }
             if state.rects.action_rect().contains(point) {
                 return Some(DeveloperAction::OpenScenes);
             }
@@ -305,6 +311,7 @@ pub struct DeveloperScene {
     scene_scroll: usize,
     /// The highlighted entry, as an index into the showing tab's list.
     selected_scene: Option<usize>,
+    persistence_error: bool,
 }
 
 /// The install's missions, sorted by name - loose `.mis` files on a classic
@@ -329,6 +336,7 @@ impl DeveloperScene {
             cutscenes: Vec::new(),
             scene_scroll: 0,
             selected_scene: None,
+            persistence_error: false,
         }
     }
 
@@ -384,6 +392,17 @@ impl DeveloperScene {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
 
+        canvas
+            .text(
+                Rect::new(14.0, 448.0, 210.0, 24.0),
+                env!("SHOCK2QUEST_BUILD_LABEL"),
+                LIST_FONT,
+                12.0,
+                HAlign::Left,
+                VAlign::Middle,
+            )
+            .opacity(0.25);
+
         let state = self.state();
         let hovered = pointer_canvas.and_then(|point| hit(state, point));
         let button = |canvas: &mut UiCanvas, rect: Rect, text: &str, action, enabled: bool| {
@@ -401,6 +420,30 @@ impl DeveloperScene {
 
         match self.page {
             DeveloperPage::Params => {
+                canvas
+                    .text(
+                        DISABLE_DEVELOPER_RECT,
+                        "Disable developer mode",
+                        LIST_FONT,
+                        14.0,
+                        HAlign::Center,
+                        VAlign::Middle,
+                    )
+                    .opacity(if hovered == Some(DeveloperAction::DisableDeveloperMode) {
+                        ACTIVE_OPACITY
+                    } else {
+                        IDLE_OPACITY
+                    });
+                if self.persistence_error {
+                    canvas.text(
+                        Rect::new(16.0, 384.0, 225.0, 32.0),
+                        "Could not remove developer mode",
+                        LIST_FONT,
+                        12.0,
+                        HAlign::Center,
+                        VAlign::Middle,
+                    );
+                }
                 // The rows, the header and "Done" are the shared panel's; the
                 // launcher's door is this host's, because the pause overlay
                 // hosts the same panel and cannot swap the scene under itself.
@@ -504,6 +547,15 @@ impl DeveloperScene {
     /// `Game`; the pages, the scroll and the selection are absorbed here.
     fn handle_action(&mut self, action: DeveloperAction) -> Vec<Effect> {
         match action {
+            DeveloperAction::DisableDeveloperMode => {
+                match crate::developer_mode::set_enabled(false) {
+                    Ok(()) => return vec![Effect::GlobalEffect(GlobalEffect::ShowMainMenu)],
+                    Err(error) => {
+                        tracing::warn!(%error, "Could not remove developer mode sentinel");
+                        self.persistence_error = true;
+                    }
+                }
+            }
             DeveloperAction::Param(event) => {
                 if dev_params_panel::activate(
                     self.panel_rects,
@@ -792,6 +844,20 @@ mod tests {
             Some(GlobalEffect::LaunchDebugScene { name }) => Some(name),
             _ => None,
         }
+    }
+
+    #[test]
+    fn disable_developer_mode_is_only_a_parameter_page_control() {
+        let mut scene = DeveloperScene::new();
+        assert_eq!(
+            hit(scene.state(), DISABLE_DEVELOPER_RECT.center()),
+            Some(DeveloperAction::DisableDeveloperMode)
+        );
+        scene.page = DeveloperPage::Scenes;
+        assert_ne!(
+            hit(scene.state(), DISABLE_DEVELOPER_RECT.center()),
+            Some(DeveloperAction::DisableDeveloperMode)
+        );
     }
 
     #[test]
