@@ -502,9 +502,9 @@ pub enum Effect {
         amount: i32,
     },
 
-    /// Atomically apply a retail food/drink use against the live player and
-    /// consume the source object. Comestibles always disappear, including at
-    /// full health; the hit-point increase is clamped to the authored maximum.
+    /// Atomically use one food/drink or diagnostic module against the live
+    /// player, decrementing a stack or destroying its final item. Even full
+    /// health consumes one; healing is clamped to the authored maximum.
     UseComestible {
         entity_id: EntityId,
         hit_points: i32,

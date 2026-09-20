@@ -4,7 +4,8 @@ use crate::physics::PhysicsWorld;
 
 use super::{Effect, MessagePayload, Script, script_util::player_carried_items};
 
-/// Retail food and drink inventory use.
+/// Retail food, drink and diagnostic/repair module inventory use.
+/// Food heals one HP; the Cyber-Assimilation module heals fifteen.
 ///
 /// The shipped 25AE `allobjs` module handles `FrobInvEnd`: it adds one hit
 /// point to the frobber, plays the object's authored Activate environmental
@@ -12,11 +13,13 @@ use super::{Effect, MessagePayload, Script, script_util::player_carried_items};
 /// world pickup and inventory use, so the carried-item check preserves the
 /// object's inherited world `MOVE` action while selecting the authored
 /// inventory `SCRIPT` path.
-pub struct Comestible;
+pub struct Comestible {
+    hit_points: i32,
+}
 
 impl Comestible {
-    pub fn new() -> Self {
-        Self
+    pub fn new(hit_points: i32) -> Self {
+        Self { hit_points }
     }
 }
 
@@ -35,7 +38,7 @@ impl Script for Comestible {
 
         Effect::UseComestible {
             entity_id,
-            hit_points: 1,
+            hit_points: self.hit_points,
         }
     }
 }
@@ -81,10 +84,26 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_module_dispatches_a_carried_fifteen_hp_use() {
+        for carried in [false, true] {
+            let (world, module) = world_with_food(carried);
+            let effect = crate::scripts::ScriptWorld::create_script("cheeseborger".into())
+                .handle_message(module, &world, &PhysicsWorld::new(), &MessagePayload::Frob);
+            if carried {
+                assert!(
+                    matches!(effect, Effect::UseComestible { entity_id, hit_points: 15 } if entity_id == module)
+                );
+            } else {
+                assert!(matches!(effect, Effect::NoEffect));
+            }
+        }
+    }
+
+    #[test]
     fn carried_food_requests_one_atomic_retail_use() {
         let (world, food) = world_with_food(true);
 
-        let effect = Comestible::new().handle_message(
+        let effect = Comestible::new(1).handle_message(
             food,
             &world,
             &PhysicsWorld::new(),
@@ -104,7 +123,7 @@ mod tests {
     fn world_frob_remains_owned_by_inherited_move_action() {
         let (world, food) = world_with_food(false);
 
-        let effect = Comestible::new().handle_message(
+        let effect = Comestible::new(1).handle_message(
             food,
             &world,
             &PhysicsWorld::new(),
@@ -118,7 +137,7 @@ mod tests {
     fn unrelated_messages_do_nothing() {
         let (world, food) = world_with_food(true);
 
-        let effect = Comestible::new().handle_message(
+        let effect = Comestible::new(1).handle_message(
             food,
             &world,
             &PhysicsWorld::new(),
