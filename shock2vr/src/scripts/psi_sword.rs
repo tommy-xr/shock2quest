@@ -14,6 +14,21 @@ pub struct PsiSwordController {
     previous: Option<(Point3<f32>, Vector3<f32>)>,
     cooldown: f32,
 }
+impl PsiSwordController {
+    fn sample_tip(
+        &mut self,
+        tip: Point3<f32>,
+        player: Vector3<f32>,
+        dt: f32,
+    ) -> Option<(Point3<f32>, Vector3<f32>)> {
+        // Control/inspection requests can update the pose without advancing time.
+        // Keep the last simulated sample so the next frame observes that motion.
+        if dt <= 0.0 {
+            return None;
+        }
+        self.previous.replace((tip, player))
+    }
+}
 impl Script for PsiSwordController {
     fn handle_message(
         &mut self,
@@ -96,7 +111,7 @@ impl Script for PsiSwordController {
         let Some((base, tip)) = psi_sword::segment(world, id) else {
             return Effect::NoEffect;
         };
-        let previous = self.previous.replace((tip, player.pos));
+        let previous = self.sample_tip(tip, player.pos, time.elapsed.as_secs_f32());
         self.cooldown = (self.cooldown - time.elapsed.as_secs_f32()).max(0.0);
         let Some((last_tip, last_player)) = previous else {
             return Effect::NoEffect;
@@ -182,6 +197,18 @@ fn swing_is_valid(distance: f32, dt: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn zero_time_pose_updates_preserve_the_next_swing() {
+        let mut sword = PsiSwordController::default();
+        let player = Vector3::new(0.0, 0.0, 0.0);
+        let before = Point3::new(0.0, 1.0, 0.0);
+        let after = Point3::new(0.04, 1.0, 0.0);
+        assert!(sword.sample_tip(before, player, 1.0 / 60.0).is_none());
+        assert!(sword.sample_tip(after, player, 0.0).is_none());
+        let (last, _) = sword.sample_tip(after, player, 1.0 / 60.0).unwrap();
+        assert_eq!(last, before);
+        assert!(swing_is_valid((after - last).magnitude(), 1.0 / 60.0));
+    }
     #[test]
     fn sword_rejects_still_tracking_and_teleports() {
         assert!(!swing_is_valid(0.0, 1.0 / 60.0));
