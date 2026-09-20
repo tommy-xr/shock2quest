@@ -43,6 +43,11 @@ pub const BERSERK_TEMPLATE_ID: i32 = -3155;
 /// the player's guns neither wear nor break (see `scripts::weapon_script`).
 pub const STABILITY_TEMPLATE_ID: i32 = -3148;
 
+/// `Immolate` - Localized Pyrokinesis (tier 2 sustained power): while active,
+/// the caster burns everything within the aura authored on this template
+/// (see `scripts::immolate`).
+pub const IMMOLATE_TEMPLATE_ID: i32 = -3152;
+
 /// `PropPsiPower::activation_type` for sustained/timed self effects - the
 /// power activates for a duration given by its `P$PsiShield` data
 /// (`duration_base + duration_per_psi × max(PSI - baseline_psi, 0)` seconds).
