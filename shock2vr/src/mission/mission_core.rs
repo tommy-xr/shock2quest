@@ -4926,7 +4926,7 @@ impl MissionCore {
             (player_info.pos, player_info.rotation)
         };
 
-        effects.extend(self.update_psi_pull(time.elapsed, input_context, asset_cache));
+        effects.extend(self.update_psi_pull(time.elapsed));
 
         self.healing_pulses.retain(|_, age| {
             *age += time.elapsed.as_secs_f32();
@@ -7585,14 +7585,9 @@ impl MissionCore {
         true
     }
 
-    /// Fly the actual loose body. Rapier keeps its normal collision shape and
-    /// CCD; acquisition happens only once that body reaches the receiver.
-    fn update_psi_pull(
-        &mut self,
-        elapsed: std::time::Duration,
-        input: &input_context::InputContext,
-        asset_cache: &mut AssetCache,
-    ) -> Vec<Effect> {
+    /// Fly the loose body toward the visible amp; catching remains an ordinary
+    /// hand interaction. Arrival or cancellation simply restores gravity.
+    fn update_psi_pull(&mut self, elapsed: std::time::Duration) -> Vec<Effect> {
         if elapsed.is_zero() {
             return vec![];
         }
@@ -7601,7 +7596,7 @@ impl MissionCore {
         };
         flight.age += elapsed.as_secs_f32();
         flight.trail_age += elapsed.as_secs_f32();
-        let item = flight.target.entity;
+        let item = flight.item;
         let player = self
             .world
             .borrow::<UniqueView<PlayerInfo>>()
@@ -7611,47 +7606,19 @@ impl MissionCore {
             .id_to_physics
             .get(&item)
             .and_then(|h| self.physics.get_position(*h));
-        let receiver_free = match flight.target.destination {
-            crate::psi_pull::Destination::Hand(hand) => {
-                let index = if hand == crate::Handedness::Left {
-                    0
-                } else {
-                    1
-                };
-                self.interaction.hand_available_for_body_slot(hand)
-                    && input
-                        .pose_tracking
-                        .is_none_or(|tracking| tracking.head && tracking.hands[index])
-            }
-            crate::psi_pull::Destination::Inventory => backpack_accepts_deposit(&self.world, item),
-            crate::psi_pull::Destination::Script => true,
-        };
-        let destination = match flight.target.destination {
-            crate::psi_pull::Destination::Hand(hand) => {
-                let tracked = if hand == crate::Handedness::Left {
-                    &input.left_hand
-                } else {
-                    &input.right_hand
-                };
-                crate::virtual_hand::hand_world_position(
-                    player.pos,
-                    player.rotation,
-                    tracked.position,
-                )
-            }
-            _ => player.pos + player.rotation.rotate_vector(vec3(0.0, 0.35, -0.4)),
-        };
+        let destination = crate::psi_pull::amp_position(&self.world, flight.amp);
         let valid = self.player_is_alive()
             && self.interaction.is_holding(flight.amp)
             && !self.interaction.is_holding(item)
             && crate::psi_pull::eligible(&self.world, item)
-            && receiver_free
+            && destination.is_some()
             && flight.age < crate::psi_pull::FLIGHT_TIMEOUT;
         let Some(position) = position.filter(|_| valid) else {
             self.physics.set_gravity(item, flight.gravity);
             self.physics.set_velocity(item, Vector3::zero());
             return vec![];
         };
+        let destination = destination.unwrap();
         let delta = destination - position;
         let distance = delta.magnitude();
         let held = self.interaction.held_entities();
@@ -7675,22 +7642,7 @@ impl MissionCore {
         if distance <= crate::psi_pull::ARRIVAL_DISTANCE {
             self.physics.set_gravity(item, flight.gravity);
             self.physics.set_velocity(item, Vector3::zero());
-            return match flight.target.destination {
-                crate::psi_pull::Destination::Inventory => {
-                    self.drop_entity_into_container(player.inventory_entity_id, item);
-                    vec![]
-                }
-                crate::psi_pull::Destination::Hand(hand) => {
-                    self.grab_entity_into_hand(asset_cache, item, hand)
-                }
-                crate::psi_pull::Destination::Script => {
-                    self.script_world.dispatch(Message {
-                        to: item,
-                        payload: MessagePayload::Frob,
-                    });
-                    vec![]
-                }
-            };
+            return vec![];
         }
         self.physics.set_velocity(
             item,
@@ -10255,25 +10207,13 @@ impl MissionCore {
                     else {
                         continue;
                     };
-                    let can_receive = match target.destination {
-                        crate::psi_pull::Destination::Inventory => {
-                            backpack_accepts_deposit(&self.world, target.entity)
-                        }
-                        crate::psi_pull::Destination::Hand(hand) => {
-                            self.interaction.hand_available_for_body_slot(hand)
-                        }
-                        crate::psi_pull::Destination::Script => true,
-                    };
-                    if !can_receive {
-                        continue;
-                    }
-                    let Some(gravity) = self.physics.begin_psi_pull(target.entity) else {
+                    let Some(gravity) = self.physics.begin_psi_pull(target) else {
                         continue;
                     };
-                    self.thrown_items.cancel(target.entity);
+                    self.thrown_items.cancel(target);
                     update_player_psi_points(&self.world, |current| current.saturating_sub(cost));
                     self.psi_pull = Some(crate::psi_pull::Flight {
-                        target,
+                        item: target,
                         amp,
                         gravity,
                         age: 0.0,

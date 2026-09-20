@@ -53,8 +53,7 @@ pub struct VirtualHand {
     rotation: Quaternion<f32>,
     trigger_value: f32,
     squeeze_value: f32,
-    // A restored or remotely assigned hold may have no physical squeeze yet.
-    // Arm release after the first squeeze.
+    // A restored hold has no physical squeeze yet. Arm release after the first squeeze.
     restored_grip_pending: bool,
     raytrace_hit: Option<RayCastResult>,
 
@@ -257,9 +256,7 @@ impl VirtualHand {
 
         VirtualHand {
             hand_state: HandState::Grabbing { entity_id },
-            // Inventory equips and PsiPull can assign an item to an open hand.
-            // Keep it there until the player deliberately squeezes and releases.
-            restored_grip_pending: self.squeeze_value < 0.5,
+            restored_grip_pending: false,
             feedback: HandFeedback::default(),
             ..self.clone()
         }

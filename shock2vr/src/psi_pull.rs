@@ -1,6 +1,5 @@
-//! Kinetic Redirection: aimed acquisition through the normal inventory/hand paths.
+//! Kinetic Redirection: fly loose physics bodies toward the held amp.
 use crate::{
-    Handedness,
     mission::PlayerInfo,
     physics::{InternalCollisionGroups, PhysicsWorld},
 };
@@ -14,20 +13,8 @@ pub const POWER: i32 = -1022;
 // Port interaction tuning, in world units. The power's data[0] is not a verified range.
 pub const RANGE: f32 = 12.0;
 
-#[derive(Clone, Copy)]
-pub enum Destination {
-    Inventory,
-    Hand(Handedness),
-    Script,
-}
-
-pub struct PullTarget {
-    pub entity: EntityId,
-    pub destination: Destination,
-}
-
 pub struct Flight {
-    pub target: PullTarget,
+    pub item: EntityId,
     pub amp: EntityId,
     pub gravity: f32,
     pub age: f32,
@@ -38,8 +25,24 @@ pub const FLIGHT_SPEED: f32 = 6.0;
 pub const ARRIVAL_DISTANCE: f32 = 0.25;
 pub const FLIGHT_TIMEOUT: f32 = 5.0;
 
+/// The visible amp muzzle, in both presentations (the same transform as its
+/// healing feedback). Flat casting uses a camera aim ray, not this endpoint.
+pub fn amp_position(world: &World, amp: EntityId) -> Option<cgmath::Vector3<f32>> {
+    use cgmath::{EuclideanSpace, Transform};
+    let transforms = world
+        .borrow::<View<crate::runtime_props::RuntimePropTransform>>()
+        .ok()?;
+    let transform = transforms.get(amp).ok()?;
+    Some(
+        transform
+            .0
+            .transform_point(crate::weapon_muzzle::resolve(world, amp).point)
+            .to_vec(),
+    )
+}
+
 /// Recheck the route even inside the arrival radius: a thin entity door must
-/// not turn the final hand/inventory transfer into a teleport through it.
+/// not let the flight finish on the far side of a thin obstacle.
 pub fn route_blocked(
     physics: &PhysicsWorld,
     from: cgmath::Vector3<f32>,
@@ -99,7 +102,7 @@ pub(crate) fn eligible(world: &World, item: EntityId) -> bool {
         })
 }
 
-pub fn resolve(world: &World, physics: &PhysicsWorld, amp: EntityId) -> Option<PullTarget> {
+pub fn resolve(world: &World, physics: &PhysicsWorld, amp: EntityId) -> Option<EntityId> {
     let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
     if player.left_hand_entity_id != Some(amp) && player.right_hand_entity_id != Some(amp) {
         return None;
@@ -126,21 +129,7 @@ pub fn resolve(world: &World, physics: &PhysicsWorld, amp: EntityId) -> Option<P
     if !eligible(world, entity) {
         return None;
     }
-    let destination = if crate::virtual_hand::uses_scripted_world_frob(world, entity) {
-        Destination::Script
-    } else if !crate::mission::presentation_is_vr(world) {
-        Destination::Inventory
-    } else if player.left_hand_entity_id.is_none() {
-        Destination::Hand(Handedness::Left)
-    } else if player.right_hand_entity_id.is_none() {
-        Destination::Hand(Handedness::Right)
-    } else {
-        return None;
-    };
-    Some(PullTarget {
-        entity,
-        destination,
-    })
+    Some(entity)
 }
 
 #[cfg(test)]
