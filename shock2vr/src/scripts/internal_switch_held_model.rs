@@ -24,19 +24,20 @@ impl Script for InternalSwitchHeldModelScript {
             MessagePayload::Hold => {
                 let is_vr = crate::mission::presentation_is_vr(world);
                 if is_vr {
-                    // On a 25AE install the remastered first-person gun models
-                    // resolve (mods/sshock2ee.kpf outranks the classic
-                    // archives) and are closed meshes, so VR wields them
-                    // directly - ChangeModel also adopts their muzzle vhots.
-                    if crate::is_25th_anniversary_install() {
-                        if let Some(view_model) = get_raw_view_model(world, entity_id)
-                            .filter(|name| vr_config::is_vr_view_model(name))
-                        {
-                            return Effect::ChangeModel {
-                                entity_id,
-                                model_name: view_model,
-                            };
-                        }
+                    // The amp's authored hand is its VR presentation on both
+                    // classic and anniversary installs; it replaces the glove.
+                    // Other classic gun meshes retain their world-model fallback.
+                    if let Some(view_model) = get_raw_view_model(world, entity_id)
+                        .filter(|name| vr_config::is_vr_view_model(name))
+                        .filter(|name| {
+                            name.eq_ignore_ascii_case("amp_h")
+                                || crate::is_25th_anniversary_install()
+                        })
+                    {
+                        return Effect::ChangeModel {
+                            entity_id,
+                            model_name: view_model,
+                        };
                     }
 
                     // Otherwise keep the world model: the classic _h meshes
@@ -136,4 +137,45 @@ fn get_previous_model(world: &World, entity_id: EntityId) -> Option<String> {
 
     let maybe_player_gun = v_player_gun.get(entity_id);
     maybe_player_gun.ok().map(|player_gun| player_gun.0.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn psi_amp_wields_its_authored_hand_and_restores_the_world_model_on_drop() {
+        let mut world = World::new();
+        world.add_unique(crate::mission::mission_core::GlobalPresentationMode(
+            crate::PresentationMode::Vr,
+        ));
+        let amp = world.add_entity((
+            PropPlayerGun {
+                flags: 0,
+                hand_model: "amp_h".into(),
+                icon_file: String::new(),
+                model_offset: cgmath::vec3(0.0, 0.0, 0.0),
+                fire_offset: cgmath::vec3(0.0, 0.0, 0.0),
+                heading: 0,
+                reload_pitch: 0,
+                reload_rate: 0,
+                gun_type: 0,
+            },
+            dark::properties::PropModelName("psiamp".into()),
+            InternalPropOriginalModelName("psiamp".into()),
+        ));
+        let mut script = InternalSwitchHeldModelScript::new();
+        let physics = PhysicsWorld::new();
+        assert!(
+            matches!(script.handle_message(amp, &world, &physics, &MessagePayload::Hold),
+            Effect::ChangeModel { entity_id, model_name } if entity_id == amp && model_name == "amp_h")
+        );
+        assert!(
+            !crate::virtual_hand::shows_hand_visual(&world, Some(amp)),
+            "the authored hand replaces the glove"
+        );
+        assert!(
+            matches!(script.handle_message(amp, &world, &physics, &MessagePayload::Drop),
+            Effect::ChangeModel { entity_id, model_name } if entity_id == amp && model_name == "psiamp")
+        );
+    }
 }
