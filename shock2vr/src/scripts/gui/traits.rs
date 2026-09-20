@@ -25,6 +25,9 @@ use crate::quest_info::QuestInfo;
 use crate::scripts::Effect;
 
 use crate::gui;
+use crate::ui::Rect;
+
+use super::panel_text::PanelText;
 
 /// The 16 O/S traits, by the original game's trait id (matching the shipped
 /// `TRAITS.STR` `Trait1..16` order, verified against those strings).
@@ -188,30 +191,10 @@ const DESC_X: f32 = 15.0;
 const DESC_Y: f32 = 214.0;
 /// Bottom of the description area ((15,214)-(174,264) in the original).
 const DESC_Y_MAX: f32 = 264.0;
-/// Crude wrap width for the ~160px description column with the engine font.
-const DESC_CHARS_PER_LINE: usize = 34;
-
-/// Greedy word-wrap: split `text` into lines of at most `width` characters
-/// (long single words get their own over-long line rather than splitting).
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if current.is_empty() {
-            current = word.to_string();
-        } else if current.len() + 1 + word.len() <= width {
-            current.push(' ');
-            current.push_str(word);
-        } else {
-            lines.push(std::mem::take(&mut current));
-            current = word.to_string();
-        }
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}
+/// Retail help well. Build-only availability feedback uses the spare space
+/// beneath it so it cannot displace or truncate the authored description.
+const DESC_RECT: Rect = Rect::new(DESC_X, DESC_Y, 159.0, DESC_Y_MAX - DESC_Y);
+const STATUS_RECT: Rect = Rect::new(DESC_X, 266.0, 159.0, 24.0);
 
 /// The trait icon art (`TRAIT01.PCX`..`TRAIT16.PCX`; `TRAIT00.PCX` is the
 /// empty-slot art).
@@ -249,9 +232,7 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
                 .with_position(vec2(0.0, 0.0))
                 .with_size(vec2(188.0, 296.0)),
             // Panel header (MISC.STR TraitHeader), as in the original.
-            gui::text(&header)
-                .with_position(vec2(HEADER_X, HEADER_Y))
-                .with_size(vec2(160.0, 12.0)),
+            PanelText::text(&header, Rect::new(HEADER_X, HEADER_Y, 143.0, 12.0)),
         ];
 
         let owned: Vec<u8> = world
@@ -274,6 +255,9 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
 
         // 4x4 selection matrix: which = col + row*4 + 1.
         for (idx, (trait_id, name)) in OS_TRAITS.iter().enumerate() {
+            if owned.contains(trait_id) {
+                continue;
+            }
             let col = idx % 4;
             let row = idx / 4;
             components.push(
@@ -288,46 +272,37 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
             );
         }
 
-        // Description area: the machine's used state, then purchase feedback,
-        // then the hovered trait's TRAITS.STR text (the original shows the
-        // hovered description there).
-        let mut lines: Vec<String> = Vec::new();
-        if machine_used(world, entity_id) {
-            lines.push(used_label(world));
-        }
-        if let Some(message) = &state.message {
-            // A used-machine refusal repeats the standing used line - skip
-            // the duplicate.
-            if !lines.contains(message) {
-                lines.push(message.clone());
-            }
-        }
-        if let Some(hovered) = cursor.as_ref().and_then(|c| hovered_trait(c.position)) {
-            let description = world
+        // Installed icons have the same hover help as the purchase matrix.
+        // Fresh hover help wins over stale purchase/refusal feedback.
+        let hovered = cursor.as_ref().and_then(|c| {
+            owned
+                .iter()
+                .enumerate()
+                .find_map(|(slot, id)| {
+                    Rect::new(OWNED_X + OWNED_PITCH * slot as f32, OWNED_Y, CELL_W, CELL_H)
+                        .contains(vec2(c.position.x, c.position.y))
+                        .then_some(*id)
+                })
+                .or_else(|| hovered_trait(c.position).filter(|id| !owned.contains(id)))
+        });
+        let description = hovered.map(|id| {
+            world
                 .borrow::<UniqueView<TraitsContext>>()
-                .map(|ctx| ctx.descriptions[(hovered - 1) as usize].clone())
-                .unwrap_or_else(|_| trait_name(hovered).to_owned());
-            lines.push(description);
-            if live_effect_note(hovered).is_none() {
-                lines.push(UNAVAILABLE_LABEL.to_string());
-            }
+                .map(|ctx| ctx.descriptions[(id - 1) as usize].clone())
+                .unwrap_or_else(|_| trait_name(id).to_owned())
+        });
+        if let Some(text) = description.as_ref().or(state.message.as_ref()) {
+            components.extend(PanelText::paragraph(world, text, DESC_RECT));
         }
-        // Word-wrap into the description box (the engine text path draws a
-        // single unwrapped line; sentence-length TRAITS.STR text would run
-        // off the 188px panel).
-        let mut y = DESC_Y;
-        'lines: for line in &lines {
-            for wrapped in wrap_text(line, DESC_CHARS_PER_LINE) {
-                if y > DESC_Y_MAX {
-                    break 'lines;
-                }
-                components.push(
-                    gui::text(&wrapped)
-                        .with_position(vec2(DESC_X, y))
-                        .with_size(vec2(160.0, 12.0)),
-                );
-                y += 12.0;
-            }
+        let status = if machine_used(world, entity_id) {
+            Some(used_label(world))
+        } else if hovered.is_some_and(|id| live_effect_note(id).is_none()) {
+            Some(UNAVAILABLE_LABEL.to_owned())
+        } else {
+            None
+        };
+        if let Some(text) = status {
+            components.extend(PanelText::paragraph(world, &text, STATUS_RECT));
         }
 
         components
@@ -459,18 +434,99 @@ mod tests {
     }
 
     #[test]
-    fn descriptions_word_wrap_to_the_panel_column() {
-        let lines = wrap_text(
-            "Tank: Increases maximum hit points by 5.",
-            DESC_CHARS_PER_LINE,
+    fn hover_help_stays_in_its_well_and_does_not_include_stale_feedback() {
+        let mut world = World::new();
+        world.add_unique(QuestInfo::new());
+        let description = "Cybernetically Enhanced: An extra implant may be installed.";
+        world.add_unique(TraitsContext {
+            descriptions: std::array::from_fn(|_| description.to_owned()),
+            header_label: FALLBACK_HEADER_LABEL.to_owned(),
+            used_label: FALLBACK_USED_LABEL.to_owned(),
+        });
+        let machine = world.add_entity((dark::properties::PropTemplateId { template_id: 133 },));
+        let components = TraitGui.get_components(
+            &Some(GuiCursor {
+                position: point2(MATRIX_X + 1.0, MATRIX_Y + 1.0),
+                held_entity_id: None,
+            }),
+            machine,
+            &world,
+            &TraitGuiState {
+                message: Some("Stale refusal".to_owned()),
+            },
         );
-        assert!(lines.len() >= 2, "sentence text wraps to multiple lines");
-        assert!(lines.iter().all(|l| l.len() <= DESC_CHARS_PER_LINE));
-        // The full text survives the wrap.
-        assert_eq!(lines.join(" "), "Tank: Increases maximum hit points by 5.");
-        // Degenerate inputs.
-        assert!(wrap_text("", 10).is_empty());
-        assert_eq!(wrap_text("word", 10), vec!["word".to_string()]);
+        let mut description_lines = Vec::new();
+        for component in &components {
+            if let GuiComponent::Text {
+                text,
+                position,
+                size,
+                font,
+                ..
+            } = component
+            {
+                assert_ne!(text, "Stale refusal");
+                if position.y >= DESC_Y && position.y < DESC_Y_MAX {
+                    assert_eq!(font, crate::ui::MFD_FONT);
+                    assert!(position.x + size.x <= 174.0);
+                    assert!(position.y + size.y <= DESC_Y_MAX);
+                    description_lines.push(text.as_str());
+                }
+            }
+        }
+        assert_eq!(description_lines.join(" "), description);
+    }
+
+    #[test]
+    fn installed_traits_leave_empty_grid_cells_without_hover_help() {
+        let mut world = World::new();
+        let mut quests = QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(TRAIT_TANK);
+        world.add_unique(quests);
+        let machine = world.add_entity((dark::properties::PropTemplateId { template_id: 133 },));
+        let components = TraitGui.get_components(
+            &Some(GuiCursor {
+                position: point2(
+                    MATRIX_X + MATRIX_PITCH_X * 3.0 + 1.0,
+                    MATRIX_Y + MATRIX_PITCH_Y + 1.0,
+                ),
+                held_entity_id: None,
+            }),
+            machine,
+            &world,
+            &TraitGuiState::default(),
+        );
+        assert_eq!(
+            components
+                .iter()
+                .filter(|c| matches!(c, GuiComponent::Button { .. }))
+                .count(),
+            15
+        );
+        assert!(!components.iter().any(|c| matches!(c,
+            GuiComponent::Text { position, .. } if position.y >= DESC_Y)));
+    }
+
+    #[test]
+    fn installed_icon_exposes_its_description() {
+        let mut world = World::new();
+        let mut quests = QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(TRAIT_TANK);
+        world.add_unique(quests);
+        let machine = world.add_entity((dark::properties::PropTemplateId { template_id: 133 },));
+        let components = TraitGui.get_components(
+            &Some(GuiCursor {
+                position: point2(OWNED_X + 1.0, OWNED_Y + 1.0),
+                held_entity_id: None,
+            }),
+            machine,
+            &world,
+            &TraitGuiState::default(),
+        );
+        assert!(components.iter().any(|component| matches!(
+            component, GuiComponent::Text { text, position, .. }
+                if text == "Tank" && position.y == DESC_Y
+        )));
     }
 
     #[test]

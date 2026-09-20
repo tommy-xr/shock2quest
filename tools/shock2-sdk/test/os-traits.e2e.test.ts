@@ -131,6 +131,12 @@ test(
     await game.step({ frames: 3 });
     const afterPick = await stats();
     assert.deepEqual(afterPick.os_traits, [8], "Tank (trait 8) is recorded");
+    assert.ok(
+      !(await game.ui.state()).active_panel!.elements.some(
+        (e) => e.kind === "button" && e.label === "Tank",
+      ),
+      "installed upgrades disappear from the purchase grid",
+    );
     const hpAfter = (await game.info()).player;
     assert.equal(
       hpAfter.max_hit_points,
@@ -155,10 +161,13 @@ test(
       "the used machine must refuse a second trait",
     );
     const refusalUi = await game.ui.state();
+    // Measured wrapping may split the message at any word boundary.
     assert.ok(
-      refusalUi.active_panel!.elements.some(
-        (e) => e.kind === "text" && e.text?.includes("already been upgraded"),
-      ),
+      refusalUi.active_panel!.elements
+        .filter((e) => e.kind === "text")
+        .map((e) => e.text)
+        .join(" ")
+        .includes("Your OS has already been upgraded at this unit."),
       "the panel shows the shipped machine-used message (MISC.STR TraitMachineUsed)",
     );
 
