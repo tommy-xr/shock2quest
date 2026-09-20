@@ -8,10 +8,21 @@ test("Pharmo-Friendly acquired at a machine improves psi hypos after transition"
   await using game = await GameServer.launch({ mission: "medsci2.mis" });
   await game.step({ frames: 5 });
   await acquireOsUpgrade(game, "Pharmo-Friendly");
-  await game.transitionLevel("debug_psi");
+  await game.transitionLevel("medsci1.mis");
+  await game.player.setStats({ psionic_ability: 6, psi_tier: 5 });
+  await game.player.spawnItem(-247);
+  await game.input.trigger("EquipPsiAmp");
   await game.step({ frames: 10 });
   assert.ok((await game.info()).player.stats!.os_traits.includes(2));
+  for (let i = 0; i < 10; i++) {
+    const p = (await game.info()).player;
+    if (p.psi_points === p.max_psi_points) break;
+    const refill = await game.player.spawnItem(-57);
+    await game.entities.sendMessage(refill.entity_id, { type: "Frob" });
+    await game.step({ frames: 2 });
+  }
   const before = (await game.info()).player.psi_points!;
+  assert.ok(before >= 25, "enough psi to measure the full 24-point bonus");
   for (let i = 0; i < 25; i++) {
     await game.input.set("right_hand.trigger", 1);
     await game.step({ frames: 3 });
