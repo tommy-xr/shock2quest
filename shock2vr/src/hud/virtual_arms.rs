@@ -93,7 +93,11 @@ pub fn create_wrist_hud_panels(
                 let canvas = ammo_panel::build_wrist_canvas(&readout);
                 objects.extend(canvas.render_world_space(
                     asset_cache,
-                    authored_amp_readout_transform(root, canvas.size()),
+                    authored_amp_readout_transform(
+                        Matrix4::from_translation(poses[i].position)
+                            * Matrix4::from(poses[i].rotation),
+                        canvas.size(),
+                    ),
                     None,
                     None,
                     0.001,
@@ -122,13 +126,14 @@ pub fn create_wrist_hud_panels(
 }
 
 /// The amp's original hand mesh has no glove cuff. Lift the unchanged shared
-/// readout above its back, on the same wrist basis as other hand holograms.
+/// readout above its back in the final controller pose, without a glove basis.
 fn authored_amp_readout_transform(root: Matrix4<f32>, size: cgmath::Vector2<f32>) -> Matrix4<f32> {
-    wrist_hologram_transform(
-        root * Matrix4::from_translation(vec3(0.0, 0.0, 0.06)),
-        size,
-        0.0,
-    )
+    // The authored fist has no calibrated glove wrist. Use its final hand
+    // pose directly: +Y clears the amp, and +Z faces back toward the player.
+    let width = 0.24;
+    root * Matrix4::from_translation(vec3(0.0, 0.55, 0.25))
+        * Matrix4::from_angle_x(Deg(-20.0))
+        * Matrix4::from_nonuniform_scale(width, width * size.y / size.x, 1.0)
 }
 
 /// Shared lower-edge hinge for the hazard and alarm canvases. A canvas pixel
