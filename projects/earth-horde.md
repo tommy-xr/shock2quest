@@ -201,6 +201,15 @@ attribute every damage event to a player. Healing, overkill and hits on dead
 bodies do not inflate the totals. The same report canvas and buttons render in
 flatscreen and VR; live gameplay messages are hidden while the menu is open.
 
+The report reuses retail `DEBRIEF.PCX`, the service-tour debrief panel from
+`shkdebrf.cpp`. Its original narrative area holds the statistics, its left
+instrument shows the completed wave, and `DEBRIEFR.BIN` supplies the Continue
+button rectangle. The entire layout is inset once in shared canvas coordinates,
+leaving arena visible around it in both presentations. In VR it uses the existing
+world-locked floating panel anchor without the pause menu's world dim; turning
+your head does not glue the report to your gaze. Flat mode retains mouse input.
+The simulation stays paused until a deliberate choice.
+
 **Continue — endless waves** keeps the character, equipment and arena, starts
 wave 11, and resumes the existing ever-increasing schedule (six extra enemies
 and eight extra assault seconds per subsequent wave). **Return to main menu**

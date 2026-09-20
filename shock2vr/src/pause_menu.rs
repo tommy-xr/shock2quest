@@ -254,9 +254,14 @@ fn target_at(
 ) -> Option<PauseMenuTarget> {
     match page {
         PauseMenuPage::Root => hit(point, rects).map(PauseMenuTarget::Root),
-        PauseMenuPage::HordeReport => {
-            crate::ui::horde_report::continue_at(point).map(PauseMenuTarget::HordeReport)
-        }
+        PauseMenuPage::HordeReport => crate::ui::horde_report::continue_at(
+            point,
+            rects
+                .first()
+                .copied()
+                .unwrap_or(crate::ui::horde_report::CONTINUE),
+        )
+        .map(PauseMenuTarget::HordeReport),
         PauseMenuPage::Developer => {
             if panel_rects.action_rect().contains(point) {
                 return Some(PauseMenuTarget::OpenCheats);
@@ -627,15 +632,17 @@ impl PauseMenu {
             || {
                 let panel = self.menu.panel();
                 let canvas = self.build_canvas(asset_cache, self.menu.pointer_canvas());
-                // First in the list, and therefore first in the overlay group: the
-                // comfort dim, which the depth clear below rides on.
-                let (dim_position, dim_forward) = dim_pose(self.head.0, self.head.1, &panel);
-                let mut objects = vec![world_dim_layer(
-                    dim_position,
-                    dim_forward,
-                    dim_distance(dim_position, &panel),
-                    crate::util::render_source::PAUSE_DIM,
-                )];
+                let mut objects = Vec::new();
+                // The survival debrief floats over the arena without a blackout.
+                if !self.is_horde_report() {
+                    let (dim_position, dim_forward) = dim_pose(self.head.0, self.head.1, &panel);
+                    objects.push(world_dim_layer(
+                        dim_position,
+                        dim_forward,
+                        dim_distance(dim_position, &panel),
+                        crate::util::render_source::PAUSE_DIM,
+                    ));
+                }
                 let canvas_objects =
                     self.menu
                         .render_world_space(asset_cache, canvas, options.presentation_mode);
@@ -655,7 +662,7 @@ impl PauseMenu {
                     object.set_transform(pawn_to_world * object.get_transform());
                 }
                 // Game assigns this whole ordered stack to the system-overlay layer:
-                // dim first, then panel and rays, all over the world and scene UI.
+                // optional dim first, then panel and rays over the world and scene UI.
                 objects
             },
         )
@@ -687,7 +694,19 @@ impl PauseMenu {
     }
 
     fn rects(&self, asset_cache: &mut AssetCache) -> Vec<Rect> {
-        self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS)
+        if self.is_horde_report() {
+            self.menu
+                .rects(
+                    asset_cache,
+                    crate::ui::horde_report::LAYOUT_FILE,
+                    &[crate::ui::horde_report::RETAIL_CONTINUE],
+                )
+                .into_iter()
+                .map(crate::ui::horde_report::inset)
+                .collect()
+        } else {
+            self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS)
+        }
     }
 
     /// The menu, described once. Screen-space and world-space presentation
@@ -700,7 +719,12 @@ impl PauseMenu {
     ) -> UiCanvas {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
         if let Some((wave, stats)) = &self.horde_report {
-            crate::ui::horde_report::draw(&mut canvas, *wave, stats, pointer_canvas);
+            let continue_rect = self
+                .rects(asset_cache)
+                .first()
+                .copied()
+                .unwrap_or(crate::ui::horde_report::CONTINUE);
+            crate::ui::horde_report::draw(&mut canvas, *wave, stats, pointer_canvas, continue_rect);
             return canvas;
         }
 
@@ -849,17 +873,15 @@ mod tests {
     fn survival_report_ignores_held_click_and_continue_requires_a_fresh_edge() {
         let mut menu = PauseMenu::new();
         menu.show_horde_report(10, crate::horde_stats::HordeBattleStats::default());
-        let point = Some(cgmath::vec2(320.0, 342.0));
-        assert!(menu.consume_pointer(point, true, &FALLBACK_RECTS).is_none());
-        assert!(
-            menu.consume_pointer(point, false, &FALLBACK_RECTS)
-                .is_none()
-        );
+        let point = Some(crate::ui::horde_report::CONTINUE.center());
+        let rects = [crate::ui::horde_report::CONTINUE];
+        assert!(menu.consume_pointer(point, true, &rects).is_none());
+        assert!(menu.consume_pointer(point, false, &rects).is_none());
         assert_eq!(
-            menu.consume_pointer(point, true, &FALLBACK_RECTS),
+            menu.consume_pointer(point, true, &rects),
             Some(PauseAction::ContinueHorde)
         );
-        assert!(menu.consume_pointer(point, true, &FALLBACK_RECTS).is_none());
+        assert!(menu.consume_pointer(point, true, &rects).is_none());
         menu.close_after_click();
         assert!(!menu.is_horde_report());
     }
