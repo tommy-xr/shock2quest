@@ -450,12 +450,20 @@ impl PauseMenu {
         let panel_rects = self.panel_rects;
         let navigation = *self.navigation.lock().unwrap();
         let cheats_scroll = self.cheats_scroll;
+        let developer_enabled = crate::developer_mode::enabled();
+        let resolve = |point| {
+            target_at(page, panel_rects, navigation, cheats_scroll, &rects, point).filter(
+                |target| {
+                    developer_enabled || *target != PauseMenuTarget::Root(PauseMenuEntry::Developer)
+                },
+            )
+        };
         let target = self.menu.update(
             elapsed,
             input_context,
             options.presentation_mode,
-            |point| target_at(page, panel_rects, navigation, cheats_scroll, &rects, point),
-            |point| target_at(page, panel_rects, navigation, cheats_scroll, &rects, point),
+            resolve,
+            resolve,
         );
         self.handle_target(target)
     }
@@ -736,10 +744,20 @@ impl PauseMenu {
         let labels = self.menu.labels(asset_cache, LABELS_FILE, MENU_ITEMS);
         // The highlight resolves through the very same `hit` the click does, so
         // an entry can never light up under a ray that would not activate it.
-        let hovered = pointer_canvas.and_then(|p| hit(p, &rects));
+        let developer_enabled = crate::developer_mode::enabled();
+        let hovered = pointer_canvas
+            .and_then(|p| hit(p, &rects))
+            .filter(|entry| developer_enabled || *entry != PauseMenuEntry::Developer);
 
         for ((item, rect), label) in MENU_ITEMS.iter().zip(&rects).zip(&labels) {
-            let opacity = if item.action.is_none() {
+            let locked_developer =
+                item.action == Some(PauseMenuEntry::Developer) && !developer_enabled;
+            let label = if locked_developer {
+                "Options"
+            } else {
+                label.as_str()
+            };
+            let opacity = if item.action.is_none() || locked_developer {
                 DISABLED_OPACITY
             } else if item.action == hovered {
                 HOVER_OPACITY

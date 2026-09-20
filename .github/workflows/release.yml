@@ -47,6 +47,8 @@ jobs:
       - name: Build signed APK
         working-directory: runtimes/oculus_runtime
         env:
+          SHOCK2QUEST_RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          SHOCK2QUEST_GIT_SHA: ${{ github.sha }}
           KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
           CARGO_APK_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
         run: |

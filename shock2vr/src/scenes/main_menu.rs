@@ -1,4 +1,4 @@
-//! Flatscreen main menu.
+//! Shared flatscreen/VR main menu with build information and developer unlock.
 //!
 //! A minimal `GameScene` that draws the original `MAIN.PCX` backdrop with the
 //! six mouse-clickable menu entries, described on the shared [`UiCanvas`]. It
@@ -7,7 +7,8 @@
 //! starts a fresh campaign; Quit emits `Quit`. Unimplemented entries are drawn
 //! dimmed and ignore clicks.
 //!
-//! Main-menu labels come from `MAIN.STR` and button rects from `MAINR.BIN`.
+//! Developer mode uses `NETMAIN.PCX` and its extra bottom-left button.
+//! Each backdrop uses its matching authored layout; labels use `NETMAIN.STR`.
 //! The difficulty page uses `NEWGAME.PCX`, `NEWGAME.STR` and `NEWGAMER.BIN`. That
 //! matters beyond fidelity - the community mod layers (SCP) ship a redrawn
 //! backdrop *with a retuned `*R.BIN`*, so a hardcoded rect is wrong on a
@@ -63,9 +64,11 @@ const CANVAS_H: f32 = 480.0;
 const MENU_FONT: &str = "metafont.fon";
 /// Original widget layout for `MAIN.PCX` - LTRB rects for the six buttons
 /// (top to bottom) plus the corner logo (`UI_LAYOUT_IMPORTER`).
-const LAYOUT_FILE: &str = "MAINR.BIN";
+const LAYOUT_FILE: &str = "NETMAINR.BIN";
 /// Original label strings for this screen, keyed by [`MenuItem::string_key`].
-const LABELS_FILE: &str = "MAIN.STR";
+const LABELS_FILE: &str = "NETMAIN.STR";
+const BUILD_INFO_RECT: Rect = Rect::new(14.0, 384.0, 200.0, 24.0);
+const BUILD_LABEL: &str = env!("SHOCK2QUEST_BUILD_LABEL");
 /// The 4:3 menu art is letterboxed (not stretched) on non-4:3 windows.
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
@@ -92,7 +95,7 @@ const NEW_GAME_RECTS: [Rect; 8] = [
     Rect::new(305.0, 400.0, 143.0, 64.0),
 ];
 
-// Fallback button geometry, used only when `MAINR.BIN` is missing: the decoded
+// Fallback button geometry, used only when `NETMAINR.BIN` is missing: the decoded
 // vanilla values - a column of six 179x60 buttons at x=400 on a 76px pitch.
 const FALLBACK_BUTTON_X: f32 = 400.0;
 const FALLBACK_BUTTON_TOP: f32 = 20.0;
@@ -109,6 +112,7 @@ enum MenuAction {
     Back,
     LoadGame,
     Developer,
+    BuildInfo,
     Quit,
 }
 
@@ -173,9 +177,9 @@ const NEW_GAME_ITEMS: &[FrontendMenuItem<MenuAction>] = &[
 
 // MAIN.PCX (native 640x480) has a vertical stack of six buttons down the right
 // side. This list is in screen order, top to bottom, so an item's index is also
-// its rect index in `MAINR.BIN`. Labels are centered in the button rect.
+// its rect index in `NETMAINR.BIN`. Labels are centered in the button rect.
 //
-// (`MAIN.STR` itself lists the keys in reverse screen order; the same reversal
+// (`NETMAIN.STR` itself lists the keys in reverse screen order; the same reversal
 // holds for `SIM.STR` against the known pause-menu order.)
 const MENU_ITEMS: &[FrontendMenuItem<MenuAction>] = &[
     FrontendMenuItem {
@@ -190,13 +194,11 @@ const MENU_ITEMS: &[FrontendMenuItem<MenuAction>] = &[
         action: Some(MenuAction::LoadGame),
         label_override: None,
     },
-    // The Options slot hosts the Developer screen while no real options
-    // screen exists (see `MenuItem::label_override`).
     FrontendMenuItem {
         string_key: "options",
         fallback_label: "Options",
-        action: Some(MenuAction::Developer),
-        label_override: Some("Developer"),
+        action: None,
+        label_override: None,
     },
     FrontendMenuItem {
         string_key: "credits",
@@ -216,9 +218,16 @@ const MENU_ITEMS: &[FrontendMenuItem<MenuAction>] = &[
         action: Some(MenuAction::Quit),
         label_override: None,
     },
+    // NETMAIN's extra bottom-left slot is authored as Multiplayer.
+    FrontendMenuItem {
+        string_key: "multiplayer",
+        fallback_label: "Developer",
+        action: Some(MenuAction::Developer),
+        label_override: Some("Developer"),
+    },
 ];
 
-const FALLBACK_RECTS: [Rect; 6] = [
+const FALLBACK_RECTS: [Rect; 7] = [
     Rect::new(
         FALLBACK_BUTTON_X,
         FALLBACK_BUTTON_TOP,
@@ -255,16 +264,17 @@ const FALLBACK_RECTS: [Rect; 6] = [
         FALLBACK_BUTTON_W,
         FALLBACK_BUTTON_H,
     ),
+    Rect::new(38.0, 416.0, 104.0, 60.0),
 ];
 
-/// Resolve each menu item's canvas rect from the `MAINR.BIN` layout (falling
+/// Resolve each menu item's canvas rect from the `NETMAINR.BIN` layout (falling
 /// back to the vanilla geometry if it's absent). Parallel to [`MENU_ITEMS`].
 #[cfg(test)]
 fn menu_rects(layout: Option<&[MapRect]>) -> Vec<Rect> {
     resolve_menu_rects(layout, &FALLBACK_RECTS)
 }
 
-/// Resolve each menu item's label from `MAIN.STR`, falling back to the shipped
+/// Resolve each menu item's label from `NETMAIN.STR`, falling back to the shipped
 /// English text when the string table is absent. Parallel to [`MENU_ITEMS`].
 #[cfg(test)]
 fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
@@ -287,7 +297,9 @@ fn resolve_click_at(
     last_pressed: bool,
     rects: &[Rect],
 ) -> (Option<MenuAction>, bool) {
-    shell_resolve_click_at(point, pressed, last_pressed, |point| hit(point, rects))
+    shell_resolve_click_at(point, pressed, last_pressed, |point| {
+        hit(point, rects, false)
+    })
 }
 
 /// The menu entry at a canvas point, if any. Shared by the click and the
@@ -296,8 +308,13 @@ fn difficulty_hit(point: Vector2<f32>, rects: &[Rect]) -> Option<MenuAction> {
     hit_menu_item(point, NEW_GAME_ITEMS, rects, |_| true)
 }
 
-fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<MenuAction> {
-    hit_menu_item(point, MENU_ITEMS, rects, |_| true)
+fn hit(point: Vector2<f32>, rects: &[Rect], developer_enabled: bool) -> Option<MenuAction> {
+    if BUILD_INFO_RECT.contains(point) {
+        return Some(MenuAction::BuildInfo);
+    }
+    hit_menu_item(point, MENU_ITEMS, rects, |action| {
+        action != MenuAction::Developer || developer_enabled
+    })
 }
 
 /// Pure click resolution: on a rising press edge over an implemented item
@@ -316,7 +333,7 @@ fn resolve_click(
         screen_size,
         vec2(CANVAS_W, CANVAS_H),
         SCALE_MODE,
-        |point| hit(point, rects),
+        |point| hit(point, rects, false),
     )
 }
 
@@ -325,6 +342,9 @@ pub struct MainMenuScene {
     scene_name: String,
     menu: FrontendMenu<MenuAction>,
     choosing_difficulty: bool,
+    developer_enabled: bool,
+    version_clicks: u8,
+    persistence_error: bool,
     difficulty: dark::gamesys::Difficulty,
 }
 
@@ -336,6 +356,9 @@ impl MainMenuScene {
             world,
             scene_name: "main_menu".to_owned(),
             choosing_difficulty: false,
+            developer_enabled: crate::developer_mode::enabled(),
+            version_clicks: 0,
+            persistence_error: false,
             difficulty: dark::gamesys::Difficulty::Normal,
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
         }
@@ -343,6 +366,28 @@ impl MainMenuScene {
 }
 
 impl MainMenuScene {
+    fn main_rects(&self, asset_cache: &mut AssetCache) -> Vec<Rect> {
+        self.menu.rects(
+            asset_cache,
+            if self.developer_enabled {
+                LAYOUT_FILE
+            } else {
+                "MAINR.BIN"
+            },
+            &FALLBACK_RECTS,
+        )
+    }
+
+    fn register_version_click(&mut self) -> bool {
+        self.version_clicks += 1;
+        if self.version_clicks == 3 {
+            self.version_clicks = 0;
+            true
+        } else {
+            false
+        }
+    }
+
     /// The menu, described once. Screen-space and world-space presentation
     /// differ only in how this canvas is rendered, so the two can never drift
     /// apart in layout, labels, or which entries look actionable.
@@ -398,10 +443,20 @@ impl MainMenuScene {
             );
             return canvas;
         }
-        canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), "MAIN.PCX");
-        let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
+        canvas.image(
+            Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H),
+            if self.developer_enabled {
+                "NETMAIN.PCX"
+            } else {
+                "MAIN.PCX"
+            },
+        );
+        let rects = self.main_rects(asset_cache);
         let labels = self.menu.labels(asset_cache, LABELS_FILE, MENU_ITEMS);
         for ((item, rect), label) in MENU_ITEMS.iter().zip(&rects).zip(&labels) {
+            if item.action == Some(MenuAction::Developer) && !self.developer_enabled {
+                continue;
+            }
             let opacity = if item.action.is_none() {
                 DISABLED_OPACITY
             } else if pointer_canvas.is_some_and(|pp| rect.contains(pp)) {
@@ -410,8 +465,34 @@ impl MainMenuScene {
                 IDLE_OPACITY
             };
             canvas
-                .text_native(*rect, label, MENU_FONT, HAlign::Center, VAlign::Middle)
+                .text_native_fit(*rect, label, MENU_FONT, HAlign::Center, VAlign::Middle)
                 .opacity(opacity);
+        }
+        canvas
+            .text(
+                BUILD_INFO_RECT,
+                BUILD_LABEL,
+                "mainfont.fon",
+                14.0,
+                HAlign::Left,
+                VAlign::Middle,
+            )
+            .opacity(
+                if pointer_canvas.is_some_and(|point| BUILD_INFO_RECT.contains(point)) {
+                    HOVER_OPACITY
+                } else {
+                    IDLE_OPACITY
+                },
+            );
+        if self.persistence_error {
+            canvas.text(
+                Rect::new(14.0, 360.0, 290.0, 22.0),
+                "Could not save developer mode",
+                "mainfont.fon",
+                12.0,
+                HAlign::Left,
+                VAlign::Middle,
+            );
         }
         canvas
     }
@@ -440,7 +521,7 @@ impl GameScene for MainMenuScene {
             self.menu
                 .rects(asset_cache, NEW_GAME_LAYOUT_FILE, &NEW_GAME_RECTS)
         } else {
-            self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS)
+            self.main_rects(asset_cache)
         };
         let action = self.menu.update(
             time.elapsed,
@@ -450,19 +531,37 @@ impl GameScene for MainMenuScene {
                 if self.choosing_difficulty {
                     difficulty_hit(point, &rects)
                 } else {
-                    hit(point, &rects)
+                    hit(point, &rects, self.developer_enabled)
                 }
             },
             |point| {
                 if self.choosing_difficulty {
                     difficulty_hit(point, &rects)
                 } else {
-                    hit(point, &rects)
+                    hit(point, &rects, self.developer_enabled)
                 }
             },
         );
 
+        if action.is_some() && action != Some(MenuAction::BuildInfo) {
+            self.version_clicks = 0;
+        }
         match action {
+            Some(MenuAction::BuildInfo) => {
+                if !self.developer_enabled && self.register_version_click() {
+                    match crate::developer_mode::set_enabled(true) {
+                        Ok(()) => {
+                            self.developer_enabled = true;
+                            self.persistence_error = false;
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "Could not persist developer mode");
+                            self.persistence_error = true;
+                        }
+                    }
+                }
+                Vec::new()
+            }
             Some(MenuAction::NewGame) => {
                 self.choosing_difficulty = true;
                 self.difficulty = dark::gamesys::Difficulty::Normal;
@@ -820,13 +919,12 @@ mod tests {
     }
 
     #[test]
-    fn rising_edge_over_the_developer_slot_activates_it() {
-        // Rect 2 was the inert "Options" slot; it now hosts the Developer
-        // screen (canvas y 172..232).
+    fn options_slot_is_inert_until_options_are_implemented() {
+        // Developer moved to NETMAIN's dedicated bottom-left slot.
         let rects = menu_rects(None);
         assert!(rects[2].contains(vec2(512.0, 202.0)));
         let (action, _, _) = resolve_click(pointer_at(0.8, 0.4208, true), false, SCREEN, &rects);
-        assert_eq!(action, Some(MenuAction::Developer));
+        assert_eq!(action, None);
     }
 
     #[test]
@@ -855,7 +953,7 @@ mod tests {
         assert_eq!(rects.len(), MENU_ITEMS.len());
         assert_eq!(rects[0], Rect::new(10.0, 0.0, 100.0, 50.0));
         assert_eq!(rects[5], Rect::new(10.0, 350.0, 100.0, 50.0));
-        // Without a layout: the decoded vanilla MAINR.BIN geometry.
+        // Without a layout: the decoded vanilla NETMAINR.BIN geometry.
         let rects = menu_rects(None);
         assert_eq!(rects[0], Rect::new(400.0, 20.0, 179.0, 60.0));
         assert_eq!(rects[5], Rect::new(400.0, 400.0, 179.0, 60.0));
@@ -880,17 +978,18 @@ mod tests {
         // Missing key and empty value both fall back to the shipped English.
         assert_eq!(labels[1], "Load Game");
         assert_eq!(labels[4], "Survive");
-        // The repurposed Options slot reads what it does, whatever the string
-        // table says (the override wins even over a shipped "Options").
-        assert_eq!(labels[2], "Developer");
+        // Options remains inert; the extra Multiplayer slot reads Developer.
+        assert_eq!(labels[2], "Options");
+        assert_eq!(labels[6], "Developer");
     }
 
-    /// The body of the shipped `res/intrface/MAIN.STR`, verbatim (the file is
+    /// The body of the shipped `res/intrface/NETMAIN.STR`, verbatim (the file is
     /// CRLF-terminated, which the importer's line splitting strips). Kept here
     /// so a rename of a key - ours or the data's - fails a test rather than
     /// silently falling back to the English constants at runtime, which is
     /// invisible on an English install because the two agree.
     const SHIPPED_MAIN_STR: &str = concat!(
+        "multiplayer:\"Multiplayer\"\n",
         "quit:\"Quit\"\n",
         "intro:\"Intro\"\n",
         "credits:\"Credits\"\n",
@@ -908,25 +1007,24 @@ mod tests {
         for item in MENU_ITEMS {
             assert!(
                 strings.contains_key(item.string_key),
-                "MAIN.STR has no key '{}'",
+                "NETMAIN.STR has no key '{}'",
                 item.string_key
             );
         }
-        // ...and the table must account for all six entries, so a seventh
-        // shipped key would be a prompt to wire up another item.
+        // NETMAIN includes the six main entries and the extra Multiplayer slot.
         assert_eq!(strings.len(), MENU_ITEMS.len());
 
-        // Resolved through the real parser, top to bottom - the Options slot
-        // is overridden to read what it now does.
+        // Resolved through the real parser; only Multiplayer is overridden.
         assert_eq!(
             menu_labels(Some(&strings)),
             vec![
                 "New Game",
                 "Load Game",
-                "Developer",
+                "Options",
                 "Credits",
                 "Survive",
-                "Quit"
+                "Quit",
+                "Developer"
             ]
         );
     }
@@ -939,12 +1037,60 @@ mod tests {
             vec![
                 "New Game",
                 "Load Game",
-                "Developer",
+                "Options",
                 "Credits",
                 "Survive",
-                "Quit"
+                "Quit",
+                "Developer"
             ]
         );
+    }
+
+    #[test]
+    fn build_label_unlock_requires_three_distinct_press_edges() {
+        let mut scene = MainMenuScene::new();
+        let rects = menu_rects(None);
+        let mut pressed = true; // A press held into the menu is ignored.
+        let mut unlocked = false;
+        for (down, expected_clicks) in [
+            (true, 0),
+            (false, 0),
+            (true, 1),
+            (true, 1),
+            (false, 1),
+            (true, 2),
+            (true, 2),
+            (false, 2),
+        ] {
+            let (action, next) =
+                shell_resolve_click_at(Some(BUILD_INFO_RECT.center()), down, pressed, |point| {
+                    hit(point, &rects, false)
+                });
+            pressed = next;
+            if action == Some(MenuAction::BuildInfo) {
+                unlocked = scene.register_version_click();
+            }
+            assert!(!unlocked);
+            assert_eq!(scene.version_clicks, expected_clicks);
+        }
+        let (action, _) =
+            shell_resolve_click_at(Some(BUILD_INFO_RECT.center()), true, pressed, |point| {
+                hit(point, &rects, false)
+            });
+        assert_eq!(action, Some(MenuAction::BuildInfo));
+        assert!(scene.register_version_click());
+        assert_eq!(scene.version_clicks, 0);
+    }
+
+    #[test]
+    fn developer_button_uses_the_extra_authored_slot_only_when_unlocked() {
+        let mut rects = menu_rects(None);
+        rects[6] = Rect::new(30.0, 420.0, 130.0, 40.0);
+        let point = rects[6].center();
+        assert_eq!(hit(point, &rects, false), None);
+        assert_eq!(hit(point, &rects, true), Some(MenuAction::Developer));
+        assert_eq!(hit(rects[2].center(), &rects, true), None);
+        assert!(!rects[6].contains(BUILD_INFO_RECT.center()));
     }
 
     #[test]
