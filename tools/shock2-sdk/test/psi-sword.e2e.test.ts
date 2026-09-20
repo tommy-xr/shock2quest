@@ -76,36 +76,46 @@ test("additive blade survives a mission transition and save/load without losing 
 });
 
 
-test("VR sword damages on physical swing across zero-time input updates", {
-  skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000,
-}, async () => {
-  await using game = await GameServer.launch({ mission: "debug_psi", debugFlags: ["--vr"] });
-  await game.step({ frames: 30 });
-  const [amp] = await game.entities.byTemplate(-247);
-  assert.ok(amp);
-  await aimVrHandAt(game, amp.position, 0.35);
-  await game.input.set("right_hand.squeeze", 1);
-  await game.step({ frames: 8 });
-  assert.equal((await game.info()).player.right_hand_entity_id, amp.id);
-  await game.input.set("head.look", [0,0]);
-  await aimVrHandAt(game, [-3,1.6,-1], 1, 1, 0, { lookAtTarget: false });
-  await game.step({ frames: 13 });
-  await selectPsiPower(game, "Psi Sword");
-  await pullTrigger(game);
-  await game.step({ frames: 6 });
-  const target = (await game.entities.list({ filter: "OG-Pipe" })).entities.sort((a,b) => a.distance-b.distance)[0];
-  assert.ok(target);
-  await game.player.teleport({ x:-7.8, y:1.2, z:-1.4 });
-  await game.step({ frames: 6 });
-  await game.input.lookAtWorldPoint(target.position, { eyeHeight: (await game.info()).player.camera_offset[1] });
-  const hp = async () => Number((await game.entities.detail(target.id)).properties.find(p => p.name === "HitPoints")!.value);
-  const before = await hp();
-  assert.ok(before > 0);
-  // Each helper call sends zero-time input patches, then advances three frames.
-  // Those patches must not consume the tracked movement before the swing tick.
-  for (let i=0; i<24 && await hp()>0; i++) {
-    await aimVrHandAt(game, [-9,1.6,-1.2+i*0.1], 0.2, 1, 0, { lookAtTarget: false });
-  }
-  assert.equal(await hp(), 0, "a physical sweep hits without pressing the trigger");
-  assert.equal((await game.info()).player.right_hand_entity_id, amp.id);
-});
+for (const invisible of [false, true]) {
+  test(`VR sword physical swing ${invisible ? "ends invisibility" : "survives zero-time input updates"}`, {
+    skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000,
+  }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_psi", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    const [amp] = await game.entities.byTemplate(-247);
+    assert.ok(amp);
+    await aimVrHandAt(game, amp.position, 0.35);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 8 });
+    assert.equal((await game.info()).player.right_hand_entity_id, amp.id);
+    await game.input.set("head.look", [0,0]);
+    await aimVrHandAt(game, [-3,1.6,-1], 1, 1, 0, { lookAtTarget: false });
+    await game.step({ frames: 13 });
+    if (invisible) {
+      await selectPsiPower(game, "Inviso");
+      await pullTrigger(game);
+      assert.ok((await game.info()).player.active_psi_powers.includes("Inviso"));
+    }
+    await selectPsiPower(game, "Psi Sword");
+    await pullTrigger(game);
+    await game.step({ frames: 6 });
+    const target = (await game.entities.list({ filter: "OG-Pipe" })).entities.sort((a,b) => a.distance-b.distance)[0];
+    assert.ok(target);
+    await game.player.teleport({ x:-7.8, y:1.2, z:-1.4 });
+    await game.step({ frames: 6 });
+    await game.input.lookAtWorldPoint(target.position, { eyeHeight: (await game.info()).player.camera_offset[1] });
+    const hp = async () => Number((await game.entities.detail(target.id)).properties.find(p => p.name === "HitPoints")!.value);
+    const before = await hp();
+    assert.ok(before > 0);
+    if (invisible) assert.ok((await game.info()).player.active_psi_powers.includes("Inviso"), "preparing the swing keeps stealth");
+    // Each helper call sends zero-time input patches, then advances three frames.
+    // Those patches must not consume the tracked movement before the swing tick.
+    for (let i=0; i<24 && await hp()>0; i++) {
+      await aimVrHandAt(game, [-9,1.6,-1.2+i*0.1], 0.2, 1, 0, { lookAtTarget: false });
+    }
+    assert.equal(await hp(), 0, "a physical sweep hits without pressing the trigger");
+    if (invisible) assert.ok(!(await game.info()).player.active_psi_powers.includes("Inviso"), "a qualifying VR strike breaks stealth");
+    assert.equal((await game.info()).player.right_hand_entity_id, amp.id);
+  });
+
+}

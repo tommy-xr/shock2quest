@@ -2574,6 +2574,30 @@ mod tests {
     }
 
     #[test]
+    fn invisible_players_can_still_be_heard() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        world.add_unique(crate::psi::ActivePsiPowers(vec![
+            crate::psi::ActivePsiPower {
+                template_id: crate::psi::INVISO_TEMPLATE_ID,
+                name: "Inviso".into(),
+                remaining_secs: 20.0,
+            },
+        ]));
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        let origin = vec3(1.0, 0.0, 5.0);
+        monster.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::HeardNoise { origin },
+        );
+        assert_eq!(monster.last_known_player_pos, Some(origin));
+        assert_ne!(monster.alertness.current_level, AIAlertLevel::Lowest);
+    }
+
+    #[test]
     fn repeated_heard_cues_renew_memory_without_a_level_change() {
         let (world, entity) = world_with_monster_and_player(Deg(180.0));
         let physics = PhysicsWorld::new();

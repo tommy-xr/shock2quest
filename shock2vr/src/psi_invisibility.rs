@@ -26,3 +26,66 @@ pub(crate) fn apply(object: &mut SceneObject, transparency: Option<f32>) {
         object.set_depth_write(false);
     }
 }
+
+/// Only an attack by a weapon in the player's hands reveals the player.
+/// NPC fire, dropped props, empty triggers and grip adjustments are excluded.
+pub(crate) fn attack_effect(world: &World, weapon: shipyard::EntityId) -> crate::scripts::Effect {
+    let held = world
+        .borrow::<UniqueView<crate::mission::PlayerInfo>>()
+        .is_ok_and(|p| {
+            p.left_hand_entity_id == Some(weapon) || p.right_hand_entity_id == Some(weapon)
+        });
+    if held && transparency(world).is_some() {
+        crate::scripts::Effect::DeactivatePsiPower {
+            template_id: crate::psi::INVISO_TEMPLATE_ID,
+        }
+    } else {
+        crate::scripts::Effect::NoEffect
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn only_the_players_held_weapon_reveals_invisibility() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        let held = world.add_entity(());
+        let other = world.add_entity(());
+        world.add_unique(crate::mission::PlayerInfo {
+            pos: cgmath::Vector3::new(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            inventory_entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: Some(held),
+        });
+        world.add_unique(crate::psi::ActivePsiPowers(vec![
+            crate::psi::ActivePsiPower {
+                template_id: crate::psi::INVISO_TEMPLATE_ID,
+                name: "Inviso".into(),
+                remaining_secs: 20.0,
+            },
+        ]));
+        assert!(matches!(
+            attack_effect(&world, other),
+            crate::scripts::Effect::NoEffect
+        ));
+        assert!(matches!(
+            attack_effect(&world, held),
+            crate::scripts::Effect::DeactivatePsiPower {
+                template_id: crate::psi::INVISO_TEMPLATE_ID
+            }
+        ));
+        world
+            .borrow::<shipyard::UniqueViewMut<crate::psi::ActivePsiPowers>>()
+            .unwrap()
+            .0
+            .clear();
+        assert!(matches!(
+            attack_effect(&world, held),
+            crate::scripts::Effect::NoEffect
+        ));
+    }
+}

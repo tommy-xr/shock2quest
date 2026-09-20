@@ -180,5 +180,13 @@ mod shield_tests {
             baseline_psi: 0,
         };
         assert_eq!(shield.duration_for_psi(6), 40.0);
+        let invisibility = PropPsiShield {
+            duration_base: 5,
+            duration_per_psi: 5,
+            baseline_psi: 0,
+        };
+        for (psi, seconds) in [(1, 10.0), (6, 35.0), (8, 45.0)] {
+            assert_eq!(invisibility.duration_for_psi(psi), seconds);
+        }
     }
 }

@@ -142,6 +142,9 @@ impl Script for HeldMeleeWeapon {
 
                 let mut effects = Vec::new();
                 if let Some(amount) = damage {
+                    // In VR a qualifying strike is the attack gesture; merely
+                    // repositioning a tracked hand must not break stealth.
+                    effects.push(crate::psi_invisibility::attack_effect(world, entity_id));
                     // Addressed to the hitbox, not the creature: forwarding it
                     // is what stamps the struck joint onto the blow.
                     effects.push(contact_damage_effect(*with, amount, *contact));

@@ -9490,6 +9490,13 @@ impl MissionCore {
                             .retain(|p| p.template_id != crate::psi_sword::POWER);
                     }
                 }
+                Effect::DeactivatePsiPower { template_id } => {
+                    self.world
+                        .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
+                        .unwrap()
+                        .0
+                        .retain(|p| p.template_id != template_id);
+                }
                 Effect::ActivatePsiPower {
                     template_id,
                     name,
@@ -9564,6 +9571,10 @@ impl MissionCore {
                 }
 
                 Effect::FlatMeleeSwing { entity_id } => {
+                    effects.push_front(crate::psi_invisibility::attack_effect(
+                        &self.world,
+                        entity_id,
+                    ));
                     self.queue_flat_melee_swing(asset_cache, entity_id);
                 }
 

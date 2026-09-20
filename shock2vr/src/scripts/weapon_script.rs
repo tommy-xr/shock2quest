@@ -650,6 +650,7 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
         }
     }
     if is_gunshot {
+        effects.push(crate::psi_invisibility::attack_effect(world, entity_id));
         if let Some((impulse, one_hand)) = crate::weapon_recoil::shot_impulse(world, entity_id) {
             effects.push(Effect::KickHeldGun {
                 entity_id,
