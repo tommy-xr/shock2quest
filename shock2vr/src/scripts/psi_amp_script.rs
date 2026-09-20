@@ -16,7 +16,7 @@
 //! heals) and aimed (Soma Transference) - cast so far; the remaining kinds are
 //! logged and skipped without spending points.
 
-use cgmath::{EuclideanSpace, InnerSpace, Point3, Transform, Vector3, point3, vec3};
+use cgmath::{EuclideanSpace, InnerSpace, Point3, Transform, Vector3};
 use engine::{audio::AudioHandle, game_log};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
@@ -841,6 +841,7 @@ mod tests {
     use super::*;
     use crate::psi::{GlobalPsiPowers, PsiPowerSelection};
     use crate::quest_info::QuestInfo;
+    use cgmath::{point3, vec3};
 
     #[test]
     fn power_psi_prevents_burnout_damage_but_keeps_cost_and_failed_cast() {
