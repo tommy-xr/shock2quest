@@ -41,7 +41,6 @@ async function spawnTarget(game: GameServer) {
 }
 
 for (const difficulty of ["easy", "normal", "hard", "impossible"] as const) {
-}
 
 test(
   `Soma Transference drains and heals on ${difficulty}`,
@@ -88,6 +87,8 @@ test(
     );
   },
 );
+
+}
 
 test(
   "a creature beyond the interaction range is out of reach",
