@@ -5037,7 +5037,7 @@ impl MissionCore {
             ]
             .map(|hand| self.interaction.hand_available_for_body_slot(hand)),
             super::holsters::occupants(&self.world),
-            super::holsters::slot_count(&self.world),
+            super::holsters::SLOT_COUNT,
             held.map(|entity| {
                 entity.is_some_and(|entity| {
                     crate::virtual_hand::is_wieldable_weapon(&self.world, entity)
@@ -13318,9 +13318,7 @@ impl MissionCore {
                 if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
                     let occupants = super::holsters::occupants(&self.world);
                     for (slot, center) in centers.into_iter().enumerate() {
-                        if slot < super::holsters::slot_count(&self.world)
-                            || occupants[slot].is_some()
-                        {
+                        if slot < super::holsters::SLOT_COUNT || occupants[slot].is_some() {
                             parts.push(("astra-vr-holster.glb", center, Matrix4::from_scale(1.0)));
                         }
                     }

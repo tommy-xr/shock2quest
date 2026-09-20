@@ -760,3 +760,10 @@ The acoustic regression tests cover hearing ratings, cover, Agility, and crouch;
 SDK scenarios exercise real footsteps, gunfire, and thrown-cup audio/investigation.
 Footstep pacing retains its existing limits: tracked room-scale head movement
 alone does not move the pawn or generate steps.
+
+### VR thigh holsters
+
+Both left and right thigh holsters are available from the start, independently
+of O/S upgrades. Pack-Rat adds three backpack slots only. Either hand can stow
+a melee weapon or compact pistol in either holster with a deliberate release,
+and retrieve it with a fresh squeeze.
