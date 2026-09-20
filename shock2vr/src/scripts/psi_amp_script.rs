@@ -93,6 +93,9 @@ impl Script for PsiAmpScript {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
+            MessagePayload::TriggerPull if crate::psi_sword::active(world, entity_id) => {
+                Effect::NoEffect
+            }
             MessagePayload::TriggerPull => {
                 let Some(power) = selected_power(world) else {
                     return Effect::NoEffect;
@@ -424,6 +427,13 @@ fn cast_sustained_power(
     power: &PsiPowerInfo,
     effective_psi: i32,
 ) -> Effect {
+    if power.template_id == crate::psi_sword::POWER
+        && world
+            .borrow::<UniqueView<psi::ActivePsiPowers>>()
+            .is_ok_and(|p| p.is_active(crate::psi_sword::POWER))
+    {
+        return Effect::NoEffect;
+    }
     let Some(duration) = &power.duration else {
         game_log!(
             INFO,
@@ -445,6 +455,14 @@ fn cast_sustained_power(
             duration_secs,
         },
     ];
+    if power.template_id == crate::psi_sword::POWER {
+        effects.push(Effect::Send {
+            msg: super::Message {
+                to: amp_entity,
+                payload: MessagePayload::BeginPsiSword,
+            },
+        });
+    }
     effects.extend(amp_cast_flashes(world, amp_entity));
 
     game_log!(

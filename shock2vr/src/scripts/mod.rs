@@ -64,6 +64,7 @@ pub mod player_script;
 mod psi_amp_script;
 mod psi_kit;
 mod psi_mine;
+mod psi_sword;
 mod put_bomb_in_replicator;
 pub mod radiation;
 mod reduce_psi;
@@ -245,6 +246,7 @@ pub struct DamageImpact {
 
 #[derive(Clone, Debug)]
 pub enum MessagePayload {
+    BeginPsiSword,
     Hazard {
         toxin: bool,
         amount: f32,
@@ -1193,6 +1195,7 @@ impl ScriptWorld {
             "wrench" => Box::new(NoopScript::new()),
             "psiampscript" => Box::new(CompositeScript::new(vec![
                 Box::new(PsiAmpScript::new()),
+                Box::new(psi_sword::PsiSwordController::default()),
                 Box::new(InternalSwitchHeldModelScript::new()),
             ])),
             "viralmodify" => Box::new(UnimplementedScript::new(&script_name)),

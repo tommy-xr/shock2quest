@@ -185,6 +185,10 @@ pub enum AIPropertyUpdate {
 
 #[derive(Clone, Debug)]
 pub enum Effect {
+    SetPsiSword {
+        amp: EntityId,
+        enabled: bool,
+    },
     NoEffect,
     /// Cheat: add stored contamination directly, regardless of protection.
     AddPlayerHazard {

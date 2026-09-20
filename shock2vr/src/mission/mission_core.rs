@@ -9496,6 +9496,19 @@ impl MissionCore {
                     self.destroy_entity(entity_id);
                 }
 
+                Effect::SetPsiSword { amp, enabled } => {
+                    if enabled {
+                        self.world
+                            .add_component(amp, (crate::psi_sword::BoundBlade,));
+                    } else {
+                        self.world.remove::<(crate::psi_sword::BoundBlade,)>(amp);
+                        self.world
+                            .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
+                            .unwrap()
+                            .0
+                            .retain(|p| p.template_id != crate::psi_sword::POWER);
+                    }
+                }
                 Effect::ActivatePsiPower {
                     template_id,
                     name,
@@ -12493,6 +12506,33 @@ impl MissionCore {
                 let is_melee = limb_model.is_some();
                 let fp_model_name = gun_model.or(limb_model);
                 if let Some(xform) = maybe_xform {
+                    let sword_active = crate::psi_sword::active(&self.world, weapon);
+                    let swing_angle = if sword_active {
+                        self.flat_melee_anim
+                            .as_ref()
+                            .filter(|(e, _)| *e == weapon)
+                            .map(|(_, p)| {
+                                let state = p.snapshot();
+                                let frames = state
+                                    .queue
+                                    .first()
+                                    .map(|c| c.num_frames)
+                                    .unwrap_or(1)
+                                    .max(1);
+                                -65.0
+                                    * (std::f32::consts::PI * state.current_frame as f32
+                                        / frames as f32)
+                                        .sin()
+                            })
+                            .unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+                    // Move the amp and its additive blade as one rigid assembly.
+                    let swing = xform
+                        * Matrix4::from_angle_x(cgmath::Deg(swing_angle))
+                        * xform.invert().unwrap();
+                    let xform = swing * xform;
                     // The reload tilt is part of the entity transform itself:
                     // the flat controller folds the reload pitch into the gun's
                     // camera-pivot pitch (see `FlatPlayerController::update`),
@@ -12519,7 +12559,8 @@ impl MissionCore {
                             .filter(|(e, _)| *e == weapon)
                             .map(|(_, p)| p.clone());
                         let player = match (is_melee, swing_player) {
-                            (_, Some(p)) => p,
+                            (_, Some(p)) if !sword_active => p,
+                            (_, Some(_)) => AnimationPlayer::empty(),
                             (true, None) => asset_cache
                                 .get_opt(
                                     &ANIMATION_CLIP_IMPORTER,
@@ -12562,6 +12603,11 @@ impl MissionCore {
                         let mut o = obj.clone();
                         o.set_transform(squish * xform);
                         ret.push(o);
+                    }
+
+                    for mut blade in crate::psi_sword::render(&self.world, asset_cache, weapon) {
+                        blade.set_transform(squish * swing * blade.transform);
+                        ret.push(blade);
                     }
 
                     if let Some(age) = self.healing_pulses.get(&weapon) {
@@ -12961,6 +13007,19 @@ impl MissionCore {
 
         // Start with built in scene objects
         let mut scene = self.scene_objects.clone();
+        {
+            let blades = self
+                .world
+                .borrow::<View<crate::psi_sword::BoundBlade>>()
+                .unwrap();
+            for (amp, _) in blades.iter().with_id() {
+                if options.presentation_mode != crate::PresentationMode::Flat
+                    || self.interaction.viewmodel_entity() != Some(amp)
+                {
+                    scene.extend(crate::psi_sword::render(&self.world, asset_cache, amp));
+                }
+            }
+        }
 
         let mut total_model_count = 0;
         let mut rendered_model_count = 0;
