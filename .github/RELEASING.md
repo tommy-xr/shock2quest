@@ -67,8 +67,9 @@ signed with a different key requires uninstalling the old app first. Existing
    ```
 
    This rebuilds from the selected `main` commit; check that it is the commit
-   you tested. Only this mode checks for existing tags/releases and runs the
-   publish job, which is the only job with repository write permission.
+   you tested. Only this mode rejects existing tags/releases and versions older
+   than any published release, and runs the publish job, which is the only job
+   with repository write permission.
    On success, `v0.0.1` points to that exact source commit and the published
    release contains `shock2quest-0.0.1.apk`, `INSTALL.md`, and `SHA256SUMS`.
    The README badge and latest-release link update automatically. Releases are

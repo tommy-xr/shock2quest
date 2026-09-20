@@ -34,19 +34,17 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: python3 .github/scripts/prepare-release.py "$RELEASE_VERSION"
-      - name: Reject existing tags or releases
+      - name: Reject existing or older releases
         if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           tags=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")
           test -z "$tags" || { echo "Tag already exists: $RELEASE_TAG"; exit 1; }
-          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name' > "$RUNNER_TEMP/release-tags"
-          if grep -Fxq "$RELEASE_TAG" "$RUNNER_TEMP/release-tags"; then
-            echo "Release already exists: $RELEASE_TAG (including drafts)"
-            exit 1
-          fi
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases" > "$RUNNER_TEMP/releases.json"
+          python3 .github/scripts/prepare-release.py "$RELEASE_VERSION" --published-releases "$RUNNER_TEMP/releases.json"
       - name: Check signing configuration
         env:
           KEYSTORE: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}

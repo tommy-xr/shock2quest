@@ -13,6 +13,27 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ReleaseVersionTests(unittest.TestCase):
+    def test_publication_requires_numeric_increase_over_every_release(self):
+        published = [{"tag_name": "v0.2.0", "draft": False},
+                     {"tag_name": "v0.1.9", "draft": False}]
+        for version in ("0.1.1", "0.2.0"):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                release.check_published_releases(version, published)
+        release.check_published_releases("0.10.0", published)
+        release.check_published_releases("1.0.0", published)
+        release.check_published_releases("0.0.1", [])
+
+    def test_drafts_reserve_only_their_own_version(self):
+        drafts = [{"tag_name": "v1.0.0", "draft": True}]
+        release.check_published_releases("0.0.1", drafts)
+        with self.assertRaises(ValueError):
+            release.check_published_releases("1.0.0", drafts)
+
+    def test_unrelated_tags_do_not_prevent_publication(self):
+        release.check_published_releases("0.0.1", [
+            {"tag_name": "nightly", "draft": False},
+        ])
+
     def checkout(self, root):
         for name in ("runtimes/oculus_runtime/Cargo.toml", "Cargo.lock"):
             target = root / name
