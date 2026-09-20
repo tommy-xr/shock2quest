@@ -44,22 +44,35 @@ signed with a different key requires uninstalling the old app first. Existing
    workflows must be present on the default branch; the release job only runs on
    `main`, where signing secrets are allowed.
 2. Open **Actions → Release → Run workflow**, select `main`, and enter `0.0.1`.
-   Equivalent CLI:
+   Leave **publish** unchecked (the default) to test the signed build without
+   creating a tag or release. Equivalent CLI:
 
    ```sh
-   gh workflow run release.yml --ref main -f version=0.0.1
+   gh workflow run release.yml --ref main -f version=0.0.1 -F publish=false
    ```
 
 3. Watch the run. It stamps the Android crate and matching Cargo.lock entry in
    its disposable checkout, builds with locked dependencies, verifies signature,
    alignment, package ID, versions, ABI, and non-debuggable status, then uploads
-   the checked payload. Only the publish job has repository write permission.
-4. On success, `v0.0.1` points to the workflow's exact source commit and the
-   published release contains `shock2quest-0.0.1.apk`, `INSTALL.md`, `SHA256SUMS`.
+   the checked payload as the **release-apk** Actions artifact (retained for 14
+   days). Download and extract it from the run's summary page.
+4. Install that APK on a Quest using `INSTALL.md` and check launch, game-data
+   detection, cutscene playback, and controls. CI's package checks do not
+   establish playability. Build-only runs can reuse a version, including one
+   with an existing tag/release.
+5. To publish, run the workflow again with **publish** checked:
+
+   ```sh
+   gh workflow run release.yml --ref main -f version=0.0.1 -F publish=true
+   ```
+
+   This rebuilds from the selected `main` commit; check that it is the commit
+   you tested. Only this mode checks for existing tags/releases and runs the
+   publish job, which is the only job with repository write permission.
+   On success, `v0.0.1` points to that exact source commit and the published
+   release contains `shock2quest-0.0.1.apk`, `INSTALL.md`, and `SHA256SUMS`.
    The README badge and latest-release link update automatically. Releases are
    ordinary GitHub releases, described as early development builds in the notes.
-5. Install the first downloaded APK on a Quest and check launch, game-data
-   detection, and controls. CI's package checks do not establish playability.
 
 Use increasing MAJOR.MINOR.PATCH versions, with each component in 0..255 and no
 leading zeroes, suffixes, or `v` prefix. cargo-apk 0.9.7 encodes versionCode as
@@ -68,8 +81,8 @@ input sets Android versionName and the Rust package version. The source tag
 retains the development manifest; rerun the stamping script with the release
 version to reproduce release metadata.
 
-Concurrent release runs are serialized. Existing tags/releases (including drafts)
-are rejected, and published artifacts are never overwritten. If publication
+Concurrent release runs are serialized. When publishing, existing tags/releases
+(including drafts) are rejected, and published artifacts are never overwritten. If publication
 fails after creating a draft, inspect it and its attached files before removing
 that unpublished draft and any associated tag, then rerun. Never remove a
 published tag/release to reuse a version. A build failure before publication
