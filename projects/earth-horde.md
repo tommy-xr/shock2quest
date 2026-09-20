@@ -126,7 +126,8 @@ A debug run accepts `--difficulty easy|normal|hard|impossible` at launch.
 
 ## OS bank and service placement
 
-Four single-use OS stations share the west side of the upstairs landing. The
+Four single-use OS stations mount on the continuous west wall of the upstairs
+landing, grouped clear of the doorway and light fixture. The
 first is available immediately; the others activate at the beginning of waves
 3, 6, and 9. Offline stations are dimmed, show their wave requirement in the
 object name, and refuse purchases until activated. Each grants one supported
@@ -136,9 +137,10 @@ horde access cards or reward-room locks.
 Trainers remain in the subway: stats at the west end, tech at the east end,
 and weapons/psi on the east platform's back wall. The weapons trainer is clear
 of the large containment cabinet. Three replicators serve the street: west,
-east, and far east end. Their separate RepScreen displays and wall-mounted
-height follow authored MedSci machines for wall units; the central street kiosk
-sits on the floor clear of the sloped walls. Outlets face accessible approaches.
+south wall, and far east end. Their separate RepScreen displays and wall-mounted
+height follow authored MedSci machines. All three cabinet backs contact their
+walls; the south-wall ammunition shop avoids the sloped buttresses, vehicles,
+and containment device. Outlets face accessible approaches.
 
 ## Start at a wave / jump cheat
 

@@ -282,33 +282,35 @@ impl EntityPopulator for HordePopulation {
                 0.0,
             ));
         }
+        // Mount the cabinet backs just into the surveyed vertical wall planes
+        // (north z33.2, south z8, east x55), clear of the sloped buttresses.
         let supply = add(
             60_010,
             -463,
             "West street supplies",
-            [0.0, 23.55, 32.2],
+            [0.0, 23.55, 32.7],
             0.0,
         );
         let specialty = add(
             60_011,
             -463,
-            "East street ammunition",
-            [27.0, 22.6, 24.0],
-            0.0,
+            "South street ammunition",
+            [25.0, 23.55, 8.5],
+            180.0,
         );
         let east_supply = add(
             60_012,
             -463,
             "Far east street supplies",
-            [54.2, 23.55, 24.0],
+            [54.5, 23.55, 24.0],
             90.0,
         );
         // Retail replicators are an assembly: RepBase is only the cabinet.
         // Match the separate RepScreen and its authored local offset.
         for (index, position, yaw) in [
-            (0, [0.0, 23.40, 32.54], 0.0),
-            (1, [27.0, 22.45, 24.34], 0.0),
-            (2, [54.54, 23.40, 24.0], 90.0),
+            (0, [0.0, 23.40, 33.04], 0.0),
+            (1, [25.0, 23.40, 8.16], 180.0),
+            (2, [54.84, 23.40, 24.0], 90.0),
         ] {
             add(60_040 + index, -464, "Replicator display", position, yaw);
         }
@@ -323,6 +325,8 @@ impl EntityPopulator for HordePopulation {
         {
             add(60_020 + index as i32, *template, name, *position, *yaw);
         }
+        // West landing wall is continuous here (x6.8); the old wider bank
+        // crossed the doorway at z50. Keep all four clear of its light fixture.
         let mut os_stations = vec![];
         for (index, wave) in OS_WAVES.iter().enumerate() {
             os_stations.push(add(
@@ -336,7 +340,7 @@ impl EntityPopulator for HordePopulation {
                         format!("wave {wave}")
                     }
                 ),
-                [8.2, 24.0, 44.0 + index as f32 * 3.0],
+                [7.25, 24.0, 43.0 + index as f32 * 1.6],
                 -90.0,
             ));
         }
@@ -349,7 +353,7 @@ impl EntityPopulator for HordePopulation {
             (
                 specialty,
                 60_031,
-                add(60_031, -327, "Ammunition outlet", [27.0, 21.0, 22.6], 0.0),
+                add(60_031, -327, "Ammunition outlet", [25.0, 21.0, 10.0], 180.0),
             ),
             (
                 east_supply,
