@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import { selectPsiPower } from "./helpers/psi.js";
+import { aimVrHandAt } from "./helpers/vr-hand.js";
 import { pullTrigger } from "./helpers/weapon.js";
 
 // Localized Pyrokinesis ("Immolate" in the gamesys, tier 2 sustained power):
@@ -82,7 +83,36 @@ test(
     await game.player.teleport({ x: 0, y: 2, z: 0 });
     await game.step({ frames: 55 * 60 });
     assert.ok(!(await game.info()).player.active_psi_powers.includes("Immolate"), "PSI6 aura expires at55s");
+    assert.equal((await game.info()).player.hit_points, startPlayer.hit_points, "expiry must not burn the caster");
   },
 );
 
+}
+
+for (const vr of [false, true]) {
+  test(`Immolate final pulse cannot burn its caster (${vr ? "VR" : "flat"})`, {
+    skip: !e2eEnabled, timeout: 600_000,
+  }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_psi", debugFlags: vr ? ["--vr"] : [] });
+    await game.step({ frames: 30 });
+    if (vr) {
+      const [amp] = await game.entities.byTemplate(-247);
+      await aimVrHandAt(game, amp.position, 0.35);
+      await game.input.set("right_hand.squeeze", 1);
+      await game.step({ frames: 8 });
+      assert.equal((await game.info()).player.right_hand_entity_id, amp.id);
+    }
+    await selectPsiPower(game, "Immolate");
+    const before = (await game.info()).player;
+    await pullTrigger(game);
+    assert.ok((await game.info()).player.active_psi_powers.includes("Immolate"));
+    await game.step({ frames: 54 * 60 });
+    assert.equal((await game.info()).player.hit_points, before.hit_points);
+    assert.ok((await game.info()).player.active_psi_powers.includes("Immolate"));
+    await game.step({ frames: 2 * 60 });
+    const after = (await game.info()).player;
+    assert.equal(after.life_state, "alive");
+    assert.ok(!after.active_psi_powers.includes("Immolate"));
+    assert.equal(after.hit_points, before.hit_points, "last pulse must not outlive its fire immunity");
+  });
 }
