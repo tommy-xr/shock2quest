@@ -70,5 +70,6 @@ pub fn render(world: &World, cache: &mut AssetCache, amp: EntityId) -> Vec<Scene
     ));
     object.set_depth_write(false);
     object.set_transparency(Some(0.15));
+    crate::psi_invisibility::apply(&mut object, crate::psi_invisibility::transparency(world));
     vec![object]
 }

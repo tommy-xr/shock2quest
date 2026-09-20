@@ -532,6 +532,11 @@ impl VirtualHand {
             })
             .unwrap_or_default();
 
+        let invisibility = crate::psi_invisibility::transparency(world);
+        for object in &mut scene_objects {
+            crate::psi_invisibility::apply(object, invisibility);
+        }
+
         let hit_color = self.color_from_state();
 
         // Show ray trace hit

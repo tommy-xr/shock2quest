@@ -160,7 +160,7 @@ impl Script for PsiSwordController {
             return Effect::NoEffect;
         }
         self.cooldown = 0.4;
-        Effect::Send {
+        let hit = Effect::Send {
             msg: super::Message {
                 to: target,
                 payload: MessagePayload::Damage {
@@ -172,7 +172,8 @@ impl Script for PsiSwordController {
                     }),
                 },
             },
-        }
+        };
+        Effect::combine(vec![crate::psi_invisibility::attack_effect(world, id), hit])
     }
     fn script_state_key(&self) -> Option<&'static str> {
         Some("shock2vr.psi_sword_amp")

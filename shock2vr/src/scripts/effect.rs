@@ -540,6 +540,11 @@ pub enum Effect {
         level: i32,
     },
 
+    /// End one sustained power while preserving the others.
+    DeactivatePsiPower {
+        template_id: i32,
+    },
+
     /// Activate (or refresh) a sustained psi power on the player for
     /// `duration_secs` (`ActivePsiPowers` unique). Emitted by the psi amp
     /// when a sustained (activation type 1) power is cast; a per-frame tick
