@@ -39,7 +39,7 @@ pub const INVISO_TEMPLATE_ID: i32 = -3157;
 /// their health (see `scripts::berserk`).
 pub const BERSERK_TEMPLATE_ID: i32 = -3155;
 
-/// `Stability` - Anti-entropic Field (tier 3 sustained power): while active,
+/// `Stability` - Anti-entropic Field (tier 2 sustained power): while active,
 /// the player's guns neither wear nor break (see `scripts::weapon_script`).
 pub const STABILITY_TEMPLATE_ID: i32 = -3148;
 

@@ -152,8 +152,8 @@ fn degrade_per_shot(world: &World, entity_id: EntityId) -> Option<f32> {
 }
 
 /// Whether the Anti-entropic Field is running: while it is, a gun neither
-/// breaks nor wears. The power's own casting behaviour is still being sorted
-/// out (#1304) - this only asks whether it is active.
+/// breaks nor wears. Retail `shkplgun.cpp` gates both its break roll and
+/// condition decrement on `!IsActive(kPsiStability)`.
 fn is_weapon_stability_active(world: &World) -> bool {
     world
         .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
@@ -1586,6 +1586,44 @@ mod tests {
             fire_one_shot(&world, gun, &GunSettingDesc::default()),
             ShotOutcome::Fired(_)
         ));
+    }
+
+    #[test]
+    fn stability_prevents_even_guaranteed_breakage_and_wear() {
+        let (mut world, gun) = gun_world(Some(ObjectState::Normal));
+        world.add_component(
+            gun,
+            PropGunReliability {
+                min_break: 100.0,
+                max_break: 100.0,
+                degrade_rate: 1.0,
+                thresh_break: 101.0,
+            },
+        );
+        assert!(roll_for_breakage(&world, gun).is_some());
+        world.add_unique(crate::psi::ActivePsiPowers(vec![
+            crate::psi::ActivePsiPower {
+                template_id: crate::psi::STABILITY_TEMPLATE_ID,
+                name: "Stability".into(),
+                remaining_secs: 130.0,
+            },
+        ]));
+        assert!(roll_for_breakage(&world, gun).is_none());
+        let ShotOutcome::Fired(effect) = fire_one_shot(&world, gun, &GunSettingDesc::default())
+        else {
+            panic!("Stability must allow the otherwise guaranteed breaking shot");
+        };
+        assert!(
+            !Effect::flatten(vec![effect])
+                .iter()
+                .any(|effect| matches!(effect, Effect::AdjustWeaponCondition { .. }))
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<crate::psi::ActivePsiPowers>>()
+            .unwrap()
+            .0
+            .clear();
+        assert!(roll_for_breakage(&world, gun).is_some());
     }
 
     /// A shot that breaks the gun: it does not fire - no projectile, no ammo
