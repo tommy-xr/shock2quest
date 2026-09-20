@@ -58,6 +58,7 @@ pub const TRAIT_PHARMO_FRIENDLY: u8 = 2;
 pub const TRAIT_TANK: u8 = 8;
 pub const TRAIT_SPEEDY: u8 = 4;
 pub const TRAIT_SHARPSHOOTER: u8 = 5;
+pub const TRAIT_LETHAL_WEAPON: u8 = 9;
 pub const TRAIT_SPATIALLY_AWARE: u8 = 16;
 pub const TRAIT_SECURITY_EXPERT: u8 = 10;
 pub const TRAIT_POWER_PSI: u8 = 14;
@@ -402,6 +403,7 @@ pub fn live_effect_note(trait_id: u8) -> Option<&'static str> {
         TRAIT_SECURITY_EXPERT => Some("+2 effective Hack at security computers"),
         TRAIT_SPATIALLY_AWARE => Some("Full map layout on every deck"),
         TRAIT_SHARPSHOOTER => Some("35% more ranged damage (classic retail behavior)"),
+        TRAIT_LETHAL_WEAPON => Some("35% more melee damage"),
         TRAIT_TANK => Some("+5 max hit points"),
         TRAIT_NATURALLY_ABLE => Some("+8 cyber modules"),
         TRAIT_PACK_RAT => Some("+3 pack slots"),

@@ -729,7 +729,7 @@ pub(super) fn flat_melee_hit(
                         )
                     } else {
                         MELEE_DAMAGE
-                    }) * crate::scripts::berserk::melee_damage_multiplier(world),
+                    }) * crate::scripts::melee_weapon::player_melee_damage_scale(world),
                     // Swing direction + contact point seed the victim's
                     // death-ragdoll reaction. No bone: melee resolves a hitbox
                     // proxy to its parent BEFORE sending (so HitBoxScript
@@ -1482,6 +1482,35 @@ mod tests {
         assert!(
             !includes_damage_to(effect, target),
             "the trigger edge is only the start of the visible swing"
+        );
+    }
+
+    #[test]
+    fn lethal_weapon_scales_flat_melee_at_the_hit_frame() {
+        let (world, physics, weapon, target) = flat_melee_fixture();
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(9);
+        world.add_unique(quests);
+        let effect = WeaponScript::new().handle_message(
+            weapon,
+            &world,
+            &physics,
+            &MessagePayload::AnimationFlagTriggered {
+                motion_flags: MotionFlags::TRIGGER1,
+            },
+        );
+        fn damage(effect: &Effect, target: EntityId) -> Option<f32> {
+            match effect {
+                Effect::Send { msg } if msg.to == target => match msg.payload {
+                    MessagePayload::Damage { amount, .. } => Some(amount),
+                    _ => None,
+                },
+                Effect::Multiple(effects) => effects.iter().find_map(|e| damage(e, target)),
+                _ => None,
+            }
+        }
+        assert!(
+            (damage(&effect, target).expect("swing hit") - MELEE_DAMAGE * 1.35).abs() < 0.00001
         );
     }
 

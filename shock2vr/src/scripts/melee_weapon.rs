@@ -11,6 +11,19 @@ use super::{
     script_util::entity_class_template_id,
 };
 
+/// Shared scale for a held player melee attack. Apply before the damage
+/// handler rounds to whole HP; thrown props and enemy attacks never call this.
+pub(super) fn player_melee_damage_scale(world: &World) -> f32 {
+    let lethal = world
+        .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
+        .is_ok_and(|quests| {
+            quests
+                .player_stats()
+                .has_os_trait(crate::scripts::gui::TRAIT_LETHAL_WEAPON)
+        });
+    crate::scripts::berserk::melee_damage_multiplier(world) * if lethal { 1.35 } else { 1.0 }
+}
+
 /// Contact damage for the player's authored melee weapons (`PropLimbModel`).
 ///
 /// The rule is physical: a swing damages because the weapon was closing on
@@ -129,16 +142,7 @@ impl Script for HeldMeleeWeapon {
                     && self.may_damage(entity_id, owner, physics, *contact, player_velocity))
                 .then(|| authored_contact_damage(world, entity_id, owner))
                 .flatten()
-                // Adrenaline Overproduction scales the *player's* swing,
-                // so only a weapon in their hand gets the bonus (a wrench
-                // knocked into a creature is nobody's swing).
-                .map(|amount| {
-                    if self.is_held(world, entity_id) {
-                        amount * crate::scripts::berserk::melee_damage_multiplier(world)
-                    } else {
-                        amount
-                    }
-                });
+                .map(|amount| amount * player_melee_damage_scale(world));
 
                 let mut effects = Vec::new();
                 if let Some(amount) = damage {
@@ -724,6 +728,32 @@ mod tests {
         assert!(
             (amount - WEAPON_BASH_INTENSITY).abs() < f32::EPSILON,
             "got {amount}"
+        );
+    }
+
+    #[test]
+    fn lethal_weapon_scales_held_vr_melee_but_not_loose_props() {
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(9);
+        world.add_unique(quests);
+        let Effect::Multiple(effects) =
+            collide(&mut HeldMeleeWeapon::new(), &world, weapon, target)
+        else {
+            panic!("expected a landed swing");
+        };
+        assert!(effects.iter().any(|effect| matches!(effect,
+            Effect::Send { msg } if matches!(msg.payload,
+                MessagePayload::Damage { amount, .. } if (amount - WEAPON_BASH_INTENSITY * 1.35).abs() < 0.00001))));
+        world.remove::<crate::runtime_props::RuntimePropVrGripOffset>(weapon);
+        assert_eq!(
+            damage_count(&collide(
+                &mut HeldMeleeWeapon::new(),
+                &world,
+                weapon,
+                target
+            )),
+            0
         );
     }
 
