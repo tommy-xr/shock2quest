@@ -135,9 +135,10 @@ test("two amps retain independent pairs across a level transition and save/load"
   firstPair = swappedRight;
   await game.input.set("right_hand.trigger", 0);
   await game.step({frames: 2});
+  const beforeCast = (await game.info()).player.psi_points;
   await game.input.set("right_hand.trigger", 1);
   await game.step({frames: 10});
-  assert.equal((await game.info()).player.psi_charge_phase, "charging", "right trigger rearms while the left menu remains open");
+  assert.ok((await game.info()).player.psi_points < beforeCast, "right trigger rearms and casts while the left menu remains open");
   assert.ok((await state(game, b.entity_id)).menu);
   await game.input.set("right_hand.trigger", 0);
   await game.step({frames: 2});
