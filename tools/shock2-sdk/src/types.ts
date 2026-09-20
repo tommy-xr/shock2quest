@@ -764,11 +764,20 @@ export interface SkillLevels {
   research: number;
 }
 
+export type PrimaryStat = "strength" | "endurance" | "agility" | "psionic_ability" | "cyber_affinity";
+export interface StatModifierRequest {
+  source: string;
+  stat: PrimaryStat;
+  delta: number;
+  duration_secs: number;
+}
+
 /** The player's persistent character sheet. Primary stats start at a baseline
  * of 1 and skills at 0; station training tours raise them per the (career,
  * year, tour) reward table. `psi_disciplines` lists OSA-mastered disciplines by
  * display name; `granted_years` records which training years were applied. */
 export interface PlayerStats {
+  modifiers: Array<{ source: string; stat: PrimaryStat; delta: number; remaining: { secs: number; nanos: number } }>;
   strength: number;
   endurance: number;
   agility: number;

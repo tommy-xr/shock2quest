@@ -408,6 +408,10 @@ async fn start_http_server(
         .route("/v1/player/give", axum::routing::post(give_item))
         .route("/v1/player/spawn-item", axum::routing::post(spawn_item))
         .route("/v1/player/stats", axum::routing::post(set_player_stats))
+        .route(
+            "/v1/player/stat-modifier",
+            axum::routing::post(apply_stat_modifier),
+        )
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/scene", get(list_scene_objects))
         .route("/v1/physics/bodies", get(list_physics_bodies))
@@ -1526,6 +1530,13 @@ fn process_command(
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send spawn-item result - receiver dropped");
             }
+        }
+        RuntimeCommand::ApplyStatModifier { request, reply } => {
+            let result = match game.debug_scene_mut() {
+                Some(scene) => scene.apply_stat_modifier(&request),
+                None => Err("no debuggable scene available".to_string()),
+            };
+            let _ = reply.send(result);
         }
         RuntimeCommand::SetPlayerStats { request, reply } => {
             let result = match game.debug_scene_mut() {
@@ -3397,6 +3408,21 @@ async fn spawn_item(
             tracing::error!("Failed to receive spawn-item result - sender dropped");
             Err(game_loop_unavailable())
         }
+    }
+}
+
+async fn apply_stat_modifier(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<shock2vr::game_scene::StatModifierRequest>,
+) -> Result<Json<shock2vr::player_stats::PlayerStats>, (StatusCode, String)> {
+    let (reply, result) = oneshot::channel();
+    command_tx
+        .send(RuntimeCommand::ApplyStatModifier { request, reply })
+        .map_err(|_| game_loop_unavailable())?;
+    match result.await {
+        Ok(Ok(stats)) => Ok(Json(stats)),
+        Ok(Err(error)) => Err((StatusCode::BAD_REQUEST, error)),
+        Err(_) => Err(game_loop_unavailable()),
     }
 }
 

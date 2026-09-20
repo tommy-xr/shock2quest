@@ -574,6 +574,16 @@ pub struct DebugPlayerStatsRequest {
     pub cyber_modules: Option<i32>,
 }
 
+/// Debug hook for the same timed modifier path used by gameplay effects.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatModifierRequest {
+    pub source: String,
+    pub stat: crate::player_stats::Stat,
+    pub delta: i32,
+    pub duration_secs: f32,
+}
+
 /// Every stat, skill and psi tier at its cap - what the "Max out stats" cheat
 /// asks for. Written as a full struct literal on purpose: a new skill field
 /// then fails to compile here rather than being silently left un-maxed.
@@ -1074,6 +1084,13 @@ pub trait DebuggableScene {
         _request: &DebugPlayerStatsRequest,
     ) -> Result<crate::player_stats::PlayerStats, String> {
         Err("scene does not support a character sheet".to_string())
+    }
+
+    fn apply_stat_modifier(
+        &mut self,
+        _request: &StatModifierRequest,
+    ) -> Result<crate::player_stats::PlayerStats, String> {
+        Err("scene does not support stat modifiers".to_string())
     }
 
     /// Level-transition triggers in this scene (where each leads + its position),

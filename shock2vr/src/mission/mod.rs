@@ -481,6 +481,13 @@ impl crate::game_scene::DebuggableScene for Mission {
             .spawn_item_for_player(asset_cache, template)
     }
 
+    fn apply_stat_modifier(
+        &mut self,
+        request: &crate::game_scene::StatModifierRequest,
+    ) -> Result<crate::player_stats::PlayerStats, String> {
+        self.mission_core.apply_stat_modifier(request)
+    }
+
     fn set_player_stats(
         &mut self,
         request: &crate::game_scene::DebugPlayerStatsRequest,

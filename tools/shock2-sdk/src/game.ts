@@ -39,6 +39,7 @@ import type {
   PlayerInventoryResult,
   PlayerStats,
   PlayerStatsRequest,
+  StatModifierRequest,
   SpawnedItem,
   TransitionsResult,
   WaitForOptions,
@@ -334,6 +335,11 @@ export class PlayerApi {
       "/v1/player/spawn-item",
       typeof template === "number" ? { template_id: template } : { template },
     );
+  }
+
+  /** Add or refresh a timed stat contribution; zero duration removes it. */
+  async applyStatModifier(request: StatModifierRequest): Promise<PlayerStats> {
+    return this.client.post("/v1/player/stat-modifier", request);
   }
 
   /**

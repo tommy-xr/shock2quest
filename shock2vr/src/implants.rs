@@ -127,6 +127,15 @@ pub fn effective_stats(world: &World) -> Option<PlayerStats> {
             _ => {}
         }
     }
+    // Fold timed modifiers in last so the 1..=8 clamp covers implants too;
+    // clearing them keeps a later `effective()` on the result from re-adding.
+    use crate::player_stats::Stat;
+    stats.strength = stats.effective(Stat::Strength);
+    stats.endurance = stats.effective(Stat::Endurance);
+    stats.agility = stats.effective(Stat::Agility);
+    stats.psionic_ability = stats.effective(Stat::PsionicAbility);
+    stats.cyber_affinity = stats.effective(Stat::CyberAffinity);
+    stats.modifiers.clear();
     Some(stats)
 }
 
@@ -200,5 +209,44 @@ mod tests {
         world.add_component(player, Links::empty());
         assert_eq!(equipped(&world), [None, None]);
         assert_eq!(effective_stats(&world).unwrap().endurance, 1);
+    }
+    #[test]
+    fn timed_modifiers_stack_with_implants_and_clamp_once() {
+        let (mut world, a, _, _) = fixture(false);
+        world.add_component(a, RuntimePropImplantSlot(0));
+        {
+            let mut quests = world
+                .borrow::<shipyard::UniqueViewMut<QuestInfo>>()
+                .unwrap();
+            let stats = quests.player_stats_mut();
+            stats.strength = 6;
+            stats.apply_modifier(crate::player_stats::TimedStatModifier {
+                source: "test".into(),
+                stat: crate::player_stats::Stat::Strength,
+                delta: 1,
+                remaining: std::time::Duration::from_secs(10),
+            });
+            stats.apply_modifier(crate::player_stats::TimedStatModifier {
+                source: "test".into(),
+                stat: crate::player_stats::Stat::Agility,
+                delta: 2,
+                remaining: std::time::Duration::from_secs(10),
+            });
+        }
+        // 6 trained + 1 implant + 1 timed = 8; a second +1 source still clamps at 8.
+        let stats = effective_stats(&world).unwrap();
+        assert_eq!((stats.strength, stats.agility), (8, 3));
+        assert_eq!(stats.effective(crate::player_stats::Stat::Agility), 3);
+        world
+            .borrow::<shipyard::UniqueViewMut<QuestInfo>>()
+            .unwrap()
+            .player_stats_mut()
+            .apply_modifier(crate::player_stats::TimedStatModifier {
+                source: "other".into(),
+                stat: crate::player_stats::Stat::Strength,
+                delta: 1,
+                remaining: std::time::Duration::from_secs(10),
+            });
+        assert_eq!(effective_stats(&world).unwrap().strength, 8);
     }
 }

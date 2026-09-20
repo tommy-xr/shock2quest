@@ -254,7 +254,8 @@ impl HrmTerms {
             skill,
             bonus_levels,
             implant: skill > 0 && crate::implants::active(world, 7),
-            stat: stats.cyber_affinity,
+            stat: crate::implants::effective_stats(world)
+                .map_or(stats.cyber_affinity, |effective| effective.cyber_affinity),
         }
     }
 
