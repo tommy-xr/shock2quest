@@ -433,6 +433,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                     &state.hack,
                     hack_msg,
                     diff,
+                    false,
                     HackOutcomeEffects {
                         success: replicator_hack_success,
                         critical_failure: replicator_hack_critical_failure,

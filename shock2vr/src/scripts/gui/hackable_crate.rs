@@ -229,6 +229,7 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
                     &state.hack,
                     hack_msg,
                     diff,
+                    false,
                     HackOutcomeEffects {
                         success: crate_hack_success,
                         critical_failure: crate_hack_critical_failure,

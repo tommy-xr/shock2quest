@@ -175,13 +175,24 @@ fn roll_succeeds(roll: i32, chance: i32) -> bool {
     roll < chance
 }
 
-fn effective_hack_values(world: &World, diff: PropHackDiff) -> (i32, i32) {
+fn effective_hack_values(world: &World, diff: PropHackDiff, security_computer: bool) -> (i32, i32) {
     let (skill, stat) = world
         .borrow::<UniqueView<QuestInfo>>()
         .ok()
         .map(|quest| {
             let stats = quest.player_stats();
-            (stats.skill_level(Skill::Hack), stats.cyber_affinity)
+            let base = stats.skill_level(Skill::Hack);
+            // Retail grants two effective levels only at security computers;
+            // it does not train an unskilled player or change the saved sheet.
+            let bonus = if security_computer
+                && base > 0
+                && stats.has_os_trait(super::traits::TRAIT_SECURITY_EXPERT)
+            {
+                2
+            } else {
+                0
+            };
+            (base + bonus, stats.cyber_affinity)
         })
         .unwrap_or((0, 0));
     world
@@ -378,6 +389,7 @@ pub(crate) fn handle_hack_msg(
     state: &HackState,
     msg: &KeyPadMsg,
     diff: PropHackDiff,
+    security_computer: bool,
     outcomes: HackOutcomeEffects,
 ) -> (HackState, Effect) {
     let mut new_state = state.clone();
@@ -396,7 +408,7 @@ pub(crate) fn handle_hack_msg(
                     },
                 );
             };
-            let (_, mine_count) = effective_hack_values(world, diff);
+            let (_, mine_count) = effective_hack_values(world, diff, security_computer);
             let mut rng_state = hack_seed(world, entity_id);
             tracing::debug!(entity = entity_id.inner(), rng_state, "HRM rng seed");
             let nodes = board_with_mines(mine_count, &mut rng_state);
@@ -448,7 +460,7 @@ pub(crate) fn handle_hack_msg(
                 rng_state = new_state.rng_state,
                 "HRM rng outcome"
             );
-            let (chance, _) = effective_hack_values(world, diff);
+            let (chance, _) = effective_hack_values(world, diff, security_computer);
             if roll_succeeds(roll, chance) {
                 new_state.nodes[index] = HackNode::Lit;
                 if has_connected_three(&new_state.nodes) {
@@ -587,6 +599,7 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
                 &state.hack,
                 msg,
                 hack_diff,
+                false,
                 HackOutcomeEffects {
                     success: keypad_hack_success,
                     critical_failure: keypad_hack_critical_failure,
@@ -672,6 +685,81 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn security_expert_is_a_contextual_bonus_for_trained_hackers() {
+        for (owned, security, base, expected) in [
+            (false, true, 1, (35, 9)),
+            (true, false, 1, (35, 9)),
+            (true, true, 0, (25, 9)),
+            (true, true, 1, (55, 9)),
+            (true, true, 6, (85, 9)),
+        ] {
+            let mut world = World::new();
+            let entity = world.add_entity(());
+            let mut quests = QuestInfo::new();
+            quests.player_stats_mut().skills.hack = base;
+            quests.player_stats_mut().cyber_affinity = 1;
+            if owned {
+                quests.player_stats_mut().add_os_trait(10);
+            }
+            world.add_unique(quests);
+            world.add_unique(GlobalHrmParams(Some(dark::gamesys::HrmParams {
+                // Retail shock2.gam HRM: skill affects chance, stat affects both.
+                skill_critical_bonus: 0,
+                skill_success_bonus: 10,
+                stat_critical_bonus: 1,
+                stat_success_bonus: 5,
+                stat_break_chance: [0.0; 8],
+            })));
+            let diff = PropHackDiff {
+                success_chance: 20,
+                critical_chance: 10,
+                cost: 3.0,
+            };
+            assert_eq!(effective_hack_values(&world, diff, security), expected);
+            // The same roll loses at base Hack 1 (35%) and succeeds at the
+            // security computer with the upgrade (55%). Exercise the actual
+            // node-message path, not only the numerical resolver.
+            let seed = (1..1000)
+                .find(|seed| outcome_roll(&mut seed.clone()) == 40)
+                .unwrap();
+            let state = HackState {
+                phase: HackPhase::Playing,
+                rng_state: seed,
+                ..HackState::default()
+            };
+            let (after, _) = handle_hack_msg(
+                entity,
+                &world,
+                &state,
+                &KeyPadMsg::PlayNode { x: 2, y: 0 },
+                diff,
+                security,
+                HackOutcomeEffects {
+                    success: keypad_hack_success,
+                    critical_failure: keypad_hack_critical_failure,
+                },
+            );
+            assert_eq!(
+                after.nodes[board_index(2, 0)],
+                if expected.0 > 40 {
+                    HackNode::Lit
+                } else {
+                    HackNode::Burned
+                }
+            );
+            assert_eq!(
+                world
+                    .borrow::<UniqueView<QuestInfo>>()
+                    .unwrap()
+                    .player_stats()
+                    .skills
+                    .hack,
+                base
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -794,6 +882,7 @@ mod tests {
             &state,
             &KeyPadMsg::StartHack,
             diff,
+            false,
             HackOutcomeEffects {
                 success: keypad_hack_success,
                 critical_failure: keypad_hack_critical_failure,

@@ -265,6 +265,7 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
             &state.hack,
             msg,
             diff,
+            self.security,
             HackOutcomeEffects {
                 success: if self.security {
                     security_hack_success
