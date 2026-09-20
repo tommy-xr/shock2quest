@@ -37,7 +37,7 @@ pub fn render(world: &World, cache: &mut AssetCache, amp: EntityId) -> Vec<Scene
     let Some(frame) = frame(world, amp) else {
         return vec![];
     };
-    let Some(source) = cache.get_opt(&GLOVE_WEAPON_IMPORTER, "psword_h") else {
+    let Some(source) = cache.get_opt(&GLOVE_WEAPON_IMPORTER, "psword_h.bin") else {
         return vec![];
     };
     let Some(source) = source.as_ref().as_ref() else {
