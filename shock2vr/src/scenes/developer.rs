@@ -392,6 +392,17 @@ impl DeveloperScene {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
 
+        canvas
+            .text(
+                Rect::new(14.0, 448.0, 210.0, 24.0),
+                env!("SHOCK2QUEST_BUILD_LABEL"),
+                LIST_FONT,
+                12.0,
+                HAlign::Left,
+                VAlign::Middle,
+            )
+            .opacity(0.25);
+
         let state = self.state();
         let hovered = pointer_canvas.and_then(|point| hit(state, point));
         let button = |canvas: &mut UiCanvas, rect: Rect, text: &str, action, enabled: bool| {

@@ -67,7 +67,8 @@ const MENU_FONT: &str = "metafont.fon";
 const LAYOUT_FILE: &str = "NETMAINR.BIN";
 /// Original label strings for this screen, keyed by [`MenuItem::string_key`].
 const LABELS_FILE: &str = "NETMAIN.STR";
-const BUILD_INFO_RECT: Rect = Rect::new(14.0, 384.0, 200.0, 24.0);
+// The inset footer box below the left panel’s horizontal rule.
+const BUILD_INFO_RECT: Rect = Rect::new(14.0, 448.0, 152.0, 24.0);
 const BUILD_LABEL: &str = env!("SHOCK2QUEST_BUILD_LABEL");
 /// The 4:3 menu art is letterboxed (not stretched) on non-4:3 windows.
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
@@ -309,7 +310,7 @@ fn difficulty_hit(point: Vector2<f32>, rects: &[Rect]) -> Option<MenuAction> {
 }
 
 fn hit(point: Vector2<f32>, rects: &[Rect], developer_enabled: bool) -> Option<MenuAction> {
-    if BUILD_INFO_RECT.contains(point) {
+    if !developer_enabled && BUILD_INFO_RECT.contains(point) {
         return Some(MenuAction::BuildInfo);
     }
     hit_menu_item(point, MENU_ITEMS, rects, |action| {
@@ -468,22 +469,24 @@ impl MainMenuScene {
                 .text_native_fit(*rect, label, MENU_FONT, HAlign::Center, VAlign::Middle)
                 .opacity(opacity);
         }
-        canvas
-            .text(
-                BUILD_INFO_RECT,
-                BUILD_LABEL,
-                "mainfont.fon",
-                14.0,
-                HAlign::Left,
-                VAlign::Middle,
-            )
-            .opacity(
-                if pointer_canvas.is_some_and(|point| BUILD_INFO_RECT.contains(point)) {
-                    HOVER_OPACITY
-                } else {
-                    IDLE_OPACITY
-                },
-            );
+        if !self.developer_enabled {
+            canvas
+                .text(
+                    BUILD_INFO_RECT,
+                    BUILD_LABEL,
+                    "mainfont.fon",
+                    12.0,
+                    HAlign::Left,
+                    VAlign::Middle,
+                )
+                .opacity(
+                    if pointer_canvas.is_some_and(|point| BUILD_INFO_RECT.contains(point)) {
+                        0.4
+                    } else {
+                        0.25
+                    },
+                );
+        }
         if self.persistence_error {
             canvas.text(
                 Rect::new(14.0, 360.0, 290.0, 22.0),
@@ -1090,7 +1093,11 @@ mod tests {
         assert_eq!(hit(point, &rects, false), None);
         assert_eq!(hit(point, &rects, true), Some(MenuAction::Developer));
         assert_eq!(hit(rects[2].center(), &rects, true), None);
-        assert!(!rects[6].contains(BUILD_INFO_RECT.center()));
+        // Once unlocked, the footer never acts as a build-label target.
+        assert_ne!(
+            hit(BUILD_INFO_RECT.center(), &rects, true),
+            Some(MenuAction::BuildInfo)
+        );
     }
 
     #[test]

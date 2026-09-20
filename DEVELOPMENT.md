@@ -349,7 +349,8 @@ The main menu's bottom-left build label shows `dev | <commit>` for local builds
 and `v<version> | <commit>` for release builds. Click it three times to enable
 Developer. In VR, point at the label and press/release the trigger three times.
 The extra bottom-left Developer button then appears; the pause menu's Developer
-entry is enabled too. A held press counts only once.
+entry is enabled too. The build label moves into the Developer menu UI while
+developer mode is active. A held press counts only once.
 
 Developer mode survives restarts via the `developer-mode` sentinel in the game
 data directory (`/sdcard/shock2quest/developer-mode` on Quest). Choose **Disable
