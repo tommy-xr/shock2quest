@@ -1,5 +1,5 @@
 //! The blade is an addition to the original amp, never a replacement item.
-use cgmath::{InnerSpace, Matrix4, Point3, Quaternion, Transform, Vector3, vec3};
+use cgmath::{Matrix4, Point3, Quaternion, Transform, Vector3, vec3};
 use dark::importers::GLOVE_WEAPON_IMPORTER;
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{Component, EntityId, Get, UniqueView, View, World};
@@ -21,17 +21,7 @@ pub fn frame(world: &World, amp: EntityId) -> Option<Matrix4<f32>> {
         .borrow::<View<crate::runtime_props::RuntimePropTransform>>()
         .ok()?;
     let transform = transforms.get(amp).ok()?.0;
-    let muzzle = crate::weapon_muzzle::resolve(world, amp);
-    let base = transform.transform_point(muzzle.point);
-    let up = transform.transform_vector(Vector3::unit_y()).normalize();
-    let forward = transform.transform_vector(muzzle.axis).normalize();
-    let right = up.cross(forward).normalize();
-    Some(Matrix4::from_cols(
-        right.extend(0.0),
-        up.extend(0.0),
-        forward.extend(0.0),
-        base.to_homogeneous(),
-    ))
+    Some(crate::weapon_muzzle::resolve(world, amp).shot_frame(transform))
 }
 pub fn segment(world: &World, amp: EntityId) -> Option<(Point3<f32>, Point3<f32>)> {
     let frame = frame(world, amp)?;

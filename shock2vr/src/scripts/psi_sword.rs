@@ -120,9 +120,7 @@ impl Script for PsiSwordController {
             true,
             &filter,
         );
-        if hit.as_ref().is_none_or(|h| h.maybe_entity_id.is_none())
-            && (tip - last_tip).magnitude2() > 0.000001
-        {
+        if hit.is_none() && (tip - last_tip).magnitude2() > 0.000001 {
             hit = physics.ray_cast2_with_entity_filter(
                 last_tip,
                 (tip - last_tip).normalize(),
