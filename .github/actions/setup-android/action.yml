@@ -112,7 +112,7 @@ runs:
         for search_dir in "/usr/lib" "/usr/local/lib" "/opt" "/usr/lib/x86_64-linux-gnu"; do
           echo "Searching in $search_dir..."
           # Look specifically for the actual libclang shared library
-          FOUND_FILE=$(find "$search_dir" -name "libclang.so*" -o -name "libclang-*.so*" 2>/dev/null | head -1)
+          FOUND_FILE=$(find "$search_dir" -name "libclang.so*" -o -name "libclang-*.so*" 2>/dev/null | sed -n '1p')
           if [ -n "$FOUND_FILE" ] && [ -f "$FOUND_FILE" ]; then
             LIBCLANG_PATH=$(dirname "$FOUND_FILE")
             echo "Found libclang.so in: $LIBCLANG_PATH (file: $FOUND_FILE)"
@@ -150,7 +150,8 @@ runs:
           echo "Looking for libclang.so files:"
           ls -la "$LIBCLANG_PATH"/libclang*.so* 2>/dev/null || echo "No libclang.so files found!"
           echo "Directory contents:"
-          ls -la "$LIBCLANG_PATH" | head -5
+          # Consume all input: head can SIGPIPE ls under the composite's pipefail.
+          ls -la "$LIBCLANG_PATH" | sed -n '1,5p'
         else
           echo "WARNING: LIBCLANG_PATH directory does not exist!"
           echo "Available LLVM directories in /usr/lib:"
