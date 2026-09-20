@@ -15,7 +15,6 @@ use crate::{
 };
 
 const BUILDER: i32 = 57_000;
-const BOX: i32 = 57_010;
 const TURRET: i32 = 57_020;
 // Street-only, surveyed floor sites. Flying segments are additionally checked
 // against world geometry; a blocked route never teleports through a wall.
@@ -40,7 +39,6 @@ pub(super) struct TechGrowth {
     builder_seen: bool,
     last_position: [f32; 3],
     next_site: usize,
-    commissioned: Vec<usize>,
 }
 
 fn create(
@@ -113,28 +111,10 @@ impl TechGrowth {
             .collect();
         let find = |tag| actors.iter().find(|(kind, _, _)| *kind == tag).copied();
         let mut effects = vec![];
-        // A junction is the local power source. Destroying it removes its
-        // turret even during rest or while the developer toggle is disabled.
-        self.commissioned.retain(|&site| {
-            if find(BOX + site as i32).is_some() {
-                return true;
-            }
-            if let Some((_, entity_id, _)) = find(TURRET + site as i32) {
-                effects.push(Effect::DestroyEntity { entity_id });
-            }
-            false
-        });
         let builder = find(BUILDER);
         if builder.is_none() && self.builder_seen {
             self.builder_seen = false;
             self.last_spawn_wave = wave;
-            if let Phase::Building { site, .. } | Phase::Deploying(site) = self.phase {
-                for tag in [BOX + site as i32, TURRET + site as i32] {
-                    if let Some((_, entity_id, _)) = find(tag) {
-                        effects.push(Effect::DestroyEntity { entity_id });
-                    }
-                }
-            }
             self.phase = Phase::Idle;
             effects.push(create(
                 -87,
@@ -197,8 +177,7 @@ impl TechGrowth {
             Phase::Idle => {
                 for offset in 0..SITES.len() {
                     let site = (self.next_site + offset) % SITES.len();
-                    if find(BOX + site as i32).is_none()
-                        && find(TURRET + site as i32).is_none()
+                    if find(TURRET + site as i32).is_none()
                         && clear_route(physics, builder, position, at(site, 2.4))
                     {
                         self.next_site = (site + 1) % SITES.len();
@@ -221,66 +200,43 @@ impl TechGrowth {
                             position: position + delta / distance * step,
                         });
                     } else {
-                        effects.push(create(
-                            -760,
-                            at(site, 0.4),
-                            BOX + site as i32,
-                            "Turret junction — destroy to disable",
-                            None,
-                            Some(12),
-                        ));
                         self.phase = Phase::Building {
                             site,
                             progress: 0.0,
                         };
-                        effects.push(Effect::ShowMessage { text: "Installer constructing a turret. Destroy the installer or its junction box.".into() });
+                        effects.push(Effect::ShowMessage { text: "Installer constructing a turret. Destroy the Talon before it finishes.".into() });
                     }
                 }
             }
             Phase::Building { site, progress } => {
-                if let Some((_, junction, _)) = find(BOX + site as i32) {
-                    let progress = (progress
-                        + work_dt / dev_params::get(dev_params::HORDE_TECH_BUILD_SECONDS))
-                    .min(1.0);
-                    effects.push(Effect::SetRenderAlpha {
-                        entity_id: junction,
-                        alpha: 0.35 + progress * 0.65,
-                    });
-                    effects.push(Effect::SetRotation {
-                        entity_id: builder,
-                        rotation: Quaternion::from_angle_y(Deg(progress * 720.0)),
-                    });
-                    if progress >= 1.0 {
-                        effects.push(create(
-                            -369,
-                            at(site, 1.3),
-                            TURRET + site as i32,
-                            "Installed slug turret",
-                            None,
-                            None,
-                        ));
-                        self.phase = Phase::Deploying(site);
-                    } else {
-                        self.phase = Phase::Building { site, progress };
-                    }
+                let progress = (progress
+                    + work_dt / dev_params::get(dev_params::HORDE_TECH_BUILD_SECONDS))
+                .min(1.0);
+                effects.push(Effect::SetRotation {
+                    entity_id: builder,
+                    rotation: Quaternion::from_angle_y(Deg(progress * 720.0)),
+                });
+                if progress >= 1.0 {
+                    effects.push(create(
+                        -369,
+                        at(site, 1.3),
+                        TURRET + site as i32,
+                        "Installed slug turret",
+                        None,
+                        None,
+                    ));
+                    self.phase = Phase::Deploying(site);
                 } else {
-                    self.phase = Phase::Idle;
+                    self.phase = Phase::Building { site, progress };
                 }
             }
             Phase::Deploying(site) => {
-                if find(BOX + site as i32).is_none() {
-                    if let Some((_, entity_id, _)) = find(TURRET + site as i32) {
-                        effects.push(Effect::DestroyEntity { entity_id });
-                    }
-                    self.phase = Phase::Idle;
-                } else if find(TURRET + site as i32).is_some() {
-                    self.commissioned.push(site);
+                if find(TURRET + site as i32).is_some() {
                     self.phase = Phase::Idle;
                     effects.push(Effect::ShowMessage {
-                        text: "Turret online. Its junction box is the weak point.".into(),
+                        text: "Turret online. Destroy it to clear the installation.".into(),
                     });
                 } else {
-                    // Creation was not observed: keep the job pending and retry.
                     self.phase = Phase::Building {
                         site,
                         progress: 0.99,
@@ -344,7 +300,6 @@ mod tests {
         let mut world = world();
         let physics = PhysicsWorld::new();
         actor(&mut world, BUILDER, 0);
-        actor(&mut world, BOX, 0);
         let mut tech = TechGrowth {
             phase: Phase::Building {
                 site: 0,
@@ -368,24 +323,24 @@ mod tests {
         )));
         actor(&mut world, TURRET, 0);
         loaded.update(&world, &physics, 1.0, true, 5, false);
-        assert_eq!(loaded.commissioned, vec![0]);
+        assert!(matches!(loaded.phase, Phase::Idle));
     }
     #[test]
-    fn destroying_junction_removes_its_turret_even_during_rest() {
+    fn completed_turret_remains_when_installer_is_destroyed() {
         let mut world = world();
         let physics = PhysicsWorld::new();
         let turret = actor(&mut world, TURRET, 0);
         let mut tech = TechGrowth {
-            commissioned: vec![0],
+            builder_seen: true,
+            last_spawn_wave: 5,
             ..Default::default()
         };
+        let effects = tech.update(&world, &physics, 1.0, false, 5, false);
         assert!(
-            tech.update(&world, &physics, 1.0, false, 5, false)
+            !effects
                 .iter()
-                .any(|effect| matches!(effect,
-            Effect::DestroyEntity { entity_id } if *entity_id == turret))
+                .any(|e| matches!(e, Effect::DestroyEntity { entity_id } if *entity_id == turret))
         );
-        assert!(tech.commissioned.is_empty());
     }
     #[test]
     fn full_sites_prevent_additional_construction() {
@@ -393,13 +348,9 @@ mod tests {
         let physics = PhysicsWorld::new();
         actor(&mut world, BUILDER, 0);
         for site in 0..SITES.len() {
-            actor(&mut world, BOX + site as i32, site);
             actor(&mut world, TURRET + site as i32, site);
         }
-        let mut tech = TechGrowth {
-            commissioned: vec![0, 1, 2],
-            ..Default::default()
-        };
+        let mut tech = TechGrowth::default();
         for _ in 0..10 {
             assert!(
                 tech.update(&world, &physics, 100.0, true, 5, false)
@@ -412,7 +363,6 @@ mod tests {
     fn killing_installer_cancels_unfinished_job_and_drops_salvage_only_once() {
         let mut world = world();
         let physics = PhysicsWorld::new();
-        let junction = actor(&mut world, BOX, 0);
         let mut tech = TechGrowth {
             builder_seen: true,
             last_spawn_wave: 5,
@@ -423,9 +373,14 @@ mod tests {
             ..Default::default()
         };
         let effects = tech.update(&world, &physics, 1.0, true, 6, false);
-        assert!(effects.iter().any(
-            |effect| matches!(effect, Effect::DestroyEntity { entity_id } if *entity_id == junction)
-        ));
+        assert!(!effects.iter().any(|effect| matches!(
+            effect,
+            Effect::CreateEntity {
+                template_id: -369,
+                ..
+            }
+        )));
+        assert!(matches!(tech.phase, Phase::Idle));
         assert_eq!(
             effects
                 .iter()
