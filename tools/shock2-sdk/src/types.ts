@@ -651,6 +651,7 @@ export interface PlayerSnapshot {
   /** The gamesys names of the active sustained psi powers (e.g. "Inviso"),
    * in activation order; empty when none. */
   active_psi_powers: string[];
+  seekersense_contacts: { entity_id: number; position: Vec3; distance: number; strength: number }[];
   radar_contacts: { entity_id: number; position: Vec3; distance: number; strength: number }[];
   /** The player's persistent character sheet (primary stats, trained skills,
    * mastered psi disciplines), accumulated from career + station training

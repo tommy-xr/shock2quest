@@ -2475,6 +2475,10 @@ fn capture_frame_snapshot(
                     .as_ref()
                     .map(|s| s.active_psi_powers.clone())
                     .unwrap_or_default(),
+                seekersense_contacts: state
+                    .as_ref()
+                    .map(|s| s.seekersense_contacts.clone())
+                    .unwrap_or_default(),
                 radar_contacts: state
                     .as_ref()
                     .map(|s| s.radar_contacts.clone())

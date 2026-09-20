@@ -41,6 +41,8 @@ mod psi;
 mod psi_heal_visual;
 mod psi_invisibility;
 pub mod psi_radar;
+pub mod psi_seekersense;
+pub mod psi_sense;
 mod psi_sword;
 mod psi_visuals;
 pub mod quest_info;
@@ -740,7 +742,8 @@ pub struct PlayerStateSnapshot {
     /// The gamesys names of the currently active sustained psi powers (e.g.
     /// "Inviso"), in activation order. Empty when none are active.
     pub active_psi_powers: Vec<String>,
-    pub radar_contacts: Vec<crate::psi_radar::RadarContact>,
+    pub radar_contacts: Vec<crate::psi_sense::PsiSenseContact>,
+    pub seekersense_contacts: Vec<crate::psi_sense::PsiSenseContact>,
     /// The player's persistent character sheet (primary stats, skills, mastered
     /// psi disciplines), accumulated from career + training tours. `None` when
     /// the scene has no `QuestInfo` (e.g. a menu). See `crate::player_stats`.
@@ -919,6 +922,10 @@ impl Game {
             active_psi_powers: world
                 .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
                 .map(|active| active.0.iter().map(|p| p.name.clone()).collect())
+                .unwrap_or_default(),
+            seekersense_contacts: world
+                .borrow::<UniqueView<crate::psi_seekersense::Seekersense>>()
+                .map(|sense| sense.contacts.clone())
                 .unwrap_or_default(),
             radar_contacts: world
                 .borrow::<UniqueView<crate::psi_radar::Radar>>()
