@@ -24,19 +24,20 @@ impl Script for InternalSwitchHeldModelScript {
             MessagePayload::Hold => {
                 let is_vr = crate::mission::presentation_is_vr(world);
                 if is_vr {
-                    // On a 25AE install the remastered first-person gun models
-                    // resolve (mods/sshock2ee.kpf outranks the classic
-                    // archives) and are closed meshes, so VR wields them
-                    // directly - ChangeModel also adopts their muzzle vhots.
-                    if crate::is_25th_anniversary_install() {
-                        if let Some(view_model) = get_raw_view_model(world, entity_id)
-                            .filter(|name| vr_config::is_vr_view_model(name))
-                        {
-                            return Effect::ChangeModel {
-                                entity_id,
-                                model_name: view_model,
-                            };
-                        }
+                    // The amp's authored hand is its VR presentation on both
+                    // classic and anniversary installs; it replaces the glove.
+                    // Other classic gun meshes retain their world-model fallback.
+                    if let Some(view_model) = get_raw_view_model(world, entity_id)
+                        .filter(|name| vr_config::is_vr_view_model(name))
+                        .filter(|name| {
+                            name.eq_ignore_ascii_case("amp_h")
+                                || crate::is_25th_anniversary_install()
+                        })
+                    {
+                        return Effect::ChangeModel {
+                            entity_id,
+                            model_name: view_model,
+                        };
                     }
 
                     // Otherwise keep the world model: the classic _h meshes
