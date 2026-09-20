@@ -50,8 +50,8 @@ pub const ACTIVATION_TYPE_SUSTAINED: i32 = 1;
 
 /// `PropPsiPower::activation_type` for instant/special powers - they resolve
 /// immediately on cast, with no duration and no projectile. Self-targeted
-/// (the heals, SomaDrain) and remote (CyberHack, ForceWall) powers both land
-/// here.
+/// (the heals), aimed (SomaDrain) and remote (CyberHack, ForceWall) powers all
+/// land here.
 pub const ACTIVATION_TYPE_INSTANT: i32 = 2;
 
 /// `PsiHeal` - Cerebro-stimulated Regeneration (tier 2 instant power): heals
@@ -62,6 +62,10 @@ pub const PSI_HEAL_TEMPLATE_ID: i32 = -1017;
 /// power): the large version of [`PSI_HEAL_TEMPLATE_ID`] - same script, same
 /// `data` shape, bigger numbers.
 pub const MAJOR_HEAL_TEMPLATE_ID: i32 = -1139;
+
+/// `SomaDrain` - Soma Transference (tier 5 instant power): drains health from
+/// the creature under the amp's aim and transfers it to the caster.
+pub const SOMA_DRAIN_TEMPLATE_ID: i32 = -3160;
 
 /// The powers that support hold-to-overload (per the published gameplay
 /// tables), by template id. Comments give the gamesys name and the
