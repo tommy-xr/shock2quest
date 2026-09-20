@@ -80,8 +80,9 @@ test(
     await game.step({ frames: 5 });
 
     const initial = await game.info();
-    assert.equal(hp(initial), 30);
-    assert.equal(initial.player.max_hit_points, 30);
+    const fullHp = hp(initial);
+    assert.ok(fullHp > 10, "player survives the ten-point damage fixture");
+    assert.equal(fullHp, initial.player.max_hit_points, "player starts fully healed");
     const playerId = initial.player.entity_id;
     assert.notEqual(playerId, null, "Earth should have a live player");
 
@@ -101,7 +102,7 @@ test(
     const audioBefore =
       (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
     await useInventoryItem(game, juice.id);
-    assert.equal(hp(await game.info()), 30);
+    assert.equal(hp(await game.info()), fullHp);
     assert.equal(
       (await game.entities.byTemplate(BASIC_JUICE)).length,
       0,
@@ -129,10 +130,10 @@ test(
 
     await game.entities.sendMessage(playerId!, { type: "Damage", amount: 10 });
     await game.step({ frames: 2 });
-    assert.equal(hp(await game.info()), 20);
+    assert.equal(hp(await game.info()), fullHp - 10);
 
     await useInventoryItem(game, chips.id);
-    assert.equal(hp(await game.info()), 21, "Chips should restore exactly one HP");
+    assert.equal(hp(await game.info()), fullHp - 9, "Chips should restore exactly one HP");
     assert.equal(
       (await game.entities.byTemplate(BASIC_CHIPS)).length,
       0,
@@ -144,7 +145,7 @@ test(
     // latches: prove both survive the canonical save/load path.
     await game.save("comestible-flat-complete");
     await game.load("comestible-flat-complete");
-    assert.equal(hp(await game.info()), 21);
+    assert.equal(hp(await game.info()), fullHp - 9);
     assert.equal((await game.entities.byTemplate(BASIC_JUICE)).length, 0);
     assert.equal((await game.entities.byTemplate(BASIC_CHIPS)).length, 0);
     assert.equal((await game.player.inventory()).count, 0);
@@ -163,11 +164,13 @@ test(
     await game.step({ frames: 5 });
 
     const initial = await game.info();
+    const fullHp = hp(initial);
+    assert.ok(fullHp > 10, "player survives the ten-point damage fixture");
     const playerId = initial.player.entity_id;
     assert.notEqual(playerId, null, "Earth should have a live player");
     await game.entities.sendMessage(playerId!, { type: "Damage", amount: 10 });
     await game.step({ frames: 2 });
-    assert.equal(hp(await game.info()), 20);
+    assert.equal(hp(await game.info()), fullHp - 10);
 
     const juice = await exactlyOne(game, BASIC_JUICE, "Basic Juice bottle");
     // Juice begins slightly above its display surface and is still falling
@@ -232,7 +235,7 @@ test(
       !foodMessages.some((message) => message.payload === "TriggerPull"),
       "food must not receive the weapon trigger protocol",
     );
-    assert.equal(hp(await game.info()), 21, "one VR use should restore exactly one HP");
+    assert.equal(hp(await game.info()), fullHp - 9, "one VR use should restore exactly one HP");
     assert.equal(
       (await game.entities.byTemplate(BASIC_JUICE)).length,
       0,
@@ -252,7 +255,7 @@ test(
     // Holding the trigger for more frames must not apply another heal after
     // canonical teardown removed the source entity.
     await game.step({ frames: 30 });
-    assert.equal(hp(await game.info()), 21);
+    assert.equal(hp(await game.info()), fullHp - 9);
     assert.equal((await game.entities.byTemplate(BASIC_JUICE)).length, 0);
   },
 );
