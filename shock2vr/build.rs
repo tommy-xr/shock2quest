@@ -20,8 +20,15 @@ fn main() {
     for reference in refs {
         if let Some(path) = git(&["rev-parse", "--git-path", &reference]) {
             let path = PathBuf::from(path);
-            if path.exists() {
-                println!("cargo:rerun-if-changed={}", path.display());
+            // A packed branch has no loose ref yet. Watch its directory so a
+            // new commit creating that ref invalidates the embedded SHA too.
+            let watched = if reference.starts_with("refs/") {
+                path.ancestors().find(|path| path.exists()).unwrap_or(&path)
+            } else {
+                &path
+            };
+            if watched.exists() {
+                println!("cargo:rerun-if-changed={}", watched.display());
             }
         }
     }
