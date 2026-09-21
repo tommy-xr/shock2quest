@@ -119,11 +119,10 @@ test(
     // --- Back to standard and reload from the clip that was just ejected: the
     // rounds are genuinely usable again, not a cosmetic stack.
     assert.equal(await cycleAmmo(game), "he");
-    assert.equal(await cycleAmmo(game), "std");
     const spare = await game.player.spawnItem(STD_CLIP);
     const reserveBeforeReload = await reserveRounds(game);
-    await game.input.trigger("Reload");
-    await game.step({ frames: 2 });
+    assert.equal(await cycleAmmo(game), "std");
+    assert.equal((await game.info()).player.reloading, true);
     const reloaded = ammoOf(await game.entities.detail(pistol));
     assert.equal(reloaded, loaded, "the pistol refills from its own ejected rounds");
     assert.equal(
@@ -198,6 +197,7 @@ test(
       "the spare was consumed - the eject has nothing to merge into",
     );
 
+    await game.step({ frames: 180 });
     await game.input.trigger("CycleAmmo");
     await game.step({ frames: 2 });
     assert.equal(ammoOf(await game.entities.detail(rifle)), 0, "the magazine was ejected");

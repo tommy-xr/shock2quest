@@ -189,9 +189,9 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 | Key | Action | Notes |
 | --- | ------ | ----- |
 | `P` | `PathfindingTestCycle` | set start → set goal → show path |
-| `B` | `DebugCycleWeapon` | spawns and wields the next weapon (unlike the number row) |
+| `Alt+B` | `DebugCycleWeapon` | spawns and wields the next weapon (unlike the number row) |
 | `Alt+X` | `EjectClip` | magazine back to the backpack reserve; no Quest button - in VR it is the settings MFD's UNLOAD |
-| `T` / `Y` | `CycleAmmo` / `CyclePsiPower` | no Quest binding: a clip is inserted by hand, and the psi MFD's stick navigation steps the power |
+| `B` (or `T`) / `Y` | `CycleAmmo` / `CyclePsiPower` | no Quest binding: a clip is inserted by hand, and the psi MFD's stick navigation steps the power |
 | - | `SelectPsiPower` | opens the psi power selection MFD; flat clicks the readout's power badge instead, Quest: the amp hand's *upper* face button |
 | `F` | `CycleGunSetting` | switch the wielded gun's fire mode (e.g. NORM / BURST); Quest: the gun hand's *upper* face button |
 | `U` | `ReadLastUnreadLog` | on Quest a free hand's *upper* face button resolves to this - see below |
