@@ -72,6 +72,11 @@ pub enum GlobalEffect {
         difficulty: dark::gamesys::Difficulty,
     },
 
+    /// Begin a fresh horde run with its own difficulty and campaign state.
+    StartNewHorde {
+        difficulty: dark::gamesys::Difficulty,
+    },
+
     /// Open the pause menu over the active scene. The scene cannot open it
     /// itself - the overlay is `Game`'s, and a paused scene is not updated at
     /// all - so the cyber interface's system button asks for it this way.
@@ -800,6 +805,10 @@ pub enum Effect {
     ReplaceEntity {
         entity_id: EntityId,
         template_id: i32,
+    },
+
+    StartHordeWave {
+        wave: u32,
     },
 
     Send {

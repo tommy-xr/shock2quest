@@ -43,6 +43,38 @@ const STATE_KEY: &str = "shock2vr.earth_horde";
 const SEED: u64 = 0x4541525448;
 const FINAL_WAVE: u32 = 10;
 const MAX_ALIVE: usize = 15;
+const OS_STATIONS: i32 = 60_300;
+const OS_WAVES: [u32; 4] = [0, 3, 6, 9];
+
+// Unlocks are monotonic: a debug jump backwards never revokes an earned station.
+fn unlock_os_stations(world: &World, wave: u32) -> Vec<Effect> {
+    let (ids, locked) = world
+        .borrow::<(View<PropTemplateId>, View<PropLocked>)>()
+        .unwrap();
+    let mut effects = vec![];
+    for (entity_id, (id, locked)) in (&ids, &locked).iter().with_id() {
+        let index = id.template_id - OS_STATIONS;
+        if let Some(required) = usize::try_from(index).ok().and_then(|i| OS_WAVES.get(i)) {
+            if locked.0 && wave >= *required {
+                effects.push(Effect::SetLocked {
+                    entity_id,
+                    locked: false,
+                });
+                effects.push(Effect::SetRenderAlpha {
+                    entity_id,
+                    alpha: 1.0,
+                });
+                effects.push(Effect::ShowMessage {
+                    text: format!(
+                        "OS upgrade station online: wave {required}. One free upgrade available."
+                    ),
+                });
+            }
+        }
+    }
+    effects
+}
+
 const WAVE_COUNTS: [u32; 10] = [6, 9, 12, 15, 18, 22, 26, 30, 34, 38];
 // Each unlocked archetype gets a guaranteed slot every wave. Pipe and shotgun
 // open every wave, so neither melee nor ranged pressure depends on RNG.
@@ -216,6 +248,7 @@ impl EntityPopulator for HordePopulation {
                 (
                     PropTemplateId { template_id: id },
                     PropSymName(name.to_owned()),
+                    PropObjName(format!("horde_object: \"{name}\"")),
                     PropPosition {
                         position: pos.into(),
                         cell: u16::MAX,
@@ -249,45 +282,102 @@ impl EntityPopulator for HordePopulation {
                 0.0,
             ));
         }
-        let supply = add(60_010, -463, "Containment supplies", [2.0, 22.0, 32.5], 0.0);
+        // Mount the cabinet backs just into the surveyed vertical wall planes
+        // (north z33.2, south z8, east x55), clear of the sloped buttresses.
+        let supply = add(
+            60_010,
+            -463,
+            "West street supplies",
+            [0.0, 23.55, 32.7],
+            0.0,
+        );
         let specialty = add(
             60_011,
             -463,
-            "Containment ammunition",
-            [-0.5, 22.0, 32.5],
-            0.0,
+            "South street ammunition",
+            [25.0, 23.55, 8.5],
+            180.0,
         );
-        for (index, (template, name)) in [
-            (-581, "Stats Trainer"),
-            (-1436, "Tech Trainer"),
-            (-1437, "Weapon Trainer"),
-            (-1583, "Psi Trainer"),
+        let east_supply = add(
+            60_012,
+            -463,
+            "Far east street supplies",
+            [54.5, 23.55, 24.0],
+            90.0,
+        );
+        // Retail replicators are an assembly: RepBase is only the cabinet.
+        // Match the separate RepScreen and its authored local offset.
+        for (index, position, yaw) in [
+            (0, [0.0, 23.40, 33.04], 0.0),
+            (1, [25.0, 23.40, 8.16], 180.0),
+            (2, [54.84, 23.40, 24.0], 90.0),
+        ] {
+            add(60_040 + index, -464, "Replicator display", position, yaw);
+        }
+        for (index, (template, name, position, yaw)) in [
+            (-581, "Stats Trainer", [-11.2, 2.8, 4.0], -90.0),
+            (-1436, "Tech Trainer", [32.8, 2.8, 4.0], 90.0),
+            (-1437, "Weapon Trainer", [19.3, 2.8, 12.4], 0.0),
+            (-1583, "Psi Trainer", [24.0, 2.8, 12.4], 0.0),
         ]
         .iter()
         .enumerate()
         {
-            add(
-                60_020 + index as i32,
-                *template,
-                name,
-                [8.2, 24.0, [44.0, 46.0, 55.0, 57.0][index]],
+            add(60_020 + index as i32, *template, name, *position, *yaw);
+        }
+        // West landing wall is continuous here (x6.8); the old wider bank
+        // crossed the doorway at z50. Keep all four clear of its light fixture.
+        let mut os_stations = vec![];
+        for (index, wave) in OS_WAVES.iter().enumerate() {
+            os_stations.push(add(
+                OS_STATIONS + index as i32,
+                -2307,
+                &format!(
+                    "OS upgrade — {}",
+                    if *wave == 0 {
+                        "available now".into()
+                    } else {
+                        format!("wave {wave}")
+                    }
+                ),
+                [7.25, 24.0, 43.0 + index as f32 * 1.6],
                 -90.0,
-            );
+            ));
         }
         let outlets = [
             (
                 supply,
                 60_030,
-                add(60_030, -327, "Supply outlet", [2.0, 21.0, 31.5], 0.0),
+                add(60_030, -327, "Supply outlet", [0.0, 21.0, 30.8], 0.0),
             ),
             (
                 specialty,
                 60_031,
-                add(60_031, -327, "Ammunition outlet", [-0.5, 21.0, 31.5], 0.0),
+                add(60_031, -327, "Ammunition outlet", [25.0, 21.0, 10.0], 180.0),
+            ),
+            (
+                east_supply,
+                60_032,
+                add(
+                    60_032,
+                    -327,
+                    "Far east supply outlet",
+                    [52.8, 21.0, 24.0],
+                    90.0,
+                ),
             ),
         ];
         let containment = super::earth_containment::populate(&mut add);
         drop(add);
+        for (index, station) in os_stations.into_iter().enumerate() {
+            world.add_component(
+                station,
+                (
+                    PropLocked(index > 0),
+                    PropRenderAlpha(if index == 0 { 1.0 } else { 0.35 }),
+                ),
+            );
+        }
         super::earth_containment::configure(world, containment, director);
         for (shop, template, outlet) in outlets {
             world.add_component(
@@ -329,6 +419,18 @@ impl EntityPopulator for HordePopulation {
         for (entity, items, costs) in [
             (
                 supply,
+                [
+                    "Standard Clip",
+                    "Med Patch",
+                    "Psi Booster",
+                    "Maintenance Tool",
+                    "Detox Patch",
+                    "Anti-Annelid Toxin",
+                ],
+                [8, 10, 8, 12, 8, 10],
+            ),
+            (
+                east_supply,
                 [
                     "Standard Clip",
                     "Med Patch",
@@ -409,8 +511,12 @@ pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
         research.advance(-1341, 0.0, 1, 1.0, 0.0, None, 0);
     }
     crate::difficulty::refresh_player_pools(&core.world, true);
-    core.teleport_player(vec3(11.6, 21.2, 24.0))
+    core.teleport_player(vec3(11.6, 23.36, 42.0))
         .expect("surveyed Earth horde start");
+    core.world
+        .borrow::<UniqueViewMut<PlayerInfo>>()
+        .unwrap()
+        .rotation = Quaternion::from_angle_y(Deg(-90.0));
     for template in [-928, -17, -247, -1358, -1358, -52, -57, -57] {
         core.spawn_into_backpack(assets, template)
             .expect("horde starter item fits backpack");
@@ -453,7 +559,34 @@ fn corpse_container(world: &World, id: u64) -> Option<EntityId> {
 
 /// Only unlooted contents still owned by expired corpses are removed. Picked
 /// up items have left those Contains links, so inventory and held loot survive.
+pub(crate) fn wave_jump_message(world: &World, wave: u32) -> Effect {
+    let scripts = world.borrow::<View<PropScripts>>().unwrap();
+    scripts
+        .iter()
+        .with_id()
+        .find(|(_, s)| {
+            s.scripts
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("EarthHorde"))
+        })
+        .map(|(to, _)| Effect::Send {
+            msg: crate::scripts::Message {
+                to,
+                payload: MessagePayload::StartHordeWave {
+                    wave: wave.clamp(1, 100),
+                },
+            },
+        })
+        .unwrap_or(Effect::ShowMessage {
+            text: "Start wave is available in Earth horde.".into(),
+        })
+}
+
 fn expired_corpses(world: &World) -> Vec<Effect> {
+    cleanup_enemies(world, false)
+}
+
+fn cleanup_enemies(world: &World, include_living: bool) -> Vec<Effect> {
     let (types, hp, links) = world
         .borrow::<(View<PropEcoType>, View<PropHitPoints>, View<Links>)>()
         .unwrap();
@@ -462,7 +595,7 @@ fn expired_corpses(world: &World) -> Vec<Effect> {
         .with_id()
         .filter(|(_, (tag, hp))| {
             (tag.0 > ECOLOGY || super::earth_containment::is_containment_type(tag.0))
-                && hp.hit_points <= 0
+                && (hp.hit_points <= 0 || (include_living && tag.0 > ECOLOGY))
         })
         .map(|(id, _)| id)
         .collect();
@@ -632,11 +765,28 @@ impl HordeDirector {
         }
     }
 
+    fn jump_to_wave(&mut self, world: &World, wave: u32) -> Effect {
+        if !self.initialized
+            || !world
+                .borrow::<UniqueView<PlayerLifeState>>()
+                .is_ok_and(|life| life.is_alive())
+        {
+            return Effect::NoEffect;
+        }
+        let mut effects = cleanup_enemies(world, true);
+        self.enemies.clear();
+        self.kills = 0;
+        self.wave = wave.clamp(1, 100) - 1;
+        effects.push(self.start_wave(world));
+        Effect::Multiple(effects)
+    }
+
     fn start_wave(&mut self, world: &World) -> Effect {
         let mut effects = expired_corpses(world);
         self.wave = self.wave.saturating_add(1);
         self.phase = Phase::Assault;
         effects.push(self.music());
+        effects.extend(unlock_os_stations(world, self.wave));
         self.spawned = 0;
         self.clock = 0.0;
         self.next_spawn = 0.0;
@@ -654,7 +804,8 @@ impl HordeDirector {
     fn status(&self) -> Effect {
         let text = match self.phase {
             Phase::Rest => format!(
-                "Rest: {}s | Supplies: street | Upgrades: upstairs | READY button skips wait",
+                "Wave {} in {}s | Shops: street | Trainers: subway | OS: landing",
+                self.wave + 1,
                 self.clock.ceil() as u32
             ),
             Phase::Assault => format!(
@@ -685,7 +836,7 @@ impl HordeDirector {
         };
         self.clock = self.rest_seconds();
         self.next_status = 5.0;
-        Effect::Multiple(vec![
+        let effects = vec![
             self.music(),
             Effect::AwardNanites {
                 amount: 30 + self.wave.min(20) as i32 * 5,
@@ -701,7 +852,8 @@ impl HordeDirector {
                     8 + self.wave.min(20) * 2
                 ),
             },
-        ])
+        ];
+        Effect::Multiple(effects)
     }
     /// Roll this kill's drop into the corpse's own loot container, so it is
     /// searched like any authored creature's loot (and expires with the corpse,
@@ -806,12 +958,17 @@ impl Script for HordeDirector {
                 .map(|p| p.0)
                 .unwrap_or(0);
             self.quick = mode == 1;
-            if mode == 2 {
-                self.wave = FINAL_WAVE - 1;
+            self.wave = if mode == 2 {
+                FINAL_WAVE
+            } else {
+                crate::dev_params::get(crate::dev_params::HORDE_START_WAVE) as u32
             }
+            .clamp(1, 100)
+                - 1;
             self.clock = self.rest_seconds();
             self.next_status = 5.0;
-            effects.push(Effect::ShowMessage { text: "EARTH: CONTAINMENT | Pistol + psi amp in inventory | Shops ahead, trainers upstairs".into() });
+            effects.extend(unlock_os_stations(world, self.wave + 1));
+            effects.push(Effect::ShowMessage { text: "EARTH: CONTAINMENT | Pistol + psi amp in inventory | Trainers in subway; shops on street; OS bank at the stair landing: start / waves 3/6/9".into() });
         }
         if !self.music_synced {
             effects.push(self.music());
@@ -842,6 +999,7 @@ impl Script for HordeDirector {
             dt,
             self.phase == Phase::Assault,
             self.quick,
+            self.wave,
         ));
         match self.phase {
             Phase::Rest => {
@@ -915,6 +1073,9 @@ impl Script for HordeDirector {
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
+        if let MessagePayload::StartHordeWave { wave } = msg {
+            return self.jump_to_wave(world, *wave);
+        }
         if let MessagePayload::TurnOn { from } = msg {
             if self.phase != Phase::Failed {
                 return self.containment.replenish(world, *from);
@@ -996,6 +1157,80 @@ mod tests {
         let (text, duration) = banner(director.start_wave(&world)).expect("a wave card");
         assert_eq!(text, "Wave 3");
         assert_eq!(duration, WAVE_CARD_DURATION);
+    }
+
+    #[test]
+    fn wave_jump_clears_attackers_without_awarding_skipped_waves() {
+        let mut world = World::new();
+        world.add_unique(PlayerLifeState::Alive);
+        let enemy = world.add_entity((PropEcoType(ECOLOGY + 1), PropHitPoints { hit_points: 20 }));
+        let inventory = world.add_entity((PropHitPoints { hit_points: 1 },));
+        let mut director = HordeDirector {
+            initialized: true,
+            wave: 1,
+            enemies: vec![Enemy {
+                id: enemy.inner(),
+                position: [0.0; 3],
+            }],
+            ..Default::default()
+        };
+        for wave in [9, 3, 100] {
+            let effects = Effect::flatten(vec![director.jump_to_wave(&world, wave)]);
+            assert_eq!(director.wave, wave);
+            assert_eq!(director.phase, Phase::Assault);
+            assert_eq!(director.spawned, 0);
+            assert!(director.enemies.is_empty());
+            assert!(
+                effects.iter().any(
+                    |e| matches!(e, Effect::DestroyEntity { entity_id } if *entity_id == enemy)
+                )
+            );
+            assert!(
+                !effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::AwardXP { .. } | Effect::AwardNanites { .. }))
+            );
+            assert!(!effects.iter().any(
+                |e| matches!(e, Effect::DestroyEntity { entity_id } if *entity_id == inventory)
+            ));
+        }
+    }
+
+    #[test]
+    fn wave_jump_refuses_dead_player_and_unrelated_mission() {
+        let world = World::new();
+        let mut director = HordeDirector {
+            initialized: true,
+            ..Default::default()
+        };
+        assert!(matches!(director.jump_to_wave(&world, 9), Effect::NoEffect));
+        assert!(matches!(
+            wave_jump_message(&world, 9),
+            Effect::ShowMessage { .. }
+        ));
+    }
+
+    #[test]
+    fn os_bank_unlocks_at_wave_start_and_skipped_milestones() {
+        let mut world = World::new();
+        for i in 0..4 {
+            world.add_entity((
+                PropTemplateId {
+                    template_id: OS_STATIONS + i,
+                },
+                PropLocked(i > 0),
+            ));
+        }
+        for (wave, count) in [(0, 0), (2, 0), (3, 1), (5, 1), (6, 2), (9, 3), (20, 3)] {
+            let effects = unlock_os_stations(&world, wave);
+            assert_eq!(
+                effects
+                    .iter()
+                    .filter(|e| matches!(e, Effect::SetLocked { locked: false, .. }))
+                    .count(),
+                count
+            );
+        }
     }
 
     #[test]

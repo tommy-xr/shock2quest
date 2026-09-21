@@ -249,6 +249,9 @@ pub struct DamageImpact {
 #[derive(Clone, Debug)]
 pub enum MessagePayload {
     BeginPsiSword,
+    StartHordeWave {
+        wave: u32,
+    },
     Hazard {
         toxin: bool,
         amount: f32,

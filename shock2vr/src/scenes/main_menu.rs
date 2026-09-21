@@ -3,7 +3,7 @@
 //! A minimal `GameScene` that draws the original `MAIN.PCX` backdrop with the
 //! six mouse-clickable menu entries, described on the shared [`UiCanvas`]. It
 //! reads `InputContext::pointer` (normalized screen coords) and emits a
-//! `GlobalEffect` on click. New Game opens a difficulty selection page, then
+//! `GlobalEffect` on click. New Game and Survive open the shared difficulty selection page; New Game then
 //! starts a fresh campaign; Quit emits `Quit`. Unimplemented entries are drawn
 //! dimmed and ignore clicks.
 //!
@@ -108,7 +108,7 @@ const FALLBACK_BUTTON_PITCH: f32 = 76.0;
 enum MenuAction {
     NewGame,
     ChooseDifficulty(dark::gamesys::Difficulty),
-    StartCampaign,
+    StartGame,
     Survive,
     Back,
     LoadGame,
@@ -159,7 +159,7 @@ const NEW_GAME_ITEMS: &[FrontendMenuItem<MenuAction>] = &[
     FrontendMenuItem {
         string_key: "start",
         fallback_label: "Start Game",
-        action: Some(MenuAction::StartCampaign),
+        action: Some(MenuAction::StartGame),
         label_override: None,
     },
     FrontendMenuItem {
@@ -338,11 +338,17 @@ fn resolve_click(
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NewRun {
+    Campaign,
+    Horde,
+}
+
 pub struct MainMenuScene {
     world: World,
     scene_name: String,
     menu: FrontendMenu<MenuAction>,
-    choosing_difficulty: bool,
+    choosing_difficulty: Option<NewRun>,
     developer_enabled: bool,
     version_clicks: u8,
     persistence_error: bool,
@@ -356,7 +362,7 @@ impl MainMenuScene {
         Self {
             world,
             scene_name: "main_menu".to_owned(),
-            choosing_difficulty: false,
+            choosing_difficulty: None,
             developer_enabled: crate::developer_mode::enabled(),
             version_clicks: 0,
             persistence_error: false,
@@ -389,6 +395,68 @@ impl MainMenuScene {
         }
     }
 
+    fn handle_action(&mut self, action: Option<MenuAction>) -> Vec<Effect> {
+        if action.is_some() && action != Some(MenuAction::BuildInfo) {
+            self.version_clicks = 0;
+        }
+        match action {
+            Some(MenuAction::BuildInfo) => {
+                if !self.developer_enabled && self.register_version_click() {
+                    match crate::developer_mode::set_enabled(true) {
+                        Ok(()) => {
+                            self.developer_enabled = true;
+                            self.persistence_error = false;
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "Could not persist developer mode");
+                            self.persistence_error = true;
+                        }
+                    }
+                }
+                Vec::new()
+            }
+
+            Some(MenuAction::NewGame) => {
+                self.choosing_difficulty = Some(NewRun::Campaign);
+                self.difficulty = dark::gamesys::Difficulty::Normal;
+                Vec::new()
+            }
+            Some(MenuAction::ChooseDifficulty(difficulty)) => {
+                self.difficulty = difficulty;
+                Vec::new()
+            }
+            Some(MenuAction::Back) => {
+                self.choosing_difficulty = None;
+                Vec::new()
+            }
+            Some(MenuAction::StartGame) => {
+                let effect = match self.choosing_difficulty {
+                    Some(NewRun::Horde) => GlobalEffect::StartNewHorde {
+                        difficulty: self.difficulty,
+                    },
+                    Some(NewRun::Campaign) => GlobalEffect::StartNewCampaign {
+                        difficulty: self.difficulty,
+                    },
+                    None => return Vec::new(),
+                };
+                vec![Effect::GlobalEffect(effect)]
+            }
+            Some(MenuAction::Survive) => {
+                self.choosing_difficulty = Some(NewRun::Horde);
+                self.difficulty = dark::gamesys::Difficulty::Normal;
+                Vec::new()
+            }
+            Some(MenuAction::LoadGame) => {
+                vec![Effect::GlobalEffect(GlobalEffect::ShowLoadGame)]
+            }
+            Some(MenuAction::Developer) => {
+                vec![Effect::GlobalEffect(GlobalEffect::ShowDeveloper)]
+            }
+            Some(MenuAction::Quit) => vec![Effect::GlobalEffect(GlobalEffect::Quit)],
+            None => Vec::new(),
+        }
+    }
+
     /// The menu, described once. Screen-space and world-space presentation
     /// differ only in how this canvas is rendered, so the two can never drift
     /// apart in layout, labels, or which entries look actionable.
@@ -402,7 +470,7 @@ impl MainMenuScene {
     ) -> UiCanvas {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
 
-        if self.choosing_difficulty {
+        if self.choosing_difficulty.is_some() {
             canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), "NEWGAME.PCX");
             let rects = self
                 .menu
@@ -436,7 +504,11 @@ impl MainMenuScene {
             }
             canvas.text(
                 Rect::new(4.0, 130.0, 632.0, 25.0),
-                "Fixed for this campaign",
+                if self.choosing_difficulty == Some(NewRun::Horde) {
+                    "Survive - fixed for this run"
+                } else {
+                    "Fixed for this campaign"
+                },
                 MENU_FONT,
                 16.0,
                 HAlign::Center,
@@ -520,7 +592,7 @@ impl GameScene for MainMenuScene {
             *world_time = time.clone();
         }
 
-        let rects = if self.choosing_difficulty {
+        let rects = if self.choosing_difficulty.is_some() {
             self.menu
                 .rects(asset_cache, NEW_GAME_LAYOUT_FILE, &NEW_GAME_RECTS)
         } else {
@@ -531,14 +603,14 @@ impl GameScene for MainMenuScene {
             input_context,
             game_options.presentation_mode,
             |point| {
-                if self.choosing_difficulty {
+                if self.choosing_difficulty.is_some() {
                     difficulty_hit(point, &rects)
                 } else {
                     hit(point, &rects, self.developer_enabled)
                 }
             },
             |point| {
-                if self.choosing_difficulty {
+                if self.choosing_difficulty.is_some() {
                     difficulty_hit(point, &rects)
                 } else {
                     hit(point, &rects, self.developer_enabled)
@@ -546,57 +618,7 @@ impl GameScene for MainMenuScene {
             },
         );
 
-        if action.is_some() && action != Some(MenuAction::BuildInfo) {
-            self.version_clicks = 0;
-        }
-        match action {
-            Some(MenuAction::BuildInfo) => {
-                if !self.developer_enabled && self.register_version_click() {
-                    match crate::developer_mode::set_enabled(true) {
-                        Ok(()) => {
-                            self.developer_enabled = true;
-                            self.persistence_error = false;
-                        }
-                        Err(error) => {
-                            tracing::warn!(%error, "Could not persist developer mode");
-                            self.persistence_error = true;
-                        }
-                    }
-                }
-                Vec::new()
-            }
-            Some(MenuAction::NewGame) => {
-                self.choosing_difficulty = true;
-                self.difficulty = dark::gamesys::Difficulty::Normal;
-                Vec::new()
-            }
-            Some(MenuAction::ChooseDifficulty(difficulty)) => {
-                self.difficulty = difficulty;
-                Vec::new()
-            }
-            Some(MenuAction::Back) => {
-                self.choosing_difficulty = false;
-                Vec::new()
-            }
-            Some(MenuAction::StartCampaign) => {
-                vec![Effect::GlobalEffect(GlobalEffect::StartNewCampaign {
-                    difficulty: self.difficulty,
-                })]
-            }
-            Some(MenuAction::Survive) => {
-                vec![Effect::GlobalEffect(GlobalEffect::new_game_transition(
-                    "earth_horde".to_owned(),
-                ))]
-            }
-            Some(MenuAction::LoadGame) => {
-                vec![Effect::GlobalEffect(GlobalEffect::ShowLoadGame)]
-            }
-            Some(MenuAction::Developer) => {
-                vec![Effect::GlobalEffect(GlobalEffect::ShowDeveloper)]
-            }
-            Some(MenuAction::Quit) => vec![Effect::GlobalEffect(GlobalEffect::Quit)],
-            None => Vec::new(),
-        }
+        self.handle_action(action)
     }
 
     fn render(
@@ -681,6 +703,29 @@ mod tests {
     const SCREEN: Vector2<f32> = Vector2 { x: 800.0, y: 600.0 };
 
     #[test]
+    fn survive_selects_difficulty_before_launch_and_cancel_does_not_leak_to_campaign() {
+        let mut menu = MainMenuScene::new();
+        assert!(menu.handle_action(Some(MenuAction::Survive)).is_empty());
+        assert_eq!(menu.choosing_difficulty, Some(NewRun::Horde));
+        for difficulty in dark::gamesys::Difficulty::ALL {
+            menu.handle_action(Some(MenuAction::ChooseDifficulty(difficulty)));
+            assert!(
+                matches!(menu.handle_action(Some(MenuAction::StartGame)).as_slice(),
+                [Effect::GlobalEffect(GlobalEffect::StartNewHorde { difficulty: actual })] if *actual == difficulty)
+            );
+        }
+        menu.handle_action(Some(MenuAction::Back));
+        assert!(menu.handle_action(Some(MenuAction::StartGame)).is_empty());
+        menu.handle_action(Some(MenuAction::NewGame));
+        assert!(matches!(
+            menu.handle_action(Some(MenuAction::StartGame)).as_slice(),
+            [Effect::GlobalEffect(GlobalEffect::StartNewCampaign {
+                difficulty: dark::gamesys::Difficulty::Normal
+            })]
+        ));
+    }
+
+    #[test]
     fn difficulty_page_maps_four_choices_start_and_cancel_to_retail_rects() {
         let center = |index: usize| {
             let rect = NEW_GAME_RECTS[index];
@@ -694,7 +739,7 @@ mod tests {
         }
         assert_eq!(
             difficulty_hit(center(5), &NEW_GAME_RECTS),
-            Some(MenuAction::StartCampaign)
+            Some(MenuAction::StartGame)
         );
         assert_eq!(
             difficulty_hit(center(7), &NEW_GAME_RECTS),

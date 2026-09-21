@@ -42,10 +42,11 @@ pub enum DevCategory {
     Melee,
     Throwing,
     Camera,
+    Horde,
 }
 
 impl DevCategory {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Root,
         Self::Visualizations,
         Self::Interaction,
@@ -58,6 +59,7 @@ impl DevCategory {
         Self::Melee,
         Self::Throwing,
         Self::Camera,
+        Self::Horde,
     ];
 
     pub fn label(self) -> &'static str {
@@ -74,6 +76,7 @@ impl DevCategory {
             Self::Melee => "Melee",
             Self::Throwing => "Throwing",
             Self::Camera => "Camera & view",
+            Self::Horde => "Earth horde",
         }
     }
 
@@ -213,6 +216,13 @@ macro_rules! dev_params {
 }
 
 dev_params! {
+    /// Applied once to fresh horde runs; the cheat explicitly applies it mid-run.
+    HORDE_START_WAVE = Horde::float("horde_start_wave", "Start / jump to wave", 1.0, 1.0, 100.0, 1.0),
+    /// Earliest normal-mode wave that permits growth and new pods. Protection
+    /// still counts down during earlier combat; diagnostic mode bypasses this gate.
+    HORDE_GROWTH_WAVE = Horde::float("horde_growth_wave", "Growth first wave", 4.0, 1.0, 20.0, 1.0),
+    /// Combat seconds from bare to maximum infestation after protection expires.
+    HORDE_GROWTH_SECONDS = Horde::float("horde_growth_seconds", "Growth seconds", 180.0, 30.0, 600.0, 15.0),
     /// Global VR hand-frame offset along controller-local -Z, in centimeters.
     /// Includes menu gloves, wrist UI, held items and interactions; negative pulls back.
     GLOVE_FORWARD_CM = Hands::float_locked("glove_forward_cm", "Glove forward cm", -15.0, -20.0, 20.0, 0.5),

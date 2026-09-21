@@ -2,9 +2,11 @@
 
 Run `cargo dbgr --mission earth_horde` (or launch that mission in the desktop runtime). `earth_horde_test` uses three short waves for iteration. The aliases load Earth geometry; ordinary `earth.mis` keeps its original behavior.
 
-Ten escalating waves have about 26 minutes of minimum scheduled combat and rest. Clearing enemies can take longer. After the final wave, use the ready button beside the shops to begin optional endless play. The same button skips a rest. Doors are closed and locked and the training trigger graph is disabled.
+The player starts at the top of the stairs, facing the subway gravshaft.
 
-The starter backpack contains a wrench, pistol, psi amp, ammunition and medical/psi supplies. Shops are on the street, trainers upstairs. Buy psi tiers and individual powers separately; only powers supported by the current runtime are sold. Replicated items dispense in front of the machines. Random equipment and currency supplement normal enemy loot and wave rewards.
+Ten escalating waves have about 26 minutes of minimum scheduled combat and rest. Clearing enemies can take longer. After the final wave, use the ready button beside the shops to begin optional endless play. The same button skips a rest. The training trigger graph is disabled. The original training doors remain sealed; OS rewards are available from the landing bank.
+
+The starter backpack contains a wrench, pistol, psi amp, ammunition and medical/psi supplies. Three shops are spread across the street; four trainers are spread around the subway. Buy psi tiers and individual powers separately; only powers supported by the current runtime are sold. Replicated items dispense in front of the machines. Random equipment and currency supplement normal enemy loot and wave rewards.
 
 Corpses and their remaining contents stay lootable throughout the rest. Starting the next wave removes them; items already collected survive. Run state, rewards and purchased powers persist in saves.
 
@@ -46,23 +48,24 @@ Loading a save restarts the saved assault's song from its beginning; other phase
 load silently. Sample offsets and random music branches are not serialized.
 ## Renewable containment
 
-Three Hydro air circulators protect the subway, street, and upstairs independently.
-The subway cabinet is beside the platform wall, the street cabinet is east of the
-shops, and the upstairs cabinet is on the east wall opposite the trainers.
-They begin with 180, 210, and 240 seconds of protection respectively. Protection
+Two Hydro air circulators protect the two levels. The subway cabinet protects
+only the subway; the street cabinet protects both the street and upstairs lobby.
+They begin with 180 and 210 seconds of protection respectively. Protection
 counts combat time only: preparation, rest, and the completed-run screen do not
 spend it. A warning appears with 30 seconds remaining.
 
-When protection expires, overlapping Hydro growth spreads outward from shop and
+Growth and new pods are gated until wave 4, even if the opening waves take a long
+time. Protection still counts down during those waves. Once the wave gate is
+open and protection expires, overlapping Hydro growth spreads outward from shop and
 trainer approaches onto nearby floors and walls, then farther along travel routes.
 There are 339 surveyed patches: 110 in the subway, 155 on the street, and 74
 upstairs. Sites were checked against world geometry and reachable arena paths;
 locked training rooms are excluded. Growth is cosmetic and does not prevent
 using the machines. Wall eggs remain a follow-up.
 
-Density reaches its maximum after 90 unprotected combat seconds. At 60 seconds,
+Density reaches its maximum after 180 eligible unprotected combat seconds. At 120 seconds,
 the zone can produce a GrubEgg every 45 combat seconds, up to four pods. At
-75 seconds the cap rises to six and the interval drops to 30 seconds; at maximum
+150 seconds the cap rises to six and the interval drops to 30 seconds; at maximum
 density it reaches eight pods with a 15-second interval. Each new spawn uses the
 current interval; an already running countdown completes normally. Eight floor
 sites per zone prioritize services before extending along routes. Approaching within four world units hatches an existing pod even during
@@ -74,7 +77,7 @@ New runs begin with Toxin-A research completed. Buy ready-to-use Anti-Annelid
 Toxin (Toxin-A) for 10 nanites at the supply replicator.
 In flatscreen, frob a circulator while carrying a vial; in VR, release a held
 vial against the cabinet. Each vial protects
-only that zone for another 180 combat seconds, immediately stops new eggs, and
+that device’s level for another 180 combat seconds, immediately stops new eggs, and
 clears accumulated patches over up to 12 seconds (recovery also runs during rest).
 The cabinet changes from inactive `air_reof` to active `air_re`. Existing eggs
 and grubs remain; servicing a circulator does not erase those threats.
@@ -85,8 +88,72 @@ Hatching reserves available capacity within each batch. Open shells expire after
 30 seconds; dead containment creatures join the existing end-of-rest corpse
 cleanup. Saved runs retain each zone's protection, density, egg cadence, and
 shell lifetime. The short `earth_horde_test` alias accelerates depletion, growth,
-and egg production tenfold for diagnostics, while keeping recovery/hatching rules.
+and egg production tenfold and bypasses the wave gate for diagnostics, while
+keeping recovery/hatching rules.
 
 The first pass deliberately uses floor GrubEggs. Wall-mounted growth reuses the
 Hydro meshes with wall-facing transforms; wall eggs and additional payloads can
 follow once pacing has been playtested.
+
+## Pacing prototype controls
+
+Open **Developer → Earth horde** in the pause menu or main menu. Both controls
+apply live through the existing shared flat/VR developer menu and debug API:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `horde_growth_wave` | 4 | First wave allowing growth and new pods (1–20). Protection still drains in earlier combat. |
+| `horde_growth_seconds` | 180 | Unprotected combat seconds from bare to maximum growth (30–600). Larger is slower. |
+
+Set these to `1` and `90` to compare the previous containment pacing. Increasing
+the first-wave setting mid-run pauses new growth/pods below that wave; it does
+not remove existing growth, pods, or grubs. Growth speed changes apply to remaining
+growth immediately; Toxin-A recovery and egg cadence retain their existing speeds.
+The diagnostic alias ignores only the wave gate, not the growth speed setting.
+
+These are developer overrides: they reset when the application restarts and are
+not stored in saves. Saved protection, density, and egg timers still resume; the
+current process's tuning controls their subsequent progression.
+
+Choose **Survive** on the main menu, select **Easy / Normal / Hard / Impossible**,
+then **Start Game**. **Cancel** returns to the main menu. The choice initializes a
+fresh horde run and stays fixed in its saves.
+
+Horde pressure is separate from campaign difficulty. Campaign difficulty feeds
+player health/psi pools and authored shop/training costs and loot; the director's
+wave roster, quotas, living-enemy cap, and assault schedule are fixed independently.
+A debug run accepts `--difficulty easy|normal|hard|impossible` at launch.
+
+## OS bank and service placement
+
+Four single-use OS stations mount on the continuous west wall of the upstairs
+landing, grouped clear of the doorway and light fixture. The
+first is available immediately; the others activate at the beginning of waves
+3, 6, and 9. Offline stations are dimmed, show their wave requirement in the
+object name, and refuse purchases until activated. Each grants one supported
+OS trait for free. Used and unlocked state survives save/load. There are no
+horde access cards or reward-room locks.
+
+Trainers remain in the subway: stats at the west end, tech at the east end,
+and weapons/psi on the east platform's back wall. The weapons trainer is clear
+of the large containment cabinet. Three replicators serve the street: west,
+south wall, and far east end. Their separate RepScreen displays and wall-mounted
+height follow authored MedSci machines. All three cabinet backs contact their
+walls; the south-wall ammunition shop avoids the sloped buttresses, vehicles,
+and containment device. Outlets face accessible approaches.
+
+## Start at a wave / jump cheat
+
+Set **Developer → Earth horde → Start / jump to wave** (`horde_start_wave`,
+1–100, default 1) before starting a fresh run. You begin with preparation for
+that wave and the usual starter character. Alternatively, while playing, set
+the same value and click **Developer → Cheats → Start selected horde wave**.
+`DebugStartHordeWave` exposes the same action to the debug runtime input API.
+
+A jump clears current wave attackers and their uncollected contents, resets
+the wave schedule, starts the selected wave and its music, and enables any OS
+stations due by that wave. It preserves inventory, bought upgrades and already
+used stations. Skipped waves grant no nanites or cyber modules. Existing
+infestation remains. Jumps require a living player in Earth horde; changing the
+selector alone never rewinds a loaded or running game. The selector resets on
+process restart, while the actual run's wave is saved normally.
