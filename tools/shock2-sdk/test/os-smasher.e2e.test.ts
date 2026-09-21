@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { acquireOsUpgrade } from "./helpers/os-upgrade.js";
+import { aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
 test("Smasher waits for release and adds six base damage after its retail charge time", {
   skip: process.env.SHOCK2_E2E !== "1", timeout: 300_000,
@@ -29,5 +30,72 @@ test("Smasher waits for release and adds six base damage after its retail charge
     await game.step({ frames: 120 });
     assert.equal(before - await hp(), expected);
     assert.ok(await hp() > 0, "no zero-HP clamping");
+  }
+});
+
+test("VR Smasher cues charge and ready once on the owning hand", {
+  skip: process.env.SHOCK2_E2E !== "1", timeout: 300_000,
+}, async () => {
+  const save = `os_smasher_haptics_${Date.now()}`;
+  {
+    await using flat = await GameServer.launch({ mission: "medsci2.mis" });
+    await acquireOsUpgrade(flat, "Smasher");
+    await flat.player.spawnItem(-928);
+    await flat.input.trigger("EquipWrench");
+    await flat.step({ frames: 5 });
+    assert.ok((await flat.save(save)).success);
+  }
+  await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+  await game.input.set("left_hand.squeeze", 1);
+  assert.ok((await game.load(save)).success);
+  await game.step({ frames: 30 });
+  assert.ok((await game.info()).player.stats!.os_traits.includes(11));
+  const pulses = async () => (await game.info()).player.hand_feedback!.haptics!.sequence;
+  for (const hand of ["left", "right"] as const) {
+    const i = hand === "left" ? 0 : 1;
+    const owner = hand === "left" ? "wielded_entity_id" : "right_hand_entity_id";
+    let id = (await game.info()).player.wielded_entity_id;
+    if (hand === "right") {
+      const existing = new Set((await game.entities.list()).entities.map(e => e.id));
+      await game.player.spawnItem(-928);
+      id = (await game.entities.list()).entities.find(e => e.template_id === -928 && !existing.has(e.id))!.id;
+      await game.input.trigger("ToggleUseMode");
+      await game.step({ frames: 5 });
+      const ui = await game.ui.state();
+      const cell = ui.strip?.elements.find(e => e.entity_id === id);
+      assert.ok(cell);
+      await aimVrHandAtCanvas(game, ui.panel_pose!, [cell.rect[0] + cell.rect[2] / 2, cell.rect[1] + cell.rect[3] / 2], { hand, squeeze: 1 });
+      await game.step({ frames: 5 });
+      await game.input.trigger("ToggleUseMode");
+    }
+    assert.ok(id != null);
+    await game.input.set(`${hand}_hand.position`, [i === 0 ? -0.6 : 0.6, 1.2, -0.6]);
+    await game.step({ frames: 5 });
+    assert.equal((await game.info()).player[owner], id, `${hand} holds the wrench`);
+    const before = await pulses();
+    await game.input.set(`${hand}_hand.trigger`, 1);
+    await game.step({ frames: 3 });
+    assert.equal((await pulses())[i], before[i] + 1, "light start pulse");
+    await game.step({ frames: 30 });
+    assert.equal((await pulses())[i], before[i] + 2, "ready pulse after 380 ms");
+    await game.step({ frames: 60 });
+    assert.equal((await pulses())[i], before[i] + 2, "holding ready does not buzz repeatedly");
+    await game.input.set(`${hand}_hand.trigger`, 0);
+    await game.step({ frames: 60 });
+    assert.equal((await pulses())[i], before[i] + 2, "release and expiry are silent");
+    await game.input.set(`${hand}_hand.trigger`, 1);
+    await game.step({ frames: 3 });
+    await game.input.set(`${hand}_hand.trigger`, 0);
+    await game.step({ frames: 30 });
+    assert.equal((await pulses())[i], before[i] + 3, "short charge has no ready pulse");
+    await game.input.set(`${hand}_hand.trigger`, 1);
+    await game.step({ frames: 3 });
+    await game.input.set(`${hand}_hand.squeeze`, 0);
+    await game.step({ frames: 30 });
+    assert.equal((await game.info()).player[owner], null);
+    assert.equal((await pulses())[i], before[i] + 4, "dropping cancels the ready pulse");
+    assert.equal((await pulses())[1 - i], before[1 - i], "other controller stays silent");
+    await game.input.set(`${hand}_hand.trigger`, 0);
+    await game.step({ frames: 3 });
   }
 });

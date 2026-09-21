@@ -9455,6 +9455,28 @@ impl MissionCore {
                     entity_id,
                     fraction,
                 } => {
+                    if presentation_is_vr(&self.world) {
+                        let previous = self
+                            .world
+                            .borrow::<View<crate::runtime_props::RuntimePropMeleeCharge>>()
+                            .unwrap()
+                            .get(entity_id)
+                            .ok()
+                            .map(|charge| charge.0);
+                        if let Some(pulse) = crate::haptics::melee_charge_pulse(previous, fraction)
+                        {
+                            for hand in [crate::Handedness::Left, crate::Handedness::Right] {
+                                if crate::wielded_weapon::held_by_hand(&self.world, hand)
+                                    == Some(entity_id)
+                                {
+                                    self.world
+                                        .borrow::<UniqueViewMut<crate::haptics::HapticFeedback>>()
+                                        .unwrap()
+                                        .request(hand, pulse);
+                                }
+                            }
+                        }
+                    }
                     if let Some(fraction) = fraction {
                         self.world.add_component(
                             entity_id,

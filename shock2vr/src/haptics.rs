@@ -12,6 +12,21 @@ pub const SHOULDER_READY: HapticPulse = HapticPulse {
     duration_ms: 60,
 };
 
+/// Smasher feedback follows charge transitions, never the per-frame readout.
+pub(crate) fn melee_charge_pulse(previous: Option<f32>, next: Option<f32>) -> Option<HapticPulse> {
+    match (previous, next) {
+        (previous, Some(0.0)) if previous != Some(0.0) => Some(HapticPulse {
+            amplitude: 0.2,
+            duration_ms: 30,
+        }),
+        (Some(previous), Some(next)) if previous < 1.0 && next >= 1.0 => Some(HapticPulse {
+            amplitude: 0.6,
+            duration_ms: 70,
+        }),
+        _ => None,
+    }
+}
+
 #[derive(Default, Unique, serde::Serialize)]
 pub struct HapticFeedback {
     pub pending: [Option<HapticPulse>; 2],
@@ -52,6 +67,27 @@ pub fn take(world: &World) -> [Option<HapticPulse>; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn smasher_charge_cues_edges_only() {
+        let start = melee_charge_pulse(None, Some(0.0)).expect("charge starts with a pulse");
+        let ready = melee_charge_pulse(Some(0.99), Some(1.0)).expect("full charge cues ready");
+        assert!(ready.amplitude > start.amplitude);
+        assert!(ready.duration_ms > start.duration_ms);
+        assert_eq!(melee_charge_pulse(Some(0.0), Some(1.0)), Some(ready));
+        for (before, after) in [
+            (Some(0.0), Some(0.0)),
+            (Some(0.1), Some(0.9)),
+            (Some(1.0), Some(1.0)),
+            (Some(0.2), None),
+            (Some(1.0), None),
+            (None, None),
+            (None, Some(1.0)),
+        ] {
+            assert_eq!(melee_charge_pulse(before, after), None);
+        }
+        assert_eq!(melee_charge_pulse(Some(1.0), Some(0.0)), Some(start));
+    }
 
     #[test]
     fn output_is_consumed_once_and_absent_worlds_are_silent() {
