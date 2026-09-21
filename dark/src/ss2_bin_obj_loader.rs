@@ -223,20 +223,73 @@ pub fn to_scene_objects(
             };
 
             let material = RefCell::new(mat);
-            let mut so = create_dark_object_scene_object(material, geometry);
+            let mut so = create_dark_object_scene_object(material, geometry.clone());
 
-            so.additive_color = additive;
+            so.blend_mode = if additive {
+                engine::scene::scene_object::BlendMode::AdditiveColor
+            } else {
+                engine::scene::scene_object::BlendMode::Alpha
+            };
             if additive { so.set_depth_write(false); }
             so.set_skinning_data(skeleton.get_transforms());
 
-            Some(so)
+            let mut objects = vec![so];
+            // Start with one inspected decal material. Other material profiles
+            // remain on the base path until their geometry is render-verified.
+            let is_metal_decal = tex_path.split('.').next()
+                .is_some_and(|name| name.eq_ignore_ascii_case("ND-mtlhit"));
+            if !is_skinned && !debug_normals_enabled && is_metal_decal {
+                for pass in crate::util::object_material_incidence_passes(asset_cache, &tex_path) {
+                    let Some(overlay_texture) = pass.texture.as_deref()
+                        .map(|name| crate::util::load_texture_with_fallback(asset_cache, name))
+                        .unwrap_or_else(|| Some(texture.clone()))
+                    else { continue; };
+                    let Some(ramp) = load_incidence_ramp(asset_cache, &pass.ramp)
+                    else { continue; };
+                    let mat = engine::scene::basic_material::create_incidence(
+                        overlay_texture,
+                        engine::scene::incidence::IncidencePass {
+                            ramp, tint: pass.tint, unlit: pass.unlit,
+                            geometric_normal: true,
+                        },
+                    );
+                    let mut overlay = create_dark_object_scene_object(
+                        RefCell::new(mat), geometry.clone(),
+                    );
+                    overlay.blend_mode = engine::scene::scene_object::BlendMode::AdditiveAlpha;
+                    overlay.set_depth_write(false);
+                    objects.push(overlay);
+                }
+            }
+            Some(objects)
         })
+        .flatten()
         .collect::<Vec<SceneObject>>();
 
     // Vhots are attachment points (muzzle, light, particle origins), not
     // geometry - they are read off `mesh.vhots` by whoever attaches to them.
     // The viewer tools draw their own markers (`--debug-articulation`).
     (mesh_objects, skeleton)
+}
+
+fn load_incidence_ramp(assets: &mut AssetCache, name: &str) -> Option<Rc<dyn TextureTrait>> {
+    let candidates = engine::texture_format::DECODABLE_EXTENSIONS
+        .iter()
+        .map(|ext| format!("{name}.{ext}"))
+        .collect::<Vec<_>>();
+    let resolved = assets
+        .asset_paths()
+        .resolve_first(assets.base_path().to_owned(), &candidates)?;
+    assets
+        .get_ext_opt(
+            &TEXTURE_IMPORTER,
+            &resolved,
+            &engine::texture::TextureOptions {
+                wrap: false,
+                ..Default::default()
+            },
+        )
+        .map(|texture| texture as Rc<dyn TextureTrait>)
 }
 
 fn create_dark_object_scene_object(

@@ -1,3 +1,4 @@
+pub mod incidence;
 pub mod scene;
 pub use scene::{LegacyScene, Scene};
 

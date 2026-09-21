@@ -43,3 +43,9 @@ not seeded, so fixed simulation steps reproduce timing but not exact pixels.
 
 Verification uses flatscreen and headless `--vr` presentation for now. It does
 not establish headset stereo quality or device GPU cost.
+
+The metal decal sample now consumes its installed incidence-shine pass. Move
+around the mark to inspect the changing highlight; its geometry, UVs and depth
+bias are shared with the base decal. Shared material includes are resolved
+before selecting supported passes. This is a targeted shine implementation,
+not general multi-pass material parity or dynamic light spill.

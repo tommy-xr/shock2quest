@@ -169,8 +169,8 @@ pub fn create_debug_nd_materials_scene(
 
     // Static inspection samples below the impact. Preserve model geometry and
     // local transforms; only position/scale the whole object on the panel. The
-    // existing model importer supplies the base material (extra shine passes
-    // are intentionally not approximated here).
+    // model importer supplies the base material and supported shine passes.
+    // Every pass inherits the same placement and depth bias.
     for (index, models) in [
         (0, vec!["ND-mtlhit0"]),
         (
