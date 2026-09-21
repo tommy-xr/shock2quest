@@ -51,6 +51,12 @@ test("VR Smasher cues charge and ready once on the owning hand", {
   await game.step({ frames: 30 });
   assert.ok((await game.info()).player.stats!.os_traits.includes(11));
   const pulses = async () => (await game.info()).player.hand_feedback!.haptics!.sequence;
+  const renderOffset = async (id: number) => {
+    const body = await game.entities.detail(id);
+    const draw = (await game.scene.objects({ entityId: id })).objects.find(o => o.source === "entity");
+    assert.ok(draw, "held wrench is rendered");
+    return Math.hypot(...draw.position.map((v, axis) => v - body.position[axis]));
+  };
   for (const hand of ["left", "right"] as const) {
     const i = hand === "left" ? 0 : 1;
     const owner = hand === "left" ? "wielded_entity_id" : "right_hand_entity_id";
@@ -72,16 +78,21 @@ test("VR Smasher cues charge and ready once on the owning hand", {
     await game.input.set(`${hand}_hand.position`, [i === 0 ? -0.6 : 0.6, 1.2, -0.6]);
     await game.step({ frames: 5 });
     assert.equal((await game.info()).player[owner], id, `${hand} holds the wrench`);
+    assert.ok(await renderOffset(id) < 1e-5, "idle mesh follows physical pose");
     const before = await pulses();
     await game.input.set(`${hand}_hand.trigger`, 1);
     await game.step({ frames: 3 });
     assert.equal((await pulses())[i], before[i] + 1, "light start pulse");
     await game.step({ frames: 30 });
     assert.equal((await pulses())[i], before[i] + 2, "ready pulse after 380 ms");
+    const vibrating = await renderOffset(id);
+    assert.ok(vibrating > 0.0001 && vibrating < 0.02, "charged mesh trembles relative to its physical pose");
     await game.step({ frames: 60 });
     assert.equal((await pulses())[i], before[i] + 2, "holding ready does not buzz repeatedly");
     await game.input.set(`${hand}_hand.trigger`, 0);
-    await game.step({ frames: 60 });
+    await game.step({ frames: 2 });
+    assert.ok(await renderOffset(id) < 1e-5, "release immediately stops motion while strike is armed");
+    await game.step({ frames: 58 });
     assert.equal((await pulses())[i], before[i] + 2, "release and expiry are silent");
     await game.input.set(`${hand}_hand.trigger`, 1);
     await game.step({ frames: 3 });

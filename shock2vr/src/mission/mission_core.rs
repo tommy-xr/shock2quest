@@ -9454,6 +9454,7 @@ impl MissionCore {
                 Effect::SetMeleeCharge {
                     entity_id,
                     fraction,
+                    held_seconds,
                 } => {
                     if presentation_is_vr(&self.world) {
                         let previous = self
@@ -9462,7 +9463,7 @@ impl MissionCore {
                             .unwrap()
                             .get(entity_id)
                             .ok()
-                            .map(|charge| charge.0);
+                            .map(|charge| charge.fraction);
                         if let Some(pulse) = crate::haptics::melee_charge_pulse(previous, fraction)
                         {
                             for hand in [crate::Handedness::Left, crate::Handedness::Right] {
@@ -9480,7 +9481,10 @@ impl MissionCore {
                     if let Some(fraction) = fraction {
                         self.world.add_component(
                             entity_id,
-                            crate::runtime_props::RuntimePropMeleeCharge(fraction),
+                            crate::runtime_props::RuntimePropMeleeCharge {
+                                fraction,
+                                held_seconds,
+                            },
                         );
                     } else {
                         self.world
@@ -13224,7 +13228,12 @@ impl MissionCore {
                 if options.presentation_mode != crate::PresentationMode::Flat
                     || self.interaction.viewmodel_entity() != Some(amp)
                 {
-                    scene.extend(crate::psi_sword::render(&self.world, asset_cache, amp));
+                    let charge_transform =
+                        crate::melee_charge_visual::transform(&self.world, Some(amp));
+                    for mut blade in crate::psi_sword::render(&self.world, asset_cache, amp) {
+                        blade.set_transform(charge_transform * blade.get_transform());
+                        scene.push(blade);
+                    }
                 }
             }
         }
@@ -13359,9 +13368,14 @@ impl MissionCore {
             });
 
             if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
+                let visual_xform = if self.interaction.is_holding(*entity_id) {
+                    crate::melee_charge_visual::transform(&self.world, Some(*entity_id)) * xform
+                } else {
+                    xform
+                };
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
-                    xformed_obj.set_transform(xform);
+                    xformed_obj.set_transform(visual_xform);
                     xformed_obj.set_debug_tag(Some(debug_tag.clone()));
                     if options.debug_skeletons && is_animated_model {
                         xformed_obj.set_depth_write(false);

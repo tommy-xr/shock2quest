@@ -725,6 +725,7 @@ pub enum Effect {
     SetMeleeCharge {
         entity_id: EntityId,
         fraction: Option<f32>,
+        held_seconds: Option<f32>,
     },
 
     DestroyEntity {

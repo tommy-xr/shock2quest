@@ -4,7 +4,7 @@ use shipyard::{EntityId, UniqueView, World};
 
 use super::Effect;
 
-const CHARGE_SECONDS: f32 = 0.380;
+pub(crate) const CHARGE_SECONDS: f32 = 0.380;
 pub(super) const BONUS_DAMAGE: f32 = 6.0;
 // A VR release opens one physical swing, rather than storing damage forever.
 const STRIKE_WINDOW_SECONDS: f32 = 0.8;
@@ -100,12 +100,14 @@ impl MeleeCharge {
         Effect::SetMeleeCharge {
             entity_id,
             fraction: None,
+            held_seconds: None,
         }
     }
 
     fn readout(&self, entity_id: EntityId) -> Effect {
         Effect::SetMeleeCharge {
             entity_id,
+            held_seconds: self.elapsed,
             fraction: Some(
                 self.elapsed
                     .map(|s| (s / CHARGE_SECONDS).min(1.0))
