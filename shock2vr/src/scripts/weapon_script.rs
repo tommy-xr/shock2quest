@@ -310,6 +310,7 @@ pub struct WeaponScript {
     /// and deliberately not saved: a save taken mid-burst loads with the
     /// trigger at rest, the same call `RuntimePropShotCooldown` makes.
     burst: Option<ActiveBurst>,
+    melee_charge: super::melee_charge::MeleeCharge,
 }
 
 /// A burst in flight, with the setting the pull started in - so switching fire
@@ -321,7 +322,10 @@ struct ActiveBurst {
 
 impl WeaponScript {
     pub fn new() -> WeaponScript {
-        WeaponScript { burst: None }
+        WeaponScript {
+            burst: None,
+            melee_charge: Default::default(),
+        }
     }
 }
 
@@ -335,6 +339,13 @@ impl Script for WeaponScript {
         _physics: &PhysicsWorld,
         time: &crate::time::Time,
     ) -> Effect {
+        if self.melee_charge.charging() {
+            return self.melee_charge.tick(
+                entity_id,
+                time.elapsed.as_secs_f32(),
+                crate::wielded_weapon::held_in_hand(world, entity_id),
+            );
+        }
         let Some(burst) = self.burst.as_mut() else {
             return Effect::NoEffect;
         };
@@ -413,7 +424,16 @@ impl Script for WeaponScript {
                 }
 
                 match fire_one_shot(world, entity_id, &setting) {
-                    ShotOutcome::FlatMeleeSwing => Effect::FlatMeleeSwing { entity_id },
+                    ShotOutcome::FlatMeleeSwing => {
+                        if super::melee_charge::owned(world) {
+                            self.melee_charge.begin(entity_id)
+                        } else {
+                            Effect::FlatMeleeSwing {
+                                entity_id,
+                                bonus_damage: 0.0,
+                            }
+                        }
+                    }
                     ShotOutcome::Empty => dry_fire(world, entity_id),
                     ShotOutcome::NotWorking => play_environmental_sound(
                         world,
@@ -458,7 +478,11 @@ impl Script for WeaponScript {
             {
                 crate::scripts::maintenance::apply(world, *entity, Some(entity_id))
             }
+            MessagePayload::Drop => self.melee_charge.cancel(entity_id),
             MessagePayload::TriggerRelease => {
+                if let Some(effect) = self.melee_charge.release(entity_id, false) {
+                    return effect;
+                }
                 // An unlimited burst ends with the trigger. A finite one plays
                 // out regardless - letting go of the pistol's BURST one frame
                 // in still sends all three rounds.
@@ -680,6 +704,11 @@ pub(super) fn flat_melee_hit(
     world: &World,
     weapon_id: EntityId,
 ) -> Effect {
+    let bonus = world
+        .borrow::<View<crate::runtime_props::RuntimePropFlatMeleeBonus>>()
+        .ok()
+        .and_then(|v| v.get(weapon_id).ok().map(|b| b.0))
+        .unwrap_or(0.0);
     // `ray_cast` normalizes its direction and casts a fixed 100 units, so the
     // reach has to be passed as `ray_cast2`'s max_toi - scaling the direction
     // bounds nothing.
@@ -721,15 +750,18 @@ pub(super) fn flat_melee_hit(
                 payload: MessagePayload::Damage {
                     // Adrenaline Overproduction scales the player's melee
                     // damage while it is active (1.0 otherwise).
-                    amount: (if crate::psi_sword::active(world, weapon_id) {
-                        crate::mission::stim_response::contact_stim_damage(
+                    amount: if crate::psi_sword::active(world, weapon_id) {
+                        crate::mission::stim_response::contact_stim_damage_with_bonus(
                             world,
                             crate::psi_sword::WEAPON,
                             target,
+                            crate::scripts::melee_weapon::player_melee_damage_scale(world),
+                            bonus,
                         )
                     } else {
-                        MELEE_DAMAGE
-                    }) * crate::scripts::melee_weapon::player_melee_damage_scale(world),
+                        (MELEE_DAMAGE + bonus)
+                            * crate::scripts::melee_weapon::player_melee_damage_scale(world)
+                    },
                     // Swing direction + contact point seed the victim's
                     // death-ragdoll reaction. No bone: melee resolves a hitbox
                     // proxy to its parent BEFORE sending (so HitBoxScript
@@ -1482,6 +1514,26 @@ mod tests {
         assert!(
             !includes_damage_to(effect, target),
             "the trigger edge is only the start of the visible swing"
+        );
+    }
+
+    #[test]
+    fn smasher_waits_for_trigger_release_before_starting_a_flat_swing() {
+        let (world, physics, weapon, _) = flat_melee_fixture();
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(11);
+        world.add_unique(quests);
+        let mut script = WeaponScript::new();
+        let effect = script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerPull);
+        assert!(
+            !matches!(effect, Effect::FlatMeleeSwing { .. }),
+            "charge must precede the swing"
+        );
+        let effect =
+            script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerRelease);
+        assert!(
+            !matches!(effect, Effect::NoEffect),
+            "release must resolve the charged attack"
         );
     }
 

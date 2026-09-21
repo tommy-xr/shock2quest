@@ -55,6 +55,7 @@ mod laser_shot;
 mod level_change_button;
 pub mod maintenance;
 mod many_ride;
+mod melee_charge;
 mod melee_weapon;
 mod obj_consume_button;
 mod once_room;

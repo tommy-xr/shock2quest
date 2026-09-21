@@ -208,6 +208,8 @@ pub(crate) struct AmmoReadout {
     pub psi_power: Option<(String, i32)>,
     /// This amp's overload meter, never borrowed from the other hand.
     pub psi_charge: Option<(f32, crate::runtime_props::PsiChargePhase)>,
+    /// Smasher windup, on this hand only.
+    pub melee_charge: Option<f32>,
     /// Rounds in the wielded weapon's clip.
     pub ammo: Option<i32>,
     /// Progress of this weapon hand's eject hold.
@@ -250,7 +252,19 @@ impl AmmoReadout {
     pub(crate) fn from_world(world: &World, show_buttons: bool) -> Self {
         Self::for_weapon(
             world,
-            crate::wielded_weapon::wielded_weapon(world),
+            crate::wielded_weapon::wielded_weapon(world).or_else(|| {
+                [
+                    crate::vr_config::Handedness::Right,
+                    crate::vr_config::Handedness::Left,
+                ]
+                .into_iter()
+                .filter_map(|h| crate::wielded_weapon::held_by_hand(world, h))
+                .find(|w| {
+                    world
+                        .borrow::<View<crate::runtime_props::RuntimePropMeleeCharge>>()
+                        .is_ok_and(|v| v.contains(*w))
+                })
+            }),
             show_buttons,
         )
     }
@@ -262,6 +276,12 @@ impl AmmoReadout {
         show_buttons: bool,
     ) -> Self {
         Self {
+            melee_charge: weapon.and_then(|w| {
+                world
+                    .borrow::<View<crate::runtime_props::RuntimePropMeleeCharge>>()
+                    .ok()
+                    .and_then(|v| v.get(w).ok().map(|c| c.0))
+            }),
             eject_progress: weapon
                 .and_then(|w| crate::weapon_button_hold::EjectProgress::for_weapon(world, w)),
             gun_condition: weapon.and_then(|w| wielded_gun_condition(world, w)),
@@ -292,7 +312,7 @@ impl AmmoReadout {
     /// Nothing to say - no weapon with a clip and no psi power wielded. The
     /// gauge backdrop is not drawn at all in flat when this is true.
     pub(crate) fn is_empty(&self) -> bool {
-        self.psi_power.is_none() && self.ammo.is_none()
+        self.psi_power.is_none() && self.ammo.is_none() && self.melee_charge.is_none()
     }
 }
 
@@ -383,8 +403,23 @@ pub(crate) fn buttons(readout: &AmmoReadout) -> Vec<ReadoutButtonSpec> {
 /// art is the caller's (flat swaps AMMOBACK/AMMOFULL with use mode); every
 /// *placement* lives here.
 pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoReadout) {
-    // The psi amp shows its selected discipline where a gun shows its clip.
-    if let Some((power_name, tier)) = &readout.psi_power {
+    if let Some(fraction) = readout.melee_charge {
+        let meter = at(origin, Rect::new(177.0, 16.0, 60.0, 19.0));
+        if fraction >= 1.0 {
+            canvas.image(meter, "LOADGOOD.PCX");
+        } else {
+            canvas
+                .image(meter, "LOADBACK.PCX")
+                .bar(meter, "LOADMETR.PCX", fraction);
+        }
+        canvas.text_native_fit(
+            at(origin, PSI_POWER_NAME),
+            if fraction >= 1.0 { "READY" } else { "CHARGE" },
+            FONT,
+            HAlign::Center,
+            VAlign::Middle,
+        );
+    } else if let Some((power_name, tier)) = &readout.psi_power {
         if let Some((fraction, phase)) = readout.psi_charge {
             use crate::runtime_props::PsiChargePhase;
             let meter = at(origin, Rect::new(177.0, 16.0, 60.0, 19.0));
@@ -667,6 +702,21 @@ mod tests {
         assert_eq!(
             amp_readout.psi_power,
             Some(("Projected Cryokinesis".to_owned(), 1))
+        );
+    }
+
+    #[test]
+    fn melee_charge_is_visible_without_gun_ammo_and_stays_in_its_hand() {
+        let mut world = World::new();
+        let melee = world.add_entity(crate::runtime_props::RuntimePropMeleeCharge(0.5));
+        let other = world.add_entity(());
+        let charge = AmmoReadout::for_weapon(&world, Some(melee), false);
+        assert!(!charge.is_empty());
+        assert_eq!(charge.melee_charge, Some(0.5));
+        assert!(build_wrist_canvas(&charge).element_count() > 0);
+        assert_eq!(
+            AmmoReadout::for_weapon(&world, Some(other), false).melee_charge,
+            None
         );
     }
 

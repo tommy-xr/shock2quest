@@ -9387,6 +9387,21 @@ impl MissionCore {
                     }
                 }
 
+                Effect::SetMeleeCharge {
+                    entity_id,
+                    fraction,
+                } => {
+                    if let Some(fraction) = fraction {
+                        self.world.add_component(
+                            entity_id,
+                            crate::runtime_props::RuntimePropMeleeCharge(fraction),
+                        );
+                    } else {
+                        self.world
+                            .remove::<crate::runtime_props::RuntimePropMeleeCharge>(entity_id);
+                    }
+                }
+
                 Effect::SetPsiCharge {
                     entity_id,
                     fraction,
@@ -9664,12 +9679,15 @@ impl MissionCore {
                     }
                 }
 
-                Effect::FlatMeleeSwing { entity_id } => {
+                Effect::FlatMeleeSwing {
+                    entity_id,
+                    bonus_damage,
+                } => {
                     effects.push_front(crate::psi_invisibility::attack_effect(
                         &self.world,
                         entity_id,
                     ));
-                    self.queue_flat_melee_swing(asset_cache, entity_id);
+                    self.queue_flat_melee_swing(asset_cache, entity_id, bonus_damage);
                 }
 
                 Effect::ArmProximityGrenade { entity_id } => {
@@ -11711,9 +11729,15 @@ impl MissionCore {
     /// the static idle.
     fn update_flat_melee_anim(&mut self, dt: std::time::Duration) {
         let Some((entity, player)) = self.flat_melee_anim.take() else {
+            self.world
+                .borrow::<ViewMut<crate::runtime_props::RuntimePropFlatMeleeBonus>>()
+                .unwrap()
+                .clear();
             return;
         };
         if self.interaction.viewmodel_entity() != Some(entity) {
+            self.world
+                .remove::<crate::runtime_props::RuntimePropFlatMeleeBonus>(entity);
             return; // weapon changed; leave None -> static idle
         }
         let (next, flags, events, _disp) = AnimationPlayer::update(&player, dt);
@@ -11736,17 +11760,31 @@ impl MissionCore {
     /// Start a one-shot swing on the flat melee viewmodel (it plays once, then
     /// `update_flat_melee_anim` drops it back to the static idle). Driven by
     /// `Effect::FlatMeleeSwing` on a melee attack.
-    fn queue_flat_melee_swing(&mut self, asset_cache: &mut AssetCache, entity_id: EntityId) {
+    fn queue_flat_melee_swing(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        entity_id: EntityId,
+        bonus_damage: f32,
+    ) {
         // Do not let release/pull chatter restart the clip before its authored
         // hit frame (or manufacture extra hits). A new swing is accepted only
         // after the current one returns to idle.
         if self.flat_melee_anim.is_some() {
             return;
         }
+        let clip_name = if bonus_damage > 0.0 {
+            "highswing"
+        } else {
+            MELEE_SWING_CLIP
+        };
         if let Some(clip) =
-            asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{MELEE_SWING_CLIP}_.mc"))
+            asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{clip_name}_.mc"))
         {
             let player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip);
+            self.world.add_component(
+                entity_id,
+                crate::runtime_props::RuntimePropFlatMeleeBonus(bonus_damage),
+            );
             self.flat_melee_anim = Some((entity_id, player));
         }
     }

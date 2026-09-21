@@ -704,6 +704,12 @@ pub enum Effect {
     /// wielded melee weapon). Emitted by the melee attack; a no-op in VR.
     FlatMeleeSwing {
         entity_id: EntityId,
+        bonus_damage: f32,
+    },
+
+    SetMeleeCharge {
+        entity_id: EntityId,
+        fraction: Option<f32>,
     },
 
     DestroyEntity {
