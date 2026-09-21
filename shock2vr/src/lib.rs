@@ -1,4 +1,5 @@
 pub mod audio_log;
+pub mod benchmark_scene;
 pub mod game_scene;
 pub mod hand_buttons;
 pub mod hand_pose;
