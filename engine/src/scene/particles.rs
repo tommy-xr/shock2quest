@@ -85,6 +85,7 @@ pub struct ParticleSystem {
     sprite_looping: bool,
     size_velocity: f32,
     fade_in_time: f32,
+    world_space: bool,
 }
 
 fn randf(a: f32, b: f32) -> f32 {
@@ -102,10 +103,14 @@ fn randv3(a: Vector3<f32>, b: Vector3<f32>) -> Vector3<f32> {
     vec3(randf(a.x, b.x), randf(a.y, b.y), randf(a.z, b.z))
 }
 
-fn create_random_particle(system: &ParticleSystem) -> Particle {
+fn create_random_particle(system: &ParticleSystem, transform: Matrix4<f32>) -> Particle {
     let lifetime = randf(system.launch_lifetime.0, system.launch_lifetime.1);
-    let position = randv3(system.launch_bounding_box.0, system.launch_bounding_box.1);
-    let velocity = randv3(system.launch_velocity.0, system.launch_velocity.1);
+    let mut position = randv3(system.launch_bounding_box.0, system.launch_bounding_box.1);
+    let mut velocity = randv3(system.launch_velocity.0, system.launch_velocity.1);
+    if system.world_space {
+        position = (transform * position.extend(1.0)).truncate();
+        velocity = (transform * velocity.extend(0.0)).truncate();
+    }
     let scale = randf(system.particle_size.0, system.particle_size.1);
     Particle {
         age: 0.0,
@@ -146,6 +151,7 @@ impl ParticleSystem {
             sprite_looping: false,
             size_velocity: 0.0,
             fade_in_time: 0.0,
+            world_space: false,
         }
     }
 
@@ -193,6 +199,16 @@ impl ParticleSystem {
     pub fn with_fade_in_time(self, fade_in_time: f32) -> ParticleSystem {
         ParticleSystem {
             fade_in_time,
+            ..self
+        }
+    }
+
+    /// Bake the emitter pose into each particle at birth. Existing particles
+    /// then stay in the world when the emitter moves, and acceleration is in
+    /// world coordinates (so gravity does not rotate with an impact normal).
+    pub fn with_world_space(self, world_space: bool) -> ParticleSystem {
+        ParticleSystem {
+            world_space,
             ..self
         }
     }
@@ -288,16 +304,20 @@ impl ParticleSystem {
             if !self.has_launched {
                 self.has_launched = true;
                 for _ in 0..self.max_particles {
-                    self.particles.push(create_random_particle(self));
+                    self.particles.push(create_random_particle(self, transform));
                 }
             }
         } else if self.particles.len() < self.max_particles && self.launch_time_remaining < 0.0 {
             // Continuous emitter: create a new particle per launch interval.
             self.launch_time_remaining = self.launch_time;
-            self.particles.push(create_random_particle(self));
+            self.particles.push(create_random_particle(self, transform));
         }
 
-        self.root_transform = transform
+        self.root_transform = if self.world_space {
+            Matrix4::identity()
+        } else {
+            transform
+        };
     }
 
     pub fn render(&self) -> Vec<SceneObject> {
@@ -382,6 +402,30 @@ fn sprite_frame_index(age: f32, count: usize, frame_time: f32, looping: bool) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::InnerSpace;
+
+    #[test]
+    fn world_particles_keep_launch_pose_and_gravity_when_emitter_moves() {
+        let mut system = ParticleSystem::new()
+            .with_one_shot(true)
+            .with_num_particles(1)
+            .with_lifetime(2.0, 2.0)
+            .with_world_space(true)
+            .with_launch_bounding_box(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0))
+            .with_velocity(vec3(-1.0, 0.0, 0.0), vec3(-1.0, 0.0, 0.0))
+            .with_acceleration(vec3(0.0, -2.0, 0.0));
+        let launch = Matrix4::from_translation(vec3(4.0, 5.0, 6.0))
+            * Matrix4::from_angle_z(cgmath::Deg(90.0));
+        system.update(Duration::ZERO, launch);
+        system.update(
+            Duration::from_millis(500),
+            Matrix4::from_translation(vec3(99.0, 99.0, 99.0)),
+        );
+        let p = &system.particles[0];
+        assert!((p.position - vec3(4.0, 4.5, 6.0)).magnitude2() < 1e-5);
+        assert!((p.velocity - vec3(0.0, -2.0, 0.0)).magnitude2() < 1e-5);
+        assert_eq!(system.root_transform, Matrix4::identity());
+    }
 
     #[test]
     fn sprite_animation_wraps_or_holds_the_last_frame() {
