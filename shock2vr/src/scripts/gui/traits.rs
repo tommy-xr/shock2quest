@@ -11,9 +11,8 @@
 //! flag is a quest bit keyed by the machine's stable mission object id (also
 //! `QuestInfo`, so it survives save/load and deck re-entry), and
 //! `Effect::AcquireOsTrait` applies the pick atomically. Live effects are
-//! implemented for the subset with existing consumers (Tank, Naturally Able,
-//! Pack-Rat, Pharmo-Friendly, Replicator Expert - see [`live_effect_note`]); everything else stays visible
-//! but cannot consume a one-shot machine or trait slot until its effect exists.
+//! available for all sixteen classic traits; see [`live_effect_note`]. Invalid
+//! trait IDs cannot consume a one-shot machine or trait slot.
 
 use cgmath::{Vector2, Vector3, vec2};
 use engine::assets::asset_cache::AssetCache;
@@ -55,6 +54,7 @@ pub const TRAIT_STRONG_METABOLISM: u8 = 1;
 pub const TRAIT_NATURALLY_ABLE: u8 = 6;
 pub const TRAIT_PACK_RAT: u8 = 3;
 pub const TRAIT_PHARMO_FRIENDLY: u8 = 2;
+pub const TRAIT_TINKER: u8 = 15;
 pub const TRAIT_TANK: u8 = 8;
 pub const TRAIT_SPEEDY: u8 = 4;
 pub const TRAIT_SHARPSHOOTER: u8 = 5;
@@ -408,6 +408,7 @@ pub fn live_effect_note(trait_id: u8) -> Option<&'static str> {
         TRAIT_CYBERNETICALLY_ENHANCED => Some("Two distinct implants equipped simultaneously"),
         TRAIT_SMASHER => Some("Hold trigger 380 ms for +6 melee base damage"),
         TRAIT_LETHAL_WEAPON => Some("35% more melee damage"),
+        TRAIT_TINKER => Some("Half-price weapon modification attempts"),
         TRAIT_TANK => Some("+5 max hit points"),
         TRAIT_NATURALLY_ABLE => Some("+8 cyber modules"),
         TRAIT_PACK_RAT => Some("+3 pack slots"),
@@ -557,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_only_trait_does_not_consume_the_machine() {
+    fn invalid_trait_does_not_consume_the_machine() {
         let mut world = World::new();
         world.add_unique(QuestInfo::new());
         let machine = world.add_entity((dark::properties::PropTemplateId { template_id: 133 },));
@@ -566,7 +567,7 @@ mod tests {
             machine,
             &world,
             &TraitGuiState::default(),
-            &TraitGuiMsg::Pick(15), // Tinker awaits weapon modification.
+            &TraitGuiMsg::Pick(17), // Invalid trait IDs never consume a machine.
         );
 
         assert!(matches!(effect, Effect::NoEffect));

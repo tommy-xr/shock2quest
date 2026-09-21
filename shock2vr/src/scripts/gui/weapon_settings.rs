@@ -21,10 +21,15 @@ use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::PropGunState;
 use shipyard::{EntityId, Get, View, World};
 
+use super::keypad::{
+    HackOutcomeEffects, HackPhase, HackState, HrmContext, KeyPadMsg, draw_hack_board,
+    handle_hrm_msg,
+};
 use crate::gui::{self, ButtonHoverBehavior, Gui, GuiComponent, GuiConfig, GuiCursor};
 use crate::scripts::Effect;
 use crate::scripts::script_util;
 use crate::ui::Rect;
+use crate::weapon_modification;
 
 /// A panel-local rect's upper-left corner / extent, as the component builders
 /// want them.
@@ -106,7 +111,9 @@ impl WeaponSettingsTarget {
 pub struct WeaponSettingsGui;
 
 #[derive(Clone, Debug, Default)]
-pub struct WeaponSettingsGuiState;
+pub struct WeaponSettingsGuiState {
+    modification: Option<(i32, dark::properties::PropHackDiff, HackState)>,
+}
 
 #[derive(Clone, Debug)]
 pub enum WeaponSettingsGuiMsg {
@@ -114,6 +121,9 @@ pub enum WeaponSettingsGuiMsg {
     SelectSetting(i32),
     /// Eject the magazine back to the backpack.
     Unload,
+    Modify,
+    Back,
+    Board(KeyPadMsg),
 }
 
 /// Whether an open settings panel must now close. The panel is opened for the
@@ -169,7 +179,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         _cursor: &Option<GuiCursor>,
         _entity_id: EntityId,
         world: &World,
-        _state: &WeaponSettingsGuiState,
+        state: &WeaponSettingsGuiState,
     ) -> Vec<GuiComponent<WeaponSettingsGuiMsg>> {
         // Archive-qualified for the same reason the log reader qualifies its
         // backdrop: obj.crf and iface.crf collide on plain basenames.
@@ -184,6 +194,65 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         let Some(weapon) = WeaponSettingsTarget::resolve(world) else {
             return components;
         };
+
+        if let Some((_, diff, board)) = &state.modification {
+            let shown_diff = if matches!(board.phase, HackPhase::Won | HackPhase::Lost) {
+                *diff
+            } else {
+                weapon_modification::quote(world, weapon).unwrap_or(*diff)
+            };
+            let mut components = draw_hack_board(board, shown_diff, WeaponSettingsGuiMsg::Board);
+            // The authored Modify board shares HRM geometry with Hack.
+            if let Some(GuiComponent::Image { texture, .. }) = components.first_mut() {
+                *texture = "modify.pcx".into();
+            }
+            components.push(
+                gui::button(WeaponSettingsGuiMsg::Back)
+                    .with_label("Back to settings")
+                    .with_position(vec2(16.0, 264.0))
+                    .with_size(vec2(128.0, 22.0)),
+            );
+            components.push(super::PanelText::text(
+                "Back to settings",
+                Rect::new(22.0, 269.0, 116.0, 14.0),
+            ));
+            components.extend(super::PanelText::paragraph(
+                world,
+                "Connect three nodes. A failed red node breaks the weapon.",
+                Rect::new(16.0, 188.0, 135.0, 50.0),
+            ));
+            components.push(
+                gui::text("MODIFY")
+                    .with_position(vec2(16.0, 10.0))
+                    .with_size(vec2(130.0, 16.0)),
+            );
+            return components;
+        }
+        if weapon_modification::supported(world, weapon) {
+            let quote = weapon_modification::quote(world, weapon);
+            let label = match &quote {
+                Ok(diff) => format!("MODIFY ({} nanites)", diff.cost as i32),
+                Err(_) => "MODIFY".into(),
+            };
+            components.push(
+                gui::button(WeaponSettingsGuiMsg::Modify)
+                    .with_label(&label)
+                    .with_position(vec2(16.0, 18.0))
+                    .with_size(vec2(140.0, 25.0)),
+            );
+            components.push(super::PanelText::text(
+                &label,
+                Rect::new(22.0, 24.0, 128.0, 14.0),
+            ));
+            let help = quote
+                .err()
+                .unwrap_or_else(|| weapon_modification::description(world, weapon).into());
+            components.extend(super::PanelText::paragraph(
+                world,
+                &help,
+                Rect::new(16.0, 49.0, 140.0, 42.0),
+            ));
+        }
 
         let modification = world
             .borrow::<View<PropGunState>>()
@@ -285,6 +354,72 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         let Some(weapon) = WeaponSettingsTarget::resolve(world) else {
             return (state.clone(), Effect::NoEffect);
         };
+        match msg {
+            WeaponSettingsGuiMsg::Back => {
+                return (WeaponSettingsGuiState::default(), Effect::NoEffect);
+            }
+            WeaponSettingsGuiMsg::Modify => {
+                return match weapon_modification::quote(world, weapon) {
+                    Ok(diff) => (
+                        WeaponSettingsGuiState {
+                            modification: Some((
+                                weapon_modification::level(world, weapon).unwrap(),
+                                diff,
+                                HackState::default(),
+                            )),
+                        },
+                        Effect::NoEffect,
+                    ),
+                    Err(text) => (state.clone(), Effect::ShowMessage { text }),
+                };
+            }
+            WeaponSettingsGuiMsg::Board(msg) => {
+                let Some((level, _, board)) = &state.modification else {
+                    return (state.clone(), Effect::NoEffect);
+                };
+                if matches!(board.phase, HackPhase::Won | HackPhase::Lost) {
+                    return (state.clone(), Effect::NoEffect);
+                }
+                let quote = weapon_modification::quote(world, weapon);
+                if weapon_modification::level(world, weapon) != Some(*level) || quote.is_err() {
+                    return (
+                        WeaponSettingsGuiState::default(),
+                        Effect::ShowMessage {
+                            text: quote
+                                .err()
+                                .unwrap_or_else(|| "Weapon modification changed.".into()),
+                        },
+                    );
+                }
+                let diff = quote.unwrap();
+                let (board, effect) = handle_hrm_msg(
+                    weapon,
+                    world,
+                    board,
+                    msg,
+                    diff,
+                    HrmContext::Modify,
+                    HackOutcomeEffects {
+                        success: |entity_id, world| Effect::ModifyWeapon {
+                            entity_id,
+                            expected_level: weapon_modification::level(world, entity_id)
+                                .unwrap_or(-1),
+                        },
+                        critical_failure: |entity_id, _| Effect::SetObjectState {
+                            entity_id,
+                            state: dark::properties::ObjectState::Broken,
+                        },
+                    },
+                );
+                return (
+                    WeaponSettingsGuiState {
+                        modification: Some((*level, diff, board)),
+                    },
+                    effect,
+                );
+            }
+            _ => {}
+        }
         let effect = match msg {
             // `SetGunSetting` is a no-op for a gun with no second mode and
             // plays the mode-switch cue itself.
@@ -293,6 +428,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 setting: *setting,
             },
             WeaponSettingsGuiMsg::Unload => Effect::UnloadWeapon { entity_id: weapon },
+            _ => Effect::NoEffect,
         };
         (state.clone(), effect)
     }
@@ -411,7 +547,7 @@ mod tests {
                 .handle_msg(
                     EntityId::dead(),
                     &world,
-                    &WeaponSettingsGuiState,
+                    &WeaponSettingsGuiState::default(),
                     &WeaponSettingsGuiMsg::SelectSetting(1),
                 )
                 .1
@@ -437,7 +573,7 @@ mod tests {
 
     fn components(world: &World) -> Vec<GuiComponent<WeaponSettingsGuiMsg>> {
         let host = EntityId::dead();
-        WeaponSettingsGui.get_components(&None, host, world, &WeaponSettingsGuiState)
+        WeaponSettingsGui.get_components(&None, host, world, &WeaponSettingsGuiState::default())
     }
 
     /// Every placed (texture, position, size, interactive) - images and buttons.
@@ -659,7 +795,7 @@ mod tests {
         let (_, effect) = WeaponSettingsGui.handle_msg(
             EntityId::dead(),
             &world,
-            &WeaponSettingsGuiState,
+            &WeaponSettingsGuiState::default(),
             &WeaponSettingsGuiMsg::SelectSetting(1),
         );
         assert!(matches!(
@@ -673,7 +809,7 @@ mod tests {
         let (_, effect) = WeaponSettingsGui.handle_msg(
             EntityId::dead(),
             &world,
-            &WeaponSettingsGuiState,
+            &WeaponSettingsGuiState::default(),
             &WeaponSettingsGuiMsg::Unload,
         );
         assert!(matches!(

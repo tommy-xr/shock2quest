@@ -1175,7 +1175,7 @@ impl ScriptWorld {
 
             // weapons:
             "delaygrenade" => Box::new(DelayGrenade::new()),
-            "annelidmodify" => Box::new(UnimplementedScript::new(&script_name)),
+            "annelidmodify" => Box::new(NoopScript::new()), // applied by weapon_modification
             "empmodify" => Box::new(NoopScript::new()),
             "lasermodify" => Box::new(NoopScript::new()),
             "fusionmodify" => Box::new(NoopScript::new()),
@@ -1200,7 +1200,7 @@ impl ScriptWorld {
                 Box::new(psi_sword::PsiSwordController::default()),
                 Box::new(InternalSwitchHeldModelScript::new()),
             ])),
-            "viralmodify" => Box::new(UnimplementedScript::new(&script_name)),
+            "viralmodify" => Box::new(NoopScript::new()), // applied by weapon_modification
 
             //goodies:
             "expcookie" => Box::new(ExpCookie::new()), // cyber modules

@@ -17,7 +17,7 @@ pub struct KeyPadState {
     hack: HackState,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum KeyPadMsg {
     ButtonPressed(u32),
     Clear,
@@ -175,17 +175,35 @@ fn roll_succeeds(roll: i32, chance: i32) -> bool {
     roll < chance
 }
 
+#[cfg(test)]
 fn effective_hack_values(world: &World, diff: PropHackDiff, security_computer: bool) -> (i32, i32) {
+    effective_hrm_values(world, diff, HrmContext::Hack { security_computer })
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum HrmContext {
+    Hack { security_computer: bool },
+    Modify,
+}
+
+fn effective_hrm_values(world: &World, diff: PropHackDiff, context: HrmContext) -> (i32, i32) {
     let (skill, stat) = world
         .borrow::<UniqueView<QuestInfo>>()
         .ok()
         .map(|quest| {
             let stats = quest.player_stats();
-            let base = stats.skill_level(Skill::Hack);
+            let base = stats.skill_level(match context {
+                HrmContext::Hack { .. } => Skill::Hack,
+                HrmContext::Modify => Skill::Modify,
+            });
             // Retail grants two effective levels only at security computers;
             // it does not train an unskilled player or change the saved sheet.
-            let bonus = if security_computer
-                && base > 0
+            let bonus = if matches!(
+                context,
+                HrmContext::Hack {
+                    security_computer: true
+                }
+            ) && base > 0
                 && stats.has_os_trait(super::traits::TRAIT_SECURITY_EXPERT)
             {
                 2
@@ -400,6 +418,26 @@ pub(crate) fn handle_hack_msg(
     security_computer: bool,
     outcomes: HackOutcomeEffects,
 ) -> (HackState, Effect) {
+    handle_hrm_msg(
+        entity_id,
+        world,
+        state,
+        msg,
+        diff,
+        HrmContext::Hack { security_computer },
+        outcomes,
+    )
+}
+
+pub(crate) fn handle_hrm_msg(
+    entity_id: EntityId,
+    world: &World,
+    state: &HackState,
+    msg: &KeyPadMsg,
+    diff: PropHackDiff,
+    context: HrmContext,
+    outcomes: HackOutcomeEffects,
+) -> (HackState, Effect) {
     let mut new_state = state.clone();
     match msg {
         KeyPadMsg::StartHack if !matches!(new_state.phase, HackPhase::Won | HackPhase::Lost) => {
@@ -416,7 +454,7 @@ pub(crate) fn handle_hack_msg(
                     },
                 );
             };
-            let (_, mine_count) = effective_hack_values(world, diff, security_computer);
+            let (_, mine_count) = effective_hrm_values(world, diff, context);
             let mut rng_state = hack_seed(world, entity_id);
             tracing::debug!(entity = entity_id.inner(), rng_state, "HRM rng seed");
             let nodes = board_with_mines(mine_count, &mut rng_state);
@@ -468,7 +506,7 @@ pub(crate) fn handle_hack_msg(
                 rng_state = new_state.rng_state,
                 "HRM rng outcome"
             );
-            let (chance, _) = effective_hack_values(world, diff, security_computer);
+            let (chance, _) = effective_hrm_values(world, diff, context);
             if roll_succeeds(roll, chance) {
                 new_state.nodes[index] = HackNode::Lit;
                 if has_connected_three(&new_state.nodes) {

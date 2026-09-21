@@ -64,18 +64,7 @@ test(
       traitButton(name, els);
     }
 
-    // --- A storage-only trait refuses clearly and leaves this one-shot
-    // machine available for a live choice. ---
-    await clickElement(game, traitButton("Tinker", els));
-    await game.step({ frames: 3 });
-    assert.deepEqual((await stats()).os_traits, [], "unsupported trait is not recorded");
     let refreshed = await game.ui.state();
-    assert.ok(
-      refreshed.active_panel!.elements.some(
-        (e) => e.kind === "text" && e.text?.includes("Upgrade unavailable"),
-      ),
-      "the panel explains why the trait cannot be selected",
-    );
 
     // --- Pick Tank: stored + live +5 max AND current HP (the original
     // raises both - buying wounded at 25/30 yields 30/35). The player can't
