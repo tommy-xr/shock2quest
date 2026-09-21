@@ -66,7 +66,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform vec3 ambientLight;
         // 0 = the renderer's smooth curve, 1 = inverse distance (how the
         // original lit objects - it falls off far more slowly).
-        uniform int lightFalloffMode;
+        uniform int lightFalloffMode[6];
         // 0 = plain lambert, 1 = half-lambert (light wraps past the terminator).
         uniform float lambertWrap;
 
@@ -111,7 +111,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
 
             // Distance attenuation
             float distanceAttenuation;
-            if (lightFalloffMode == 1) {
+            if (lightFalloffMode[i] == 1) {
                 distanceAttenuation = 1.0 / max(distance, SOURCE_RADIUS);
             } else {
                 distanceAttenuation = 1.0 / (1.0 + 0.1 * distance + 0.01 * distance * distance);
@@ -120,7 +120,8 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             // Diffuse lighting, optionally wrapped past the terminator so a
             // surface facing away is lifted rather than black.
             float ndl = dot(normal, lightDir);
-            float lambertian = max((ndl + lambertWrap) / (1.0 + lambertWrap), 0.0);
+            float wrap = lightFalloffMode[i] == 1 ? lambertWrap : 0.0;
+            float lambertian = max((ndl + wrap) / (1.0 + wrap), 0.0);
 
             // Combine all factors
             return texColor * spotlightColorIntensity[i].rgb * spotlightColorIntensity[i].w
@@ -243,13 +244,11 @@ where
                 lights.ambient.z,
             );
             gl::Uniform1f(uniforms.lambert_wrap_loc, lights.lambert_wrap);
-            gl::Uniform1i(
-                uniforms.light_falloff_mode_loc,
-                match lights.falloff {
-                    crate::scene::light::LightFalloff::Smooth => 0,
-                    crate::scene::light::LightFalloff::InverseDistance => 1,
-                },
-            );
+            let falloff_modes = lights.falloff.map(|mode| match mode {
+                crate::scene::light::LightFalloff::Smooth => 0,
+                crate::scene::light::LightFalloff::InverseDistance => 1,
+            });
+            gl::Uniform1iv(uniforms.light_falloff_mode_loc, 6, falloff_modes.as_ptr());
 
             // Set spotlight array uniforms
             for i in 0..6 {
@@ -495,7 +494,7 @@ where
                     ),
                     light_falloff_mode_loc: gl::GetUniformLocation(
                         shader.gl_id,
-                        c_str!("lightFalloffMode").as_ptr(),
+                        c_str!("lightFalloffMode[0]").as_ptr(),
                     ),
                     lambert_wrap_loc: gl::GetUniformLocation(
                         shader.gl_id,
