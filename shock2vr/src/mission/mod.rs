@@ -295,6 +295,10 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.player_is_gripping()
     }
 
+    fn flat_eye_pose(&self) -> Option<crate::death_camera::EyePose> {
+        self.mission_core.flat_eye_pose()
+    }
+
     fn death_camera(&self) -> Option<crate::death_camera::DeathCameraSample> {
         self.mission_core.death_camera()
     }

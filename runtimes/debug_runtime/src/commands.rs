@@ -505,6 +505,9 @@ pub struct InputState {
     /// Ordinary held jump request. The physics controller launches only on
     /// its rising edge and only while grounded.
     pub jump: bool,
+    /// Flat-only held lean request, -1 left to +1 right.
+    #[serde(default)]
+    pub lean: f32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -537,6 +540,7 @@ impl Default for InputState {
             pointer: None,
             crouch: false,
             jump: false,
+            lean: 0.0,
         }
     }
 }

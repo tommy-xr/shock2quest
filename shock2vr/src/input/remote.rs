@@ -46,6 +46,7 @@ pub fn input_channels_help() -> &'static str {
      {left,right}_hand.position [x,y,z] (pawn-local), \
      {left,right}_hand.rotation [x,y,z,w], \
      crouch 0|1 (stand-up refused without headroom), \
+     lean -1..1 (flat only; negative left, positive right), \
      jump 0|1 (held; launches on the grounded rising edge); \
      locomotion: right_hand.thumbstick [strafe, forward] moves the player, \
      left_hand.thumbstick.x turns, left_hand.thumbstick.y flies up/down"
@@ -239,6 +240,14 @@ pub fn apply_input_patch(
             };
             Ok(())
         }
+        "lean" => {
+            let axis = num(channel, value)?;
+            if !(-1.0..=1.0).contains(&axis) {
+                return Err(format!("channel '{channel}' expects -1..1, got {axis}"));
+            }
+            input.lean = axis;
+            Ok(())
+        }
         "jump" => {
             input.jump = match num(channel, value)? {
                 v if v == 0.0 => false,
@@ -325,7 +334,7 @@ fn canonical_channel(channel: &str) -> Result<(String, bool), String> {
     match channel {
         "head.look" => Ok(("head.rotation".to_owned(), true)),
         "head.rotation" | "head.position" | "pointer.position" | "pointer.pressed" | "crouch"
-        | "jump" => Ok((channel.to_owned(), false)),
+        | "jump" | "lean" => Ok((channel.to_owned(), false)),
         _ => Err(unknown_channel(channel)),
     }
 }
@@ -420,6 +429,17 @@ impl InputOverrides {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn lean_accepts_signed_axis_and_rejects_out_of_range_values() {
+        let mut overrides = InputOverrides::default();
+        for value in [-1.0, 0.0, 0.5, 1.0] {
+            assert!(overrides.set("lean", json!(value)).is_ok());
+        }
+        for value in [json!(-1.01), json!(1.01), json!(true), json!("left")] {
+            assert!(overrides.set("lean", value).is_err());
+        }
+    }
 
     #[test]
     fn patch_sets_channels() {

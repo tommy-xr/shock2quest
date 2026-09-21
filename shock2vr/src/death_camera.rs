@@ -82,6 +82,16 @@ pub struct EyePose {
     pub rotation: Quaternion<f32>,
 }
 
+impl EyePose {
+    /// Neutral flatscreen eye in pawn space, using the actual crouch height.
+    pub fn flat(eye_height: f32, rotation: Quaternion<f32>) -> Self {
+        Self {
+            position: vec3(0.0, eye_height / dark::SCALE_FACTOR, 0.0),
+            rotation,
+        }
+    }
+}
+
 /// The full camera a runtime renders from, in the terms it hands to
 /// `engine::EngineRenderContext`.
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -37,10 +37,8 @@ pub struct InteractionContext<'a> {
     pub input: &'a InputContext,
     pub player_pos: Vector3<f32>,
     pub player_rotation: Quaternion<f32>,
-    pub head_rotation: Quaternion<f32>,
-    /// Eye height above `player_pos` in SS2 units - crouch-aware, so the flat
-    /// controller's shot/viewmodel origin follows the actual camera.
-    pub eye_height: f32,
+    /// Shared pawn-space eye for flat rendering, aiming and weapon placement.
+    pub flat_eye: crate::death_camera::EyePose,
     pub step_dt: f32,
     pub support_enabled: bool,
 }
@@ -1572,8 +1570,7 @@ impl PlayerInteraction for FlatInteraction {
             &ctx.input.right_hand,
             ctx.player_pos,
             ctx.player_rotation,
-            ctx.head_rotation,
-            ctx.eye_height,
+            ctx.flat_eye,
             ctx.step_dt,
             ctx.world,
             ctx.physics,
@@ -1704,8 +1701,7 @@ mod tests {
             input,
             player_pos: vec3(0.0, 0.0, 0.0),
             player_rotation: identity(),
-            head_rotation: identity(),
-            eye_height: 1.04,
+            flat_eye: crate::death_camera::EyePose::flat(1.04, identity()),
             step_dt: 1.0 / 60.0,
             support_enabled: true,
         }

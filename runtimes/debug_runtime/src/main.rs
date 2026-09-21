@@ -2106,6 +2106,7 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
         right_hand: hand(&input.right_hand),
         crouch: input.crouch,
         jump: input.jump,
+        lean: input.lean,
     }
 }
 
@@ -2253,7 +2254,14 @@ fn apply_camera_request(
         );
     }
 
-    let (head_offset, head_rotation) = composed_head(game, input);
+    let (tracked_offset, tracked_rotation) = tracked_head(game, input);
+    let detached_head = game.resolve_free_camera(
+        vec3(0.0, 0.0, 0.0),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        tracked_offset,
+        tracked_rotation,
+    );
+    let (head_offset, head_rotation) = (detached_head.head_offset, detached_head.head_rotation);
     // Patch semantics are against the *eye* pose, which is the pose the caller
     // named last time - not the compensated one stored underneath.
     let current_eye = game

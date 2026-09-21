@@ -327,6 +327,10 @@ impl GameScene for DebugScene {
         self.core.queue_entity_trigger(entity_name)
     }
 
+    fn flat_eye_pose(&self) -> Option<crate::death_camera::EyePose> {
+        self.core.flat_eye_pose()
+    }
+
     fn player_is_crouched(&self) -> bool {
         self.core.player_is_crouched()
     }
@@ -557,6 +561,10 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
 
     fn queue_entity_trigger(&mut self, entity_name: String) {
         self.core.queue_entity_trigger(entity_name)
+    }
+
+    fn flat_eye_pose(&self) -> Option<crate::death_camera::EyePose> {
+        self.core.flat_eye_pose()
     }
 
     fn player_is_crouched(&self) -> bool {

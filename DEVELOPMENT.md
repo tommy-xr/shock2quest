@@ -155,6 +155,27 @@ The persistence behavior follows the original `sound/ambient.c` →
 `SongUtilSetTheme` → `cSongPlayer::SetTheme` / `_DoSegmentCallback` path.
 Sample offsets, branch randomness, and themes outside markers are not saved.
 
+### Flatscreen leaning
+
+Hold `Q` / `E` to lean left / right; holding both returns to center. The eye
+moves up to two SS2 feet (~61 cm), with 7 degrees of roll, over 150 ms. The
+movement collider stays put. A sphere sweep limits eye displacement and roll
+against solid geometry, including when crouched. Rendering, weapon placement,
+shots and interaction all use the same resolved eye pose. The damage collider
+is unchanged. Use mode recenters the view; pause freezes it; free camera ignores
+lean. VR keeps tracked head movement and desktop `--vr` Q/E hand controls.
+
+The debug runtime accepts `{"lean": -1.0}` / `0.0` / `1.0` through
+`POST /v1/control/input`; `/v1/info` exposes the resulting `player.camera_offset`
+and `player.camera_rotation`. Lean is transient and resets on mission load.
+
+Tune **Pause → Developer → Camera & view → Max lean (ft)** live: `flat_lean_distance`
+defaults to `2.0`, ranges from `0.0` to `4.0` SS2 feet in `0.1` steps, and takes
+effect on the next frame. `1.0` restores the original distance; `0.0` disables
+lean including roll. The maximum roll remains 7 degrees. Like other developer
+parameters, the value resets when the app restarts. The debug API can set it via
+`POST /v1/dev-params` with `{"key":"flat_lean_distance","value":2.0}`.
+
 ### Debug & developer keys
 
 Player-facing controls are listed in [README.md](README.md#controls). The keys

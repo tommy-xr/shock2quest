@@ -39,9 +39,9 @@ your Remaster game files.
 This is geared towards VR, so the control scheme is really meant for VR headsets and controllers.
 
 However, you can play with a keyboard and a mouse, using the following hard-coded keys:
-- `Mouse` - look around with headset, when `Q` and `E` are not pressed
+- `Mouse` - look around (flat); in `--vr`, aim the head unless `Q` or `E` is held
 - `W` `A` `S` `D` - move around (hold `Shift` to move faster)
-- `Q` `E` - control left hand or right hand, respectively. Mouse look will move the hand, left click will 'trigger', and right click will 'grab'.
+- `Q` / `E` - hold to lean left/right in flat mode; release to return. Both keys cancel. Leaning works while crouched and stops against solid geometry. In `--vr`, these keys still control the simulated left/right hand: mouse aims, left click triggers, and right click grabs.
 - `Ctrl` - crouch
 - `Space` - jump
 - `Tab` - toggle the cyber interface ("use" mode): a cursor-driven UI over the 3D view
