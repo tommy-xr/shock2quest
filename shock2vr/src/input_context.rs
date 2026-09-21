@@ -37,6 +37,8 @@ pub struct InputContext {
     /// Live runtime tracking validity, separate from fallback/stale pose values.
     /// None means synthetic input (desktop/debug), whose poses are validated directly.
     pub pose_tracking: Option<PoseTracking>,
+    /// This sample uses a newly defined tracking origin, not physical travel.
+    pub tracking_origin_changed: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -58,6 +60,7 @@ impl InputContext {
             lean: 0.0,
             tracking: None,
             pose_tracking: None,
+            tracking_origin_changed: false,
         }
     }
 

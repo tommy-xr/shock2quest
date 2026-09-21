@@ -1563,6 +1563,7 @@ impl Game {
             // Without this a minute spent in the menu expires every AI deadline
             // and jumps every total-time-driven animation the moment the world
             // comes back.
+            vr_tracking::RoomscaleState::invalidate(self.active_game_scene.world());
             self.time_suspended += time.elapsed;
             actions.clear_triggered();
             return;
@@ -1808,9 +1809,14 @@ impl Game {
             return;
         }
 
+        let mut pause_input = input_context.clone();
+        vr_tracking::RoomscaleState::apply(
+            &mut pause_input,
+            vr_tracking::RoomscaleState::offset(self.active_game_scene.world()),
+        );
         let action = self.pause_menu.update(
             time.elapsed,
-            input_context,
+            &pause_input,
             &mut self.asset_cache,
             &self.options,
         );
@@ -2357,6 +2363,10 @@ impl Game {
             .is_some_and(|sample| sample.weight > 0.0)
     }
 
+    pub fn presentation_mode(&self) -> PresentationMode {
+        self.options.presentation_mode
+    }
+
     pub fn resolve_camera(
         &self,
         pawn_position: Vector3<f32>,
@@ -2384,6 +2394,8 @@ impl Game {
         head_offset: Vector3<f32>,
         head_rotation: Quaternion<f32>,
     ) -> death_camera::CameraPose {
+        let head_offset =
+            head_offset + vr_tracking::RoomscaleState::offset(self.active_game_scene.world());
         death_camera::resolve(
             pawn_position,
             pawn_rotation,

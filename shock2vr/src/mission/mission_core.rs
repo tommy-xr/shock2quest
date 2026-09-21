@@ -3091,6 +3091,7 @@ impl MissionCore {
 
         world.add_unique(GlobalEntityMetadata(template_name_to_template_id.clone()));
         world.add_unique(Time::default());
+        world.add_unique(crate::vr_tracking::RoomscaleState::default());
         world.add_unique(speech_registry);
         world.add_unique(DebugOptions {
             debug_ai: game_options.debug_ai,
@@ -4151,6 +4152,28 @@ impl MissionCore {
         life_state_effects.append(&mut self.update_player_life_state(time.elapsed.as_secs_f32()));
         self.advance_death_camera(time.elapsed.as_secs_f32());
 
+        let roomscale_movement = self
+            .world
+            .borrow::<UniqueViewMut<crate::vr_tracking::RoomscaleState>>()
+            .unwrap()
+            .sample(
+                input_context,
+                game_options.presentation_mode == crate::PresentationMode::Vr
+                    && crate::dev_params::get_bool(crate::dev_params::VR_ROOMSCALE),
+                !time.elapsed.is_zero(),
+                self.player_is_alive()
+                    && self.player_controls_enabled
+                    && !crate::free_camera::FreeCamera::is_enabled()
+                    && !self.player_is_gripping()
+                    && !self.player_handle.is_topping_out(),
+            );
+        let mut roomscale_input = input_context.clone();
+        crate::vr_tracking::RoomscaleState::apply(
+            &mut roomscale_input,
+            crate::vr_tracking::RoomscaleState::offset(&self.world),
+        );
+        let input_context = &roomscale_input;
+
         // A dead player's actionable channels are neutral until
         // reconstruction. A scripted control lock is subtler: tracked poses
         // keep updating, and an item already owned by a VR hand must keep its
@@ -4565,7 +4588,9 @@ impl MissionCore {
             let request = match hand_climb.translation {
                 Some(translation) => crate::physics::PlayerMoveRequest::HandClimb { translation },
                 None => crate::physics::PlayerMoveRequest::Walk {
-                    movement: forward + cgmath::vec3(0.0, up_value, 0.0),
+                    movement: forward
+                        + new_rotation.rotate_vector(roomscale_movement)
+                        + cgmath::vec3(0.0, up_value, 0.0),
                     facing,
                     jump_pressed: jump,
                     // Push-to-climb is the FLAT climb input; VR's hands are
