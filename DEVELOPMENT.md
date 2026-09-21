@@ -334,8 +334,11 @@ through the same readout-control list, so it is there in both presentations
 
 Each amp saves its own current and alternate power. Tap its upper face button
 (right B / left Y) to swap them. Hold for half a second to open its lightweight
-carousel; releasing that opening hold leaves it open. Three rows show adjacent
-tiers around the highlighted tier. Flick the **amp hand's** stick up/down to
+hologram above the amp; releasing that opening hold leaves it open. Up to three
+curved rows show purchased powers in adjacent trained tiers. Empty tiers and
+unpurchased powers are hidden. The highlighted power sits forward, and icons
+rotate through a fixed focal point as you browse (a 0.25 s eased transition).
+Corner C/A badges identify the saved current/alternate powers. Flick the **amp hand's** stick up/down to
 change tiers, or left/right to browse trained powers in that tier. That stick
 stops driving locomotion while browsing; the other hand remains available.
 

@@ -4395,16 +4395,16 @@ impl MissionCore {
                             .world
                             .borrow::<UniqueView<PlayerPsiKnownPowers>>()
                             .unwrap();
-                        menu.index = crate::psi::step_selection(
-                            &powers.0, &known.0, menu.index, axis, forward,
+                        menu.preview(
+                            crate::psi::step_selection(
+                                &powers.0, &known.0, menu.index, axis, forward,
+                            ),
+                            &powers.0,
+                            &known.0,
                         );
                     }
                 }
-                menu.anchor.update(
-                    input_context.head.position,
-                    input_context.head.rotation,
-                    time.elapsed,
-                );
+                menu.update(time.elapsed.as_secs_f32());
                 if confirm {
                     crate::psi_carousel::advance_input_epoch(&mut self.world, menu.amp);
                     self.commit_amp_selection(menu.amp, menu.index);
@@ -13210,13 +13210,6 @@ impl MissionCore {
                 );
             }
 
-            if let Some(menu) = &self.psi_carousel {
-                ret.extend(menu.canvas(&self.world, asset_cache).render_screen_space(
-                    asset_cache,
-                    screen_size,
-                    crate::ui::ScaleMode::PreserveAspect,
-                ));
-            }
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
             // the HUD. Also records the render-target size the pointer ->
             // canvas mapping needs.
@@ -14157,26 +14150,9 @@ impl MissionCore {
             scene.extend(use_mode_objects);
         }
 
-        if options.presentation_mode == crate::PresentationMode::Vr {
-            if let Some(menu) = &self.psi_carousel {
-                let panel = menu.anchor.panel();
-                let root = Matrix4::from_translation(panel.center)
-                    * Matrix4::from(panel.rotation)
-                    * Matrix4::from_nonuniform_scale(
-                        panel.size.x * 0.8,
-                        panel.size.x * 0.8 * 340.0 / 480.0,
-                        1.0,
-                    );
-                let mut objects = menu.canvas(&self.world, asset_cache).render_world_space(
-                    asset_cache,
-                    root,
-                    None,
-                    None,
-                    0.001,
-                );
-                rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
-                scene.extend(objects);
-            }
+        if let Some(menu) = &self.psi_carousel {
+            let eye = player.pos + player.rotation * self.last_head_position;
+            scene.extend(menu.render(&self.world, asset_cache, eye));
         }
         // Status messages in VR: flat draws them into its 2D HUD above, so this
         // is the VR half of the same shared canvas.

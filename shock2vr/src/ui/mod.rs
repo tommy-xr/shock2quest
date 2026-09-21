@@ -425,6 +425,8 @@ pub enum ImageKind {
     /// `tiles_y` times across the element's rect, with its black dropped and
     /// its lines tinted (see [`HOLOGRAM_TINT`]). Sized like [`Self::Ui`].
     Hologram { tiles_x: u8, tiles_y: u8 },
+    /// Untiled luminous art: dark pixels become transparent, bright pixels cyan.
+    HolographicIcon,
     /// One sub-rectangle of the art, stretched to the element's rect - the
     /// corners in normalized texture coordinates, `v` measured from the top of
     /// the bitmap. Built by [`UiCanvas::cropped_image`]; lets a panel wear a
@@ -1077,16 +1079,24 @@ impl UiCanvas<()> {
 /// asset cache the same way.
 fn texture_options(kind: ImageKind) -> TextureOptions {
     let hologram = matches!(kind, ImageKind::Hologram { .. });
+    let luminous = hologram || matches!(kind, ImageKind::HolographicIcon);
     TextureOptions {
         // A hologram repeats one tile across its cells, so it - and only it -
         // needs the sampler to wrap.
         wrap: hologram,
         transparent_index_0: kind.transparent_index_0(),
-        luminance_alpha_tint: hologram.then_some(HOLOGRAM_TINT),
+        luminance_alpha_tint: luminous.then_some(HOLOGRAM_TINT),
+        // Retail psi icons use dim green (~44 luma) behind bright glyphs
+        // (~108 luma). Remove the plate without fading the glyph itself.
+        luminance_alpha_range: if matches!(kind, ImageKind::HolographicIcon) {
+            [52, 108]
+        } else {
+            [0, 255]
+        },
         // The grid's lines are a texel wide and are drawn well under their
         // authored size, at a distance the VR viewer changes at will; without
         // mipmaps they alias into a swimming, unevenly-bright grid.
-        filter: if hologram {
+        filter: if luminous {
             engine::texture::TextureFilter::LinearMipmap
         } else {
             engine::texture::TextureFilter::Linear
@@ -1354,7 +1364,10 @@ pub(crate) fn drawn_rect(
     kind: ImageKind,
 ) -> (Vector2<f32>, Vector2<f32>) {
     match kind {
-        ImageKind::Ui | ImageKind::Hologram { .. } | ImageKind::Crop { .. } => (position, size),
+        ImageKind::Ui
+        | ImageKind::Hologram { .. }
+        | ImageKind::HolographicIcon
+        | ImageKind::Crop { .. } => (position, size),
         ImageKind::ObjectIcon => (position + centered_offset(size, texture_px), texture_px),
         ImageKind::ObjectIconFit => {
             let scale = (size.x / texture_px.x).min(size.y / texture_px.y).min(1.0);
@@ -1648,6 +1661,19 @@ mod tests {
         let ui = texture_options(ImageKind::Ui);
         assert!(!ui.wrap);
         assert_eq!(ui.luminance_alpha_tint, None);
+    }
+
+    #[test]
+    fn holographic_icons_drop_dark_pixels_without_grid_tiling_or_uv_shift() {
+        let kind = ImageKind::HolographicIcon;
+        let options = texture_options(kind);
+        assert!(!options.wrap);
+        assert_eq!(options.luminance_alpha_tint, Some(HOLOGRAM_TINT));
+        assert_eq!(kind.uv_rect(), None);
+        assert_eq!(
+            drawn_rect(vec2(3.0, 4.0), vec2(42.0, 42.0), vec2(32.0, 32.0), kind),
+            (vec2(3.0, 4.0), vec2(42.0, 42.0))
+        );
     }
 
     /// A hologram fills its slot like ordinary UI art - the tile scales to the
