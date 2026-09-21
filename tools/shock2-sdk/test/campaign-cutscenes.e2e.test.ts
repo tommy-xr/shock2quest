@@ -52,6 +52,11 @@ test(
   async () => {
     await using game = await GameServer.launch({ mission: "earth.mis" });
     await game.step({ frames: 5 });
+    // A non-default trained stat must cross the movie's temporary scene.
+    // Marines now earn bonuses from tours rather than a fixed +10 HP loadout.
+    await game.player.setStats({ endurance: 2 });
+    const beforeMovie = (await game.info()).player;
+
 
     await game.player.teleport({
       x: MARINE_CAREER_DOOR[0],
@@ -83,7 +88,7 @@ test(
 
     // The movie replaces the scene that queued the transition, so its own empty
     // world is what the station would have been handed without the state the
-    // cutscene carries: no career bit and no career loadout.
+    // cutscene carries: no career bit and no trained character stats.
     assert.equal(
       await game.quests.get("career_marine"),
       "complete",
@@ -91,8 +96,9 @@ test(
     );
     assert.equal(
       arrival.player.max_hit_points,
-      45,
-      "the Marine loadout should still be applied on the other side of the movie",
+      beforeMovie.max_hit_points,
+      "the trained HP capacity should survive the movie",
     );
+    assert.equal(arrival.player.stats!.endurance, 2, "trained Endurance survives the movie");
   },
 );

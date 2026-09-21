@@ -315,17 +315,26 @@ for (const vr of [false,true]) {
     await capture("idle");
     const inventory=await game.player.inventory();const original=(await game.info()).player.stats;
     await click(await button());assert.equal((await button()).texture?.toLowerCase(),"iface/ifbtn21.pcx");
-    await capture("base");await click(await button());assert.ok(!(await game.ui.state()).strip!.elements.some(e=>e.label==="character_stat"));
+    await capture("base");await click(await button());assert.ok(!(await game.ui.state()).utilities.some(e=>e.label==="character_tab_0"));
     assert.deepEqual((await game.info()).player.stats,original);assert.deepEqual(await game.player.inventory(),inventory);
     // Explicit debug fixture to expose every bar length; panel reads remain inert.
     await game.player.setStats({strength:6,endurance:4,psionic_ability:2,agility:5,cyber_affinity:3});
     const stats=(await game.info()).player.stats!;
     await click(await button());
-    const labels=(await game.ui.state()).strip!.elements.filter(e=>e.label==="character_stat").map(e=>e.text);
-    assert.deepEqual(labels,[`STRENGTH ${stats.strength}`,`ENDURANCE ${stats.endurance}`,`PSIONICS ${stats.psionic_ability}`,`AGILITY ${stats.agility}`,`CYBER ${stats.cyber_affinity}`]);
+    const sheet=(await game.ui.state()).utilities;
+    assert.ok(sheet.some(e=>e.label==="character_tab_0"),"the character sheet is open");
+    const rows=[['STRENGTH',stats.strength],['ENDURANCE',stats.endurance],['PSIONICS',stats.psionic_ability],['AGILITY',stats.agility],['CYBER',stats.cyber_affinity]] as const;
+    // The retail sheet renders names and level arrows separately, rather
+    // than the obsolete combined text labels in the inventory strip.
+    for(const [index,[name,level]] of rows.entries()) {
+      const rowTop=132+index*26;
+      assert.ok(sheet.some(e=>e.kind==="text" && e.text===name && e.rect[1]>=rowTop && e.rect[1]<rowTop+14),name);
+      const arrows=sheet.filter(e=>e.texture?.toLowerCase()==="iface/skilstat.pcx" && Math.abs(e.rect[1]-(rowTop+14))<0.001);
+      assert.equal(arrows.length,level,`${name} renders its live level`);
+    }
     await capture("varied");
     const close=(await game.ui.state()).strip!.elements.find(e=>e.label==="utility_close");assert.ok(close);await click(close);
-    assert.ok(!(await game.ui.state()).strip!.elements.some(e=>e.label==="character_stat"));assert.equal((await game.ui.state()).mode,"use");
+    assert.ok(!(await game.ui.state()).utilities.some(e=>e.label==="character_tab_0"));assert.equal((await game.ui.state()).mode,"use");
     assert.deepEqual((await game.info()).player.stats,stats);assert.deepEqual(await game.player.inventory(),inventory);
   });
 }

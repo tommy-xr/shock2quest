@@ -21,9 +21,18 @@ test("hazards: toxin persists, weaker exposure does not stack, and Endurance mit
   assert.equal(poisoned.toxin_level, 4);
   assert.equal(poisoned.hit_points, hp - 4);
   await game.player.setStats({ endurance: 6 });
-  await game.step({ frames: 600 });
+  await game.step({ frames: 1 });
+  const trained = (await game.info()).player;
+  // Endurance raises the HP pool while preserving damage already taken.
+  // Measure the next poison tick against that new pool, not the END 1 pool.
+  assert.equal(
+    trained.max_hit_points! - trained.hit_points!,
+    poisoned.max_hit_points! - poisoned.hit_points!,
+    "Endurance training preserves the existing HP deficit",
+  );
+  await game.step({ frames: 599 });
   assert.equal((await game.info()).player.toxin_level, 4);
-  assert.equal((await game.info()).player.hit_points, hp - 5, "poison retains its one-point minimum at END 6");
+  assert.equal((await game.info()).player.hit_points, trained.hit_points! - 1, "poison retains its one-point minimum at END 6");
   const patch = await game.player.spawnItem("Detox Patch");
   await game.entities.sendMessage(patch.entity_id, { type: "Frob" });
   await game.step({ frames: 2 });

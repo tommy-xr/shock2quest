@@ -158,14 +158,21 @@ test(
       15,
       "VR consumes the same five blocked columns x three rows",
     );
-    // Strip rects are reported on the shared 640x480 canvas: the strip docks
-    // at (2, 0), so panel-local coordinates shift right by 2.
+    // Both presentations fit the additional 37-pixel arm column into the
+    // original strip width, then dock the scaled strip at (2, 0).
+    const scale = 635 / (635 + 37);
     const blockRects = ui.strip.elements.filter(isBlock).map((element) => element.rect);
-    assert.deepEqual(blockRects[0], [356, 17, 34, 32]);
+    const assertStripRect = (actual: number[], local: number[]) => {
+      const expected = local.map((value, index) => value * scale + (index === 0 ? 2 : 0));
+      for (const [index, value] of actual.entries()) {
+        assert.ok(Math.abs(value - expected[index]) < 0.001,
+          `strip coordinate ${index}: expected ${expected[index]}, got ${value}`);
+      }
+    };
+    assertStripRect(blockRects[0], [354, 17, 34, 32]);
     const last = blockRects.at(-1);
     assert.ok(last);
-    assert.ok(Math.abs(last[0] - 496) < 0.001, `last block x: ${last[0]}`);
-    assert.deepEqual(last.slice(1), [85, 34, 32]);
+    assertStripRect(last, [494, 85, 34, 32]);
   },
 );
 

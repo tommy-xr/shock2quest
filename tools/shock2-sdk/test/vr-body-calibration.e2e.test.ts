@@ -12,13 +12,19 @@ test("belt and holster calibration moves live targets independently and resolves
   await game.devParams.set("vr_belt_distance", 0.30);
   await game.step({ frames: 3 });
   const movedBelt = (await game.info()).player.hand_feedback!;
-  assert.deepEqual(movedBelt.holsters!.centers, before.holsters!.centers, "belt must not move thighs");
+  // These are world-space centers; allow one millimetre for the player's
+  // physics settling, matching the tolerance on the deliberate moves below.
+  for (const [slot, center] of movedBelt.holsters!.centers!.entries()) {
+    assert.ok(Math.hypot(...sub(center, before.holsters!.centers![slot])) * 0.762 < 0.001,
+      "belt must not move thighs beyond settling tolerance");
+  }
   const delta = sub(movedBelt.ammo_pouch!.center!, before.ammo_pouch!.center!);
   assert.ok(Math.abs(Math.hypot(...delta) * 0.762 - 0.10) < 0.001, "pouch moves by ten centimetres with belt");
   await game.devParams.set("vr_holster_forward", -0.10);
   await game.step({ frames: 3 });
   const movedThighs = (await game.info()).player.hand_feedback!;
-  assert.deepEqual(movedThighs.ammo_pouch!.center, movedBelt.ammo_pouch!.center, "thighs must not move pouch");
+  assert.ok(Math.hypot(...sub(movedThighs.ammo_pouch!.center!, movedBelt.ammo_pouch!.center!)) * 0.762 < 0.001,
+    "thighs must not move pouch beyond settling tolerance");
   assert.ok(Math.abs(Math.hypot(...sub(movedThighs.holsters!.centers![0], movedBelt.holsters!.centers![0])) * 0.762 - 0.14) < 0.001);
 
   const rack = (await game.entities.list()).entities;

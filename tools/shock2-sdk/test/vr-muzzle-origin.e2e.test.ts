@@ -57,8 +57,9 @@ const len = (v: Vec3): number => Math.sqrt(dot(v, v));
 
 /**
  * Stepped frames of flight between the shot and the first position that can be
- * sampled: the trigger frame spawns and integrates the projectile once, and one
- * more frame is stepped before the entity list is read.
+ * sampled for a gun: the trigger frame spawns and integrates the projectile
+ * once, and one more frame is stepped before the entity list is read.
+ * An overloadable psi power instead casts on release, so it has flown once.
  */
 const FLIGHT_FRAMES_BEFORE_FIRST_SAMPLE = 2;
 
@@ -145,10 +146,8 @@ async function fireAndTrack(
   await game.input.set(`${hand}_hand.trigger`, 1);
   await game.step({ frames: 1 });
   await game.input.set(`${hand}_hand.trigger`, 0);
-  // The trigger frame spawns the projectile and integrates it once; the first
-  // loop iteration below steps once more before it can be observed. So the
-  // first sample sits FLIGHT_FRAMES_BEFORE_FIRST_SAMPLE frames down the barrel
-  // from where the shot actually started.
+  // Guns spawn on the trigger frame and fly again on the first loop frame.
+  // Overloadable psi powers wait for release and spawn on that loop frame.
 
   const track: Vec3[] = [];
   for (let frame = 0; frame < 30; frame += 1) {
@@ -179,6 +178,7 @@ async function fireAndTrack(
 function assertLeftTheMuzzle(
   shot: Awaited<ReturnType<typeof fireAndTrack>>,
   what: string,
+  flightFrames = FLIGHT_FRAMES_BEFORE_FIRST_SAMPLE,
 ): void {
   assert.ok(
     shot.barrelDeviationDeg < 1,
@@ -188,11 +188,11 @@ function assertLeftTheMuzzle(
     shot.lateralError < 0.05,
     `the ${what}'s flight path must pass through the muzzle vhot, missing it sideways by ${shot.lateralError.toFixed(3)} world units`,
   );
-  const expectedAxial = shot.frameStep * FLIGHT_FRAMES_BEFORE_FIRST_SAMPLE;
+  const expectedAxial = shot.frameStep * flightFrames;
   assert.ok(
     Math.abs(shot.axialDistance - expectedAxial) < shot.frameStep * 0.25,
     `the ${what} must start at the muzzle: it was ${shot.axialDistance.toFixed(3)} units along the barrel after ` +
-      `${FLIGHT_FRAMES_BEFORE_FIRST_SAMPLE} frames of flight, expected ${expectedAxial.toFixed(3)} ` +
+      `${flightFrames} frames of flight, expected ${expectedAxial.toFixed(3)} ` +
       `(one frame is ${shot.frameStep.toFixed(3)})`,
   );
 }
@@ -294,7 +294,7 @@ test(
       (e) => e.name.startsWith("Cryo PSI"),
     );
 
-    assertLeftTheMuzzle(shot, "cryo bolt");
+    assertLeftTheMuzzle(shot, "cryo bolt", 1);
   },
 );
 
