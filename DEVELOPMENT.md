@@ -537,6 +537,37 @@ by it cancel: it is an internal unit convention, not a physical-size slider.
 Glove size is deliberately an independent fit experiment and
 does not change the world, stereo separation, tracking conversion or saved grips.
 
+#### Psi amp fit check (`debug_psi_fit`)
+
+Open **Developer → Scenes → debug_psi_fit** on Quest. Like the glove fit
+scene, it shows your room through passthrough, with the amp's authored hand
+model on each controller. There are no enemies or casting interactions;
+the previews stay attached without squeezing. Hold Menu, then open
+**Developer → Hands & gloves** to tune:
+
+| Label | HTTP key | Meaning |
+| --- | --- | --- |
+| Psi amp forward cm | `psi_amp_forward_cm` | Offset from the current placement; positive moves forward along hand-local -Z, negative pulls back. Default 0, ±20 cm, 0.5 cm steps. |
+| Psi amp up cm | `psi_amp_up_cm` | Offset along hand-local +Y, rotating with the controller. Default 0, ±20 cm, 0.5 cm steps. |
+| Psi amp scale | `psi_amp_scale` | Uniform size about the hand origin. Default 1, range 0.25–2, 0.01 steps. |
+
+These three controls also apply to the held amp in normal VR gameplay, without
+re-equipping. They reset on app restart; record your preferred values before
+quitting. Defaults preserve the previous fit. Scale includes the amp's authored
+hand mesh; it is visual tuning and does not resize collision geometry.
+Normal flatscreen viewmodels and dropped amps are unaffected.
+
+**Hands & gloves → Fit experiment → Fit passthrough** switches between the
+room and a black background. The amp scene always uses gameplay's aim pose;
+the glove scene's grip-pose and size previews do not apply here. Global glove
+forward calibration still applies, matching gameplay. Compare both hands at
+several orientations and tune position separately from size. Physical alignment
+needs an in-headset check.
+
+For synthetic desktop captures: `cargo dbgr --mission debug_psi_fit --vr`.
+Desktop/debug show black behind the models. The scene is also visible in flat
+debug presentation, using the same hand transforms.
+
 #### Testing VR weapon handling at different stats
 
 Open `debug_weapons` from the Developer scene list and pick up a gun from the

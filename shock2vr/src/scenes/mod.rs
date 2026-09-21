@@ -184,6 +184,7 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
         Box::new(DebugHudScene::new())
     }),
     ("debug_gloves", DebugGlovesScene::new),
+    ("debug_psi_fit", DebugGlovesScene::psi_amp),
     ("debug_hand_poses", DebugHandPosesScene::new),
     ("debug_joint_constraint", DebugJointConstraintScene::new),
     ("debug_map", |_global, _options, _assets, _audio| {

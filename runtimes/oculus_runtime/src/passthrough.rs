@@ -62,7 +62,7 @@ impl FitPassthrough {
         match result {
             Ok(running) => {
                 self.running = Some(running);
-                println!("SHOCK2QUEST_PASSTHROUGH state=running scene=debug_gloves");
+                println!("SHOCK2QUEST_PASSTHROUGH state=running");
             }
             Err(error) => {
                 println!("SHOCK2QUEST_PASSTHROUGH state=failed fallback=black error={error:?}")

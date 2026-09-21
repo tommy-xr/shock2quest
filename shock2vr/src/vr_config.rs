@@ -549,11 +549,26 @@ pub fn get_vr_hand_model_adjustments_from_model(
 
     let adjustments = maybe_adjustments.unwrap();
 
-    if handedness == Handedness::Left {
+    let mut adjustment = if handedness == Handedness::Left {
         adjustments.left_hand.clone()
     } else {
         adjustments.right_hand.clone()
+    };
+    if model_name == "amp_h" {
+        adjustment.offset = psi_amp_offset(
+            adjustment.offset,
+            crate::dev_params::get(crate::dev_params::PSI_AMP_FORWARD_CM),
+            crate::dev_params::get(crate::dev_params::PSI_AMP_UP_CM),
+            crate::dev_params::get(crate::dev_params::PSI_AMP_SCALE),
+        );
     }
+    adjustment
+}
+
+/// Scale the authored seating offset with the mesh so size changes pivot about
+/// the hand origin. Translation is in physical centimeters along hand -Z/+Y.
+fn psi_amp_offset(authored: Vector3<f32>, forward_cm: f32, up_cm: f32, scale: f32) -> Vector3<f32> {
+    authored * scale + vec3(0.0, up_cm, -forward_cm) * (0.01 / crate::METERS_PER_WORLD_UNIT)
 }
 
 #[cfg(test)]
@@ -561,6 +576,33 @@ mod tests {
     use cgmath::InnerSpace;
 
     use super::*;
+
+    #[test]
+    fn psi_amp_fit_scales_about_the_hand_and_uses_physical_local_offsets() {
+        use cgmath::{EuclideanSpace, Matrix4, Point3, Rotation, Transform};
+        let authored = vec3(0.0, 0.0, 0.4);
+        let rotation = Quaternion::from_angle_y(Deg(-90.0));
+        // The model-space point seated on the controller must stay there as
+        // size changes. Offset controls then move it in physical hand space.
+        let grip_point = Point3::from_vec(-rotation.conjugate().rotate_vector(authored));
+        for side in [Handedness::Left, Handedness::Right] {
+            for scale in [0.25, 1.0, 2.0] {
+                for roll in [0.0, 90.0, 180.0] {
+                    let hand_rotation = Quaternion::from_angle_z(Deg(roll));
+                    let offset = psi_amp_offset(authored, 5.0, -3.0, scale);
+                    let transform = Matrix4::from(hand_rotation)
+                        * Matrix4::from_translation(offset)
+                        * Matrix4::from(rotation)
+                        * Matrix4::from_scale(scale)
+                        * side.gun_mirror();
+                    let expected = hand_rotation.rotate_vector(vec3(0.0, -0.03, -0.05));
+                    let actual = transform.transform_point(grip_point) - Point3::new(0.0, 0.0, 0.0);
+                    assert!((actual * crate::METERS_PER_WORLD_UNIT - expected).magnitude() < 1e-5);
+                }
+            }
+        }
+        assert_eq!(psi_amp_offset(authored, 0.0, 0.0, 1.0), authored);
+    }
 
     /// The melee subset of [`VR_25AE_VIEW_MODELS`]: skinned arm rigs, seated
     /// from the posed skeleton rather than from a static grip entry.
