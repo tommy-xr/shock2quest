@@ -505,6 +505,7 @@ impl VirtualHand {
         glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
         grip: Option<(&crate::vr_grip::ResolvedGrip, f32)>,
         visual_pose: Option<crate::vr_support::GripPose>,
+        lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<SceneObject> {
         let hand_pose = visual_pose.unwrap_or(crate::vr_support::GripPose {
             position: self.position,
@@ -516,6 +517,7 @@ impl VirtualHand {
         }
         // The hand itself: the skinned hand model, posed from the analog
         // inputs - unless a wielded weapon's model stands in for it.
+        let hand_lights = lighting.map(|lighting| lighting.at_player_position(hand_pose.position));
         let mut scene_objects = glove_renderer
             .filter(|_| shows_hand_visual(world, self.get_held_entity()))
             .map(|renderer| {
@@ -528,6 +530,7 @@ impl VirtualHand {
                     self.get_held_entity().is_some(),
                     grip.map(|(grip, blend)| (grip.finger_amounts_at(self.trigger_value), blend)),
                     self.feedback.light(),
+                    hand_lights,
                 )
             })
             .unwrap_or_default();

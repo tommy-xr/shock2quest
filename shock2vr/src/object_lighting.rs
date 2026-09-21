@@ -19,6 +19,51 @@ use engine::scene::light::{LightArray, PointLight, SceneLight, SpotLight};
 use crate::dev_params;
 use crate::mission::spatial_query::SpatialQueryEngine;
 
+/// A frame's authored lighting inputs, shared by world models, gloves and
+/// first-person weapons. Absence means legacy shading (disabled/no world rep).
+pub struct ObjectLighting<'a> {
+    spatial: &'a dyn SpatialQueryEngine,
+    intensities: Option<&'a HashMap<i16, f32>>,
+    player_position: Vector3<f32>,
+}
+
+impl<'a> ObjectLighting<'a> {
+    pub fn for_scene(
+        options: &crate::GameOptions,
+        spatial: Option<&'a dyn SpatialQueryEngine>,
+        intensities: Option<&'a HashMap<i16, f32>>,
+        player_position: Vector3<f32>,
+    ) -> Option<Self> {
+        if !options.experimental_features.contains("object_lighting") {
+            return None;
+        }
+        Some(Self {
+            spatial: spatial?,
+            intensities,
+            player_position,
+        })
+    }
+
+    /// Hands and viewmodels can extend into solid space. Keep the player's
+    /// light set there instead of abruptly dropping to ambient-only; shader
+    /// distance/cone tests still use the mesh's actual world position.
+    pub fn at_player_position(&self, position: Vector3<f32>) -> std::rc::Rc<LightArray> {
+        self.at_position(if self.spatial.get_cell_from_position(position).is_some() {
+            position
+        } else {
+            self.player_position
+        })
+    }
+
+    pub fn at_position(&self, position: Vector3<f32>) -> std::rc::Rc<LightArray> {
+        std::rc::Rc::new(lights_for_position(
+            self.spatial,
+            position,
+            self.intensities,
+        ))
+    }
+}
+
 /// How many lights the renderer can apply to one object.
 const MAX_OBJECT_LIGHTS: usize = 6;
 

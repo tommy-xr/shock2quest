@@ -100,6 +100,8 @@ pub struct SceneObject {
     pub skinning_data: [Matrix4<f32>; crate::scene::SKINNING_PALETTE_SIZE],
     pub depth_write: bool,
     render_layer: RenderLayer,
+    /// Viewmodel framing changes projection, never the world-space light inputs.
+    projection_override: Option<Matrix4<f32>>,
     /// Per-object transparency override (0.0 = opaque, 1.0 = invisible).
     /// Materials are shared (`Rc`) across every object using the same model, so
     /// a lasting material-level override would bleed between entities; instead
@@ -359,6 +361,7 @@ impl SceneObject {
             skinning_data: [Matrix4::identity(); crate::scene::SKINNING_PALETTE_SIZE],
             depth_write: true,
             render_layer: RenderLayer::World,
+            projection_override: None,
             transparency_override: None,
             additive_color: false,
             debug_tag: None,
@@ -391,6 +394,12 @@ impl SceneObject {
                 .initialize(engine_context.is_opengl_es);
         }
 
+        let render_context = EngineRenderContext {
+            projection_matrix: self
+                .projection_override
+                .unwrap_or(render_context.projection_matrix),
+            ..*render_context
+        };
         let xform = self.transform * self.local_transform;
         if !self.depth_write {
             unsafe { gl::DepthMask(gl::FALSE) };
@@ -402,7 +411,7 @@ impl SceneObject {
                 .set_transparency_override(Some(t));
         }
         if self.material.borrow().draw_opaque(
-            render_context,
+            &render_context,
             view,
             &xform,
             &self.skinning_data,
@@ -425,6 +434,12 @@ impl SceneObject {
         view: &Matrix4<f32>,
         lights: &crate::scene::light::LightArray,
     ) {
+        let render_context = EngineRenderContext {
+            projection_matrix: self
+                .projection_override
+                .unwrap_or(render_context.projection_matrix),
+            ..*render_context
+        };
         let xform = self.transform * self.local_transform;
         if let Some(t) = self.transparency_override {
             self.material
@@ -432,7 +447,7 @@ impl SceneObject {
                 .set_transparency_override(Some(t));
         }
         if self.material.borrow().draw_transparent(
-            render_context,
+            &render_context,
             view,
             &xform,
             &self.skinning_data,
@@ -498,6 +513,7 @@ impl SceneObject {
             skinning_data: [Matrix4::identity(); crate::scene::SKINNING_PALETTE_SIZE],
             depth_write: true,
             render_layer: RenderLayer::World,
+            projection_override: None,
             transparency_override: None,
             additive_color: false,
             debug_tag: None,
@@ -517,6 +533,7 @@ impl SceneObject {
             skinning_data: self.skinning_data,
             depth_write: self.depth_write,
             render_layer: self.render_layer,
+            projection_override: self.projection_override,
             transparency_override: self.transparency_override,
             additive_color: self.additive_color,
             debug_tag: self.debug_tag.clone(),
@@ -527,6 +544,11 @@ impl SceneObject {
 
     pub fn set_depth_write(&mut self, enabled: bool) {
         self.depth_write = enabled;
+    }
+
+    /// Override only projection for this draw; lights and normals stay in world space.
+    pub fn set_projection_override(&mut self, projection: Option<Matrix4<f32>>) {
+        self.projection_override = projection;
     }
 
     pub fn set_render_layer(&mut self, layer: RenderLayer) {

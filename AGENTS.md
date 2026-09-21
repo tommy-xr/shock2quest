@@ -710,7 +710,13 @@ The project supports experimental flags for gating in-progress features during d
   lights are merged). Switched `P$AnimLight` sources use the same live intensity
   map as the wall lightmaps, including restored save state; an off source does
   not occupy a light slot. This does not add temporal flicker/pulse modes beyond
-  the existing controller. The feature remains opt-in pending Quest profiling.
+  the existing controller. VR gloves sample at each rendered hand pose; VR held
+  models and flat first-person weapons use the same selection path. A held
+  visual outside the world rep falls back to the player's cell. Lit gloves drop
+  full-texture emission while keeping their emissive status-light mask. Flat weapon
+  FOV is a per-object projection override, preserving world positions/normals
+  for lighting; its emissive attachments and the HUD remain independent.
+  The feature remains opt-in pending Quest profiling.
 
 - **`high_detail_meshes`** / **`no_high_detail_meshes`**: force the 25AE
   high-detail (`PMNM`) creature meshes on or off, overriding the default (on

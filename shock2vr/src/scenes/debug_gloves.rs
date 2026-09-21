@@ -98,6 +98,7 @@ impl DebugSceneHooks for GloveFitHooks {
                 false,
                 None,
                 HandLight::Off,
+                None,
             );
             let transform = fit.transform(pose, side);
             for object in &mut hand {

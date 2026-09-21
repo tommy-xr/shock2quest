@@ -13093,7 +13093,7 @@ impl MissionCore {
                     // camera-pivot pitch (see `FlatPlayerController::update`),
                     // so the gun dips around the eye like the original instead
                     // of spinning in place around its own origin.
-                    let scene_objs = if let Some(name) = fp_model_name {
+                    let scene_objs = if let Some(name) = fp_model_name.as_ref() {
                         let model = asset_cache.get(&MODELS_IMPORTER, &format!("{name}.BIN"));
                         // FP meshes are articulated (hand + arm + weapon as
                         // skeleton sub-objects), so the unskinned `to_scene_objects`
@@ -13139,44 +13139,52 @@ impl MissionCore {
                     } else {
                         Vec::new()
                     };
-                    // The FP models are framed for the game's original, much
-                    // wider field of view (90 deg horizontal / ~74 vertical at
-                    // 4:3); under our narrower world projection the close-up
-                    // viewmodel fills the screen. Instead of a second render
-                    // pass with its own projection, scale the viewmodel toward
-                    // the view axis in camera space by
-                    // tan(world_fov/2) / tan(viewmodel_fov/2): every vertex
-                    // lands on exactly the pixel the wider-FOV projection would
-                    // put it on (depth is unchanged).
-                    const VIEWMODEL_FOV_Y_DEG: f32 = 73.74; // 90 deg horizontal at 4:3
-                    let tan_world = 1.0 / projection.y.y;
-                    let tan_vm = (VIEWMODEL_FOV_Y_DEG / 2.0).to_radians().tan();
-                    let s = tan_world / tan_vm;
-                    let squish =
-                        view.invert().unwrap() * Matrix4::from_nonuniform_scale(s, s, 1.0) * view;
+                    // Frame FP models at the original wider FOV, without
+                    // distorting their world positions/normals used for lighting.
+                    let viewmodel_projection =
+                        crate::flat_player_controller::viewmodel_projection(projection);
+                    let lighting = crate::object_lighting::ObjectLighting::for_scene(
+                        options,
+                        self.spatial_data.as_deref(),
+                        self.animated_lightmaps
+                            .as_ref()
+                            .map(|c| c.light_intensities()),
+                        self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos,
+                    );
+                    let weapon_lights = lighting
+                        .as_ref()
+                        .map(|lighting| lighting.at_player_position(xform.w.truncate()));
+                    let weapon_tag = Rc::new(engine::scene::SceneObjectDebugTag {
+                        entity_id: Some(weapon.inner()),
+                        model: fp_model_name.clone(),
+                        source: Some("viewmodel".to_owned()),
+                        ..Default::default()
+                    });
                     for obj in scene_objs {
                         let mut o = obj.clone();
-                        o.set_transform(squish * xform);
+                        o.set_transform(xform);
+                        o.set_projection_override(Some(viewmodel_projection));
+                        o.set_lights(weapon_lights.clone());
+                        o.set_debug_tag(Some(weapon_tag.clone()));
                         crate::psi_invisibility::apply(&mut o, invisibility);
                         ret.push(o);
                     }
 
                     for mut blade in crate::psi_sword::render(&self.world, asset_cache, weapon) {
-                        blade.set_transform(squish * swing * blade.transform);
+                        blade.set_transform(swing * blade.transform);
+                        blade.set_projection_override(Some(viewmodel_projection));
                         ret.push(blade);
                     }
 
                     if let Some(age) = self.healing_pulses.get(&weapon) {
                         for mut pulse in crate::psi_heal_visual::render(&self.world, weapon, *age) {
-                            pulse.set_transform(squish * pulse.get_transform());
+                            pulse.set_projection_override(Some(viewmodel_projection));
                             ret.push(pulse);
                         }
                     }
-                    // Entities bolted to the viewmodel (muzzle flash etc.,
-                    // skipped in the world pass) draw here too so they share
-                    // the viewmodel-FOV scale - otherwise they keep their true
-                    // camera-space offset while the weapon is scaled toward
-                    // the view axis, and float away from the barrel.
+                    // Attachments share the viewmodel projection so a muzzle
+                    // flash stays at the barrel. Their emissive lighting remains
+                    // independent of the authored light on the weapon.
                     let attached: Vec<(EntityId, Matrix4<f32>)> = {
                         let v_attach = self.world.borrow::<View<RuntimePropAttachment>>().unwrap();
                         let v_transform =
@@ -13202,7 +13210,8 @@ impl MissionCore {
                             };
                             for obj in objs {
                                 let mut o = obj.clone();
-                                o.set_transform(squish * attached_xform);
+                                o.set_transform(attached_xform);
+                                o.set_projection_override(Some(viewmodel_projection));
                                 crate::psi_invisibility::apply(&mut o, invisibility);
                                 o.set_debug_tag(Some(Rc::new(
                                     engine::scene::SceneObjectDebugTag {
@@ -13657,11 +13666,14 @@ impl MissionCore {
         // Per-object lighting, when enabled. `None` when the flag is off or the
         // scene has no world rep, so the render loop pays no cell lookup and no
         // light ranking at all.
-        let object_lights: Option<&dyn SpatialQueryEngine> = options
-            .experimental_features
-            .contains("object_lighting")
-            .then(|| self.spatial_data.as_deref())
-            .flatten();
+        let object_lights = crate::object_lighting::ObjectLighting::for_scene(
+            options,
+            self.spatial_data.as_deref(),
+            self.animated_lightmaps
+                .as_ref()
+                .map(|c| c.light_intensities()),
+            self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos,
+        );
 
         // Render models
         for (entity_id, objs) in &self.id_to_model {
@@ -13721,21 +13733,20 @@ impl MissionCore {
             });
 
             if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
-                let visual_xform = if self.interaction.is_holding(*entity_id) {
+                let held = self.interaction.is_holding(*entity_id);
+                let visual_xform = if held {
                     crate::melee_charge_visual::transform(&self.world, Some(*entity_id)) * xform
                 } else {
                     xform
                 };
                 // One light set per entity, resolved at its origin and shared by
                 // its sub-objects - the lights that reach the room it stands in.
-                let entity_lights = object_lights.map(|spatial| {
-                    Rc::new(crate::object_lighting::lights_for_position(
-                        spatial,
-                        xform.w.truncate(),
-                        self.animated_lightmaps
-                            .as_ref()
-                            .map(|c| c.light_intensities()),
-                    ))
+                let entity_lights = object_lights.as_ref().map(|lighting| {
+                    if held {
+                        lighting.at_player_position(xform.w.truncate())
+                    } else {
+                        lighting.at_position(xform.w.truncate())
+                    }
                 });
 
                 for obj in scene_objs {
@@ -13860,11 +13871,12 @@ impl MissionCore {
         // + forearm HUD panels; flat draws nothing here (its weapon viewmodel is
         // drawn on top in `render_per_eye`). They are labelled `PLAYER_HANDS_SOURCE`
         // so `Game` can drop them while the pause menu is up (issue #1018).
-        scene.append(
-            &mut self
-                .interaction
-                .render(asset_cache, &self.world, self.use_mode),
-        );
+        scene.append(&mut self.interaction.render(
+            asset_cache,
+            &self.world,
+            self.use_mode,
+            object_lights.as_ref(),
+        ));
 
         if options.presentation_mode == crate::PresentationMode::Vr {
             scene.extend(

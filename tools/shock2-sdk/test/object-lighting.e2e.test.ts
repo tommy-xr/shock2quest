@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
+import { switchCourtLights } from "./helpers/rec1-lights.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 
@@ -30,24 +31,13 @@ for (const vr of [false, true]) {
         return lighting;
       }
 
-      async function switchLights(type: "TurnOn" | "TurnOff") {
-        const [liveButton] = await game.entities.byTemplate(77);
-        const links = (await game.entities.detail(liveButton.id)).outgoing_links
-          .filter(link => link.link_type === "SwitchLink" && /light/i.test(link.target_name));
-        assert.equal(links.length, 16, "authored light targets, excluding the one-shot quest-bit setter");
-        // Exercise BaseLight directly: button77 is a one-way power activator,
-        // so TurnOff on the button itself does not test an on-to-off transition.
-        for (const link of links) await game.entities.sendMessage(link.target_id, { type });
-        await game.step({ frames: 2 });
-      }
-
-      await switchLights("TurnOn");
+      await switchCourtLights(game, "TurnOn");
       const firstOn = await corpseLighting();
-      await switchLights("TurnOff");
+      await switchCourtLights(game, "TurnOff");
       const off = await corpseLighting();
       const saveName = `object-lighting-off-${vr ? "vr" : "flat"}`;
       assert.equal((await game.save(saveName)).success, true);
-      await switchLights("TurnOn");
+      await switchCourtLights(game, "TurnOn");
       const on = await corpseLighting();
       assert.ok(Math.abs(on.received - firstOn.received) < 0.0001,
         "on/off/on must recover full brightness without cumulative scaling");
@@ -77,7 +67,7 @@ for (const vr of [false, true]) {
       assert.ok(Math.abs(restored.received - off.received) < 0.0001,
         "loading the off state must restore object shading as well as wall lightmaps");
       assert.equal(restored.light_count, off.light_count);
-      await switchLights("TurnOn");
+      await switchCourtLights(game, "TurnOn");
       assert.ok(Math.abs((await corpseLighting()).received - on.received) < 0.0001,
         "an off/on cycle after loading must recover full brightness without cumulative scaling");
     });
