@@ -2910,7 +2910,12 @@ pub struct PhysicsWorld {
     // Rapier joint motors. Keyed by the weapon body handle so the normal
     // set_position_rotation path can redirect hand poses to the target.
     held_item_drives: HashMap<RigidBodyHandle, HeldItemDrive>,
-    held_target_frame: Option<(Vector3<f32>, Quaternion<f32>)>,
+    held_target_frame: Option<(
+        Vector3<f32>,
+        Quaternion<f32>,
+        Option<crate::vr_tracking::TrackingTransform>,
+    )>,
+    held_tracking_translation: Vector3<f32>,
 
     // The player's travel over the previous frame, in world units per second,
     // and where they were when it was sampled. A held weapon rides the player,
@@ -3609,14 +3614,29 @@ impl PhysicsWorld {
     ///
     /// Only move the targets. The weapons still take their normal swept path
     /// and Rapier step, preserving obstruction, contact velocity and CCD.
-    pub fn rebase_held_targets(&mut self, player: &PlayerHandle, rotation: Quaternion<f32>) {
-        let Some((previous_position, previous_rotation)) = self.held_target_frame else {
+    pub fn rebase_held_targets(
+        &mut self,
+        player: &PlayerHandle,
+        rotation: Quaternion<f32>,
+        tracking: Option<crate::vr_tracking::TrackingTransform>,
+    ) {
+        self.held_tracking_translation = vec3(0.0, 0.0, 0.0);
+        let Some((previous_position, previous_rotation, previous_tracking)) =
+            self.held_target_frame
+        else {
             return;
         };
-        let next_position = self.rigid_body_set[player.character_handle]
-            .next_position()
-            .translation
-            .vector;
+        let next_position = vec_to_nvec(self.get_player_next_translation(player));
+        // Tracked stance conversion can cancel the capsule-center change.
+        // Carry that origin change too, rather than bobbing a physically still
+        // controller when crouching/standing. Synthetic input has no rig offset.
+        if let (Some(previous), Some(current)) = (previous_tracking, tracking) {
+            use cgmath::Rotation;
+            self.held_tracking_translation = rotation.rotate_vector(
+                current.stage_to_pawn(vec3(0.0, 0.0, 0.0))
+                    - previous.stage_to_pawn(vec3(0.0, 0.0, 0.0)),
+            );
+        }
         let rotation_delta = quat_to_nquat(rotation * previous_rotation.conjugate());
         for drive in self.held_item_drives.values() {
             let Some(target) = self.rigid_body_set.get_mut(drive.target) else {
@@ -3624,6 +3644,7 @@ impl PhysicsWorld {
             };
             let mut pose = *target.next_position();
             pose.translation.vector = next_position
+                + vec_to_nvec(self.held_tracking_translation)
                 + rotation_delta * (pose.translation.vector - vec_to_nvec(previous_position));
             pose.rotation = rotation_delta * pose.rotation;
             target.set_next_kinematic_position(pose);
@@ -3633,8 +3654,13 @@ impl PhysicsWorld {
     /// Record the frame used by the just-published hand targets, including
     /// paused input updates. This is independent of PlayerInfo: a scripted
     /// teleport can move the physical pair before PlayerInfo is synchronized.
-    pub fn set_held_target_frame(&mut self, position: Vector3<f32>, rotation: Quaternion<f32>) {
-        self.held_target_frame = Some((position, rotation));
+    pub fn set_held_target_frame(
+        &mut self,
+        position: Vector3<f32>,
+        rotation: Quaternion<f32>,
+        tracking: Option<crate::vr_tracking::TrackingTransform>,
+    ) {
+        self.held_target_frame = Some((position, rotation, tracking));
     }
 
     /// Carry the complete physical-hand pair through a discontinuous player
@@ -3648,7 +3674,7 @@ impl PhysicsWorld {
         if delta.magnitude2() <= f32::EPSILON {
             return;
         }
-        if let Some((position, _)) = &mut self.held_target_frame {
+        if let Some((position, _, _)) = &mut self.held_target_frame {
             *position += delta;
         }
         let delta = vec_to_nvec(delta);
@@ -4820,18 +4846,16 @@ impl PhysicsWorld {
         // Match the pawn frame the held targets will use in this step, rather
         // than sampling the previous committed pose (which misclassifies a
         // start/stop as hand motion).
-        let translation = nvec_to_cgmath(
-            self.rigid_body_set[player_handle.character_handle]
-                .next_position()
-                .translation
-                .vector,
-        );
+        let translation = self.get_player_next_translation(player_handle);
         let dt = self.integration_parameters.dt;
         self.player_velocity = match self.last_player_translation {
-            Some(previous) if dt > 0.0 => (translation - previous) / dt,
+            Some(previous) if dt > 0.0 => {
+                (translation - previous + self.held_tracking_translation) / dt
+            }
             _ => Vector3::new(0.0, 0.0, 0.0),
         };
         self.last_player_translation = Some(translation);
+        self.held_tracking_translation = vec3(0.0, 0.0, 0.0);
     }
 
     fn drive_held_items(&mut self) {
@@ -5364,6 +5388,7 @@ impl PhysicsWorld {
             kinematic_attachments: HashMap::new(),
             held_item_drives: HashMap::new(),
             held_target_frame: None,
+            held_tracking_translation: vec3(0.0, 0.0, 0.0),
             player_velocity: Vector3::new(0.0, 0.0, 0.0),
             last_player_translation: None,
 
