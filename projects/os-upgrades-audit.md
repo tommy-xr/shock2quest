@@ -97,6 +97,46 @@ The two successive weapon changes alter saved gun properties used by firing/relo
 | Lethal Weapon | #1626 |
 | Smasher (held-trigger charge, including VR) | #1627 |
 | Cybernetically Enhanced | #1629 |
-| Tinker and paid modification | Current stack tip |
+| Tinker and paid modification | #1630 |
+| Existing SDK fixture/assertion corrections exposed by the full run | #1631 |
 
 All sixteen trait IDs have live consumers and are selectable. The deliberately classic rules include Sharpshooter's actual 35% multiplier and Strong Metabolism's actual 50% toxin reduction, even where old tooltips disagreed. SCP-only extensions are not advertised. Initial UI parity differences above remain documented; headless flat/VR verification does not establish physical headset comfort.
+
+## Final stack verification (2026-09-20)
+
+The complete SDK suite ran serially against the mounted 25th Anniversary assets: **842 tests, 759 passed, 72 failed, 11 skipped**, with no cancellations. Its recorded verdict is **FAIL**; it is not a green full-suite run. All 23 mission-load cases passed, as did the new upgrade-acquisition/effect scenarios and the holster scenarios, including both psi-amp sockets and matching paperdoll contents.
+
+PR #1631 corrects **25 of those failed cases across 17 test files**. All **37 focused scenarios** used to verify those corrections pass. The full suite was not restarted after these fixes, so its original failure count remains 72. The corrections cover obsolete HP/psi/character-sheet/trainer/readout fixtures, the requested separation of held controls from holster contents, release-time VR psi casting, submillimetre physics settling, and two timing-sensitive melee/search setups. Melee deduplication is now observed within one existing cooldown window; the search scenario confirms a visible chase before removing the player rather than racing a non-preemptible melee animation. No production behavior was changed in this regression-test PR.
+
+Warning-free `cargo check` passes for `shock2vr`, `desktop_runtime`, and `debug_runtime`. The Rust suite passed 1,966 tests with two ignored before the final weapon-table addition; all three weapon-modification table tests passed afterwards. Every visual feature PR includes flat/VR stills, looping GIFs, and before/after evidence captured with the `pr-visuals` workflow. These are headless checks; physical headset comfort/readability remains unmeasured.
+
+**47 broader-suite failures remain in 26 files.** A preserved pre-upgrade runtime reproduces the failing assertion for 45 of them. The two melee rows marked **earlier baseline failure** stop sooner on the baseline, so their exact current failures have not been isolated from the upgrade stack. Neither those limitations nor skipped tests are counted as passing. The table records the remaining checks for follow-up; this campaign does not claim to repair the entire pre-existing gameplay suite.
+
+| SDK test file | Failed cases | Baseline comparison / remaining assertion |
+| --- | ---: | --- |
+| [debug-interactions.e2e.test.ts](../tools/shock2-sdk/test/debug-interactions.e2e.test.ts) | 1 | Fitted hand-local item offset assertion also fails on original pre-campaign runtime. |
+| [dev-menu.e2e.test.ts](../tools/shock2-sdk/test/dev-menu.e2e.test.ts) | 7 | All seven failures reproduce on original pre-campaign runtime; one pause-menu test passes. |
+| [earth-psi-cryo-self-hit.e2e.test.ts](../tools/shock2-sdk/test/earth-psi-cryo-self-hit.e2e.test.ts) | 1 | Muzzle-within-player precondition also fails on original runtime (0.50 >= 0.48; current 0.64 >= 0.48). |
+| [earth-psionic-training.e2e.test.ts](../tools/shock2-sdk/test/earth-psionic-training.e2e.test.ts) | 1 | Same booster 275 world-use pickup assertion fails on original runtime. |
+| [energy-projectile-visibility.e2e.test.ts](../tools/shock2-sdk/test/energy-projectile-visibility.e2e.test.ts) | 2 | Both flat and VR EMP LaserShot mesh-reveal failures reproduce on original pre-campaign runtime. |
+| [healing-items.e2e.test.ts](../tools/shock2-sdk/test/healing-items.e2e.test.ts) | 1 | Desk 471 panel-open assertion fails identically on original pre-campaign runtime. |
+| [hostile-ranged-damage.e2e.test.ts](../tools/shock2-sdk/test/hostile-ranged-damage.e2e.test.ts) | 1 | Same turret damage assertion (35 -> 35) fails on original pre-campaign runtime. |
+| [hydro-research.e2e.test.ts](../tools/shock2-sdk/test/hydro-research.e2e.test.ts) | 1 | Same missing Chem #4 in container 354 assertion fails on original pre-campaign runtime. |
+| [hydro2-vr-research-self-offer.e2e.test.ts](../tools/shock2-sdk/test/hydro2-vr-research-self-offer.e2e.test.ts) | 1 | Same null hand-ray target for attached Research panel on original pre-campaign runtime. |
+| [impact-sounds.e2e.test.ts](../tools/shock2-sdk/test/impact-sounds.e2e.test.ts) | 1 | Same missing creature collision-schema impact sound on original pre-campaign runtime. |
+| [medsci-saved-vr-melee.e2e.test.ts](../tools/shock2-sdk/test/medsci-saved-vr-melee.e2e.test.ts) | 1 | **Earlier baseline failure.** Original and preserved Smasher binaries fail the fresh-control fixed nine-damage HP assertion (0 instead of 1); current reaches the same HP mismatch on the saved wrench. Baseline fails earlier, so this does not establish exact failure equivalence. |
+| [melee-impact-sound.e2e.test.ts](../tools/shock2-sdk/test/melee-impact-sound.e2e.test.ts) | 1 | **Earlier baseline failure.** Original and preserved Smasher binaries fail earlier at authored wrench pickup. Current fails quiet-rest assertion with one plasticrete impact; impact guard/cooldown code is unchanged. Earlier baseline failure does not prove exact failure equivalence. |
+| [ops2-vr-chip-a-loot.e2e.test.ts](../tools/shock2-sdk/test/ops2-vr-chip-a-loot.e2e.test.ts) | 1 | Same missing Chip A backpack transfer after trigger-click on original pre-campaign runtime. |
+| [ranged-hitbox.e2e.test.ts](../tools/shock2-sdk/test/ranged-hitbox.e2e.test.ts) | 1 | Same centered shot produces no creature Damage message on original pre-campaign runtime. |
+| [shodan-live-assassin-support.e2e.test.ts](../tools/shock2-sdk/test/shodan-live-assassin-support.e2e.test.ts) | 1 | Same missing authored Red Assassin object 649 on original pre-campaign runtime. |
+| [trap-unlock.e2e.test.ts](../tools/shock2-sdk/test/trap-unlock.e2e.test.ts) | 1 | Locked grav-lift refusal-sound assertion also fails on original pre-campaign runtime. |
+| [vr-gun-weight.e2e.test.ts](../tools/shock2-sdk/test/vr-gun-weight.e2e.test.ts) | 4 | Both hands of weighted shotgun and AR fail the same support-socket acquisition assertion on original pre-campaign runtime; four control cases pass. |
+| [vr-held-model.e2e.test.ts](../tools/shock2-sdk/test/vr-held-model.e2e.test.ts) | 2 | Same authored mesh-count and mirrored melee contact-volume assertions fail on original pre-campaign runtime. |
+| [vr-reach-haptics.e2e.test.ts](../tools/shock2-sdk/test/vr-reach-haptics.e2e.test.ts) | 1 | Same null holster proximity at the thirty-centimetre-below test position on original pre-campaign runtime. |
+| [vr-support-region.e2e.test.ts](../tools/shock2-sdk/test/vr-support-region.e2e.test.ts) | 5 | Same five overlay/support-acquisition failures on original pre-campaign runtime; annelid right-hand control passes. |
+| [vr-strength-recoil.e2e.test.ts](../tools/shock2-sdk/test/vr-strength-recoil.e2e.test.ts) | 5 | Same pistol recoil/override curve assertions and three rifle/shotgun support-acquisition failures on original pre-campaign runtime. |
+| [vr-weapon-handedness.e2e.test.ts](../tools/shock2-sdk/test/vr-weapon-handedness.e2e.test.ts) | 1 | Same six-versus-four forearm draw-count assertion on original pre-campaign runtime. |
+| [vr-weapon-haptics.e2e.test.ts](../tools/shock2-sdk/test/vr-weapon-haptics.e2e.test.ts) | 3 | Same two null-amplitude assertions and dual-wield haptic mismatch on original pre-campaign runtime. |
+| [weapon-reload-animation.e2e.test.ts](../tools/shock2-sdk/test/weapon-reload-animation.e2e.test.ts) | 1 | Same missing third reserve clip for partial reload. Reproduces on original pre-campaign runtime. |
+| [weapon-reload.e2e.test.ts](../tools/shock2-sdk/test/weapon-reload.e2e.test.ts) | 1 | Same authored clip assertion: combined stack 18 versus expected 6. Reproduces on original pre-campaign runtime. |
+| [weapon-selection.e2e.test.ts](../tools/shock2-sdk/test/weapon-selection.e2e.test.ts) | 1 | Same spawn-item refusal for non-pickup template -28. Reproduces on original pre-campaign runtime. |
