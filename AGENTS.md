@@ -706,7 +706,11 @@ The project supports experimental flags for gating in-progress features during d
   `object_light_wrap`) tune that live over HTTP. **No-op in `debug_*` scenes**,
   which have no world rep and therefore no cells to take lights from. Inspect
   the result with `GET /v1/scene`, whose `lighting` block reports each object's
-  resolved light count and the light it receives.
+  resolved light count and the light it receives (authored lights before hand
+  lights are merged). Switched `P$AnimLight` sources use the same live intensity
+  map as the wall lightmaps, including restored save state; an off source does
+  not occupy a light slot. This does not add temporal flicker/pulse modes beyond
+  the existing controller. The feature remains opt-in pending Quest profiling.
 
 - **`high_detail_meshes`** / **`no_high_detail_meshes`**: force the 25AE
   high-detail (`PMNM`) creature meshes on or off, overriding the default (on
