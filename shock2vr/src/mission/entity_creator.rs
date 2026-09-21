@@ -121,6 +121,10 @@ pub fn create_entity_with_position(
         world.add_component(entity_id, InternalPropOriginalModelName(model_name.clone()));
     }
 
+    if let Some(ecology_type) = additional_options.ecology_type {
+        world.add_component(entity_id, dark::properties::PropEcoType(ecology_type));
+    }
+
     if additional_options.force_visible {
         world.add_component(entity_id, PropHasRefs(true));
         world.add_component(entity_id, PropRenderType(RenderType::Normal));
@@ -1821,6 +1825,8 @@ pub struct CreateEntityOptions {
     /// Instance-specific appearance, for archetypes whose model is assigned
     /// by a mission rather than the gamesys. Applied before visuals/physics.
     pub model_override: Option<String>,
+    /// Population membership for children of an ecology-owned egg.
+    pub ecology_type: Option<i32>,
     /// Bolt the new entity to this parent's transform for its lifetime (see
     /// `RuntimePropAttachment`). The spawn-time relative pose is captured and the
     /// child then tracks the parent each frame - used so a weapon's muzzle flash
@@ -1864,6 +1870,7 @@ impl Default for CreateEntityOptions {
         CreateEntityOptions {
             force_visible: false,
             model_override: None,
+            ecology_type: None,
             attach_to: None,
             transient_fx: false,
             projectile_raycast_origin: None,
