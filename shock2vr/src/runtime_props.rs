@@ -470,3 +470,7 @@ pub struct RuntimePropShoulderWeapon(pub u8);
 /// Explicitly worn armor; saved with its item and effective only while carried.
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropHazardEquipment;
+
+/// Physical implant socket, independent of hands and thigh holsters.
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct RuntimePropImplantSlot(pub u8);

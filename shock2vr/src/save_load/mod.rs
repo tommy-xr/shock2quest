@@ -206,6 +206,15 @@ pub fn to_save_data_with_scripts(
         }
     }
 
+    let implants: HashMap<_, _> = world
+        .borrow::<View<crate::runtime_props::RuntimePropImplantSlot>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .filter(|(id, _)| !entities_to_filter.contains(&id.inner()))
+        .map(|(id, slot)| (id.inner(), *slot))
+        .collect();
+    let (held_implants, world_implants) = partition_map(implants, |id| held_entities.contains(id));
     let (held_hazard_equipment, world_hazard_equipment): (Vec<_>, Vec<_>) = world
         .borrow::<View<crate::runtime_props::RuntimePropHazardEquipment>>()
         .unwrap()
@@ -316,6 +325,7 @@ pub fn to_save_data_with_scripts(
         death_poses: world_death_poses,
         selected_ammo: world_selected_ammo,
         hazard_equipment: world_hazard_equipment,
+        implant_slots: world_implants,
         holstered: world_holstered,
         shoulder_weapons: world_shoulders,
         canonical_template_ids: world_canonical_templates,
@@ -337,6 +347,7 @@ pub fn to_save_data_with_scripts(
         death_poses: held_death_poses,
         selected_ammo: held_selected_ammo,
         hazard_equipment: held_hazard_equipment,
+        implant_slots: held_implants,
         holstered: held_holstered,
         shoulder_weapons: held_shoulders,
         canonical_template_ids: held_canonical_templates,

@@ -2748,6 +2748,7 @@ pub struct MissionCore {
     pub obj_map: HashMap<i32, String>,
     pub world: World,
     pub player_handle: PlayerHandle,
+    backpack_width: usize,
     pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
     /// Host template -> the particle-group archetypes authored to ride it
     /// (reverse of the archetype `ParticleAttachement` links). Runtime entity
@@ -3538,10 +3539,7 @@ impl MissionCore {
         // Current saves record the width that encoded their backpack link
         // ordinals. Pre-#948 saves omit it and used the former fixed width 15;
         // migrate both shapes before any restored interaction can add items.
-        let current_backpack_width = world
-            .borrow::<UniqueView<QuestInfo>>()
-            .map(|quests| crate::inventory::backpack_width(quests.player_stats()))
-            .unwrap_or(crate::inventory::BACKPACK_GRID.0);
+        let current_backpack_width = crate::inventory::grid_for(&world, inventory).0;
         let backpack_load_remap = held_item_save_data.remap_instantiated_backpack(
             &mut world,
             inventory,
@@ -3778,6 +3776,7 @@ impl MissionCore {
             id_to_physics,
             template_to_entity_id,
             player_handle,
+            backpack_width: current_backpack_width,
             spatial_data: abstract_mission.spatial_data,
             debug_lines: Vec::new(),
             psi_drain_trails: Vec::new(),
@@ -4605,10 +4604,8 @@ impl MissionCore {
                     footstep,
                     new_character_pos,
                 ));
-                let agility = self
-                    .world
-                    .borrow::<UniqueView<QuestInfo>>()
-                    .map(|q| q.player_stats().agility)
+                let agility = crate::implants::effective_stats(&self.world)
+                    .map(|stats| stats.agility)
                     .unwrap_or(1);
                 effects.push(Effect::RaiseNoise {
                     source: self
@@ -5727,7 +5724,7 @@ impl MissionCore {
             self.weapon_settings_gun = None;
         }
         let name_strip = self.flat_ui.strip_entity().and_then(|_| {
-            self.flat_ui.pointed_holster_name().or_else(|| {
+            self.flat_ui.pointed_equipment_name().or_else(|| {
                 self.flat_ui
                     .pointed_item()
                     .or_else(|| self.name_strip_world_pick(game_options))
@@ -7205,14 +7202,22 @@ impl MissionCore {
     /// Re-encode the backpack's stored cells after effective Strength changes.
     /// Items that cannot fit even after deterministic reflow are spilled into
     /// the world, matching retail's `ShockInvResize` -> `ShockInvAddObj` path.
-    fn resize_player_backpack(&mut self, old_width: usize, new_width: usize) {
-        if old_width == new_width {
-            return;
-        }
+    fn refresh_implant_effects(&mut self) {
+        self.resize_player_backpack();
+        crate::difficulty::refresh_player_pools(&self.world, false);
+    }
+
+    fn resize_player_backpack(&mut self) {
         let inventory_entity = match self.world.borrow::<UniqueView<PlayerInfo>>() {
             Ok(player) => player.inventory_entity_id,
             Err(_) => return,
         };
+        let old_width = self.backpack_width;
+        let new_width = crate::inventory::grid_for(&self.world, inventory_entity).0;
+        if old_width == new_width {
+            return;
+        }
+        self.backpack_width = new_width;
         let outcome = crate::inventory::remap_container_width(
             &mut self.world,
             inventory_entity,
@@ -8419,6 +8424,58 @@ impl MissionCore {
                         rooms.0.clear();
                     }
                 }
+                Effect::ToggleImplant { entity_id } => {
+                    match crate::implants::toggle_slot(&self.world, entity_id) {
+                        Ok(Some(slot)) => {
+                            self.world.add_component(
+                                entity_id,
+                                crate::runtime_props::RuntimePropImplantSlot(slot),
+                            );
+                        }
+                        Ok(None) => {
+                            self.world
+                                .remove::<crate::runtime_props::RuntimePropImplantSlot>(entity_id);
+                        }
+                        Err(text) => {
+                            effects.push_back(Effect::ShowMessage {
+                                text: text.to_owned(),
+                            });
+                            continue;
+                        }
+                    }
+                    self.refresh_implant_effects();
+                }
+                Effect::UnequipImplant { entity_id } => {
+                    if self
+                        .world
+                        .remove::<crate::runtime_props::RuntimePropImplantSlot>(entity_id)
+                        .0
+                        .is_some()
+                    {
+                        self.refresh_implant_effects();
+                    }
+                }
+                Effect::AdjustImplantEnergy {
+                    entity_id,
+                    amount,
+                    recharge,
+                } => {
+                    if crate::implants::kind(&self.world, entity_id).is_none() {
+                        continue;
+                    }
+                    let before = crate::implants::energy(&self.world, entity_id);
+                    let after = if recharge {
+                        before.max(amount)
+                    } else {
+                        (before + amount).max(0.0)
+                    };
+                    self.world
+                        .add_component(entity_id, dark::properties::PropEnergy(after));
+                    if (before > 0.0) != (after > 0.0) {
+                        self.refresh_implant_effects();
+                    }
+                }
+
                 Effect::ToggleHazardArmor { entity_id } => {
                     if self.world.borrow::<View<PropObjState>>().is_ok_and(|v| {
                         v.get(entity_id)
@@ -8968,10 +9025,11 @@ impl MissionCore {
                         .get(entity_id)
                         .map(|skills| skills.0.research().max(1))
                         .unwrap_or(1);
+                    let skill = crate::scripts::script_util::player_skill_level(
+                        &self.world,
+                        crate::player_stats::Skill::Research,
+                    );
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
-                    let skill = quests
-                        .player_stats()
-                        .skill_level(crate::player_stats::Skill::Research);
                     let result = quests.research_mut().begin(template_id, required, skill);
                     drop(quests);
                     match result {
@@ -11104,11 +11162,9 @@ impl MissionCore {
 
                 Effect::GrantTourReward { career, year, tour } => {
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
-                    let old_width = crate::inventory::backpack_width(quests.player_stats());
                     let applied = quests
                         .player_stats_mut()
                         .apply_tour_reward(career, year, tour);
-                    let new_width = crate::inventory::backpack_width(quests.player_stats());
                     if applied {
                         info!(
                             "Applied training-tour reward ({:?} year {} tour {}): {:?}",
@@ -11120,7 +11176,7 @@ impl MissionCore {
                     }
                     drop(quests);
                     if applied {
-                        self.resize_player_backpack(old_width, new_width);
+                        self.resize_player_backpack();
                         crate::difficulty::refresh_player_pools(&self.world, false);
                     }
                 }
@@ -11150,11 +11206,10 @@ impl MissionCore {
                     }
                     let costs = crate::difficulty::trainer_costs(&self.world);
                     if let Some(costs) = costs {
-                        let (purchased, old_width, new_width) = {
+                        let purchased = {
                             let mut quests =
                                 self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                             let stats = quests.player_stats_mut();
-                            let old_width = crate::inventory::backpack_width(stats);
                             match upgrade_quote(&costs, stats, target) {
                                 Some(cost) if stats.spend_cyber_modules(cost) => {
                                     apply_purchase(stats, target);
@@ -11162,26 +11217,26 @@ impl MissionCore {
                                         "Trainer purchase {:?} (-{} modules, balance {})",
                                         target, cost, stats.cyber_modules
                                     );
-                                    (true, old_width, crate::inventory::backpack_width(stats))
+                                    true
                                 }
                                 Some(cost) => {
                                     info!(
                                         "Trainer purchase {:?} refused: costs {}, balance {}",
                                         target, cost, stats.cyber_modules
                                     );
-                                    (false, old_width, old_width)
+                                    false
                                 }
                                 None => {
                                     info!(
                                         "Trainer purchase {:?} refused: maxed/locked/unavailable",
                                         target
                                     );
-                                    (false, old_width, old_width)
+                                    false
                                 }
                             }
                         };
                         if purchased {
-                            self.resize_player_backpack(old_width, new_width);
+                            self.resize_player_backpack();
                             crate::difficulty::refresh_player_pools(&self.world, false);
                         }
                     } else {
@@ -11269,19 +11324,18 @@ impl MissionCore {
                         warn!("O/S trait {} refused: machine has no template id", trait_id);
                         continue;
                     };
-                    let (acquired, old_width, new_width) = {
+                    let acquired = {
                         let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
-                        let old_width = crate::inventory::backpack_width(quests.player_stats());
                         let used = quests
                             .read_quest_bit_value(&used_bit_name(machine_id))
                             .bits()
                             != 0;
                         if used {
                             info!("O/S trait {} refused: machine already used", trait_id);
-                            (false, old_width, old_width)
+                            false
                         } else if !quests.player_stats_mut().add_os_trait(trait_id) {
                             info!("O/S trait {} refused: owned or slots full", trait_id);
-                            (false, old_width, old_width)
+                            false
                         } else {
                             quests.set_quest_bit_value(
                                 &used_bit_name(machine_id),
@@ -11292,13 +11346,12 @@ impl MissionCore {
                                     .player_stats_mut()
                                     .award_cyber_modules(NATURALLY_ABLE_MODULES);
                             }
-                            let new_width = crate::inventory::backpack_width(quests.player_stats());
-                            (true, old_width, new_width)
+                            true
                         }
                     };
 
                     if acquired {
-                        self.resize_player_backpack(old_width, new_width);
+                        self.resize_player_backpack();
                         crate::difficulty::refresh_player_pools(&self.world, false);
                         info!(
                             "O/S trait acquired: {} ({}){}",
@@ -14707,10 +14760,11 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
         .unwrap_or(1.0);
 
     let outcome = {
+        let skill = crate::scripts::script_util::player_skill_level(
+            world,
+            crate::player_stats::Skill::Research,
+        );
         let mut quests = world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
-        let skill = quests
-            .player_stats()
-            .skill_level(crate::player_stats::Skill::Research);
         quests.research_mut().advance(
             template_id,
             real_seconds,
@@ -15538,6 +15592,27 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         name: "Exp".to_string(),
                         value: exp.to_string(),
                     });
+                }
+                if let Some(kind) = crate::implants::kind(&self.world, id) {
+                    properties.push(DebugPropertyInfo {
+                        name: "ImplantType".into(),
+                        value: kind.to_string(),
+                    });
+                    properties.push(DebugPropertyInfo {
+                        name: "Energy".into(),
+                        value: crate::implants::energy(&self.world, id).to_string(),
+                    });
+                    if let Ok(slot) = self
+                        .world
+                        .borrow::<View<crate::runtime_props::RuntimePropImplantSlot>>()
+                        .unwrap()
+                        .get(id)
+                    {
+                        properties.push(DebugPropertyInfo {
+                            name: "ImplantSlot".into(),
+                            value: slot.0.to_string(),
+                        });
+                    }
                 }
                 if let Some(stack) = stack_count {
                     properties.push(DebugPropertyInfo {
@@ -16474,7 +16549,6 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .borrow::<UniqueViewMut<QuestInfo>>()
             .map_err(|_| "scene has no quest info".to_string())?;
         let stats = quests.player_stats_mut();
-        let old_backpack_width = crate::inventory::backpack_width(stats);
 
         let stat_targets = [
             (Stat::Strength, request.strength, "strength"),
@@ -16588,11 +16662,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         if let Some(target) = request.cyber_modules {
             stats.award_cyber_modules(target.saturating_sub(stats.cyber_modules));
         }
-
-        let new_backpack_width = crate::inventory::backpack_width(stats);
         let result = stats.clone();
         drop(quests);
-        self.resize_player_backpack(old_backpack_width, new_backpack_width);
+        self.resize_player_backpack();
         crate::difficulty::refresh_player_pools(&self.world, false);
         info!("Debug provisioning set player stats: {:?}", result);
         Ok(result)

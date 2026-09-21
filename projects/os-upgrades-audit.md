@@ -70,3 +70,9 @@ A coherent follow-up should derive supported descriptions and effect values from
 - Existing `os-traits.e2e.test.ts` SDK scenario passes: unsupported-choice refusal, Tank grant, single-use machine, save/load, deck transition, and Naturally Able at a second machine. Updated the message assertion to compare text across wrapped lines.
 - `cargo fmt --all -- --check` and `git diff --check` pass.
 - These checks establish headless flat/VR geometry and interaction behavior, not headset readability or exact parity with an independently running retail executable.
+
+## Implementation follow-up: powered implant sockets
+
+Cybernetically Enhanced now enables two independent powered implant sockets. Standard stat/technical/research implants equip through inventory use, obey duplicate and research restrictions, drain authored energy, and preserve slot, charge and drain timer through save/load and deck transitions. Recharge capacity follows the shipped BaseImplant script: `100 + 10 × base Maintenance`. Temporary bonuses remain separate from trained stats; Brawn changes backpack capacity safely and Endurance changes HP capacity. The paperdoll's two lower wells display equipment and charge and allow removal in both presentations. The arm wells remain holsters.
+
+This supplies the second-slot prerequisite with the standard implant family and the pre-existing WormHeart immunity path. It does not claim implementation of the other organic implant scripts or WormHeart regeneration/withdrawal. The paid-acquisition SDK scenario covers second-slot refusal/unlock, duplicate refusal, drain, save/load, transition and Maintenance recharge; headless flat/VR captures additionally exercise occupied-well removal.

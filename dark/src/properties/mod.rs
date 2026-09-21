@@ -247,6 +247,14 @@ pub struct PropWeaponType(pub i32);
 #[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
 pub struct PropImplantDesc(pub i32);
 
+/// Stored implant charge and authored drain tuning, in seconds/charge units.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropEnergy(pub f32);
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropDrainRate(pub f32);
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropDrainAmount(pub f32);
+
 /// The count of a stackable object (e.g. how many cyber modules an EXP-cookie
 /// pile is worth - the retail engine stores an EXP cookie's module value as its
 /// stack count, `P$StackCoun`). A 4-byte signed int.
@@ -1544,6 +1552,24 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ExP",
             |reader, _len| read_i32(reader),
             PropExp,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Energy",
+            |reader, _len| read_single(reader),
+            PropEnergy,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$DrainRate",
+            |reader, _len| read_single(reader),
+            PropDrainRate,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$DrainAmt",
+            |reader, _len| read_single(reader),
+            PropDrainAmount,
             accumulator::latest,
         ),
         define_prop(

@@ -936,6 +936,7 @@ pub struct PlayerInfo {
     /// tours. `null` when the scene has no player. See
     /// `shock2vr::player_stats::PlayerStats`.
     pub stats: Option<shock2vr::player_stats::PlayerStats>,
+    pub effective_stats: Option<shock2vr::player_stats::PlayerStats>,
     /// The audio logs the player has collected (frobbed), in pickup order.
     /// Persisted in `QuestInfo`; survives level transitions and save/load. See
     /// `shock2vr::quest_info::CollectedLog`.

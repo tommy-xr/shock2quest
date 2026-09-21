@@ -43,8 +43,8 @@ use super::{
 /// would cast at the wrong tier.
 fn player_psi_stat(world: &World) -> i32 {
     match world.borrow::<UniqueView<crate::quest_info::QuestInfo>>() {
-        Ok(quests) => quests
-            .player_stats()
+        Ok(quests) => crate::implants::effective_stats(world)
+            .unwrap_or_else(|| quests.player_stats().clone())
             .stat_level(crate::player_stats::Stat::PsionicAbility),
         Err(err) => {
             let baseline = crate::player_stats::PlayerStats::default().psionic_ability;

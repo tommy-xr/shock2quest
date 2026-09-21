@@ -265,6 +265,9 @@ pub struct FlatUiHost {
     hand_items: [Option<CursorItem>; 2],
     /// Read-only paperdoll contents, in physical left/right holster order.
     holster_items: [Option<CursorItem>; 2],
+    implant_items: [Option<CursorItem>; 2],
+    implant_energy: [f32; 2],
+    implant_capacity: usize,
     hand_ammo: [crate::hud::ammo_panel::AmmoReadout; 2],
     selected_ammo: Option<EntityId>,
     pub(crate) utilities: super::mfd_utilities::MfdUtilities,
@@ -346,6 +349,9 @@ impl FlatUiHost {
             shoulder_weapons: [None; 2],
             hand_items: [None, None],
             holster_items: [None, None],
+            implant_items: [None, None],
+            implant_energy: [0.0; 2],
+            implant_capacity: 1,
             hand_ammo: Default::default(),
             selected_ammo: None,
             utilities: Default::default(),
@@ -488,7 +494,13 @@ impl FlatUiHost {
     ) {
         self.hand_ammo = items
             .map(|entity| crate::hud::ammo_panel::AmmoReadout::for_weapon(world, entity, true));
-        let [held, holstered] = [items, holsters].map(|items| {
+        let implants = crate::implants::equipped(world);
+        self.implant_energy = implants.map(|id| {
+            id.map(|id| crate::implants::energy(world, id))
+                .unwrap_or(0.0)
+        });
+        self.implant_capacity = crate::implants::capacity(world);
+        let [held, holstered, implanted] = [items, holsters, implants].map(|items| {
             items.map(|entity| {
                 let entity = entity.filter(|entity| {
                     world
@@ -503,6 +515,7 @@ impl FlatUiHost {
         });
         self.hand_items = held;
         self.holster_items = holstered;
+        self.implant_items = implanted;
         self.reconcile_ammo_selection();
     }
 
@@ -539,11 +552,25 @@ impl FlatUiHost {
         (self.selected_ammo, hand)
     }
 
-    pub(crate) fn pointed_holster_name(&self) -> Option<String> {
+    pub(crate) fn pointed_equipment_name(&self) -> Option<String> {
         if self.cursor_item.is_some() {
             return None;
         }
         let pointer = self.cursor_canvas?;
+        if let Some(slot) = implant_readout_rects(self.strip_rect()?)
+            .iter()
+            .position(|r| r.contains(pointer))
+        {
+            let name = self.implant_items[slot]
+                .as_ref()
+                .and_then(|i| i.label.as_deref())
+                .unwrap_or(if slot < self.implant_capacity {
+                    "Use an implant in your inventory to equip it"
+                } else {
+                    "Requires Cybernetically Enhanced"
+                });
+            return Some(format!("Implant {}: {name}", slot + 1));
+        }
         let rects = holster_readout_rects(self.strip_rect()?);
         let slot = rects.iter().position(|rect| rect.contains(pointer))?;
         let side = ["Left holster", "Right holster"][slot];
@@ -731,6 +758,7 @@ impl FlatUiHost {
             .hand_items
             .iter_mut()
             .chain(self.holster_items.iter_mut())
+            .chain(self.implant_items.iter_mut())
         {
             if item.as_ref().is_some_and(|item| item.entity == entity) {
                 *item = None;
@@ -1081,6 +1109,26 @@ impl FlatUiHost {
                 return (Vec::new(), actions);
             }
         }
+        if let Some(slot) = strip_rect.and_then(|r| {
+            implant_readout_rects(r)
+                .iter()
+                .position(|r| r.contains(canvas_pos))
+        }) {
+            self.hover_close = false;
+            let messages = if pressed_edge && self.cursor_item.is_none() {
+                self.implant_items[slot]
+                    .as_ref()
+                    .map(|item| Message {
+                        to: item.entity,
+                        payload: MessagePayload::Frob,
+                    })
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            return (messages, Vec::new());
+        }
         if strip_rect.is_some_and(|r| {
             holster_readout_rects(r)
                 .iter()
@@ -1409,6 +1457,35 @@ impl FlatUiHost {
                     }
                 }
             }
+            for (slot, well) in implant_readout_rects(rect).into_iter().enumerate() {
+                if let Some(item) = &self.implant_items[slot] {
+                    if let Some(icon) = &item.icon {
+                        canvas.fitted_object_icon(
+                            Rect::new(well.x + 2.0, well.y, well.w - 4.0, well.h - 9.0),
+                            icon,
+                        );
+                    }
+                    canvas.text_native_fit(
+                        Rect::new(well.x, well.y + well.h - 10.0, well.w, 10.0),
+                        &format!("{:.0}%", self.implant_energy[slot]),
+                        NAME_STRIP_FONT,
+                        HAlign::Center,
+                        VAlign::Middle,
+                    );
+                } else {
+                    canvas.text_native_fit(
+                        well,
+                        if slot < self.implant_capacity {
+                            "EMPTY"
+                        } else {
+                            "LOCK"
+                        },
+                        NAME_STRIP_FONT,
+                        HAlign::Center,
+                        VAlign::Middle,
+                    );
+                }
+            }
             // The mini-frame sits in the inventory bar, so it is up exactly
             // while the bar is. Placement is decided here, once, in canvas
             // pixels - both presentations map this rect (AGENTS.md 3).
@@ -1588,6 +1665,27 @@ impl FlatUiHost {
                         screen_rect: self.to_screen_rect(r),
                     },
                 ));
+                elements.extend(implant_readout_rects(rect).into_iter().enumerate().map(
+                    |(slot, r)| {
+                        let item = self.implant_items[slot].as_ref();
+                        crate::game_scene::DebugUiElement {
+                            kind: "readout".to_owned(),
+                            texture: item.and_then(|i| i.icon.clone()),
+                            text: Some(item.and_then(|i| i.label.clone()).unwrap_or_else(|| {
+                                if slot < self.implant_capacity {
+                                    "Empty"
+                                } else {
+                                    "Locked"
+                                }
+                                .to_owned()
+                            })),
+                            label: Some(format!("Implant {}", slot + 1)),
+                            entity_id: item.map(|i| i.entity.inner() as i32),
+                            rect: [r.x, r.y, r.w, r.h],
+                            screen_rect: self.to_screen_rect(r),
+                        }
+                    },
+                ));
                 elements.extend(holster_readout_rects(rect).into_iter().enumerate().map(
                     |(slot, r)| {
                         let item = self.holster_items[slot].as_ref();
@@ -1739,6 +1837,19 @@ fn mirrored_arm_rect(strip: Rect) -> Rect {
         EXTRA_ARM_WIDTH * STRIP_SCALE,
         strip.h,
     )
+}
+
+/// The two authored implant sockets below the paperdoll's chest.
+fn implant_readout_rects(strip: Rect) -> [Rect; 2] {
+    let scale = strip.w / 636.0;
+    [0, 1].map(|slot| {
+        Rect::new(
+            strip.x + (563.0 + slot as f32 * 36.0) * scale,
+            strip.y + 84.0 * scale,
+            34.0 * scale,
+            34.0 * scale,
+        )
+    })
 }
 
 /// The paperdoll faces the viewer: its right arm is on the viewer's left.
@@ -2841,18 +2952,23 @@ mod tests {
         assert!(right.x < left.x, "paperdoll faces the viewer");
         host.cursor_canvas = Some(right.center());
         assert_eq!(
-            host.pointed_holster_name().as_deref(),
+            host.pointed_equipment_name().as_deref(),
             Some("Right holster: Wrench")
         );
         host.cursor_canvas = Some(left.center());
         assert_eq!(
-            host.pointed_holster_name().as_deref(),
+            host.pointed_equipment_name().as_deref(),
             Some("Left holster: Empty")
         );
         let readouts: Vec<_> = host
             .strip_debug_elements(&world)
             .into_iter()
-            .filter(|e| e.kind == "readout")
+            .filter(|e| {
+                e.kind == "readout"
+                    && e.label
+                        .as_ref()
+                        .is_some_and(|label| label.ends_with("holster"))
+            })
             .collect();
         assert_eq!(readouts.len(), 2);
         assert_eq!(readouts[0].entity_id, None);
@@ -2869,7 +2985,7 @@ mod tests {
         host.on_entity_destroyed(item);
         host.cursor_canvas = Some(right.center());
         assert_eq!(
-            host.pointed_holster_name().as_deref(),
+            host.pointed_equipment_name().as_deref(),
             Some("Right holster: Empty")
         );
     }
@@ -2882,7 +2998,7 @@ mod tests {
             let point = rect.center();
             assert!(press_edge(&mut host, &world, (point.x, point.y)).is_empty());
             assert_eq!(host.held_entity(), Some(item));
-            assert_eq!(host.pointed_holster_name(), None);
+            assert_eq!(host.pointed_equipment_name(), None);
         }
     }
 

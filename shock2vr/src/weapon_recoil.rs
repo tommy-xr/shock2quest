@@ -2,10 +2,7 @@
 //! excluded: the tracked head is never moved. Citadel's mass=1, stiffness=40,
 //! damping=14 response is integrated analytically, without frame-rate drift.
 use cgmath::{InnerSpace, Vector3, vec3};
-use dark::properties::{
-    GunKickSetting, Link, Links, PropGunKick, PropGunState, PropImplantDesc, PropModelName,
-    PropPlayerGun,
-};
+use dark::properties::{GunKickSetting, PropGunKick, PropGunState, PropModelName, PropPlayerGun};
 use rand::Rng;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
@@ -83,26 +80,7 @@ fn kick_angle<R: Rng + ?Sized>(
 }
 
 fn aiming_implant(world: &World) -> bool {
-    let Ok(player) = world.borrow::<UniqueView<crate::mission::PlayerInfo>>() else {
-        return false;
-    };
-    let Ok((links, implants)) = world.borrow::<(View<Links>, View<PropImplantDesc>)>() else {
-        return false;
-    };
-    // Dark GetEquip: PDOLLBASE 1000 + Special/Special2 (3/4). Merely
-    // carrying an implant in a backpack cell does not activate it.
-    [player.entity_id, player.inventory_entity_id]
-        .into_iter()
-        .any(|owner| {
-            links.get(owner).is_ok_and(|links| {
-                links.to_links.iter().any(|link| {
-                    matches!(link.link, Link::Contains(1003 | 1004))
-                        && link
-                            .to_entity_id
-                            .is_some_and(|id| implants.get(id.0).is_ok_and(|p| p.0 == 6))
-                })
-            })
-        })
+    crate::implants::active(world, 6)
 }
 
 /// Live Strength for physical gun recoil and weight only. The developer knob
@@ -112,9 +90,8 @@ pub fn handling_strength(world: &World) -> i32 {
     if override_level > 0 {
         return override_level;
     }
-    world
-        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
-        .map(|q| q.player_stats().strength)
+    crate::implants::effective_stats(world)
+        .map(|stats| stats.strength)
         .unwrap_or(1)
 }
 
@@ -179,9 +156,8 @@ pub fn shot_impulse(world: &World, gun: EntityId) -> Option<(RecoilImpulse, Reco
     let agility = if override_agility > 0 {
         override_agility
     } else {
-        world
-            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
-            .map(|q| q.player_stats().agility)
+        crate::implants::effective_stats(world)
+            .map(|stats| stats.agility)
             .unwrap_or(1)
     };
     // Shipped Still Hand template, verified against gamesys (power id 2).
@@ -809,12 +785,18 @@ mod tests {
     }
 
     #[test]
-    fn aiming_implant_requires_an_equipped_special_slot() {
-        use crate::mission::PlayerInfo;
-        use dark::properties::{ToLink, WrappedEntityId};
+    fn aiming_implant_requires_powered_equipment_not_backpack_membership() {
+        use crate::{mission::PlayerInfo, runtime_props::RuntimePropImplantSlot};
+        use dark::properties::{Link, Links, PropEnergy, PropImplantDesc, ToLink, WrappedEntityId};
         let mut world = World::new();
-        let implant = world.add_entity(PropImplantDesc(6));
-        let owner = world.add_entity(Links::empty());
+        let implant = world.add_entity((PropImplantDesc(6), PropEnergy(100.0)));
+        let owner = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: 0,
+                to_entity_id: Some(WrappedEntityId(implant)),
+                link: Link::Contains(0),
+            }],
+        });
         world.add_unique(PlayerInfo {
             pos: vec3(0.0, 0.0, 0.0),
             rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
@@ -823,20 +805,10 @@ mod tests {
             left_hand_entity_id: None,
             right_hand_entity_id: None,
         });
-        for (slot, expected) in [(0, false), (1002, false), (1003, true), (1004, true)] {
-            world.add_component(
-                owner,
-                Links {
-                    to_links: vec![ToLink {
-                        to_template_id: 0,
-                        to_entity_id: Some(WrappedEntityId(implant)),
-                        link: Link::Contains(slot),
-                    }],
-                },
-            );
-            assert_eq!(aiming_implant(&world), expected);
-        }
-        world.add_component(implant, PropImplantDesc(5));
+        assert!(!aiming_implant(&world));
+        world.add_component(implant, RuntimePropImplantSlot(0));
+        assert!(aiming_implant(&world));
+        world.add_component(implant, PropEnergy(0.0));
         assert!(!aiming_implant(&world));
     }
 

@@ -42,6 +42,7 @@ mod homing;
 pub(crate) mod impact_sound;
 
 pub mod immolate;
+mod implant;
 mod internal_collision_type;
 mod internal_explosion;
 pub mod internal_fast_projectile;
@@ -1042,7 +1043,7 @@ impl ScriptWorld {
             "triggerdamage" => Box::new(TriggerDamage::new()),
             // many.micontain
             "brain" => Box::new(NoopScript::new()),
-            "wormheartimplant" => Box::new(hazard_objects::HazardObject::Armor),
+            "wormheartimplant" => Box::new(implant::Implant::default()),
             "wormskin" => Box::new(hazard_objects::HazardObject::Armor),
             // shodan.mis
             "toggleshodantexture" => Box::new(NoopScript::new()),
@@ -1209,7 +1210,7 @@ impl ScriptWorld {
             "autoinstallsoft" => Box::new(AutoInstallSoft::new()), // auto install software
             "strboost" => Box::new(UnimplementedScript::new(&script_name)), // strength boost
             "intboost" => Box::new(UnimplementedScript::new(&script_name)),
-            "statboostimplant" => Box::new(UnimplementedScript::new(&script_name)),
+            "statboostimplant" => Box::new(implant::Implant::default()),
 
             // earth:
             "comestible" => Box::new(Comestible::new(1)),
@@ -1288,7 +1289,7 @@ impl ScriptWorld {
             // elevator buttons
             "elevatorbutton" => gui_script(Box::new(ElevatorGui)),
             "pictureswap" => Box::new(PictureSwap::new()),
-            "testimplant" => Box::new(UnimplementedScript::new(&script_name)),
+            "testimplant" => Box::new(implant::Implant::default()),
 
             // ric2:
             "shakeyourbooty" => Box::new(UnimplementedScript::new(&script_name)), // what does this one do?

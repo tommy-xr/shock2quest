@@ -4,13 +4,12 @@ use crate::{
     game_scene::DebugUiElement,
     gui::{GuiComponent, GuiCursor},
     player_stats::{PlayerStats, Skill, Stat},
-    quest_info::QuestInfo,
     scripts::gui::{PsiPowersGuiMsg, psi_panel_components},
     ui::{HAlign, MFD_FONT, Rect, UiCanvas, VAlign},
 };
 use cgmath::{Vector2, point2, vec2};
 use engine::assets::asset_cache::AssetCache;
-use shipyard::{UniqueView, World};
+use shipyard::World;
 
 pub(super) const PANEL: Rect = Rect::new(450.0, 124.0, 188.0, 296.0);
 const SIZE: Vector2<f32> = vec2(188.0, 296.0);
@@ -53,8 +52,8 @@ impl CharacterSheet {
         }
     }
     pub(super) fn refresh(&mut self, world: &World, assets: &mut AssetCache) {
-        if let Ok(quests) = world.borrow::<UniqueView<QuestInfo>>() {
-            self.stats = quests.player_stats().clone();
+        if let Some(stats) = crate::implants::effective_stats(world) {
+            self.stats = stats;
         }
         if self.tab == 3 {
             let cursor = self.point.map(|p| GuiCursor {
