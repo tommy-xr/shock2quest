@@ -581,3 +581,53 @@ fn a_swing_stopped_by_a_limb_reports_it_pointing_at_the_limb() {
         contact.closing_speed
     );
 }
+
+/// Reproduce production order: targets are authored after physics, while the
+/// player already has its next collision-resolved movement queued for the next
+/// frame. Check starts, reversals and stops without a settling frame.
+#[test]
+fn held_targets_follow_the_pawn_frame_without_counting_walking_as_a_swing() {
+    let (mut world, mut player) = world_with_floor();
+    world.set_player_translation(vec3(0.0, 1.2, 0.0), &mut player);
+    let offset = vec3(0.7, 1.0, 0.0);
+    let mut pawn = world.get_player_translation(&player);
+    let (weapon, handle) = spawn_held_wrench(&mut world, pawn + offset);
+    world.set_position_rotation2(weapon, pawn + offset, identity_quat());
+    for movement in [0.0, 0.1, 0.1, -0.1, -0.1, 0.0, 0.0] {
+        world.set_held_target_frame(pawn, identity_quat());
+        world.rebase_held_targets(&player, identity_quat());
+        (pawn, _) = world.update(vec3(movement, 0.0, 0.0), &mut player);
+        let actual = world.get_position(handle).unwrap();
+        assert!(
+            (actual - pawn - offset).magnitude() < 0.002,
+            "held body {actual:?} must follow current pawn {pawn:?}"
+        );
+        let hand_velocity = world
+            .held_melee_target_velocity_at_point(weapon, actual)
+            .unwrap();
+        assert!(
+            (hand_velocity - world.player_velocity()).magnitude() < 0.002,
+            "walking alone must not register as swing: hand {hand_velocity:?}, player {:?}",
+            world.player_velocity()
+        );
+        // Same late target publication as VirtualHand / fitted grips.
+        world.set_position_rotation2(weapon, pawn + offset, identity_quat());
+    }
+}
+
+/// A teleport already carries both endpoints. It must also carry the recorded
+/// target frame, even without a paused administrative update to refresh it.
+#[test]
+fn held_target_rebase_does_not_apply_a_player_teleport_twice() {
+    let (mut world, mut player) = world_with_floor();
+    let start = world.get_player_translation(&player);
+    let offset = vec3(0.7, 1.0, 0.0);
+    let (weapon, handle) = spawn_held_wrench(&mut world, start + offset);
+    world.set_position_rotation2(weapon, start + offset, identity_quat());
+    world.set_held_target_frame(start, identity_quat());
+    let destination = start + vec3(30.0, 0.0, 0.0);
+    world.set_player_translation(destination, &mut player);
+    world.rebase_held_targets(&player, identity_quat());
+    world.update(vec3(0.0, 0.0, 0.0), &mut player);
+    assert!((world.get_position(handle).unwrap() - destination - offset).magnitude() < 0.002);
+}
