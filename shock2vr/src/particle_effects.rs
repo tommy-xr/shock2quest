@@ -11,19 +11,26 @@ use engine::{
 };
 use std::{rc::Rc, time::Duration};
 
+#[derive(Default)]
 pub struct ParticleEffect {
     layers: Vec<ParticleSystem>,
+    replaces_parent_model: bool,
 }
 
 impl From<ParticleSystem> for ParticleEffect {
     fn from(system: ParticleSystem) -> Self {
         Self {
             layers: vec![system],
+            ..Self::default()
         }
     }
 }
 
 impl ParticleEffect {
+    pub fn replaces_parent_model(&self) -> bool {
+        self.replaces_parent_model
+    }
+
     pub fn update(&mut self, elapsed: Duration, transform: Matrix4<f32>) {
         for layer in &mut self.layers {
             layer.update(elapsed, transform);
@@ -46,6 +53,9 @@ impl ParticleEffect {
 pub(crate) enum EnhancedEffect {
     BloodDropletsAndMist,
     BloodSpray,
+    EmpCore { overload: bool },
+    EmpArcs { overload: bool },
+    EmpLegacyJet,
 }
 
 impl EnhancedEffect {
@@ -58,10 +68,40 @@ impl EnhancedEffect {
         .find_map(|(name, kind)| (lookup(name) == Some(template)).then_some(kind))
     }
 
+    /// Restrict replacements to cosmetic riders of real EMP shots. These
+    /// particle archetypes may also appear as standalone level decorations.
+    pub fn for_emp_attachment(
+        template: i32,
+        parent: i32,
+        lookup: impl Fn(&str) -> Option<i32>,
+    ) -> Option<Self> {
+        let overload = lookup("big emp shot") == Some(parent);
+        if !overload && lookup("emp shot") != Some(parent) {
+            return None;
+        }
+        [
+            ("emp blue", Self::EmpCore { overload }),
+            ("emp2", Self::EmpArcs { overload }),
+            ("emp jet up", Self::EmpLegacyJet),
+            ("emp jet down", Self::EmpLegacyJet),
+            ("emp jet left", Self::EmpLegacyJet),
+            ("emp jet right", Self::EmpLegacyJet),
+            ("electric sparks", Self::EmpLegacyJet),
+        ]
+        .into_iter()
+        .find_map(|(name, kind)| (lookup(name) == Some(template)).then_some(kind))
+    }
+
     pub fn build(self, assets: &mut AssetCache) -> Option<ParticleEffect> {
         let sprite_names: &[&str] = match self {
             Self::BloodDropletsAndMist => &["NDbld", "NDsmk"],
             Self::BloodSpray => &["ND-bsp"],
+            // Every EMP component checks the same complete asset set. If any
+            // part is missing, retain the whole legacy projectile presentation
+            // rather than hiding its mesh/jets around a partial replacement.
+            Self::EmpCore { .. } | Self::EmpArcs { .. } | Self::EmpLegacyJet => {
+                &["NDsbll", "NDarc", "NDsprk"]
+            }
         };
         let frames: Vec<_> = sprite_names
             .iter()
@@ -71,7 +111,11 @@ impl EnhancedEffect {
             return None;
         }
         Some(ParticleEffect {
-            layers: blood_layers(self, &frames),
+            layers: match self {
+                Self::BloodDropletsAndMist | Self::BloodSpray => blood_layers(self, &frames),
+                _ => emp_layers(self, &frames),
+            },
+            replaces_parent_model: matches!(self, Self::EmpCore { .. }),
         })
     }
 }
@@ -141,6 +185,60 @@ fn blood_layers(kind: EnhancedEffect, frames: &[Vec<Rc<dyn TextureTrait>>]) -> V
                 .with_fade_time(0.35)
                 .with_sprite_animation(frames[0].clone(), Duration::from_millis(40), false),
         ],
+        _ => unreachable!("blood recipe called for a non-blood effect"),
+    }
+}
+
+fn emp_layers(kind: EnhancedEffect, frames: &[Vec<Rc<dyn TextureTrait>>]) -> Vec<ParticleSystem> {
+    let scale = match kind {
+        EnhancedEffect::EmpCore { overload } | EnhancedEffect::EmpArcs { overload } => {
+            if overload {
+                1.35
+            } else {
+                1.0
+            }
+        }
+        EnhancedEffect::EmpLegacyJet => return vec![],
+        _ => unreachable!("EMP recipe called for a non-EMP effect"),
+    };
+    let base = ParticleSystem::new()
+        .with_velocity(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0))
+        .with_launch_bounding_box(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0))
+        .with_color(vec3(0.4, 0.65, 1.0))
+        .with_alpha(0.9)
+        .with_launch_time(Duration::ZERO);
+    match kind {
+        EnhancedEffect::EmpCore { .. } => vec![
+            base.clone()
+                .with_num_particles(1)
+                .with_lifetime(0.9, 0.9)
+                .with_particle_size(0.30 * scale, 0.30 * scale)
+                .with_fade_time(0.0)
+                .with_sprite_animation(frames[0].clone(), Duration::from_millis(90), true),
+            base.with_num_particles(1)
+                .with_lifetime(0.9, 0.9)
+                .with_particle_size(0.75 * scale, 0.75 * scale)
+                .with_alpha(0.18)
+                .with_fade_time(0.0),
+        ],
+        EnhancedEffect::EmpArcs { .. } => vec![
+            base.clone()
+                .with_num_particles(3)
+                .with_lifetime(0.25, 0.35)
+                .with_particle_size(0.45 * scale, 0.55 * scale)
+                .with_launch_time(Duration::from_millis(50))
+                .with_fade_time(0.12)
+                .with_sprite_animation(frames[1].clone(), Duration::from_millis(45), true),
+            base.with_num_particles(8)
+                .with_lifetime(0.18, 0.3)
+                .with_particle_size(0.08 * scale, 0.12 * scale)
+                .with_velocity(vec3(-0.15, -0.4, -0.4), vec3(0.15, 0.4, 0.4))
+                .with_world_space(true)
+                .with_launch_time(Duration::from_millis(30))
+                .with_fade_time(0.18)
+                .with_sprite_animation(frames[2].clone(), Duration::from_millis(35), true),
+        ],
+        _ => unreachable!("non-rendering EMP component handled above"),
     }
 }
 
@@ -173,9 +271,11 @@ mod tests {
         let empty_frames = vec![vec![], vec![]];
         let mut parent = ParticleEffect {
             layers: blood_layers(EnhancedEffect::BloodDropletsAndMist, &empty_frames),
+            ..ParticleEffect::default()
         };
         let mut spray = ParticleEffect {
             layers: blood_layers(EnhancedEffect::BloodSpray, &empty_frames),
+            ..ParticleEffect::default()
         };
         for effect in [&mut parent, &mut spray] {
             effect.update(Duration::ZERO, Matrix4::identity());
@@ -187,5 +287,69 @@ mod tests {
         assert!(!parent.is_done());
         parent.update(Duration::from_secs(1), Matrix4::identity());
         assert!(parent.is_done());
+    }
+
+    #[test]
+    fn emp_replacements_require_an_emp_parent_and_keep_overload_distinct() {
+        let lookup = |name: &str| match name {
+            "emp shot" => Some(-1),
+            "big emp shot" => Some(-2),
+            "emp blue" => Some(-3),
+            "emp2" => Some(-4),
+            "emp jet up" => Some(-5),
+            "electric sparks" => Some(-6),
+            _ => None,
+        };
+        assert_eq!(
+            EnhancedEffect::for_emp_attachment(-3, -1, lookup),
+            Some(EnhancedEffect::EmpCore { overload: false })
+        );
+        assert_eq!(
+            EnhancedEffect::for_emp_attachment(-4, -2, lookup),
+            Some(EnhancedEffect::EmpArcs { overload: true })
+        );
+        assert_eq!(
+            EnhancedEffect::for_emp_attachment(-6, -2, lookup),
+            Some(EnhancedEffect::EmpLegacyJet)
+        );
+        assert_eq!(EnhancedEffect::for_emp_attachment(-3, -99, lookup), None);
+        assert_eq!(EnhancedEffect::for_emp_attachment(-99, -1, lookup), None);
+        assert_eq!(EnhancedEffect::for_template(-3, lookup), None);
+    }
+
+    #[test]
+    fn emp_layers_keep_emitting_for_the_projectile_lifetime() {
+        let frames = vec![vec![], vec![], vec![]];
+        for kind in [
+            EnhancedEffect::EmpCore { overload: false },
+            EnhancedEffect::EmpArcs { overload: true },
+        ] {
+            let mut effect = ParticleEffect {
+                layers: emp_layers(kind, &frames),
+                ..ParticleEffect::default()
+            };
+            for _ in 0..600 {
+                effect.update(Duration::from_millis(16), Matrix4::identity());
+            }
+            assert!(!effect.is_done());
+        }
+        assert!(emp_layers(EnhancedEffect::EmpLegacyJet, &frames).is_empty());
+    }
+
+    #[test]
+    fn missing_art_keeps_legacy_blood_and_all_emp_components() {
+        let mut assets = AssetCache::new(
+            String::new(),
+            engine::assets::asset_paths::AssetPath::combine(vec![]),
+        );
+        for kind in [
+            EnhancedEffect::BloodDropletsAndMist,
+            EnhancedEffect::BloodSpray,
+            EnhancedEffect::EmpCore { overload: false },
+            EnhancedEffect::EmpArcs { overload: true },
+            EnhancedEffect::EmpLegacyJet,
+        ] {
+            assert!(kind.build(&mut assets).is_none());
+        }
     }
 }

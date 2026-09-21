@@ -5996,6 +5996,7 @@ impl MissionCore {
             |prop_particle_group: View<PropParticleGroup>,
              prop_particle_launch_info: View<PropParticleLaunchInfo>,
              templates: View<PropTemplateId>,
+             attachments: View<RuntimePropAttachment>,
              v_transient_fx: View<crate::runtime_props::RuntimePropTransientFx>,
              transform: View<RuntimePropTransform>| {
                 for (id, (pg, launch_info, transform)) in
@@ -6018,14 +6019,24 @@ impl MissionCore {
                     let particle_system =
                         self.id_to_particle_system.entry(id).or_insert_with(|| {
                             let enhanced = templates.get(id).ok().and_then(|template| {
+                                let lookup = |name: &str| {
+                                    self.template_name_to_template_id
+                                        .get(name)
+                                        .map(|metadata| metadata.template_id)
+                                };
                                 crate::particle_effects::EnhancedEffect::for_template(
                                     template.template_id,
-                                    |name| {
-                                        self.template_name_to_template_id
-                                            .get(name)
-                                            .map(|metadata| metadata.template_id)
-                                    },
+                                    lookup,
                                 )
+                                .or_else(|| {
+                                    let parent = attachments.get(id).ok()?.parent;
+                                    let parent_template = templates.get(parent).ok()?.template_id;
+                                    crate::particle_effects::EnhancedEffect::for_emp_attachment(
+                                        template.template_id,
+                                        parent_template,
+                                        lookup,
+                                    )
+                                })
                             });
                             if let Some(effect) = enhanced.and_then(|kind| kind.build(asset_cache))
                             {
@@ -13688,10 +13699,29 @@ impl MissionCore {
             self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos,
         );
 
+        // A successfully loaded attached effect can replace its host's mesh.
+        // Keep the model and physics data intact; unavailable art leaves the
+        // old projectile mesh and all of its particle riders visible.
+        let replaced_particle_hosts: HashSet<EntityId> = {
+            let attachments = self.world.borrow::<View<RuntimePropAttachment>>().unwrap();
+            self.id_to_particle_system
+                .iter()
+                .filter_map(|(id, effect)| {
+                    effect
+                        .replaces_parent_model()
+                        .then(|| attachments.get(*id).ok().map(|a| a.parent))
+                        .flatten()
+                })
+                .collect()
+        };
+
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
             if flat_viewmodel_skip.contains(entity_id) {
+                continue;
+            }
+            if replaced_particle_hosts.contains(entity_id) {
                 continue;
             }
             if !has_refs(&self.world, *entity_id) {
