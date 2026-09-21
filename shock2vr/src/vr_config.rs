@@ -555,20 +555,45 @@ pub fn get_vr_hand_model_adjustments_from_model(
         adjustments.right_hand.clone()
     };
     if model_name == "amp_h" {
+        let (roll_param, yaw_param) = match handedness {
+            Handedness::Left => (
+                crate::dev_params::PSI_AMP_LEFT_ROLL_DEG,
+                crate::dev_params::PSI_AMP_LEFT_YAW_DEG,
+            ),
+            Handedness::Right => (
+                crate::dev_params::PSI_AMP_RIGHT_ROLL_DEG,
+                crate::dev_params::PSI_AMP_RIGHT_YAW_DEG,
+            ),
+        };
+        let roll = Quaternion::from_angle_z(Deg(-crate::dev_params::get(roll_param)));
+        let yaw = Quaternion::from_angle_y(Deg(crate::dev_params::get(yaw_param)));
+        // Yaw the rolled amp around controller-local up, keeping the grip pivot
+        // fixed and the physical forward/up sliders on the controller axes.
+        let fit_rotation = yaw * roll;
         adjustment.offset = psi_amp_offset(
             adjustment.offset,
             crate::dev_params::get(crate::dev_params::PSI_AMP_FORWARD_CM),
             crate::dev_params::get(crate::dev_params::PSI_AMP_UP_CM),
             crate::dev_params::get(crate::dev_params::PSI_AMP_SCALE),
+            fit_rotation,
         );
+        adjustment.rotation = fit_rotation * adjustment.rotation;
     }
     adjustment
 }
 
-/// Scale the authored seating offset with the mesh so size changes pivot about
-/// the hand origin. Translation is in physical centimeters along hand -Z/+Y.
-fn psi_amp_offset(authored: Vector3<f32>, forward_cm: f32, up_cm: f32, scale: f32) -> Vector3<f32> {
-    authored * scale + vec3(0.0, up_cm, -forward_cm) * (0.01 / crate::METERS_PER_WORLD_UNIT)
+/// Scale and rotate the authored seating offset with the mesh so both pivot about
+/// the hand origin. Apply physical hand -Z/+Y translation after rotation so the
+/// fit controls keep their controller-local directions.
+fn psi_amp_offset(
+    authored: Vector3<f32>,
+    forward_cm: f32,
+    up_cm: f32,
+    scale: f32,
+    fit_rotation: Quaternion<f32>,
+) -> Vector3<f32> {
+    fit_rotation * (authored * scale)
+        + vec3(0.0, up_cm, -forward_cm) * (0.01 / crate::METERS_PER_WORLD_UNIT)
 }
 
 #[cfg(test)]
@@ -586,22 +611,51 @@ mod tests {
         // size changes. Offset controls then move it in physical hand space.
         let grip_point = Point3::from_vec(-rotation.conjugate().rotate_vector(authored));
         for side in [Handedness::Left, Handedness::Right] {
-            for scale in [0.25, 1.0, 2.0] {
-                for roll in [0.0, 90.0, 180.0] {
-                    let hand_rotation = Quaternion::from_angle_z(Deg(roll));
-                    let offset = psi_amp_offset(authored, 5.0, -3.0, scale);
-                    let transform = Matrix4::from(hand_rotation)
-                        * Matrix4::from_translation(offset)
-                        * Matrix4::from(rotation)
-                        * Matrix4::from_scale(scale)
-                        * side.gun_mirror();
-                    let expected = hand_rotation.rotate_vector(vec3(0.0, -0.03, -0.05));
-                    let actual = transform.transform_point(grip_point) - Point3::new(0.0, 0.0, 0.0);
-                    assert!((actual * crate::METERS_PER_WORLD_UNIT - expected).magnitude() < 1e-5);
+            for scale in [0.25, 0.40, 1.0, 2.0] {
+                for amp_yaw in [-90.0, 0.0, 30.0, 90.0] {
+                    for amp_roll in [-180.0, -90.0, 0.0, 90.0, 180.0] {
+                        let amp_roll = Quaternion::from_angle_y(Deg(amp_yaw))
+                            * Quaternion::from_angle_z(Deg(-amp_roll));
+                        for roll in [0.0, 90.0, 180.0] {
+                            let hand_rotation = Quaternion::from_angle_z(Deg(roll));
+                            let offset = psi_amp_offset(authored, 5.0, -3.0, scale, amp_roll);
+                            let transform = Matrix4::from(hand_rotation)
+                                * Matrix4::from_translation(offset)
+                                * Matrix4::from(amp_roll * rotation)
+                                * Matrix4::from_scale(scale)
+                                * side.gun_mirror();
+                            let expected = hand_rotation.rotate_vector(vec3(0.0, -0.03, -0.05));
+                            let actual =
+                                transform.transform_point(grip_point) - Point3::new(0.0, 0.0, 0.0);
+                            assert!(
+                                (actual * crate::METERS_PER_WORLD_UNIT - expected).magnitude()
+                                    < 1e-5
+                            );
+                        }
+                    }
                 }
             }
         }
-        assert_eq!(psi_amp_offset(authored, 0.0, 0.0, 1.0), authored);
+        assert_eq!(
+            psi_amp_offset(authored, 0.0, 0.0, 1.0, Quaternion::from_angle_z(Deg(0.0))),
+            authored
+        );
+    }
+
+    #[test]
+    fn psi_amp_roll_uses_each_hands_setting_about_forward() {
+        for (side, param) in [
+            (Handedness::Left, crate::dev_params::PSI_AMP_LEFT_ROLL_DEG),
+            (Handedness::Right, crate::dev_params::PSI_AMP_RIGHT_ROLL_DEG),
+        ] {
+            let adjustment = get_vr_hand_model_adjustments_from_model("amp_h", side);
+            let angle = Deg(crate::dev_params::get(param));
+            let expected_up = vec3(angle.0.to_radians().sin(), angle.0.to_radians().cos(), 0.0);
+            assert!((adjustment.rotation * Vector3::unit_y() - expected_up).magnitude() < 1e-5);
+            assert!(
+                (adjustment.rotation * -Vector3::unit_x() + Vector3::unit_z()).magnitude() < 1e-5
+            );
+        }
     }
 
     /// The melee subset of [`VR_25AE_VIEW_MODELS`]: skinned arm rigs, seated
