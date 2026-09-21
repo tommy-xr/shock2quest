@@ -4396,10 +4396,27 @@ impl MissionCore {
         let dir = new_rotation * input_context.head.rotation;
         let facing = dir.rotate_vector(cgmath::vec3(0.0, 0.0, -1.0));
         let move_thumbstick_value = input_context.right_hand.thumbstick;
+        // Retail shktrait.cpp applies a 1.15 translation scale and leaves
+        // turn speed unchanged. Apply only to stick movement: tracked hand
+        // climbing, jumps and the detached camera keep their own motion.
+        let move_speed = PLAYER_MOVE_SPEED
+            * self
+                .world
+                .borrow::<UniqueView<QuestInfo>>()
+                .map(|q| {
+                    if q.player_stats()
+                        .has_os_trait(crate::scripts::gui::TRAIT_SPEEDY)
+                    {
+                        1.15
+                    } else {
+                        1.0
+                    }
+                })
+                .unwrap_or(1.0);
         let forward = dir.rotate_vector(cgmath::vec3(
-            -delta_time * move_thumbstick_value.x * PLAYER_MOVE_SPEED / dark::SCALE_FACTOR,
+            -delta_time * move_thumbstick_value.x * move_speed / dark::SCALE_FACTOR,
             0.0,
-            -delta_time * move_thumbstick_value.y * PLAYER_MOVE_SPEED / dark::SCALE_FACTOR,
+            -delta_time * move_thumbstick_value.y * move_speed / dark::SCALE_FACTOR,
         ));
 
         let up_value = input_context.left_hand.thumbstick.y / dark::SCALE_FACTOR;
