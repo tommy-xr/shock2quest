@@ -4573,6 +4573,11 @@ impl MissionCore {
                     push_to_climb: game_options.presentation_mode == crate::PresentationMode::Flat,
                 },
             };
+            self.physics.rebase_held_targets(
+                &self.player_handle,
+                new_rotation,
+                input_context.tracking,
+            );
             let moved = profile!(
                 "shock2.update.physics",
                 self.physics
@@ -5475,6 +5480,8 @@ impl MissionCore {
             }
         }
         effects.extend(self.process_virtual_hand_effects(asset_cache, interaction_msgs));
+        self.physics
+            .set_held_target_frame(player_pos, player_rot, hands_input.tracking);
         // Remember only successful shoulder deposits, after the shared storage
         // transition has committed real backpack ownership. Other items and
         // refused deposits cannot overwrite a weapon shortcut.
