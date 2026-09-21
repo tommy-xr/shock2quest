@@ -669,6 +669,7 @@ pub(crate) struct HordeDirector {
     enemies: Vec<Enemy>,
     containment: super::earth_containment::Containment,
     supplies: super::earth_supplies::SupplyDrops,
+    tech: super::earth_tech::TechGrowth,
     last_spawn_site: Option<i32>,
 }
 
@@ -690,6 +691,7 @@ impl Default for HordeDirector {
             enemies: vec![],
             containment: Default::default(),
             supplies: Default::default(),
+            tech: Default::default(),
             last_spawn_site: None,
         }
     }
@@ -1009,6 +1011,14 @@ impl Script for HordeDirector {
             self.next_status = 5.0;
         }
         effects.extend(self.supplies.update(world, dt, self.phase == Phase::Rest));
+        effects.extend(self.tech.update(
+            world,
+            physics,
+            dt,
+            self.phase == Phase::Assault,
+            self.wave,
+            self.quick,
+        ));
         effects.extend(self.containment.update(
             world,
             dt,

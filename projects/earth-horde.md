@@ -175,3 +175,19 @@ Wave attackers choose among sixteen surveyed sites, avoid their previous site
 when alternatives exist, prefer cover, and keep eight units from the player.
 Subway and street spawn arenas remain separate because enemies cannot ride the
 gravshafts. Fresh runs randomize the stream; saves continue it.
+## Talon turret builder
+
+From wave 5, one non-attacking Talon installer appears on the street during
+combat. It flies between three clear street sites, rotates while working, and
+installs a hostile slug turret directly after 25 combat seconds. There are no
+junction boxes. Destroy the Talon to interrupt unfinished work; it drops five
+nanites and cannot be replaced until the next wave. Completed turrets remain
+ordinary enemies and can be destroyed directly, freeing their sites.
+
+Three sites cap living installations at three. Travel and construction pause
+during rest; deployed turrets remain active. Builder position, work progress,
+and replacement-wave gating survive save/load. World rays prevent flying
+through walls. Developer → Earth horde offers builder enable, first wave and
+build seconds. The diagnostic alias bypasses the wave gate and accelerates work
+fivefold while travel remains normal. This prototype installs street turrets;
+it does not deploy drones or choose arbitrary locations.
