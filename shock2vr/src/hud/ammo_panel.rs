@@ -20,7 +20,7 @@
 
 use cgmath::{Vector2, vec2};
 use dark::properties::ObjectState;
-use shipyard::{EntityId, World};
+use shipyard::{EntityId, Get, View, World};
 
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 
@@ -206,6 +206,8 @@ pub(crate) struct AmmoReadout {
     /// Selected psi power `(discipline, tier)` while the psi amp is wielded.
     /// The amp has no clip, so this *replaces* the ammo readout.
     pub psi_power: Option<(String, i32)>,
+    /// This amp's overload meter, never borrowed from the other hand.
+    pub psi_charge: Option<(f32, crate::runtime_props::PsiChargePhase)>,
     /// Rounds in the wielded weapon's clip.
     pub ammo: Option<i32>,
     /// Progress of this weapon hand's eject hold.
@@ -264,6 +266,12 @@ impl AmmoReadout {
                 .and_then(|w| crate::weapon_button_hold::EjectProgress::for_weapon(world, w)),
             gun_condition: weapon.and_then(|w| wielded_gun_condition(world, w)),
             psi_power: super::get_weapon_psi_power(world, weapon),
+            psi_charge: weapon.and_then(|w| {
+                let charges = world
+                    .borrow::<View<crate::runtime_props::RuntimePropPsiCharge>>()
+                    .ok()?;
+                charges.get(w).ok().map(|c| (c.fraction, c.phase))
+            }),
             ammo: weapon
                 .filter(|w| !crate::wielded_weapon::is_psi_amp(world, *w))
                 .and_then(|w| super::get_weapon_ammo(world, Some(w))),
@@ -377,18 +385,35 @@ pub(crate) fn buttons(readout: &AmmoReadout) -> Vec<ReadoutButtonSpec> {
 pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoReadout) {
     // The psi amp shows its selected discipline where a gun shows its clip.
     if let Some((power_name, tier)) = &readout.psi_power {
-        canvas
-            .image(
+        if let Some((fraction, phase)) = readout.psi_charge {
+            use crate::runtime_props::PsiChargePhase;
+            let meter = at(origin, Rect::new(177.0, 16.0, 60.0, 19.0));
+            match phase {
+                PsiChargePhase::Charging => {
+                    canvas
+                        .image(meter, "LOADBACK.PCX")
+                        .bar(meter, "LOADMETR.PCX", fraction);
+                }
+                PsiChargePhase::Overloaded => {
+                    canvas.image(meter, "LOADGOOD.PCX");
+                }
+                PsiChargePhase::Burnout => {
+                    canvas.image(meter, "LOADBURN.PCX");
+                }
+            }
+        } else {
+            canvas.image(
                 at(origin, PSI_TIER_BADGE),
                 &format!("AmPsi{}1.PCX", (*tier).clamp(1, 5)),
-            )
-            .text_native_fit(
-                at(origin, PSI_POWER_NAME),
-                &power_name.to_ascii_uppercase(),
-                FONT,
-                HAlign::Center,
-                VAlign::Middle,
             );
+        }
+        canvas.text_native_fit(
+            at(origin, PSI_POWER_NAME),
+            &power_name.to_ascii_uppercase(),
+            FONT,
+            HAlign::Center,
+            VAlign::Middle,
+        );
     } else if let Some(rounds) = readout.ammo {
         let compact = !readout.show_buttons;
         canvas.text(
@@ -597,6 +622,10 @@ mod tests {
             silence_value: 0.0,
         },));
         let amp = world.add_entity((
+            crate::runtime_props::RuntimePropPsiCharge {
+                fraction: 0.75,
+                phase: crate::runtime_props::PsiChargePhase::Charging,
+            },
             PropTemplateId { template_id: -247 },
             PropGunState {
                 ammo: 0,
@@ -629,6 +658,11 @@ mod tests {
         let amp_readout = AmmoReadout::for_weapon(&world, Some(amp), false);
         assert_eq!(gun_readout.ammo, Some(12));
         assert_eq!(gun_readout.psi_power, None);
+        assert_eq!(gun_readout.psi_charge, None);
+        assert_eq!(
+            amp_readout.psi_charge,
+            Some((0.75, crate::runtime_props::PsiChargePhase::Charging))
+        );
         assert_eq!(amp_readout.ammo, None);
         assert_eq!(
             amp_readout.psi_power,

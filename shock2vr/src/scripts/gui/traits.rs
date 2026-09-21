@@ -56,6 +56,7 @@ pub const TRAIT_NATURALLY_ABLE: u8 = 6;
 pub const TRAIT_PACK_RAT: u8 = 3;
 pub const TRAIT_PHARMO_FRIENDLY: u8 = 2;
 pub const TRAIT_TANK: u8 = 8;
+pub const TRAIT_POWER_PSI: u8 = 14;
 pub const TRAIT_REPLICATOR_EXPERT: u8 = 13;
 /// Cyber-Assimilation: unlocks a creature's `P$GuarLoot` drop on top of its
 /// ordinary loot table.
@@ -391,6 +392,7 @@ fn hovered_trait(cursor: cgmath::Point2<f32>) -> Option<u8> {
 pub fn live_effect_note(trait_id: u8) -> Option<&'static str> {
     match trait_id {
         TRAIT_STRONG_METABOLISM => Some("25% less radiation damage, 50% less toxin damage"),
+        TRAIT_POWER_PSI => Some("No burnout HP damage; failed casts still cost psi"),
         TRAIT_TANK => Some("+5 max hit points"),
         TRAIT_NATURALLY_ABLE => Some("+8 cyber modules"),
         TRAIT_PACK_RAT => Some("+3 pack slots"),
