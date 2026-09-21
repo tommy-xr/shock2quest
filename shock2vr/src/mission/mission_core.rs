@@ -9378,6 +9378,9 @@ impl MissionCore {
                     target: Some(target),
                 }]
             }
+            FlatUiDragAction::ApplyItemUse(request, target) => {
+                vec![Effect::ApplyItemUse { request, target }]
+            }
             FlatUiDragAction::ToggleMap => vec![Effect::ToggleMap],
             FlatUiDragAction::Place(entity_id) => vec![crate::scripts::script_util::announce(
                 entity_id,
@@ -10217,6 +10220,7 @@ impl MissionCore {
 
     fn leave_use_mode(&mut self) -> Effect {
         self.use_mode = false;
+        self.flat_ui.cancel_item_use();
         self.flat_ui.take_cursor_item();
         self.flat_ui.set_strip(None);
         self.refresh_readouts();
@@ -10451,6 +10455,41 @@ impl MissionCore {
                         .borrow::<UniqueViewMut<crate::alcohol::AlcoholVital>>()
                         .unwrap()
                         .clear();
+                }
+                Effect::BeginItemUse { request } => {
+                    if self.player_is_alive() && request.valid(&self.world) {
+                        if !self.use_mode {
+                            effects.push_front(
+                                self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT),
+                            );
+                        }
+                        self.flat_ui.begin_item_use(request);
+                        effects.push_front(crate::scripts::item_tool::message(request.prompt()));
+                    }
+                }
+                Effect::ApplyItemUse { request, target } => {
+                    if self.player_is_alive() {
+                        let result = crate::scripts::item_tool::resolve(
+                            &self.world,
+                            request,
+                            target,
+                            rand::Rng::gen_range(&mut thread_rng(), 1..=100),
+                        );
+                        // Resolve and apply this whole transaction before the next
+                        // queued use observes the same currency or target stack.
+                        for effect in Effect::flatten(vec![result]).into_iter().rev() {
+                            effects.push_front(effect);
+                        }
+                    }
+                }
+                Effect::RechargeItemEnergy { entity_id, level } => {
+                    let mut energy = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropEnergy>>()
+                        .unwrap();
+                    if let Ok(energy) = (&mut energy).get(entity_id) {
+                        energy.0 = energy.0.max(level);
+                    }
                 }
                 Effect::AddPlayerHazard { toxin, amount } => {
                     if let Ok(mut status) = self
@@ -22837,6 +22876,7 @@ impl crate::game_scene::GameScene for MissionCore {
         self.reference_grid.reset();
         self.dismiss_amp_carousel();
         crate::vr_psi_sway::suspend(&self.world);
+        self.flat_ui.cancel_item_use();
     }
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
