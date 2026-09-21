@@ -403,13 +403,12 @@ in `0.05` steps, and resets on app restart. `0.5` halves those contributions;
 UI, video, and explicitly fullbright world surfaces keep their existing brightness.
 
 **Camera & view → Level light intensity** (`level_light_intensity`) scales baked
-world lightmaps, also from `0` to `3` in `0.05` steps with default `1`.
-The ambient floor still applies after this scaling; lower both controls to
-darken both baked lighting and the minimum light level. Objects do not yet
-receive authored level lights on this branch, so this control currently affects
-only world lightmaps. When per-object level lighting lands (#1229), its authored
-light contributions should use this same multiplier, applied once independently
-of ambient, emissive contributions, and runtime spotlights (tracked in #1547).
+world lightmaps and authored object lights, also from `0` to `3` in `0.05` steps
+with default `1`. The ambient floor still applies after this scaling; lower both
+controls to darken both baked lighting and the minimum light level. With
+experimental `object_lighting` enabled, authored object contributions receive
+this multiplier once, in addition to `object_light_brightness`. Ambient,
+emissive contributions, and runtime spotlights remain independent.
 
 Developer parameters use category submenus. **Back** moves up one category;
 **Resume** on the pause Developer page returns directly to gameplay. Opening

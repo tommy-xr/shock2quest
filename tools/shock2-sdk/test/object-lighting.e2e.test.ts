@@ -55,6 +55,21 @@ for (const vr of [false, true]) {
         `restoring court lights must light the corpse: off=${off.received}, on=${on.received}`);
       assert.deepEqual(on.ambient, off.ambient, "switching a lamp must not change mission ambient");
 
+      // The shared level-light control scales authored direct light exactly
+      // once. It must not change the independently controlled ambient floor.
+      for (const gain of [0.5, 0, 2]) {
+        await game.devParams.set("level_light_intensity", gain);
+        await game.step({ frames: 1 });
+        const scaled = await corpseLighting();
+        assert.ok(Math.abs(scaled.received - on.received * gain) < 0.0001,
+          `level intensity ${gain} must scale authored object light once`);
+        assert.deepEqual(scaled.ambient, on.ambient);
+      }
+      await game.devParams.reset("level_light_intensity");
+      await game.step({ frames: 1 });
+      assert.ok(Math.abs((await corpseLighting()).received - on.received) < 0.0001,
+        "reset restores authored brightness");
+
       assert.equal((await game.load(saveName)).success, true);
       await game.camera.set({ position: [-2, 2, -213], lookAt: [2, 0.5, -213] });
       await game.step({ frames: 2 });
