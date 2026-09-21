@@ -199,16 +199,15 @@ impl FlatPlayerController {
         input: &Hand,
         player_pos: Vector3<f32>,
         player_rotation: Quaternion<f32>,
-        head_rotation: Quaternion<f32>,
-        eye_height: f32,
+        eye: crate::death_camera::EyePose,
         step_dt: f32,
         world: &World,
         physics: &PhysicsWorld,
     ) -> (Vec<VirtualHandEffect>, Option<EntityId>) {
         let mut effects = Vec::new();
 
-        let look = player_rotation * head_rotation;
-        let camera_pos = player_pos + vec3(0.0, eye_height / SCALE_FACTOR, 0.0);
+        let look = player_rotation * eye.rotation;
+        let camera_pos = player_pos + player_rotation * eye.position;
         // Unconditional, so a kick cannot freeze mid-flight while a melee
         // weapon (or nothing) is wielded and thaw on the next gun frame.
         let kick = self.recoil.step(step_dt);
@@ -443,6 +442,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn aiming_uses_the_same_displaced_rotated_eye_as_rendering() {
+        use cgmath::{Deg, InnerSpace, Rotation3};
+        let pawn = vec3(3.0, 4.0, 5.0);
+        let rotation = Quaternion::from_angle_y(Deg(90.0));
+        let eye = crate::death_camera::EyePose {
+            position: vec3(0.4, 0.2, 0.0),
+            rotation: Quaternion::from_angle_z(Deg(-7.0)),
+        };
+        let mut controller = FlatPlayerController::new();
+        controller.update(
+            &Hand::default(),
+            pawn,
+            rotation,
+            eye,
+            1.0 / 60.0,
+            &World::new(),
+            &PhysicsWorld::new(),
+        );
+        let (origin, direction) = controller.aim_ray().unwrap();
+        let expected = pawn + rotation * eye.position;
+        assert!((origin - point3(expected.x, expected.y, expected.z)).magnitude() < 1e-6);
+        assert!((direction - rotation * eye.rotation * -Vector3::unit_z()).magnitude() < 1e-6);
+    }
+
     /// Recoil must raise the MUZZLE and push the gun back along its own barrel
     /// while leaving the camera alone, then settle back to the carry pose.
     /// The `_h` gun meshes point down model -x (`weapon_muzzle::barrel_axis`).
@@ -568,8 +592,7 @@ mod tests {
                 &Hand::default(),
                 vec3(0.0, 0.0, 0.0),
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                0.0,
+                crate::death_camera::EyePose::flat(0.0, Quaternion::new(1.0, 0.0, 0.0, 0.0)),
                 1.0 / 60.0,
                 &mut world,
                 &physics,
@@ -595,8 +618,7 @@ mod tests {
                 &Hand::default(),
                 vec3(0.0, 0.0, 0.0),
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                0.0,
+                crate::death_camera::EyePose::flat(0.0, Quaternion::new(1.0, 0.0, 0.0, 0.0)),
                 1.0 / 60.0,
                 &world,
                 &physics,
@@ -830,8 +852,7 @@ mod tests {
             },
             vec3(0.0, 0.0, 0.0),
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            0.0,
+            crate::death_camera::EyePose::flat(0.0, Quaternion::new(1.0, 0.0, 0.0, 0.0)),
             1.0 / 60.0,
             &world,
             &physics,

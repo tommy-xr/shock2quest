@@ -29,6 +29,9 @@ pub struct InputContext {
     // cannot repeatedly add upward velocity.
     pub jump: bool,
 
+    /// Flat-only held lean axis: -1 left, +1 right.
+    pub lean: f32,
+
     /// Conversion used by a tracked runtime; lets a stance change rebase all poses together.
     pub tracking: Option<crate::vr_tracking::TrackingTransform>,
     /// Live runtime tracking validity, separate from fallback/stale pose values.
@@ -52,6 +55,7 @@ impl InputContext {
             pointer: None,
             crouch: false,
             jump: false,
+            lean: 0.0,
             tracking: None,
             pose_tracking: None,
         }
@@ -76,6 +80,7 @@ impl InputContext {
         suppressed.pointer = None;
         suppressed.crouch = false;
         suppressed.jump = false;
+        suppressed.lean = 0.0;
         suppressed
     }
 }
@@ -178,6 +183,7 @@ mod tests {
         });
         input.crouch = true;
         input.jump = true;
+        input.lean = 1.0;
 
         let suppressed = input.with_player_controls_suppressed(false, true);
 
@@ -198,5 +204,6 @@ mod tests {
         assert!(suppressed.pointer.is_none());
         assert!(!suppressed.crouch);
         assert!(!suppressed.jump);
+        assert_eq!(suppressed.lean, 0.0);
     }
 }

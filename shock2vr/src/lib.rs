@@ -23,6 +23,7 @@ pub mod death_camera;
 pub mod dev_params;
 mod developer_mode;
 pub mod difficulty;
+mod flat_lean;
 mod flat_player_controller;
 pub mod free_camera;
 mod glove_fit;
@@ -2335,7 +2336,7 @@ impl Game {
     /// `EngineRenderContext`, so the fall to the floor is decided once for both
     /// presentations instead of once per runtime (AGENTS.md section 3).
     ///
-    /// While the player is alive this returns its inputs verbatim.
+    /// Flat gameplay supplies its collision-resolved eye; VR retains tracked poses.
     /// Whether the player's own body - VR hands in [`Game::render`], the flat
     /// weapon viewmodel and HUD in [`Game::render_per_eye`] - should be dropped
     /// this frame because the death camera has taken the view.
@@ -2358,11 +2359,31 @@ impl Game {
         tracked_head_offset: Vector3<f32>,
         tracked_head_rotation: Quaternion<f32>,
     ) -> death_camera::CameraPose {
+        let flat_eye = (!self.free_camera.is_detached())
+            .then(|| self.active_game_scene.flat_eye_pose())
+            .flatten();
+        self.resolve_free_camera(
+            pawn_position,
+            pawn_rotation,
+            flat_eye.map_or(tracked_head_offset, |eye| eye.position),
+            flat_eye.map_or(tracked_head_rotation, |eye| eye.rotation),
+        )
+    }
+
+    /// Compose tracked input and death pose without gameplay lean. Placement
+    /// tools use this before detaching, matching the eventual detached view.
+    pub fn resolve_free_camera(
+        &self,
+        pawn_position: Vector3<f32>,
+        pawn_rotation: Quaternion<f32>,
+        head_offset: Vector3<f32>,
+        head_rotation: Quaternion<f32>,
+    ) -> death_camera::CameraPose {
         death_camera::resolve(
             pawn_position,
             pawn_rotation,
-            tracked_head_offset,
-            tracked_head_rotation,
+            head_offset,
+            head_rotation,
             self.active_game_scene.death_camera(),
         )
     }
@@ -2404,12 +2425,11 @@ impl Game {
         // head. Anchored to the raw tracked pose, the damage tint would slide
         // off to the side as the camera falls away from it - and the killing
         // blow is exactly when it is on screen.
-        let rendered_eye = death_camera::resolve(
+        let rendered_eye = self.resolve_camera(
             vec3(0.0, 0.0, 0.0),
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             self.head_pose.0,
             self.head_pose.1,
-            self.active_game_scene.death_camera(),
         );
         let (mut eye_position, eye_forward) =
             hit_feedback::eye_pose(rendered_eye.head_offset, rendered_eye.head_rotation);

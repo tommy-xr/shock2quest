@@ -260,6 +260,10 @@ dev_params! {
     /// shares its single flat projection between flat and `--vr` mode, so this
     /// override reaches both there.)
     FOV_OVERRIDE_DEG = Camera::float("fov_override_deg", "FOV override", 0.0, 0.0, 120.0, 1.0),
+    /// Maximum flat Q/E eye displacement in SS2 feet, read every frame.
+    /// 2 feet is twice the original lean; 0 disables displacement and roll.
+    /// Geometry still limits the resolved pose. VR uses tracked head motion.
+    FLAT_LEAN_DISTANCE = Camera::float("flat_lean_distance", "Max lean (ft)", 2.0, 0.0, 4.0, 0.1),
     /// Scale the world ambient floor and model ambient: 0 disables, 1 preserves.
     AMBIENT_LIGHT_INTENSITY = Camera::float("ambient_light_intensity", "Ambient intensity", 1.0, 0.0, 3.0, 0.05),
     /// Scale baked world lighting independently of the ambient floor and spotlights.

@@ -2910,6 +2910,8 @@ pub struct MissionCore {
     /// while they are alive. Runtime-only, like [`PlayerLifeState`] itself: a
     /// dead game cannot be saved, so there is no death mid-fall to restore.
     death_camera: Option<DeathCamera>,
+    flat_lean: crate::flat_lean::FlatLean,
+    flat_eye: Option<death_camera::EyePose>,
 }
 
 pub struct GlobalContext {
@@ -3806,6 +3808,8 @@ impl MissionCore {
             last_head_position: vec3(0.0, 0.0, 0.0),
             show_position_anchor: crate::ui::FrontendPanelAnchor::new(),
             death_camera: None,
+            flat_lean: Default::default(),
+            flat_eye: None,
         };
         mission_core
             .thrown_items
@@ -3925,12 +3929,12 @@ impl MissionCore {
         // collider center), which is the space the runtimes' `head_offset`
         // lives in - see `crate::death_camera`.
         let eye_height = crate::player_eye_height_for(self.player_is_crouched());
-        let live_eye = death_camera::EyePose {
+        let live_eye = self.flat_eye.unwrap_or(death_camera::EyePose {
             position: cgmath::vec3(0.0, eye_height / SCALE_FACTOR, 0.0),
             // Where the player was actually looking: the body topples sideways
             // from their gaze, so whatever killed them stays in frame.
             rotation: self.last_head_rotation,
-        };
+        });
         let floor_y = -physics::player_center_above_floor(self.player_is_crouched());
         let seed = death_seed(position);
         let lateral =
@@ -3987,6 +3991,11 @@ impl MissionCore {
         if let Some(death_camera) = &mut self.death_camera {
             death_camera.advance(elapsed_seconds);
         }
+    }
+
+    /// Shared collision-resolved pose; absent in VR.
+    pub fn flat_eye_pose(&self) -> Option<death_camera::EyePose> {
+        self.flat_eye
     }
 
     /// This frame's death-camera contribution, for [`crate::Game::resolve_camera`].
@@ -5358,6 +5367,29 @@ impl MissionCore {
                 .then_some((held[i]?, merge_returns[i].or(shoulder_cells[i])))
         }));
 
+        let neutral_eye = death_camera::EyePose::flat(
+            crate::player_eye_height_for(self.player_handle.is_crouched()),
+            input_context.head.rotation,
+        );
+        self.flat_eye =
+            (game_options.presentation_mode == crate::PresentationMode::Flat).then(|| {
+                let (left, right) = self.interaction.held_entities();
+                let ignored = [left, right];
+                self.flat_lean.update(
+                    if self.use_mode {
+                        0.0
+                    } else {
+                        input_context.lean
+                    },
+                    time.elapsed.as_secs_f32(),
+                    neutral_eye,
+                    player_pos,
+                    player_rot,
+                    &self.physics,
+                    &ignored,
+                )
+            });
+
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
         let mut interaction_msgs = self.interaction.update(&InteractionContext {
@@ -5370,8 +5402,7 @@ impl MissionCore {
                 && self.player_controls_enabled,
             player_pos,
             player_rotation: player_rot,
-            head_rotation: input_context.head.rotation,
-            eye_height: crate::player_eye_height_for(self.player_handle.is_crouched()),
+            flat_eye: self.flat_eye.unwrap_or(neutral_eye),
         });
         self.interaction.fit_held_items(
             &self.world,
@@ -13674,7 +13705,11 @@ impl MissionCore {
             .borrow::<UniqueView<Time>>()
             .map(|time| time.total.as_secs_f64())
             .unwrap_or(0.0);
-        let eye = player.pos + player.rotation * self.last_head_position;
+        let eye = player.pos
+            + player.rotation
+                * self
+                    .flat_eye
+                    .map_or(self.last_head_position, |eye| eye.position);
         scene.extend(crate::damage_overlay::render(
             asset_cache,
             self.script_world.damage_popups(),
@@ -16888,8 +16923,7 @@ mod held_item_restore_tests {
                 input: &input,
                 player_pos: vec3(0.0, 0.0, 0.0),
                 player_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                eye_height: 1.04,
+                flat_eye: death_camera::EyePose::flat(1.04, Quaternion::new(1.0, 0.0, 0.0, 0.0)),
                 step_dt: 1.0 / 60.0,
                 support_enabled: false,
             });
@@ -16909,8 +16943,7 @@ mod held_item_restore_tests {
                 input: &input,
                 player_pos: vec3(0.0, 0.0, 0.0),
                 player_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                eye_height: 1.04,
+                flat_eye: death_camera::EyePose::flat(1.04, Quaternion::new(1.0, 0.0, 0.0, 0.0)),
                 step_dt: 1.0 / 60.0,
                 support_enabled: false,
             });

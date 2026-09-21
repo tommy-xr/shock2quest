@@ -183,6 +183,11 @@ pub trait GameScene {
         Err(PlayerSavePoseError::NoPlayer)
     }
 
+    /// Collision-resolved flat eye, shared with interaction and rendering.
+    fn flat_eye_pose(&self) -> Option<crate::death_camera::EyePose> {
+        None
+    }
+
     /// The death camera's contribution to this frame's view, if the player is
     /// dying. Consumed by [`crate::Game::resolve_camera`], which folds it into
     /// whatever tracked head pose the runtime resolved, so flat and VR fall the

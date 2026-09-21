@@ -6717,6 +6717,47 @@ impl PhysicsWorld {
         radius: f32,
         can_hit: &dyn Fn(EntityId) -> bool,
     ) -> f32 {
+        self.sphere_clearance(
+            origin,
+            direction,
+            distance,
+            radius,
+            can_hit,
+            false,
+            InternalCollisionGroups::ALL,
+        )
+    }
+
+    /// Camera clearance includes the near plane. Starting in geometry must
+    /// refuse leaning rather than letting the eye emerge through a thin wall.
+    pub(crate) fn lean_distance(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        distance: f32,
+        can_hit: &dyn Fn(EntityId) -> bool,
+    ) -> f32 {
+        self.sphere_clearance(
+            origin,
+            direction,
+            distance,
+            0.5 / SCALE_FACTOR,
+            can_hit,
+            true,
+            InternalCollisionGroups::PLAYER,
+        )
+    }
+
+    fn sphere_clearance(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        distance: f32,
+        radius: f32,
+        can_hit: &dyn Fn(EntityId) -> bool,
+        stop_at_penetration: bool,
+        memberships: InternalCollisionGroups,
+    ) -> f32 {
         let predicate = |_: ColliderHandle, collider: &Collider| {
             EntityId::from_inner(collider.user_data as u64).is_none_or(can_hit)
         };
@@ -6725,7 +6766,7 @@ impl PhysicsWorld {
             .exclude_sensors()
             .predicate(&predicate)
             .groups(InteractionGroups::new(
-                InternalCollisionGroups::ALL.bits.into(),
+                memberships.bits.into(),
                 groups.bits.into(),
                 Default::default(),
             ));
@@ -6743,9 +6784,9 @@ impl PhysicsWorld {
                 rapier3d::parry::query::ShapeCastOptions {
                     max_time_of_impact: distance,
                     target_distance: 0.01,
-                    // A palm close to a wall may start the enclosing sphere
-                    // overlapping it; permit a shot moving back into clear space.
-                    stop_at_penetration: false,
+                    // Projectiles may leave an initial overlap; cameras must
+                    // not emerge through geometry from an overlapping eye.
+                    stop_at_penetration,
                     compute_impact_geometry_on_penetration: true,
                 },
             )

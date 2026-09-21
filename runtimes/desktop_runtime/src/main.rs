@@ -236,9 +236,9 @@ fn mouse_look_target(
     scene_wants_pointer: bool,
     presentation: shock2vr::PresentationMode,
 ) -> MouseLookTarget {
-    if right_hand_key {
+    if presentation == shock2vr::PresentationMode::Vr && right_hand_key {
         MouseLookTarget::RightHand
-    } else if left_hand_key {
+    } else if presentation == shock2vr::PresentationMode::Vr && left_hand_key {
         MouseLookTarget::LeftHand
     } else if !scene_wants_pointer {
         MouseLookTarget::Head
@@ -520,7 +520,7 @@ pub fn main() {
         // Routed through `resolve_camera` rather than used directly: while the
         // player is dying the game blends this tracked pose toward the fallen
         // death pose, once, for every runtime (see `shock2vr::death_camera`).
-        // Alive, it hands back exactly what went in.
+        // Flat gameplay supplies the shared collision-resolved leaning eye.
         let render_context = game
             .resolve_camera(
                 pawn_offset,
@@ -762,6 +762,10 @@ fn process_events(
     }
 
     let mut input_context = InputContext::default();
+    if presentation == shock2vr::PresentationMode::Flat && !wants_pointer && !is_alt_pressed {
+        input_context.lean = f32_from_bool(window.get_key(Key::E) == Action::Press)
+            - f32_from_bool(window.get_key(Key::Q) == Action::Press);
+    }
     let head_rotation = camera_rotation(camera_context);
     input_context.head.rotation = head_rotation;
     // The flat rig has no tracked head: the eye sits directly above the pawn
@@ -842,6 +846,15 @@ mod tests {
         ray_to_canvas(CANVAS, &panel, position, direction)
     }
 
+    #[test]
+    fn leaning_keys_keep_mouse_look_in_flat_mode() {
+        use shock2vr::PresentationMode::Flat;
+        for (q, e) in [(true, false), (false, true), (true, true)] {
+            assert_eq!(mouse_look_target(e, q, false, Flat), MouseLookTarget::Head);
+            assert_eq!(mouse_look_target(e, q, true, Flat), MouseLookTarget::Cursor);
+        }
+    }
+
     /// `camera_rotation` maps local **+Z** (not -Z) onto `camera_forward`, and
     /// the rig's own forward is `-camera_forward` - so a pose built from it
     /// aims along -Z, the convention every VR consumer assumes. Pinned here
@@ -904,7 +917,7 @@ mod tests {
     /// Doing it under `--vr` froze the head and hands, so the menu ray stuck at
     /// the resting pose and hover/click never responded. Under `--vr` a
     /// pointer-wanting scene routes the mouse to the right hand (the only thing
-    /// that moves the ray across the head-anchored panel); E/Q always win.
+    /// that moves the ray across the head-anchored panel); VR E/Q always win.
     #[test]
     fn pointer_scenes_route_the_mouse_to_the_right_hand_in_vr() {
         use shock2vr::PresentationMode::{Flat, Vr};
