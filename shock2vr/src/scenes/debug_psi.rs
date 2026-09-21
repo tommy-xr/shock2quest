@@ -176,6 +176,11 @@ impl DebugSceneHooks for PsiHooks {
                 spawn_at(-1358, Point3::new(-4.0, 1.0, -2.0)),
                 spawn_at(-928, Point3::new(-18.0, 1.0, 0.0)),
                 spawn_at(-57, Point3::new(-45.0, 1.0, 0.0)),
+                // Item-power station: rechargeable implant and reusable Recycler.
+                // The existing nearby Med Patch and clip exercise conversion.
+                spawn_at(-101, Point3::new(-2.0, 1.0, 2.0)),
+                spawn_at(-71, Point3::new(-2.0, 1.0, -2.0)),
+                Effect::AwardNanites { amount: 200 },
             ]);
             core.handle_effects(
                 spawns,
