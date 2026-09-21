@@ -89,6 +89,7 @@ pub enum FlatUiDragAction {
     ToggleMap,
     Throw(EntityId),
     Wield(EntityId),
+    ApplyItemUse(crate::scripts::item_tool::ItemUse, EntityId),
     /// One of the AMMOFULL readout's controls was clicked (fire-mode setting,
     /// reload, ammo cycle, psi selector). Not tied to a cursor item - the
     /// target is the entity in the last drawn readout, never a hand lookup.
@@ -238,6 +239,7 @@ pub struct FlatUiHost {
     /// The item lifted onto the cursor (the original's "cursor IS the item"
     /// drag, §2.4). `Some` between a lift and the place/throw that clears it.
     cursor_item: Option<CursorItem>,
+    item_use: Option<crate::scripts::item_tool::ItemUse>,
     /// Resolved inventory destination, drawn by the shared canvas in both presentations.
     placement_preview: Option<PlacementPreview>,
     /// The most recent lift, for double-click (wield) detection. Counts down
@@ -341,6 +343,7 @@ impl FlatUiHost {
             components: Vec::new(),
             strip: None,
             cursor_item: None,
+            item_use: None,
             placement_preview: None,
             last_lift: None,
             readouts: None,
@@ -476,9 +479,27 @@ impl FlatUiHost {
             .or_else(|| self.panel_item_at(canvas_pos))
     }
 
+    pub fn begin_item_use(&mut self, request: crate::scripts::item_tool::ItemUse) {
+        self.cursor_item = None;
+        self.last_lift = None;
+        self.item_use = Some(request);
+        self.guard_held_press();
+    }
+
+    pub fn cancel_item_use(&mut self) {
+        self.item_use = None;
+    }
+
     /// Set the mini-frame's name line (already resolved to a display name).
     pub fn set_name_strip(&mut self, name: Option<String>) {
-        self.name_strip = name;
+        self.name_strip = if let Some(request) = self.item_use {
+            Some(match name {
+                Some(name) => format!("{} {name}", request.prompt()),
+                None => request.prompt().to_owned(),
+            })
+        } else {
+            name
+        };
     }
 
     pub(crate) fn set_shoulder_weapons(&mut self, weapons: [Option<EntityId>; 2]) {
@@ -1047,6 +1068,20 @@ impl FlatUiHost {
         };
         let canvas_pos = pointer.canvas_pos;
         self.cursor_canvas = canvas_pos;
+        if self.item_use.is_some_and(|request| !request.valid(world)) {
+            self.item_use = None;
+        }
+        if let (Some(request), Some(pos)) = (self.item_use, canvas_pos) {
+            if pressed_edge {
+                if let Some(target) = self.strip_item_at(pos).or_else(|| self.panel_item_at(pos)) {
+                    self.item_use = None;
+                    return (
+                        Vec::new(),
+                        vec![FlatUiDragAction::ApplyItemUse(request, target)],
+                    );
+                }
+            }
+        }
         if canvas_pos.is_none() {
             self.hover_close = false;
         }
@@ -1168,6 +1203,23 @@ impl FlatUiHost {
             }
             if over_strip {
                 let held = self.cursor_item.as_ref().unwrap().entity;
+                if let Some(recycler) = self.strip_item_at(canvas_pos).filter(|target| {
+                    *target != held && crate::scripts::item_tool::is_recycler(world, *target)
+                }) {
+                    self.cursor_item = None;
+                    self.last_lift = None;
+                    return (
+                        Vec::new(),
+                        vec![FlatUiDragAction::ApplyItemUse(
+                            crate::scripts::item_tool::ItemUse {
+                                tool: recycler,
+                                power: None,
+                                effective_psi: 0,
+                            },
+                            held,
+                        )],
+                    );
+                }
                 // Double-click on the just-lifted item's slot wields it (the
                 // second press of a quick same-spot double-click) rather than
                 // placing - the faithful single-button equip gesture.

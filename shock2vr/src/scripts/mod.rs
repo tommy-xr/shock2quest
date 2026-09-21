@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod effect;
+pub mod item_tool;
 pub(crate) mod proximity_grenade;
 pub mod speech_registry;
 pub mod speech_util;
@@ -987,6 +988,7 @@ impl ScriptWorld {
             "deadpowercell" => Box::new(DeadPowerCell::new()),
             "energystation" => Box::new(EnergyStation::new()),
             "toolconsumable" => Box::new(ToolConsumable::new()),
+            "recycler" => Box::new(item_tool::Recycler),
 
             // AI stuff
             "trapsignal" => Box::new(TrapSignal::new()),
