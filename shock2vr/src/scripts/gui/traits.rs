@@ -141,7 +141,7 @@ impl TraitsContext {
         let strings = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, "traits.str");
         let descriptions = std::array::from_fn(|i| {
             if (i + 1) as u8 == TRAIT_PACK_RAT {
-                return "Pack-Rat: +3 pack slots, +1 holster in VR.".to_owned();
+                return "Pack-Rat: Adds three extra inventory slots.".to_owned();
             }
             let key = format!("trait{}", i + 1);
             strings
@@ -383,7 +383,7 @@ pub fn live_effect_note(trait_id: u8) -> Option<&'static str> {
         TRAIT_STRONG_METABOLISM => Some("25% less radiation damage, 50% less toxin damage"),
         TRAIT_TANK => Some("+5 max hit points"),
         TRAIT_NATURALLY_ABLE => Some("+8 cyber modules"),
-        TRAIT_PACK_RAT => Some("+3 pack slots, +1 VR holster"),
+        TRAIT_PACK_RAT => Some("+3 pack slots"),
         TRAIT_PHARMO_FRIENDLY => Some("20% healing-item bonus"),
         TRAIT_REPLICATOR_EXPERT => Some("20% replicator discount"),
         _ => None,

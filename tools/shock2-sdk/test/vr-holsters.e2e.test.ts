@@ -36,9 +36,12 @@ async function reach(
 }
 
 for (const hand of ["left", "right"] as const) {
-  test(`${hand} holster preserves the exact weapon and ammunition`, { skip: !enabled, timeout: 180_000 }, async () => {
+  for (const slot of [0, 1]) {
+  test(`${hand} hand, holster ${slot} preserves the exact weapon and ammunition`, { skip: !enabled, timeout: 180_000 }, async () => {
     await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
     await game.step({ frames: 30 });
+    assert.deepEqual((await game.info()).player.stats?.os_traits, [], "no upgrade required");
+    assert.equal((await game.info()).player.hand_feedback?.holsters?.enabled_slots, 2);
     const item = (await game.entities.list()).entities.find(e => e.template_id === -17)!;
     assert.ok(item);
     await aimVrHandAt(game, item.position, 0.2, 1, 0, { hand });
@@ -51,12 +54,12 @@ for (const hand of ["left", "right"] as const) {
       // Holsters are dedicated capacity even when the largest backpack is full.
       for (let i = 0; i < 45; i++) await game.player.spawnItem(-1221);
     }
-    await reach(game, hand, 0);
+    await reach(game, hand, slot);
     assert.equal((await game.info()).player[owner(hand)], item.id, "reaching is not releasing");
     await game.input.set(`${hand}_hand.squeeze`, 0);
     await game.step({ frames: 8 });
     assert.equal((await game.info()).player[owner(hand)], null);
-    assert.deepEqual((await game.info()).player.hand_feedback?.holsters?.items, [item.id, null]);
+    assert.deepEqual((await game.info()).player.hand_feedback?.holsters?.items, slot === 0 ? [item.id, null] : [null, item.id]);
     assert.equal((await game.player.inventory()).items.find(i => i.entity_id === item.id), undefined);
     assert.equal((await game.physics.bodies({ entityId: item.id })).bodies.length, 0);
     await game.input.set(`${hand}_hand.trigger`, 1);
@@ -67,6 +70,7 @@ for (const hand of ["left", "right"] as const) {
     assert.equal(ammoOf(await game.entities.detail(item.id)), ammo, "drawing with trigger held must not fire");
     assert.equal((await game.info()).player.wielded_gun_condition, 57);
   });
+}
 }
 
 test("occupied holster retains the refused weapon until a deliberate regrip", { skip: !enabled, timeout: 180_000 }, async () => {
@@ -193,3 +197,37 @@ test("drawing a holstered wrench restores its physical melee body", { skip: !ena
   assert.equal((await game.info()).player.hand_feedback?.holsters?.items[0], null);
   assert.ok((await game.physics.bodies({ entityId: wrench.id })).bodies.length > 0);
 });
+
+for (const slot of [0, 1]) {
+  test(`psi amp uses holster ${slot} and paperdoll shows storage, not held items`, { skip: !enabled, timeout: 180_000 }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    const amp = (await game.entities.list()).entities.find(e => e.template_id === -247);
+    assert.ok(amp);
+    assert.deepEqual((await game.info()).player.stats?.os_traits, []);
+    await aimVrHandAt(game, amp.position, 0.2, 1);
+    await game.step({ frames: 5 });
+    assert.equal((await game.info()).player.right_hand_entity_id, amp.id);
+    await reach(game, "right", slot);
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 8 });
+    assert.equal((await game.info()).player.right_hand_entity_id, null);
+    assert.equal((await game.info()).player.hand_feedback?.holsters?.items[slot], amp.id);
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    const label = slot === 0 ? "Right holster" : "Left holster";
+    const icon = (await game.ui.state()).strip?.elements.find(e => e.label === label);
+    assert.equal(icon?.entity_id, amp.id, "the paperdoll names the physically matching holster");
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    await reach(game, "right", slot);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 8 });
+    assert.equal((await game.info()).player.right_hand_entity_id, amp.id);
+    assert.equal((await game.info()).player.hand_feedback?.holsters?.items[slot], null);
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    const empty = (await game.ui.state()).strip?.elements.find(e => e.label === label);
+    assert.equal(empty?.entity_id, null, "holding the amp must not refill the holster display");
+  });
+}

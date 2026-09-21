@@ -5046,7 +5046,7 @@ impl MissionCore {
             ]
             .map(|hand| self.interaction.hand_available_for_body_slot(hand)),
             super::holsters::occupants(&self.world),
-            super::holsters::slot_count(&self.world),
+            super::holsters::SLOT_COUNT,
             held.map(|entity| {
                 entity.is_some_and(|entity| {
                     crate::virtual_hand::is_wieldable_weapon(&self.world, entity)
@@ -5643,8 +5643,14 @@ impl MissionCore {
                 hand_items[crate::vr_config::hand_slot(hand)] = Some(entity);
             }
         }
-        self.flat_ui
-            .set_hand_items(&self.world, asset_cache, hand_items);
+        // Storage indexes right then left; the paperdoll uses physical left/right.
+        let [right_holster, left_holster] = super::holsters::occupants(&self.world);
+        self.flat_ui.set_equipment_items(
+            &self.world,
+            asset_cache,
+            hand_items,
+            [left_holster, right_holster],
+        );
         let placement_preview = self.vr_use_mode_pointer.as_ref().and_then(|pass| {
             // Use the same per-hand rays as release detection, including a
             // carrying hand when the other controller owns the UI cursor.
@@ -5688,7 +5694,7 @@ impl MissionCore {
             self.weapon_settings_gun = None;
         }
         let name_strip = self.flat_ui.strip_entity().and_then(|_| {
-            self.flat_ui.pointed_hand_name().or_else(|| {
+            self.flat_ui.pointed_holster_name().or_else(|| {
                 self.flat_ui
                     .pointed_item()
                     .or_else(|| self.name_strip_world_pick(game_options))
@@ -13349,9 +13355,7 @@ impl MissionCore {
                 if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
                     let occupants = super::holsters::occupants(&self.world);
                     for (slot, center) in centers.into_iter().enumerate() {
-                        if slot < super::holsters::slot_count(&self.world)
-                            || occupants[slot].is_some()
-                        {
+                        if slot < super::holsters::SLOT_COUNT || occupants[slot].is_some() {
                             parts.push(("astra-vr-holster.glb", center, Matrix4::from_scale(1.0)));
                         }
                     }
