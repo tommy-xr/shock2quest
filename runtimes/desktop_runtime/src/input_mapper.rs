@@ -37,7 +37,7 @@ impl DesktopInputMapper {
             },
             Binding {
                 key: Key::B,
-                modifier: Modifier::None,
+                modifier: Modifier::Alt,
                 action: InputAction::DebugCycleWeapon,
             },
             // Original System Shock 2 direct weapon bindings. These select a
@@ -116,6 +116,11 @@ impl DesktopInputMapper {
                 key: Key::R,
                 modifier: Modifier::None,
                 action: InputAction::Reload,
+            },
+            Binding {
+                key: Key::B,
+                modifier: Modifier::None,
+                action: InputAction::CycleAmmo,
             },
             Binding {
                 key: Key::T,
@@ -252,6 +257,19 @@ mod tests {
         mapper.resolve(|key| held.contains(&key), state);
     }
 
+    #[test]
+    fn b_cycles_ammo_and_alt_b_is_debug_only() {
+        let mut mapper = DesktopInputMapper::new();
+        let mut state = InputActionState::new();
+        frame(&mut mapper, &mut state, &[Key::B]);
+        assert!(state.just_triggered(InputAction::CycleAmmo));
+        assert!(!state.just_triggered(InputAction::DebugCycleWeapon));
+        frame(&mut mapper, &mut state, &[]);
+        frame(&mut mapper, &mut state, &[Key::LeftAlt, Key::B]);
+        assert!(state.just_triggered(InputAction::DebugCycleWeapon));
+        assert!(!state.just_triggered(InputAction::CycleAmmo));
+    }
+
     /// The baseline every binding relies on: hold a key, get one edge. This
     /// holds under the old per-binding logic too - the flicker only needed a
     /// second binding, which `twin_bindings_for_one_action_do_not_fight`
@@ -293,9 +311,7 @@ mod tests {
     /// down mints no second edge. Keying edges per *binding* fails here - the
     /// unpressed twin releases the action every frame while the pressed one
     /// re-triggers it, which is exactly what `Tab` did while `I` was bound to
-    /// `ToggleUseMode` as well. Nothing in the shipped table shares an action
-    /// today, so this builds the pair: the rule has to hold the moment one is
-    /// added back.
+    /// `ToggleUseMode` as well. This also protects the B/T ammo-cycle aliases.
     #[test]
     fn twin_bindings_for_one_action_do_not_fight() {
         let mut mapper = DesktopInputMapper::new();

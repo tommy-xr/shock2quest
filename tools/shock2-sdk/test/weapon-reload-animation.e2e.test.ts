@@ -33,15 +33,15 @@ test(
     const pistolId = pistol.id;
     assert.equal(ammoOf(await game.entities.detail(pistolId)), 0, "Earth pistol starts empty");
 
-    // Seed a full magazine from two authored reserve clips, then wait for that
+    // Seed a full magazine from the merged reserve stack, then wait for that
     // reload to finish before testing the next reload's animation.
     await game.input.trigger("Reload");
     await game.step({ frames: 140 });
     const clip = ammoOf(await game.entities.detail(pistolId));
-    assert.equal(clip, 12, "two small clips filled the pistol");
+    assert.equal(clip, 12, "twelve reserve rounds filled the pistol");
     assert.ok(
-      (await game.player.inventory()).items.some((item) => item.entity_id === clips[2].id),
-      "third reserve clip remains for the animated partial reload",
+      (await game.player.inventory()).items.some((item) => clips.some(clip => item.entity_id === clip.id)),
+      "remaining reserve stays available for the animated partial reload",
     );
 
     // Not reloading at rest.

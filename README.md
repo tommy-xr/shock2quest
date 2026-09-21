@@ -42,6 +42,8 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `Mouse` - look around (flat); in `--vr`, aim the head unless `Q` or `E` is held
 - `W` `A` `S` `D` - move around (hold `Shift` to move faster)
 - `Q` / `E` - hold to lean left/right in flat mode; release to return. Both keys cancel. Leaning works while crouched and stops against solid geometry. In `--vr`, these keys still control the simulated left/right hand: mouse aims, left click triggers, and right click grabs.
+- `B` (or `T`) - cycle ammunition type in flatscreen, then automatically reload from matching reserve
+- `R` - reload the current ammunition type
 - `Ctrl` - crouch
 - `Space` - jump
 - `Tab` - toggle the cyber interface ("use" mode): a cursor-driven UI over the 3D view

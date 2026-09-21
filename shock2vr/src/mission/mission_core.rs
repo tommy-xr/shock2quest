@@ -8735,7 +8735,8 @@ impl MissionCore {
                     if let Some(weapon) =
                         crate::wielded_weapon::resolve_weapon_target(&self.world, weapon)
                     {
-                        self.cycle_ammo(asset_cache, weapon);
+                        let cue = self.cycle_ammo(asset_cache, weapon);
+                        effects.push_back(cue);
                     }
                 }
 
@@ -12155,10 +12156,21 @@ impl MissionCore {
     /// mid-magazine swap costs the player a reload rather than converting
     /// standard rounds into AP for free. The only magazine that still has to be
     /// fired off is one whose projectile has no clip archetype to return to
-    /// (`can_cycle_ammo`).
-    fn cycle_ammo(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) {
+    /// (`can_cycle_ammo`). Flatscreen then reloads from matching reserve and
+    /// returns its audible cue; a type with no reserve remains selected and empty.
+    #[must_use]
+    fn cycle_ammo(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) -> Effect {
+        // Do not eject the rounds that are still being loaded or restart the
+        // animation when B is pressed again before the gun is ready.
+        if self
+            .world
+            .borrow::<View<RuntimePropReloading>>()
+            .is_ok_and(|v| v.get(weapon).is_ok_and(|r| !r.is_done()))
+        {
+            return Effect::NoEffect;
+        }
         if !crate::scripts::script_util::can_cycle_ammo(&self.world, weapon) {
-            return;
+            return Effect::NoEffect;
         }
         // The switch is earned by an empty magazine, never assumed. Every way an
         // eject can fall short - the fresh clip refused by the backpack, a
@@ -12166,7 +12178,7 @@ impl MissionCore {
         // then would convert them to the next type for free, which is the exact
         // thing this ejection exists to prevent.
         if !self.unload_magazine(asset_cache, weapon) {
-            return;
+            return Effect::NoEffect;
         }
         let count =
             crate::scripts::script_util::ordered_projectile_links(&self.world, weapon).len();
@@ -12178,6 +12190,13 @@ impl MissionCore {
             .unwrap_or(0);
         self.world
             .add_component(weapon, RuntimePropSelectedAmmo((current + 1) % count));
+        // Commit the type before reloading: reserve matching and the reload cue
+        // must use the new projectile. VR still inserts its clip by hand.
+        if !presentation_is_vr(&self.world) {
+            self.begin_reload(weapon)
+        } else {
+            Effect::NoEffect
+        }
     }
 
     /// Switch `weapon` to fire setting `setting`, keeping the selected ammo
