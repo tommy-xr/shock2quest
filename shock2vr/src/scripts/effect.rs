@@ -81,6 +81,10 @@ pub enum GlobalEffect {
     /// itself - the overlay is `Game`'s, and a paused scene is not updated at
     /// all - so the cyber interface's system button asks for it this way.
     OpenPauseMenu,
+    ShowHordeReport {
+        wave: u32,
+        stats: crate::horde_stats::HordeBattleStats,
+    },
 
     /// Open the Developer screen (live-tunable runtime parameters), replacing
     /// whatever scene is active. Reached from the main menu; the pause menu
@@ -807,6 +811,7 @@ pub enum Effect {
         template_id: i32,
     },
 
+    ContinueHorde,
     StartHordeWave {
         wave: u32,
     },

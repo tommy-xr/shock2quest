@@ -123,7 +123,7 @@ pub(crate) fn asset_mission(name: &str) -> &str {
     if is_horde(name) { "earth.mis" } else { name }
 }
 
-fn is_horde(name: &str) -> bool {
+pub(super) fn is_horde(name: &str) -> bool {
     name.eq_ignore_ascii_case("earth_horde")
         || name.eq_ignore_ascii_case("earth_horde_test")
         || name.eq_ignore_ascii_case("earth_horde_final")
@@ -499,6 +499,7 @@ pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
     }
     {
         let mut quests = core.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+        quests.horde_battle = Default::default();
         let stats = quests.player_stats_mut();
         stats.strength = 2;
         stats.endurance = 2;
@@ -561,9 +562,8 @@ fn corpse_container(world: &World, id: u64) -> Option<EntityId> {
     Some(entity)
 }
 
-/// Only unlooted contents still owned by expired corpses are removed. Picked
-/// up items have left those Contains links, so inventory and held loot survive.
-pub(crate) fn wave_jump_message(world: &World, wave: u32) -> Effect {
+/// Route a horde action to the arena director.
+pub(crate) fn director_message(world: &World, payload: MessagePayload) -> Effect {
     let scripts = world.borrow::<View<PropScripts>>().unwrap();
     scripts
         .iter()
@@ -574,22 +574,26 @@ pub(crate) fn wave_jump_message(world: &World, wave: u32) -> Effect {
                 .any(|name| name.eq_ignore_ascii_case("EarthHorde"))
         })
         .map(|(to, _)| Effect::Send {
-            msg: crate::scripts::Message {
-                to,
-                payload: MessagePayload::StartHordeWave {
-                    wave: wave.clamp(1, 100),
-                },
-            },
+            msg: crate::scripts::Message { to, payload },
         })
         .unwrap_or(Effect::ShowMessage {
-            text: "Start wave is available in Earth horde.".into(),
+            text: "This action is available in Earth horde.".into(),
         })
+}
+pub(crate) fn wave_jump_message(world: &World, wave: u32) -> Effect {
+    director_message(
+        world,
+        MessagePayload::StartHordeWave {
+            wave: wave.clamp(1, 100),
+        },
+    )
 }
 
 fn expired_corpses(world: &World) -> Vec<Effect> {
     cleanup_enemies(world, false)
 }
 
+/// Remove remaining corpse contents while preserving collected inventory.
 fn cleanup_enemies(world: &World, include_living: bool) -> Vec<Effect> {
     let (types, hp, links) = world
         .borrow::<(View<PropEcoType>, View<PropHitPoints>, View<Links>)>()
@@ -656,6 +660,8 @@ pub(crate) struct HordeDirector {
     // Audio is scene-local and must be re-established after loading a save.
     #[serde(skip)]
     music_synced: bool,
+    #[serde(skip)]
+    report_shown: bool,
     quick: bool,
     phase: Phase,
     wave: u32,
@@ -678,6 +684,7 @@ impl Default for HordeDirector {
         Self {
             initialized: false,
             music_synced: false,
+            report_shown: false,
             quick: false,
             phase: Phase::Rest,
             wave: 0,
@@ -840,6 +847,7 @@ impl HordeDirector {
         Effect::ShowMessage { text }
     }
     fn clear_wave(&mut self) -> Effect {
+        self.report_shown = false;
         self.phase = if self.wave == self.final_wave() {
             Phase::Victory
         } else {
@@ -1001,6 +1009,19 @@ impl Script for HordeDirector {
         }
         if self.phase == Phase::Failed {
             return Effect::Multiple(effects);
+        }
+        if self.phase == Phase::Victory && !self.report_shown {
+            self.report_shown = true;
+            let stats = world
+                .borrow::<UniqueView<QuestInfo>>()
+                .map(|q| q.horde_battle.clone())
+                .unwrap_or_default();
+            effects.push(Effect::GlobalEffect(
+                crate::scripts::GlobalEffect::ShowHordeReport {
+                    wave: self.wave,
+                    stats,
+                },
+            ));
         }
         if self.phase != Phase::Victory {
             self.elapsed += dt;
@@ -1182,6 +1203,47 @@ mod tests {
         let (text, duration) = banner(director.start_wave(&world)).expect("a wave card");
         assert_eq!(text, "Wave 3");
         assert_eq!(duration, WAVE_CARD_DURATION);
+    }
+
+    #[test]
+    fn surviving_report_is_once_per_victory_and_reopens_after_load() {
+        let mut world = World::new();
+        world.add_unique(PlayerLifeState::Alive);
+        world.add_unique(QuestInfo::new());
+        let mut director = HordeDirector {
+            initialized: true,
+            phase: Phase::Victory,
+            wave: 10,
+            ..Default::default()
+        };
+        let reports = |effect| {
+            Effect::flatten(vec![effect])
+                .iter()
+                .filter(|effect| {
+                    matches!(
+                        effect,
+                        Effect::GlobalEffect(crate::scripts::GlobalEffect::ShowHordeReport {
+                            wave: 10,
+                            ..
+                        })
+                    )
+                })
+                .count()
+        };
+        assert_eq!(reports(tick(&mut director, &world, 0.1)), 1);
+        assert_eq!(reports(tick(&mut director, &world, 0.1)), 0);
+        let mut restored: HordeDirector =
+            serde_json::from_str(&serde_json::to_string(&director).unwrap()).unwrap();
+        assert_eq!(reports(tick(&mut restored, &world, 0.1)), 1);
+        restored.handle_message(
+            EntityId::dead(),
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        );
+        assert_eq!(restored.wave, 11);
+        assert_eq!(restored.phase, Phase::Assault);
+        assert!(restored.quota() > WAVE_COUNTS[9]);
     }
 
     #[test]
