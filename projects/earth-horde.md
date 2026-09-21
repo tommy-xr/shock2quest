@@ -157,3 +157,21 @@ used stations. Skipped waves grant no nanites or cyber modules. Existing
 infestation remains. Jumps require a living player in Earth horde; changing the
 selector alone never rewinds a loaded or running game. The selector resets on
 process restart, while the actual run's wave is saved normally.
+## Intermission supplies
+
+At initial preparation and each rest, two loose supplies and one cache appear
+at random reachable sites on **each** floor. Caches randomly use an ordinary
+TriOptimum crate or a security crate (one-third chance), with the existing hack
+board, nanite/skill requirements, critical failures and ICE Pick support.
+Every crate holds ammo, healing, psi and a nanite/cyber-module bonus.
+
+Unclaimed drops last 90 simulation seconds, including time after you start the
+next wave early. Pause freezes the clock. Collected/held items survive expiry;
+remaining contents disappear with their expired crate. A new intermission
+replaces older unclaimed drops. Saves retain the claim timer, contents, random
+stream and one-time fill state. Fully emptied crates disappear immediately.
+
+Wave attackers choose among sixteen surveyed sites, avoid their previous site
+when alternatives exist, prefer cover, and keep eight units from the player.
+Subway and street spawn arenas remain separate because enemies cannot ride the
+gravshafts. Fresh runs randomize the stream; saves continue it.
