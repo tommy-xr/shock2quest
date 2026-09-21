@@ -30,8 +30,10 @@ The first gameplay integrations are blood impacts and normal/overload EMP
 projectiles. Blood enhances the existing spang and spray attachment; EMP
 enhances the existing projectile riders. Their gameplay selection, damage,
 energy use and collision behavior are unchanged. Missing effect art retains
-the legacy visuals. Material-specific terrain routing and the EMP impact
-explosion are separate follow-ups.
+the legacy visuals. EMP impacts now add an expanding electrical burst, sparks
+and a fading cloud. Spawned EMP explosion hosts and their pulse attachments
+are removed when the burst expires; blast damage and radius remain authored.
+Material-specific terrain routing remains a separate follow-up.
 
 For a repeatable capture, place the free camera at `[8.5, 2, 0]`, looking at
 `[-4, 1.6, 0]`. The six stations run along Z from `5.25` to `-5.25`, spaced
