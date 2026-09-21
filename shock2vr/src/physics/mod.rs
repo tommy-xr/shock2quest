@@ -1,5 +1,7 @@
 mod debug_render_pipeline;
+mod held_recovery;
 mod physics_events;
+pub use held_recovery::{HeldRecovery, HeldRecoveryContext};
 pub(crate) mod util;
 
 use collision::Aabb3;
@@ -2780,6 +2782,8 @@ struct HeldItemDrive {
     /// blow is reported when the weapon arrives rather than every frame it
     /// leans there.
     stopped_on: Option<EntityId>,
+    recovery: held_recovery::RecoveryState,
+    recovered_this_step: bool,
 }
 
 /// What stopped a swing: the limb, and where the cast met it.
@@ -2955,6 +2959,7 @@ pub struct PhysicsWorld {
     /// hit on that limb, and the stop is what prevents the narrow phase from
     /// ever seeing it.
     pending_held_sweep_events: Vec<CollisionEvent>,
+    held_recoveries: Vec<HeldRecovery>,
 
     // Entities already reported by report_nonfinite_rigid_body_state, so a
     // body fed bad state every frame (e.g. NaN animation joints driving a
@@ -3309,6 +3314,8 @@ impl PhysicsWorld {
                     ),
                     seated: false,
                     stopped_on: None,
+                    recovery: held_recovery::RecoveryState::default(),
+                    recovered_this_step: false,
                 },
             );
         }
@@ -3694,6 +3701,10 @@ impl PhysicsWorld {
                 pose.translation.vector += delta;
                 body.set_position(pose, true);
                 body.set_next_kinematic_position(pose);
+            }
+            if let Some(drive) = self.held_item_drives.get_mut(&weapon) {
+                drive.recovery = held_recovery::RecoveryState::default();
+                drive.recovered_this_step = false;
             }
         }
     }
@@ -4376,8 +4387,14 @@ impl PhysicsWorld {
         point: Vector3<f32>,
     ) -> Option<Vector3<f32>> {
         let handle = self.entity_id_to_body.get(&entity_id)?;
-        let target = self.held_item_drives.get(handle)?.target;
-        self.body_velocity_at_point(target, point)
+        let drive = self.held_item_drives.get(handle)?;
+        if drive.recovered_this_step {
+            // Recovery has no hand motion relative to the player, even if
+            // locomotion continues. A zero world velocity would subtract the
+            // moving player's speed and could masquerade as a reverse swing.
+            return Some(self.player_velocity);
+        }
+        self.body_velocity_at_point(drive.target, point)
     }
 
     fn body_velocity_at_point(
@@ -4867,6 +4884,10 @@ impl PhysicsWorld {
             .map(|(weapon, drive)| (*weapon, drive.target))
             .collect::<Vec<_>>();
         for (weapon, target) in pairs {
+            self.held_item_drives
+                .get_mut(&weapon)
+                .unwrap()
+                .recovered_this_step = false;
             // `next_position`, not `position`: the hand pose arrives through
             // `set_next_kinematic_position`, which Rapier only commits during
             // the step. Reading the committed pose would aim at where the hand
@@ -4878,6 +4899,7 @@ impl PhysicsWorld {
             else {
                 continue;
             };
+            let controller_pose = desired;
             if let Some(drive) = self.held_item_drives.get_mut(&weapon) {
                 if let Some(weight) = drive.weight_target {
                     let anchor =
@@ -4922,6 +4944,16 @@ impl PhysicsWorld {
                 sweep_stop = stop;
                 step * fraction
             };
+
+            if self.recover_held_item(
+                weapon,
+                current,
+                desired,
+                controller_pose,
+                allowed + 1.0e-5 < step,
+            ) {
+                continue;
+            }
 
             let mut next = desired;
             next.translation.vector = if distance <= 1.0e-6 {
@@ -5397,6 +5429,7 @@ impl PhysicsWorld {
             player_sensor_intersections: HashSet::new(),
             pending_player_sensor_events: Vec::new(),
             pending_held_sweep_events: Vec::new(),
+            held_recoveries: Vec::new(),
 
             reported_nonfinite_entities: HashSet::new(),
 

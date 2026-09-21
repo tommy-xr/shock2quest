@@ -559,6 +559,16 @@ Desktop/debug VR testing needs
 can set the same knobs through `game.devParams.set("gun_strength_override", 3)`
 and `game.devParams.set("gun_agility_override", 1)`; `reset(key)` restores `0`.
 
+Physical VR weapons recover if an obstruction keeps their grip more than
+0.5 metres from its target for 150 ms. Recovery waits for valid head/controller
+tracking, a held grip, a clear chest-to-grip corridor, and clearance for the
+entire weapon at its intended orientation. A blocked destination stays blocked;
+bring the controller back into clear space. The same weapon returns immediately,
+with a subtle 180 ms cyan particle trail and no teleport-derived melee strike.
+The deterministic regression uses the button post in `debug_interactions`:
+`tools/shock2-sdk/test/physical-held-recovery.e2e.test.ts` snags a rifle, walks
+past the post, and checks recovery and retained weapon state.
+
 **Free camera** detaches the view from the player: the camera stays where it
 was while the pawn stands still, so you can watch the simulation from outside
 without perturbing it. Nothing in the simulation follows it - AI keeps reading

@@ -95,7 +95,7 @@ fn identity_quat() -> Quaternion<f32> {
     Quaternion::new(1.0, 0.0, 0.0, 0.0)
 }
 
-fn world_with_floor() -> (PhysicsWorld, PlayerHandle) {
+pub(super) fn world_with_floor() -> (PhysicsWorld, PlayerHandle) {
     let mut world = PhysicsWorld::new();
     let floor = world.create_static_body(
         Isometry::translation(0.0, -1.0, 0.0),
@@ -114,7 +114,10 @@ fn world_with_floor() -> (PhysicsWorld, PlayerHandle) {
     (world, player)
 }
 
-fn spawn_held_wrench(world: &mut PhysicsWorld, at: Vector3<f32>) -> (EntityId, RigidBodyHandle) {
+pub(super) fn spawn_held_wrench(
+    world: &mut PhysicsWorld,
+    at: Vector3<f32>,
+) -> (EntityId, RigidBodyHandle) {
     let weapon = EntityId::from_inner(2).unwrap();
     let handle = world.add_dynamic(
         weapon,

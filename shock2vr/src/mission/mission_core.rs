@@ -2734,6 +2734,7 @@ pub struct MissionCore {
     pub id_to_physics: HashMap<EntityId, RigidBodyHandle>,
     pub id_to_particle_system: HashMap<EntityId, ParticleSystem>,
     immolate_flames: Option<ParticleSystem>,
+    held_recovery_particles: Vec<ParticleSystem>,
     #[allow(dead_code)]
     pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub template_name_to_template_id: HashMap<String, EntityMetadata>,
@@ -3766,6 +3767,7 @@ impl MissionCore {
             id_to_bitmap,
             id_to_particle_system: HashMap::new(),
             immolate_flames: None,
+            held_recovery_particles: Vec::new(),
             template_name_to_template_id,
             mission_object_name_to_id,
             rains_landed: 0,
@@ -4573,6 +4575,27 @@ impl MissionCore {
                     push_to_climb: game_options.presentation_mode == crate::PresentationMode::Flat,
                 },
             };
+            let held = self.interaction.held_entities();
+            let pending_pawn = self
+                .physics
+                .get_player_next_translation(&self.player_handle);
+            for (hand, entity) in [held.0, held.1].into_iter().enumerate() {
+                let Some(entity) = entity else { continue };
+                let context = self
+                    .interaction
+                    .held_grip_anchor(entity)
+                    .and_then(|anchor| {
+                        physics::HeldRecoveryContext::from_input(
+                            input_context,
+                            hand,
+                            pending_pawn,
+                            new_rotation,
+                            anchor,
+                            time.elapsed.as_secs_f32(),
+                        )
+                    });
+                self.physics.set_held_recovery_context(entity, context);
+            }
             self.physics.rebase_held_targets(
                 &self.player_handle,
                 new_rotation,
@@ -4798,6 +4821,30 @@ impl MissionCore {
         });
         self.psi_drain_trails
             .retain_mut(|trail| trail.advance(time.elapsed));
+        self.held_recovery_particles.retain_mut(|particles| {
+            particles.update(time.elapsed, Matrix4::identity());
+            !particles.is_done()
+        });
+        // The weapon arrives immediately. A few faint motes explain the jump
+        // without animating a collidable gun through the intervening wall.
+        for recovery in self.physics.take_held_recoveries() {
+            for i in 0..6 {
+                let start = recovery.from + (recovery.to - recovery.from) * (i as f32 / 6.0);
+                let velocity = (recovery.to - start) / 0.18;
+                let mut particles = ParticleSystem::new()
+                    .with_one_shot(true)
+                    .with_num_particles(1)
+                    .with_color(vec3(0.2, 0.8, 1.0))
+                    .with_alpha(0.45)
+                    .with_particle_size(0.045, 0.045)
+                    .with_lifetime(0.18, 0.18)
+                    .with_fade_time(0.18)
+                    .with_launch_bounding_box(start, start)
+                    .with_velocity(velocity, velocity);
+                particles.update(std::time::Duration::ZERO, Matrix4::identity());
+                self.held_recovery_particles.push(particles);
+            }
+        }
         self.debug_lines.iter_mut().for_each(|p| {
             p.remaining_life_in_seconds -= time.elapsed.as_secs_f32();
         });
@@ -13511,6 +13558,11 @@ impl MissionCore {
                 let mut scene_obj = SceneObject::new(mat, Box::new(quad::create()));
                 scene_obj.set_transform(xform);
                 scene.push(scene_obj);
+            }
+        }
+        if options.render_particles {
+            for particles in &self.held_recovery_particles {
+                scene.extend(particles.render());
             }
         }
         if let Some(flames) = &self.immolate_flames {
