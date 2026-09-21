@@ -450,6 +450,16 @@ Declarations use `Category::float(...)` / `Category::bool(...)`, or
 `float_locked(...)` / `bool_locked(...)`; locking only changes menu placement.
 `GET /v1/dev-params` also reports each parameter's category label and locked flag.
 
+#### Material effects gallery (`debug_nd_materials`)
+
+Run `cargo dr --mission debug_nd_materials --vr` for a walkable gallery of
+metal sparks, plasticrete dust/chips, glass shards, blood, goo, and electrical
+arcs/glow. Effects repeat automatically; metal and plasticrete decal samples
+sit below their stations. Omit `--vr` for flatscreen, or use `cargo dbgr` for
+headless capture. These are preview effects using installed remaster art;
+campaign impacts and extra material passes are separate work. See
+[the gallery notes](projects/debug-nd-materials.md).
+
 #### Glove fit check (`debug_gloves`)
 
 Open `debug_gloves` from the Developer scene list. On Quest it requests room

@@ -34,6 +34,7 @@ pub mod debug_ladder;
 pub mod debug_map;
 pub mod debug_melee;
 pub mod debug_minimal;
+pub mod debug_nd_materials;
 pub mod debug_particles;
 pub mod debug_protocol_droid;
 pub mod debug_psi;
@@ -190,6 +191,10 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     }),
     ("debug_ragdoll", DebugRagdollScene::new),
     ("debug_particles", DebugParticlesScene::new),
+    (
+        "debug_nd_materials",
+        debug_nd_materials::create_debug_nd_materials_scene,
+    ),
     ("debug_hitbox", DebugHitboxScene::new),
 ];
 
@@ -617,7 +622,12 @@ mod tests {
             );
         }
         // A few the docs promise by name, so a rename shows up here.
-        for expected in ["debug_ragdoll", "debug_hud", "debug_weapons"] {
+        for expected in [
+            "debug_ragdoll",
+            "debug_hud",
+            "debug_weapons",
+            "debug_nd_materials",
+        ] {
             assert!(names.contains(&expected), "'{expected}' is missing");
         }
         // Nothing else answers to a debug name: an unknown one is not a scene,
