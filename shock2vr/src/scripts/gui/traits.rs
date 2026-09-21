@@ -121,14 +121,14 @@ const FALLBACK_HEADER_LABEL: &str = "Choose one upgrade.";
 const FALLBACK_USED_LABEL: &str = "Your OS has already been upgraded at this unit.";
 const UNAVAILABLE_LABEL: &str = "Upgrade unavailable in this build.";
 
-/// Preloaded trait-panel strings (`TRAITS.STR` descriptions plus the MISC.STR
-/// header / used-machine lines), added as a world unique at mission load so
+/// Classic-rules descriptions plus the MISC.STR header / used-machine lines,
+/// added as a world unique at mission load so
 /// the (`AssetCache`-less) `TraitGui` can show them - the `ElevatorContext`
 /// pattern.
 #[derive(shipyard::Unique)]
 pub struct TraitsContext {
-    /// `Trait1..16` description strings; index 0 = trait id 1. Falls back to
-    /// the bare trait name when TRAITS.STR is absent.
+    /// Descriptions of the supported classic rules; index 0 = trait id 1.
+    /// Community Patch additions must not leak into these promises.
     pub descriptions: [String; 16],
     /// MISC.STR `TraitHeader` ("Choose one upgrade."), drawn atop the panel.
     pub header_label: String,
@@ -138,17 +138,27 @@ pub struct TraitsContext {
 
 impl TraitsContext {
     pub fn load(asset_cache: &mut AssetCache) -> TraitsContext {
-        let strings = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, "traits.str");
-        let descriptions = std::array::from_fn(|i| {
-            if (i + 1) as u8 == TRAIT_PACK_RAT {
-                return "Pack-Rat: Adds three extra inventory slots.".to_owned();
-            }
-            let key = format!("trait{}", i + 1);
-            strings
-                .as_ref()
-                .and_then(|s| s.get(&key).cloned())
-                .unwrap_or_else(|| trait_name((i + 1) as u8).to_owned())
-        });
+        // The mounted Community Patch replaces TRAITS.STR with promises of
+        // additional mechanics. This port targets classic retail: keep the
+        // player-facing descriptions tied to its implemented rules instead.
+        let descriptions = [
+            "Strong Metabolism: Radiation damage reduced by 25%; toxin damage reduced by 50%.",
+            "Pharmo-Friendly: 20% more benefit from healing, psi and hazard-treatment items.",
+            "Pack-Rat: Adds three extra inventory slots.",
+            "Speedy: Movement speed increased by 15%.",
+            "Sharpshooter: Ranged, non-psionic weapons deal 15% more damage.",
+            "Naturally Able: One-time bonus of 8 cyber modules.",
+            "Cybernetically Enhanced: Allows two implants of different types at once.",
+            "Tank: Adds 5 maximum and current hit points.",
+            "Lethal Weapon: Melee attacks deal 35% more damage.",
+            "Security Expert: +2 Hack at security computers. Requires at least Hack 1.",
+            "Smasher: Hold the trigger to charge a stronger overhand melee attack.",
+            "Cyber-Assimilation: Destroyed robots drop repair modules that heal 15 hit points.",
+            "Replicator Expert: Replicator purchases cost 20% less.",
+            "Power Psi: Psionic burnout no longer damages you. Failed casts still spend psi points.",
+            "Tinker: Weapon modification nanite costs reduced by 50%.",
+            "Spatially Aware: The entire map of each sublevel is revealed.",
+        ].map(str::to_owned);
         let misc = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, "misc.str");
         let misc_lookup = |key: &str, fallback: &str| -> String {
             misc.as_ref()
@@ -384,7 +394,7 @@ pub fn live_effect_note(trait_id: u8) -> Option<&'static str> {
         TRAIT_TANK => Some("+5 max hit points"),
         TRAIT_NATURALLY_ABLE => Some("+8 cyber modules"),
         TRAIT_PACK_RAT => Some("+3 pack slots"),
-        TRAIT_PHARMO_FRIENDLY => Some("20% healing-item bonus"),
+        TRAIT_PHARMO_FRIENDLY => Some("20% healing, psi and hazard-item bonus"),
         TRAIT_REPLICATOR_EXPERT => Some("20% replicator discount"),
         _ => None,
     }

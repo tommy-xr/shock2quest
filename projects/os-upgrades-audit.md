@@ -52,7 +52,7 @@ Suggested sequence: fix text/provenance, then Power Psi and Speedy, Cyber-Assimi
 
 | Upgrade | Current effect | Audit finding |
 | --- | --- | --- |
-| Strong Metabolism | Radiation/toxin consumer applies -25% radiation / -50% toxin | Classic and SCP text promise -25% for both. SCP also promises immunity to harmful recreational-substance effects. Resolve the toxin discrepancy against authored behavior. |
+| Strong Metabolism | Radiation/toxin consumer applies -25% radiation / -50% toxin | Classic and SCP text promise -25% for both. SCP also promises immunity to harmful recreational-substance effects. Follow-up: `projects/radiation-toxins.md` records original September 1999 OSM disassembly proving toxin ×0.5; retain that actual retail behavior and describe it explicitly. |
 | Pharmo-Friendly | Healing/hazard item consumers apply a 20% bonus | `PsiKitScript` and `apply_psi_kit_use` do not apply it to psi hypos, despite classic text saying all hypos. SCP additionally promises faster healing. |
 | Pack-Rat | Three inventory slots and an extra VR holster | Deliberate port extension; custom description reflects it. |
 | Naturally Able | Eight modules, once | Matches classic text. Mounted SCP text promises twenty. |
