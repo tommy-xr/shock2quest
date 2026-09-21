@@ -191,8 +191,8 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 | `P` | `PathfindingTestCycle` | set start → set goal → show path |
 | `Alt+B` | `DebugCycleWeapon` | spawns and wields the next weapon (unlike the number row) |
 | `Alt+X` | `EjectClip` | magazine back to the backpack reserve; no Quest button - in VR it is the settings MFD's UNLOAD |
-| `B` (or `T`) / `Y` | `CycleAmmo` / `CyclePsiPower` | no Quest binding: a clip is inserted by hand, and the psi MFD's stick navigation steps the power |
-| - | `SelectPsiPower` | opens the psi power selection MFD; flat clicks the readout's power badge instead, Quest: the amp hand's *upper* face button |
+| `B` (or `T`) / `Y` | `CycleAmmo` / `CyclePsiPower` | no Quest binding: a clip is inserted by hand; the amp selector uses its hand's stick |
+| - | `SelectPsiPower` | opens the lightweight amp selector in VR world mode; flat and the cyber interface retain the power MFD |
 | `F` | `CycleGunSetting` | switch the wielded gun's fire mode (e.g. NORM / BURST); Quest: the gun hand's *upper* face button |
 | `U` | `ReadLastUnreadLog` | on Quest a free hand's *upper* face button resolves to this - see below |
 | `M` | `ToggleMap` | flat only |
@@ -287,7 +287,7 @@ that hand holds (`shock2vr/src/hand_buttons.rs`):
 | nothing, a melee weapon, or any other item | `Jump` | `ReadLastUnreadLog` |
 | a gun | `Jump` | tap/release switches that gun's fire mode; hold ~0.5 s drops its loaded clip, with progress on its cuff meter |
 | an ammo clip | `Jump` | swap with the next compatible carried ammo type, returning the original clip to the backpack |
-| the psi amp | `Jump` | `SelectPsiPower` - the power selection MFD, in the cyber interface |
+| the psi amp | `Jump` | tap swaps current/alternate; hold 0.5 s opens its power carousel |
 
 The lower button is jump unconditionally: it is the one control a player reaches
 for with both hands full, so a held weapon must not take it away. Only the upper
@@ -330,24 +330,27 @@ bottom readouts) that opens the pause menu directly - drawn and hit-tested
 through the same readout-control list, so it is there in both presentations
 (flat's `Esc` still works too).
 
-#### The psi selection MFD captures a thumbstick
+#### Amp quick selection
 
-While the psi power selection MFD is docked - opened from the flat readout's
-power badge, or from the amp hand's upper face button in VR - **one** thumbstick
-is captured: up/down step the tier, left/right step the power inside it, and
-that stick stops driving the player until the panel closes.
+Each amp saves its own current and alternate power. Tap its upper face button
+(right B / left Y) to swap them. Hold for half a second to open its lightweight
+hologram above the amp; releasing that opening hold leaves it open. Up to three
+curved rows show purchased powers in adjacent trained tiers. Empty tiers and
+unpurchased powers are hidden. The highlighted power sits forward, and icons
+rotate through a fixed focal point as you browse (a 0.25 s eased transition).
+Corner C/A badges identify the saved current/alternate powers. Flick the **amp hand's** stick up/down to
+change tiers, or left/right to browse trained powers in that tier. That stick
+stops driving locomotion while browsing; the other hand remains available.
 
-Which stick is the one the player is not already using to hold or aim the
-weapon, so it differs by presentation:
+B/Y or that amp's trigger confirms and closes. Choosing a different power makes
+the previous current power the alternate; choosing the same power preserves the
+pair. Confirmation consumes the input through release and cannot also cast or
+swap. Dropping the amp, death, tracking loss, the cyber interface or pause cancels
+browsing. The game keeps running while the lightweight selector is open.
 
-| | captured | still drives |
-| --- | --- | --- |
-| flat | the **left** stick (arrow-key turn) | `WASD` still walks |
-| VR | the stick of the hand **not** holding the amp | the amp hand keeps aiming |
-
-Steps are edge-triggered, so a held stick moves one place, and they are the same
-`StepPsiSelection` the readout's four arrows emit - the selection applies live,
-and the panel pages to whatever tier it lands on.
+The full psi MFD is still available inside the cyber interface, with its existing
+pointer controls and thumbstick navigation. Its readout resolves the target amp's
+selection rather than a shared setting.
 
 ### Campaign difficulty
 

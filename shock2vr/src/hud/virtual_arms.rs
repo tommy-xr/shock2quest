@@ -224,13 +224,7 @@ pub(crate) fn get_weapon_psi_power(
         return None;
     }
 
-    let powers = world
-        .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
-        .ok()?;
-    let selection = world
-        .borrow::<UniqueView<crate::psi::PsiPowerSelection>>()
-        .ok()?;
-    let power = powers.0.get(selection.index)?;
+    let power = crate::psi_amp_selection::selected_power(world, weapon?)?;
     let name = power
         .display_name
         .clone()

@@ -13,6 +13,8 @@ pub mod install;
 pub mod inventory;
 mod melee_charge_visual;
 pub mod message_trace;
+pub mod psi_amp_selection;
+mod psi_carousel;
 pub mod save_load;
 pub mod scenes;
 pub mod time;
@@ -903,13 +905,8 @@ impl Game {
                 .map(|radiation| radiation.level())
                 .unwrap_or(0.0),
             selected_psi_power: (|| {
-                let powers = world
-                    .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
-                    .ok()?;
-                let selection = world
-                    .borrow::<UniqueView<crate::psi::PsiPowerSelection>>()
-                    .ok()?;
-                powers.0.get(selection.index).map(|p| p.name.clone())
+                let amp = crate::psi_amp_selection::target(world)?;
+                crate::psi_amp_selection::selected_power(world, amp).map(|p| p.name)
             })(),
             psi_charge: wielded.and_then(|weapon| {
                 use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
@@ -1552,6 +1549,7 @@ impl Game {
         // close the menu again.
         self.update_pause_menu(time, input_context, actions);
         if self.pause_menu.suspends_scene() {
+            self.active_game_scene.cancel_transient_input();
             self.weapon_buttons.cancel(self.active_game_scene.world());
             // Paused: the scene is not updated (nothing simulates, and
             // `VirtualHand` is never advanced, so hands are inert but keep

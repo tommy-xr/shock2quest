@@ -391,8 +391,9 @@ pub enum MessagePayload {
     },
 
     // VR Interactions
-    TriggerPull,    // player started pulling the trigger
-    TriggerRelease, // player stopped pulling the trigger
+    CancelPsiCharge, // selector takes trigger ownership without casting
+    TriggerPull,     // player started pulling the trigger
+    TriggerRelease,  // player stopped pulling the trigger
     Hold,
     Drop,
 

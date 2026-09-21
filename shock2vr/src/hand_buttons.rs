@@ -109,9 +109,9 @@ pub fn resolve_hand_button(
             // The gun hand's own handling control: its fire mode.
             HeldKind::Gun => InputAction::CycleGunSetting,
             HeldKind::Ammo => InputAction::CycleAmmo,
-            // The amp hand's own control: the power selection MFD, where a
-            // power is *chosen* from a described grid. It names no hand -
-            // there is one psi selection, not one per amp.
+            // Fallback for direct hand-button effects. Normal controller input
+            // is consumed by WeaponButtons: tap swaps this amp's pair; hold
+            // opens its carousel. The cyber interface retains its MFD route.
             HeldKind::PsiAmp => InputAction::SelectPsiPower,
         }),
     }

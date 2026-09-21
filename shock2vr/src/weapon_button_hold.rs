@@ -30,6 +30,7 @@ impl EjectProgress {
 
 #[derive(Default)]
 struct Press {
+    epoch: u64,
     weapon: Option<EntityId>,
     timer: MenuHold,
 }
@@ -89,11 +90,17 @@ impl WeaponButtons {
         .into_iter()
         .enumerate()
         {
+            let kind = crate::hand_buttons::held_kind_in_hand(world, hand);
             let gun = (allowed
                 && !(free_camera && i == 1)
-                && crate::hand_buttons::held_kind_in_hand(world, hand) == HeldKind::Gun)
-                .then(|| crate::wielded_weapon::weapon_in_hand(world, hand))
-                .flatten();
+                && matches!(kind, HeldKind::Gun | HeldKind::PsiAmp))
+            .then(|| crate::wielded_weapon::weapon_in_hand(world, hand))
+            .flatten();
+            if actions.just_triggered(action) {
+                self.presses[i].epoch = gun
+                    .map(|id| crate::psi_carousel::input_epoch(world, id))
+                    .unwrap_or(0);
+            }
             let result = self.presses[i].update(
                 gun,
                 actions.just_triggered(action),
@@ -103,11 +110,22 @@ impl WeaponButtons {
             if let Some(weapon) = gun {
                 actions.consume_trigger(action);
                 match result {
-                    MenuPress::Short | MenuPress::Long => effects.push(Effect::HeldGunButton {
-                        hand,
-                        weapon,
-                        long_press: result == MenuPress::Long,
-                    }),
+                    MenuPress::Short | MenuPress::Long => {
+                        effects.push(if crate::wielded_weapon::is_psi_amp(world, weapon) {
+                            Effect::PsiAmpButton {
+                                hand,
+                                amp: weapon,
+                                epoch: self.presses[i].epoch,
+                                long_press: result == MenuPress::Long,
+                            }
+                        } else {
+                            Effect::HeldGunButton {
+                                hand,
+                                weapon,
+                                long_press: result == MenuPress::Long,
+                            }
+                        })
+                    }
                     MenuPress::None => {}
                 }
                 if crate::mission::reload::world_clip_offer(world, weapon).is_some()

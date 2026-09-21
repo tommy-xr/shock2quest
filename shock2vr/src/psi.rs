@@ -24,7 +24,7 @@ pub const POWERS_PER_TIER: i32 = 8;
 
 /// `Projected Cryokinesis` - the power every trained OSA agent starts with,
 /// and the default selection.
-const CRYOKINESIS_TEMPLATE_ID: i32 = -1143;
+pub(crate) const CRYOKINESIS_TEMPLATE_ID: i32 = -1143;
 
 /// The `Psi Powers` meta-prop root - every psi power template descends from
 /// it (`MetaProperty → Psi Powers → Level 1..5 → power`).

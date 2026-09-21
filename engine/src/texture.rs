@@ -151,6 +151,9 @@ pub struct TextureOptions {
     /// therefore drops out entirely, which is what makes a grid bitmap read as
     /// a hologram over the world instead of a black panel.
     pub luminance_alpha_tint: Option<[u8; 3]>,
+    /// Luminance mapped to transparent/opaque when tinting. Defaults preserve
+    /// the source contrast; a narrower range removes a dim icon background.
+    pub luminance_alpha_range: [u8; 2],
     pub filter: TextureFilter,
 }
 
@@ -160,6 +163,7 @@ impl Default for TextureOptions {
             wrap: true,
             transparent_index_0: false,
             luminance_alpha_tint: None,
+            luminance_alpha_range: [0, 255],
             filter: TextureFilter::Linear,
         }
     }

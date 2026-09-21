@@ -242,6 +242,10 @@ impl DebugScene {
 }
 
 impl GameScene for DebugScene {
+    fn cancel_transient_input(&mut self) {
+        self.core.cancel_transient_input();
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }
@@ -452,6 +456,10 @@ impl<H> HookedDebugScene<H> {
 }
 
 impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
+    fn cancel_transient_input(&mut self) {
+        self.core.cancel_transient_input();
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }
