@@ -1,6 +1,7 @@
 extern crate gl;
 use std::rc::Rc;
 
+use super::incidence::{IncidencePass, IncidenceUniforms};
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
@@ -202,11 +203,12 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
                 finalColor += calculateSpotlight(i, worldPos, normal, texColor.rgb);
             }
 
-            fragColor = vec4(finalColor, texColor.a * (1.0 - transparency));
+            fragColor = applyIncidence(vec4(finalColor, texColor.a * (1.0 - transparency)), texColor, worldPos, worldNormal);
         }
 "#;
 
 struct UnifiedUniforms {
+    incidence: IncidenceUniforms,
     // Basic transformation matrices
     world_loc: i32,
     view_loc: i32,
@@ -239,6 +241,7 @@ static UNIFIED_SHADER_PROGRAM: OnceCell<(ShaderProgram, UnifiedUniforms)> = Once
 
 #[derive(Clone)]
 pub struct SkinnedMaterial {
+    incidence: Option<IncidencePass>,
     silhouette_color: Option<Vector3<f32>>,
     has_initialized: bool,
     diffuse_texture: Rc<dyn TextureTrait>,
@@ -259,11 +262,12 @@ impl SkinnedMaterial {
     pub fn silhouette(&self, color: Vector3<f32>) -> Box<dyn Material> {
         let mut material = self.clone();
         material.silhouette_color = Some(color);
+        material.incidence = None;
         Box::new(material)
     }
 
     pub fn is_transparent(&self) -> bool {
-        self.transparency > 0.01
+        self.incidence.is_some() || self.transparency > 0.01
     }
 
     pub fn set_transparency_override(&mut self, transparency: f32) {
@@ -292,6 +296,9 @@ impl SkinnedMaterial {
             .bind1(render_context);
         unsafe {
             gl::UseProgram(shader_program.gl_id);
+            uniforms
+                .incidence
+                .bind(self.incidence.as_ref(), render_context, view_matrix);
 
             let projection = render_context.projection_matrix;
 
@@ -443,7 +450,11 @@ impl Material for SkinnedMaterial {
             );
 
             let fragment_shader = crate::shader::build(
-                UNIFIED_FRAGMENT_SHADER_SOURCE,
+                &format!(
+                    "{}\n{}",
+                    super::incidence::GLSL,
+                    UNIFIED_FRAGMENT_SHADER_SOURCE
+                ),
                 crate::shader::ShaderType::Fragment,
                 is_opengl_es,
             );
@@ -470,6 +481,7 @@ impl Material for SkinnedMaterial {
                     gl::GetUniformLocation(shader.gl_id, c_str!("bone_matrices[0]").as_ptr());
 
                 let uniforms = UnifiedUniforms {
+                    incidence: IncidenceUniforms::new(shader.gl_id),
                     // Basic transformation matrices
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
                     view_loc: gl::GetUniformLocation(shader.gl_id, c_str!("view").as_ptr()),
@@ -728,6 +740,24 @@ impl SkinnedMaterial {
         )
     }
 
+    /// Use the normal skinning palette and lighting for a specular overlay.
+    pub fn create_incidence(
+        texture: Rc<dyn TextureTrait>,
+        pass: IncidencePass,
+    ) -> Box<dyn Material> {
+        Box::new(Self {
+            incidence: Some(pass),
+            silhouette_color: None,
+            diffuse_texture: texture,
+            has_initialized: false,
+            emissivity: 0.0,
+            transparency: 0.0,
+            base_transparency: 0.0,
+            emissive_mask: None,
+            emissive_tint: Vector3::new(0.0, 0.0, 0.0),
+        })
+    }
+
     fn build(
         diffuse_texture: Rc<dyn TextureTrait>,
         emissivity: f32,
@@ -736,6 +766,7 @@ impl SkinnedMaterial {
         emissive_tint: Vector3<f32>,
     ) -> Box<dyn Material> {
         Box::new(SkinnedMaterial {
+            incidence: None,
             silhouette_color: None,
             diffuse_texture,
             has_initialized: false,

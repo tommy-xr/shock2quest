@@ -49,3 +49,10 @@ around the mark to inspect the changing highlight; its geometry, UVs and depth
 bias are shared with the base decal. Shared material includes are resolved
 before selecting supported passes. This is a targeted shine implementation,
 not general multi-pass material parity or dynamic light spill.
+
+Egg shells and grubs now consume their dedicated specular-map incidence
+passes as well. Inspect them in `debug_annelid`: approach the Grub pod to hatch
+a crawling grub. Overlays share the base geometry and skinning palette, use
+the authored specular masks and tint, and preserve repeated passes. The
+separate membrane material and shared diffuse fill/rim passes remain on their
+existing rendering paths. Missing overlay art leaves the base material intact.

@@ -13817,7 +13817,9 @@ impl MissionCore {
                         xformed_obj.set_depth_write(false);
                         xformed_obj.set_transparency(Some(1.0 - alpha));
                     } else {
-                        xformed_obj.set_depth_write(true);
+                        // The fresh clone already carries the material pass's
+                        // authored depth policy (e.g. a specular overlay must
+                        // not write depth). Only entity overrides disable it.
                         xformed_obj.set_skinned_transparency(None);
                     }
                     if invisible_items.contains(entity_id) {

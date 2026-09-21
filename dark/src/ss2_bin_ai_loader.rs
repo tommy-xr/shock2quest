@@ -492,7 +492,7 @@ pub fn to_scene_objects(
         };
 
         let material = RefCell::new(engine::scene::SkinnedMaterial::create(
-            diffuse_texture,
+            diffuse_texture.clone(),
             0.0,
             0.0,
         ));
@@ -501,6 +501,13 @@ pub fn to_scene_objects(
         let skinning_data = Skeleton::expand_skinning_palette(&skeleton.get_transforms(), skeleton);
         scene_object.set_skinning_palette(skinning_data);
         scene_objects.push(scene_object);
+        crate::util::append_incidence_overlays(
+            &mut scene_objects,
+            asset_cache,
+            &material_name,
+            diffuse_texture,
+            true,
+        );
     }
 
     trace!("ai_mesh produced {} scene objects", scene_objects.len());
@@ -771,7 +778,11 @@ pub fn pmnm_to_scene_objects(
         };
 
         let diffuse: Rc<dyn TextureTrait> = texture;
-        let material = RefCell::new(engine::scene::SkinnedMaterial::create(diffuse, 0.0, 0.0));
+        let material = RefCell::new(engine::scene::SkinnedMaterial::create(
+            diffuse.clone(),
+            0.0,
+            0.0,
+        ));
         // No palette is baked here: `expand_skinning_palette` assumes joint-local
         // vertices and would double-apply each joint's rest transform to a
         // bind-space mesh. `Model::from_ai_bin` bakes the correct rest palette
@@ -779,6 +790,13 @@ pub fn pmnm_to_scene_objects(
         scene_objects.push(engine::scene::scene_object::SceneObject::create(
             material, geometry,
         ));
+        crate::util::append_incidence_overlays(
+            &mut scene_objects,
+            asset_cache,
+            &material_name,
+            diffuse,
+            true,
+        );
     }
     scene_objects
 }
