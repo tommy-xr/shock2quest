@@ -138,7 +138,12 @@ test("two amps retain independent pairs across a level transition and save/load"
   const beforeCast = (await game.info()).player.psi_points;
   await game.input.set("right_hand.trigger", 1);
   await game.step({frames: 10});
-  assert.ok((await game.info()).player.psi_points < beforeCast, "right trigger rearms and casts while the left menu remains open");
+  // Overloadable powers now cast on trigger release in VR too.
+  await game.input.set("right_hand.trigger", 0);
+  await game.step({frames: 2});
+  const afterCast = (await game.info()).player.psi_points;
+  assert.ok(beforeCast !== null && afterCast !== null, "psi readings are available");
+  assert.ok(afterCast < beforeCast, "right trigger rearms and casts while the left menu remains open");
   assert.ok((await state(game, b.entity_id)).menu);
   await game.input.set("right_hand.trigger", 0);
   await game.step({frames: 2});

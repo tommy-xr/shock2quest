@@ -850,6 +850,7 @@ fn amp_cast_flashes(world: &World, amp_entity: EntityId) -> Vec<Effect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::psi::{GlobalPsiPowers, PsiPowerSelection};
     use crate::quest_info::QuestInfo;
 
     #[test]
