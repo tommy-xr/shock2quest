@@ -1211,7 +1211,8 @@ impl ScriptWorld {
             "statboostimplant" => Box::new(UnimplementedScript::new(&script_name)),
 
             // earth:
-            "comestible" => Box::new(Comestible::new()),
+            "comestible" => Box::new(Comestible::new(1)),
+            "cheeseborger" => Box::new(Comestible::new(15)),
             "liquor" => Box::new(NoopScript::new()),
 
             // Not implemented - new medsci1 ones:

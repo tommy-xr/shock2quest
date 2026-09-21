@@ -800,6 +800,7 @@ enum PsiKitUseOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ComestibleUseOutcome {
     NotUsed,
+    DecrementedStack,
     Consumed,
 }
 
@@ -1878,6 +1879,13 @@ fn apply_comestible_use(
         return ComestibleUseOutcome::NotUsed;
     }
 
+    let stack_count = world
+        .borrow::<View<dark::properties::PropStackCount>>()
+        .ok()
+        .and_then(|counts| counts.get(entity_id).ok().map(|count| count.0));
+    if stack_count.is_some_and(|count| count <= 0) {
+        return ComestibleUseOutcome::NotUsed;
+    }
     let player = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
     let maximum = world
         .borrow::<View<dark::properties::PropMaxHitPoints>>()
@@ -1898,7 +1906,15 @@ fn apply_comestible_use(
         .hit_points
         .saturating_add(hit_points)
         .clamp(0, maximum.max(0));
-    ComestibleUseOutcome::Consumed
+    if stack_count.is_some_and(|count| count > 1) {
+        let mut counts = world
+            .borrow::<ViewMut<dark::properties::PropStackCount>>()
+            .unwrap();
+        (&mut counts).get(entity_id).unwrap().0 -= 1;
+        ComestibleUseOutcome::DecrementedStack
+    } else {
+        ComestibleUseOutcome::Consumed
+    }
 }
 
 /// First-person player-melee idle clip (motiondb ActorType 1, `+plyrmelee:0`),
@@ -9431,9 +9447,8 @@ impl MissionCore {
                     // live world snapshot. A duplicate effect for an already
                     // destroyed object safely no-ops; full health still
                     // consumes, matching the retail script.
-                    if apply_comestible_use(&self.world, entity_id, hit_points)
-                        == ComestibleUseOutcome::NotUsed
-                    {
+                    let outcome = apply_comestible_use(&self.world, entity_id, hit_points);
+                    if outcome == ComestibleUseOutcome::NotUsed {
                         continue;
                     }
 
@@ -9444,7 +9459,9 @@ impl MissionCore {
                         vec![],
                         AudioHandle::new(),
                     );
-                    self.destroy_entity(entity_id);
+                    if outcome == ComestibleUseOutcome::Consumed {
+                        self.destroy_entity(entity_id);
+                    }
                     if !matches!(sound, Effect::NoEffect) {
                         effects.push_front(sound);
                     }
@@ -17903,6 +17920,28 @@ mod comestible_use_tests {
             .get(player)
             .unwrap()
             .hit_points
+    }
+
+    #[test]
+    fn diagnostic_module_stack_uses_one_and_caps_the_fifteen_hp_heal() {
+        let (mut world, player, module) = world_with_player(10, true);
+        world.add_component(module, dark::properties::PropStackCount(2));
+        apply_comestible_use(&world, module, 15);
+        assert_eq!(player_hit_points(&world, player), 25);
+        assert_eq!(
+            world
+                .borrow::<View<dark::properties::PropStackCount>>()
+                .unwrap()
+                .get(module)
+                .unwrap()
+                .0,
+            1
+        );
+        assert_eq!(
+            apply_comestible_use(&world, module, 15),
+            ComestibleUseOutcome::Consumed
+        );
+        assert_eq!(player_hit_points(&world, player), 30);
     }
 
     #[test]
