@@ -323,7 +323,11 @@ pub struct RuntimePropPsiCharge {
 
 /// Presentation state only; the charging script owns the transient attack.
 #[derive(Component, Clone, Copy, Debug)]
-pub struct RuntimePropMeleeCharge(pub f32);
+pub struct RuntimePropMeleeCharge {
+    pub fraction: f32,
+    /// None once released, even while READY remains armed for one strike.
+    pub held_seconds: Option<f32>,
+}
 
 /// Bonus belonging to the accepted flat animation, immune to trigger chatter.
 #[derive(Component, Clone, Copy, Debug)]

@@ -280,7 +280,7 @@ impl AmmoReadout {
                 world
                     .borrow::<View<crate::runtime_props::RuntimePropMeleeCharge>>()
                     .ok()
-                    .and_then(|v| v.get(w).ok().map(|c| c.0))
+                    .and_then(|v| v.get(w).ok().map(|c| c.fraction))
             }),
             eject_progress: weapon
                 .and_then(|w| crate::weapon_button_hold::EjectProgress::for_weapon(world, w)),
@@ -708,7 +708,10 @@ mod tests {
     #[test]
     fn melee_charge_is_visible_without_gun_ammo_and_stays_in_its_hand() {
         let mut world = World::new();
-        let melee = world.add_entity(crate::runtime_props::RuntimePropMeleeCharge(0.5));
+        let melee = world.add_entity(crate::runtime_props::RuntimePropMeleeCharge {
+            fraction: 0.5,
+            held_seconds: Some(0.19),
+        });
         let other = world.add_entity(());
         let charge = AmmoReadout::for_weapon(&world, Some(melee), false);
         assert!(!charge.is_empty());

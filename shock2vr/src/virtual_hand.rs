@@ -533,7 +533,9 @@ impl VirtualHand {
             .unwrap_or_default();
 
         let invisibility = crate::psi_invisibility::transparency(world);
+        let charge_transform = crate::melee_charge_visual::transform(world, self.get_held_entity());
         for object in &mut scene_objects {
+            object.set_transform(charge_transform * object.get_transform());
             crate::psi_invisibility::apply(object, invisibility);
         }
 
