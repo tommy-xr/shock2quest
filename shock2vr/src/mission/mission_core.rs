@@ -13732,6 +13732,9 @@ impl MissionCore {
                     Rc::new(crate::object_lighting::lights_for_position(
                         spatial,
                         xform.w.truncate(),
+                        self.animated_lightmaps
+                            .as_ref()
+                            .map(|c| c.light_intensities()),
                     ))
                 });
 

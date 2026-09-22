@@ -73,11 +73,15 @@ impl AnimatedLightmapController {
             regions = regions.len(),
             "prepared switchable lightmaps"
         );
+        // The atlas starts with static pixels only. Animated lights without
+        // an instantiated property (e.g. a difficulty-filtered owner) stay off
+        // for objects too, rather than falling back to static full brightness.
+        let intensities = light_to_regions.keys().map(|&id| (id, 0.0)).collect();
         Self {
             texture,
             regions,
             light_to_regions,
-            intensities: HashMap::new(),
+            intensities,
             compose_scratch: Vec::new(),
         }
     }
@@ -85,19 +89,29 @@ impl AnimatedLightmapController {
     /// Queue one authored light value. Repeated effects in a script batch mark
     /// rectangles only; [`flush`](Self::flush) recomposes each at most once.
     pub fn set_light_intensity(&mut self, light_number: i16, intensity: f32) -> bool {
-        let Some(affected_regions) = self.light_to_regions.get(&light_number) else {
+        if light_number < 0 || !intensity.is_finite() {
             return false;
-        };
+        }
         let intensity = intensity.clamp(0.0, 1.0);
         if self.intensities.get(&light_number).copied() == Some(intensity) {
             return true;
         }
 
         self.intensities.insert(light_number, intensity);
-        for &region_index in affected_regions {
-            self.regions[region_index].dirty = true;
+        if let Some(affected_regions) = self.light_to_regions.get(&light_number) {
+            for &region_index in affected_regions {
+                self.regions[region_index].dirty = true;
+            }
         }
         true
+    }
+
+    /// The same normalized values drive object lights and wall lightmaps.
+    /// Keep values even for lights without an atlas region: their authored
+    /// object-light entry can still reach a prop. Missing entries are static
+    /// lights, whose table brightness needs no multiplier.
+    pub fn light_intensities(&self) -> &HashMap<i16, f32> {
+        &self.intensities
     }
 
     /// Upload every dirty rectangle. Cost scales with the authored affected

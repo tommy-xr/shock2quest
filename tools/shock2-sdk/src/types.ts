@@ -437,6 +437,14 @@ export interface PhysicsBodyListResult {
  * One object as submitted to the renderer on the last frame
  * (GET /v1/scene). Mirrors `commands::SceneObjectSummary`.
  */
+/** Authored object lights before scene/hand lights are merged for drawing. */
+export interface ObjectLightingSummary {
+  light_count: number;
+  /** Received energy at the origin, ignoring normals and spotlight coverage. */
+  received: number;
+  ambient: Vec3;
+}
+
 export interface SceneObjectSummary {
   entity_id: number | null;
   name: string | null;
@@ -458,6 +466,8 @@ export interface SceneObjectSummary {
   clear_depth: boolean;
   /** Front-face winding used for culling, or null when double-sided. */
   backface_culling: string | null;
+  /** Null unless experimental object lighting resolved a set for this object. */
+  lighting?: ObjectLightingSummary | null;
 }
 
 export interface SceneListResult {

@@ -10,6 +10,8 @@
 //! is ranked by how much each light contributes at the object's position and
 //! the strongest are kept.
 
+use std::collections::HashMap;
+
 use cgmath::{InnerSpace, Vector3, Vector4, vec3};
 use dark::mission::WorldLight;
 use engine::scene::light::{LightArray, PointLight, SceneLight, SpotLight};
@@ -94,7 +96,11 @@ pub fn received_light(lights: &LightArray, position: Vector3<f32>) -> f32 {
 }
 
 /// The lights that shade an object at `position`, strongest first.
-pub fn lights_for_position(spatial: &dyn SpatialQueryEngine, position: Vector3<f32>) -> LightArray {
+pub fn lights_for_position(
+    spatial: &dyn SpatialQueryEngine,
+    position: Vector3<f32>,
+    intensities: Option<&HashMap<i16, f32>>,
+) -> LightArray {
     let table = spatial.get_light_table();
     let brightness = BRIGHTNESS_SCALE * dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS);
     let ambient_boost = dev_params::get(dev_params::OBJECT_LIGHT_AMBIENT_BOOST);
@@ -113,6 +119,18 @@ pub fn lights_for_position(spatial: &dyn SpatialQueryEngine, position: Vector3<f
     for index in &cell.light_indices {
         let Some(light) = table.get(*index) else {
             continue;
+        };
+
+        // A switched light's world-rep entry stores its full-strength colour.
+        // Scale a copy from the lightmap controller's live value before both
+        // ranking and shading. An off light must not occupy a renderer slot.
+        let intensity = intensities
+            .and_then(|values| i16::try_from(*index).ok().and_then(|id| values.get(&id)))
+            .copied()
+            .unwrap_or(1.0);
+        let light = &WorldLight {
+            brightness: light.brightness * intensity,
+            ..*light
         };
 
         // Convert first, then ask the renderer's own reach test - so the lights
