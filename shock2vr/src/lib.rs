@@ -13,6 +13,7 @@ pub mod install;
 pub mod inventory;
 mod melee_charge_visual;
 pub mod message_trace;
+pub mod object_lighting;
 pub mod psi_amp_selection;
 mod psi_carousel;
 pub mod save_load;

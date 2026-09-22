@@ -78,7 +78,7 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
         }
 "#;
 
-const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
+pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         out vec4 fragColor;
 
         in vec2 texCoord;
@@ -107,6 +107,19 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform float spotlightInnerAngle[6];
         uniform float spotlightOuterAngle[6];
         uniform float spotlightRange[6];
+
+        // Light every surface gets before any lamp reaches it.
+        uniform vec3 ambientLight;
+        // 0 = the renderer's smooth curve, 1 = inverse distance (how the
+        // original lit objects - it falls off far more slowly).
+        uniform int lightFalloffMode[6];
+        // 0 = plain lambert, 1 = half-lambert (light wraps past the terminator).
+        uniform float lambertWrap;
+
+        // Lights are sources of this radius, not points: without a floor the
+        // inverse-distance falloff runs away inside the model a lamp belongs
+        // to. Must equal engine::scene::light::LIGHT_SOURCE_RADIUS.
+        const float SOURCE_RADIUS = 0.8;
 
         // Calculate spotlight contribution
         vec3 calculateSpotlight(int i, vec3 worldPos, vec3 normal, vec3 texColor) {
@@ -143,10 +156,18 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             }
 
             // Distance attenuation
-            float distanceAttenuation = 1.0 / (1.0 + 0.1 * distance + 0.01 * distance * distance);
+            float distanceAttenuation;
+            if (lightFalloffMode[i] == 1) {
+                distanceAttenuation = 1.0 / max(distance, SOURCE_RADIUS);
+            } else {
+                distanceAttenuation = 1.0 / (1.0 + 0.1 * distance + 0.01 * distance * distance);
+            }
 
-            // Diffuse lighting
-            float lambertian = max(dot(normal, lightDir), 0.0);
+            // Diffuse lighting, optionally wrapped past the terminator so a
+            // surface facing away is lifted rather than black.
+            float ndl = dot(normal, lightDir);
+            float wrap = lightFalloffMode[i] == 1 ? lambertWrap : 0.0;
+            float lambertian = max((ndl + wrap) / (1.0 + wrap), 0.0);
 
             // Combine all factors
             return texColor * spotlightColorIntensity[i].rgb * spotlightColorIntensity[i].w
@@ -164,7 +185,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             }
 
             // Base material color (ambient)
-            vec3 finalColor = texColor.rgb * 0.5 * ambientIntensity;
+            vec3 finalColor = texColor.rgb * ambientLight * ambientIntensity;
 
             // Add emissive contribution
             finalColor += texColor.rgb * emissivity;
@@ -209,6 +230,9 @@ struct UnifiedUniforms {
     spotlight_inner_angle_loc: [i32; 6],
     spotlight_outer_angle_loc: [i32; 6],
     spotlight_range_loc: [i32; 6],
+    ambient_light_loc: i32,
+    light_falloff_mode_loc: i32,
+    lambert_wrap_loc: i32,
 }
 
 static UNIFIED_SHADER_PROGRAM: OnceCell<(ShaderProgram, UnifiedUniforms)> = OnceCell::new();
@@ -325,6 +349,21 @@ impl SkinnedMaterial {
                 gl::FALSE,
                 packed.as_ptr(),
             );
+
+            // How this array's lights behave: what an unlit surface shows, and
+            // how the lights fall off.
+            gl::Uniform3f(
+                uniforms.ambient_light_loc,
+                lights.ambient.x,
+                lights.ambient.y,
+                lights.ambient.z,
+            );
+            gl::Uniform1f(uniforms.lambert_wrap_loc, lights.lambert_wrap);
+            let falloff_modes = lights.falloff.map(|mode| match mode {
+                crate::scene::light::LightFalloff::Smooth => 0,
+                crate::scene::light::LightFalloff::InverseDistance => 1,
+            });
+            gl::Uniform1iv(uniforms.light_falloff_mode_loc, 6, falloff_modes.as_ptr());
 
             // Set spotlight array uniforms
             for i in 0..6 {
@@ -590,6 +629,18 @@ impl Material for SkinnedMaterial {
                         gl::GetUniformLocation(shader.gl_id, c_str!("spotlightRange[4]").as_ptr()),
                         gl::GetUniformLocation(shader.gl_id, c_str!("spotlightRange[5]").as_ptr()),
                     ],
+                    ambient_light_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("ambientLight").as_ptr(),
+                    ),
+                    light_falloff_mode_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("lightFalloffMode[0]").as_ptr(),
+                    ),
+                    lambert_wrap_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("lambertWrap").as_ptr(),
+                    ),
                 };
                 (shader, uniforms)
             }
@@ -696,3 +747,8 @@ impl SkinnedMaterial {
         })
     }
 }
+
+/// The fragment shader source, for the test that pins its SOURCE_RADIUS to the
+/// engine constant. Both lit materials declare it; both must agree.
+#[cfg(test)]
+pub(crate) const FRAGMENT_SHADER_SOURCE_FOR_TEST: &str = UNIFIED_FRAGMENT_SHADER_SOURCE;

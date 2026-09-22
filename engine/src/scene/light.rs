@@ -150,11 +150,42 @@ impl From<PointLight> for SceneLight {
     }
 }
 
+/// How a light's contribution falls off with distance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LightFalloff {
+    /// The renderer's own smooth curve, used by the player's hand lights.
+    Smooth,
+    /// Inverse distance, which is what the original engine used to light
+    /// objects. Falls off far more slowly than an inverse square.
+    InverseDistance,
+}
+
+/// The unlit floor: what a surface shows before any light reaches it.
+pub const DEFAULT_AMBIENT: f32 = 0.5;
+
+/// Treat every light as a source of this radius rather than a point, in world
+/// units. Inverse-distance has no upper bound, so a light sitting inside the
+/// model it belongs to - a lamp lighting its own housing - would otherwise
+/// contribute thousands and, worse, crowd every other light out of the
+/// selection. Shading and ranking MUST use the same floor or the lights chosen
+/// are not the lights drawn; the shader spells it `SOURCE_RADIUS`.
+pub const LIGHT_SOURCE_RADIUS: f32 = 0.8;
+
 /// Container for managing up to 6 lights for single-pass lighting
 #[derive(Debug, Clone)]
 pub struct LightArray {
     /// Array of up to 6 lights (None = disabled slot)
     pub lights: [Option<SceneLight>; 6],
+    /// Light every surface receives regardless of the lights above.
+    pub ambient: Vector3<f32>,
+    /// How the lights in this array attenuate.
+    pub falloff: [LightFalloff; 6],
+    /// Wraps diffuse light around the terminator: 0 is plain lambert (a
+    /// surface facing away gets nothing, which is what the original did for
+    /// objects), 1 is half-lambert (what it baked into lightmaps, where a wall
+    /// facing away still catches half). Between the two trades directional
+    /// contrast for lifted shadows.
+    pub lambert_wrap: f32,
 }
 
 impl LightArray {
@@ -162,6 +193,9 @@ impl LightArray {
     pub fn new() -> Self {
         Self {
             lights: [None, None, None, None, None, None],
+            ambient: Vector3::new(DEFAULT_AMBIENT, DEFAULT_AMBIENT, DEFAULT_AMBIENT),
+            falloff: [LightFalloff::Smooth; 6],
+            lambert_wrap: 0.0,
         }
     }
 
@@ -181,6 +215,45 @@ impl LightArray {
     /// Get a reference to the light in the specified slot
     pub fn get_light(&self, index: usize) -> Option<&SceneLight> {
         self.lights.get(index).and_then(|slot| slot.as_ref())
+    }
+
+    /// Light everything in this array by the original engine's rule: inverse
+    /// distance, over the mission's own ambient floor.
+    pub fn with_object_lighting(mut self, ambient: Vector3<f32>, lambert_wrap: f32) -> Self {
+        self.ambient = ambient;
+        self.falloff = [LightFalloff::InverseDistance; 6];
+        self.lambert_wrap = lambert_wrap;
+        self
+    }
+
+    /// This array's lights plus as many of `scene`'s as still fit, with the
+    /// scene's taking priority.
+    ///
+    /// The player's hand lights live in the scene array and are added by the
+    /// runtime after the game has resolved per-object lights, so an object that
+    /// carries its own lights would otherwise be invisible to the torch pointed
+    /// at it. The scene's go in first because a light the player is holding is
+    /// the one they expect to see working.
+    ///
+    /// Preserve each source's falloff per slot: the hand lights keep their
+    /// smooth curve even when sharing a draw with inverse-distance room lights.
+    /// Ambient and the authored-light wrap setting come from the object.
+    pub fn merged_with(&self, scene: &LightArray) -> LightArray {
+        let mut merged = LightArray {
+            lights: [None, None, None, None, None, None],
+            ambient: self.ambient,
+            falloff: self.falloff,
+            lambert_wrap: self.lambert_wrap,
+        };
+        for source in [scene, self] {
+            for (index, light) in source.iter_active() {
+                let Some(slot) = merged.add_light(light.clone()) else {
+                    return merged;
+                };
+                merged.falloff[slot] = source.falloff[index];
+            }
+        }
+        merged
     }
 
     /// Clear all lights
@@ -355,6 +428,31 @@ impl SpotLight {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merging_authored_lights_preserves_flashlight_falloff() {
+        let mut scene = LightArray::new();
+        scene.add_light(SpotLight::new(
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(1.0, 1.0, 1.0),
+            1.0,
+        ));
+        let mut object = LightArray::new().with_object_lighting(Vector3::new(0.1, 0.2, 0.3), 0.4);
+        object.add_light(PointLight {
+            position: Vector3::new(2.0, 1.0, 0.0),
+            color_intensity: Vector4::new(1.0, 0.0, 0.0, 1.0),
+            range: 10.0,
+        });
+        let merged = object.merged_with(&scene);
+        assert_eq!(merged.falloff[0], LightFalloff::Smooth);
+        assert_eq!(merged.falloff[1], LightFalloff::InverseDistance);
+        assert_eq!(merged.ambient, object.ambient);
+        assert_eq!(
+            merged.get_light(0).unwrap().position(),
+            scene.get_light(0).unwrap().position()
+        );
+    }
 
     #[test]
     fn test_spotlight_creation() {
