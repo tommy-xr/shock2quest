@@ -382,7 +382,7 @@ for (const vr of [false, true]) {
 
       await press(back);
       await press(back);
-      await press(category(5)); // Locked
+      await press(category(7)); // Locked
       await press(category(0)); // Hands & gloves
       const locked = (await game.devParams.list()).params.find(p => p.key === "glove_forward_cm");
       assert.equal(locked?.locked, true);

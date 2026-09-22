@@ -695,29 +695,6 @@ The project supports experimental flags for gating in-progress features during d
   prop, e.g. shield membranes) are sealed in A* in every mode. Verify AI routing
   with `GET /v1/ai/paths` on the debug runtime.
 
-- **`object_lighting`**: light objects (props, creatures, held items) from the
-  mission's own lights. Without it every object is shaded a flat ambient plus
-  the player's hand lights, so a prop under a lamp and one in a black corridor
-  look identical. With it, each object takes the lights its cell says reach it,
-  ranked and capped at the renderer's slots, and is shaded the way the original
-  did - inverse-*distance* falloff over the mission's authored ambient. Objects
-  are legitimately dimmer than the lightmapped walls behind them; three dev
-  params (`object_light_brightness`, `object_light_ambient`,
-  `object_light_wrap`) tune that live over HTTP. **No-op in `debug_*` scenes**,
-  which have no world rep and therefore no cells to take lights from. Inspect
-  the result with `GET /v1/scene`, whose `lighting` block reports each object's
-  resolved light count and the light it receives (authored lights before hand
-  lights are merged). Switched `P$AnimLight` sources use the same live intensity
-  map as the wall lightmaps, including restored save state; an off source does
-  not occupy a light slot. This does not add temporal flicker/pulse modes beyond
-  the existing controller. VR gloves sample at each rendered hand pose; VR held
-  models and flat first-person weapons use the same selection path. A held
-  visual outside the world rep falls back to the player's cell. Lit gloves drop
-  full-texture emission while keeping their emissive status-light mask. Flat weapon
-  FOV is a per-object projection override, preserving world positions/normals
-  for lighting; its emissive attachments and the HUD remain independent.
-  The feature remains opt-in pending Quest profiling.
-
 - **`high_detail_meshes`** / **`no_high_detail_meshes`**: force the 25AE
   high-detail (`PMNM`) creature meshes on or off, overriding the default (on
   everywhere since the Quest 3 measurement in #1022; ~0.3 ms extra combined eye
@@ -738,6 +715,32 @@ The project supports experimental flags for gating in-progress features during d
    ```
 
 2. **Update this documentation** to list the new experimental feature
+
+### Object lighting (enabled by default)
+
+Objects (props, creatures, held items) are lit from the mission's own lights.
+The `object_lighting` developer parameter can disable it for testing.
+When disabled every object is shaded a flat ambient plus
+the player's hand lights, so a prop under a lamp and one in a black corridor
+look identical. With it, each object takes the lights its cell says reach it,
+ranked and capped at the renderer's slots, and is shaded the way the original
+did - inverse-*distance* falloff over the mission's authored ambient. Objects
+are legitimately dimmer than the lightmapped walls behind them; three dev
+params (`object_light_brightness`, `object_light_ambient`,
+`object_light_wrap`) tune that live over HTTP. **No-op in `debug_*` scenes**,
+which have no world rep and therefore no cells to take lights from. Inspect
+the result with `GET /v1/scene`, whose `lighting` block reports each object's
+resolved light count and the light it receives (authored lights before hand
+lights are merged). Switched `P$AnimLight` sources use the same live intensity
+map as the wall lightmaps, including restored save state; an off source does
+not occupy a light slot. This does not add temporal flicker/pulse modes beyond
+the existing controller. VR gloves sample at each rendered hand pose; VR held
+models and flat first-person weapons use the same selection path. A held
+visual outside the world rep falls back to the player's cell. Lit gloves drop
+full-texture emission while keeping their emissive status-light mask. Flat weapon
+FOV is a per-object projection override, preserving world positions/normals
+for lighting; its emissive attachments and the HUD remain independent.
+This is no longer an experimental flag.
 
 ### Code Quality
 

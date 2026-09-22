@@ -29,12 +29,11 @@ pub struct ObjectLighting<'a> {
 
 impl<'a> ObjectLighting<'a> {
     pub fn for_scene(
-        options: &crate::GameOptions,
         spatial: Option<&'a dyn SpatialQueryEngine>,
         intensities: Option<&'a HashMap<i16, f32>>,
         player_position: Vector3<f32>,
     ) -> Option<Self> {
-        if !options.experimental_features.contains("object_lighting") {
+        if !dev_params::get_bool(dev_params::OBJECT_LIGHTING) {
             return None;
         }
         Some(Self {

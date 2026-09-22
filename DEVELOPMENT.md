@@ -395,20 +395,28 @@ free-camera switches. Values are read every frame, so a change is live on the
 next one, and the same registry is exposed over HTTP by the debug runtime
 (`GET`/`POST /v1/dev-params`) for headless runs.
 
-**Camera & view → Ambient intensity** (`ambient_light_intensity`) scales the
+**Lighting → Ambient intensity** (`ambient_light_intensity`) scales the
 mission's authored world ambient floor and the fixed `0.5` ambient contribution
 on object and creature materials. It defaults to `1`, ranges from `0` to `3`
 in `0.05` steps, and resets on app restart. `0.5` halves those contributions;
 `0` removes them. Emissive contributions and runtime spotlights remain independent.
 UI, video, and explicitly fullbright world surfaces keep their existing brightness.
 
-**Camera & view → Level light intensity** (`level_light_intensity`) scales baked
+**Lighting → Level light intensity** (`level_light_intensity`) scales baked
 world lightmaps and authored object lights, also from `0` to `3` in `0.05` steps
 with default `1`. The ambient floor still applies after this scaling; lower both
-controls to darken both baked lighting and the minimum light level. With
-experimental `object_lighting` enabled, authored object contributions receive
-this multiplier once, in addition to `object_light_brightness`. Ambient,
-emissive contributions, and runtime spotlights remain independent.
+controls to darken both baked lighting and the minimum light level. Authored
+object contributions receive this multiplier once, in addition to
+`object_light_brightness`. Ambient, emissive contributions, and runtime spotlights
+remain independent.
+
+Object lighting is enabled by default for props, creatures, held items, and gloves.
+**Lighting → Object lighting** (`object_lighting`) can disable it live for
+comparison with legacy shading. For example, POST `/v1/dev-params` with
+`{"key":"object_lighting","value":0}`; reset the parameter or set it to `1` to
+restore authored lighting. It resets to on at app restart. Debug scenes without
+world cells retain their existing shading. Quest benchmark fixtures explicitly
+override this parameter for their on/off measurements.
 
 Developer parameters use category submenus. **Back** moves up one category;
 **Resume** on the pause Developer page returns directly to gameplay. Opening

@@ -13144,7 +13144,6 @@ impl MissionCore {
                     let viewmodel_projection =
                         crate::flat_player_controller::viewmodel_projection(projection);
                     let lighting = crate::object_lighting::ObjectLighting::for_scene(
-                        options,
                         self.spatial_data.as_deref(),
                         self.animated_lightmaps
                             .as_ref()
@@ -13663,11 +13662,10 @@ impl MissionCore {
             .iter()
             .map(|c| (c.entity_id, c.strength))
             .collect();
-        // Per-object lighting, when enabled. `None` when the flag is off or the
+        // Per-object lighting, when enabled. `None` when the dev toggle is off or the
         // scene has no world rep, so the render loop pays no cell lookup and no
         // light ranking at all.
         let object_lights = crate::object_lighting::ObjectLighting::for_scene(
-            options,
             self.spatial_data.as_deref(),
             self.animated_lightmaps
                 .as_ref()
