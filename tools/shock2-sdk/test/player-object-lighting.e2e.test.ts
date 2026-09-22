@@ -10,12 +10,12 @@ const enabled = process.env.SHOCK2_E2E === "1";
 
 for (const vr of [false, true]) {
   for (const lit of [true, false]) {
-    test(`player models follow room lighting (${vr ? "VR" : "flat"}, flag ${lit ? "on" : "off"})`,
+    test(`player models follow room lighting (${vr ? "VR" : "flat"}, lighting ${lit ? "on" : "off"})`,
       { skip: !enabled, timeout: 180_000 }, async () => {
         await using game = await GameServer.launch({
           mission: "rec1.mis", debugFlags: vr ? ["--vr"] : [],
-          experimental: lit ? ["object_lighting"] : [],
         });
+        if (!lit) await game.devParams.set("object_lighting", 0);
         await game.step({ frames: 2 });
         await game.player.teleport({ x: -2, y: 0.5, z: -213 });
         await game.input.lookAtWorldPoint([2, 0.5, -213]);
@@ -60,7 +60,7 @@ for (const vr of [false, true]) {
         await switchCourtLights(game, "TurnOn");
         const on = await playerMeshes();
         if (!lit) {
-          assert.ok(on.every(o => o.lighting == null), "flag off preserves legacy shading");
+          assert.ok(on.every(o => o.lighting == null), "developer toggle off preserves legacy shading");
           return;
         }
         assert.ok(on.every(o => o.lighting && o.lighting.received > 0.01),

@@ -556,7 +556,7 @@ fn main() {
     // Quest has no launch-flag UI: ship the physical gun path, including
     // recoil/contact feedback and downward weight. Handling can be compared
     // live through the Developer panel's Strength/Agility overrides.
-    let mut experimental_features = HashSet::from([
+    let experimental_features = HashSet::from([
         "physical_held_items".to_owned(),
         "physical_gun_weight".to_owned(),
     ]);
@@ -572,8 +572,11 @@ fn main() {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => panic!("cannot read benchmark-scene.json: {error}"),
         };
-    if benchmark_config.as_ref().is_some_and(|b| b.object_lighting) {
-        experimental_features.insert("object_lighting".to_owned());
+    if let Some(benchmark) = &benchmark_config {
+        shock2vr::dev_params::set(
+            shock2vr::dev_params::OBJECT_LIGHTING,
+            if benchmark.object_lighting { 1.0 } else { 0.0 },
+        );
     }
     let mission = benchmark_config
         .as_ref()

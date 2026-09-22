@@ -42,11 +42,12 @@ pub enum DevCategory {
     Melee,
     Throwing,
     Camera,
+    Lighting,
     Horde,
 }
 
 impl DevCategory {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Root,
         Self::Visualizations,
         Self::Interaction,
@@ -59,6 +60,7 @@ impl DevCategory {
         Self::Melee,
         Self::Throwing,
         Self::Camera,
+        Self::Lighting,
         Self::Horde,
     ];
 
@@ -76,6 +78,7 @@ impl DevCategory {
             Self::Melee => "Melee",
             Self::Throwing => "Throwing",
             Self::Camera => "Camera & view",
+            Self::Lighting => "Lighting",
             Self::Horde => "Earth horde",
         }
     }
@@ -280,9 +283,9 @@ dev_params! {
     /// Geometry still limits the resolved pose. VR uses tracked head motion.
     FLAT_LEAN_DISTANCE = Camera::float("flat_lean_distance", "Max lean (ft)", 2.0, 0.0, 4.0, 0.1),
     /// Scale the world ambient floor and model ambient: 0 disables, 1 preserves.
-    AMBIENT_LIGHT_INTENSITY = Camera::float("ambient_light_intensity", "Ambient intensity", 1.0, 0.0, 3.0, 0.05),
+    AMBIENT_LIGHT_INTENSITY = Lighting::float("ambient_light_intensity", "Ambient intensity", 1.0, 0.0, 3.0, 0.05),
     /// Scale baked world lighting independently of the ambient floor and spotlights.
-    LEVEL_LIGHT_INTENSITY = Camera::float("level_light_intensity", "Level light intensity", 1.0, 0.0, 3.0, 0.05),
+    LEVEL_LIGHT_INTENSITY = Lighting::float("level_light_intensity", "Level light intensity", 1.0, 0.0, 3.0, 0.05),
     /// Weapon-handling test overrides only: 0 follows the character sheet,
     /// 1–6 selects a live test level without changing stats or saves. Strength
     /// affects physical gun recoil and optional weight; Agility affects recoil.
@@ -418,30 +421,33 @@ dev_params! {
     /// making the arm exactly life-size (0.79) would leave the Wrench at 52,
     /// and making the Wrench right (~0.5) would leave a child's arm.
     MELEE_WIELD_SCALE = Melee::float_locked("melee_scale", "Melee scale", 0.7, 0.25, 1.5, 0.05),
-    /// Enables the detached debug ("free") camera. This is the *gate*, not
-    /// the camera's own on/off: while it is false the toggle input is not
-    /// even read, so a stray `Alt+V` (or controller chord) during normal play
-    /// cannot detach the view. Turning it back off while detached also
-    /// re-attaches the camera, so the switch is always a way out.
+    /// Authored lighting for world objects, held models and gloves. Disable
+    /// only to compare against legacy shading during testing.
+    OBJECT_LIGHTING = Lighting::bool("object_lighting", "Object lighting", true),
     /// Multiplies every object light's brightness. The default 1.0 is the
     /// faithful value - brightness as authored, divided back down for our
     /// smaller world units - and exists to be turned up when the authored
     /// answer reads too dark on a modern display. Objects are legitimately
     /// dimmer than the walls behind them (lightmapped surfaces never fall
     /// fully dark, objects do), so this is a taste knob, not a correction.
-    OBJECT_LIGHT_BRIGHTNESS = Camera::float("object_light_brightness", "Obj light", 1.0, 0.0, 8.0, 0.1),
+    OBJECT_LIGHT_BRIGHTNESS = Lighting::float("object_light_brightness", "Obj light", 1.0, 0.0, 8.0, 0.1),
     /// Added to the mission's own ambient for objects only. The mission floor
     /// is often very low (medsci1 authors 0.078), which is faithful but leaves
     /// an object with no light on it nearly black; raise this to lift the
     /// shadows without touching what the lamps do.
-    OBJECT_LIGHT_AMBIENT_BOOST = Camera::float("object_light_ambient", "Obj ambient", 0.0, 0.0, 0.5, 0.01),
+    OBJECT_LIGHT_AMBIENT_BOOST = Lighting::float("object_light_ambient", "Obj ambient", 0.0, 0.0, 0.5, 0.01),
     /// How far light wraps past the terminator on objects. 0 is what the
     /// original did for objects - a face pointing away from a lamp gets
     /// nothing but ambient. 1 is the half-lambert it baked into *lightmaps*,
     /// which is why walls never go fully dark and props do. Raising this lifts
     /// a prop's shadowed side at the cost of the directional read that makes a
     /// lamp feel like a lamp.
-    OBJECT_LIGHT_WRAP = Camera::float("object_light_wrap", "Obj wrap", 0.0, 0.0, 1.0, 0.05),
+    OBJECT_LIGHT_WRAP = Lighting::float("object_light_wrap", "Obj wrap", 0.0, 0.0, 1.0, 0.05),
+    /// Enables the detached debug ("free") camera. This is the *gate*, not
+    /// the camera's own on/off: while it is false the toggle input is not
+    /// even read, so a stray `Alt+V` (or controller chord) during normal play
+    /// cannot detach the view. Turning it back off while detached also
+    /// re-attaches the camera, so the switch is always a way out.
     FREE_CAMERA = Camera::bool("free_camera", "Free camera", false),
     /// Which pose the visibility engine culls from while the free camera is
     /// detached. Off (the default) culls from the *player*, so flying out
