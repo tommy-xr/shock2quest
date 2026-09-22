@@ -385,6 +385,16 @@ pub fn render_source_tag(source: &str) -> Rc<SceneObjectDebugTag> {
 pub fn tag_render_source(objects: &mut [SceneObject], source: &str) {
     let tag = render_source_tag(source);
     for object in objects {
-        object.set_debug_tag(Some(tag.clone()));
+        // A render-path label must retain mesh/entity provenance supplied by
+        // the producer (e.g. gloves among the hand HUD and pointer draws).
+        let tag = object.debug_tag().map_or_else(
+            || tag.clone(),
+            |existing| {
+                let mut existing = existing.clone();
+                existing.source = tag.source.clone();
+                Rc::new(existing)
+            },
+        );
+        object.set_debug_tag(Some(tag));
     }
 }

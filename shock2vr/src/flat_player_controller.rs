@@ -9,7 +9,9 @@
 //!
 //! See `projects/flatscreen-and-vr-architecture.md` (Slices 5-6).
 
-use cgmath::{Deg, Point3, Quaternion, Rotation, Rotation3, Vector2, Vector3, point3, vec2, vec3};
+use cgmath::{
+    Deg, Matrix4, Point3, Quaternion, Rotation, Rotation3, Vector2, Vector3, point3, vec2, vec3,
+};
 use shipyard::{EntityId, Get, View, World};
 
 use dark::{
@@ -27,6 +29,14 @@ use crate::{
         FROB_REACH, VirtualHandEffect, can_grab_item, is_wieldable_weapon, uses_scripted_world_frob,
     },
 };
+
+/// The original first-person FOV, applied in projection space so shading
+/// continues to use undistorted world positions and normals.
+pub fn viewmodel_projection(projection: Matrix4<f32>) -> Matrix4<f32> {
+    const FOV_Y_DEG: f32 = 73.74; // 90 degrees horizontal at 4:3.
+    let scale = (1.0 / projection.y.y) / (FOV_Y_DEG / 2.0).to_radians().tan();
+    projection * Matrix4::from_nonuniform_scale(scale, scale, 1.0)
+}
 
 /// Fallback viewmodel framing offset (look space: +x right, +y up, -z forward),
 /// before the world-scale divide. Used only for wielded items with no
@@ -419,6 +429,29 @@ mod tests {
     use dark::properties::{FrobFlag, KeyCard, PropFrobInfo, PropKeySrc, PropPlayerGun};
 
     use crate::physics::CollisionGroup;
+
+    #[test]
+    fn viewmodel_projection_preserves_framing_without_moving_world_geometry() {
+        use cgmath::{InnerSpace, SquareMatrix, vec4};
+        for fov in [45.0, 73.74, 100.0] {
+            let projection = cgmath::perspective(Deg(fov), 4.0 / 3.0, 0.1, 1000.0);
+            let view = Matrix4::look_at_rh(
+                point3(-2.0, 2.0, -213.0),
+                point3(2.0, 0.5, -213.0),
+                Vector3::unit_y(),
+            );
+            let framed = viewmodel_projection(projection);
+            assert!((2.0 * (1.0 / framed.y.y).atan().to_degrees() - 73.74).abs() < 0.0001);
+            let scale = framed.x.x / projection.x.x;
+            let old_squish =
+                view.invert().unwrap() * Matrix4::from_nonuniform_scale(scale, scale, 1.0) * view;
+            for point in [vec4(-1.0, 1.3, -212.5, 1.0), vec4(0.0, 2.1, -214.0, 1.0)] {
+                let old_clip = projection * view * old_squish * point;
+                let new_clip = framed * view * point;
+                assert!((old_clip / old_clip.w - new_clip / new_clip.w).magnitude() < 0.0001);
+            }
+        }
+    }
 
     fn frob_info(world_action: FrobFlag) -> PropFrobInfo {
         PropFrobInfo {

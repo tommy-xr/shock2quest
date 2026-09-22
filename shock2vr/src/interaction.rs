@@ -156,6 +156,7 @@ pub trait PlayerInteraction {
         _asset_cache: &mut AssetCache,
         _world: &World,
         _use_mode: bool,
+        _lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<SceneObject> {
         Vec::new()
     }
@@ -1260,6 +1261,7 @@ impl PlayerInteraction for VrInteraction {
         asset_cache: &mut AssetCache,
         world: &World,
         use_mode: bool,
+        lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<SceneObject> {
         let mut glove_slot = self.glove_renderer.borrow_mut();
         let mut glove_renderer = glove_slot
@@ -1299,6 +1301,7 @@ impl PlayerInteraction for VrInteraction {
                     )
                 }),
                 self.visual_hands[index],
+                lighting,
             ));
         }
         if self.grip_overlay {

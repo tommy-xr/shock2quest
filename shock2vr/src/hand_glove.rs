@@ -88,6 +88,7 @@ pub struct GloveRenderer {
     point: Pose,
     wrist_frames: Option<[Matrix4<f32>; 2]>,
     materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
+    lit_materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
 }
 
 /// An authored pose a hand can be shown in when nothing analog is driving it -
@@ -120,28 +121,36 @@ impl GloveRenderer {
         // Immutable material sets per colour: drawing the second hand cannot
         // recolour scene objects already submitted for the first hand.
         let authored = model.to_scene_objects();
-        let materials = HandLight::ALL
-            .into_iter()
-            .map(|light| {
-                authored
-                    .iter()
-                    .map(|object| match &texture {
-                        Some(texture) => Rc::new(RefCell::new(match &emissive {
-                            Some(mask) => SkinnedMaterial::create_with_light(
-                                texture.clone(),
-                                1.0,
-                                0.0,
-                                mask.clone(),
-                                light.tint(),
-                            ),
-                            None => SkinnedMaterial::create(texture.clone(), 1.0, 0.0),
-                        })),
-                        None => object.material.clone(),
-                    })
-                    .collect()
-            })
-            .collect();
+        let make_materials = |base_emissivity| {
+            HandLight::ALL
+                .into_iter()
+                .map(|light| {
+                    authored
+                        .iter()
+                        .map(|object| match &texture {
+                            Some(texture) => Rc::new(RefCell::new(match &emissive {
+                                Some(mask) => SkinnedMaterial::create_with_light(
+                                    texture.clone(),
+                                    base_emissivity,
+                                    0.0,
+                                    mask.clone(),
+                                    light.tint(),
+                                ),
+                                None => {
+                                    SkinnedMaterial::create(texture.clone(), base_emissivity, 0.0)
+                                }
+                            })),
+                            None => object.material.clone(),
+                        })
+                        .collect()
+                })
+                .collect()
+        };
 
+        // Legacy/menu gloves keep their full-texture glow. With authored
+        // lighting only the status-light mask emits; the glove surface is lit.
+        let materials = make_materials(1.0);
+        let lit_materials = make_materials(0.0);
         let retarget = HandPoseRetarget::for_right_glove(model.skeleton());
 
         Some(Self {
@@ -151,6 +160,7 @@ impl GloveRenderer {
             fist: hand_pose::fist_right_hand(),
             point: hand_pose::point_right_hand(),
             materials,
+            lit_materials,
             wrist_frames: None,
         })
     }
@@ -248,6 +258,7 @@ impl GloveRenderer {
         holding: bool,
         fitted: Option<(FingerAmounts, f32)>,
         light: HandLight,
+        lights: Option<Rc<engine::scene::light::LightArray>>,
     ) -> Vec<SceneObject> {
         let mut amounts = if holding {
             // Gripping a held item: fingers wrapped on the handle, thumb
@@ -284,15 +295,30 @@ impl GloveRenderer {
             };
         }
         let pose = self.open.blend_per_finger(&self.fist, &amounts);
-        Self::render_posed(
+        let materials = if lights.is_some() {
+            &self.lit_materials
+        } else {
+            &self.materials
+        };
+        let mut objects = Self::render_posed(
             &mut self.model,
             &self.retarget,
-            &self.materials[light as usize],
+            &materials[light as usize],
             &pose,
             position,
             rotation,
             handedness,
-        )
+        );
+        let tag = Rc::new(engine::scene::SceneObjectDebugTag {
+            model: Some(GLOVE_MODEL.to_owned()),
+            name: Some(format!("{handedness:?} glove")),
+            ..Default::default()
+        });
+        for object in &mut objects {
+            object.set_lights(lights.clone());
+            object.set_debug_tag(Some(tag.clone()));
+        }
+        objects
     }
 
     /// Build the glove in one of the authored [`StaticHandPose`]s.
