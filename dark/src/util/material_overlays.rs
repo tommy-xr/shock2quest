@@ -3,10 +3,7 @@
 use crate::importers::TEXTURE_IMPORTER;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{
-        SceneObject, SkinnedMaterial, basic_material, incidence::IncidencePass,
-        scene_object::BlendMode,
-    },
+    scene::{SceneObject, SkinnedMaterial, basic_material, incidence::IncidencePass},
     texture::TextureTrait,
 };
 use std::{cell::RefCell, path::Path, rc::Rc};
@@ -25,7 +22,9 @@ fn profile(name: &str) -> Option<Profile> {
         .as_str()
     {
         "nd-mtlhit" => Some(Profile::PlanarDecal),
-        "nd-anegg" | "nd-grub" => Some(Profile::Organic),
+        "nd-anegg" | "nd-grub" | "nd-spdrbby" | "nd-spiderboss" | "nd-overlord" | "nd-reaver" => {
+            Some(Profile::Organic)
+        }
         _ => None,
     }
 }
@@ -46,7 +45,14 @@ pub(crate) fn append_incidence_overlays(
     let Some(base) = objects.last().map(SceneObject::duplicate) else {
         return;
     };
-    for pass in super::object_material_incidence_passes(assets, name) {
+    // Mesh materials can share a basename with incomplete obj-family stubs.
+    // Preserve the family through script includes and mask texture lookup.
+    let material_name = if skinned {
+        format!("mesh/txt16/{name}")
+    } else {
+        name.to_owned()
+    };
+    for pass in super::object_material_incidence_passes(assets, &material_name) {
         // Organic profiles first opt into their dedicated specular textures.
         // Shared fill/rim passes using the diffuse texture remain a follow-up.
         if profile == Profile::Organic && pass.texture.is_none() {
@@ -63,6 +69,7 @@ pub(crate) fn append_incidence_overlays(
         let Some(ramp) = load_incidence_ramp(assets, &pass.ramp) else {
             continue;
         };
+        let blend_mode = pass.blend_mode;
         let pass = IncidencePass {
             ramp,
             tint: pass.tint,
@@ -76,7 +83,7 @@ pub(crate) fn append_incidence_overlays(
         };
         let mut overlay = base.duplicate();
         overlay.material = Rc::new(RefCell::new(material));
-        overlay.blend_mode = BlendMode::AdditiveAlpha;
+        overlay.blend_mode = blend_mode;
         overlay.set_depth_write(false);
         objects.push(overlay);
     }
@@ -110,6 +117,14 @@ mod tests {
         assert_eq!(profile("ND-anegg.psd"), Some(Profile::Organic));
         assert_eq!(profile("ND-GRUB.DDS"), Some(Profile::Organic));
         assert_eq!(profile("ND-mtlhit"), Some(Profile::PlanarDecal));
+        for name in [
+            "ND-spdrBby.psd",
+            "ND-spiderboss",
+            "ND-overlord",
+            "ND-reaver",
+        ] {
+            assert_eq!(profile(name), Some(Profile::Organic));
+        }
         for name in ["ND-anegg_c", "ND-grub_extra", "ND-goldegg", "ordinary"] {
             assert_eq!(profile(name), None, "{name} has not been verified");
         }
