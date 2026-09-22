@@ -131,6 +131,24 @@ Playback uses the audio device clock; these captures are not fixed-timestep.
 The installed-asset regression can be run with
 `cargo test -p dark_explorer mounted_songs -- --ignored`.
 
+### Model viewer lighting
+
+In `cargo dx ui`, expand **Lighting** above a model preview to adjust ambient
+light, the strength of three fixed spotlights, and their colors. The lights
+stay fixed as you orbit; **Reset lighting** restores ambient-only viewing.
+The rig uses the game's object-lighting shader and inverse-distance falloff.
+Unlit material passes remain independent of those controls.
+
+For repeatable previews, use `--model-ambient 0.08 --model-lights cool` with
+`--select obj/eggcl.bin`. The light preset accepts `off`, `warm`, `cool`, `green`,
+or `all`; `--screenshot /absolute/path.png` captures the result.
+
+`debug_annelid` also has white, warm, cool and green station lights. Its lamps
+and egg/grub highlights respond to **Developer → Lighting**, including object
+lighting, ambient/level intensity, brightness, ambient boost and wrap. This
+scene supplies synthetic object lights because it has no mission light table;
+use a real mission to test cell-based light selection.
+
 ### Gameplay music themes
 
 Mission music is driven by `PropAmbientHacked` markers with the `MUSIC` flag.
