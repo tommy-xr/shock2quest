@@ -56,3 +56,13 @@ a crawling grub. Overlays share the base geometry and skinning palette, use
 the authored specular masks and tint, and preserve repeated passes. The
 separate membrane material and shared diffuse fill/rim passes remain on their
 existing rendering paths. Missing overlay art leaves the base material intact.
+
+The egg scene now provides fixed white/warm/cool/green station lights and uses
+the standard Lighting developer controls. With object lighting enabled, setting
+both ambient and level intensity to zero removes the lit shell highlights;
+turning object lighting off restores the legacy ambient shading. The scene's
+synthetic light set tests the renderer, not world-rep cell selection.
+
+The explorer model preview also offers ambient and colored spotlight controls
+for inspecting the same materials under repeatable lighting. No additional
+organic profiles are enabled by these lighting tools.

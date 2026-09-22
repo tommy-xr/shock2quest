@@ -19,13 +19,13 @@
 //! distance check that sends the same `TurnOn` - the pod script sees exactly
 //! what a mission tripwire would send.
 
-use cgmath::{Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, vec3};
+use cgmath::{Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, Vector3, vec3};
 use dark::{importers::FONT_IMPORTER, properties::PropTemplateId};
 use engine::{assets::asset_cache::AssetCache, audio::AudioContext, scene::SceneObject};
 use shipyard::{EntityId, IntoIter, IntoWithId, UniqueView, UniqueViewMut, View};
 
 use crate::{
-    GameOptions,
+    GameOptions, dev_params,
     game_scene::GameScene,
     input_context::InputContext,
     mission::{
@@ -81,6 +81,15 @@ const STATION_DISTANCE: f32 = 8.0;
 /// its neighbours - the whole point of separate stations.
 const TRIP_RADIUS: f32 = 2.5;
 
+// One fixed lamp per station: white, warm, cool, green. The same rig lights
+// both base draws and their incidence overlays, including newly hatched grubs.
+const LAMP_COLORS: [[f32; 3]; 4] = [
+    [1.0, 1.0, 1.0],
+    [1.0, 0.55, 0.25],
+    [0.25, 0.55, 1.0],
+    [0.35, 1.0, 0.45],
+];
+
 pub fn create_debug_annelid_scene(
     global_context: &GlobalContext,
     game_options: &GameOptions,
@@ -99,6 +108,13 @@ pub fn create_debug_annelid_scene(
             vec3(0.26, 0.30, 0.24),
             vec3(-STATION_DISTANCE, 0.05, station.z),
             vec3(2.0 * TRIP_RADIUS, 0.1, 2.0 * TRIP_RADIUS),
+        ));
+    }
+    for (station, color) in STATIONS.iter().zip(LAMP_COLORS) {
+        boxes.push((
+            color.into(),
+            vec3(-STATION_DISTANCE + 2.0, 3.2, station.z + 1.0),
+            vec3(0.18, 0.18, 0.18),
         ));
     }
     // wpod's mouth faces local -Z; mount its back against this solid wall.
@@ -173,6 +189,45 @@ struct AnnelidHooks {
 }
 
 impl DebugSceneHooks for AnnelidHooks {
+    fn after_render(
+        &mut self,
+        _core: &mut MissionCore,
+        scene_objects: &mut Vec<SceneObject>,
+        _camera_position: &mut Vector3<f32>,
+        _camera_rotation: &mut Quaternion<f32>,
+        _asset_cache: &mut AssetCache,
+        _options: &GameOptions,
+    ) {
+        if !dev_params::get_bool(dev_params::OBJECT_LIGHTING) {
+            return;
+        }
+        // Debug scenes have no world-rep cells/light table. Supply the renderer
+        // equivalent of authored lights, with the usual live Lighting controls.
+        let ambient = 0.08 + dev_params::get(dev_params::OBJECT_LIGHT_AMBIENT_BOOST);
+        let mut lights = engine::scene::light::LightArray::new().with_object_lighting(
+            vec3(ambient, ambient, ambient),
+            dev_params::get(dev_params::OBJECT_LIGHT_WRAP),
+        );
+        let brightness = 2.5
+            * dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS)
+            * dev_params::get(dev_params::LEVEL_LIGHT_INTENSITY);
+        for (station, color) in STATIONS.iter().zip(LAMP_COLORS) {
+            let position = vec3(-STATION_DISTANCE + 2.0, 3.2, station.z + 1.0);
+            let mut light = engine::scene::SpotLight::new(
+                position,
+                vec3(-STATION_DISTANCE, 0.7, station.z) - position,
+                color.into(),
+                brightness,
+            );
+            light.range = 5.5;
+            lights.add_light(light);
+        }
+        let lights = std::rc::Rc::new(lights);
+        for object in scene_objects {
+            object.set_lights(Some(lights.clone()));
+        }
+    }
+
     fn before_handle_effects(
         &mut self,
         core: &mut MissionCore,
