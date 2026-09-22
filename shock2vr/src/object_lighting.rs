@@ -102,7 +102,9 @@ pub fn lights_for_position(
     intensities: Option<&HashMap<i16, f32>>,
 ) -> LightArray {
     let table = spatial.get_light_table();
-    let brightness = BRIGHTNESS_SCALE * dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS);
+    let brightness = BRIGHTNESS_SCALE
+        * dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS)
+        * dev_params::get(dev_params::LEVEL_LIGHT_INTENSITY);
     let ambient_boost = dev_params::get(dev_params::OBJECT_LIGHT_AMBIENT_BOOST);
     let ambient = spatial.get_ambient_light() + vec3(ambient_boost, ambient_boost, ambient_boost);
     let mut lights = LightArray::new()
