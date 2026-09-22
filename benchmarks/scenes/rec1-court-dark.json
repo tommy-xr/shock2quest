@@ -1,0 +1,44 @@
+{
+  "name": "rec1-court-dark",
+  "mission": "rec1.mis",
+  "player_position": [
+    -2,
+    0.5,
+    -213
+  ],
+  "camera_eye": [
+    -2,
+    2,
+    -213
+  ],
+  "camera_look_at": [
+    2,
+    0.5,
+    -213
+  ],
+  "subject_model": "corpmal1",
+  "expected_subject_meshes": 2,
+  "object_lighting": false,
+  "lights_on": false,
+  "light_templates": [
+    711,
+    714,
+    799,
+    801,
+    802,
+    805,
+    800,
+    404,
+    402,
+    406,
+    401,
+    368,
+    1043,
+    1361,
+    280,
+    715
+  ],
+  "subject_templates": [
+    466
+  ]
+}
