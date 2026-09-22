@@ -128,13 +128,18 @@ pub fn object_material_script(asset_cache: &AssetCache, requested: &str) -> Opti
     reader.borrow_mut().read_to_string(&mut script).ok()?;
     // The object family mount strips `obj/`; include paths are authored
     // relative to the full archive path, two levels above obj/txt16.
-    let root = if script_name.starts_with("obj/") {
+    let qualified = script_name.starts_with("obj/") || script_name.starts_with("mesh/");
+    let root = if qualified {
         script_name.clone()
     } else {
         format!("obj/{script_name}")
     };
     let expanded = material_includes::expand_material_includes(&root, &script, |path| {
-        let mounted = path.strip_prefix("obj/").unwrap_or(path);
+        let mounted = if qualified {
+            path
+        } else {
+            path.strip_prefix("obj/").unwrap_or(path)
+        };
         let reader = asset_cache.get_raw_reader(mounted)?;
         let mut source = String::new();
         reader.borrow_mut().read_to_string(&mut source).ok()?;
@@ -564,6 +569,29 @@ mod tests {
         assert_eq!(
             super::resolve_object_icon_name(&classic, "disc.png").as_deref(),
             Some("objicon/disc.pcx")
+        );
+    }
+
+    #[test]
+    fn qualified_material_includes_stay_in_their_family() {
+        let assets = cache(&[
+            ("obj/txt16/example.mtl", b"include local.inc\n"),
+            ("obj/txt16/local.inc", b"object source"),
+            ("txt16/local.inc", b"wrong unqualified source"),
+            ("mesh/txt16/example.mtl", b"include local.inc\n"),
+            ("mesh/txt16/local.inc", b"mesh source"),
+        ]);
+        assert_eq!(
+            super::object_material_script(&assets, "obj/txt16/example")
+                .unwrap()
+                .trim(),
+            "object source"
+        );
+        assert_eq!(
+            super::object_material_script(&assets, "mesh/txt16/example")
+                .unwrap()
+                .trim(),
+            "mesh source"
         );
     }
 
