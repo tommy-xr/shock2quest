@@ -26,6 +26,7 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
         uniform mat4 world;
         uniform mat4 view;
         uniform mat4 projection;
+        uniform mat3 normalMatrix;
         // Affine bones packed as 3 vec4 rows each (the mat3x4's columns hold
         // the matrix rows), so the 80-slot palette costs 240 uniform vectors
         // and fits the GLES 3.0 guaranteed vertex budget (256); a mat4 array
@@ -73,7 +74,7 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
             // Transform to world space
             vec4 worldPosition = world * mod_position;
             worldPos = worldPosition.xyz;
-            worldNormal = normalize(mat3(world) * mod_normal);
+            worldNormal = normalize(normalMatrix * mod_normal);
 
             gl_Position = projection * view * worldPosition;
         }
@@ -213,6 +214,7 @@ struct UnifiedUniforms {
     world_loc: i32,
     view_loc: i32,
     projection_loc: i32,
+    normal_matrix_loc: i32,
 
     // Material properties
     emissivity_loc: i32,
@@ -306,6 +308,13 @@ impl SkinnedMaterial {
             gl::UniformMatrix4fv(uniforms.world_loc, 1, gl::FALSE, world_matrix.as_ptr());
             gl::UniformMatrix4fv(uniforms.view_loc, 1, gl::FALSE, view_matrix.as_ptr());
             gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
+            let normal_matrix = crate::scene::material::normal_matrix(world_matrix);
+            gl::UniformMatrix3fv(
+                uniforms.normal_matrix_loc,
+                1,
+                gl::FALSE,
+                normal_matrix.as_ptr(),
+            );
 
             let color = self
                 .silhouette_color
@@ -488,6 +497,10 @@ impl Material for SkinnedMaterial {
                     projection_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("projection").as_ptr(),
+                    ),
+                    normal_matrix_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("normalMatrix").as_ptr(),
                     ),
 
                     // Material properties
