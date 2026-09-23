@@ -61,6 +61,11 @@ pub trait Material: Any {
     }
 }
 
+/// World-space position of the eye a view matrix looks from.
+pub fn eye_position(view: &Matrix4<f32>) -> cgmath::Vector3<f32> {
+    view.invert().unwrap_or_else(Matrix4::identity).w.truncate()
+}
+
 /// Maps object-space normals to world space: the inverse-transpose of the
 /// world matrix's 3x3, so normals stay perpendicular under non-uniform scale.
 /// Computed once per draw rather than per vertex in the shader.

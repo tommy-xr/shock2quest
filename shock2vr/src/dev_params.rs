@@ -424,6 +424,10 @@ dev_params! {
     /// Authored lighting for world objects, held models and gloves. Disable
     /// only to compare against legacy shading during testing.
     OBJECT_LIGHTING = Lighting::bool("object_lighting", "Object lighting", true),
+    /// Paint the mission's environment cubemap around the camera instead of
+    /// the world, to check what reflections sample and that it is oriented
+    /// like the level.
+    ENV_MAP_PREVIEW = Lighting::bool("env_map_preview", "Env map preview", false),
     /// Multiplies every object light's brightness. The default 1.0 is the
     /// faithful value - brightness as authored, divided back down for our
     /// smaller world units - and exists to be turned up when the authored

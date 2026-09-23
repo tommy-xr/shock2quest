@@ -60,6 +60,7 @@ pub use indexed_mesh::IndexedMesh;
 pub mod lines_mesh;
 pub use lines_mesh::LinesMesh;
 
+pub mod environment;
 pub mod material;
 pub mod shine;
 pub use material::Material;

@@ -148,7 +148,7 @@ impl ShineUniforms {
             };
             shine.mask.bind_to(context, MASK_UNIT);
             shine.ramp.bind_to(context, RAMP_UNIT);
-            let eye = view.invert().unwrap_or_else(Matrix4::identity).w.truncate();
+            let eye = crate::scene::material::eye_position(view);
             gl::Uniform3fv(self.eye, 1, eye.as_ptr());
             gl::Uniform3fv(self.tint, 1, shine.tint.as_ptr());
             gl::Uniform1i(self.unlit, i32::from(shine.unlit));

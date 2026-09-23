@@ -1,5 +1,6 @@
 pub mod audio_log;
 pub mod benchmark_scene;
+pub mod environment_map;
 pub mod game_scene;
 pub mod hand_buttons;
 pub mod hand_pose;
@@ -251,6 +252,7 @@ const RESOURCE_FAMILIES: &[&str] = &[
     "song",
     "strings",
     "materials",
+    "env",
 ];
 
 /// The 25AE mod stack, highest priority first, exactly as
@@ -301,7 +303,7 @@ fn mount_family(
 ) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
     match family {
         "strings" => ZipAssetPath::with_prefix_opts(archive, prefix, false, None),
-        "materials" => ZipAssetPath::with_prefix_opts(archive, prefix, false, Some(family)),
+        "materials" | "env" => ZipAssetPath::with_prefix_opts(archive, prefix, false, Some(family)),
         "iface" | "bitmap" | "objicon" | "obj" | "mesh" => {
             ZipAssetPath::with_prefix_opts(archive, prefix, true, Some(family))
         }
