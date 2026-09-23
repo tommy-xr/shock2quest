@@ -244,8 +244,18 @@ dev_params! {
     GLOVE_FIT_VISIBLE = Fit::bool("glove_fit_visible", "Fit gloves", true),
     /// Quest only: compare grip pose against gameplay's current aim pose.
     GLOVE_FIT_GRIP_POSE = Fit::bool("glove_fit_grip_pose", "Hand pose", false, "Aim", "Grip"),
-    /// Quest only: show the room behind debug_gloves. Other scenes stay opaque.
+    /// Quest only: show the room behind debug_gloves/debug_psi_fit. Other scenes stay opaque.
     GLOVE_FIT_PASSTHROUGH = Fit::bool("glove_fit_passthrough", "Fit passthrough", true),
+    /// Live VR amp fit, relative to the authored hand placement. Also used by debug_psi_fit.
+    PSI_AMP_FORWARD_CM = Hands::float("psi_amp_forward_cm", "Psi amp forward cm", 2.0, -20.0, 20.0, 0.5),
+    PSI_AMP_UP_CM = Hands::float("psi_amp_up_cm", "Psi amp up cm", 0.0, -20.0, 20.0, 0.5),
+    PSI_AMP_SCALE = Hands::float("psi_amp_scale", "Psi amp scale", 0.40, 0.25, 2.0, 0.01),
+    /// Roll about hand-local forward (-Z), around the hand origin before fit translation.
+    PSI_AMP_LEFT_ROLL_DEG = Hands::float("psi_amp_left_roll_deg", "Psi amp left roll deg", 90.0, -180.0, 180.0, 5.0),
+    PSI_AMP_RIGHT_ROLL_DEG = Hands::float("psi_amp_right_roll_deg", "Psi amp right roll deg", -90.0, -180.0, 180.0, 5.0),
+    /// Yaw about hand-local up (+Y), after roll and before fit translation.
+    PSI_AMP_LEFT_YAW_DEG = Hands::float("psi_amp_left_yaw_deg", "Psi amp left yaw deg", 0.0, -180.0, 180.0, 5.0),
+    PSI_AMP_RIGHT_YAW_DEG = Hands::float("psi_amp_right_yaw_deg", "Psi amp right yaw deg", 0.0, -180.0, 180.0, 5.0),
     /// How far ahead of the head the VR frontend/pause panel hangs, in world
     /// units. Default matches the old `ui::FRONTEND_PANEL_DISTANCE` const.
     FRONTEND_PANEL_DISTANCE = Camera::float("panel_distance", "Panel distance", 2.0, 0.5, 6.0, 0.1),

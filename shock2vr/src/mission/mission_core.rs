@@ -13805,6 +13805,21 @@ impl MissionCore {
                     }
                 });
 
+                // Amp size is a live visual fit. Its hand-local seating offset
+                // scales alongside it in vr_config, including in the fit scene.
+                let visual_xform = if options.presentation_mode == crate::PresentationMode::Vr
+                    && held
+                    && v_model_name
+                        .get(*entity_id)
+                        .is_ok_and(|name| name.0.eq_ignore_ascii_case("amp_h"))
+                {
+                    visual_xform
+                        * Matrix4::from_scale(crate::dev_params::get(
+                            crate::dev_params::PSI_AMP_SCALE,
+                        ))
+                } else {
+                    visual_xform
+                };
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(visual_xform);

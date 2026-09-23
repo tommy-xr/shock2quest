@@ -1356,7 +1356,8 @@ fn main() {
 
         fit_passthrough.update(
             &session,
-            passthrough::is_fit_scene(&game)
+            (passthrough::is_fit_scene(&game)
+                || matches!(&game, shock2vr::App::Ready(game) if game.scene_name() == "debug_psi_fit"))
                 && shock2vr::dev_params::get_bool(shock2vr::dev_params::GLOVE_FIT_PASSTHROUGH),
         );
         let tracking = tracking.with_stance(

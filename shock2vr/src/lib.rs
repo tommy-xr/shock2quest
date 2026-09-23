@@ -1490,7 +1490,10 @@ impl Game {
         let calibrated_input = glove_fit::calibrated_input(
             input_context,
             self.options.presentation_mode,
-            self.active_game_scene.scene_name() == "debug_gloves",
+            matches!(
+                self.active_game_scene.scene_name(),
+                "debug_gloves" | "debug_psi_fit"
+            ),
             dev_params::get(dev_params::GLOVE_FORWARD_CM),
         );
         let input_context = &calibrated_input;
