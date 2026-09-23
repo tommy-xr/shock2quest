@@ -2,6 +2,7 @@ extern crate gl;
 use std::any::Any;
 use std::ops::Deref;
 
+use super::incidence::{IncidencePass, IncidenceUniforms};
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
@@ -150,11 +151,12 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
                 finalColor += calculateSpotlight(i, worldPos, normal, texColor.rgb);
             }
 
-            fragColor = vec4(finalColor, texColor.a * (1.0 - transparency));
+            fragColor = applyIncidence(vec4(finalColor, texColor.a * (1.0 - transparency)), texColor, worldPos, worldNormal);
         }
 "#;
 
 struct UnifiedUniforms {
+    incidence: IncidenceUniforms,
     // Basic transformation matrices
     world_loc: i32,
     view_loc: i32,
@@ -191,6 +193,7 @@ where
     base_transparency: f32,
     additive_unlit: bool,
     fixed_ambient: bool,
+    incidence: Option<IncidencePass>,
 }
 
 impl<T> BasicMaterial<T>
@@ -198,7 +201,7 @@ where
     T: Deref<Target = dyn TextureTrait>,
 {
     pub fn is_transparent(&self) -> bool {
-        self.additive_unlit || self.transparency > 0.01
+        self.incidence.is_some() || self.additive_unlit || self.transparency > 0.01
     }
 
     pub fn draw_unified(
@@ -214,6 +217,9 @@ where
         self.diffuse_texture.bind0(render_context);
         unsafe {
             gl::UseProgram(shader_program.gl_id);
+            uniforms
+                .incidence
+                .bind(self.incidence.as_ref(), render_context, view_matrix);
 
             let projection = render_context.projection_matrix;
 
@@ -331,7 +337,11 @@ where
             );
 
             let fragment_shader = crate::shader::build(
-                UNIFIED_FRAGMENT_SHADER_SOURCE,
+                &format!(
+                    "{}\n{}",
+                    super::incidence::GLSL,
+                    UNIFIED_FRAGMENT_SHADER_SOURCE
+                ),
                 crate::shader::ShaderType::Fragment,
                 is_opengl_es,
             );
@@ -341,6 +351,7 @@ where
 
                 // Get uniform locations for all shader variables
                 let uniforms = UnifiedUniforms {
+                    incidence: IncidenceUniforms::new(shader.gl_id),
                     // Basic transformation matrices
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
                     view_loc: gl::GetUniformLocation(shader.gl_id, c_str!("view").as_ptr()),
@@ -565,6 +576,7 @@ where
         base_transparency: transparency,
         additive_unlit,
         fixed_ambient: false,
+        incidence: None,
     })
 }
 
@@ -586,6 +598,25 @@ where
         base_transparency: transparency,
         additive_unlit: false,
         fixed_ambient: true,
+        incidence: None,
+    })
+}
+
+/// A depth-tested additive overlay using the same geometry and lighting as
+/// the base material. SceneObject supplies SRC_ALPHA/ONE composition.
+pub fn create_incidence(
+    texture: std::rc::Rc<dyn TextureTrait>,
+    pass: IncidencePass,
+) -> Box<dyn Material> {
+    Box::new(BasicMaterial {
+        diffuse_texture: texture,
+        has_initialized: false,
+        emissivity: 0.0,
+        transparency: 0.0,
+        base_transparency: 0.0,
+        additive_unlit: false,
+        fixed_ambient: false,
+        incidence: Some(pass),
     })
 }
 

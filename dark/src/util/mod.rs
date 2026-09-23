@@ -230,9 +230,32 @@ fn render_passes(script: &str) -> Vec<RenderPassFields> {
                 let source = fields.next();
                 let destination = fields.next();
                 fields_so_far.blend_is_base = Some(blend_is_base(source, destination));
+                fields_so_far.additive_alpha = source
+                    .is_some_and(|s| s.eq_ignore_ascii_case("SRC_ALPHA"))
+                    && destination.is_some_and(|s| s.eq_ignore_ascii_case("ONE"));
                 fields_so_far.additive_color = source
                     .is_some_and(|s| s.eq_ignore_ascii_case("SRC_COLOR"))
                     && destination.is_some_and(|s| s.eq_ignore_ascii_case("ONE"));
+            } else if directive.eq_ignore_ascii_case("rgb") {
+                let values: Option<Vec<f32>> = fields
+                    .map(|v| v.trim_end_matches(',').parse().ok())
+                    .collect();
+                fields_so_far.tint = values
+                    .filter(|v| v.len() == 3 && v.iter().all(|x| x.is_finite()))
+                    .map(|v| cgmath::vec3(v[0], v[1], v[2]));
+            } else if directive.eq_ignore_ascii_case("alpha") {
+                let values: Vec<_> = fields.collect();
+                // The installed incidence passes use the unity parameter pair.
+                // Other alpha functions remain unsupported rather than guessed.
+                if values.len() == 5
+                    && values[0].eq_ignore_ascii_case("func")
+                    && values[1].eq_ignore_ascii_case("incidence")
+                    && values[2].parse::<f32>() == Ok(1.0)
+                    && values[3].parse::<f32>() == Ok(1.0)
+                {
+                    fields_so_far.incidence_ramp =
+                        Some(values[4].replace('\\', "/").to_ascii_lowercase());
+                }
             } else if directive.eq_ignore_ascii_case("shaded") {
                 fields_so_far.unlit = fields.next() == Some("0");
             }
@@ -265,7 +288,52 @@ struct RenderPassFields {
     /// `None` when the pass carries no `blend` directive at all.
     blend_is_base: Option<bool>,
     additive_color: bool,
+    additive_alpha: bool,
+    tint: Option<cgmath::Vector3<f32>>,
+    incidence_ramp: Option<String>,
     unlit: bool,
+}
+
+/// Supported additive incidence pass, in authored order. The bitmap and
+/// ramp are loaded separately; missing art simply omits this extra pass.
+#[derive(Debug, PartialEq)]
+pub struct MaterialIncidencePass {
+    pub texture: Option<String>,
+    pub ramp: String,
+    pub tint: cgmath::Vector3<f32>,
+    pub unlit: bool,
+}
+
+pub fn object_material_incidence_passes(
+    assets: &AssetCache,
+    name: &str,
+) -> Vec<MaterialIncidencePass> {
+    object_material_script(assets, name)
+        .map(|source| incidence_passes(&source))
+        .unwrap_or_default()
+}
+
+fn incidence_passes(source: &str) -> Vec<MaterialIncidencePass> {
+    render_passes(source)
+        .into_iter()
+        .filter_map(|pass| {
+            if !pass.additive_alpha {
+                return None;
+            }
+            Some(MaterialIncidencePass {
+                texture: if pass.keeps_authored_texture {
+                    None
+                } else {
+                    Some(normalize_material_texture_reference(
+                        pass.texture.as_deref()?,
+                    )?)
+                },
+                ramp: pass.incidence_ramp?,
+                tint: pass.tint.unwrap_or(cgmath::vec3(1.0, 1.0, 1.0)),
+                unlit: pass.unlit,
+            })
+        })
+        .collect()
 }
 
 /// Whether a `blend <source> <destination>` pair describes a base pass - one
@@ -495,6 +563,28 @@ mod tests {
             super::resolve_object_icon_name(&classic, "disc.png").as_deref(),
             Some("objicon/disc.pcx")
         );
+    }
+
+    #[test]
+    fn incidence_passes_preserve_texture_tint_and_duplicates() {
+        let pass = "render_pass\n{\nblend SRC_ALPHA ONE\ntexture obj/txt16/wet_s\nRGB 0.2 0.3 0.4\nalpha func INCIDENCE 1 1 MATERIALS/shine\nshaded 1\n}\n";
+        let passes = super::incidence_passes(&format!("{pass}{pass}"));
+        assert_eq!(passes.len(), 2);
+        assert_eq!(passes[0], passes[1]);
+        assert_eq!(passes[0].texture.as_deref(), Some("wet_s"));
+        assert_eq!(passes[0].ramp, "materials/shine");
+        assert_eq!(passes[0].tint, cgmath::vec3(0.2, 0.3, 0.4));
+        assert!(!passes[0].unlit);
+        assert!(
+            super::incidence_passes(&pass.replace("1 1 MATERIALS", "2 1 MATERIALS")).is_empty()
+        );
+        assert!(super::incidence_passes(&pass.replace("SRC_ALPHA ONE", "ONE ZERO")).is_empty());
+        assert!(
+            super::incidence_passes(&pass.replace("alpha func INCIDENCE", "alpha func UNKNOWN"))
+                .is_empty()
+        );
+        let own = super::incidence_passes(&pass.replace("obj/txt16/wet_s", "$TEXTURE"));
+        assert_eq!(own[0].texture, None);
     }
 
     #[test]

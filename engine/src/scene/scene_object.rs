@@ -30,6 +30,16 @@ use super::quad;
 use super::skinned_material::SkinnedMaterial;
 use crate::materials;
 
+/// Composition for a transparent scene object. Incidence overlays reuse the
+/// base mesh depth, so they also allow equal-depth fragments.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BlendMode {
+    #[default]
+    Alpha,
+    AdditiveColor,
+    AdditiveAlpha,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FrontFaceWinding {
     Clockwise,
@@ -108,7 +118,7 @@ pub struct SceneObject {
     /// this is applied to the material only around this object's own draw.
     pub transparency_override: Option<f32>,
     /// Authored SRC_COLOR/ONE light accumulation, scoped to this draw.
-    pub additive_color: bool,
+    pub blend_mode: BlendMode,
     /// Front-face winding used to cull backfaces for this object. Most engine
     /// geometry remains double-sided; imported Dark models opt in explicitly.
     backface_culling: Option<FrontFaceWinding>,
@@ -363,7 +373,7 @@ impl SceneObject {
             render_layer: RenderLayer::World,
             projection_override: None,
             transparency_override: None,
-            additive_color: false,
+            blend_mode: BlendMode::Alpha,
             debug_tag: None,
             backface_culling: None,
             depth_bias: false,
@@ -515,7 +525,7 @@ impl SceneObject {
             render_layer: RenderLayer::World,
             projection_override: None,
             transparency_override: None,
-            additive_color: false,
+            blend_mode: BlendMode::Alpha,
             debug_tag: None,
             backface_culling: None,
             depth_bias: false,
@@ -535,7 +545,7 @@ impl SceneObject {
             render_layer: self.render_layer,
             projection_override: self.projection_override,
             transparency_override: self.transparency_override,
-            additive_color: self.additive_color,
+            blend_mode: self.blend_mode,
             debug_tag: self.debug_tag.clone(),
             backface_culling: self.backface_culling,
             depth_bias: self.depth_bias,
@@ -593,11 +603,12 @@ impl SceneObject {
         self.depth_bias
     }
 
-    /// `apply_depth_bias` is false on the transparent pass: the bias exists
-    /// for opaque coplanar decals, and translucent flats (membranes, glass)
-    /// were never verified with an offset applied.
+    /// Incidence overlays inherit the base decal's bias; otherwise they fail
+    /// the depth test against the very surface they are meant to enhance.
+    /// Other translucent flats keep their existing unbiased presentation.
     fn draw_geometry(&self, apply_depth_bias: bool) {
-        let depth_bias = apply_depth_bias && self.depth_bias;
+        let depth_bias =
+            (apply_depth_bias || self.blend_mode == BlendMode::AdditiveAlpha) && self.depth_bias;
         if depth_bias {
             unsafe {
                 gl::Enable(gl::POLYGON_OFFSET_FILL);
@@ -615,13 +626,23 @@ impl SceneObject {
             }
         }
 
-        if self.additive_color {
-            unsafe {
-                gl::BlendFunc(gl::SRC_COLOR, gl::ONE);
+        unsafe {
+            match self.blend_mode {
+                BlendMode::Alpha => {}
+                BlendMode::AdditiveColor => gl::BlendFunc(gl::SRC_COLOR, gl::ONE),
+                BlendMode::AdditiveAlpha => {
+                    gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE, gl::ZERO, gl::ONE);
+                    gl::DepthFunc(gl::LEQUAL);
+                }
             }
         }
         self.geometry.draw();
-        if self.additive_color {
+        if self.blend_mode == BlendMode::AdditiveAlpha {
+            unsafe {
+                gl::DepthFunc(gl::LESS);
+            }
+        }
+        if self.blend_mode != BlendMode::Alpha {
             unsafe {
                 gl::BlendFuncSeparate(
                     gl::SRC_ALPHA,
