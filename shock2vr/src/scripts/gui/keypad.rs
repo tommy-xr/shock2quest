@@ -84,6 +84,27 @@ pub(crate) const fn base_hack_board() -> [HackNode; BOARD_WIDTH * BOARD_HEIGHT] 
     ]
 }
 
+/// Each HRM mode deals its own shape, matching the node outlines printed on
+/// its board art.
+const fn base_board(context: HrmContext) -> [HackNode; BOARD_WIDTH * BOARD_HEIGHT] {
+    use HackNode::{Empty as E, Free as F};
+    match context {
+        HrmContext::Hack { .. } => base_hack_board(),
+        HrmContext::Repair => [
+            E, F, F, F, E, //
+            E, F, F, F, E, //
+            E, F, F, F, E, //
+            E, F, F, F, E,
+        ],
+        HrmContext::Modify => [
+            E, F, F, F, F, //
+            E, F, E, F, E, //
+            E, F, E, F, E, //
+            F, F, F, F, E,
+        ],
+    }
+}
+
 fn next_random(rng_state: &mut u64, upper_exclusive: u32) -> u32 {
     debug_assert!(upper_exclusive > 0);
     let mut value = if *rng_state == 0 {
@@ -124,10 +145,11 @@ fn mix_hack_seed(time_nanoseconds: u64, stable_id: u64) -> u64 {
 }
 
 fn board_with_mines(
+    context: HrmContext,
     mine_count: i32,
     rng_state: &mut u64,
 ) -> [HackNode; BOARD_WIDTH * BOARD_HEIGHT] {
-    let mut nodes = base_hack_board();
+    let mut nodes = base_board(context);
     let mut free: Vec<_> = nodes
         .iter()
         .enumerate()
@@ -459,7 +481,7 @@ pub(crate) fn handle_hrm_msg(
             let (_, mine_count) = effective_hrm_values(world, diff, context);
             let mut rng_state = hack_seed(world, entity_id);
             tracing::debug!(entity = entity_id.inner(), rng_state, "HRM rng seed");
-            let nodes = board_with_mines(mine_count, &mut rng_state);
+            let nodes = board_with_mines(context, mine_count, &mut rng_state);
             tracing::debug!(
                 entity = entity_id.inner(),
                 rng_state,
@@ -842,11 +864,31 @@ mod tests {
         assert!(has_connected_three(&board));
     }
 
+    /// A repair board is dealt on its own shape: the middle three columns,
+    /// all rows - never a hole the repair art prints no outline for.
+    #[test]
+    fn a_repair_board_deals_the_middle_three_columns() {
+        let mut rng_state = 7;
+        let board = board_with_mines(HrmContext::Repair, 4, &mut rng_state);
+        for y in 0..BOARD_HEIGHT {
+            for x in 0..BOARD_WIDTH {
+                let playable = board[board_index(x, y)] != HackNode::Empty;
+                assert_eq!(playable, (1..=3).contains(&x), "node ({x},{y})");
+            }
+        }
+    }
+
     #[test]
     fn seeded_earth_route_uses_three_genuine_success_rolls() {
         let earth_effective_chance = 55;
         let mut rng_state = 7;
-        let board = board_with_mines(1, &mut rng_state);
+        let board = board_with_mines(
+            HrmContext::Hack {
+                security_computer: false,
+            },
+            1,
+            &mut rng_state,
+        );
         let rolls = (0..3)
             .map(|_| outcome_roll(&mut rng_state))
             .collect::<Vec<_>>();
