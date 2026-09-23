@@ -21,6 +21,7 @@ unsafe impl Sync for Texture {}
 pub trait TextureTrait {
     fn bind0(&self, render_context: &EngineRenderContext);
     fn bind1(&self, render_context: &EngineRenderContext);
+    fn bind_to(&self, render_context: &EngineRenderContext, unit: u32);
 }
 
 impl TextureTrait for Texture {
@@ -29,6 +30,9 @@ impl TextureTrait for Texture {
     }
     fn bind1(&self, _render_context: &EngineRenderContext) {
         bind1(self);
+    }
+    fn bind_to(&self, _render_context: &EngineRenderContext, unit: u32) {
+        bind_to(self, unit);
     }
 }
 
@@ -56,6 +60,11 @@ impl TextureTrait for AnimatedTexture {
         let frame = (render_context.time / self.time_per_frame) as usize;
         let frame = frame % self.textures.len();
         bind1(&self.textures[frame]);
+    }
+    fn bind_to(&self, render_context: &EngineRenderContext, unit: u32) {
+        let frame = (render_context.time / self.time_per_frame) as usize;
+        let frame = frame % self.textures.len();
+        bind_to(&self.textures[frame], unit);
     }
 }
 
@@ -115,6 +124,13 @@ pub fn bind0(texture: &Texture) {
 pub fn bind1(texture: &Texture) {
     unsafe {
         gl::ActiveTexture(gl::TEXTURE1);
+        gl::BindTexture(gl::TEXTURE_2D, texture.gl_id);
+    }
+}
+
+pub fn bind_to(texture: &Texture, unit: u32) {
+    unsafe {
+        gl::ActiveTexture(gl::TEXTURE0 + unit);
         gl::BindTexture(gl::TEXTURE_2D, texture.gl_id);
     }
 }

@@ -3,6 +3,7 @@ use std::any::Any;
 use std::ops::Deref;
 
 use super::incidence::{IncidencePass, IncidenceUniforms};
+use super::shine::{Shine, ShineUniforms};
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
@@ -138,24 +139,24 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             }
             if (texColor.a < 0.1) discard;
 
-            // Base material color (ambient)
-            vec3 finalColor = texColor.rgb * ambientLight * ambientIntensity;
+            vec3 finalColor = texColor.rgb * emissivity;
 
-            // Add emissive contribution
-            finalColor += texColor.rgb * emissivity;
-
-            // Calculate contribution from all 6 spotlights
+            // Light reaching the surface before albedo, shared with the shine.
             vec3 normal = normalize(worldNormal);
+            vec3 light = ambientLight * ambientIntensity;
             for (int i = 0; i < 6; i++) {
-                finalColor += calculateSpotlight(i, worldPos, normal, texColor.rgb);
+                light += calculateSpotlight(i, worldPos, normal, vec3(1.0));
             }
+            finalColor += texColor.rgb * light;
+            vec4 shaded = applyShine(vec4(finalColor, texColor.a * (1.0 - transparency)), light, 1.0 - transparency, texCoord, worldPos, normal);
 
-            fragColor = applyIncidence(vec4(finalColor, texColor.a * (1.0 - transparency)), texColor, worldPos, worldNormal);
+            fragColor = applyIncidence(shaded, texColor, worldPos, worldNormal);
         }
 "#;
 
 struct UnifiedUniforms {
     incidence: IncidenceUniforms,
+    shine: ShineUniforms,
     // Basic transformation matrices
     world_loc: i32,
     view_loc: i32,
@@ -194,6 +195,7 @@ where
     additive_unlit: bool,
     fixed_ambient: bool,
     incidence: Option<IncidencePass>,
+    shine: Option<Shine>,
 }
 
 impl<T> BasicMaterial<T>
@@ -220,6 +222,9 @@ where
             uniforms
                 .incidence
                 .bind(self.incidence.as_ref(), render_context, view_matrix);
+            uniforms
+                .shine
+                .bind(self.shine.as_ref(), render_context, view_matrix);
 
             let projection = render_context.projection_matrix;
 
@@ -319,6 +324,10 @@ where
         self
     }
 
+    fn set_shine(&mut self, shine: Shine) {
+        self.shine = Some(shine);
+    }
+
     fn set_transparency_override(&mut self, transparency: Option<f32>) {
         self.transparency = match transparency {
             Some(value) => value.clamp(0.0, 1.0),
@@ -345,8 +354,9 @@ where
 
             let fragment_shader = crate::shader::build(
                 &format!(
-                    "{}\n{}",
+                    "{}\n{}\n{}",
                     super::incidence::GLSL,
+                    super::shine::GLSL,
                     UNIFIED_FRAGMENT_SHADER_SOURCE
                 ),
                 crate::shader::ShaderType::Fragment,
@@ -359,6 +369,7 @@ where
                 // Get uniform locations for all shader variables
                 let uniforms = UnifiedUniforms {
                     incidence: IncidenceUniforms::new(shader.gl_id),
+                    shine: ShineUniforms::new(shader.gl_id),
                     // Basic transformation matrices
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
                     view_loc: gl::GetUniformLocation(shader.gl_id, c_str!("view").as_ptr()),
@@ -588,6 +599,7 @@ where
         additive_unlit,
         fixed_ambient: false,
         incidence: None,
+        shine: None,
     })
 }
 
@@ -610,6 +622,7 @@ where
         additive_unlit: false,
         fixed_ambient: true,
         incidence: None,
+        shine: None,
     })
 }
 
@@ -628,6 +641,7 @@ pub fn create_incidence(
         additive_unlit: false,
         fixed_ambient: false,
         incidence: Some(pass),
+        shine: None,
     })
 }
 

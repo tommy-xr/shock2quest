@@ -50,6 +50,10 @@ pub trait Material: Any {
     /// materials without transparency support.
     fn set_transparency_override(&mut self, _transparency: Option<f32>) {}
 
+    /// Composite an authored shine over this material in the same draw.
+    /// Default is a no-op for materials that do not light a diffuse.
+    fn set_shine(&mut self, _shine: crate::scene::shine::Shine) {}
+
     /// The transparency currently in effect (0.0 = opaque, 1.0 = invisible),
     /// for debug inspection only. `None` for materials without transparency.
     fn transparency(&self) -> Option<f32> {
