@@ -26,6 +26,13 @@ effect bursts do not accumulate entities. Installed particle/decal assets are
 loaded through the regular asset cache. A missing particle sprite logs a warning
 and uses the existing glow disk fallback; missing decal models are reported.
 
+The first gameplay integrations are blood impacts and normal/overload EMP
+projectiles. Blood enhances the existing spang and spray attachment; EMP
+enhances the existing projectile riders. Their gameplay selection, damage,
+energy use and collision behavior are unchanged. Missing effect art retains
+the legacy visuals. Material-specific terrain routing and the EMP impact
+explosion are separate follow-ups.
+
 For a repeatable capture, place the free camera at `[8.5, 2, 0]`, looking at
 `[-4, 1.6, 0]`. The six stations run along Z from `5.25` to `-5.25`, spaced
 `2.1` units apart, with effects at Y `1.65`. Capture early and late within each
