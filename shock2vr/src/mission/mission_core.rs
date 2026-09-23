@@ -6734,13 +6734,26 @@ impl MissionCore {
             }
 
             for (template_id, _corpse_options) in corpse_links {
+                // EMP impact hosts are disposable bursts, unlike gameplay
+                // corpses and persistent hazards that use the same link type.
+                let transient_fx = matches!(
+                    crate::particle_effects::EnhancedEffect::for_template(template_id, |name| {
+                        self.template_name_to_template_id
+                            .get(name)
+                            .map(|m| m.template_id)
+                    }),
+                    Some(crate::particle_effects::EnhancedEffect::EmpExplosion { .. })
+                );
                 self.create_entity_with_position(
                     asset_cache,
                     template_id,
                     vec3_to_point3(position),
                     rotation,
                     Matrix4::identity(),
-                    CreateEntityOptions::default(),
+                    CreateEntityOptions {
+                        transient_fx,
+                        ..Default::default()
+                    },
                 );
             }
         }
