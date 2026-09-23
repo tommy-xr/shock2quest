@@ -3,17 +3,13 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { clickElement } from "./helpers/os-upgrade.js";
 import { carriedNaniteTotal } from "./helpers/nanites.js";
-import { elements, openSettings, property, winBoard } from "./helpers/hrm.js";
+import { closeSettings, elements, openSettings, property, winBoard } from "./helpers/hrm.js";
 
 // A Broken gun's settings panel offers REPAIR in MODIFY's place. A won paid
 // board sets the gun back to Normal with 10 more condition.
 const enabled = process.env.SHOCK2_E2E === "1";
 const PISTOL = -17;
 
-async function closeSettings(game: GameServer) {
-  await game.input.trigger("ToggleUseMode");
-  await game.step({ frames: 2 });
-}
 async function breakGun(game: GameServer, gun: number, condition: number) {
   await game.entities.sendMessage(gun, { type: "SetObjectState", state: "Broken" });
   await game.entities.sendMessage(gun, { type: "SetGunCondition", condition });

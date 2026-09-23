@@ -295,12 +295,7 @@ pub(crate) fn hrm_breakdown(world: &World, diff: PropHackDiff, context: HrmConte
     };
     let line = |key: &str, fallback: &str, args: &[i32]| {
         let format = super::PanelText::string(world, "jargon", &format!("{key}{mode}"), fallback);
-        // Shipped lines end in a literal `\n` escape; the join supplies breaks.
-        let mut out = format.replace("\\n", "").replace("%%", "\u{0}");
-        for arg in args {
-            out = out.replacen("%d", &arg.to_string(), 1);
-        }
-        out.replace('\u{0}', "%").trim_end().to_owned()
+        super::PanelText::format(&format, args)
     };
     let terms = HrmTerms::for_context(world, context);
     let (skill_bonus, stat_bonus) = hrm_params(world)

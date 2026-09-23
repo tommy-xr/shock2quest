@@ -1153,6 +1153,7 @@ pub enum Effect {
         world_offset: Vector3<f32>,
         world_size: Vector2<f32>,
         components: Vec<GuiComponentRenderInfo>,
+        sidecar: Option<crate::gui::PanelSidecar>,
     },
 
     /// Put a line on the HUD's status-message channel, where it stays for the

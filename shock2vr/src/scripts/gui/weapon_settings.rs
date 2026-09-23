@@ -25,7 +25,9 @@ use super::keypad::{
     HackOutcomeEffects, HackPhase, HackState, HrmContext, KeyPadMsg, draw_hack_board,
     handle_hrm_msg, hrm_breakdown, hrm_failure_percent,
 };
-use crate::gui::{self, ButtonHoverBehavior, Gui, GuiComponent, GuiConfig, GuiCursor};
+use crate::gui::{
+    self, ButtonHoverBehavior, Gui, GuiComponent, GuiConfig, GuiCursor, PanelSidecar,
+};
 use crate::scripts::Effect;
 use crate::scripts::script_util;
 use crate::ui::Rect;
@@ -94,7 +96,9 @@ const FAILURE_RECT: Rect = Rect::new(14.0, 49.0, 30.0, 12.0);
 const ODDS_RECT: Rect = Rect::new(15.0, 180.0, 137.0, 104.0);
 
 /// Retail's 73x194 HRM plug beside the MFD, dropped 96px from its top, with
-/// its 52x74 button at plug-local (16, 114).
+/// its 52x74 button at plug-local (16, 114). Retail puts it at screen x 181
+/// beside an MFD at x 2, so it overlaps the body's right edge by 9px.
+const PLUG_X: f32 = 179.0;
 const PLUG_Y: f32 = 96.0;
 const PLUG_W: f32 = 73.0;
 const PLUG_H: f32 = 194.0;
@@ -139,8 +143,8 @@ struct Plug {
 
 /// The plug the settings panel raises for `weapon`, if any.
 fn plug_for(world: &World, weapon: EntityId) -> Option<Plug> {
-    if weapon_repair::is_broken(world, weapon) && weapon_repair::supported(world, weapon) {
-        Some(Plug {
+    if weapon_repair::is_broken(world, weapon) {
+        weapon_repair::supported(world, weapon).then_some(Plug {
             backdrop: "plugrep.pcx",
             button: ["plugr0.pcx", "plugr1.pcx"],
             label: "repair",
@@ -272,9 +276,11 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             };
             // Archive-qualified: obj.crf also ships a repair.pcx.
             let (backdrop, goal) = match job {
-                HrmJob::Modify(_) => (
+                // The level the board was opened at: after a win the gun
+                // already carries the next one.
+                HrmJob::Modify(level) => (
                     "modify.pcx",
-                    weapon_modification::description(world, weapon).to_owned(),
+                    weapon_modification::description(world, weapon, *level),
                 ),
                 HrmJob::Repair => (
                     "iface/repair.pcx",
@@ -310,12 +316,12 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         if let Some(plug) = plug_for(world, weapon) {
             components.push(
                 gui::image(plug.backdrop)
-                    .with_position(vec2(PANEL_W, PLUG_Y))
+                    .with_position(vec2(PLUG_X, PLUG_Y))
                     .with_size(vec2(PLUG_W, PLUG_H)),
             );
             components.push(
                 gui::button(plug.msg)
-                    .with_position(vec2(PANEL_W + PLUG_BUTTON.x, PLUG_Y + PLUG_BUTTON.y))
+                    .with_position(vec2(PLUG_X + PLUG_BUTTON.x, PLUG_Y + PLUG_BUTTON.y))
                     .with_size(vec2(PLUG_BUTTON.w, PLUG_BUTTON.h))
                     .with_image(plug.button[0])
                     .with_hover(ButtonHoverBehavior::Texture(plug.button[1].to_owned()))
@@ -419,20 +425,38 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         }
     }
 
-    /// The plug widens the canvas to its right while the settings show.
+    /// A gun with a plug widens the canvas for it for as long as the panel is
+    /// open - board included - so the VR quad never resizes mid-session.
     fn get_config_for(
         &self,
         _entity_id: EntityId,
         world: &World,
-        state: &WeaponSettingsGuiState,
+        _state: &WeaponSettingsGuiState,
     ) -> GuiConfig {
         let mut config = self.get_config();
-        let plug = state.board.is_none()
-            && WeaponSettingsTarget::resolve(world).is_some_and(|w| plug_for(world, w).is_some());
-        if plug {
-            config.screen_size_in_pixels.x += PLUG_W;
+        if WeaponSettingsTarget::resolve(world).is_some_and(|w| plug_for(world, w).is_some()) {
+            config.screen_size_in_pixels.x = PLUG_X + PLUG_W;
         }
         config
+    }
+
+    /// The plug's room is kept while the panel is open; it shows (and takes
+    /// clicks) only beside the settings, not the board.
+    fn sidecar(
+        &self,
+        _entity_id: EntityId,
+        world: &World,
+        state: &WeaponSettingsGuiState,
+    ) -> Option<PanelSidecar> {
+        let weapon = WeaponSettingsTarget::resolve(world)?;
+        plug_for(world, weapon)?;
+        Some(PanelSidecar {
+            body_width: PANEL_W,
+            rect: state
+                .board
+                .is_none()
+                .then_some(Rect::new(PLUG_X, PLUG_Y, PLUG_W, PLUG_H)),
+        })
     }
 
     fn handle_msg(
@@ -485,14 +509,38 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 let diff = quote.unwrap();
                 let outcomes = match job {
                     HrmJob::Modify(_) => HackOutcomeEffects {
-                        success: |entity_id, world| Effect::ModifyWeapon {
-                            entity_id,
-                            expected_level: weapon_modification::level(world, entity_id)
-                                .unwrap_or(-1),
+                        success: |entity_id, world| {
+                            Effect::combine(vec![
+                                Effect::ShowMessage {
+                                    text: super::PanelText::hrm(
+                                        world,
+                                        "ModifyResult1",
+                                        "Modification completed!",
+                                        &[],
+                                    ),
+                                },
+                                Effect::ModifyWeapon {
+                                    entity_id,
+                                    expected_level: weapon_modification::level(world, entity_id)
+                                        .unwrap_or(-1),
+                                },
+                            ])
                         },
-                        critical_failure: |entity_id, _| Effect::SetObjectState {
-                            entity_id,
-                            state: dark::properties::ObjectState::Broken,
+                        critical_failure: |entity_id, world| {
+                            Effect::combine(vec![
+                                Effect::ShowMessage {
+                                    text: super::PanelText::hrm(
+                                        world,
+                                        "ModifyResult2",
+                                        "Modification Failed!",
+                                        &[],
+                                    ),
+                                },
+                                Effect::SetObjectState {
+                                    entity_id,
+                                    state: dark::properties::ObjectState::Broken,
+                                },
+                            ])
                         },
                     },
                     HrmJob::Repair => HackOutcomeEffects {
@@ -666,7 +714,7 @@ mod tests {
                 .get_config_for(EntityId::dead(), &world, &WeaponSettingsGuiState::default())
                 .screen_size_in_pixels
                 .x,
-            PANEL_W + PLUG_W,
+            PLUG_X + PLUG_W,
             "the plug widens the canvas beside the settings",
         );
 

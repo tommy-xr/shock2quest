@@ -18,6 +18,18 @@ export async function openSettings(game: GameServer) {
   await clickElement(game, button);
 }
 
+/** Leave use mode, closing the MFD. */
+export async function closeSettings(game: GameServer) {
+  await game.input.trigger("ToggleUseMode");
+  await game.step({ frames: 2 });
+}
+
+/** Retail's HRM board has no way back: close the MFD and reopen settings. */
+export async function reopenSettings(game: GameServer) {
+  await closeSettings(game);
+  await openSettings(game);
+}
+
 export async function property(game: GameServer, entity: number, name: string) {
   return (await game.entities.detail(entity)).properties.find((p) => p.name === name)!.value;
 }

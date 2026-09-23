@@ -26,6 +26,7 @@ impl PanelText {
         let height = font.base_height();
         let strings = [
             "misc", "stathelp", "skilhelp", "research", "rsrchtxt", "objshort", "hrm", "jargon",
+            "modify1", "modify2",
         ]
         .into_iter()
         .map(|name| {
@@ -67,6 +68,34 @@ impl PanelText {
                     .cloned()
             })
             .unwrap_or_else(|| fallback.to_owned())
+    }
+
+    /// Fill a `.STR` printf line: each `%d` takes the next of `args`, `%%` is
+    /// a literal percent, and the literal `\n` escape shipped lines end in is
+    /// dropped.
+    pub fn format(line: &str, args: &[i32]) -> String {
+        let mut out = line.replace("\\n", "").replace("%%", "\u{0}");
+        for arg in args {
+            out = out.replacen("%d", &arg.to_string(), 1);
+        }
+        out.replace('\u{0}', "%").trim_end().to_owned()
+    }
+
+    /// A line from `hrm.str`, the HRM board's string table, filled with `args`.
+    pub fn hrm(world: &World, key: &str, fallback: &str, args: &[i32]) -> String {
+        Self::format(&Self::string(world, "hrm", key, fallback), args)
+    }
+
+    /// Resolve an object string (`key: "fallback"`) against a loaded table.
+    pub fn object_string(world: &World, table: &str, raw: &str) -> String {
+        let metrics = world.borrow::<UniqueView<Self>>();
+        let empty = HashMap::new();
+        let strings = metrics
+            .as_ref()
+            .ok()
+            .and_then(|m| m.strings.get(table))
+            .unwrap_or(&empty);
+        dark::importers::resolve_localized_property_string(raw, strings)
     }
 
     pub fn line_height(world: &World) -> f32 {

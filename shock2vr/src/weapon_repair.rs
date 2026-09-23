@@ -5,6 +5,7 @@ use dark::properties::{ObjectState, PropHackDiff, PropRepairDiff, PropRequiredTe
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::scripts::Effect;
+use crate::scripts::gui::PanelText;
 
 /// Condition a won repair adds, capped at 100.
 const REPAIR_CONDITION_BONUS: f32 = 10.0;
@@ -42,27 +43,25 @@ pub fn quote(world: &World, weapon: EntityId) -> Result<PropHackDiff, String> {
         .borrow::<UniqueView<QuestInfo>>()
         .map_err(|_| "No player stats.")?;
     if quests.player_stats().skill_level(Skill::Repair) < required {
-        return Err(
-            hrm_string(world, "techminskill1", "Repair skill %d required.")
-                .replace("%d", &required.to_string()),
-        );
+        return Err(PanelText::hrm(
+            world,
+            "techminskill1",
+            "Repair skill %d required.",
+            &[required],
+        ));
     }
     diff.cost = (diff.cost as i32).max(1) as f32;
     Ok(diff)
 }
 
-/// A line from `hrm.str`, the board's own string table.
-fn hrm_string(world: &World, key: &str, fallback: &str) -> String {
-    crate::scripts::gui::PanelText::string(world, "hrm", key, fallback)
-}
-
 pub fn success(entity_id: EntityId, world: &World) -> Effect {
     Effect::combine(vec![
         Effect::ShowMessage {
-            text: hrm_string(
+            text: PanelText::hrm(
                 world,
                 "RepairResult1",
                 "The item has been successfully repaired, and can be used normally.",
+                &[],
             ),
         },
         Effect::SetObjectState {
@@ -79,7 +78,7 @@ pub fn success(entity_id: EntityId, world: &World) -> Effect {
 pub fn critical_failure(entity_id: EntityId, world: &World) -> Effect {
     Effect::combine(vec![
         Effect::ShowMessage {
-            text: hrm_string(world, "RepairResult2", "You have destroyed the item!"),
+            text: PanelText::hrm(world, "RepairResult2", "You have destroyed the item!", &[]),
         },
         Effect::DestroyEntity { entity_id },
     ])

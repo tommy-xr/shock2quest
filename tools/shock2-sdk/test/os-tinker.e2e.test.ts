@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { GameServer, type UiElement } from "../src/index.js";
 import { acquireOsUpgrade, clickElement } from "./helpers/os-upgrade.js";
 import { carriedNaniteTotal } from "./helpers/nanites.js";
-import { elements, openSettings, property, winBoard } from "./helpers/hrm.js";
+import { closeSettings, elements, openSettings, property, reopenSettings, winBoard } from "./helpers/hrm.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 async function click(game: GameServer, label: string) {
@@ -17,11 +17,6 @@ async function openModifyBoard(game: GameServer) {
   const cost = (await elements(game)).find(e => e.kind === "text" && /^\d+$/.test(e.text ?? ""));
   assert.ok(cost, JSON.stringify(await elements(game)));
   return Number(cost.text);
-}
-/** Retail's HRM board has no way back: close the MFD and reopen settings. */
-async function reopenSettings(game: GameServer) {
-  await game.input.trigger("ToggleUseMode"); await game.step({ frames: 2 });
-  await openSettings(game);
 }
 test("Tinker halves actual paid Modify attempts; two pistol modifications survive save and transition", { skip: !enabled, timeout: 300_000 }, async () => {
   await using game = await GameServer.launch({ mission: "medsci2.mis" });
@@ -37,7 +32,7 @@ test("Tinker halves actual paid Modify attempts; two pistol modifications surviv
   assert.equal(await carriedNaniteTotal(game), balance, "insufficient payment leaves balance unchanged");
   assert.equal(await property(game, gun, "Modification"), "0");
   assert.ok((await elements(game)).some(e => /pay[hm]\.pcx/.test(e.texture ?? "")));
-  await game.input.trigger("ToggleUseMode"); await game.step({ frames: 2 });
+  await closeSettings(game);
   await acquireOsUpgrade(game, "Tinker");
   for (let i = 0; i < 20; i++) await game.player.spawnItem("20 Nanites");
   await openSettings(game);

@@ -439,6 +439,12 @@ pub struct PropGunSettingText2(pub String);
 pub struct PropModifyDiff(pub PropHackDiff);
 #[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
 pub struct PropModify2Diff(pub PropHackDiff);
+/// `P$Modify1` / `P$Modify2` - the object string describing a gun's first /
+/// second modification, resolved against `MODIFY1.STR` / `MODIFY2.STR`.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropModifyText1(pub String);
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropModifyText2(pub String);
 /// `P$RepairDif` - the terms a Broken object is repaired on.
 #[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
 pub struct PropRepairDiff(pub PropHackDiff);
@@ -1647,6 +1653,18 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$BaseGunDe",
             PropBaseGunDesc::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Modify1",
+            read_variable_length_string,
+            PropModifyText1,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Modify2",
+            read_variable_length_string,
+            PropModifyText2,
             accumulator::latest,
         ),
         define_prop(

@@ -10474,6 +10474,7 @@ impl MissionCore {
                     world_offset,
                     world_size,
                     components,
+                    sidecar,
                 } => {
                     // The FlatUiHost's canvas slots: the flat MFD panel
                     // and the use-mode inventory strip,
@@ -10483,8 +10484,13 @@ impl MissionCore {
                     // slots, so this is inert outside those modes. VR's
                     // object-bound world panel still accepts only the panel
                     // explicitly opened through `OpenPanel` (below).
-                    self.flat_ui
-                        .on_set_ui(&self.world, parent_entity, world_size, &components);
+                    self.flat_ui.on_set_ui(
+                        &self.world,
+                        parent_entity,
+                        world_size,
+                        sidecar,
+                        &components,
+                    );
                     let is_map = self
                         .world
                         .borrow::<UniqueView<MapPanelEntity>>()
