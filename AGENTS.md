@@ -403,6 +403,11 @@ For debugging visual/rendering changes without a full interactive session:
    # (Teleporting into a trigger volume fires it, same as walking in.)
    curl -X POST http://127.0.0.1:8080/v1/control/input -d '{"right_hand.thumbstick": [0.0, 1.0]}'
 
+   # Aim the head with head.look [yaw_deg, pitch_deg]. Pitch is POSITIVE DOWN
+   # (+60 looks at the floor, -60 at the ceiling), like mouse-look. For an
+   # exact world direction, place the debug camera with look_at instead.
+   curl -X POST http://127.0.0.1:8080/v1/control/input -d '{"head.look": [90.0, -30.0]}'
+
    # Place the debug (free) camera anywhere and aim it - the only way to
    # photograph something the player's own eye cannot see, the player and
    # whatever they are holding included. `position` is the world-space EYE
