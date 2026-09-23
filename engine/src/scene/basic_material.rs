@@ -23,6 +23,7 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
         uniform mat4 world;
         uniform mat4 view;
         uniform mat4 projection;
+        uniform mat3 normalMatrix;
 
         out vec2 texCoord;
         out vec3 worldPos;
@@ -33,8 +34,6 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
             vec4 worldPosition = world * vec4(inPos, 1.0);
             worldPos = worldPosition.xyz;
 
-            // Transform normal to world space
-            mat3 normalMatrix = transpose(inverse(mat3(world)));
             worldNormal = normalize(normalMatrix * inNormal);
 
             gl_Position = projection * view * worldPosition;
@@ -161,6 +160,7 @@ struct UnifiedUniforms {
     world_loc: i32,
     view_loc: i32,
     projection_loc: i32,
+    normal_matrix_loc: i32,
 
     // Material properties
     emissivity_loc: i32,
@@ -227,6 +227,13 @@ where
             gl::UniformMatrix4fv(uniforms.world_loc, 1, gl::FALSE, world_matrix.as_ptr());
             gl::UniformMatrix4fv(uniforms.view_loc, 1, gl::FALSE, view_matrix.as_ptr());
             gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
+            let normal_matrix = crate::scene::material::normal_matrix(world_matrix);
+            gl::UniformMatrix3fv(
+                uniforms.normal_matrix_loc,
+                1,
+                gl::FALSE,
+                normal_matrix.as_ptr(),
+            );
 
             // Set material properties
             gl::Uniform1i(uniforms.additive_unlit_loc, i32::from(self.additive_unlit));
@@ -358,6 +365,10 @@ where
                     projection_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("projection").as_ptr(),
+                    ),
+                    normal_matrix_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("normalMatrix").as_ptr(),
                     ),
 
                     // Material properties
