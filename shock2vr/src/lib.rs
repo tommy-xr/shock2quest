@@ -236,8 +236,21 @@ pub fn is_25th_anniversary_install() -> bool {
 /// This is the same precedence the classic `.crf` mount list uses: `obj` first
 /// so a model material resolves to a model texture, `iface` and friends after.
 const RESOURCE_FAMILIES: &[&str] = &[
-    "obj", "bitmap", "book", "fam", "fonts", "iface", "intrface", "mesh", "motions", "objicon",
-    "snd", "snd2", "song", "strings",
+    "obj",
+    "bitmap",
+    "book",
+    "fam",
+    "fonts",
+    "iface",
+    "intrface",
+    "mesh",
+    "motions",
+    "objicon",
+    "snd",
+    "snd2",
+    "song",
+    "strings",
+    "materials",
 ];
 
 /// The 25AE mod stack, highest priority first, exactly as
@@ -288,6 +301,7 @@ fn mount_family(
 ) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
     match family {
         "strings" => ZipAssetPath::with_prefix_opts(archive, prefix, false, None),
+        "materials" => ZipAssetPath::with_prefix_opts(archive, prefix, false, Some(family)),
         "iface" | "bitmap" | "objicon" => {
             ZipAssetPath::with_prefix_opts(archive, prefix, true, Some(family))
         }

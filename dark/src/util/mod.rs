@@ -1,3 +1,4 @@
+mod material_includes;
 mod merge_maps;
 
 use cgmath::{InnerSpace, Point3, point3};
@@ -107,7 +108,9 @@ fn object_material_primary_texture(asset_cache: &AssetCache, requested: &str) ->
     Some(texture)
 }
 
-fn object_material_script(asset_cache: &AssetCache, requested: &str) -> Option<String> {
+/// Load a material with includes expanded in authored order. An incomplete or
+/// cyclic include tree falls back to the model's ordinary texture.
+pub fn object_material_script(asset_cache: &AssetCache, requested: &str) -> Option<String> {
     let stem = Path::new(requested).with_extension("");
     let stem = stem.to_str()?.to_ascii_lowercase();
     let candidates = [
@@ -121,7 +124,26 @@ fn object_material_script(asset_cache: &AssetCache, requested: &str) -> Option<S
     let reader = asset_cache.get_raw_reader(&script_name)?;
     let mut script = String::new();
     reader.borrow_mut().read_to_string(&mut script).ok()?;
-    Some(script)
+    // The object family mount strips `obj/`; include paths are authored
+    // relative to the full archive path, two levels above obj/txt16.
+    let root = if script_name.starts_with("obj/") {
+        script_name.clone()
+    } else {
+        format!("obj/{script_name}")
+    };
+    let expanded = material_includes::expand_material_includes(&root, &script, |path| {
+        let mounted = path.strip_prefix("obj/").unwrap_or(path);
+        let reader = asset_cache.get_raw_reader(mounted)?;
+        let mut source = String::new();
+        reader.borrow_mut().read_to_string(&mut source).ok()?;
+        Some(source)
+    });
+    if expanded.is_none() {
+        tracing::warn!(
+            "incomplete or cyclic material includes for {requested}; keeping ordinary material"
+        );
+    }
+    expanded
 }
 
 /// A sole unlit, additive pass using the authored texture (25AE gun flashes).
@@ -145,8 +167,8 @@ fn is_additive_flash_script(script: &str) -> bool {
 ///
 /// Only a *base* pass can supply the diffuse. 25AE materials routinely open
 /// with an additive shine or modulate overlay whose texture is a specular map,
-/// and reach their real diffuse through an `include` (not yet followed - see
-/// #912); treating such an overlay as the diffuse renders the object with its
+/// and reach their real diffuse through an `include`; treating such an
+/// overlay as the diffuse renders the object with its
 /// spec map and can make it disappear. Passes that cannot be a base pass are
 /// skipped, and `$TEXTURE` in a base pass means the model keeps its authored
 /// texture.
@@ -472,6 +494,30 @@ mod tests {
         assert_eq!(
             super::resolve_object_icon_name(&classic, "disc.png").as_deref(),
             Some("objicon/disc.pcx")
+        );
+    }
+
+    #[test]
+    fn object_material_resolves_included_base_before_local_overlays() {
+        let assets = cache(&[
+            ("txt16/example.mtl", b"include ../../materials/base.inc\nrender_pass\n{\nblend SRC_ALPHA ONE\ntexture obj/txt16/specular\n}\n"),
+            ("materials/base.inc", b"render_pass\n{\ntexture obj/txt16/diffuse\n}\n"),
+            ("txt16/diffuse.dds", b"diffuse"),
+            ("txt16/specular.dds", b"specular"),
+            ("txt16/example.dds", b"original"),
+        ]);
+        assert_eq!(
+            resolve_object_material_texture_name(&assets, "example"),
+            Some("txt16/diffuse.dds".to_owned())
+        );
+        let missing = cache(&[
+            ("txt16/example.mtl", b"include ../../materials/missing.inc\nrender_pass\n{\ntexture obj/txt16/incorrect\n}\n"),
+            ("txt16/example.dds", b"original"),
+            ("txt16/incorrect.dds", b"partial tree"),
+        ]);
+        assert_eq!(
+            resolve_object_material_texture_name(&missing, "example"),
+            Some("txt16/example.dds".to_owned())
         );
     }
 

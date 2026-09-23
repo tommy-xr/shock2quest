@@ -97,6 +97,11 @@ impl ZipAssetPath {
                     .or_insert_with(|| full.clone());
             }
             if let Some(namespace) = namespace {
+                // Preserve subdirectories for relative material includes;
+                // retain basename aliases used by bitmap/interface callers.
+                asset_to_path
+                    .entry(format!("{namespace}/{relative}"))
+                    .or_insert_with(|| full.clone());
                 asset_to_path
                     .entry(format!("{namespace}/{base}"))
                     .or_insert(full);
@@ -205,6 +210,12 @@ mod tests {
                 },
                 AssetEntry {
                     key: "obj/foo.pcx".to_owned(),
+                    source: archive.clone(),
+                    entry_name: "OBJ/txt16/Foo.PCX".to_owned(),
+                    is_alias: true,
+                },
+                AssetEntry {
+                    key: "obj/txt16/foo.pcx".to_owned(),
                     source: archive.clone(),
                     entry_name: "OBJ/txt16/Foo.PCX".to_owned(),
                     is_alias: true,
