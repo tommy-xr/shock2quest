@@ -54,6 +54,7 @@ fn create_particle_texture() -> Arc<Texture> {
     Arc::new(texture)
 }
 
+#[derive(Clone)]
 pub struct ParticleSystem {
     particles: Vec<Particle>,
     acceleration: Vector3<f32>,
@@ -79,6 +80,11 @@ pub struct ParticleSystem {
     /// Sprite for bitmap particles (PRT_SCALED_BITMAP); `None` renders the
     /// default radial glow disk.
     sprite_texture: Option<Rc<dyn TextureTrait>>,
+    sprite_frames: Vec<Rc<dyn TextureTrait>>,
+    sprite_frame_time: f32,
+    sprite_looping: bool,
+    size_velocity: f32,
+    fade_in_time: f32,
 }
 
 fn randf(a: f32, b: f32) -> f32 {
@@ -102,6 +108,7 @@ fn create_random_particle(system: &ParticleSystem) -> Particle {
     let velocity = randv3(system.launch_velocity.0, system.launch_velocity.1);
     let scale = randf(system.particle_size.0, system.particle_size.1);
     Particle {
+        age: 0.0,
         remaining_life_in_seconds: lifetime,
         position,
         velocity,
@@ -134,6 +141,11 @@ impl ParticleSystem {
             one_shot: false,
             has_launched: false,
             sprite_texture: None,
+            sprite_frames: Vec::new(),
+            sprite_frame_time: 0.1,
+            sprite_looping: false,
+            size_velocity: 0.0,
+            fade_in_time: 0.0,
         }
     }
 
@@ -148,6 +160,39 @@ impl ParticleSystem {
     pub fn with_sprite_texture(self, texture: Rc<dyn TextureTrait>) -> ParticleSystem {
         ParticleSystem {
             sprite_texture: Some(texture),
+            sprite_frames: Vec::new(),
+            ..self
+        }
+    }
+
+    /// Each particle starts its own animation at birth. An empty sequence keeps
+    /// the existing single sprite (or glow disk); a non-looping sequence holds
+    /// its final frame until the particle expires.
+    pub fn with_sprite_animation(
+        self,
+        frames: Vec<Rc<dyn TextureTrait>>,
+        frame_time: Duration,
+        looping: bool,
+    ) -> ParticleSystem {
+        ParticleSystem {
+            sprite_frames: frames,
+            sprite_frame_time: frame_time.as_secs_f32(),
+            sprite_looping: looping,
+            ..self
+        }
+    }
+
+    /// Change sprite diameter in world units per second, clamped at zero.
+    pub fn with_size_velocity(self, size_velocity: f32) -> ParticleSystem {
+        ParticleSystem {
+            size_velocity,
+            ..self
+        }
+    }
+
+    pub fn with_fade_in_time(self, fade_in_time: f32) -> ParticleSystem {
+        ParticleSystem {
+            fade_in_time,
             ..self
         }
     }
@@ -226,9 +271,11 @@ impl ParticleSystem {
     pub fn update(&mut self, dt: Duration, transform: Matrix4<f32>) {
         let delta_time = dt.as_secs_f32();
         self.particles.iter_mut().for_each(|p| {
+            p.age += delta_time;
             p.remaining_life_in_seconds -= delta_time;
             p.position += p.velocity * delta_time;
             p.velocity += self.acceleration * delta_time;
+            p.scale = (p.scale + self.size_velocity * delta_time).max(0.0);
         });
 
         self.particles.retain(|p| p.remaining_life_in_seconds > 0.0);
@@ -264,10 +311,21 @@ impl ParticleSystem {
                 if adj_time > 0.0 {
                     alpha = 1.0 - (adj_time / self.particle_fade_time);
                 }
+                if self.fade_in_time > 0.0 {
+                    alpha *= (p.age / self.fade_in_time).clamp(0.0, 1.0);
+                }
                 // Emissive so particles self-glow (visible in dark scenes); the
                 // glow is tinted by `color` in the shader, so it stays the
                 // palette color rather than washing to white.
-                let mat = match &self.sprite_texture {
+                let sprite = sprite_frame_index(
+                    p.age,
+                    self.sprite_frames.len(),
+                    self.sprite_frame_time,
+                    self.sprite_looping,
+                )
+                .and_then(|index| self.sprite_frames.get(index))
+                .or(self.sprite_texture.as_ref());
+                let mat = match sprite {
                     // Sprites render unlit at their authored texel colors -
                     // adding emissive on top would double the brightness and
                     // clip the sprite's gradients to white.
@@ -297,9 +355,64 @@ impl ParticleSystem {
     }
 }
 
+#[derive(Clone)]
 struct Particle {
+    age: f32,
     remaining_life_in_seconds: f32,
     position: Vector3<f32>,
     velocity: Vector3<f32>,
     scale: f32,
+}
+
+fn sprite_frame_index(age: f32, count: usize, frame_time: f32, looping: bool) -> Option<usize> {
+    if count == 0 {
+        return None;
+    }
+    if !frame_time.is_finite() || frame_time <= 0.0 {
+        return Some(0);
+    }
+    let frame = (age / frame_time) as usize;
+    Some(if looping {
+        frame % count
+    } else {
+        frame.min(count - 1)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sprite_animation_wraps_or_holds_the_last_frame() {
+        assert_eq!(sprite_frame_index(0.0, 4, 0.25, false), Some(0));
+        assert_eq!(sprite_frame_index(0.75, 4, 0.25, false), Some(3));
+        assert_eq!(sprite_frame_index(1.25, 4, 0.25, false), Some(3));
+        assert_eq!(sprite_frame_index(1.25, 4, 0.25, true), Some(1));
+        assert_eq!(sprite_frame_index(1.0, 0, 0.25, true), None);
+        assert_eq!(sprite_frame_index(1.0, 4, 0.0, true), Some(0));
+    }
+
+    #[test]
+    fn shrinking_burst_expires_without_relaunching() {
+        let mut system = ParticleSystem::new()
+            .with_one_shot(true)
+            .with_num_particles(2)
+            .with_lifetime(0.5, 0.5)
+            .with_particle_size(0.1, 0.1)
+            .with_size_velocity(-1.0);
+        system.update(Duration::ZERO, Matrix4::identity());
+        system.update(Duration::from_millis(250), Matrix4::identity());
+        assert_eq!(system.particles.len(), 2);
+        assert!(
+            system
+                .particles
+                .iter()
+                .all(|p| p.scale == 0.0 && p.age == 0.25)
+        );
+        system.update(Duration::from_millis(250), Matrix4::identity());
+        assert!(system.is_done());
+        system.update(Duration::from_secs(1), Matrix4::identity());
+        assert!(system.is_done());
+    }
 }
