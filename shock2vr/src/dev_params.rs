@@ -428,6 +428,8 @@ dev_params! {
     /// the world, to check what reflections sample and that it is oriented
     /// like the level.
     ENV_MAP_PREVIEW = Lighting::bool("env_map_preview", "Env map preview", false),
+    /// A spotlight along each VR hand's pointing ray.
+    HAND_SPOTLIGHTS = Lighting::bool("hand_spotlights", "Hand spotlights", false),
     /// Multiplies every object light's brightness. The default 1.0 is the
     /// faithful value - brightness as authored, divided back down for our
     /// smaller world units - and exists to be turned up when the authored

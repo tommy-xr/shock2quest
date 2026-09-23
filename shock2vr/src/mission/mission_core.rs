@@ -14385,7 +14385,7 @@ impl MissionCore {
             scene.extend(objects);
         }
 
-        // Note: Hand spotlights for enhanced lighting are now handled in the runtime
+        // Note: Hand spotlights are handled in the runtime
         // via get_hand_spotlights() method - they're added to the Scene's lighting system
 
         if options.debug_portals {
@@ -14410,7 +14410,7 @@ impl MissionCore {
         (scene, player.pos, player.rotation)
     }
 
-    /// Get hand spotlights for testing enhanced lighting system
+    /// Hand spotlights (`hand_spotlights` dev param).
     /// Returns a vector of SpotLight objects positioned at the player's hands
     pub fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
         self.interaction.hand_spotlights(options)

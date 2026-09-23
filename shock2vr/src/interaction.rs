@@ -161,7 +161,7 @@ pub trait PlayerInteraction {
         Vec::new()
     }
 
-    /// Hand-mounted spotlights (VR enhanced-lighting experiment).
+    /// Hand-mounted spotlights (`hand_spotlights` dev param).
     fn hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
         Vec::new()
     }
@@ -1434,9 +1434,9 @@ impl PlayerInteraction for VrInteraction {
         objs
     }
 
-    fn hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
+    fn hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
         let mut lights = Vec::new();
-        if options.experimental_features.contains("enhanced_lighting") {
+        if crate::dev_params::get_bool(crate::dev_params::HAND_SPOTLIGHTS) {
             for hand in [&self.right_hand, &self.left_hand] {
                 let dir = hand.get_rotation() * Vector3::new(0.0, 0.0, -1.0);
                 lights.push(SpotLight {
