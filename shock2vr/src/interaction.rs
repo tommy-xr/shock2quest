@@ -1437,15 +1437,21 @@ impl PlayerInteraction for VrInteraction {
     fn hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
         let mut lights = Vec::new();
         if crate::dev_params::get_bool(crate::dev_params::HAND_SPOTLIGHTS) {
+            let cone = crate::dev_params::get(crate::dev_params::SPOTLIGHT_CONE);
             for hand in [&self.right_hand, &self.left_hand] {
                 let dir = hand.get_rotation() * Vector3::new(0.0, 0.0, -1.0);
                 lights.push(SpotLight {
                     position: hand.get_position(),
                     direction: dir.normalize(),
-                    color_intensity: Vector4::new(1.0, 1.0, 0.8, 2.0),
-                    inner_cone_angle: 15.0_f32.to_radians(),
-                    outer_cone_angle: 30.0_f32.to_radians(),
-                    range: 10.0,
+                    color_intensity: Vector4::new(
+                        1.0,
+                        1.0,
+                        0.8,
+                        crate::dev_params::get(crate::dev_params::SPOTLIGHT_INTENSITY),
+                    ),
+                    inner_cone_angle: (cone / 2.0).to_radians(),
+                    outer_cone_angle: cone.to_radians(),
+                    range: crate::dev_params::get(crate::dev_params::SPOTLIGHT_RANGE),
                 });
             }
         }

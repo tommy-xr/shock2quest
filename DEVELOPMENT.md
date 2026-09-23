@@ -438,6 +438,8 @@ override this parameter for their on/off measurements.
 
 **Lighting → Hand spotlights** (`hand_spotlights`, off by default) casts a
 spotlight along each VR hand's pointing ray, like a torch in each hand.
+`spotlight_intensity`, `spotlight_cone` (outer half-angle in degrees; the
+bright core is half of it) and `spotlight_range` tune it live.
 
 Developer parameters use category submenus. **Back** moves up one category;
 **Resume** on the pause Developer page returns directly to gameplay. Opening
