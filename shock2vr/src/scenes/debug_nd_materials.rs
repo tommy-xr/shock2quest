@@ -6,12 +6,12 @@
 use std::{rc::Rc, time::Duration};
 
 use cgmath::{Deg, Matrix4, Quaternion, Rotation3, Vector3, vec3};
-use dark::importers::{FONT_IMPORTER, MODELS_IMPORTER, TEXTURE_IMPORTER};
+use dark::importers::{FONT_IMPORTER, MODELS_IMPORTER};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
     scene::{ParticleSystem, SceneObject},
-    texture::{TextureOptions, TextureTrait},
+    texture::TextureTrait,
 };
 use shipyard::EntityId;
 
@@ -20,6 +20,7 @@ use crate::{
     game_scene::GameScene,
     input_context::InputContext,
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
+    particle_effects::particle_frames,
     time::Time,
 };
 
@@ -98,37 +99,6 @@ impl DebugSceneHooks for MaterialHooks {
             objects.extend(exhibit.live.render());
         }
     }
-}
-
-/// Particle sequences use zero-based, two-digit suffixes without the model
-/// animation loader's underscore. Limit the probe and fall back to the base
-/// sprite for single-frame art. All loads go through the normal asset cache.
-fn particle_frames(assets: &mut AssetCache, name: &str) -> Vec<Rc<dyn TextureTrait>> {
-    let options = TextureOptions {
-        wrap: false,
-        ..Default::default()
-    };
-    let mut frames: Vec<Rc<dyn TextureTrait>> = Vec::new();
-    for frame in 0..64 {
-        // Bitmap mounts register family-qualified basenames, not the full
-        // archive path (the txt16 directory is already part of that mount).
-        let path = format!("bitmap/{name}{frame:02}.dds");
-        let Some(texture) = assets.get_ext_opt(&TEXTURE_IMPORTER, &path, &options) else {
-            break;
-        };
-        frames.push(texture);
-    }
-    if frames.is_empty() {
-        if let Some(texture) =
-            assets.get_ext_opt(&TEXTURE_IMPORTER, &format!("bitmap/{name}.dds"), &options)
-        {
-            frames.push(texture);
-        } else {
-            tracing::warn!("debug_nd_materials: missing particle art {name}; using glow disk");
-        }
-    }
-    tracing::info!("debug_nd_materials: {name}: {} sprite frames", frames.len());
-    frames
 }
 
 fn burst(

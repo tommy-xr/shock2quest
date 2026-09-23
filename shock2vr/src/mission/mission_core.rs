@@ -2732,7 +2732,7 @@ pub struct MissionCore {
     pub id_to_model: HashMap<EntityId, Model>,
     pub id_to_bitmap: HashMap<EntityId, Rc<BitmapAnimation>>,
     pub id_to_physics: HashMap<EntityId, RigidBodyHandle>,
-    pub id_to_particle_system: HashMap<EntityId, ParticleSystem>,
+    pub id_to_particle_system: HashMap<EntityId, crate::particle_effects::ParticleEffect>,
     immolate_flames: Option<ParticleSystem>,
     held_recovery_particles: Vec<ParticleSystem>,
     #[allow(dead_code)]
@@ -5995,6 +5995,7 @@ impl MissionCore {
         self.world.run(
             |prop_particle_group: View<PropParticleGroup>,
              prop_particle_launch_info: View<PropParticleLaunchInfo>,
+             templates: View<PropTemplateId>,
              v_transient_fx: View<crate::runtime_props::RuntimePropTransientFx>,
              transform: View<RuntimePropTransform>| {
                 for (id, (pg, launch_info, transform)) in
@@ -6016,6 +6017,20 @@ impl MissionCore {
                     }
                     let particle_system =
                         self.id_to_particle_system.entry(id).or_insert_with(|| {
+                            let enhanced = templates.get(id).ok().and_then(|template| {
+                                crate::particle_effects::EnhancedEffect::for_template(
+                                    template.template_id,
+                                    |name| {
+                                        self.template_name_to_template_id
+                                            .get(name)
+                                            .map(|metadata| metadata.template_id)
+                                    },
+                                )
+                            });
+                            if let Some(effect) = enhanced.and_then(|kind| kind.build(asset_cache))
+                            {
+                                return effect;
+                            }
                             let mut system = ParticleSystem::new()
                                 .with_lifetime(launch_info.min_time, launch_info.max_time)
                                 .with_velocity(
@@ -6075,7 +6090,7 @@ impl MissionCore {
                                     warn!("particle bitmap not found: {bitmap_name}");
                                 }
                             }
-                            system
+                            system.into()
                         });
                     particle_system.update(time.elapsed, transform.0);
                     // Only fire-and-forget effect entities (impact spangs) are
