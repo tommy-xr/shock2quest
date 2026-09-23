@@ -69,6 +69,12 @@ enum Commands {
         /// Write a PNG of the first rendered frame to this path and exit
         #[arg(long)]
         screenshot: Option<std::path::PathBuf>,
+        /// Initial model-preview ambient level (0 to 1)
+        #[arg(long)]
+        model_ambient: Option<f32>,
+        /// Initial colored model-preview spotlights
+        #[arg(long, value_parser = ["off", "warm", "cool", "green", "all"])]
+        model_lights: Option<String>,
 
         /// Start the selected song immediately (including its initial theme event)
         #[arg(long)]
@@ -257,6 +263,8 @@ fn main() {
             grip_view,
             grip_library,
             screenshot,
+            model_ambient,
+            model_lights,
             play_song,
             screenshot_after,
             select,
@@ -278,6 +286,8 @@ fn main() {
             grip_view,
             grip_library,
             screenshot,
+            model_ambient,
+            model_lights,
             play_song,
             screenshot_after,
             select,

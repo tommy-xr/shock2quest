@@ -104,6 +104,10 @@ pub struct ModelPreview {
     /// `advance()` is the only time source - `--screenshot` runs set this to
     /// capture a deterministic pose.
     pub paused: bool,
+    pub ambient: f32,
+    pub light_strengths: [f32; 3],
+    light_colors: [[f32; 3]; 3],
+    lighting_radius: f32,
     // Orbit camera around `target` (dark_viewer's parameterization: pitch 90
     // is horizontal, distance along the orbit radius).
     yaw: f32,
@@ -140,6 +144,10 @@ impl ModelPreview {
             debug_articulation: false,
             articulation: None,
             paused: false,
+            ambient: 0.5,
+            light_strengths: [0.0; 3],
+            light_colors: [[1.0, 0.55, 0.25], [0.25, 0.55, 1.0], [0.35, 1.0, 0.45]],
+            lighting_radius: 1.0,
             yaw: 65.0,
             pitch: 75.0,
             distance: 10.0,
@@ -195,6 +203,34 @@ impl ModelPreview {
             }
             ui.label("(drag to orbit, scroll to zoom)");
         });
+
+        egui::CollapsingHeader::new("Lighting")
+            .default_open(true)
+            .show(ui, |ui| {
+                self.needs_render |= ui
+                    .add(egui::Slider::new(&mut self.ambient, 0.0..=1.0).text("Ambient"))
+                    .changed();
+                for (index, label) in ["Warm key", "Cool fill", "Green rim"].iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        self.needs_render |= ui
+                            .add(
+                                egui::Slider::new(&mut self.light_strengths[index], 0.0..=3.0)
+                                    .text(*label),
+                            )
+                            .changed();
+                        self.needs_render |= ui
+                            .color_edit_button_rgb(&mut self.light_colors[index])
+                            .changed();
+                    });
+                }
+                if ui.button("Reset lighting").clicked() {
+                    self.ambient = 0.5;
+                    self.light_strengths = [0.0; 3];
+                    self.light_colors = [[1.0, 0.55, 0.25], [0.25, 0.55, 1.0], [0.35, 1.0, 0.45]];
+                    self.needs_render = true;
+                }
+                ui.label("Lights stay fixed while you orbit. Unlit materials ignore lighting.");
+            });
 
         let available = ui.available_size();
         let size = egui::vec2(available.x.max(1.0), available.y.max(1.0));
@@ -350,6 +386,7 @@ impl ModelPreview {
                     true,
                     Some((grip.finger_amounts(), 1.0)),
                     shock2vr::HandLight::Off,
+                    None,
                 ));
                 let mut support_points = Vec::new();
                 if let Some(support) = support {
@@ -391,6 +428,7 @@ impl ModelPreview {
                         false,
                         Some((support_grip.finger_amounts(), 1.0)),
                         shock2vr::HandLight::Off,
+                        None,
                     ));
                     support_points.extend(
                         rig.fingers
@@ -646,6 +684,7 @@ impl ModelPreview {
                 self.pitch = 75.0;
                 self.target = vec3(0.0, 0.0, 0.0);
                 self.distance = 11.0;
+                self.lighting_radius = 3.0;
             }
         }
     }
@@ -656,6 +695,7 @@ impl ModelPreview {
         self.yaw = 65.0;
         self.pitch = 75.0;
         self.target = center;
+        self.lighting_radius = radius.max(0.8);
         self.distance = (radius * 2.9).clamp(min_distance, 150.0);
     }
 
@@ -789,7 +829,7 @@ impl ModelPreview {
         let Some(scene) = &self.scene else { return };
         // Belt-and-braces: the scene loads lazily through the asset cache at
         // render time too (its own model lookup, the grid texture).
-        let rendered = match quiet_catch(|| scene.render(&mut self.asset_cache)) {
+        let mut rendered = match quiet_catch(|| scene.render(&mut self.asset_cache)) {
             Ok(rendered) => rendered,
             Err(msg) => {
                 self.scene = None;
@@ -797,6 +837,31 @@ impl ModelPreview {
                 return;
             }
         };
+
+        // Use the same ambient, inverse-distance falloff and per-fragment cone
+        // evaluation as authored object lights. Keep this rig in model space,
+        // independent of the orbit camera and zoom, and scale it to the bounds.
+        let mut lights = engine::scene::light::LightArray::new()
+            .with_object_lighting(vec3(self.ambient, self.ambient, self.ambient), 0.0);
+        for (index, offset) in [
+            vec3(2.0, 2.0, 1.0),
+            vec3(-2.0, 1.0, 1.0),
+            vec3(0.0, 1.5, -2.0),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let position = self.target + offset * self.lighting_radius;
+            let mut light = engine::scene::SpotLight::new(
+                position,
+                self.target - position,
+                self.light_colors[index].into(),
+                self.light_strengths[index] * self.lighting_radius * offset.magnitude(),
+            );
+            light.range = self.lighting_radius * 8.0;
+            lights.add_light(light);
+        }
+        rendered.lights = lights;
 
         // dark_viewer's orbit: position on a sphere around `target`, oriented
         // to look back at it.

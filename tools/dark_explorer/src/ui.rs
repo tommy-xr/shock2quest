@@ -35,6 +35,8 @@ pub struct UiOptions {
     pub grip_view: String,
     pub grip_library: Option<PathBuf>,
     pub screenshot: Option<PathBuf>,
+    pub model_ambient: Option<f32>,
+    pub model_lights: Option<String>,
     pub play_song: bool,
     pub screenshot_after: f32,
     pub select: Option<String>,
@@ -498,6 +500,27 @@ impl ExplorerApp {
         }
         app.screenshot_not_before = std::time::Instant::now()
             + std::time::Duration::from_secs_f32(options.screenshot_after);
+        if options.model_ambient.is_some() || options.model_lights.is_some() {
+            let host = preview_host(
+                &mut app.model_preview,
+                app.initial_overlays,
+                app.screenshot.is_some(),
+            );
+            if let Some(ambient) = options.model_ambient {
+                if !ambient.is_finite() || !(0.0..=1.0).contains(&ambient) {
+                    eprintln!("--model-ambient must be between 0 and 1");
+                    std::process::exit(2);
+                }
+                host.ambient = ambient;
+            }
+            host.light_strengths = match options.model_lights.as_deref() {
+                Some("warm") => [1.0, 0.0, 0.0],
+                Some("cool") => [0.0, 1.0, 0.0],
+                Some("green") => [0.0, 0.0, 1.0],
+                Some("all") => [1.0; 3],
+                _ => [0.0; 3],
+            };
+        }
         app
     }
 
