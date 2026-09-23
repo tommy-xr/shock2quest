@@ -390,6 +390,12 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         components
     }
 
+    /// Each open starts at the settings: a finished (or abandoned) board must
+    /// not greet the next gun the panel is opened for.
+    fn resets_state_on_frob(&self) -> bool {
+        true
+    }
+
     fn get_config(&self) -> GuiConfig {
         GuiConfig {
             world_offset: Vector3::new(0.0, 0.0, -0.1),
