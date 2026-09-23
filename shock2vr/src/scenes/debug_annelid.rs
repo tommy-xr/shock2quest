@@ -204,10 +204,12 @@ impl DebugSceneHooks for AnnelidHooks {
         // Debug scenes have no world-rep cells/light table. Supply the renderer
         // equivalent of authored lights, with the usual live Lighting controls.
         let ambient = 0.08 + dev_params::get(dev_params::OBJECT_LIGHT_AMBIENT_BOOST);
-        let mut lights = engine::scene::light::LightArray::new().with_object_lighting(
-            vec3(ambient, ambient, ambient),
-            dev_params::get(dev_params::OBJECT_LIGHT_WRAP),
-        );
+        let mut lights = engine::scene::light::LightArray::new()
+            .with_object_lighting(
+                vec3(ambient, ambient, ambient),
+                dev_params::get(dev_params::OBJECT_LIGHT_WRAP),
+            )
+            .with_specular(dev_params::get(dev_params::OBJECT_SPECULAR));
         let brightness = 2.5
             * dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS)
             * dev_params::get(dev_params::LEVEL_LIGHT_INTENSITY);

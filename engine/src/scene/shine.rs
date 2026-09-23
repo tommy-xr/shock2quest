@@ -41,25 +41,61 @@ uniform vec3 shineTint;
 uniform bool shineUnlit;
 uniform bool shineAlphaBlend;
 uniform float shinePasses;
-vec4 applyShine(vec4 base, vec3 light, float opacity, vec2 uv, vec3 position, vec3 normal) {
+uniform float shineSpecular;
+
+// Highlight exponent. Higher reads wetter but sparkles on low-poly meshes in
+// a headset.
+const float SHINE_POWER = 24.0;
+// Gloss away from the authored glints, relative to 1 on them.
+const float SHINE_BASE_GLOSS = 0.5;
+
+bool shineHighlights() {
+    return shineEnabled && shineSpecular > 0.0;
+}
+
+// Toksvig: interpolated vertex normals shorten where the surface bends
+// within a triangle, so widen the lobe there instead of letting it flicker.
+float shinePower(float normalLength) {
+    return SHINE_POWER * normalLength / (normalLength + SHINE_POWER * (1.0 - normalLength));
+}
+
+// Blinn-Phong lobe of one light; `radiance` is its colour after attenuation.
+// The energy-conserving scale keeps a widened lobe from brightening.
+vec3 shineHighlight(vec3 radiance, vec3 lightDir, vec3 normal, vec3 position, float power) {
+    // The normal nudge keeps a light straight behind the surface from
+    // normalizing a zero vector.
+    vec3 halfway = normalize(lightDir + normalize(shineEye - position) + 1e-4 * normal);
+    // Fade in past the terminator rather than cutting off at it.
+    float lit = clamp(dot(normal, lightDir) * 4.0, 0.0, 1.0);
+    return radiance * pow(max(dot(normal, halfway), 0.0), power) * lit
+        * (1.0 + power) / (1.0 + SHINE_POWER);
+}
+
+// `specular` is the summed highlight of every light.
+vec4 applyShine(vec4 base, vec3 light, vec3 specular, float opacity, vec2 uv, vec3 position, vec3 normal) {
     if (!shineEnabled) return base;
     vec4 mask = texture(shineMask, uv);
     // A separate pass would alpha-test its own bitmap.
-    if (mask.a < 0.1) return base;
+    if (mask.a < 0.1 && !shineHighlights()) return base;
     float facing = clamp(abs(dot(normal, normalize(shineEye - position))), 0.0, 1.0);
-    float alpha = mask.a * opacity * texture(shineRamp, vec2(facing, 0.5)).r;
+    float alpha = mask.a < 0.1 ? 0.0 : mask.a * opacity * texture(shineRamp, vec2(facing, 0.5)).r;
     vec3 shine = min((shineUnlit ? mask.rgb : mask.rgb * light) * shineTint, vec3(1.0));
+    // The whole surface is wet, in the mask's colour; its sparse alpha marks
+    // the glossiest glints. The ramp only shapes the authored sheen.
+    vec3 highlight = mask.rgb * mix(SHINE_BASE_GLOSS, 1.0, mask.a) * opacity * specular
+        * shineSpecular;
     // Each stacked pass blended onto a clamped framebuffer.
     vec3 color = min(base.rgb, vec3(1.0));
-    float coverage = max(base.a, 1.0 / 255.0);
     if (shineAlphaBlend) {
         float covered = 1.0 - pow(1.0 - alpha, shinePasses);
-        float outAlpha = coverage * (1.0 - covered) + covered;
-        return vec4((color * coverage * (1.0 - covered) + shine * covered) / outAlpha, outAlpha);
+        float outAlpha = base.a * (1.0 - covered) + covered;
+        vec3 blended = color * base.a * (1.0 - covered) + shine * covered + highlight;
+        return vec4(blended / max(outAlpha, 1.0 / 255.0), outAlpha);
     }
+    float coverage = max(base.a, 1.0 / 255.0);
     // The blend scales colour by the base's coverage; an additive pass does
     // not. Exact until a faded base's pre-divided colour saturates.
-    return vec4(color + shinePasses * shine * alpha / coverage, base.a);
+    return vec4(color + (shinePasses * shine * alpha + highlight) / coverage, base.a);
 }
 "#;
 
@@ -75,6 +111,7 @@ pub(crate) struct ShineUniforms {
     unlit: i32,
     alpha_blend: i32,
     passes: i32,
+    specular: i32,
 }
 impl ShineUniforms {
     pub fn new(program: u32) -> Self {
@@ -90,10 +127,17 @@ impl ShineUniforms {
             unlit: loc("shineUnlit"),
             alpha_blend: loc("shineAlphaBlend"),
             passes: loc("shinePasses"),
+            specular: loc("shineSpecular"),
         }
     }
 
-    pub fn bind(&self, shine: Option<&Shine>, context: &EngineRenderContext, view: &Matrix4<f32>) {
+    pub fn bind(
+        &self,
+        shine: Option<&Shine>,
+        specular: f32,
+        context: &EngineRenderContext,
+        view: &Matrix4<f32>,
+    ) {
         unsafe {
             gl::Uniform1i(self.enabled, i32::from(shine.is_some()));
             gl::Uniform1i(self.mask, MASK_UNIT as i32);
@@ -113,6 +157,7 @@ impl ShineUniforms {
                 i32::from(shine.blend == ShineBlend::Alpha),
             );
             gl::Uniform1f(self.passes, shine.passes as f32);
+            gl::Uniform1f(self.specular, specular);
         }
     }
 }

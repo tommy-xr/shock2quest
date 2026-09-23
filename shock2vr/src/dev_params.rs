@@ -443,6 +443,9 @@ dev_params! {
     /// a prop's shadowed side at the cost of the directional read that makes a
     /// lamp feel like a lamp.
     OBJECT_LIGHT_WRAP = Lighting::float("object_light_wrap", "Obj wrap", 0.0, 0.0, 1.0, 0.05),
+    /// Strength of the moving highlight on wet organic surfaces (eggs, grubs,
+    /// arachnids, growth). 0 leaves only the authored view-angle sheen.
+    OBJECT_SPECULAR = Lighting::float("object_specular", "Obj specular", 1.5, 0.0, 4.0, 0.1),
     /// Enables the detached debug ("free") camera. This is the *gate*, not
     /// the camera's own on/off: while it is false the toggle input is not
     /// even read, so a stray `Alt+V` (or controller chord) during normal play

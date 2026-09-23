@@ -125,7 +125,7 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         const float SOURCE_RADIUS = 0.8;
 
         // Calculate spotlight contribution
-        vec3 calculateSpotlight(int i, vec3 worldPos, vec3 normal, vec3 texColor) {
+        vec3 calculateSpotlight(int i, vec3 worldPos, vec3 normal, vec3 texColor, inout vec3 specular, float power) {
             // Skip if light has zero intensity
             if (spotlightColorIntensity[i].w <= 0.0) {
                 return vec3(0.0);
@@ -172,9 +172,12 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             float wrap = lightFalloffMode[i] == 1 ? lambertWrap : 0.0;
             float lambertian = max((ndl + wrap) / (1.0 + wrap), 0.0);
 
-            // Combine all factors
-            return texColor * spotlightColorIntensity[i].rgb * spotlightColorIntensity[i].w
-                   * lambertian * coneAttenuation * distanceAttenuation;
+            vec3 radiance = spotlightColorIntensity[i].rgb * spotlightColorIntensity[i].w
+                            * coneAttenuation * distanceAttenuation;
+            if (shineHighlights()) {
+                specular += shineHighlight(radiance, lightDir, normal, worldPos, power);
+            }
+            return texColor * radiance * lambertian;
         }
 
         void main() {
@@ -198,11 +201,13 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             // Light reaching the surface before albedo, shared with the shine.
             vec3 normal = normalize(worldNormal);
             vec3 light = ambientLight * ambientIntensity;
+            vec3 specular = vec3(0.0);
+            float power = shineHighlights() ? shinePower(length(worldNormal)) : SHINE_POWER;
             for (int i = 0; i < 6; i++) {
-                light += calculateSpotlight(i, worldPos, normal, vec3(1.0));
+                light += calculateSpotlight(i, worldPos, normal, vec3(1.0), specular, power);
             }
             finalColor += texColor.rgb * light;
-            vec4 shaded = applyShine(vec4(finalColor, texColor.a * (1.0 - transparency)), light, 1.0 - transparency, texCoord, worldPos, normal);
+            vec4 shaded = applyShine(vec4(finalColor, texColor.a * (1.0 - transparency)), light, specular, 1.0 - transparency, texCoord, worldPos, normal);
 
             fragColor = applyIncidence(shaded, texColor, worldPos, worldNormal);
         }
@@ -304,9 +309,12 @@ impl SkinnedMaterial {
             uniforms
                 .incidence
                 .bind(self.incidence.as_ref(), render_context, view_matrix);
-            uniforms
-                .shine
-                .bind(self.shine.as_ref(), render_context, view_matrix);
+            uniforms.shine.bind(
+                self.shine.as_ref(),
+                lights.specular,
+                render_context,
+                view_matrix,
+            );
 
             let projection = render_context.projection_matrix;
 
