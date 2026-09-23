@@ -110,6 +110,12 @@ pub(crate) fn append_incidence_overlays(
                     unlit: pass.unlit,
                     blend,
                     passes: count,
+                    // At 1x the highlight barely reads on the weapons under a lamp.
+                    specular: if profile == Profile::OrganicWeapon {
+                        3.0
+                    } else {
+                        1.0
+                    },
                 });
             }
             return;

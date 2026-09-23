@@ -26,6 +26,8 @@ pub struct Shine {
     pub blend: ShineBlend,
     /// How many identical passes the material stacks.
     pub passes: u32,
+    /// Scales the lights' highlight strength on this surface.
+    pub specular: f32,
 }
 
 /// `light` is ambient plus the lamps reaching the fragment, before albedo:
@@ -180,7 +182,7 @@ impl ShineUniforms {
                 i32::from(shine.blend == ShineBlend::Alpha),
             );
             gl::Uniform1f(self.passes, shine.passes as f32);
-            gl::Uniform1f(self.specular, lights.specular);
+            gl::Uniform1f(self.specular, lights.specular * shine.specular);
             let reflection = match &lights.environment {
                 Some(environment) => {
                     environment.bind_to(ENVIRONMENT_UNIT);
