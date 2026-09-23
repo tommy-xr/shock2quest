@@ -184,6 +184,7 @@ fn effective_hack_values(world: &World, diff: PropHackDiff, security_computer: b
 pub(crate) enum HrmContext {
     Hack { security_computer: bool },
     Modify,
+    Repair,
 }
 
 fn effective_hrm_values(world: &World, diff: PropHackDiff, context: HrmContext) -> (i32, i32) {
@@ -195,6 +196,7 @@ fn effective_hrm_values(world: &World, diff: PropHackDiff, context: HrmContext) 
             let base = stats.skill_level(match context {
                 HrmContext::Hack { .. } => Skill::Hack,
                 HrmContext::Modify => Skill::Modify,
+                HrmContext::Repair => Skill::Repair,
             });
             // Retail grants two effective levels only at security computers;
             // it does not train an unskilled player or change the saved sheet.

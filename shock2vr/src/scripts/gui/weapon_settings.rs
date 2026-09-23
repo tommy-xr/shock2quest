@@ -30,6 +30,7 @@ use crate::scripts::Effect;
 use crate::scripts::script_util;
 use crate::ui::Rect;
 use crate::weapon_modification;
+use crate::weapon_repair;
 
 /// A panel-local rect's upper-left corner / extent, as the component builders
 /// want them.
@@ -112,7 +113,28 @@ pub struct WeaponSettingsGui;
 
 #[derive(Clone, Debug, Default)]
 pub struct WeaponSettingsGuiState {
-    modification: Option<(i32, dark::properties::PropHackDiff, HackState)>,
+    board: Option<(HrmJob, dark::properties::PropHackDiff, HackState)>,
+}
+
+/// What the open HRM board is doing to the gun.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HrmJob {
+    /// Modifying from this level; a change of level mid-board aborts it.
+    Modify(i32),
+    Repair,
+}
+
+impl HrmJob {
+    fn quote(
+        self,
+        world: &World,
+        weapon: EntityId,
+    ) -> Result<dark::properties::PropHackDiff, String> {
+        match self {
+            HrmJob::Modify(_) => weapon_modification::quote(world, weapon),
+            HrmJob::Repair => weapon_repair::quote(world, weapon),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -122,6 +144,7 @@ pub enum WeaponSettingsGuiMsg {
     /// Eject the magazine back to the backpack.
     Unload,
     Modify,
+    Repair,
     Back,
     Board(KeyPadMsg),
 }
@@ -195,16 +218,29 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             return components;
         };
 
-        if let Some((_, diff, board)) = &state.modification {
+        if let Some((job, diff, board)) = &state.board {
             let shown_diff = if matches!(board.phase, HackPhase::Won | HackPhase::Lost) {
                 *diff
             } else {
-                weapon_modification::quote(world, weapon).unwrap_or(*diff)
+                job.quote(world, weapon).unwrap_or(*diff)
+            };
+            let (backdrop, title, help) = match job {
+                HrmJob::Modify(_) => (
+                    "modify.pcx",
+                    "MODIFY",
+                    "Connect three nodes. A failed red node breaks the weapon.",
+                ),
+                // Archive-qualified: obj.crf also ships a repair.pcx.
+                HrmJob::Repair => (
+                    "iface/repair.pcx",
+                    "REPAIR",
+                    "Connect three nodes. A failed red node destroys the weapon.",
+                ),
             };
             let mut components = draw_hack_board(board, shown_diff, WeaponSettingsGuiMsg::Board);
-            // The authored Modify board shares HRM geometry with Hack.
+            // The authored Modify and Repair boards share HRM geometry with Hack.
             if let Some(GuiComponent::Image { texture, .. }) = components.first_mut() {
-                *texture = "modify.pcx".into();
+                *texture = backdrop.into();
             }
             components.push(
                 gui::button(WeaponSettingsGuiMsg::Back)
@@ -218,24 +254,43 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             ));
             components.extend(super::PanelText::paragraph(
                 world,
-                "Connect three nodes. A failed red node breaks the weapon.",
+                help,
                 Rect::new(16.0, 188.0, 135.0, 50.0),
             ));
             components.push(
-                gui::text("MODIFY")
+                gui::text(title)
                     .with_position(vec2(16.0, 10.0))
                     .with_size(vec2(130.0, 16.0)),
             );
             return components;
         }
-        if weapon_modification::supported(world, weapon) {
-            let quote = weapon_modification::quote(world, weapon);
+        // A Broken gun offers repair in modify's place, as the original does.
+        let action = if weapon_repair::is_broken(world, weapon) {
+            weapon_repair::supported(world, weapon).then(|| {
+                (
+                    "REPAIR",
+                    WeaponSettingsGuiMsg::Repair,
+                    weapon_repair::quote(world, weapon),
+                    "Repair the weapon to use it again.",
+                )
+            })
+        } else {
+            weapon_modification::supported(world, weapon).then(|| {
+                (
+                    "MODIFY",
+                    WeaponSettingsGuiMsg::Modify,
+                    weapon_modification::quote(world, weapon),
+                    weapon_modification::description(world, weapon),
+                )
+            })
+        };
+        if let Some((name, msg, quote, description)) = action {
             let label = match &quote {
-                Ok(diff) => format!("MODIFY ({} nanites)", diff.cost as i32),
-                Err(_) => "MODIFY".into(),
+                Ok(diff) => format!("{name} ({} nanites)", diff.cost as i32),
+                Err(_) => name.into(),
             };
             components.push(
-                gui::button(WeaponSettingsGuiMsg::Modify)
+                gui::button(msg)
                     .with_label(&label)
                     .with_position(vec2(16.0, 18.0))
                     .with_size(vec2(140.0, 25.0)),
@@ -244,9 +299,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 &label,
                 Rect::new(22.0, 24.0, 128.0, 14.0),
             ));
-            let help = quote
-                .err()
-                .unwrap_or_else(|| weapon_modification::description(world, weapon).into());
+            let help = quote.err().unwrap_or_else(|| description.into());
             components.extend(super::PanelText::paragraph(
                 world,
                 &help,
@@ -358,15 +411,16 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             WeaponSettingsGuiMsg::Back => {
                 return (WeaponSettingsGuiState::default(), Effect::NoEffect);
             }
-            WeaponSettingsGuiMsg::Modify => {
-                return match weapon_modification::quote(world, weapon) {
+            WeaponSettingsGuiMsg::Modify | WeaponSettingsGuiMsg::Repair => {
+                let job = if matches!(msg, WeaponSettingsGuiMsg::Repair) {
+                    HrmJob::Repair
+                } else {
+                    HrmJob::Modify(weapon_modification::level(world, weapon).unwrap_or(-1))
+                };
+                return match job.quote(world, weapon) {
                     Ok(diff) => (
                         WeaponSettingsGuiState {
-                            modification: Some((
-                                weapon_modification::level(world, weapon).unwrap(),
-                                diff,
-                                HackState::default(),
-                            )),
+                            board: Some((job, diff, HackState::default())),
                         },
                         Effect::NoEffect,
                     ),
@@ -374,14 +428,16 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 };
             }
             WeaponSettingsGuiMsg::Board(msg) => {
-                let Some((level, _, board)) = &state.modification else {
+                let Some((job, _, board)) = &state.board else {
                     return (state.clone(), Effect::NoEffect);
                 };
                 if matches!(board.phase, HackPhase::Won | HackPhase::Lost) {
                     return (state.clone(), Effect::NoEffect);
                 }
-                let quote = weapon_modification::quote(world, weapon);
-                if weapon_modification::level(world, weapon) != Some(*level) || quote.is_err() {
+                let quote = job.quote(world, weapon);
+                let level_changed = matches!(job, HrmJob::Modify(level)
+                    if weapon_modification::level(world, weapon) != Some(*level));
+                if level_changed || quote.is_err() {
                     return (
                         WeaponSettingsGuiState::default(),
                         Effect::ShowMessage {
@@ -392,28 +448,34 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                     );
                 }
                 let diff = quote.unwrap();
-                let (board, effect) = handle_hrm_msg(
-                    weapon,
-                    world,
-                    board,
-                    msg,
-                    diff,
-                    HrmContext::Modify,
-                    HackOutcomeEffects {
-                        success: |entity_id, world| Effect::ModifyWeapon {
-                            entity_id,
-                            expected_level: weapon_modification::level(world, entity_id)
-                                .unwrap_or(-1),
+                let (context, outcomes) = match job {
+                    HrmJob::Modify(_) => (
+                        HrmContext::Modify,
+                        HackOutcomeEffects {
+                            success: |entity_id, world| Effect::ModifyWeapon {
+                                entity_id,
+                                expected_level: weapon_modification::level(world, entity_id)
+                                    .unwrap_or(-1),
+                            },
+                            critical_failure: |entity_id, _| Effect::SetObjectState {
+                                entity_id,
+                                state: dark::properties::ObjectState::Broken,
+                            },
                         },
-                        critical_failure: |entity_id, _| Effect::SetObjectState {
-                            entity_id,
-                            state: dark::properties::ObjectState::Broken,
+                    ),
+                    HrmJob::Repair => (
+                        HrmContext::Repair,
+                        HackOutcomeEffects {
+                            success: weapon_repair::success,
+                            critical_failure: weapon_repair::critical_failure,
                         },
-                    },
-                );
+                    ),
+                };
+                let (board, effect) =
+                    handle_hrm_msg(weapon, world, board, msg, diff, context, outcomes);
                 return (
                     WeaponSettingsGuiState {
-                        modification: Some((*level, diff, board)),
+                        board: Some((*job, diff, board)),
                     },
                     effect,
                 );
@@ -529,6 +591,54 @@ mod tests {
     /// The pistol as the bench hands it out: loaded.
     fn pistol_world(setting: i32) -> (World, EntityId) {
         pistol_world_with_ammo(setting, 6)
+    }
+
+    /// A Broken gun offers REPAIR in MODIFY's place, and the button opens the
+    /// board on the repair art; a working gun offers MODIFY as before.
+    #[test]
+    fn a_broken_gun_offers_repair_instead_of_modify() {
+        use dark::properties::{ObjectState, PropHackDiff, PropObjState, PropRepairDiff};
+
+        let (mut world, weapon) = pistol_world(0);
+        world.add_component(
+            weapon,
+            (
+                PropScripts {
+                    scripts: vec!["PistolModify".to_owned()],
+                    inherits: false,
+                },
+                PropRepairDiff(PropHackDiff {
+                    success_chance: 20,
+                    critical_chance: 4,
+                    cost: 3.0,
+                }),
+            ),
+        );
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().skills.repair = 1;
+        world.add_unique(quests);
+        let action = |world: &World| {
+            labels(&components(world))
+                .into_iter()
+                .find(|label| label.starts_with("MODIFY") || label.starts_with("REPAIR"))
+        };
+
+        assert_eq!(action(&world).as_deref(), Some("MODIFY"));
+
+        world.add_component(weapon, PropObjState(ObjectState::Broken));
+        assert_eq!(action(&world).as_deref(), Some("REPAIR (3 nanites)"));
+
+        let (state, _) = WeaponSettingsGui.handle_msg(
+            EntityId::dead(),
+            &world,
+            &WeaponSettingsGuiState::default(),
+            &WeaponSettingsGuiMsg::Repair,
+        );
+        let board = WeaponSettingsGui.get_components(&None, EntityId::dead(), &world, &state);
+        assert!(matches!(
+            board.first(),
+            Some(GuiComponent::Image { texture, .. }) if texture == "iface/repair.pcx"
+        ));
     }
 
     #[test]
