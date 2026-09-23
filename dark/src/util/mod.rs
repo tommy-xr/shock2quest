@@ -128,13 +128,18 @@ pub fn object_material_script(asset_cache: &AssetCache, requested: &str) -> Opti
     reader.borrow_mut().read_to_string(&mut script).ok()?;
     // The object family mount strips `obj/`; include paths are authored
     // relative to the full archive path, two levels above obj/txt16.
-    let root = if script_name.starts_with("obj/") {
+    let qualified = script_name.starts_with("obj/") || script_name.starts_with("mesh/");
+    let root = if qualified {
         script_name.clone()
     } else {
         format!("obj/{script_name}")
     };
     let expanded = material_includes::expand_material_includes(&root, &script, |path| {
-        let mounted = path.strip_prefix("obj/").unwrap_or(path);
+        let mounted = if qualified {
+            path
+        } else {
+            path.strip_prefix("obj/").unwrap_or(path)
+        };
         let reader = asset_cache.get_raw_reader(mounted)?;
         let mut source = String::new();
         reader.borrow_mut().read_to_string(&mut source).ok()?;
@@ -176,7 +181,7 @@ fn is_additive_flash_script(script: &str) -> bool {
 /// texture.
 fn primary_render_pass_texture(script: &str) -> Option<String> {
     for pass in render_passes(script) {
-        if pass.blend_is_base.unwrap_or(true) {
+        if pass.blend_is_base.unwrap_or(true) && pass.incidence_ramp.is_none() {
             if pass.keeps_authored_texture {
                 return None;
             }
@@ -235,6 +240,9 @@ fn render_passes(script: &str) -> Vec<RenderPassFields> {
                 fields_so_far.additive_alpha = source
                     .is_some_and(|s| s.eq_ignore_ascii_case("SRC_ALPHA"))
                     && destination.is_some_and(|s| s.eq_ignore_ascii_case("ONE"));
+                fields_so_far.alpha_blend = source
+                    .is_some_and(|s| s.eq_ignore_ascii_case("SRC_ALPHA"))
+                    && destination.is_some_and(|s| s.eq_ignore_ascii_case("INV_SRC_ALPHA"));
                 fields_so_far.additive_color = source
                     .is_some_and(|s| s.eq_ignore_ascii_case("SRC_COLOR"))
                     && destination.is_some_and(|s| s.eq_ignore_ascii_case("ONE"));
@@ -291,15 +299,17 @@ struct RenderPassFields {
     blend_is_base: Option<bool>,
     additive_color: bool,
     additive_alpha: bool,
+    alpha_blend: bool,
     tint: Option<cgmath::Vector3<f32>>,
     incidence_ramp: Option<String>,
     unlit: bool,
 }
 
-/// Supported additive incidence pass, in authored order. The bitmap and
+/// Supported lit or unlit incidence pass, in authored order. The bitmap and
 /// ramp are loaded separately; missing art simply omits this extra pass.
 #[derive(Debug, PartialEq)]
 pub struct MaterialIncidencePass {
+    pub blend_mode: engine::scene::scene_object::BlendMode,
     pub texture: Option<String>,
     pub ramp: String,
     pub tint: cgmath::Vector3<f32>,
@@ -319,10 +329,15 @@ fn incidence_passes(source: &str) -> Vec<MaterialIncidencePass> {
     render_passes(source)
         .into_iter()
         .filter_map(|pass| {
-            if !pass.additive_alpha {
+            let blend_mode = if pass.additive_alpha {
+                engine::scene::scene_object::BlendMode::AdditiveAlpha
+            } else if pass.alpha_blend {
+                engine::scene::scene_object::BlendMode::AlphaOverlay
+            } else {
                 return None;
-            }
+            };
             Some(MaterialIncidencePass {
+                blend_mode,
                 texture: if pass.keeps_authored_texture {
                     None
                 } else {
@@ -565,6 +580,50 @@ mod tests {
             super::resolve_object_icon_name(&classic, "disc.png").as_deref(),
             Some("objicon/disc.pcx")
         );
+    }
+
+    #[test]
+    fn qualified_material_includes_stay_in_their_family() {
+        let assets = cache(&[
+            ("obj/txt16/example.mtl", b"include local.inc\n"),
+            ("obj/txt16/local.inc", b"object source"),
+            ("txt16/local.inc", b"wrong unqualified source"),
+            ("mesh/txt16/example.mtl", b"include local.inc\n"),
+            ("mesh/txt16/local.inc", b"mesh source"),
+        ]);
+        assert_eq!(
+            super::object_material_script(&assets, "obj/txt16/example")
+                .unwrap()
+                .trim(),
+            "object source"
+        );
+        assert_eq!(
+            super::object_material_script(&assets, "mesh/txt16/example")
+                .unwrap()
+                .trim(),
+            "mesh source"
+        );
+    }
+
+    #[test]
+    fn alpha_incidence_preserves_diffuse_and_authored_passes() {
+        let pass = "render_pass\n{\nblend SRC_ALPHA INV_SRC_ALPHA\ntexture mesh/txt16/specular\nalpha func INCIDENCE 1 1 MATERIALS/shine\nshaded 1\n}\n";
+        let assets = cache(&[
+            ("txt16/creature.mtl", pass.as_bytes()),
+            ("txt16/creature.dds", b"diffuse"),
+            ("mesh/txt16/specular.dds", b"mask"),
+        ]);
+        assert_eq!(
+            resolve_object_material_texture_name(&assets, "creature").as_deref(),
+            Some("txt16/creature.dds")
+        );
+        let passes = super::incidence_passes(&format!("{pass}{pass}"));
+        assert_eq!(passes.len(), 2);
+        assert_eq!(
+            passes[0].blend_mode,
+            engine::scene::scene_object::BlendMode::AlphaOverlay
+        );
+        assert_eq!(passes[0], passes[1]);
     }
 
     #[test]

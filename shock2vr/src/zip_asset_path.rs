@@ -165,6 +165,16 @@ mod tests {
     use crate::test_support::write_archive;
     use engine::assets::asset_paths::AssetPath;
 
+    #[test]
+    fn model_family_mounts_expose_qualified_material_keys() {
+        let root = crate::test_support::TempDir::new("qualified-model-materials");
+        let archive = root.path().join("models.zip");
+        write_archive(&archive, &[("mesh/txt16/creature.mtl", b"mesh material")]);
+        let mount = crate::mount_family(archive.to_string_lossy().into_owned(), "mesh/", "mesh");
+        assert!(mount.exists(String::new(), "mesh/txt16/creature.mtl".into()));
+        assert!(mount.exists(String::new(), "txt16/creature.mtl".into()));
+    }
+
     /// `entries()` reports every registered lookup key - each file once as a
     /// primary mount-relative key, plus its basename/namespace aliases marked
     /// `is_alias` - all pointing at the real archive entry serving the bytes.

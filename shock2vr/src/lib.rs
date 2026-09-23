@@ -302,7 +302,7 @@ fn mount_family(
     match family {
         "strings" => ZipAssetPath::with_prefix_opts(archive, prefix, false, None),
         "materials" => ZipAssetPath::with_prefix_opts(archive, prefix, false, Some(family)),
-        "iface" | "bitmap" | "objicon" => {
+        "iface" | "bitmap" | "objicon" | "obj" | "mesh" => {
             ZipAssetPath::with_prefix_opts(archive, prefix, true, Some(family))
         }
         _ => ZipAssetPath::with_prefix(archive, prefix),
@@ -381,7 +381,7 @@ pub fn game_asset_mounts(
             // AssetPath::folder(resource_path("res/mesh/txt16")),
             AssetPath::folder(resource_path("res/obj")),
             // AssetPath::folder(resource_path("res/obj/txt16")),
-            ZipAssetPath::new(resource_path("res/obj.crf")),
+            mount_family(resource_path("res/obj.crf"), "", "obj"),
             mount_family(resource_path("res/bitmap.crf"), "", "bitmap"),
             // Log/email sender portraits + deck icons (the reader panel art).
             ZipAssetPath::new(resource_path("res/book.crf")),
@@ -400,7 +400,7 @@ pub fn game_asset_mounts(
             // archive-qualified "iface/<name>" key instead.
             ZipAssetPath::with_namespace(resource_path("res/iface.crf"), "iface"),
             ZipAssetPath::new(resource_path("res/intrface.crf")),
-            ZipAssetPath::new(resource_path("res/mesh.crf")),
+            mount_family(resource_path("res/mesh.crf"), "", "mesh"),
             ZipAssetPath::new(resource_path("res/motions.crf")),
             ZipAssetPath::with_namespace(resource_path("res/objicon.crf"), "objicon"),
             ZipAssetPath::new(resource_path("res/snd.crf")),

@@ -38,6 +38,8 @@ pub enum BlendMode {
     Alpha,
     AdditiveColor,
     AdditiveAlpha,
+    /// Standard alpha composition at the base mesh depth.
+    AlphaOverlay,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -607,8 +609,12 @@ impl SceneObject {
     /// the depth test against the very surface they are meant to enhance.
     /// Other translucent flats keep their existing unbiased presentation.
     fn draw_geometry(&self, apply_depth_bias: bool) {
-        let depth_bias =
-            (apply_depth_bias || self.blend_mode == BlendMode::AdditiveAlpha) && self.depth_bias;
+        let depth_bias = (apply_depth_bias
+            || matches!(
+                self.blend_mode,
+                BlendMode::AdditiveAlpha | BlendMode::AlphaOverlay
+            ))
+            && self.depth_bias;
         if depth_bias {
             unsafe {
                 gl::Enable(gl::POLYGON_OFFSET_FILL);
@@ -629,6 +635,7 @@ impl SceneObject {
         unsafe {
             match self.blend_mode {
                 BlendMode::Alpha => {}
+                BlendMode::AlphaOverlay => gl::DepthFunc(gl::LEQUAL),
                 BlendMode::AdditiveColor => gl::BlendFunc(gl::SRC_COLOR, gl::ONE),
                 BlendMode::AdditiveAlpha => {
                     gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE, gl::ZERO, gl::ONE);
@@ -637,7 +644,10 @@ impl SceneObject {
             }
         }
         self.geometry.draw();
-        if self.blend_mode == BlendMode::AdditiveAlpha {
+        if matches!(
+            self.blend_mode,
+            BlendMode::AdditiveAlpha | BlendMode::AlphaOverlay
+        ) {
             unsafe {
                 gl::DepthFunc(gl::LESS);
             }
