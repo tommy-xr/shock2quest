@@ -25,7 +25,7 @@ impl PanelText {
             .collect();
         let height = font.base_height();
         let strings = [
-            "misc", "stathelp", "skilhelp", "research", "rsrchtxt", "objshort",
+            "misc", "stathelp", "skilhelp", "research", "rsrchtxt", "objshort", "hrm", "jargon",
         ]
         .into_iter()
         .map(|name| {

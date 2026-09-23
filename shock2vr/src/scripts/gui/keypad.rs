@@ -209,46 +209,69 @@ pub(crate) enum HrmContext {
     Repair,
 }
 
-fn effective_hrm_values(world: &World, diff: PropHackDiff, context: HrmContext) -> (i32, i32) {
-    let (skill, stat) = world
-        .borrow::<UniqueView<QuestInfo>>()
-        .ok()
-        .map(|quest| {
-            let stats = quest.player_stats();
-            let base = stats.skill_level(match context {
-                HrmContext::Hack { .. } => Skill::Hack,
-                HrmContext::Modify => Skill::Modify,
-                HrmContext::Repair => Skill::Repair,
-            });
-            // Retail grants two effective levels only at security computers;
-            // it does not train an unskilled player or change the saved sheet.
-            let bonus = if matches!(
-                context,
-                HrmContext::Hack {
-                    security_computer: true
-                }
-            ) && base > 0
-                && stats.has_os_trait(super::traits::TRAIT_SECURITY_EXPERT)
-            {
-                2
-            } else {
-                0
+/// The player's side of an HRM roll: trained skill, the extra levels a
+/// security computer (Security Expert) or the tech implant grant, and CYB.
+struct HrmTerms {
+    skill: i32,
+    bonus_levels: i32,
+    implant: bool,
+    stat: i32,
+}
+
+impl HrmTerms {
+    fn for_context(world: &World, context: HrmContext) -> Self {
+        let Ok(quest) = world.borrow::<UniqueView<QuestInfo>>() else {
+            return Self {
+                skill: 0,
+                bonus_levels: 0,
+                implant: false,
+                stat: 0,
             };
-            (
-                base + bonus
-                    + if base > 0 && crate::implants::active(world, 7) {
-                        1
-                    } else {
-                        0
-                    },
-                stats.cyber_affinity,
-            )
-        })
-        .unwrap_or((0, 0));
+        };
+        let stats = quest.player_stats();
+        let skill = stats.skill_level(match context {
+            HrmContext::Hack { .. } => Skill::Hack,
+            HrmContext::Modify => Skill::Modify,
+            HrmContext::Repair => Skill::Repair,
+        });
+        // Retail grants two effective levels only at security computers;
+        // it does not train an unskilled player or change the saved sheet.
+        let bonus_levels = if matches!(
+            context,
+            HrmContext::Hack {
+                security_computer: true
+            }
+        ) && skill > 0
+            && stats.has_os_trait(super::traits::TRAIT_SECURITY_EXPERT)
+        {
+            2
+        } else {
+            0
+        };
+        Self {
+            skill,
+            bonus_levels,
+            implant: skill > 0 && crate::implants::active(world, 7),
+            stat: stats.cyber_affinity,
+        }
+    }
+
+    fn effective_skill(&self) -> i32 {
+        self.skill + self.bonus_levels + i32::from(self.implant)
+    }
+}
+
+fn hrm_params(world: &World) -> Option<dark::gamesys::HrmParams> {
     world
         .borrow::<UniqueView<GlobalHrmParams>>()
         .ok()
         .and_then(|params| params.0.clone())
+}
+
+fn effective_hrm_values(world: &World, diff: PropHackDiff, context: HrmContext) -> (i32, i32) {
+    let terms = HrmTerms::for_context(world, context);
+    let (skill, stat) = (terms.effective_skill(), terms.stat);
+    hrm_params(world)
         .map(|params| {
             (
                 params.success_chance(diff.success_chance, skill, stat),
@@ -259,6 +282,74 @@ fn effective_hrm_values(world: &World, diff: PropHackDiff, context: HrmContext) 
             diff.success_chance.clamp(0, 85),
             diff.critical_chance.max(0),
         ))
+}
+
+/// Retail's odds readout under the board (`jargon.str`, one key set per
+/// mode): starting difficulty, what skill, CYB and bonuses take off, the
+/// final difficulty and the mine count.
+pub(crate) fn hrm_breakdown(world: &World, diff: PropHackDiff, context: HrmContext) -> String {
+    let mode = match context {
+        HrmContext::Hack { .. } => 0,
+        HrmContext::Repair => 1,
+        HrmContext::Modify => 2,
+    };
+    let line = |key: &str, fallback: &str, args: &[i32]| {
+        let format = super::PanelText::string(world, "jargon", &format!("{key}{mode}"), fallback);
+        // Shipped lines end in a literal `\n` escape; the join supplies breaks.
+        let mut out = format.replace("\\n", "").replace("%%", "\u{0}");
+        for arg in args {
+            out = out.replacen("%d", &arg.to_string(), 1);
+        }
+        out.replace('\u{0}', "%").trim_end().to_owned()
+    };
+    let terms = HrmTerms::for_context(world, context);
+    let (skill_bonus, stat_bonus) = hrm_params(world)
+        .map(|p| (p.skill_success_bonus, p.stat_success_bonus))
+        .unwrap_or((0, 0));
+    let (chance, mines) = effective_hrm_values(world, diff, context);
+    let mut lines = vec![
+        line(
+            "JargonBaseDiff",
+            "Initial difficulty: %d%%.",
+            &[100 - diff.success_chance],
+        ),
+        line(
+            "JargonSkill",
+            "Skill %d: -%d%%",
+            &[terms.skill, terms.skill * skill_bonus],
+        ),
+        line(
+            "JargonStat",
+            "CYB stat %d: -%d%%",
+            &[terms.stat, terms.stat * stat_bonus],
+        ),
+    ];
+    if terms.implant {
+        lines.push(line("JargonImplant", "Exper-tech: -%d%%", &[skill_bonus]));
+    }
+    if terms.bonus_levels > 0 {
+        lines.push(line(
+            "JargonBonus",
+            "Bonus: -%d%%",
+            &[terms.bonus_levels * skill_bonus],
+        ));
+    }
+    lines.push(line(
+        "JargonFinalDiff",
+        "Final difficulty: %d%%.",
+        &[100 - chance],
+    ));
+    lines.push(if mines == 1 {
+        line("JargonMinesOne", "%d node.", &[mines])
+    } else {
+        line("JargonMines", "%d nodes.", &[mines])
+    });
+    lines.join("\n")
+}
+
+/// Retail's "N%" readout: the chance a node fails, after skill and stat.
+pub(crate) fn hrm_failure_percent(world: &World, diff: PropHackDiff, context: HrmContext) -> i32 {
+    100 - effective_hrm_values(world, diff, context).0
 }
 
 fn has_connected_three(nodes: &[HackNode; BOARD_WIDTH * BOARD_HEIGHT]) -> bool {
@@ -862,6 +953,36 @@ mod tests {
             board[board_index(0, y)] = HackNode::Lit;
         }
         assert!(has_connected_three(&board));
+    }
+
+    /// The odds readout itemizes exactly the terms the board rolls with.
+    #[test]
+    fn the_repair_breakdown_itemizes_the_rolled_odds() {
+        let world = World::new();
+        let mut quests = QuestInfo::new();
+        quests.player_stats_mut().skills.repair = 2;
+        quests.player_stats_mut().cyber_affinity = 3;
+        world.add_unique(quests);
+        world.add_unique(GlobalHrmParams(Some(dark::gamesys::HrmParams {
+            skill_critical_bonus: 1,
+            skill_success_bonus: 10,
+            stat_critical_bonus: 0,
+            stat_success_bonus: 5,
+            stat_break_chance: [0.0; 8],
+        })));
+        let diff = PropHackDiff {
+            success_chance: 20,
+            critical_chance: 4,
+            cost: 3.0,
+        };
+
+        // 20 + 2*10 + 3*5 = 55% success; 4 - 2*1 = 2 mines.
+        assert_eq!(
+            hrm_breakdown(&world, diff, HrmContext::Repair),
+            "Initial difficulty: 80%.\nSkill 2: -20%\nCYB stat 3: -15%\n\
+             Final difficulty: 45%.\n2 nodes."
+        );
+        assert_eq!(hrm_failure_percent(&world, diff, HrmContext::Repair), 45);
     }
 
     /// A repair board is dealt on its own shape: the middle three columns,

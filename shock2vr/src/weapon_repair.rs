@@ -42,14 +42,29 @@ pub fn quote(world: &World, weapon: EntityId) -> Result<PropHackDiff, String> {
         .borrow::<UniqueView<QuestInfo>>()
         .map_err(|_| "No player stats.")?;
     if quests.player_stats().skill_level(Skill::Repair) < required {
-        return Err(format!("Requires trained Repair {required}."));
+        return Err(
+            hrm_string(world, "techminskill1", "Repair skill %d required.")
+                .replace("%d", &required.to_string()),
+        );
     }
     diff.cost = (diff.cost as i32).max(1) as f32;
     Ok(diff)
 }
 
-pub fn success(entity_id: EntityId, _world: &World) -> Effect {
+/// A line from `hrm.str`, the board's own string table.
+fn hrm_string(world: &World, key: &str, fallback: &str) -> String {
+    crate::scripts::gui::PanelText::string(world, "hrm", key, fallback)
+}
+
+pub fn success(entity_id: EntityId, world: &World) -> Effect {
     Effect::combine(vec![
+        Effect::ShowMessage {
+            text: hrm_string(
+                world,
+                "RepairResult1",
+                "The item has been successfully repaired, and can be used normally.",
+            ),
+        },
         Effect::SetObjectState {
             entity_id,
             state: ObjectState::Normal,
@@ -61,8 +76,13 @@ pub fn success(entity_id: EntityId, _world: &World) -> Effect {
     ])
 }
 
-pub fn critical_failure(entity_id: EntityId, _world: &World) -> Effect {
-    Effect::DestroyEntity { entity_id }
+pub fn critical_failure(entity_id: EntityId, world: &World) -> Effect {
+    Effect::combine(vec![
+        Effect::ShowMessage {
+            text: hrm_string(world, "RepairResult2", "You have destroyed the item!"),
+        },
+        Effect::DestroyEntity { entity_id },
+    ])
 }
 
 #[cfg(test)]
@@ -108,10 +128,7 @@ mod tests {
     #[test]
     fn quote_needs_a_wielded_broken_gun_and_the_authored_repair_skill() {
         let (world, gun) = broken_pistol(1);
-        assert_eq!(
-            quote(&world, gun).unwrap_err(),
-            "Requires trained Repair 2."
-        );
+        assert_eq!(quote(&world, gun).unwrap_err(), "Repair skill 2 required.");
 
         let (mut world, gun) = broken_pistol(2);
         assert_eq!(quote(&world, gun).unwrap().cost, 3.0);
@@ -126,13 +143,14 @@ mod tests {
         assert!(matches!(
             Effect::flatten(vec![success(gun, &world)]).as_slice(),
             [
+                Effect::ShowMessage { .. },
                 Effect::SetObjectState { entity_id: a, state: ObjectState::Normal },
                 Effect::AdjustWeaponCondition { entity_id: b, delta },
             ] if *a == gun && *b == gun && *delta == REPAIR_CONDITION_BONUS
         ));
         assert!(matches!(
-            critical_failure(gun, &world),
-            Effect::DestroyEntity { entity_id } if entity_id == gun
+            Effect::flatten(vec![critical_failure(gun, &world)]).as_slice(),
+            [Effect::ShowMessage { .. }, Effect::DestroyEntity { entity_id }] if *entity_id == gun
         ));
     }
 }

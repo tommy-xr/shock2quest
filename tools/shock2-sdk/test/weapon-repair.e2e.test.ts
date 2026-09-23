@@ -21,7 +21,7 @@ async function breakGun(game: GameServer, gun: number, condition: number) {
   assert.equal(await property(game, gun, "ObjectState"), "Broken");
 }
 function repairButton(els: Awaited<ReturnType<typeof elements>>) {
-  return els.find((e) => e.label?.startsWith("REPAIR ("));
+  return els.find((e) => e.label === "repair");
 }
 test(
   "a broken pistol is repaired on the paid board from its settings panel",
@@ -44,7 +44,7 @@ test(
     const button = repairButton(await elements(game));
     assert.ok(button, JSON.stringify(await elements(game)));
     assert.ok(
-      !(await elements(game)).some((e) => e.label?.startsWith("MODIFY")),
+      !(await elements(game)).some((e) => e.label === "modify"),
       "a broken gun offers repair in modify's place",
     );
     await clickElement(game, button);
