@@ -1,4 +1,5 @@
 use dark::properties::{PropEcoState, PropEcoType, PropEcology, PropHitPoints, PropTemplateId};
+use engine::audio::AudioHandle;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
@@ -16,6 +17,10 @@ pub(crate) const ECOLOGY_STATE_NORMAL: i32 = 0;
 /// feedback watches for (`crate::security_alarm`).
 pub(crate) const ECOLOGY_STATE_ALERT: i32 = 2;
 const SCRIPT_STATE_KEY: &str = "shock2vr.trigger_ecology";
+/// Xerxes: "Potential threat detected."
+const ALERT_SCHEMA: &str = "xer02";
+/// Xerxes: "Security alert terminated."
+const ALERT_OVER_SCHEMA: &str = "xer03";
 
 #[derive(Serialize, Deserialize)]
 struct TriggerEcologyState {
@@ -31,6 +36,16 @@ pub struct TriggerEcology {
     difficulty_aware: bool,
     seconds_until_poll: f32,
     recovery_seconds_remaining: Option<f32>,
+}
+
+/// Station-wide Xerxes announcement, non-positional like retail's SchemaPlay.
+fn announce(entity_id: EntityId, schema: &str) -> Effect {
+    Effect::PlaySound {
+        handle: AudioHandle::new(),
+        name: schema.to_owned(),
+        source: Some(entity_id),
+        spatial: false,
+    }
 }
 
 impl TriggerEcology {
@@ -247,6 +262,7 @@ impl Script for TriggerEcology {
                     entity_id,
                     MessagePayload::Reset { from: entity_id },
                 ));
+                effects.push(announce(entity_id, ALERT_OVER_SCHEMA));
             }
         }
 
@@ -281,10 +297,13 @@ impl Script for TriggerEcology {
                     return Effect::NoEffect;
                 };
                 self.recovery_seconds_remaining = Some(recovery_seconds);
-                Effect::SetEcologyState {
-                    entity_id,
-                    state: ECOLOGY_STATE_ALERT,
-                }
+                Effect::combine(vec![
+                    Effect::SetEcologyState {
+                        entity_id,
+                        state: ECOLOGY_STATE_ALERT,
+                    },
+                    announce(entity_id, ALERT_SCHEMA),
+                ])
             }
             MessagePayload::Reset { .. } => {
                 if Self::eco_state(world, entity_id) != ECOLOGY_STATE_ALERT {
@@ -301,6 +320,7 @@ impl Script for TriggerEcology {
                         entity_id,
                         MessagePayload::Reset { from: entity_id },
                     ),
+                    announce(entity_id, ALERT_OVER_SCHEMA),
                 ])
             }
             _ => Effect::NoEffect,
@@ -422,6 +442,14 @@ mod tests {
         Effect::flatten(vec![effect])
             .into_iter()
             .any(|effect| matches!(effect, Effect::Send { msg } if msg.to == target))
+    }
+
+    fn announces(effect: &Effect, schema: &str) -> bool {
+        match effect {
+            Effect::PlaySound { name, spatial, .. } => name == schema && !spatial,
+            Effect::Combined { effects } => effects.iter().any(|e| announces(e, schema)),
+            _ => false,
+        }
     }
 
     fn sets_state(effect: Effect, target: EntityId, expected: i32) -> bool {
@@ -547,6 +575,7 @@ mod tests {
             &MessagePayload::Alarm { from: camera },
         );
 
+        assert!(announces(&effect, ALERT_SCHEMA));
         assert!(sets_state(effect, ecology, ECOLOGY_STATE_ALERT));
         assert_eq!(script.recovery_seconds_remaining, Some(120.0));
 
@@ -639,6 +668,11 @@ mod tests {
 
         let effects = Effect::flatten(vec![step(&mut script, ecology, &world, 1)]);
 
+        assert!(
+            effects
+                .iter()
+                .any(|effect| announces(effect, ALERT_OVER_SCHEMA))
+        );
         assert!(effects.iter().any(|effect| {
             matches!(
                 effect,
@@ -654,6 +688,27 @@ mod tests {
                         && matches!(msg.payload, MessagePayload::Reset { from } if from == ecology)
             )
         }));
+    }
+
+    #[test]
+    fn reset_announces_stand_down_only_from_alert() {
+        let mut world = World::new();
+        world.add_unique(GlobalTemplateHierarchy(HashMap::new()));
+        let console = world.add_entity(());
+        let ecology = world.add_entity((
+            PropEcoType(2501),
+            PropEcoState(ECOLOGY_STATE_ALERT),
+            ecology_props([0, 0, 2], [0, 0, 2], [0.0, 0.0, 120.0], [0, 0, 0]),
+        ));
+        let mut script = TriggerEcology::new();
+        let reset = MessagePayload::Reset { from: console };
+
+        let effect = script.handle_message(ecology, &world, &PhysicsWorld::new(), &reset);
+        assert!(announces(&effect, ALERT_OVER_SCHEMA));
+
+        world.add_component(ecology, PropEcoState(ECOLOGY_STATE_NORMAL));
+        let effect = script.handle_message(ecology, &world, &PhysicsWorld::new(), &reset);
+        assert!(!announces(&effect, ALERT_OVER_SCHEMA));
     }
 
     #[test]
