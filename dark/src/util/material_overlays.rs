@@ -45,6 +45,13 @@ pub(crate) fn append_incidence_overlays(
     let Some(profile) = profile(name) else {
         return;
     };
+    // Mounted goo's flat underside lies on the floor and z-fights it; the
+    // bias carries over to the overlay duplicated below.
+    if profile == Profile::WetGrowth {
+        if let Some(base) = objects.last_mut() {
+            base.set_depth_bias(true);
+        }
+    }
     let Some(base) = objects.last().map(SceneObject::duplicate) else {
         return;
     };
@@ -59,7 +66,7 @@ pub(crate) fn append_incidence_overlays(
         // Project-owned adaptation of the Nightdive incidence technique. Reuse
         // this surface's diffuse/alpha rather than another model's UV mask, and
         // keep it lit so dark rooms do not acquire glowing growth. Missing ramp
-        // art follows the normal fallback below and leaves the base untouched.
+        // art follows the normal fallback below and adds no overlay.
         vec![super::MaterialIncidencePass {
             texture: None,
             ramp: "materials/nd-ir_shine".into(),
