@@ -1,4 +1,6 @@
 mod material_includes;
+mod material_overlays;
+pub(crate) use material_overlays::append_incidence_overlays;
 mod merge_maps;
 
 use cgmath::{InnerSpace, Point3, point3};
