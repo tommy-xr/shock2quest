@@ -71,13 +71,11 @@ const ROW_TEXT_RIGHT: f32 = 175.0;
 /// foot of the art's large top box. That box is the weapon-icon area; the panel
 /// draws no icon into it today, so the line has it to itself.
 const MOD_LEVEL_Y: f32 = ROWS[0].y - 50.0;
-const LINE_H: f32 = 11.0;
 /// `UNLOAD0.PCX` is 142x22, centred exactly ((188 - 142) / 2 = 23) and flush to
 /// the panel's bottom edge. The backdrop authors no strip of its own for it, so
-/// it necessarily overlays something; sitting it below the last line row 1 can
-/// hold (223 + 5 * 11 = 278) costs only the thin bottom bezel, where any
-/// higher placement would cover the row's own text. It is pushed last, and the
-/// hit test takes the last match, so the overlap resolves to UNLOAD - the
+/// it necessarily overlays something: the thin bottom bezel and row 1's last
+/// 10 px, where row 1's text stops (`row_text_bottom`). It is pushed last, and
+/// the hit test takes the last match, so the overlap resolves to UNLOAD - the
 /// control actually drawn there.
 const UNLOAD_RECT: Rect = Rect::new(23.0, 278.0, 142.0, 22.0);
 
@@ -155,6 +153,13 @@ fn plug_for(world: &World, weapon: EntityId) -> Option<Plug> {
     }
 }
 
+/// Whether `weapon` can ever raise a plug. Unlike `plug_for` this does not
+/// flip with the gun's condition, so the canvas width stays fixed while the
+/// panel is open (a repair win on an unmodifiable gun removes its plug).
+fn has_plug_room(world: &World, weapon: EntityId) -> bool {
+    weapon_repair::supported(world, weapon) || weapon_modification::supported(world, weapon)
+}
+
 /// What the open HRM board is doing to the gun.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum HrmJob {
@@ -212,11 +217,9 @@ fn row_text(header: Option<&str>, description: Option<&str>) -> Option<String> {
 }
 
 /// Substitute the modification level into the MISC.STR `ModLevel` format
-/// ("Modification Level %d") - the same `replace` the HUD's own `%d` item
-/// labels use, so a data install whose string lacks the placeholder still draws
-/// its own text.
+/// ("Modification Level %d"); a string without the placeholder draws as is.
 fn mod_level_text(format: &str, modification: i32) -> String {
-    format.replace("%d", &modification.to_string())
+    super::PanelText::format(format, &[modification])
 }
 
 /// Whether the settings panel offers an UNLOAD button for `weapon`. The button
@@ -236,9 +239,10 @@ fn shows_unload(world: &World, weapon: EntityId) -> bool {
     loaded && crate::mission::reload::can_unload(world, weapon)
 }
 
-/// How many wrapped lines fit inside `row` starting at `text_y`.
-fn row_line_budget(row: Rect, text_y: f32) -> usize {
-    ((row.y + row.h - text_y) / LINE_H).floor().max(0.0) as usize
+/// Where a row's text must stop: the row's bottom, or UNLOAD's top where the
+/// button overlays the row.
+fn row_text_bottom(row: Rect) -> f32 {
+    (row.y + row.h).min(UNLOAD_RECT.y)
 }
 
 impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
@@ -330,18 +334,19 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             .and_then(|v| v.get(weapon).ok().map(|state| state.modification))
             .unwrap_or(0);
         // Retail draws every settings line in the MFD font (MAINAA, cyan).
+        let line_h = super::PanelText::line_height(world);
         components.push(super::PanelText::text(
             &mod_level_text(
                 &crate::hud::hud_strings(world).mod_level_label,
                 modification,
             ),
-            Rect::new(NAME_POS.0, MOD_LEVEL_Y, ROW_TEXT_RIGHT - NAME_POS.0, LINE_H),
+            Rect::new(NAME_POS.0, MOD_LEVEL_Y, ROW_TEXT_RIGHT - NAME_POS.0, line_h),
         ));
 
         if let Some(name) = script_util::object_short_name(world, weapon) {
             components.push(super::PanelText::text(
                 &name,
-                Rect::new(NAME_POS.0, NAME_POS.1, ROW_TEXT_RIGHT - NAME_POS.0, LINE_H),
+                Rect::new(NAME_POS.0, NAME_POS.1, ROW_TEXT_RIGHT - NAME_POS.0, line_h),
             ));
         }
 
@@ -383,7 +388,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                     text_x,
                     text_y,
                     ROW_TEXT_RIGHT - text_x,
-                    row_line_budget(row, text_y) as f32 * LINE_H,
+                    row_text_bottom(row) - text_y,
                 ),
             ));
         }
@@ -424,7 +429,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         _state: &WeaponSettingsGuiState,
     ) -> GuiConfig {
         let mut config = self.get_config();
-        if WeaponSettingsTarget::resolve(world).is_some_and(|w| plug_for(world, w).is_some()) {
+        if WeaponSettingsTarget::resolve(world).is_some_and(|w| has_plug_room(world, w)) {
             config.screen_size_in_pixels.x = PLUG_X + PLUG_W;
         }
         config
@@ -439,12 +444,12 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         state: &WeaponSettingsGuiState,
     ) -> Option<PanelSidecar> {
         let weapon = WeaponSettingsTarget::resolve(world)?;
-        plug_for(world, weapon)?;
+        if !has_plug_room(world, weapon) {
+            return None;
+        }
         Some(PanelSidecar {
             body_width: PANEL_W,
-            rect: state
-                .board
-                .is_none()
+            rect: (state.board.is_none() && plug_for(world, weapon).is_some())
                 .then_some(Rect::new(PLUG_X, PLUG_Y, PLUG_W, PLUG_H)),
         })
     }
@@ -721,6 +726,39 @@ mod tests {
         ));
     }
 
+    /// Repairing a gun that cannot be modified removes its plug; the canvas
+    /// must keep its width anyway, or the VR quad resizes mid-session.
+    #[test]
+    fn the_canvas_keeps_its_width_when_a_repair_removes_the_plug() {
+        use dark::properties::{ObjectState, PropHackDiff, PropObjState, PropRepairDiff};
+
+        let (mut world, weapon) = pistol_world(0);
+        world.add_component(
+            weapon,
+            (
+                PropRepairDiff(PropHackDiff {
+                    success_chance: 20,
+                    critical_chance: 4,
+                    cost: 3.0,
+                }),
+                PropObjState(ObjectState::Broken),
+            ),
+        );
+        let state = WeaponSettingsGuiState::default();
+        let width = |world: &World| {
+            WeaponSettingsGui
+                .get_config_for(EntityId::dead(), world, &state)
+                .screen_size_in_pixels
+                .x
+        };
+        assert_eq!(width(&world), PLUG_X + PLUG_W);
+
+        world.add_component(weapon, PropObjState(ObjectState::Normal));
+        assert_eq!(width(&world), PLUG_X + PLUG_W);
+        let sidecar = WeaponSettingsGui.sidecar(EntityId::dead(), &world, &state);
+        assert_eq!(sidecar.map(|s| s.rect), Some(None), "no plug to click");
+    }
+
     #[test]
     fn settings_stay_bound_to_the_selected_left_gun_and_go_inert_when_dropped() {
         let (mut world, left) = pistol_world(0);
@@ -835,14 +873,6 @@ mod tests {
         // the bezel, never a row's own words.
         assert_eq!(UNLOAD_RECT.y + UNLOAD_RECT.h, PANEL_H);
         assert_eq!(UNLOAD_RECT.x, (PANEL_W - UNLOAD_RECT.w) / 2.0);
-        let (row1_text_x, row1_text_y) = ROW_TEXT_POS[1];
-        let _ = row1_text_x;
-        let last_line_bottom = row1_text_y + row_line_budget(ROWS[1], row1_text_y) as f32 * LINE_H;
-        assert!(
-            UNLOAD_RECT.y >= last_line_bottom,
-            "UNLOAD ({}) must start below row 1's last line ({last_line_bottom})",
-            UNLOAD_RECT.y
-        );
     }
 
     /// The selection highlight is blitted at its authored size, so a row that is
@@ -1018,15 +1048,14 @@ mod tests {
         assert!(should_close_settings_panel(gun, None));
     }
 
+    /// Row text stays inside its row and above UNLOAD, with room for at least
+    /// four MFD-font (13 px) lines.
     #[test]
-    fn the_row_line_budget_keeps_text_inside_its_row() {
+    fn row_text_stays_inside_its_row_and_clear_of_unload() {
         for (row, (_, text_y)) in ROWS.iter().zip(ROW_TEXT_POS) {
-            let lines = row_line_budget(*row, text_y);
-            assert!(lines > 0);
-            assert!(
-                text_y + lines as f32 * LINE_H <= row.y + row.h,
-                "a full page of row text must not spill past the row"
-            );
+            let bottom = row_text_bottom(*row);
+            assert!(bottom <= row.y + row.h && bottom <= UNLOAD_RECT.y);
+            assert!(bottom - text_y >= 4.0 * 13.0);
         }
     }
 

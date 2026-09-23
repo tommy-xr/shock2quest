@@ -32,9 +32,10 @@ pub struct GuiConfig {
 }
 
 /// A companion drawn beside a panel's body in the same canvas (retail raises
-/// the HRM plug as its own overlay next to the MFD). The host anchors its
+/// the HRM plug as its own overlay next to the MFD). The flat host anchors its
 /// close button to the body and hit-tests only the body and `rect`, so the
-/// empty canvas around the companion stays click-through. Panel-local pixels;
+/// empty canvas around the companion stays click-through (the VR world panel
+/// still hit-tests its whole quad; it draws the same). Panel-local pixels;
 /// `rect` is `None` while the companion is hidden but its room is kept.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PanelSidecar {

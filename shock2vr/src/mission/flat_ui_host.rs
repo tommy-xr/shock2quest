@@ -827,7 +827,6 @@ impl FlatUiHost {
             self.components.clear();
             self.panel_size_px = None;
             self.panel_sidecar = None;
-            self.panel_sidecar = None;
         }
         self.active_panel = Some(entity);
         self.sticky_panel = false;
@@ -940,6 +939,8 @@ impl FlatUiHost {
     }
 
     /// Whether `canvas_pos` is on the panel: its body, or its companion.
+    /// Sidecar offsets are in unscaled panel pixels; no sidecar panel is wide
+    /// enough to be scaled onto the canvas.
     fn panel_hit(&self, panel: Rect, canvas_pos: Vector2<f32>) -> bool {
         match self.panel_sidecar {
             Some(sidecar) => {

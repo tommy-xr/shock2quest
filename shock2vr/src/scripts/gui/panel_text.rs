@@ -119,6 +119,15 @@ impl PanelText {
         }
     }
 
+    /// `text`, centred horizontally in `rect`.
+    pub fn centered<T: Clone>(text: &str, rect: Rect) -> GuiComponent<T> {
+        let mut component = Self::text(text, rect);
+        if let GuiComponent::Text { h, .. } = &mut component {
+            *h = HAlign::Center;
+        }
+        component
+    }
+
     pub fn paragraph<T: Clone>(world: &World, text: &str, rect: Rect) -> Vec<GuiComponent<T>> {
         let native = Self::line_height(world);
         let mut scale = 1.0;
