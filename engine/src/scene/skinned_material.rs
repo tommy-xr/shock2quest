@@ -309,12 +309,9 @@ impl SkinnedMaterial {
             uniforms
                 .incidence
                 .bind(self.incidence.as_ref(), render_context, view_matrix);
-            uniforms.shine.bind(
-                self.shine.as_ref(),
-                lights.specular,
-                render_context,
-                view_matrix,
-            );
+            uniforms
+                .shine
+                .bind(self.shine.as_ref(), lights, render_context, view_matrix);
 
             let projection = render_context.projection_matrix;
 
@@ -478,8 +475,9 @@ impl Material for SkinnedMaterial {
 
             let fragment_shader = crate::shader::build(
                 &format!(
-                    "{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}",
                     super::incidence::GLSL,
+                    super::environment::GLSL,
                     super::shine::GLSL,
                     UNIFIED_FRAGMENT_SHADER_SOURCE
                 ),

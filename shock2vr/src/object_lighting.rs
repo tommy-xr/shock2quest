@@ -25,6 +25,7 @@ pub struct ObjectLighting<'a> {
     spatial: &'a dyn SpatialQueryEngine,
     intensities: Option<&'a HashMap<i16, f32>>,
     player_position: Vector3<f32>,
+    environment: Option<std::rc::Rc<engine::texture::CubeTexture>>,
 }
 
 impl<'a> ObjectLighting<'a> {
@@ -32,6 +33,7 @@ impl<'a> ObjectLighting<'a> {
         spatial: Option<&'a dyn SpatialQueryEngine>,
         intensities: Option<&'a HashMap<i16, f32>>,
         player_position: Vector3<f32>,
+        environment: Option<std::rc::Rc<engine::texture::CubeTexture>>,
     ) -> Option<Self> {
         if !dev_params::get_bool(dev_params::OBJECT_LIGHTING) {
             return None;
@@ -40,6 +42,7 @@ impl<'a> ObjectLighting<'a> {
             spatial: spatial?,
             intensities,
             player_position,
+            environment,
         })
     }
 
@@ -55,11 +58,12 @@ impl<'a> ObjectLighting<'a> {
     }
 
     pub fn at_position(&self, position: Vector3<f32>) -> std::rc::Rc<LightArray> {
-        std::rc::Rc::new(lights_for_position(
-            self.spatial,
-            position,
-            self.intensities,
-        ))
+        std::rc::Rc::new(
+            lights_for_position(self.spatial, position, self.intensities).with_environment(
+                self.environment.clone(),
+                dev_params::get(dev_params::OBJECT_REFLECTION),
+            ),
+        )
     }
 }
 

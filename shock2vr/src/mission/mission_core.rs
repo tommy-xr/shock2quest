@@ -13206,6 +13206,7 @@ impl MissionCore {
                             .as_ref()
                             .map(|c| c.light_intensities()),
                         self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos,
+                        self.environment.clone(),
                     );
                     let weapon_lights = lighting
                         .as_ref()
@@ -13728,6 +13729,7 @@ impl MissionCore {
                 .as_ref()
                 .map(|c| c.light_intensities()),
             self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos,
+            self.environment.clone(),
         );
 
         // A successfully loaded attached effect can replace its host's mesh.

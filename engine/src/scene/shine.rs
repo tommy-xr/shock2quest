@@ -2,7 +2,7 @@
 //! identical `INCIDENCE` passes over its diffuse; composing them in the same
 //! fragment gives the stacked result without re-drawing (and re-skinning) the
 //! mesh once per pass. Shared by static and skinned shaders.
-use crate::{engine::EngineRenderContext, texture::TextureTrait};
+use crate::{engine::EngineRenderContext, scene::light::LightArray, texture::TextureTrait};
 use cgmath::{Matrix4, Vector3, prelude::*};
 use std::rc::Rc;
 
@@ -42,12 +42,20 @@ uniform bool shineUnlit;
 uniform bool shineAlphaBlend;
 uniform float shinePasses;
 uniform float shineSpecular;
+uniform samplerCube shineEnvironment;
+uniform float shineReflection;
 
 // Highlight exponent. Higher reads wetter but sparkles on low-poly meshes in
 // a headset.
 const float SHINE_POWER = 24.0;
 // Gloss away from the authored glints, relative to 1 on them.
 const float SHINE_BASE_GLOSS = 0.5;
+// Mip the capture is reflected at: blurry, as a curved wet surface would
+// show it, and forgiving of the capture having been taken elsewhere on the deck.
+const float REFLECTION_LOD = 3.0;
+// Schlick reflectance head-on (above water's 0.02 so it reads at a glance);
+// grazing angles approach 1.
+const float REFLECTION_F0 = 0.05;
 
 bool shineHighlights() {
     return shineEnabled && shineSpecular > 0.0;
@@ -76,14 +84,23 @@ vec4 applyShine(vec4 base, vec3 light, vec3 specular, float opacity, vec2 uv, ve
     if (!shineEnabled) return base;
     vec4 mask = texture(shineMask, uv);
     // A separate pass would alpha-test its own bitmap.
-    if (mask.a < 0.1 && !shineHighlights()) return base;
-    float facing = clamp(abs(dot(normal, normalize(shineEye - position))), 0.0, 1.0);
+    if (mask.a < 0.1 && !shineHighlights() && shineReflection <= 0.0) return base;
+    vec3 toEye = normalize(shineEye - position);
+    float facing = clamp(abs(dot(normal, toEye)), 0.0, 1.0);
     float alpha = mask.a < 0.1 ? 0.0 : mask.a * opacity * texture(shineRamp, vec2(facing, 0.5)).r;
     vec3 shine = min((shineUnlit ? mask.rgb : mask.rgb * light) * shineTint, vec3(1.0));
     // The whole surface is wet, in the mask's colour; its sparse alpha marks
     // the glossiest glints. The ramp only shapes the authored sheen.
-    vec3 highlight = mask.rgb * mix(SHINE_BASE_GLOSS, 1.0, mask.a) * opacity * specular
-        * shineSpecular;
+    float gloss = mix(SHINE_BASE_GLOSS, 1.0, mask.a) * opacity;
+    vec3 highlight = mask.rgb * gloss * specular * shineSpecular;
+    if (shineReflection > 0.0) {
+        vec3 mirrored = reflect(-toEye, normal);
+        vec3 seen = textureLod(shineEnvironment, environmentDirection(mirrored), REFLECTION_LOD).rgb;
+        float fresnel = mix(REFLECTION_F0, 1.0, pow(1.0 - facing, 5.0));
+        // The capture is a lit photograph of the deck; the light that actually
+        // reaches this surface keeps a dark room from reflecting a bright one.
+        highlight += seen * mask.rgb * min(light, vec3(1.0)) * fresnel * gloss * shineReflection;
+    }
     // Each stacked pass blended onto a clamped framebuffer.
     vec3 color = min(base.rgb, vec3(1.0));
     if (shineAlphaBlend) {
@@ -101,6 +118,7 @@ vec4 applyShine(vec4 base, vec3 light, vec3 specular, float opacity, vec2 uv, ve
 
 const MASK_UNIT: u32 = 2;
 const RAMP_UNIT: u32 = 3;
+const ENVIRONMENT_UNIT: u32 = 4;
 
 pub(crate) struct ShineUniforms {
     enabled: i32,
@@ -112,6 +130,8 @@ pub(crate) struct ShineUniforms {
     alpha_blend: i32,
     passes: i32,
     specular: i32,
+    environment: i32,
+    reflection: i32,
 }
 impl ShineUniforms {
     pub fn new(program: u32) -> Self {
@@ -128,13 +148,15 @@ impl ShineUniforms {
             alpha_blend: loc("shineAlphaBlend"),
             passes: loc("shinePasses"),
             specular: loc("shineSpecular"),
+            environment: loc("shineEnvironment"),
+            reflection: loc("shineReflection"),
         }
     }
 
     pub fn bind(
         &self,
         shine: Option<&Shine>,
-        specular: f32,
+        lights: &LightArray,
         context: &EngineRenderContext,
         view: &Matrix4<f32>,
     ) {
@@ -142,6 +164,7 @@ impl ShineUniforms {
             gl::Uniform1i(self.enabled, i32::from(shine.is_some()));
             gl::Uniform1i(self.mask, MASK_UNIT as i32);
             gl::Uniform1i(self.ramp, RAMP_UNIT as i32);
+            gl::Uniform1i(self.environment, ENVIRONMENT_UNIT as i32);
             // Unsampled when disabled: the branch is uniform across the draw.
             let Some(shine) = shine else {
                 return;
@@ -157,7 +180,15 @@ impl ShineUniforms {
                 i32::from(shine.blend == ShineBlend::Alpha),
             );
             gl::Uniform1f(self.passes, shine.passes as f32);
-            gl::Uniform1f(self.specular, specular);
+            gl::Uniform1f(self.specular, lights.specular);
+            let reflection = match &lights.environment {
+                Some(environment) => {
+                    environment.bind_to(ENVIRONMENT_UNIT);
+                    lights.reflection
+                }
+                None => 0.0,
+            };
+            gl::Uniform1f(self.reflection, reflection);
         }
     }
 }
