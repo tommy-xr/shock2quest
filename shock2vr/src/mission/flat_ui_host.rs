@@ -32,7 +32,7 @@ use crate::{
     input_context::Pointer2D,
     mission::PlayerInfo,
     scripts::{Message, MessagePayload},
-    ui::{HAlign, Rect, ScaleMode, UiCanvas, UiElement, VAlign, pointer_to_canvas},
+    ui::{HAlign, MFD_FONT, Rect, ScaleMode, UiCanvas, UiElement, VAlign, pointer_to_canvas},
     vr_config::Handedness,
 };
 
@@ -1425,13 +1425,13 @@ impl FlatUiHost {
                 canvas.text_native_fit(
                     title,
                     ["LEFT", "RIGHT"][slot],
-                    NAME_STRIP_FONT,
+                    MFD_FONT,
                     HAlign::Center,
                     VAlign::Middle,
                 );
                 let content = Rect::new(arm.x + 3.0, arm.y + 30.0, arm.w - 6.0, arm.h - 34.0);
-                match self.holster_items[slot].as_ref() {
-                    Some(item) => match item.icon.as_deref() {
+                if let Some(item) = self.holster_items[slot].as_ref() {
+                    match item.icon.as_deref() {
                         Some(icon) => {
                             canvas.fitted_object_icon(content, icon);
                         }
@@ -1444,16 +1444,6 @@ impl FlatUiHost {
                                 VAlign::Middle,
                             );
                         }
-                    },
-                    None => {
-                        canvas.text(
-                            Rect::new(arm.x + 1.0, content.y, arm.w - 2.0, content.h),
-                            "EMPTY",
-                            NAME_STRIP_FONT,
-                            8.0,
-                            HAlign::Center,
-                            VAlign::Middle,
-                        );
                     }
                 }
             }
@@ -1472,18 +1462,9 @@ impl FlatUiHost {
                         HAlign::Center,
                         VAlign::Middle,
                     );
-                } else {
-                    canvas.text_native_fit(
-                        well,
-                        if slot < self.implant_capacity {
-                            "EMPTY"
-                        } else {
-                            "LOCK"
-                        },
-                        NAME_STRIP_FONT,
-                        HAlign::Center,
-                        VAlign::Middle,
-                    );
+                } else if slot >= self.implant_capacity {
+                    // Same "unavailable" art as the backpack's locked cells.
+                    canvas.image(well, "iface/block.pcx");
                 }
             }
             // The mini-frame sits in the inventory bar, so it is up exactly
