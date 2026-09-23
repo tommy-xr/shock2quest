@@ -1,6 +1,7 @@
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::{
-    FrobFlag, Link, PropFrobInfo, PropInventoryDimensions, PropObjIcon, ReceptronEffect,
+    FrobFlag, Link, ObjectState, PropFrobInfo, PropInventoryDimensions, PropObjBrokenIcon,
+    PropObjIcon, ReceptronEffect,
 };
 
 use shipyard::{EntityId, Get, View, World};
@@ -227,6 +228,25 @@ const STACK_BADGE_INSET: f32 = 1.0;
 /// leaving the separators in `INVBACK.PCX` visible around it.
 const BLOCK_SIZE: Vector2<f32> = Vector2::new(34.0, 32.0);
 
+/// An item's inventory art (`P$ObjIcon` basename, no extension). A Broken item
+/// shows its authored `P$ObjBroken` art instead (a pistol's `icn_pist` becomes
+/// `icn_pistb`), falling back to the normal icon when none is authored.
+pub fn inventory_icon(world: &World, entity_id: EntityId) -> Option<String> {
+    if super::object_state(world, entity_id) == ObjectState::Broken {
+        if let Some(icon) = world
+            .borrow::<View<PropObjBrokenIcon>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|icon| icon.0.clone()))
+        {
+            return Some(icon);
+        }
+    }
+    world
+        .borrow::<View<PropObjIcon>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|icon| icon.0.clone()))
+}
+
 /// The backpack grid cell a panel-local pixel position (in `invback.pcx`'s
 /// own 635x120 pixel space, the same space [`get_components`] lays items out
 /// in) lands in - the inverse of that layout, so a pointer position and an
@@ -373,23 +393,18 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
         let initial_offset_y = spec.grid_origin.y;
         let initial_offset_x = spec.grid_origin.x;
 
-        let v_obj_icon = world.borrow::<View<PropObjIcon>>().unwrap();
         let v_stack_count = world
             .borrow::<View<dark::properties::PropStackCount>>()
             .unwrap();
         for contained_entity_info in inventory.all_items() {
             let ent = contained_entity_info.entity;
-            let maybe_obj_icon = v_obj_icon.get(ent);
-
-            if maybe_obj_icon.is_err() {
+            let Some(obj_icon) = inventory_icon(world, ent) else {
                 continue;
-            }
+            };
 
             let inv_dims = (contained_entity_info.width, contained_entity_info.height);
             let position_x = slot_pixel_width * contained_entity_info.x as f32;
             let position_y = slot_pixel_height * contained_entity_info.y as f32;
-
-            let obj_icon = &maybe_obj_icon.unwrap().0;
 
             let on_click = if self.take_on_click {
                 ContainerGuiMsg::Take(ent)
@@ -434,15 +449,13 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
 
         if let Some(cursor) = maybe_cursor {
             if let Some(ent) = cursor.held_entity_id {
-                let maybe_obj_icon = v_obj_icon.get(ent);
-
-                if let Ok(obj_icon) = maybe_obj_icon {
+                if let Some(obj_icon) = inventory_icon(world, ent) {
                     let inv_dims = v_inv_dims
                         .get(ent)
                         .map(|dims| (dims.width, dims.height))
                         .unwrap_or((1, 1));
                     components.push(
-                        gui::image(&format!("{}.pcx", obj_icon.0))
+                        gui::image(&format!("{obj_icon}.pcx"))
                             .with_object_icon()
                             .with_position(vec2(cursor.position.x, cursor.position.y))
                             .with_size(vec2(
@@ -1258,6 +1271,55 @@ mod tests {
                 "a contained cyber-module pile must emit its collectible object-icon button"
             );
         }
+    }
+
+    /// A Broken item draws its `P$ObjBroken` art in the grid and on the
+    /// cursor; any other state, or a Broken item with no broken art, keeps its
+    /// normal icon.
+    #[test]
+    fn a_broken_item_draws_its_broken_icon() {
+        use crate::gui::GuiCursor;
+        use dark::properties::PropObjState;
+
+        let (mut world, container, item, _inventory) = loot_world();
+        let cursor = Some(GuiCursor {
+            position: point2(10.0, 10.0),
+            held_entity_id: Some(item),
+        });
+        let drawn = |world: &World| -> Vec<Vec<String>> {
+            [
+                ContainerGui::loot_container(),
+                ContainerGui::inv_container(),
+            ]
+            .iter()
+            .map(|gui| {
+                gui.get_components(&cursor, container, world, &ContainerGuiState {})
+                    .into_iter()
+                    .filter_map(|component| match component {
+                        GuiComponent::Button { texture, .. } => Some(texture),
+                        GuiComponent::Image { texture, .. } if texture.starts_with("icn_") => {
+                            Some(texture)
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect()
+        };
+        let both = |icon: &str| vec![vec![icon.to_owned(); 2]; 2];
+
+        world.add_component(item, PropObjBrokenIcon("icn_psib".to_owned()));
+        assert_eq!(drawn(&world), both("icn_psi.pcx"), "a Normal item");
+
+        world.add_component(item, PropObjState(ObjectState::Broken));
+        assert_eq!(drawn(&world), both("icn_psib.pcx"), "a Broken item");
+
+        world.add_component(item, PropObjState(ObjectState::Destroyed));
+        assert_eq!(drawn(&world), both("icn_psi.pcx"), "only Broken swaps");
+
+        world.add_component(item, PropObjState(ObjectState::Broken));
+        world.delete_component::<PropObjBrokenIcon>(item);
+        assert_eq!(drawn(&world), both("icn_psi.pcx"), "no broken art");
     }
 
     /// Use-only objects can be contained too. Audio logs are the critical

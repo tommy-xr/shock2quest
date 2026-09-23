@@ -351,12 +351,8 @@ impl MfdUtilities {
             return;
         }
         self.font = Some(crate::ui::resolve_font(assets, crate::ui::MFD_FONT));
-        self.icon = world
-            .borrow::<View<dark::properties::PropObjIcon>>()
-            .unwrap()
-            .get(entity)
-            .ok()
-            .map(|p| format!("{}.pcx", p.0));
+        self.icon =
+            crate::scripts::gui::inventory_icon(world, entity).map(|icon| format!("{icon}.pcx"));
         let (title, body) = query_content(world, entity, assets);
         self.set_content(title, body);
     }
