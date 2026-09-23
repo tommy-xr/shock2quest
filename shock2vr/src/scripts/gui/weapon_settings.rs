@@ -81,11 +81,6 @@ const LINE_H: f32 = 11.0;
 /// control actually drawn there.
 const UNLOAD_RECT: Rect = Rect::new(23.0, 278.0, 142.0, 22.0);
 
-/// Approximate characters per line at the row text width. `mainfont` is
-/// variable-width; this is the same conservative greedy-wrap budget the log
-/// reader uses (26 chars at 136 px), scaled to this rect.
-const ROW_WRAP: usize = 29;
-
 const BACKDROP: &str = "iface/settings.pcx";
 
 /// Retail's HRM goal well (TEXT_X/TEXT_Y/TEXT_W, above the board) and the
@@ -334,21 +329,20 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             .ok()
             .and_then(|v| v.get(weapon).ok().map(|state| state.modification))
             .unwrap_or(0);
-        components.push(
-            gui::text(&mod_level_text(
+        // Retail draws every settings line in the MFD font (MAINAA, cyan).
+        components.push(super::PanelText::text(
+            &mod_level_text(
                 &crate::hud::hud_strings(world).mod_level_label,
                 modification,
-            ))
-            .with_position(vec2(NAME_POS.0, MOD_LEVEL_Y))
-            .with_size(vec2(ROW_TEXT_RIGHT - NAME_POS.0, LINE_H)),
-        );
+            ),
+            Rect::new(NAME_POS.0, MOD_LEVEL_Y, ROW_TEXT_RIGHT - NAME_POS.0, LINE_H),
+        ));
 
         if let Some(name) = script_util::object_short_name(world, weapon) {
-            components.push(
-                gui::text(&name)
-                    .with_position(vec2(NAME_POS.0, NAME_POS.1))
-                    .with_size(vec2(ROW_TEXT_RIGHT - NAME_POS.0, LINE_H)),
-            );
+            components.push(super::PanelText::text(
+                &name,
+                Rect::new(NAME_POS.0, NAME_POS.1, ROW_TEXT_RIGHT - NAME_POS.0, LINE_H),
+            ));
         }
 
         let current = script_util::current_gun_setting(world, weapon);
@@ -382,20 +376,16 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                     .with_size(extent_of(row)),
             );
             let (text_x, text_y) = ROW_TEXT_POS[setting as usize];
-            for (idx, wrapped) in super::media::wrap_text(&line, ROW_WRAP)
-                .iter()
-                .take(row_line_budget(row, text_y))
-                .enumerate()
-            {
-                if wrapped.is_empty() {
-                    continue;
-                }
-                components.push(
-                    gui::text(wrapped)
-                        .with_position(vec2(text_x, text_y + idx as f32 * LINE_H))
-                        .with_size(vec2(ROW_TEXT_RIGHT - text_x, LINE_H)),
-                );
-            }
+            components.extend(super::PanelText::paragraph(
+                world,
+                &line,
+                Rect::new(
+                    text_x,
+                    text_y,
+                    ROW_TEXT_RIGHT - text_x,
+                    row_line_budget(row, text_y) as f32 * LINE_H,
+                ),
+            ));
         }
 
         if shows_unload(world, weapon) {

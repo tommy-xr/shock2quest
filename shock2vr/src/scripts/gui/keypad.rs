@@ -487,13 +487,16 @@ where
     }
 
     // HACK.PCX already supplies the cyan `COST:` label. Retail draws only the
-    // dynamic numeric value in the 48px slot beginning at x=128, after the
-    // result overlay so WINH/LOSEH/PAYH cannot obscure it.
-    components.push(
-        gui::text(&hack_cost(diff).to_string())
-            .with_position(vec2(147.0, 158.0))
-            .with_size(vec2(29.0, 18.0)),
+    // dynamic numeric value, in the MFD font, centred in the 48px slot at
+    // (128, 161), after the result overlay so WINH/LOSEH/PAYH cannot obscure it.
+    let mut cost = super::PanelText::text(
+        &hack_cost(diff).to_string(),
+        crate::ui::Rect::new(128.0, 161.0, 48.0, 14.0),
     );
+    if let GuiComponent::Text { h, .. } = &mut cost {
+        *h = crate::ui::HAlign::Center;
+    }
+    components.push(cost);
 
     if !matches!(state.phase, HackPhase::Won | HackPhase::Lost) {
         let (normal, hover, label) =
