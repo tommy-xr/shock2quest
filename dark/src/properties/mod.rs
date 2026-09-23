@@ -424,6 +424,11 @@ impl PropInventoryDimensions {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropObjIcon(pub String);
 
+/// `P$ObjBroken` ("Obj/Broken icon") - the inventory art a Broken object shows
+/// in place of its `P$ObjIcon`.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropObjBrokenIcon(pub String);
+
 /// `P$Sett1` / `P$Sett2` - the description text for a gun's first / second fire
 /// setting, and `P$SHead1` / `P$SHead2` - the short header shown beside it
 /// (e.g. "NORM" / "BURST"). Each holds an object string (`key: "fallback"`)
@@ -1912,6 +1917,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ObjIcon",
             read_prop_string,
             PropObjIcon,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$ObjBroken",
+            read_prop_string,
+            PropObjBrokenIcon,
             accumulator::latest,
         ),
         define_prop(
