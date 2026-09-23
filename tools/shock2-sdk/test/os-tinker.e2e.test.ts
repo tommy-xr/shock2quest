@@ -3,50 +3,19 @@ import { test } from "node:test";
 import { GameServer, type UiElement } from "../src/index.js";
 import { acquireOsUpgrade, clickElement } from "./helpers/os-upgrade.js";
 import { carriedNaniteTotal } from "./helpers/nanites.js";
+import { elements, openSettings, property, winBoard } from "./helpers/hrm.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
-async function elements(game: GameServer) { return (await game.ui.state()).active_panel!.elements; }
 async function click(game: GameServer, label: string) {
   const el = (await elements(game)).find(e => e.label === label);
   assert.ok(el, `button ${label}`);
   await clickElement(game, el);
-}
-async function openSettings(game: GameServer) {
-  if ((await game.ui.state()).mode !== "use") { await game.input.trigger("ToggleUseMode"); await game.step({ frames: 2 }); }
-  const button = (await game.ui.state()).readout.find(e => e.label === "gun_setting");
-  assert.ok(button);
-  await clickElement(game, button);
 }
 async function quotedCost(game: GameServer) {
   const button = (await elements(game)).find(e => e.label?.startsWith("MODIFY ("));
   assert.ok(button, JSON.stringify(await elements(game)));
   return { cost: Number(button.label!.match(/\d+/)![0]), button };
 }
-async function property(game: GameServer, gun: number, name: string) {
-  return (await game.entities.detail(gun)).properties.find(p => p.name === name)!.value;
-}
-async function winBoard(game: GameServer) {
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const els = await elements(game);
-    const start = els.find(e => e.label === "start-hack" || e.label === "reset-hack");
-    assert.ok(start, "paid attempt remains available");
-    await clickElement(game, start);
-    // Play free nodes through the real board. Avoid known mines; failure burns
-    // a normal node, requiring a fresh paid board if no triple remains.
-    const candidates = (await elements(game)).filter(e => e.label?.startsWith("node-"));
-    for (const node of candidates) {
-      const current = await elements(game);
-      if (current.some(e => /win[hm]\.pcx/.test(e.texture ?? ""))) return;
-      if (current.some(e => /fail[hm]\.pcx/.test(e.texture ?? ""))) break;
-      const overlay = current.find(e => e.kind === "image" && e.rect[0] === node.rect[0] && e.rect[1] === node.rect[1]);
-      if (overlay) continue;
-      await clickElement(game, node);
-    }
-    if ((await elements(game)).some(e => /win[hm]\.pcx/.test(e.texture ?? ""))) return;
-  }
-  assert.fail("20 real paid HRM attempts did not win");
-}
-
 test("Tinker halves actual paid Modify attempts; two pistol modifications survive save and transition", { skip: !enabled, timeout: 300_000 }, async () => {
   await using game = await GameServer.launch({ mission: "medsci2.mis" });
   await game.player.setStats({ skills: { modify: 6 }, cyber_affinity: 6 });

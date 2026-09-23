@@ -265,25 +265,24 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             return components;
         }
         // A Broken gun offers repair in modify's place, as the original does.
-        let action = if weapon_repair::is_broken(world, weapon) {
-            weapon_repair::supported(world, weapon).then(|| {
-                (
+        let action =
+            if weapon_repair::is_broken(world, weapon) && weapon_repair::supported(world, weapon) {
+                Some((
                     "REPAIR",
                     WeaponSettingsGuiMsg::Repair,
                     weapon_repair::quote(world, weapon),
                     "Repair the weapon to use it again.",
-                )
-            })
-        } else {
-            weapon_modification::supported(world, weapon).then(|| {
-                (
-                    "MODIFY",
-                    WeaponSettingsGuiMsg::Modify,
-                    weapon_modification::quote(world, weapon),
-                    weapon_modification::description(world, weapon),
-                )
-            })
-        };
+                ))
+            } else {
+                weapon_modification::supported(world, weapon).then(|| {
+                    (
+                        "MODIFY",
+                        WeaponSettingsGuiMsg::Modify,
+                        weapon_modification::quote(world, weapon),
+                        weapon_modification::description(world, weapon),
+                    )
+                })
+            };
         if let Some((name, msg, quote, description)) = action {
             let label = match &quote {
                 Ok(diff) => format!("{name} ({} nanites)", diff.cost as i32),

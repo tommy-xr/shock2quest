@@ -1,9 +1,7 @@
 //! Repairing a Broken gun on the HRM board. Winning sets it back to Normal
 //! with 10 more condition; a critical failure destroys it.
 use crate::{player_stats::Skill, quest_info::QuestInfo};
-use dark::properties::{
-    ObjectState, PropHackDiff, PropObjState, PropRepairDiff, PropRequiredTechDesc,
-};
+use dark::properties::{ObjectState, PropHackDiff, PropRepairDiff, PropRequiredTechDesc};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::scripts::Effect;
@@ -12,9 +10,7 @@ use crate::scripts::Effect;
 const REPAIR_CONDITION_BONUS: f32 = 10.0;
 
 pub fn is_broken(world: &World, weapon: EntityId) -> bool {
-    world
-        .borrow::<View<PropObjState>>()
-        .is_ok_and(|v| v.get(weapon).is_ok_and(|p| p.0 == ObjectState::Broken))
+    crate::scripts::gui::object_state(world, weapon) == ObjectState::Broken
 }
 
 pub fn supported(world: &World, weapon: EntityId) -> bool {
@@ -73,7 +69,7 @@ pub fn critical_failure(entity_id: EntityId, _world: &World) -> Effect {
 mod tests {
     use super::*;
     use crate::mission::PlayerInfo;
-    use dark::properties::{PropGunState, TechSkillValues};
+    use dark::properties::{PropGunState, PropObjState, TechSkillValues};
 
     fn broken_pistol(repair_skill: i32) -> (World, EntityId) {
         let mut world = World::new();
