@@ -66,3 +66,19 @@ synthetic light set tests the renderer, not world-rep cell selection.
 The explorer model preview also offers ambient and colored spotlight controls
 for inspecting the same materials under repeatable lighting. No additional
 organic profiles are enabled by these lighting tools.
+
+The next material increment resolves creature scripts within their `mesh`
+family and enables authored shine on baby/boss spiders and Overlord/Reaver.
+Additive and standard-alpha incidence passes retain their authored blend mode
+and order; shared diffuse fill/rim passes remain disabled.
+
+A separate growth experiment selects only the mounted SHTUP `GOT2_`, `GOT3_`
+and `GOT4_` materials used by `goo.bin`, `goo3.bin` and `goo4.bin`. It reuses
+Nightdive's `ND-IR_SHINE` ramp with one lit additive pass at strength 0.5,
+using each surface's own diffuse RGB and alpha. This is a project-owned
+adaptation, not an authored Nightdive growth material or a neutral specular
+mask. It preserves cutouts and stays dark without lighting. Missing ramp art
+leaves the base visible. Compare these models with the explorer lighting rig
+and inspect Worm Goo in Hydro missions before broader rollout. Brain fill/rim,
+other Many items, and lightmapped terrain remain separate work; this experiment
+adds one overlay draw per selected base surface and has no Quest cost estimate.

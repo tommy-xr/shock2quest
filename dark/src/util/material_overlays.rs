@@ -12,6 +12,7 @@ use std::{cell::RefCell, path::Path, rc::Rc};
 enum Profile {
     PlanarDecal,
     Organic,
+    WetGrowth,
 }
 
 fn profile(name: &str) -> Option<Profile> {
@@ -22,6 +23,8 @@ fn profile(name: &str) -> Option<Profile> {
         .as_str()
     {
         "nd-mtlhit" => Some(Profile::PlanarDecal),
+        // The mounted SHTUP Hydro/Earth growth uses GOT*, not the legacy GOO*.
+        "got2_" | "got3_" | "got4_" => Some(Profile::WetGrowth),
         "nd-anegg" | "nd-grub" | "nd-spdrbby" | "nd-spiderboss" | "nd-overlord" | "nd-reaver" => {
             Some(Profile::Organic)
         }
@@ -52,7 +55,22 @@ pub(crate) fn append_incidence_overlays(
     } else {
         name.to_owned()
     };
-    for pass in super::object_material_incidence_passes(assets, &material_name) {
+    let passes = if profile == Profile::WetGrowth {
+        // Project-owned adaptation of the Nightdive incidence technique. Reuse
+        // this surface's diffuse/alpha rather than another model's UV mask, and
+        // keep it lit so dark rooms do not acquire glowing growth. Missing ramp
+        // art follows the normal fallback below and leaves the base untouched.
+        vec![super::MaterialIncidencePass {
+            texture: None,
+            ramp: "materials/nd-ir_shine".into(),
+            tint: cgmath::vec3(0.5, 0.5, 0.5),
+            unlit: false,
+            blend_mode: engine::scene::scene_object::BlendMode::AdditiveAlpha,
+        }]
+    } else {
+        super::object_material_incidence_passes(assets, &material_name)
+    };
+    for pass in passes {
         // Organic profiles first opt into their dedicated specular textures.
         // Shared fill/rim passes using the diffuse texture remain a follow-up.
         if profile == Profile::Organic && pass.texture.is_none() {
@@ -112,6 +130,16 @@ fn load_incidence_ramp(assets: &mut AssetCache, name: &str) -> Option<Rc<dyn Tex
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn growth_profile_is_limited_to_the_mounted_worm_goo_textures() {
+        for name in ["GOT2_.PCX", "got3_.dds", "got4_.pcx"] {
+            assert!(profile(name).is_some(), "{name}");
+        }
+        for name in ["got2_1", "goo2_", "ND-boss_head", "ordinary"] {
+            assert!(profile(name).is_none(), "{name} must remain unchanged");
+        }
+    }
+
     #[test]
     fn only_verified_surfaces_enable_overlays() {
         assert_eq!(profile("ND-anegg.psd"), Some(Profile::Organic));
