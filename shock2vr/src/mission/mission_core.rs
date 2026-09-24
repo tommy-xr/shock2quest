@@ -11270,10 +11270,7 @@ impl MissionCore {
                     );
                 }
                 Effect::StopSound { handle } => {
-                    // Observability: mark the matching play as stopped so
-                    // `still_playing` in the audio log stops reporting it.
-                    crate::audio_log::record_stop(handle.id());
-                    engine::audio::stop_audio(audio_context, handle);
+                    stop_sound(audio_context, handle);
                 }
                 Effect::RaiseSecurityAlarm { seconds } => {
                     for effect in self.security_alarm.add(&self.world, seconds) {
@@ -15413,7 +15410,8 @@ pub fn make_un_physical2(
 }
 
 /// Resolve `name` (a schema, else a bare sample) and play it. `allow_loop`
-/// repeats it when the schema authors a seamless loop.
+/// repeats a listener-relative play when the schema authors a seamless loop;
+/// spatial plays never loop.
 #[allow(clippy::too_many_arguments)]
 fn play_schema_sound(
     world: &World,
@@ -15477,6 +15475,13 @@ fn play_schema_sound(
     } else {
         warn!("Unable to load clip: {}", name)
     }
+}
+
+fn stop_sound(audio_context: &mut AudioContext<EntityId, String>, handle: AudioHandle) {
+    // Observability: mark the matching play as stopped so `still_playing` in
+    // the audio log stops reporting it.
+    crate::audio_log::record_stop(handle.id());
+    engine::audio::stop_audio(audio_context, handle);
 }
 
 fn resolve_schema(global_context: &GlobalContext, name: &str) -> (dark::ResolvedSoundSchema, bool) {
@@ -18980,8 +18985,7 @@ impl crate::game_scene::GameScene for MissionCore {
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
         if let Some(handle) = self.klaxon.take() {
-            crate::audio_log::record_stop(handle.id());
-            engine::audio::stop_audio(audio_context, handle);
+            stop_sound(audio_context, handle);
         }
     }
 

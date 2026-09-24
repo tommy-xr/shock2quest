@@ -615,6 +615,9 @@ mod tests {
             klaxon.update(&world).as_slice(),
             [Effect::PlayLoopingSound { .. }]
         ));
-        assert!(klaxon.take().is_some(), "leaving the scene stops the loop");
+        assert!(
+            klaxon.take().is_some(),
+            "the loop handle is held for on_exit"
+        );
     }
 }
