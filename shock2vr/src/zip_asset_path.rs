@@ -9,11 +9,6 @@ use std::{
 use engine::assets::asset_paths::{AbstractAssetPath, AssetEntry, ReadableAndSeekable};
 use zip::ZipArchive;
 
-/// Non-English language folders shipped in the archives.
-const LOCALIZED_DIRS: &[&str] = &[
-    "german", "french", "italian", "spanish", "russian", "polish",
-];
-
 pub struct ZipAssetPath {
     zip_path: String,
     archive: Mutex<ZipArchive<BufReader<File>>>,
@@ -98,7 +93,8 @@ impl ZipAssetPath {
             let base = relative.rsplit('/').next().unwrap_or(relative);
             // A translation (`intrface/german/anim_1.pcx`) only answers to its
             // full path: as a bare-name alias it could shadow the English file.
-            let localized = relative.split('/').any(|dir| LOCALIZED_DIRS.contains(&dir));
+            // German is the only translation the archives ship.
+            let localized = relative.split('/').any(|dir| dir == "german");
             if collapse_paths && !localized {
                 asset_to_path
                     .entry(base.to_owned())
