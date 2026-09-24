@@ -13,9 +13,9 @@ import {
 // bench, a crate - used to be completely silent, because the impact sound was
 // emitted only from the damage path. It also checks the surface the contact
 // names: the material comes from the level trimesh triangle the manifold
-// touched, so a deck sounds like its own material rather than the default. This exercises the production path on a
-// real mission's static world geometry (not a debug scene's synthetic
-// collider) and observes the played-sound log, the only headless way to hear
+// touched, so a deck sounds like its own material rather than the default.
+// This exercises the production path on a real mission's static world
+// geometry (not a debug scene's synthetic collider) and observes the played-sound log, the only headless way to hear
 // anything.
 //
 // Opt-in (compiles the runtime + needs Data/ assets):
