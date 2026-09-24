@@ -19,6 +19,8 @@ enum Profile {
     PlanarDecal,
     Organic,
     WetGrowth,
+    /// Annelid weapons: organic skins with no authored shine pass.
+    OrganicWeapon,
 }
 
 fn profile(name: &str) -> Option<Profile> {
@@ -31,6 +33,8 @@ fn profile(name: &str) -> Option<Profile> {
         "nd-mtlhit" => Some(Profile::PlanarDecal),
         // The mounted SHTUP Hydro/Earth growth uses GOT*, not the legacy GOO*.
         "got2_" | "got3_" | "got4_" => Some(Profile::WetGrowth),
+        // Worm launcher and viral proliferator.
+        "nd-al" | "nd-viro" => Some(Profile::OrganicWeapon),
         "nd-anegg" | "nd-grub" | "nd-spdrbby" | "nd-spiderboss" | "nd-overlord" | "nd-reaver" => {
             Some(Profile::Organic)
         }
@@ -64,7 +68,7 @@ pub(crate) fn append_incidence_overlays(
     } else {
         name.to_owned()
     };
-    let passes = if profile == Profile::WetGrowth {
+    let passes = if matches!(profile, Profile::WetGrowth | Profile::OrganicWeapon) {
         // Project-owned adaptation of the Nightdive incidence technique. Reuse
         // this surface's diffuse/alpha rather than another model's UV mask, and
         // keep it lit so dark rooms do not acquire glowing growth. Missing ramp
@@ -106,6 +110,12 @@ pub(crate) fn append_incidence_overlays(
                     unlit: pass.unlit,
                     blend,
                     passes: count,
+                    // At 1x the highlight barely reads on the weapons under a lamp.
+                    specular: if profile == Profile::OrganicWeapon {
+                        3.0
+                    } else {
+                        1.0
+                    },
                 });
             }
             return;
@@ -217,6 +227,8 @@ mod tests {
     #[test]
     fn only_verified_surfaces_enable_overlays() {
         assert_eq!(profile("ND-anegg.psd"), Some(Profile::Organic));
+        assert_eq!(profile("ND-al.dds"), Some(Profile::OrganicWeapon));
+        assert_eq!(profile("ND-VIRO"), Some(Profile::OrganicWeapon));
         assert_eq!(profile("ND-GRUB.DDS"), Some(Profile::Organic));
         assert_eq!(profile("ND-mtlhit"), Some(Profile::PlanarDecal));
         for name in [
@@ -227,7 +239,13 @@ mod tests {
         ] {
             assert_eq!(profile(name), Some(Profile::Organic));
         }
-        for name in ["ND-anegg_c", "ND-grub_extra", "ND-goldegg", "ordinary"] {
+        for name in [
+            "ND-anegg_c",
+            "ND-grub_extra",
+            "ND-alarm",
+            "ND-goldegg",
+            "ordinary",
+        ] {
             assert_eq!(profile(name), None, "{name} has not been verified");
         }
     }
