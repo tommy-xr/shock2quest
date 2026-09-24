@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
-import { aimVrHandAt, drawPersonalCard } from "./helpers/vr-hand.js";
+import { add, sub, scale, normalize, quatRotate, quatConjugate, aimVrHandAt, drawPersonalCard } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 
@@ -57,7 +57,12 @@ for (const hand of ["left", "right"] as const) {
     assert.equal((await game.ui.state()).active_panel, null);
     await game.input.set(`${hand}_hand.squeeze`, 0);
     await drawPersonalCard(game, hand);
-    await aimVrHandAt(game, aim.world_point, .12, 1, 0, { hand });
+    const contact = await aimVrHandAt(game, aim.world_point, .12, 1, 0, { hand });
+    // Hand input is the raw aim pose. Compensate the default -15 cm glove
+    // calibration so the calibrated hand, and its offset card, reach the reader.
+    const rotation = (await game.info()).player.rotation;
+    const forward = quatRotate(quatConjugate(rotation), normalize(sub(contact.target, contact.start)));
+    await game.input.set(`${hand}_hand.position`, add(contact.local, scale(forward, .15 / .762)));
     await game.step({ frames: 12 });
     assert.equal((await game.ui.state()).active_panel?.template_id, 262);
     let card = (await game.info()).player.hand_feedback!.body_gear!.personal_card;
