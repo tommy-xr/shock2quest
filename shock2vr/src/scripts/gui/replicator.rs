@@ -1,7 +1,6 @@
 use cgmath::{Vector2, Vector3, vec2, vec3};
 use dark::properties::{ObjectState, PropReplicatorContents, PropReplicatorHackedContents};
 use engine::audio::AudioHandle;
-use num_traits::ToPrimitive;
 
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
@@ -9,6 +8,7 @@ use crate::{
     gui::{ButtonHoverBehavior, Gui, GuiComponent, GuiConfig, GuiCursor},
     mission::GlobalEntityMetadata,
     quest_info::QuestInfo,
+    ui::Rect,
     util::{get_position_from_transform, get_rotation_from_transform},
 };
 
@@ -35,7 +35,8 @@ enum ReplicatorPanel {
 
 #[derive(Clone, Debug, Default)]
 pub struct ReplicatorState {
-    message: Option<String>,
+    /// The last box clicked, framed with REPSEL like retail's selection.
+    selected: Option<usize>,
     panel: ReplicatorPanel,
     hack: HackState,
 }
@@ -81,6 +82,39 @@ fn active_inventory(world: &World, entity_id: EntityId) -> Option<ReplicatorInve
                     })
             }),
     }
+}
+
+/// REPLIC.PCX's four item boxes, 142x62. Retail shows only the first four
+/// catalog slots.
+const BOXES: [Rect; 4] = [
+    Rect::new(10.0, 8.0, 142.0, 62.0),
+    Rect::new(10.0, 74.0, 142.0, 62.0),
+    Rect::new(10.0, 141.0, 142.0, 62.0),
+    Rect::new(10.0, 206.0, 142.0, 62.0),
+];
+/// Retail wraps an item's name from 37px into its box.
+const NAME_X: f32 = 37.0;
+/// REPSEL.PCX's authored size; one pixel taller than a box.
+const SELECT_SIZE: (f32, f32) = (142.0, 65.0);
+
+/// Retail's one refusal line for any purchase that fails.
+fn refusal(world: &World, entity_id: EntityId) -> Effect {
+    Effect::combine(vec![
+        Effect::ShowMessage {
+            text: super::PanelText::string(
+                world,
+                "misc",
+                "RepFail",
+                "Insufficient nanites to replicate.",
+            ),
+        },
+        Effect::PlaySound {
+            handle: AudioHandle::new(),
+            source: Some(entity_id),
+            name: "repfail".to_owned(),
+            spatial: false,
+        },
+    ])
 }
 
 fn can_hack(world: &World, entity_id: EntityId) -> bool {
@@ -136,47 +170,31 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
             }
         }
 
-        // Six authored slots must fit above the feedback/currency footer in
-        // the shared 296px canvas; 60px rows put the final slots off-canvas.
-        let button_height = 36.0;
-        let initial_padding_y = 10.0;
-        let button_width = 188.0;
-        let button_padding = 4.0;
-        let replicator_contents = active_inventory(world, entity_id);
         let current_state = object_state(world, entity_id);
         let has_sidecar = can_hack(world, entity_id) || current_state == ObjectState::Broken;
         let main_x = if has_sidecar { 73.0 } else { 0.0 };
+        let at = |rect: Rect| Rect::new(main_x + rect.x, rect.y, rect.w, rect.h);
 
-        let replicator_icon = |icon: &str, position: f32| GuiComponent::Image {
-            position: vec2(
-                main_x + 10.0,
-                3.0 + initial_padding_y + (button_height + button_padding) * position,
-            ),
-            size: vec2(30.0, 30.0),
-            texture: icon.to_owned(),
-            alpha: 0.5,
-            // Replicator catalogs use the same PropObjIcon art as inventory,
-            // including palette-index-0 transparency. Unlike an inventory
-            // grid, this compact list has fixed 30x50 icon boxes, so uniformly
-            // fit oversized art rather than letting a tall icon overlap rows.
-            kind: crate::ui::ImageKind::ObjectIconFit,
+        // A broken replicator draws only BREPLIC.PCX's static.
+        let backdrop = if current_state == ObjectState::Broken {
+            "breplic.pcx"
+        } else {
+            "replic.pcx"
         };
-
         let mut components: Vec<GuiComponent<ReplicatorMsg>> = vec![
-            gui::image("replic.pcx")
+            gui::image(backdrop)
                 .with_position(vec2(main_x, 0.0))
                 .with_size(vec2(188.0, 296.0)),
         ];
-        if let Some(replicator_contents) = replicator_contents {
+        if let Some(contents) = active_inventory(world, entity_id) {
             let entity_metadata = world.borrow::<UniqueView<GlobalEntityMetadata>>().unwrap();
-            for (i, (obj_name, authored_cost)) in replicator_contents
+            for (i, ((obj_name, authored_cost), rect)) in contents
                 .object_names
                 .iter()
-                .zip(replicator_contents.costs)
+                .zip(contents.costs)
+                .zip(BOXES)
                 .enumerate()
             {
-                let float_i = i.to_f32().unwrap();
-
                 if obj_name.is_empty() || authored_cost <= 0 {
                     continue;
                 }
@@ -184,48 +202,58 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                 if cost <= 0 {
                     continue;
                 }
-
                 let metadata = entity_metadata.0.get(obj_name).unwrap();
                 let obj_icon = metadata.obj_icon.as_ref().unwrap();
+                let rect = at(rect);
 
+                // Zero-alpha hit target over the box art, like the weapon
+                // settings rows.
                 components.push(
                     gui::button(ReplicatorMsg::SelectItem(i))
-                        .with_position(vec2(
-                            main_x,
-                            initial_padding_y + (button_height + button_padding) * float_i,
-                        ))
-                        .with_size(vec2(button_width, button_height))
-                        .with_image("key0.pcx")
+                        .with_position(vec2(rect.x, rect.y))
+                        .with_size(vec2(rect.w, rect.h))
+                        .with_image("repsel.pcx")
+                        .with_alpha(0.0)
                         .with_label(&format!("buy:{obj_name}")),
                 );
-
-                components.push(replicator_icon(obj_icon, float_i));
-
+                // Retail draws the icon at the box's corner; fit oversized art
+                // into the icon column, above the cost.
+                components.push(GuiComponent::Image {
+                    position: vec2(rect.x, rect.y),
+                    size: vec2(NAME_X, 47.0),
+                    texture: obj_icon.to_owned(),
+                    alpha: 1.0,
+                    kind: crate::ui::ImageKind::ObjectIconFit,
+                });
                 let short_name = metadata
                     .obj_short_name
                     .as_deref()
                     .filter(|name| !name.trim().is_empty())
                     .unwrap_or(obj_name);
-                let mut label = gui::text(short_name)
-                    .with_position(vec2(
-                        main_x + 44.0,
-                        initial_padding_y + 3.0 + (button_height + button_padding) * float_i,
-                    ))
-                    .with_size(vec2(140.0, 12.0));
-                if let GuiComponent::Text { fit_to_rect, .. } = &mut label {
-                    *fit_to_rect = true;
+                components.extend(super::PanelText::paragraph(
+                    world,
+                    short_name,
+                    Rect::new(rect.x + NAME_X, rect.y + 4.0, rect.w - NAME_X, rect.h - 4.0),
+                ));
+                components.push(super::PanelText::text(
+                    &format!("{cost:03}"),
+                    Rect::new(
+                        rect.x + 9.0,
+                        rect.y + rect.h - 11.0,
+                        NAME_X - 9.0,
+                        super::PanelText::line_height(world),
+                    ),
+                ));
+                if state.selected == Some(i) {
+                    // Palette index 0 is REPSEL's transparent interior.
+                    components.push(GuiComponent::Image {
+                        position: vec2(rect.x, rect.y),
+                        size: vec2(SELECT_SIZE.0, SELECT_SIZE.1),
+                        texture: "repsel.pcx".to_owned(),
+                        alpha: 1.0,
+                        kind: crate::ui::ImageKind::ObjectIcon,
+                    });
                 }
-                components.push(label);
-
-                // Price sits below the label, beside the fitted item icon.
-                components.push(
-                    gui::text(&format!("{cost:03}"))
-                        .with_position(vec2(
-                            main_x + 44.0,
-                            initial_padding_y + 20.0 + (button_height + button_padding) * float_i,
-                        ))
-                        .with_size(vec2(34.0, 12.0)),
-                );
             }
         }
 
@@ -254,29 +282,20 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                     .with_position(vec2(0.0, 96.0))
                     .with_size(vec2(73.0, 194.0)),
             );
+            return components;
         }
 
         // REPLIC.PCX supplies "YOUR NANITES:"; retail places a four-digit
         // live balance at (104, 274) beside it.
-        components.push(
-            gui::text(&format!("{:04}", player_nanite_total(world)))
-                .with_position(vec2(main_x + 104.0, 274.0))
-                .with_size(vec2(40.0, 14.0)),
-        );
-        let message = if current_state == ObjectState::Broken {
-            Some("Replicator broken; repair required")
-        } else if active_inventory(world, entity_id).is_none() {
-            Some("Replicator offline")
-        } else {
-            state.message.as_deref()
-        };
-        if let Some(message) = message {
-            components.push(
-                gui::text(message)
-                    .with_position(vec2(main_x + 10.0, 248.0))
-                    .with_size(vec2(168.0, 14.0)),
-            );
-        }
+        components.push(super::PanelText::text(
+            &format!("{:04}", player_nanite_total(world)),
+            Rect::new(
+                main_x + 104.0,
+                274.0,
+                48.0,
+                super::PanelText::line_height(world),
+            ),
+        ));
 
         components
     }
@@ -318,94 +337,41 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
     ) -> (ReplicatorState, Effect) {
         match msg {
             ReplicatorMsg::SelectItem(slot) => {
-                let Some(contents) = active_inventory(world, entity_id) else {
-                    return (
-                        ReplicatorState {
-                            message: Some("Replicator offline".to_owned()),
-                            ..state.clone()
-                        },
-                        Effect::NoEffect,
-                    );
+                // Retail frames the clicked box whether or not it vends.
+                let state = ReplicatorState {
+                    selected: Some(*slot),
+                    ..state.clone()
                 };
-                let Some((item, authored_cost)) = contents
-                    .object_names
-                    .get(*slot)
-                    .zip(contents.costs.get(*slot))
-                    .filter(|(item, cost)| !item.is_empty() && **cost > 0)
+                // Retail treats an empty slot, a post-discount cost of zero
+                // and an unaffordable one alike (`ShockReplicate`: cost != 0).
+                let Some((item, cost)) =
+                    replicator_quote(world, entity_id, *slot).filter(|(_, cost)| *cost > 0)
                 else {
-                    return (
-                        ReplicatorState {
-                            message: Some("Item unavailable".to_owned()),
-                            ..state.clone()
-                        },
-                        Effect::NoEffect,
-                    );
+                    return (state, refusal(world, entity_id));
                 };
-                let cost = effective_replicator_cost(world, *authored_cost);
-                // Retail treats a post-discount cost of zero as a failed
-                // selection, not a free vend (`ShockReplicate`: cost != 0).
-                if cost <= 0 {
-                    return (
-                        ReplicatorState {
-                            message: Some("Item unavailable".to_owned()),
-                            ..state.clone()
-                        },
-                        Effect::PlaySound {
-                            handle: AudioHandle::new(),
-                            source: Some(entity_id),
-                            name: "repfail".to_owned(),
-                            spatial: false,
-                        },
-                    );
-                }
                 if spend_player_nanites(world, cost).is_none() {
-                    return (
-                        ReplicatorState {
-                            message: Some("Insufficient nanites".to_owned()),
-                            ..state.clone()
-                        },
-                        Effect::PlaySound {
-                            handle: AudioHandle::new(),
-                            source: Some(entity_id),
-                            name: "repfail".to_owned(),
-                            spatial: false,
-                        },
-                    );
+                    return (state, refusal(world, entity_id));
                 }
                 let Some(link) =
                     get_first_link_of_type(world, entity_id, dark::properties::Link::Replicator)
                 else {
-                    return (
-                        ReplicatorState {
-                            message: Some("Replicator offline".to_owned()),
-                            ..state.clone()
-                        },
-                        Effect::NoEffect,
-                    );
+                    return (state, Effect::NoEffect);
                 };
-
                 let purchase = Effect::ReplicatorPurchase {
                     replicator: entity_id,
                     slot: *slot,
                     cost,
-                    template_name: item.clone(),
+                    template_name: item,
                     position: get_position_from_transform(world, link, vec3(0.0, 0.0, 0.0)),
                     orientation: get_rotation_from_transform(world, link),
                 };
-
-                (
-                    ReplicatorState {
-                        message: None,
-                        ..state.clone()
-                    },
-                    purchase,
-                )
+                (state, purchase)
             }
             ReplicatorMsg::OpenHack => {
                 if can_hack(world, entity_id) {
                     (
                         ReplicatorState {
-                            message: None,
+                            selected: None,
                             panel: ReplicatorPanel::Hacking,
                             hack: HackState::default(),
                         },
@@ -685,6 +651,13 @@ mod tests {
             "broken state should expose the authored repair status sidecar"
         );
         assert!(
+            matches!(
+                reopened.first(),
+                Some(GuiComponent::Image { texture, .. }) if texture == "breplic.pcx"
+            ),
+            "broken state draws retail's static backdrop"
+        );
+        assert!(
             reopened
                 .iter()
                 .all(|component| !matches!(component, GuiComponent::Button { .. })),
@@ -747,12 +720,23 @@ mod tests {
             !creates_template(&zero_cost_effect),
             "a zero-cost replicator slot must not mint a free item: {zero_cost_effect:?}"
         );
+        // Both refusals put retail's RepFail line on the HUD.
+        for effect in [&effect, &zero_cost_effect] {
+            let Effect::Combined { effects } = effect else {
+                panic!("expected message + sound: {effect:?}");
+            };
+            assert!(
+                effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::ShowMessage { text } if text.contains("nanites")))
+            );
+        }
         let mut refused_state = ReplicatorState {
-            message: Some("Insufficient nanites".to_owned()),
+            selected: Some(0),
             ..ReplicatorState::default()
         };
         gui.prepare_state_on_frob(&mut refused_state);
-        assert_eq!(refused_state.message, None);
+        assert_eq!(refused_state.selected, None);
     }
 
     #[test]

@@ -237,14 +237,9 @@ test(
       clipsBeforeRefusal.entities.length,
       "an unaffordable selection must not mint a free output item",
     );
-    const refused = (await game.ui.state()).active_panel;
     assert.ok(
-      refused?.elements.some(
-        (element) =>
-          element.kind === "text" &&
-          element.text === "Insufficient nanites",
-      ),
-      "the visible panel should explain the refusal",
+      (await game.ui.state()).messages.some((line) => /insufficient nanites/i.test(line)),
+      "the HUD should explain the refusal",
     );
   },
 );

@@ -17745,8 +17745,9 @@ mod template_catalog_name_tests {
                 texts.iter().any(|text| text == "Translated chips"),
                 "{texts:?}"
             );
+            // The name wraps inside its box.
             assert!(
-                texts.iter().any(|text| text == "6 translated bullets"),
+                texts.join(" ").contains("6 translated bullets"),
                 "{texts:?}"
             );
             assert!(
