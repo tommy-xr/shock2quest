@@ -46,9 +46,9 @@ impl Script for TrapSound {
                         handle,
                         name: sound.name.to_owned(),
                         source: Some(entity_id),
-                        // TrapSound narrations are anchored at their authored
-                        // station - a stale montage segment two rooms away
-                        // should be distant, not at the player's ears.
+                        // TrapSound plays at its authored station (so a stale
+                        // montage segment two rooms away is distant);
+                        // TrapSoundAmb plays at the ears.
                         spatial: self.spatial,
                     }
                 } else {

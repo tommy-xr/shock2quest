@@ -410,6 +410,15 @@ pub fn create_entity_core(
     } else {
         Vec::new()
     };
+    // An object running both flavours (earth's narration traps: their own
+    // TrapSoundAmb plus the archetype's TrapSound) keeps one play, at the trap,
+    // so a late montage segment stays distant rather than at the ears.
+    if processed_scripts
+        .iter()
+        .any(|script| script.eq_ignore_ascii_case("TrapSound"))
+    {
+        processed_scripts.retain(|script| !script.eq_ignore_ascii_case("TrapSoundAmb"));
+    }
 
     // Create any internal scripts to power some properties
 

@@ -20,8 +20,16 @@ async function at(
   return found;
 }
 
-async function played(game: GameServer, sample: string): Promise<PlayedSound | undefined> {
-  return (await game.audio.recent({ sample })).sounds[0];
+/// The one play of `sample` - a trap must not play its line twice.
+async function playedOnce(game: GameServer, sample: string): Promise<PlayedSound> {
+  const sounds = (await game.audio.recent({ sample })).sounds;
+  assert.equal(sounds.length, 1, `expected one ${sample}, got ${JSON.stringify(sounds)}`);
+  return sounds[0]!;
+}
+
+/// Listener-relative plays record the origin as their position.
+function atEars(sound: PlayedSound): boolean {
+  return sound.position.every((axis) => axis === 0);
 }
 
 // medsci1 authors both flavours of sound trap: TrapSoundAmb plays at the
@@ -38,9 +46,14 @@ test(
     const button = await at(game, "Button", 2.73, -8.48);
     await game.entities.sendMessage(button.id, { type: "Frob" });
     await game.step({ frames: 30 });
-    const ambient = await played(game, "xxrmsg12");
-    assert.ok(ambient, "the button should fire its Xerxes message");
-    assert.equal(ambient.pan_applied, true, "TrapSoundAmb must not be positional");
+    // The button authors two SwitchLinks to this trap, so count plays loosely;
+    // what matters is that none of them is positional.
+    const ambient = (await game.audio.recent({ sample: "xxrmsg12" })).sounds;
+    assert.ok(ambient.length > 0, "the button should fire its Xerxes message");
+    assert.ok(
+      ambient.every(atEars),
+      `TrapSoundAmb must not be positional, got ${JSON.stringify(ambient.map((s) => s.position))}`,
+    );
 
     // Tripwire -> email -> delay chain -> TrapSound "trg0202" (decompression).
     const tripwire = await at(game, "Tripwire", -40.49, 17.74);
@@ -50,8 +63,7 @@ test(
       z: tripwire.position[2],
     });
     await game.step({ frames: 20 * 60 });
-    const spatial = await played(game, "trg0202");
-    assert.ok(spatial, "the Cryo Recovery chain should reach its sound trap");
-    assert.equal(spatial.pan_applied, false, "TrapSound plays at the trap");
+    const spatial = await playedOnce(game, "trg0202");
+    assert.ok(!atEars(spatial), "TrapSound plays at the trap");
   },
 );
