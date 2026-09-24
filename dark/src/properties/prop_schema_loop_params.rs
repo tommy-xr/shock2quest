@@ -20,7 +20,6 @@ pub struct PropSchemaLoopParams {
 }
 
 impl PropSchemaLoopParams {
-    pub const POLY: u8 = 1 << 0;
     pub const COUNT: u8 = 1 << 1;
 
     pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> Self {

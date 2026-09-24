@@ -24,7 +24,8 @@ pub struct ResolvedSoundSchema {
     pub sample_name: String,
     pub volume_millibels: i32,
     pub pan_millibels: i32,
-    /// Repeat seamlessly until stopped (`P$SchLoopPa` with zero intervals).
+    /// Repeat seamlessly until stopped (`P$SchLoopPa` with zero intervals and
+    /// no COUNT limit).
     /// Interval re-trigger loops still play once.
     pub looping: bool,
 }
