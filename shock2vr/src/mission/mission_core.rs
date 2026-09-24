@@ -5712,7 +5712,7 @@ impl MissionCore {
         let downloads: Vec<_> = interaction_msgs
             .iter()
             .filter_map(|effect| match effect {
-                VirtualHandEffect::DropItem { entity_id }
+                VirtualHandEffect::DropItem { entity_id, .. }
                     if game_options.presentation_mode == crate::PresentationMode::Vr
                         && crate::scripts::script_util::is_download_pickup(
                             &self.world,
