@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { selectPsiPower } from "./helpers/psi.js";
 import { ammoOf, cycleToWeapon, fireOnce, pullTrigger } from "./helpers/weapon.js";
-import { aimVrHandAt } from "./helpers/vr-hand.js";
+import { equipRightHand } from "./helpers/vr-hand.js";
 
 for (const vr of [false, true]) {
   test(`Stability prevents wear until its stat-scaled expiry (${vr ? "VR" : "flat"})`, {
@@ -13,19 +13,8 @@ for (const vr of [false, true]) {
     await game.step({ frames: 30 });
     const [amp] = await game.entities.byTemplate(-247);
     const pistol = await cycleToWeapon(game, e => e.template_id === -17);
-    async function equip(id: number, action: "EquipPistol" | "EquipPsiAmp") {
-      if (vr) {
-        await game.input.set("right_hand.squeeze", 0);
-        await game.step({ frames: 3 });
-        await aimVrHandAt(game, (await game.entities.detail(id)).position, 0.3);
-        await game.input.set("right_hand.squeeze", 1);
-        await game.step({ frames: 8 });
-        assert.equal((await game.info()).player.right_hand_entity_id, id);
-      } else {
-        await game.input.trigger(action);
-        await game.step({ frames: 10 });
-      }
-    }
+    const equip = (id: number, action: "EquipPistol" | "EquipPsiAmp") =>
+      equipRightHand(game, vr, id, action);
     async function shoot(count: number, expected: number) {
       const ammo = ammoOf(await game.entities.detail(pistol.id));
       for (let i = 0; i < count; i++) await fireOnce(game);
