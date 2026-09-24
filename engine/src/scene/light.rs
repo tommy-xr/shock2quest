@@ -188,6 +188,10 @@ pub struct LightArray {
     pub lambert_wrap: f32,
     /// Strength of the moving highlight on shine materials; 0 draws none.
     pub specular: f32,
+    /// What shine materials reflect, and how strongly; no reflection without
+    /// a capture or at 0.
+    pub environment: Option<std::rc::Rc<crate::texture::CubeTexture>>,
+    pub reflection: f32,
 }
 
 impl LightArray {
@@ -199,6 +203,8 @@ impl LightArray {
             falloff: [LightFalloff::Smooth; 6],
             lambert_wrap: 0.0,
             specular: 0.0,
+            environment: None,
+            reflection: 0.0,
         }
     }
 
@@ -234,6 +240,16 @@ impl LightArray {
         self
     }
 
+    pub fn with_environment(
+        mut self,
+        environment: Option<std::rc::Rc<crate::texture::CubeTexture>>,
+        reflection: f32,
+    ) -> Self {
+        self.environment = environment;
+        self.reflection = reflection;
+        self
+    }
+
     /// This array's lights plus as many of `scene`'s as still fit, with the
     /// scene's taking priority.
     ///
@@ -253,6 +269,8 @@ impl LightArray {
             falloff: self.falloff,
             lambert_wrap: self.lambert_wrap,
             specular: self.specular,
+            environment: self.environment.clone(),
+            reflection: self.reflection,
         };
         for source in [scene, self] {
             for (index, light) in source.iter_active() {
@@ -444,6 +462,13 @@ mod tests {
     fn merging_keeps_the_object_specular_strength() {
         let object = LightArray::new().with_specular(1.5);
         assert_eq!(object.merged_with(&LightArray::new()).specular, 1.5);
+    }
+
+    #[test]
+    fn merging_keeps_the_object_reflection_strength() {
+        let object = LightArray::new().with_environment(None, 2.0);
+        let scene = LightArray::new().with_environment(None, 0.5);
+        assert_eq!(object.merged_with(&scene).reflection, 2.0);
     }
 
     #[test]

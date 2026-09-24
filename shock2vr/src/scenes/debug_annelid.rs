@@ -161,6 +161,8 @@ pub fn create_debug_annelid_scene(
         builder = builder.add_scene_object(label);
     }
 
+    // No mission of its own: borrow medsci1's cubemap so shine reflections show.
+    let environment = crate::environment_map::load(asset_cache, "medsci1");
     let mut core = builder.build_core(DebugSceneBuildOptions {
         global_context,
         game_options,
@@ -177,7 +179,13 @@ pub fn create_debug_annelid_scene(
          Swarmer = a flying swarm. Each pod trips once."
     );
 
-    Box::new(HookedDebugScene::new(core, AnnelidHooks::default()))
+    Box::new(HookedDebugScene::new(
+        core,
+        AnnelidHooks {
+            environment,
+            ..AnnelidHooks::default()
+        },
+    ))
 }
 
 #[derive(Default)]
@@ -186,6 +194,7 @@ struct AnnelidHooks {
     /// One entry per station, in `STATIONS` order; `None` until the pod is
     /// spawned, dropped again once that pod has been tripped.
     pods: Vec<Option<EntityId>>,
+    environment: Option<std::rc::Rc<engine::texture::CubeTexture>>,
 }
 
 impl DebugSceneHooks for AnnelidHooks {
@@ -209,7 +218,11 @@ impl DebugSceneHooks for AnnelidHooks {
                 vec3(ambient, ambient, ambient),
                 dev_params::get(dev_params::OBJECT_LIGHT_WRAP),
             )
-            .with_specular(dev_params::get(dev_params::OBJECT_SPECULAR));
+            .with_specular(dev_params::get(dev_params::OBJECT_SPECULAR))
+            .with_environment(
+                self.environment.clone(),
+                dev_params::get(dev_params::OBJECT_REFLECTION),
+            );
         let brightness = 2.5
             * dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS)
             * dev_params::get(dev_params::LEVEL_LIGHT_INTENSITY);
