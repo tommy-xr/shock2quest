@@ -11,9 +11,10 @@ use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::World;
 
 use super::ammo_panel::{self, AmmoReadout};
+use super::banner;
+use super::get_wielded_psi_charge;
 use super::message_line;
 use super::readouts::{self, BioReadout};
-use super::{get_health_percentage, get_psi_percentage, get_wielded_psi_charge};
 use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
 use crate::ui::{Rect, ScaleMode, UiCanvas};
 
@@ -63,7 +64,7 @@ const OVERLOAD_METER: Rect = Rect::new(
 );
 
 /// Build the flat HUD as a resolution-independent canvas for the given player
-/// stat fractions and (optional) wielded-weapon ammo. Pure (no asset/GL
+/// vitals and (optional) wielded-weapon ammo. Pure (no asset/GL
 /// access), so it is unit-testable.
 ///
 /// `use_mode` is the whole shooter/interface split: the original turns the
@@ -72,16 +73,26 @@ const OVERLOAD_METER: Rect = Rect::new(
 /// canvas - so in use mode this draws neither.
 pub(crate) fn build_flat_hud_canvas(
     use_mode: bool,
-    health_fraction: f32,
-    psi_fraction: f32,
+    bio: &BioReadout,
     psi_charge: Option<RuntimePropPsiCharge>,
     ammo_readout: &AmmoReadout,
     messages: &[String],
+    banner: Option<&super::ActiveBanner>,
+    reticle: super::reticle::ReticleState,
+    fov_y_degrees: f32,
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(VIRTUAL_W, VIRTUAL_H));
 
     if !use_mode {
-        canvas.image(CROSSHAIR, "CROSSHAI.PCX");
+        super::reticle::emit(
+            &mut canvas,
+            CROSSHAIR.center(),
+            CROSSHAIR_SIZE,
+            "CROSSHAI.PCX",
+            reticle,
+            fov_y_degrees,
+            VIRTUAL_H,
+        );
     }
 
     // Shooter mode draws the compact readouts here. In use mode both expand to
@@ -95,10 +106,7 @@ pub(crate) fn build_flat_hud_canvas(
             METERS_ORIGIN,
             "BIO.PCX",
             readouts::BIO_SIZE,
-            &BioReadout {
-                health_fraction,
-                psi_fraction,
-            },
+            bio,
         );
     }
 
@@ -134,6 +142,12 @@ pub(crate) fn build_flat_hud_canvas(
     // panel draws with.
     message_line::emit(&mut canvas, message_line::flat_origin(), messages);
 
+    // The interstitial banner, placed by the shared `banner` layout the VR
+    // head panel draws with. Last, so its plate covers the view centre.
+    if let Some(shown) = banner {
+        banner::emit(&mut canvas, banner::flat_center(), &shown.text, shown.alpha);
+    }
+
     canvas
 }
 
@@ -146,23 +160,27 @@ pub(crate) fn create_flat_hud(
     screen_size: cgmath::Vector2<f32>,
     use_mode: bool,
     messages: &[String],
+    banner: Option<&super::ActiveBanner>,
+    reticle: super::reticle::ReticleState,
+    fov_y_degrees: f32,
 ) -> Vec<SceneObject> {
     let mut canvas = build_flat_hud_canvas(
         use_mode,
-        get_health_percentage(world),
-        get_psi_percentage(world),
+        &BioReadout::from_world(world),
         get_wielded_psi_charge(world),
         // The compact gauge has no clickable controls: the pointer only exists
         // in use mode, where the interface canvas draws the expanded panel.
         &AmmoReadout::from_world(world, false),
         messages,
+        banner,
+        reticle,
+        fov_y_degrees,
     );
     if !use_mode {
         super::hazards::emit(
             &mut canvas,
             super::hazards::SCREEN_ORIGIN,
             &super::hazards::HazardReadout::from_world(world),
-            false,
         );
     }
     if let Some(seconds) = crate::security_alarm::status(world)
@@ -178,6 +196,29 @@ pub(crate) fn create_flat_hud(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The reticle's own geometry is covered in `hud::reticle`; these cases are
+    /// about the rest of the HUD, so they draw it at rest at the default FOV.
+    /// Shadows the real builder so each case keeps its original arguments.
+    fn build_flat_hud_canvas(
+        use_mode: bool,
+        bio: &BioReadout,
+        psi_charge: Option<RuntimePropPsiCharge>,
+        ammo_readout: &AmmoReadout,
+        messages: &[String],
+        banner: Option<&crate::hud::ActiveBanner>,
+    ) -> UiCanvas {
+        super::build_flat_hud_canvas(
+            use_mode,
+            bio,
+            psi_charge,
+            ammo_readout,
+            messages,
+            banner,
+            crate::hud::reticle::ReticleState::default(),
+            crate::DEFAULT_FOV_DEG,
+        )
+    }
 
     /// `AmmoReadout` for the common test shapes. `cycle` stands in for a
     /// multi-ammo weapon; nothing else offers a button.
@@ -197,18 +238,26 @@ mod tests {
         }
     }
 
+    const BIO: BioReadout = BioReadout {
+        health_points: 40,
+        psi_points: 21,
+        health_fraction: 1.0,
+        psi_fraction: 0.75,
+    };
+
     #[test]
     fn canvas_has_crosshair_bio_backdrop_bars_and_readouts() {
-        // Crosshair + bio backdrop + 2 bars + 2 stat numbers = 6 (no weapon).
+        // Crosshair (4 arms + fixed centre) + bio backdrop + 2 bars + 2 stat
+        // numbers = 10 (no weapon).
         let canvas = build_flat_hud_canvas(
             false,
-            1.0,
-            0.75,
+            &BIO,
             None,
             &readout(None, None, None, false),
             &[],
+            None,
         );
-        assert_eq!(canvas.element_count(), 6);
+        assert_eq!(canvas.element_count(), 10);
     }
 
     #[test]
@@ -216,13 +265,13 @@ mod tests {
         // ...plus the ammo backdrop + count when a clip is present.
         let canvas = build_flat_hud_canvas(
             false,
-            1.0,
-            0.75,
+            &BIO,
             None,
             &readout(Some(12), None, None, false),
             &[],
+            None,
         );
-        assert_eq!(canvas.element_count(), 8);
+        assert_eq!(canvas.element_count(), 12);
     }
 
     #[test]
@@ -230,23 +279,22 @@ mod tests {
         // ...plus the ammo-type icon + label when a type is selected.
         let canvas = build_flat_hud_canvas(
             false,
-            1.0,
-            0.75,
+            &BIO,
             None,
             &readout(Some(12), Some("STD_I.PCX"), Some("std"), false),
             &[],
+            None,
         );
-        assert_eq!(canvas.element_count(), 10);
+        assert_eq!(canvas.element_count(), 14);
     }
 
     #[test]
     fn psi_amp_shows_discipline_instead_of_clip() {
-        // Base 6 + gauge backdrop + tier badge + discipline name = 9; the clip
+        // Base 10 + gauge backdrop + tier badge + discipline name = 13; the clip
         // readout is suppressed even though the amp has ammo=0.
         let canvas = build_flat_hud_canvas(
             false,
-            1.0,
-            0.75,
+            &BIO,
             None,
             &AmmoReadout {
                 psi_power: Some(("Projected Cryokinesis".to_string(), 1)),
@@ -254,8 +302,9 @@ mod tests {
                 ..Default::default()
             },
             &[],
+            None,
         );
-        assert_eq!(canvas.element_count(), 9);
+        assert_eq!(canvas.element_count(), 13);
     }
 
     /// Use mode hands the bottom readouts to the interface canvas and turns
@@ -265,20 +314,20 @@ mod tests {
     fn use_mode_leaves_the_bottom_readouts_to_the_interface_canvas() {
         let shooter = build_flat_hud_canvas(
             false,
-            1.0,
-            0.75,
+            &BIO,
             None,
             &readout(Some(12), None, None, false),
             &[],
+            None,
         );
-        assert_eq!(shooter.element_count(), 8);
+        assert_eq!(shooter.element_count(), 12);
         let use_mode = build_flat_hud_canvas(
             true,
-            1.0,
-            0.75,
+            &BIO,
             None,
             &readout(Some(12), None, None, false),
             &[],
+            None,
         );
         assert_eq!(use_mode.element_count(), 0);
     }
@@ -289,14 +338,14 @@ mod tests {
     fn the_overload_meter_survives_use_mode() {
         let canvas = build_flat_hud_canvas(
             true,
-            1.0,
-            0.75,
+            &BIO,
             Some(RuntimePropPsiCharge {
                 phase: PsiChargePhase::Charging,
                 fraction: 0.5,
             }),
             &readout(Some(12), None, None, false),
             &[],
+            None,
         );
         // The charging meter is a backdrop + its fill.
         assert_eq!(canvas.element_count(), 2);
@@ -333,14 +382,14 @@ mod tests {
     #[test]
     fn a_status_message_adds_a_line_to_the_hud() {
         let empty = readout(None, None, None, false);
-        let base = build_flat_hud_canvas(false, 1.0, 0.75, None, &empty, &[]);
+        let base = build_flat_hud_canvas(false, &BIO, None, &empty, &[], None);
         let with_message = build_flat_hud_canvas(
             false,
-            1.0,
-            0.75,
+            &BIO,
             None,
             &empty,
             &["This lift has been taken offline for repairs.".to_string()],
+            None,
         );
 
         assert_eq!(with_message.element_count(), base.element_count() + 1);
@@ -348,16 +397,43 @@ mod tests {
         assert_eq!(vec2(line.x, line.y), message_line::flat_origin());
     }
 
+    /// A banner adds its plate plus one text element per line, centered on the
+    /// HUD canvas by the shared `banner` layout.
+    #[test]
+    fn a_banner_adds_a_centered_plate_and_its_lines() {
+        let empty = readout(None, None, None, false);
+        let base = build_flat_hud_canvas(false, &BIO, None, &empty, &[], None);
+        let with_banner = build_flat_hud_canvas(
+            false,
+            &BIO,
+            None,
+            &empty,
+            &[],
+            Some(&crate::hud::ActiveBanner {
+                text: "4 Years Earlier\nRamsey Recruitment Ctr.".to_string(),
+                alpha: 1.0,
+            }),
+        );
+
+        assert_eq!(with_banner.element_count(), base.element_count() + 3);
+        let plate = with_banner.elements()[base.element_count()].rect();
+        assert_eq!(plate.center(), banner::flat_center());
+    }
+
     #[test]
     fn out_of_range_fractions_do_not_panic() {
         // Fills are clamped inside `UiCanvas::bar`.
         let _ = build_flat_hud_canvas(
             false,
-            2.0,
-            -1.0,
+            &BioReadout {
+                health_fraction: 2.0,
+                psi_fraction: -1.0,
+                ..BIO
+            },
             None,
             &readout(None, None, None, false),
             &[],
+            None,
         );
     }
 }

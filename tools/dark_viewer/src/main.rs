@@ -408,6 +408,8 @@ pub fn main() {
         let orig_camera_rot = yaw_quat * pitch_quat;
 
         let render_context = engine::EngineRenderContext {
+            ambient_light_intensity: 1.0,
+            level_light_intensity: 1.0,
             time: glfw.get_time() as f32,
             camera_offset: orig_camera_position,
             camera_rotation: Quaternion {

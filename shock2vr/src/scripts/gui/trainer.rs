@@ -14,12 +14,8 @@
 //! script round-trip: the effect handler bumps `PlayerStats` inside
 //! `QuestInfo`, so upgrades persist across save/load and level transitions.
 //!
-//! Deliberate simplifications (see the PR): the psi panel sells *tier
-//! unlocks* only (`PlayerStats::psi_tier`, sequential, from `PSICOST[t][0]`);
-//! individual power purchases within a tier are deferred until known-psi-power
-//! persistence lands. UNDO is deferred (the shared `Gui` layer has no
-//! panel-open/close lifecycle to snapshot against). Costs are Normal
-//! difficulty (no difficulty setting exists yet).
+//! The psi trainer uses the shared discipline grid in `psi_powers`; this
+//! module supplies its sequential tier-purchase validation. UNDO is deferred.
 //!
 //! A stat is only sold when it has a live gameplay consumer. Strength expands
 //! the backpack, Endurance raises maximum HP, and Cyber Affinity feeds hacking
@@ -36,7 +32,9 @@ use crate::player_stats::{PSI_TIER_CAP, PlayerStats, SKILL_CAP, STAT_CAP, Skill,
 use crate::quest_info::QuestInfo;
 use crate::scripts::Effect;
 
+use super::PanelText;
 use crate::gui;
+use crate::ui::Rect;
 
 /// What one trainer row upgrades.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,7 +51,6 @@ pub enum TrainerMode {
     Stats,
     Tech,
     Weapons,
-    Psi,
 }
 
 /// Whether a stat has a real gameplay consumer and is therefore safe to sell.
@@ -197,30 +194,11 @@ impl TrainerMode {
                 }
                 rows
             }
-            TrainerMode::Psi => (1..=PSI_TIER_CAP)
-                .map(|tier| TrainerRow {
-                    label: psi_tier_label(tier),
-                    target: TrainerTarget::PsiTier(tier),
-                })
-                .collect(),
         }
     }
 
     fn backdrop(&self) -> &'static str {
-        match self {
-            TrainerMode::Psi => "psitrain.pcx",
-            _ => "train.pcx",
-        }
-    }
-}
-
-fn psi_tier_label(tier: i32) -> &'static str {
-    match tier {
-        1 => "Psi Tier 1",
-        2 => "Psi Tier 2",
-        3 => "Psi Tier 3",
-        4 => "Psi Tier 4",
-        _ => "Psi Tier 5",
+        "train.pcx"
     }
 }
 
@@ -257,18 +235,17 @@ pub enum TrainerGuiMsg {
 }
 
 // Row layout on the 188x296 panel (matches the original trainer panel, which
-// draws five rows starting at y=21; ELBUTT art is the 138x28 generic row
-// plate).
+// draws five 90x32 buy rows, with separate 44x32 cost boxes).
 const ROW_X: f32 = 13.0;
 const ROW_Y0: f32 = 21.0;
 const ROW_PITCH: f32 = 34.0;
-const ROW_W: f32 = 138.0;
-const ROW_H: f32 = 28.0;
+const ROW_W: f32 = 90.0;
+const ROW_H: f32 = 32.0;
 
 impl Gui<TrainerGuiState, TrainerGuiMsg> for TrainerGui {
     fn get_components(
         &self,
-        _cursor: &Option<GuiCursor>,
+        cursor: &Option<GuiCursor>,
         _entity_id: EntityId,
         world: &World,
         state: &TrainerGuiState,
@@ -276,7 +253,8 @@ impl Gui<TrainerGuiState, TrainerGuiMsg> for TrainerGui {
         let mut components: Vec<GuiComponent<TrainerGuiMsg>> = vec![
             gui::image(self.mode.backdrop())
                 .with_position(vec2(0.0, 0.0))
-                .with_size(vec2(188.0, 296.0)),
+                .with_size(vec2(188.0, 296.0))
+                .with_alpha(1.0),
         ];
 
         let Ok(quests) = world.borrow::<UniqueView<QuestInfo>>() else {
@@ -286,59 +264,106 @@ impl Gui<TrainerGuiState, TrainerGuiMsg> for TrainerGui {
         let costs = crate::difficulty::trainer_costs(world);
         drop(quests);
 
+        let (name_prefix, help_table, help_prefix) = match self.mode {
+            TrainerMode::Stats => ("StatName", "stathelp", "Text"),
+            TrainerMode::Tech => ("TechSkill", "skilhelp", "Tech"),
+            TrainerMode::Weapons => ("WpnSkill", "skilhelp", "Weapon"),
+        };
+        let mut help = None;
         for (i, row) in self.mode.rows(world).iter().enumerate() {
             let y = ROW_Y0 + ROW_PITCH * i as f32;
+            let rect = Rect::new(ROW_X, y, ROW_W, ROW_H);
+            let level = row_level(&stats, row.target);
+            let quote = costs
+                .as_ref()
+                .and_then(|costs| upgrade_quote(costs, &stats, row.target));
+            let available =
+                !matches!(row.target, TrainerTarget::Stat(stat) if !stat_upgrade_available(stat));
             components.push(
                 gui::button(TrainerGuiMsg::Buy(row.target))
-                    .with_position(vec2(ROW_X, y))
-                    .with_size(vec2(ROW_W, ROW_H))
-                    .with_image("elbutt0.pcx")
+                    .with_rect(rect)
+                    .with_alpha(1.0)
+                    .with_image(if quote.is_some() && available {
+                        "iface/tbut10.pcx"
+                    } else {
+                        "iface/tbutmax.pcx"
+                    })
+                    .with_hover(gui::ButtonHoverBehavior::Texture(
+                        if quote.is_some() && available {
+                            "iface/tbut11.pcx".into()
+                        } else {
+                            "iface/tbutmax.pcx".into()
+                        },
+                    ))
                     .with_label(row.label),
             );
             components.push(
-                gui::text(row.label)
-                    .with_position(vec2(ROW_X + 8.0, y + 3.0))
-                    .with_size(vec2(80.0, 12.0)),
+                gui::image("iface/tbutcost.pcx")
+                    .with_rect(Rect::new(105.0, y, 44.0, ROW_H))
+                    .with_alpha(1.0),
             );
-            let level = row_level(&stats, row.target);
-            let detail = match &costs {
-                // No cost tables (non-retail gamesys): the rows are
-                // unavailable, not maxed.
-                None => "(offline)".to_string(),
-                Some(costs) => match (row.target, upgrade_quote(costs, &stats, row.target)) {
-                    (TrainerTarget::Stat(stat), _) if !stat_upgrade_available(stat) => {
-                        "unavailable".to_string()
-                    }
-                    (TrainerTarget::PsiTier(_), Some(cost)) => {
-                        format!("unlock: {} cm", cost)
-                    }
-                    (TrainerTarget::PsiTier(tier), None) if tier <= level => "owned".to_string(),
-                    (TrainerTarget::PsiTier(_), None) => "locked".to_string(),
-                    (_, Some(cost)) => format!("lvl {} > {}: {} cm", level, level + 1, cost),
-                    (_, None) => format!("lvl {} (MAX)", level),
-                },
-            };
-            components.push(
-                gui::text(&detail)
-                    .with_position(vec2(ROW_X + 8.0, y + 15.0))
-                    .with_size(vec2(120.0, 10.0)),
-            );
+            let name = PanelText::string(world, "misc", &format!("{name_prefix}{i}"), row.label);
+            let mut label = PanelText::text(&name, Rect::new(18.0, y + 9.0, 43.0, 14.0));
+            if PanelText::wrap(world, &name, 43.0).len() > 1 {
+                if let GuiComponent::Text { font_size, .. } = &mut label {
+                    *font_size = 10.0;
+                }
+            }
+            components.push(label);
+            if let Some(cost) = quote.filter(|_| available) {
+                for (x, value, width) in [
+                    (64.0, level, 12.0),
+                    (89.0, level + 1, 12.0),
+                    (107.0, cost, 24.0),
+                ] {
+                    components.push(PanelText::text(
+                        &value.to_string(),
+                        Rect::new(x, y + 10.0, width, 14.0),
+                    ));
+                }
+            } else {
+                let status = if !available || costs.is_none() {
+                    "N/A"
+                } else {
+                    "MAX"
+                };
+                components.push(PanelText::text(
+                    status,
+                    Rect::new(69.0, y + 10.0, 32.0, 14.0),
+                ));
+            }
+            if cursor
+                .as_ref()
+                .is_some_and(|c| rect.contains(vec2(c.position.x, c.position.y)))
+            {
+                help = Some(PanelText::string(
+                    world,
+                    help_table,
+                    &format!("{help_prefix}{i}"),
+                    row.label,
+                ));
+            }
         }
-
-        // Module pool counter (the original panel draws the pool at (68, 195)).
-        components.push(
-            gui::text(&format!("modules: {}", stats.cyber_modules))
-                .with_position(vec2(48.0, 195.0))
-                .with_size(vec2(120.0, 12.0)),
-        );
-
-        // Purchase feedback in the description area (13, 214).
-        if let Some(message) = &state.message {
-            components.push(
-                gui::text(message)
-                    .with_position(vec2(ROW_X, 214.0))
-                    .with_size(vec2(160.0, 12.0)),
-            );
+        for (key, fallback, rect) in [
+            ("TrainHeading", "Upgrade", Rect::new(13.0, 9.0, 90.0, 12.0)),
+            ("TrainCost", "Cost", Rect::new(120.0, 9.0, 33.0, 12.0)),
+            ("TrainPoints", "Modules", Rect::new(16.0, 195.0, 50.0, 14.0)),
+        ] {
+            components.push(PanelText::text(
+                &PanelText::string(world, "misc", key, fallback),
+                rect,
+            ));
+        }
+        components.push(PanelText::text(
+            &stats.cyber_modules.to_string(),
+            Rect::new(68.0, 195.0, 80.0, 14.0),
+        ));
+        if let Some(message) = help.as_ref().or(state.message.as_ref()) {
+            components.extend(PanelText::paragraph(
+                world,
+                message,
+                Rect::new(13.0, 214.0, 159.0, 74.0),
+            ));
         }
 
         components

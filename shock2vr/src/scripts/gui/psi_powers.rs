@@ -148,7 +148,7 @@ fn is_tier_marker(power_id: i32) -> bool {
 }
 
 /// The icon variant a cell draws: `_2` selected, `_1` trained, `_0` otherwise.
-fn icon_kind(trained: bool, selected: bool) -> u8 {
+pub(crate) fn icon_kind(trained: bool, selected: bool) -> u8 {
     if selected {
         2
     } else if trained {
@@ -165,7 +165,10 @@ fn icon_kind(trained: bool, selected: bool) -> u8 {
 /// last-resort guess for a data install missing the entry, right for some ids
 /// and wrong for others. Every shipped install carries all forty entries, so it
 /// does not fire in practice.
-fn icon_basename(strings: &std::collections::HashMap<String, String>, power_id: i32) -> String {
+pub(crate) fn icon_basename(
+    strings: &std::collections::HashMap<String, String>,
+    power_id: i32,
+) -> String {
     strings
         .get(&format!("psiicon{power_id}"))
         .map(|name| name.trim().to_owned())
@@ -174,7 +177,7 @@ fn icon_basename(strings: &std::collections::HashMap<String, String>, power_id: 
 }
 
 /// The full texture path for a power's icon.
-fn icon_texture(basename: &str, kind: u8) -> String {
+pub(crate) fn icon_texture(basename: &str, kind: u8) -> String {
     format!("iface/{basename}_{kind}.pcx")
 }
 
@@ -241,6 +244,271 @@ pub fn stick_nav(stick: Vector2<f32>, latched: bool) -> (Option<NavStep>, bool) 
 
 pub struct PsiPowersGui;
 
+/// The trainer reuses the selector's icon grid and help. Its tier browsing is
+/// local, and clicking a discipline purchases it rather than selecting it.
+pub struct PsiTrainerGui;
+
+#[derive(Clone, Debug)]
+pub struct PsiTrainerState {
+    tier: i32,
+    message: Option<String>,
+}
+
+impl Default for PsiTrainerState {
+    fn default() -> Self {
+        Self {
+            tier: 1,
+            message: None,
+        }
+    }
+}
+
+/// Only sell disciplines with a gameplay implementation. In particular,
+/// setting a sustained status flag alone does not make that status useful.
+fn purchasable_power(power: &crate::psi::PsiPowerInfo) -> bool {
+    use crate::psi::*;
+    match power.power.activation_type {
+        ACTIVATION_TYPE_INSTANT => power.template_id == PSI_HEAL_TEMPLATE_ID,
+        ACTIVATION_TYPE_SUSTAINED => {
+            power.duration.is_some()
+                && matches!(
+                    power.template_id,
+                    INVISO_TEMPLATE_ID
+                        | BERSERK_TEMPLATE_ID
+                        | STABILITY_TEMPLATE_ID
+                        | -1107
+                        | -1113
+                        | -1114
+                )
+        }
+        _ => !power.projectiles.is_empty(),
+    }
+}
+
+/// Authored PSICOST column 0 buys the tier; columns 1..7 buy disciplines.
+/// Shared by the display, input handler and authoritative effect applier.
+pub(crate) fn psi_power_quote(world: &World, template_id: i32) -> Option<i32> {
+    let powers = world.borrow::<UniqueView<GlobalPsiPowers>>().ok()?;
+    let power = powers.0.iter().find(|p| p.template_id == template_id)?;
+    let tier = power.tier();
+    let slot = power.power.power_id % POWERS_PER_TIER;
+    if !(1..=TIERS).contains(&tier) || slot <= 0 || !purchasable_power(power) {
+        return None;
+    }
+    let known = world.borrow::<UniqueView<PlayerPsiKnownPowers>>().ok()?;
+    let quests = world
+        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+        .ok()?;
+    if known.0.contains(&template_id) || quests.player_stats().psi_tier < tier {
+        return None;
+    }
+    let costs = crate::difficulty::trainer_costs(world)?;
+    let price = costs.psi_cost[(tier - 1) as usize][slot as usize];
+    (price >= 0).then_some(price)
+}
+
+impl Gui<PsiTrainerState, PsiPowersGuiMsg> for PsiTrainerGui {
+    fn get_components(
+        &self,
+        cursor: &Option<GuiCursor>,
+        _entity: EntityId,
+        world: &World,
+        state: &PsiTrainerState,
+    ) -> Vec<GuiComponent<PsiPowersGuiMsg>> {
+        // The purchase panel has its own authored geometry (shktrpsi.cpp):
+        // row-major icons at x=15/80, points at y=167, help at y=190.
+        // The amp/character selector uses a different, column-major layout.
+        let mut components = vec![
+            gui::image("iface/psitrain.pcx")
+                .with_size(vec2(PANEL_W, PANEL_H))
+                .with_alpha(1.0),
+        ];
+        components.push(
+            gui::image(&format!("iface/psi{}.pcx", state.tier))
+                .with_rect(Rect::new(12.0, 11.0, 144.0, 24.0))
+                .with_alpha(1.0),
+        );
+        for tab in 0..TIERS {
+            components.push(
+                gui::button(PsiPowersGuiMsg::BrowseTier(tab + 1))
+                    .with_image("iface/psitrain.pcx")
+                    .with_alpha(0.0)
+                    .with_label(&tier_tab_label(tab + 1))
+                    .with_rect(Rect::new(
+                        12.0 + tab as f32 * 142.0 / 5.0,
+                        10.0,
+                        142.0 / 5.0,
+                        18.0,
+                    )),
+            );
+        }
+        let quests = world
+            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+            .unwrap();
+        let stats = quests.player_stats();
+        let powers = world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+        let known = world.borrow::<UniqueView<PlayerPsiKnownPowers>>().unwrap();
+        let strings_view = world.borrow::<UniqueView<GlobalPsiStrings>>();
+        let empty = std::collections::HashMap::new();
+        let strings = strings_view.as_ref().map_or(&empty, |s| &s.0);
+        let costs = crate::difficulty::trainer_costs(world);
+        let mut help = None;
+        for slot in 0..POWERS_PER_TIER {
+            let id = (state.tier - 1) * POWERS_PER_TIER + slot;
+            let rect = Rect::new(
+                15.0 + (slot % 2) as f32 * 65.0,
+                34.0 + (slot / 2) as f32 * 30.0,
+                66.0,
+                30.0,
+            );
+            let power = power_index(&powers.0, id).map(|index| &powers.0[index]);
+            let owned = if slot == 0 {
+                stats.psi_tier >= state.tier
+            } else {
+                power.is_some_and(|p| known.0.contains(&p.template_id))
+            };
+            let quote = if slot == 0 {
+                costs.as_ref().and_then(|c| {
+                    super::upgrade_quote(c, stats, super::TrainerTarget::PsiTier(state.tier))
+                })
+            } else {
+                power.and_then(|p| psi_power_quote(world, p.template_id))
+            };
+            let kind = if owned {
+                2
+            } else if quote.is_some_and(|cost| cost <= stats.cyber_modules) {
+                1
+            } else {
+                0
+            };
+            components.push(
+                gui::image(&icon_texture(&icon_basename(strings, id), kind))
+                    .with_rect(rect)
+                    .with_alpha(1.0),
+            );
+            // One-pixel artwork overlap between columns is not a second hit:
+            // each button stops at the next column's start.
+            components.push(
+                gui::button(PsiPowersGuiMsg::SelectPower(id))
+                    .with_image("iface/psitrain.pcx")
+                    .with_alpha(0.0)
+                    .with_label(&if slot == 0 {
+                        format!("buy_psi_tier_{}", state.tier)
+                    } else {
+                        power_cell_label(id)
+                    })
+                    .with_rect(Rect { w: 65.0, ..rect }),
+            );
+            if !owned {
+                let price = costs
+                    .as_ref()
+                    .map(|c| c.psi_cost[(state.tier - 1) as usize][slot as usize]);
+                if let Some(price) = price.filter(|price| *price >= 0) {
+                    components.push(super::PanelText::text(
+                        &price.to_string(),
+                        Rect::new(rect.x + 44.0, rect.y + 15.0, 21.0, 14.0),
+                    ));
+                }
+            }
+            if stats.psi_tier >= state.tier && kind == 1 {
+                components.push(
+                    gui::image("iface/psit10.pcx")
+                        .with_rect(rect)
+                        .with_alpha(1.0),
+                );
+            }
+            if cursor.as_ref().is_some_and(|c| {
+                Rect { w: 65.0, ..rect }.contains_half_open(vec2(c.position.x, c.position.y))
+            }) {
+                help = strings.get(&format!("psi{id}")).cloned();
+            }
+        }
+        if stats.psi_tier < state.tier {
+            components.push(
+                gui::image("iface/psibuy10.pcx")
+                    .with_rect(Rect::new(15.0, 34.0, 139.0, 123.0))
+                    .with_alpha(1.0),
+            );
+        }
+        components.push(super::PanelText::text(
+            &super::PanelText::string(world, "misc", "TrainPoints", "Modules"),
+            Rect::new(16.0, 167.0, 50.0, 14.0),
+        ));
+        components.push(super::PanelText::text(
+            &stats.cyber_modules.to_string(),
+            Rect::new(68.0, 167.0, 80.0, 14.0),
+        ));
+        if let Some(help) = help.as_ref().or(state.message.as_ref()) {
+            components.extend(super::PanelText::paragraph(
+                world,
+                help,
+                Rect::new(12.0, 190.0, 159.0, 97.0),
+            ));
+        }
+        components
+    }
+    fn get_config(&self) -> GuiConfig {
+        PsiPowersGui.get_config()
+    }
+    fn handle_msg(
+        &self,
+        _entity: EntityId,
+        world: &World,
+        state: &PsiTrainerState,
+        msg: &PsiPowersGuiMsg,
+    ) -> (PsiTrainerState, Effect) {
+        if let PsiPowersGuiMsg::BrowseTier(tier) = msg {
+            return (
+                PsiTrainerState {
+                    tier: (*tier).clamp(1, TIERS),
+                    message: None,
+                },
+                Effect::NoEffect,
+            );
+        }
+        let PsiPowersGuiMsg::SelectPower(id) = msg else {
+            unreachable!()
+        };
+        let quests = world
+            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+            .unwrap();
+        let stats = quests.player_stats();
+        let (cost, effect) = if is_tier_marker(*id) {
+            let tier = id / POWERS_PER_TIER + 1;
+            let target = super::TrainerTarget::PsiTier(tier);
+            (
+                crate::difficulty::trainer_costs(world)
+                    .and_then(|c| super::upgrade_quote(&c, stats, target)),
+                Effect::TrainerPurchase { target },
+            )
+        } else {
+            let powers = world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+            let Some(index) = power_index(&powers.0, *id) else {
+                return (state.clone(), Effect::NoEffect);
+            };
+            let template_id = powers.0[index].template_id;
+            (
+                psi_power_quote(world, template_id),
+                Effect::PurchasePsiPower { template_id },
+            )
+        };
+        let (message, effect) = match cost {
+            Some(cost) if stats.cyber_modules >= cost => {
+                (format!("Purchased (-{} cm)", cost), effect)
+            }
+            Some(_) => ("Insufficient cyber modules".into(), Effect::NoEffect),
+            None => ("Owned, locked or unavailable".into(), Effect::NoEffect),
+        };
+        (
+            PsiTrainerState {
+                message: Some(message),
+                ..state.clone()
+            },
+            effect,
+        )
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PsiPowersGuiState;
 
@@ -263,6 +531,133 @@ pub fn power_index(powers: &[crate::psi::PsiPowerInfo], power_id: i32) -> Option
     powers.iter().position(|p| p.power.power_id == power_id)
 }
 
+/// Shared retail psi canvas. The character sheet browses its own tier without
+/// changing the amp selector's navigation state or selected power.
+pub(crate) fn psi_panel_components(
+    cursor: &Option<GuiCursor>,
+    world: &World,
+    tier_override: Option<i32>,
+) -> Vec<GuiComponent<PsiPowersGuiMsg>> {
+    // Archive-qualified for the same reason the settings MFD qualifies its
+    // backdrop: obj.crf and iface.crf collide on plain basenames.
+    let mut components: Vec<GuiComponent<PsiPowersGuiMsg>> = vec![
+        gui::image(BACKDROP)
+            .with_alpha(1.0)
+            .with_position(vec2(0.0, 0.0))
+            .with_size(vec2(PANEL_W, PANEL_H)),
+    ];
+
+    let (Ok(powers), Ok(known), Ok(selection), Ok(browsed)) = (
+        world.borrow::<UniqueView<GlobalPsiPowers>>(),
+        world.borrow::<UniqueView<PlayerPsiKnownPowers>>(),
+        world.borrow::<UniqueView<PsiPowerSelection>>(),
+        world.borrow::<UniqueView<PsiPanelTier>>(),
+    ) else {
+        return components;
+    };
+    // Borrowed, never cloned: the table is the whole ~120-entry
+    // `psihelp.str`, and this runs every frame the panel is visible.
+    let strings_view = world.borrow::<UniqueView<GlobalPsiStrings>>();
+    let no_strings = std::collections::HashMap::new();
+    let strings = strings_view.as_ref().map_or(&no_strings, |s| &s.0);
+
+    let tier = tier_override.unwrap_or(browsed.0).clamp(1, TIERS);
+    let selected_id = crate::psi_amp_selection::target(world)
+        .and_then(|amp| crate::psi_amp_selection::selected_power(world, amp))
+        .map(|p| p.power.power_id)
+        .or_else(|| powers.0.get(selection.index).map(|p| p.power.power_id));
+
+    // The tier strip: one piece of art per browsed tier, over five
+    // invisible tabs. A zero-alpha button is the established "hit target
+    // over backdrop art" convention - the tabs are painted into the art,
+    // so they must be clickable without painting anything over them.
+    components.push(
+        gui::image(&format!("iface/psi{tier}.pcx"))
+            .with_alpha(1.0)
+            .with_position(vec2(TIER_STRIP_POS.0, TIER_STRIP_POS.1))
+            .with_size(vec2(TIER_STRIP_SIZE.0, TIER_STRIP_SIZE.1)),
+    );
+    for tab in 0..TIERS {
+        let rect = tab_rect(tab);
+        components.push(
+            gui::button(PsiPowersGuiMsg::BrowseTier(tab + 1))
+                .with_image(BACKDROP)
+                .with_alpha(0.0)
+                .with_label(&tier_tab_label(tab + 1))
+                .with_position(vec2(rect.x, rect.y))
+                .with_size(vec2(rect.w, rect.h)),
+        );
+    }
+
+    // The grid. Every cell draws its icon; only a real power is clickable,
+    // so the tier marker is art and nothing else.
+    for column in 0..2usize {
+        for row in 0..ROWS {
+            let power_id = power_id_at_cell(tier, column, row);
+            let rect = cell_rect(column, row);
+            // The tier's capacity marker is art: it names no discipline,
+            // so it is drawn and never made clickable.
+            let index = if is_tier_marker(power_id) {
+                None
+            } else {
+                power_index(&powers.0, power_id)
+            };
+            let trained = match index {
+                Some(index) => known.0.contains(&powers.0[index].template_id),
+                // A tier's capacity marker has no power behind it; it reads
+                // as earned once anything in the tier is trained.
+                None => powers
+                    .0
+                    .iter()
+                    .any(|p| p.tier() == tier && known.0.contains(&p.template_id)),
+            };
+            let kind = icon_kind(trained, Some(power_id) == selected_id);
+            components.push(
+                gui::image(&icon_texture(&icon_basename(strings, power_id), kind))
+                    .with_alpha(1.0)
+                    .with_position(vec2(rect.x, rect.y))
+                    .with_size(vec2(rect.w, rect.h)),
+            );
+            if index.is_some() {
+                components.push(
+                    gui::button(PsiPowersGuiMsg::SelectPower(power_id))
+                        .with_image(BACKDROP)
+                        .with_alpha(0.0)
+                        .with_label(&power_cell_label(power_id))
+                        .with_position(vec2(rect.x, rect.y))
+                        .with_size(vec2(rect.w, rect.h)),
+                );
+            }
+        }
+    }
+
+    // The help panel reads whatever the cursor is over - a discipline's
+    // own entry, or the strip's one line about the tabs.
+    if let Some(help) = cursor
+        .as_ref()
+        .and_then(|cursor| help_key(tier, cursor.position.x, cursor.position.y))
+        .and_then(|key| strings.get(&key))
+    {
+        let lines = (HELP.h / LINE_H).floor() as usize;
+        for (idx, line) in super::media::wrap_text(help, HELP_WRAP)
+            .iter()
+            .take(lines)
+            .enumerate()
+        {
+            if line.is_empty() {
+                continue;
+            }
+            components.push(
+                gui::text(line)
+                    .with_position(vec2(HELP.x, HELP.y + idx as f32 * LINE_H))
+                    .with_size(vec2(HELP.w, LINE_H)),
+            );
+        }
+    }
+
+    components
+}
+
 impl Gui<PsiPowersGuiState, PsiPowersGuiMsg> for PsiPowersGui {
     fn get_components(
         &self,
@@ -271,118 +666,7 @@ impl Gui<PsiPowersGuiState, PsiPowersGuiMsg> for PsiPowersGui {
         world: &World,
         _state: &PsiPowersGuiState,
     ) -> Vec<GuiComponent<PsiPowersGuiMsg>> {
-        // Archive-qualified for the same reason the settings MFD qualifies its
-        // backdrop: obj.crf and iface.crf collide on plain basenames.
-        let mut components: Vec<GuiComponent<PsiPowersGuiMsg>> = vec![
-            gui::image(BACKDROP)
-                .with_position(vec2(0.0, 0.0))
-                .with_size(vec2(PANEL_W, PANEL_H)),
-        ];
-
-        let (Ok(powers), Ok(known), Ok(selection), Ok(browsed)) = (
-            world.borrow::<UniqueView<GlobalPsiPowers>>(),
-            world.borrow::<UniqueView<PlayerPsiKnownPowers>>(),
-            world.borrow::<UniqueView<PsiPowerSelection>>(),
-            world.borrow::<UniqueView<PsiPanelTier>>(),
-        ) else {
-            return components;
-        };
-        // Borrowed, never cloned: the table is the whole ~120-entry
-        // `psihelp.str`, and this runs every frame the panel is visible.
-        let strings_view = world.borrow::<UniqueView<GlobalPsiStrings>>();
-        let no_strings = std::collections::HashMap::new();
-        let strings = strings_view.as_ref().map_or(&no_strings, |s| &s.0);
-
-        let tier = browsed.0.clamp(1, TIERS);
-        let selected_id = powers.0.get(selection.index).map(|p| p.power.power_id);
-
-        // The tier strip: one piece of art per browsed tier, over five
-        // invisible tabs. A zero-alpha button is the established "hit target
-        // over backdrop art" convention - the tabs are painted into the art,
-        // so they must be clickable without painting anything over them.
-        components.push(
-            gui::image(&format!("iface/psi{tier}.pcx"))
-                .with_position(vec2(TIER_STRIP_POS.0, TIER_STRIP_POS.1))
-                .with_size(vec2(TIER_STRIP_SIZE.0, TIER_STRIP_SIZE.1)),
-        );
-        for tab in 0..TIERS {
-            let rect = tab_rect(tab);
-            components.push(
-                gui::button(PsiPowersGuiMsg::BrowseTier(tab + 1))
-                    .with_image(BACKDROP)
-                    .with_alpha(0.0)
-                    .with_label(&tier_tab_label(tab + 1))
-                    .with_position(vec2(rect.x, rect.y))
-                    .with_size(vec2(rect.w, rect.h)),
-            );
-        }
-
-        // The grid. Every cell draws its icon; only a real power is clickable,
-        // so the tier marker is art and nothing else.
-        for column in 0..2usize {
-            for row in 0..ROWS {
-                let power_id = power_id_at_cell(tier, column, row);
-                let rect = cell_rect(column, row);
-                // The tier's capacity marker is art: it names no discipline,
-                // so it is drawn and never made clickable.
-                let index = if is_tier_marker(power_id) {
-                    None
-                } else {
-                    power_index(&powers.0, power_id)
-                };
-                let trained = match index {
-                    Some(index) => known.0.contains(&powers.0[index].template_id),
-                    // A tier's capacity marker has no power behind it; it reads
-                    // as earned once anything in the tier is trained.
-                    None => powers
-                        .0
-                        .iter()
-                        .any(|p| p.tier() == tier && known.0.contains(&p.template_id)),
-                };
-                let kind = icon_kind(trained, Some(power_id) == selected_id);
-                components.push(
-                    gui::image(&icon_texture(&icon_basename(strings, power_id), kind))
-                        .with_position(vec2(rect.x, rect.y))
-                        .with_size(vec2(rect.w, rect.h)),
-                );
-                if index.is_some() {
-                    components.push(
-                        gui::button(PsiPowersGuiMsg::SelectPower(power_id))
-                            .with_image(BACKDROP)
-                            .with_alpha(0.0)
-                            .with_label(&power_cell_label(power_id))
-                            .with_position(vec2(rect.x, rect.y))
-                            .with_size(vec2(rect.w, rect.h)),
-                    );
-                }
-            }
-        }
-
-        // The help panel reads whatever the cursor is over - a discipline's
-        // own entry, or the strip's one line about the tabs.
-        if let Some(help) = cursor
-            .as_ref()
-            .and_then(|cursor| help_key(tier, cursor.position.x, cursor.position.y))
-            .and_then(|key| strings.get(&key))
-        {
-            let lines = (HELP.h / LINE_H).floor() as usize;
-            for (idx, line) in super::media::wrap_text(help, HELP_WRAP)
-                .iter()
-                .take(lines)
-                .enumerate()
-            {
-                if line.is_empty() {
-                    continue;
-                }
-                components.push(
-                    gui::text(line)
-                        .with_position(vec2(HELP.x, HELP.y + idx as f32 * LINE_H))
-                        .with_size(vec2(HELP.w, LINE_H)),
-                );
-            }
-        }
-
-        components
+        psi_panel_components(cursor, world, None)
     }
 
     fn get_config(&self) -> GuiConfig {
@@ -490,6 +774,84 @@ mod tests {
         PsiPowersGui.get_components(&None, EntityId::dead(), world, &PsiPowersGuiState)
     }
 
+    #[test]
+    fn discipline_purchase_uses_its_own_price_and_requires_its_tier() {
+        let world = world_with(1, 1, &[]);
+        world.add_unique(crate::quest_info::QuestInfo::new());
+        let mut costs = dark::gamesys::TrainerCostTables {
+            stat_cost: [[0; 5]; 5],
+            tech_cost: [[0; 6]; 5],
+            weapon_cost: [[0; 6]; 4],
+            psi_cost: [[7; 8]; 5],
+        };
+        costs.psi_cost[0][0] = 99;
+        costs.psi_cost[0][1] = 3;
+        world.add_unique(crate::mission::GlobalTrainerCosts(Some(costs)));
+        {
+            let mut powers = world
+                .borrow::<shipyard::UniqueViewMut<GlobalPsiPowers>>()
+                .unwrap();
+            powers.0[0].projectiles.push((
+                -1,
+                dark::properties::ProjectileOptions {
+                    order: 0,
+                    setting: 0,
+                },
+            ));
+        }
+        assert_eq!(
+            psi_power_quote(&world, -1001),
+            None,
+            "a locked tier cannot sell its power"
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<crate::quest_info::QuestInfo>>()
+            .unwrap()
+            .player_stats_mut()
+            .psi_tier = 1;
+        assert_eq!(
+            psi_power_quote(&world, -1001),
+            Some(3),
+            "use the discipline column, not capacity column"
+        );
+        assert_eq!(
+            psi_power_quote(&world, -1002),
+            None,
+            "an unimplemented power cannot consume modules"
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerPsiKnownPowers>>()
+            .unwrap()
+            .0
+            .insert(-1001);
+        assert_eq!(
+            psi_power_quote(&world, -1001),
+            None,
+            "already learned powers cannot be charged twice"
+        );
+    }
+
+    #[test]
+    fn trainer_browsing_does_not_move_the_amp_selection() {
+        let world = world_with(1, 1, &[1]);
+        let (state, effect) = PsiTrainerGui.handle_msg(
+            EntityId::dead(),
+            &world,
+            &PsiTrainerState::default(),
+            &PsiPowersGuiMsg::BrowseTier(4),
+        );
+        assert_eq!(state.tier, 4);
+        assert!(matches!(effect, Effect::NoEffect));
+        assert_eq!(world.borrow::<UniqueView<PsiPanelTier>>().unwrap().0, 1);
+        assert_eq!(
+            world
+                .borrow::<UniqueView<PsiPowerSelection>>()
+                .unwrap()
+                .index,
+            0
+        );
+    }
+
     fn images(components: &[GuiComponent<PsiPowersGuiMsg>]) -> Vec<(String, Vector2<f32>)> {
         components
             .iter()
@@ -525,6 +887,29 @@ mod tests {
 
     /// Every drawn element stays inside the panel, and the help panel clears
     /// the grid above it.
+    #[test]
+    fn character_sheet_browses_without_changing_amp_tier_or_selection() {
+        let world = world_with(1, 2, &[1]);
+        let before = world
+            .borrow::<UniqueView<PsiPowerSelection>>()
+            .unwrap()
+            .index;
+        let components = psi_panel_components(&None, &world, Some(5));
+        assert!(
+            images(&components)
+                .iter()
+                .any(|(texture, _)| texture == "iface/psi5.pcx")
+        );
+        assert_eq!(world.borrow::<UniqueView<PsiPanelTier>>().unwrap().0, 2);
+        assert_eq!(
+            world
+                .borrow::<UniqueView<PsiPowerSelection>>()
+                .unwrap()
+                .index,
+            before
+        );
+    }
+
     #[test]
     fn the_layout_fits_inside_the_panel() {
         for rect in [TIER_STRIP, GRID, HELP] {

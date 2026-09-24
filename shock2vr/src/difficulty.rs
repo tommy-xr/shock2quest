@@ -71,8 +71,7 @@ impl GlobalDifficultyParams {
     }
     pub fn limits(&self, difficulty: Difficulty, stats: &PlayerStats) -> (i32, i32) {
         let p = self.coefficients(difficulty);
-        // The current sheet contains base stats; when temporary stat modifiers
-        // gain a consumer, only HP should use effective Endurance. Psi uses base PSI.
+        // Retail uses effective Endurance for HP, but base PSI for pool capacity.
         let tank = if stats.has_os_trait(crate::scripts::gui::TRAIT_TANK) {
             crate::scripts::gui::TANK_HP_BONUS
         } else {
@@ -99,6 +98,33 @@ impl GlobalDifficultyParams {
     }
 }
 
+/// Percentage of otherwise-successful loot draws the campaign difficulty
+/// throws away (0 on Easy and Normal, 30 on Hard, 75 on Impossible in the
+/// shipped table). A draw that yields nothing is unaffected - only a draw that
+/// picked a real item is subject to it.
+pub fn loot_discard_percent(world: &World) -> i32 {
+    let difficulty = campaign_difficulty(world);
+    world
+        .borrow::<UniqueView<GlobalDifficultyParams>>()
+        .ok()
+        .and_then(|p| {
+            p.difficulty
+                .as_ref()
+                .map(|d| d.loot_discard_threshold[difficulty.retail_index()])
+        })
+        .unwrap_or(0)
+}
+
+/// The campaign's difficulty, defaulting for a world without a character sheet
+/// (debug scenes).
+fn campaign_difficulty(world: &World) -> Difficulty {
+    world
+        .borrow::<UniqueView<QuestInfo>>()
+        .ok()
+        .map(|q| q.difficulty())
+        .unwrap_or_default()
+}
+
 /// Resolve from the campaign at each quote, including seeded debug scenes.
 pub fn trainer_costs(world: &World) -> Option<dark::gamesys::TrainerCostTables> {
     let authored = world
@@ -106,11 +132,7 @@ pub fn trainer_costs(world: &World) -> Option<dark::gamesys::TrainerCostTables> 
         .ok()?
         .0
         .clone()?;
-    let difficulty = world
-        .borrow::<UniqueView<QuestInfo>>()
-        .ok()
-        .map(|q| q.difficulty())
-        .unwrap_or_default();
+    let difficulty = campaign_difficulty(world);
     Some(
         world
             .borrow::<UniqueView<GlobalDifficultyParams>>()
@@ -133,7 +155,11 @@ pub fn refresh_player_pools(world: &World, fill: bool) {
     let Ok(params) = world.borrow::<UniqueView<GlobalDifficultyParams>>() else {
         return;
     };
-    let (max_hp, max_psi) = params.limits(quests.difficulty(), quests.player_stats());
+    let effective =
+        crate::implants::effective_stats(world).unwrap_or_else(|| quests.player_stats().clone());
+    let (max_hp, _) = params.limits(quests.difficulty(), &effective);
+    // Retail psi capacity uses trained PSI; SmartBoost affects casting only.
+    let (_, max_psi) = params.limits(quests.difficulty(), quests.player_stats());
     world.run(
         |mut hp: ViewMut<dark::properties::PropHitPoints>,
          mut maximum: ViewMut<dark::properties::PropMaxHitPoints>,

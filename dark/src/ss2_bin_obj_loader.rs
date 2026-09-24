@@ -223,14 +223,25 @@ pub fn to_scene_objects(
             };
 
             let material = RefCell::new(mat);
-            let mut so = create_dark_object_scene_object(material, geometry);
+            let mut so = create_dark_object_scene_object(material, geometry.clone());
 
-            so.additive_color = additive;
+            so.blend_mode = if additive {
+                engine::scene::scene_object::BlendMode::AdditiveColor
+            } else {
+                engine::scene::scene_object::BlendMode::Alpha
+            };
             if additive { so.set_depth_write(false); }
             so.set_skinning_data(skeleton.get_transforms());
 
-            Some(so)
+            let mut objects = vec![so];
+            if !debug_normals_enabled {
+                crate::util::append_incidence_overlays(
+                    &mut objects, asset_cache, &tex_path, texture, is_skinned,
+                );
+            }
+            Some(objects)
         })
+        .flatten()
         .collect::<Vec<SceneObject>>();
 
     // Vhots are attachment points (muzzle, light, particle origins), not

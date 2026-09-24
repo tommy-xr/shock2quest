@@ -458,9 +458,8 @@ pub fn can_cycle_gun_setting(world: &World, weapon: EntityId) -> bool {
 /// permanent career upgrades. Dark stores both in its player property; our
 /// split runtime/persistent sheet combines them here. Missing data means zero.
 pub(crate) fn player_skill_level(world: &World, skill: crate::player_stats::Skill) -> i32 {
-    let trained = world
-        .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
-        .map(|quests| quests.player_stats().skill_level(skill))
+    let trained = crate::implants::effective_stats(world)
+        .map(|stats| stats.skill_level(skill))
         .unwrap_or(0);
     use crate::player_stats::Skill;
     let index = match skill {
@@ -1231,18 +1230,101 @@ pub fn play_impact_sound(
     position: Vector3<f32>,
 ) -> Effect {
     let material = get_impact_material(world, hit_entity_id);
-    let maybe_query =
-        get_environmental_sound_query(world, entity_id, "collision", vec![("material", &material)]);
-
-    if let Some(query) = maybe_query {
-        Effect::PlayEnvironmentalSound {
-            audio_handle: AudioHandle::new(),
+    let query =
+        get_environmental_sound_query(world, entity_id, "collision", vec![("material", &material)])
+            .unwrap_or_else(|| {
+                // Ordinary props (including Mug) have Material but no ClassTag.
+                // Shock's shksound.cpp::set_second_tag sorts the two material
+                // values alphabetically and names the latter Material2. Retail
+                // glass + metal then resolves to hglamet*, without a fake weapon.
+                let own_material = get_impact_material(world, entity_id);
+                let (first, second) = if own_material < material {
+                    (&own_material, &material)
+                } else {
+                    (&material, &own_material)
+                };
+                dark::EnvSoundQuery::from_tag_values(vec![
+                    ("event", "collision"),
+                    ("material", first),
+                    ("material2", second),
+                ])
+            });
+    // Guns have no retail bump schema; retain the held-gun wrench fallback
+    // for released guns too, before adding the hearing cue.
+    let audio_handle = AudioHandle::new();
+    let fallback = world
+        .borrow::<View<dark::properties::PropPlayerGun>>()
+        .is_ok_and(|v| v.get(entity_id).is_ok())
+        .then(|| {
+            dark::EnvSoundQuery::from_tag_values(vec![
+                ("event", "collision"),
+                ("weapontype", "wrench"),
+                ("material", &material),
+            ])
+        });
+    // Creature footsteps/voices and enemy shots never become investigation
+    // cues. A dropped/thrown prop retains its player provenance while moving.
+    let player_caused = world
+        .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
+        .is_ok_and(|v| v.get(entity_id).is_ok())
+        || world
+            .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
+            .is_ok_and(|p| {
+                p.left_hand_entity_id == Some(entity_id)
+                    || p.right_hand_entity_id == Some(entity_id)
+            })
+        || world
+            .borrow::<shipyard::UniqueView<crate::throwing::SavedThrows>>()
+            .is_ok_and(|throws| throws.0.contains_key(&entity_id.inner()));
+    if player_caused {
+        Effect::PlayImpactSound {
+            audio_handle,
             query,
+            fallback,
+            position,
+            source: entity_id,
+        }
+    } else if let Some(fallback) = fallback {
+        Effect::PlayEnvironmentalSoundWithFallback {
+            audio_handle,
+            query,
+            fallback,
             position,
         }
     } else {
-        Effect::NoEffect
+        Effect::PlayEnvironmentalSound {
+            audio_handle,
+            query,
+            position,
+        }
     }
+}
+
+/// A station-wide Xerxes line, non-positional like retail's schema play.
+pub fn announce(source: EntityId, schema: &str) -> Effect {
+    Effect::PlaySound {
+        handle: AudioHandle::new(),
+        name: schema.to_owned(),
+        source: Some(source),
+        spatial: false,
+    }
+}
+
+/// The names of the non-spatial sounds an effect plays - what [`announce`]
+/// emits.
+#[cfg(test)]
+pub fn announced(effect: &Effect) -> Vec<String> {
+    Effect::flatten(vec![effect.clone()])
+        .into_iter()
+        .filter_map(|effect| match effect {
+            Effect::PlaySound {
+                name,
+                spatial: false,
+                ..
+            } => Some(name),
+            _ => None,
+        })
+        .collect()
 }
 
 pub fn send_to_all_switch_links(

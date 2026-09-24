@@ -560,7 +560,28 @@ fn main() {
         "physical_held_items".to_owned(),
         "physical_gun_weight".to_owned(),
     ]);
-    let mission = quest_config::configured_mission();
+    // Explicitly provisioned benchmark workloads are opt-in and reset by
+    // removing this file. A malformed fixture must never silently measure a
+    // different scene.
+    let mut benchmark_config =
+        match std::fs::read_to_string(paths::data_root().join("benchmark-scene.json")) {
+            Ok(json) => Some(
+                shock2vr::benchmark_scene::BenchmarkScene::parse(&json)
+                    .expect("invalid benchmark-scene.json"),
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("cannot read benchmark-scene.json: {error}"),
+        };
+    if let Some(benchmark) = &benchmark_config {
+        shock2vr::dev_params::set(
+            shock2vr::dev_params::OBJECT_LIGHTING,
+            if benchmark.object_lighting { 1.0 } else { 0.0 },
+        );
+    }
+    let mission = benchmark_config
+        .as_ref()
+        .map(|b| b.mission.clone())
+        .unwrap_or_else(quest_config::configured_mission);
     let game_init_started = Instant::now();
     let options: GameOptions = GameOptions {
         mission: mission.clone(),
@@ -583,6 +604,7 @@ fn main() {
         engine::platform::set_event_pump(Some(pump_events));
     }
     let mut game = shock2vr::App::init(options, bundle_storage);
+    let mut benchmark_run: Option<shock2vr::benchmark_scene::BenchmarkRun> = None;
     // The real HMD orientation, from the previous frame's located view.
     // `input_context` is built before `locate_views` runs, so this frame's view
     // pose does not exist yet; one frame of latency is imperceptible for
@@ -1080,6 +1102,22 @@ fn main() {
         }
         let update_started = Instant::now();
         game.update(&time_context, &input_context, &mut action_state);
+        if let (Some(benchmark), App::Ready(game)) = (&mut benchmark_run, &mut game) {
+            benchmark.advance_setup(game, time_context.elapsed);
+        }
+        if let Some(config) = benchmark_config.take() {
+            benchmark_run = Some({
+                println!(
+                    "SHOCK2QUEST_BENCHMARK_CONFIG {}",
+                    serde_json::to_string(&config).unwrap()
+                );
+                match &mut game {
+                    App::Ready(game) => config.apply(game).expect("benchmark setup failed"),
+                    App::MissingAssets(_) => panic!("benchmark requires installed game assets"),
+                }
+            });
+        }
+
         let pulses = game.take_haptics();
         if session_focused {
             for (hand, action) in [&left_haptic, &right_haptic].into_iter().enumerate() {
@@ -1318,19 +1356,14 @@ fn main() {
 
         fit_passthrough.update(
             &session,
-            passthrough::is_fit_scene(&game)
+            (passthrough::is_fit_scene(&game)
+                || matches!(&game, shock2vr::App::Ready(game) if game.scene_name() == "debug_psi_fit"))
                 && shock2vr::dev_params::get_bool(shock2vr::dev_params::GLOVE_FIT_PASSTHROUGH),
         );
-        let scene_started = Instant::now();
-        let (scene, camera_pos, camera_rot) = game.render();
-        let scene_elapsed = scene_started.elapsed();
-
         let tracking = tracking.with_stance(
             game.player_center_above_floor(),
             game.player_eye_cap_above_center(),
         );
-        // Render to each eye
-        let time = now.elapsed().as_secs_f32();
         // The midpoint of the two eyes: what the death camera resolves from, so
         // it cannot pull the eyes together (see `render_swapchain`).
         let head_centre_stage = vec3(
@@ -1338,6 +1371,17 @@ fn main() {
             (views[0].pose.position.y + views[1].pose.position.y) / 2.0,
             (views[0].pose.position.z + views[1].pose.position.z) / 2.0,
         );
+        if let (Some(benchmark), App::Ready(game)) = (&benchmark_run, &mut game) {
+            let center = tracking.stage_to_pawn(head_centre_stage);
+            let q = views[0].pose.orientation;
+            benchmark.place_camera(game, center, Quaternion::new(q.w, q.x, q.y, q.z));
+        }
+        let scene_started = Instant::now();
+        let (scene, camera_pos, camera_rot) = game.render();
+        let scene_elapsed = scene_started.elapsed();
+
+        // Render to each eye
+        let time = now.elapsed().as_secs_f32();
         let (left_eye_elapsed, _) = render_swapchain(
             &mut game,
             &engine,
@@ -1502,6 +1546,12 @@ fn main() {
             submit: submit_elapsed,
         }) {
             print_frame_report(&mission, session_focused, report);
+            if let (Some(benchmark), App::Ready(game)) = (&benchmark_run, &game) {
+                println!(
+                    "SHOCK2QUEST_BENCHMARK {}",
+                    benchmark.observation(game, &scene)
+                );
+            }
         }
 
         // let mut printed = false;
@@ -1833,10 +1883,10 @@ fn render_swapchain(
 
         let mut scene_for_render = Scene::from_objects(all_scene_objs);
 
-        // Add hand spotlights for enhanced lighting testing (experimental feature)
+        // Add hand spotlights (`hand_spotlights` dev param)
         let hand_spotlights = game.get_hand_spotlights();
         for spotlight in hand_spotlights {
-            scene_for_render.lights_mut().add_spotlight(spotlight);
+            scene_for_render.lights_mut().add_light(spotlight);
         }
 
         profile!(

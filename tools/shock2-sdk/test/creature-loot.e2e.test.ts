@@ -45,6 +45,7 @@ test(
       mission: "medsci1.mis",
     });
     await game.step({ frames: 5 });
+    const startPosition = (await game.info()).player.position;
 
     const byTemplateOne = async (templateId: number, what: string) => {
       const matches = await game.entities.byTemplate(templateId);
@@ -157,23 +158,32 @@ test(
     await game.input.set("pointer.pressed", 0);
     await game.step({ frames: 5 });
     assert.ok(
-      (await game.info()).player.collected_logs.some((c) => c.deck === 2 && c.log === 14),
-      "taking Watts' disc should record deck-2 log 14 (the 12451 code log)",
+      (await game.info()).player.collected_logs.some(
+        (c) => c.deck === 2 && c.log === 14 && !c.read,
+      ),
+      "taking Watts' disc should record deck-2 log 14 unread (the 12451 code log)",
     );
 
-    // The disc's transcript surfaces 12451 in-fiction. Read it through the
-    // original's on-demand `play_unread_log` path at the disc's own authored
-    // position (the consumed entity remains as the reader backing state;
-    // standing at Watts is >4 units away, so walk-away auto-close would fire).
-    const dp = (await game.entities.detail(codeDiscId)).position;
-    await teleportVerified(game, { x: dp[0], y: dp[1] + 0.5, z: dp[2] });
+    // Collected logs belong to the player. Return to the starting room to
+    // prove the transcript can be read away from Watts and the source disc;
+    // the reader is not a world-object panel with walk-away auto-close.
+    await teleportVerified(game, {
+      x: startPosition[0],
+      y: startPosition[1],
+      z: startPosition[2],
+    });
     await game.input.trigger("ReadLastUnreadLog");
     await game.step({ frames: 5 });
     const reader = await activePanel();
-    assert.equal(
-      reader?.template_id,
-      CODE_DISC,
-      "reading the looted disc should open the reader MFD bound to it",
+    assert.ok(
+      reader,
+      "reading the collected Watts log should open its transcript away from the corpse",
+    );
+    assert.ok(
+      (await game.info()).player.collected_logs.some(
+        (c) => c.deck === 2 && c.log === 14 && c.read,
+      ),
+      "reading Watts' collected log should mark deck-2 log 14 read",
     );
     const transcript = reader.elements
       .filter((e) => e.kind === "text" && e.text)

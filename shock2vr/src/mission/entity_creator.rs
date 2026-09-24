@@ -121,6 +121,31 @@ pub fn create_entity_with_position(
         world.add_component(entity_id, InternalPropOriginalModelName(model_name.clone()));
     }
 
+    if let Some(name) = &additional_options.name_override {
+        world.add_component(
+            entity_id,
+            (
+                dark::properties::PropSymName(name.clone()),
+                dark::properties::PropObjName(format!("horde_object: \"{name}\"")),
+            ),
+        );
+    }
+    if let Some(hit_points) = additional_options.hit_points_override {
+        let hit_points = hit_points.max(1);
+        world.add_component(
+            entity_id,
+            (
+                dark::properties::PropHitPoints { hit_points },
+                dark::properties::PropMaxHitPoints {
+                    hit_points: hit_points as u32,
+                },
+            ),
+        );
+    }
+    if let Some(ecology_type) = additional_options.ecology_type {
+        world.add_component(entity_id, dark::properties::PropEcoType(ecology_type));
+    }
+
     if additional_options.force_visible {
         world.add_component(entity_id, PropHasRefs(true));
         world.add_component(entity_id, PropRenderType(RenderType::Normal));
@@ -381,21 +406,19 @@ pub fn create_entity_core(
         .unwrap();
 
     let mut processed_scripts = if let Ok(scripts) = v_scripts.get(entity_id) {
-        // Map TrapSoundAmb -> TrapSound
-        scripts
-            .scripts
-            .iter()
-            .map(|s| {
-                if s == "TrapSoundAmb" {
-                    "TrapSound".to_owned()
-                } else {
-                    s.to_owned()
-                }
-            })
-            .collect()
+        scripts.scripts.clone()
     } else {
         Vec::new()
     };
+    // An object running both flavours (earth's narration traps: their own
+    // TrapSoundAmb plus the archetype's TrapSound) keeps one play, at the trap,
+    // so a late montage segment stays distant rather than at the ears.
+    if processed_scripts
+        .iter()
+        .any(|script| script.eq_ignore_ascii_case("TrapSound"))
+    {
+        processed_scripts.retain(|script| !script.eq_ignore_ascii_case("TrapSoundAmb"));
+    }
 
     // Create any internal scripts to power some properties
 
@@ -1462,7 +1485,15 @@ fn create_physics_representation_with_options(
                 shape,
                 // TODO: Kinematic experiment
                 //is_sensor,
-                entity_group,
+                // The player steps through a carryable item rather than
+                // colliding with it. Their capsule is kinematic, so Rapier
+                // solves a contact against this dynamic body as infinite mass
+                // against finite: brushing a mug launches it across the room
+                // instead of nudging it. Only the player is dropped -
+                // creatures are ordinary dynamic bodies that cannot kick, and
+                // the item stays solid to them so a *thrown* one still
+                // reports the contact it damages on.
+                entity_group.non_solid_to_player(),
                 false,
                 dynamics_options,
             );
@@ -1813,6 +1844,11 @@ pub struct CreateEntityOptions {
     /// Instance-specific appearance, for archetypes whose model is assigned
     /// by a mission rather than the gamesys. Applied before visuals/physics.
     pub model_override: Option<String>,
+    /// Instance labels and durability, installed before scripts/physics initialize.
+    pub name_override: Option<String>,
+    pub hit_points_override: Option<i32>,
+    /// Population membership for children of an ecology-owned egg.
+    pub ecology_type: Option<i32>,
     /// Bolt the new entity to this parent's transform for its lifetime (see
     /// `RuntimePropAttachment`). The spawn-time relative pose is captured and the
     /// child then tracks the parent each frame - used so a weapon's muzzle flash
@@ -1856,6 +1892,9 @@ impl Default for CreateEntityOptions {
         CreateEntityOptions {
             force_visible: false,
             model_override: None,
+            name_override: None,
+            hit_points_override: None,
+            ecology_type: None,
             attach_to: None,
             transient_fx: false,
             projectile_raycast_origin: None,
@@ -2968,6 +3007,64 @@ mod tests {
             assert!(!bodies[0].blocks_player);
             assert!(!bodies[0].blocks_actor);
         }
+    }
+
+    /// A carryable item - the Mug, a Soda Can, a wrench lying on the floor -
+    /// is a dynamic body, and the player capsule is kinematic. Solid to each
+    /// other, Rapier solves that contact as infinite mass against finite and
+    /// walking into the item launches it across the room. The player steps
+    /// through it instead.
+    ///
+    /// Creatures stay solid to it deliberately: they are dynamic bodies that
+    /// cannot kick, and a thrown item's damage is driven by the very contact
+    /// an ACTOR-passable group would suppress (`ThrownItems::launch` sets
+    /// velocity only, never the collision group).
+    ///
+    /// Negative-first: before the fix a MOVE item blocked the player.
+    #[test]
+    fn carryable_items_do_not_block_the_player_but_stay_solid_to_creatures() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = world.add_entity((
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE,
+                inventory_action: FrobFlag::SCRIPT,
+                tool_action: FrobFlag::empty(),
+            },
+            PropPhysType {
+                phys_type: PhysicsModelType::SPHERE,
+                num_submodels: 1,
+                remove_on_sleep: false,
+                is_special: false,
+            },
+        ));
+
+        let handle = create_physics_representation(
+            &mut world,
+            &mut physics,
+            &Some(&ladder_model()),
+            entity_id,
+        )
+        .expect("a carryable item should still get a body");
+
+        assert_eq!(
+            physics.debug_list_bodies()[0].body_type,
+            "dynamic",
+            "a carryable item keeps its dynamic model-bounds body"
+        );
+        assert!(
+            !physics.collider_blocks_player(handle),
+            "the player must step through a carryable item, not kick it"
+        );
+        assert!(
+            physics.collider_blocks_actor(handle),
+            "a carryable item must stay solid to creatures, or a thrown one deals no damage"
+        );
     }
 
     /// Model scale is a render transform, while `P$PhysDims` is the separately

@@ -104,6 +104,10 @@ pub enum RuntimeCommand {
         request: shock2vr::game_scene::DebugPlayerStatsRequest,
         reply: oneshot::Sender<Result<shock2vr::player_stats::PlayerStats, String>>,
     },
+    ApplyStatModifier {
+        request: shock2vr::game_scene::StatModifierRequest,
+        reply: oneshot::Sender<Result<shock2vr::player_stats::PlayerStats, String>>,
+    },
 
     /// Get current player position
     GetPlayerPosition(oneshot::Sender<Vector3<f32>>),
@@ -318,7 +322,7 @@ pub struct SceneListResult {
 }
 
 /// One scene object as submitted to the renderer
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SceneObjectSummary {
     pub entity_id: Option<u64>,
     pub name: Option<String>,
@@ -342,6 +346,21 @@ pub struct SceneObjectSummary {
     pub clear_depth: bool,
     /// Front-face winding used for culling, or absent when double-sided.
     pub backface_culling: Option<String>,
+    /// Lights resolved for this object alone, when object lighting is on.
+    /// Absent for anything lit by the scene's own lights (world geometry, HUD).
+    pub lighting: Option<ObjectLightingSummary>,
+}
+
+/// What the object-lighting pass decided for one object.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ObjectLightingSummary {
+    /// How many lights were kept for it, out of the renderer's slots.
+    pub light_count: usize,
+    /// Total light arriving at its position, ignoring surface orientation -
+    /// the number to compare between objects to see who is lit and who is not.
+    pub received: f32,
+    /// The unlit floor this object is shaded over.
+    pub ambient: [f32; 3],
 }
 
 /// List of physics rigid bodies
@@ -505,6 +524,9 @@ pub struct InputState {
     /// Ordinary held jump request. The physics controller launches only on
     /// its rising edge and only while grounded.
     pub jump: bool,
+    /// Flat-only held lean request, -1 left to +1 right.
+    #[serde(default)]
+    pub lean: f32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -537,6 +559,7 @@ impl Default for InputState {
             pointer: None,
             crouch: false,
             jump: false,
+            lean: 0.0,
         }
     }
 }
@@ -658,6 +681,7 @@ pub struct UiStateResult {
     /// Everything the expanded use-mode readouts drew along the bottom of the
     /// shared interface canvas, in both presentations. Empty outside use mode.
     pub readout_elements: Vec<shock2vr::game_scene::DebugUiElement>,
+    pub utilities: Vec<shock2vr::game_scene::DebugUiElement>,
     /// Where the pointer last landed on the shared canvas (flat: the mouse;
     /// VR: the controller ray on the cyber-interface panel).
     pub pointer: Option<shock2vr::game_scene::DebugUiPointer>,
@@ -667,6 +691,9 @@ pub struct UiStateResult {
     pub panel_pose: Option<shock2vr::game_scene::DebugUiPanelPose>,
     /// The HUD status-message lines showing right now, oldest first.
     pub messages: Vec<String>,
+    /// The centered interstitial banner showing right now, `\n`-separated
+    /// lines as authored, or `None` when none is up.
+    pub banner: Option<String>,
     /// The station security alarm; `Some` exactly while one is up, which is
     /// when the HUD shows its badge and countdown.
     pub security_alarm: Option<shock2vr::game_scene::DebugSecurityAlarm>,
@@ -921,11 +948,14 @@ pub struct PlayerInfo {
     /// The gamesys names of the active sustained psi powers (e.g. "Inviso"),
     /// in activation order; empty when none. See `shock2vr::PlayerStateSnapshot`.
     pub active_psi_powers: Vec<String>,
+    pub radar_contacts: Vec<shock2vr::psi_sense::PsiSenseContact>,
+    pub seekersense_contacts: Vec<shock2vr::psi_sense::PsiSenseContact>,
     /// The player's persistent character sheet (primary stats, trained skills,
     /// mastered psi disciplines), accumulated from career + station training
     /// tours. `null` when the scene has no player. See
     /// `shock2vr::player_stats::PlayerStats`.
     pub stats: Option<shock2vr::player_stats::PlayerStats>,
+    pub effective_stats: Option<shock2vr::player_stats::PlayerStats>,
     /// The audio logs the player has collected (frobbed), in pickup order.
     /// Persisted in `QuestInfo`; survives level transitions and save/load. See
     /// `shock2vr::quest_info::CollectedLog`.

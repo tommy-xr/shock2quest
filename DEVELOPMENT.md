@@ -16,6 +16,11 @@
     - `save_load` - serializing, deserializing game state
     - `creature` - constants and hitboxes for creature definitions
 
+## Releases
+
+See [Publishing releases](.github/RELEASING.md) for signing setup and the manual
+release workflow. Users installing an APK should follow [INSTALL.md](INSTALL.md).
+
 ## Set up
 
 ### 1. Clone Repoo
@@ -25,12 +30,12 @@
 
 ### 2. Provide data files
 
-shock2quest reads an unmodified **25th Anniversary Remaster** install. You need
-two things from it:
+shock2quest reads an unmodified **25th Anniversary Remaster** install. Copy these from it:
 
 - `sshock2.kpf` — the base game data.
 - the `mods/` folder — the remaster's upgraded models and textures, which the
   VR hands and weapons are built against.
+- the `cutscenes/` folder, with its subfolders intact — the game's videos.
 
 Skip `sshock2ee-vault.kpf` (a bonus gallery) and the root `sshock2ee.kpf`
 (frontend-only) — nothing reads either, and together they are ~1.5 GB.
@@ -91,19 +96,103 @@ commits). Bypass in a pinch with `git push --no-verify`.
 ##### Running
 
 - `cd runtimes/desktop_runtime`
-- `cargo run --release`
+- `cargo run` (the dev profile is optimized; `--release` builds a second tree)
 
 ##### Quick Start with Cargo Aliases
 
 Alternatively, use the project's cargo aliases from the root directory:
-- `cargo dr --release` - Run desktop runtime
+- `cargo dr` - Run desktop runtime
 - `cargo dq entities --help` - Use dark_query CLI tool
 - `cargo dv --help` - Use dark_viewer tool
 
 Example:
 ```bash
-cargo dr --release --experimental teleport
+cargo run -p desktop_runtime -- --vr --experimental physical_held_items
 ```
+
+### Song explorer
+
+Open `cargo dx ui --select song/engsong.snc` (or select a `.snc` in the
+explorer's song family or Archives tab). **Play song** sends the authored start
+event; **Stop** cuts off the current WAV immediately. Event buttons queue the
+latest event for the next clip boundary. `theme ...` events persist across clip
+boundaries until another theme is selected; other events are one-shot. Restart
+clears the previous theme and selects the authored start event.
+
+The view lists section WAVs, event branches and normalized branch probabilities.
+Green marks the playing section; blue marks the branch the player actually took.
+Recent transitions show the requested event, matched/default option and selected
+weight. **Audition WAV** stops the song and plays that sample alone. Changing
+assets or tabs stops playback.
+
+For native-window capture, `--play-song --screenshot /tmp/song.png
+--screenshot-after 1` starts the selected song and captures after one second.
+Playback uses the audio device clock; these captures are not fixed-timestep.
+The installed-asset regression can be run with
+`cargo test -p dark_explorer mounted_songs -- --ignored`.
+
+### Model viewer lighting
+
+In `cargo dx ui`, expand **Lighting** above a model preview to adjust ambient
+light, the strength of three fixed spotlights, and their colors. The lights
+stay fixed as you orbit; **Reset lighting** restores ambient-only viewing.
+The rig uses the game's object-lighting shader and inverse-distance falloff.
+Unlit material passes remain independent of those controls.
+
+For repeatable previews, use `--model-ambient 0.08 --model-lights cool` with
+`--select obj/eggcl.bin`. The light preset accepts `off`, `warm`, `cool`, `green`,
+or `all`; `--screenshot /absolute/path.png` captures the result.
+
+`debug_annelid` also has white, warm, cool and green station lights. Its lamps
+and egg/grub highlights respond to **Developer → Lighting**, including object
+lighting, ambient/level intensity, brightness, ambient boost and wrap. This
+scene supplies synthetic object lights because it has no mission light table;
+use a real mission to test cell-based light selection.
+
+### Gameplay music themes
+
+Mission music is driven by `PropAmbientHacked` markers with the `MUSIC` flag.
+Entering a marker's radius selects its schema as a theme: `quiet` becomes
+`theme quiet`, `restart` becomes `theme restart`, etc. The shared song player
+retains that theme after leaving the marker and reapplies it at each WAV
+boundary, falling back to the section's default branch when unhandled. A new
+song starts fresh; standing inside a marker supplies its theme again after a
+level load. Events match complete names, case-insensitively (`quiet` and
+`quietlo`, or `begin` and `begin2`, are distinct).
+
+For example, MedSci 1 object 2014 (`music quiet turret1`) selects `quiet`;
+2026 selects `restart`, and 2013 selects `end`. These are location triggers,
+not automatic reactions to AI alertness or combat. Their musical effects come
+from each `.snc` graph: not every song supports every theme. The installed
+songs also use `quietlo`, `soft`, `bass`, `windy`, `beet`, `break`, `begin2`,
+and `begin3`. An unhandled event follows the default branch, not a guessed
+musical equivalent. Horde has no authored spatial theme markers and continues
+using each wave song's start theme; rest/preparation stop playback.
+
+The persistence behavior follows the original `sound/ambient.c` →
+`SongUtilSetTheme` → `cSongPlayer::SetTheme` / `_DoSegmentCallback` path.
+Sample offsets, branch randomness, and themes outside markers are not saved.
+
+### Flatscreen leaning
+
+Hold `Q` / `E` to lean left / right; holding both returns to center. The eye
+moves up to two SS2 feet (~61 cm), with 7 degrees of roll, over 150 ms. The
+movement collider stays put. A sphere sweep limits eye displacement and roll
+against solid geometry, including when crouched. Rendering, weapon placement,
+shots and interaction all use the same resolved eye pose. The damage collider
+is unchanged. Use mode recenters the view; pause freezes it; free camera ignores
+lean. VR keeps tracked head movement and desktop `--vr` Q/E hand controls.
+
+The debug runtime accepts `{"lean": -1.0}` / `0.0` / `1.0` through
+`POST /v1/control/input`; `/v1/info` exposes the resulting `player.camera_offset`
+and `player.camera_rotation`. Lean is transient and resets on mission load.
+
+Tune **Pause → Developer → Camera & view → Max lean (ft)** live: `flat_lean_distance`
+defaults to `2.0`, ranges from `0.0` to `4.0` SS2 feet in `0.1` steps, and takes
+effect on the next frame. `1.0` restores the original distance; `0.0` disables
+lean including roll. The maximum roll remains 7 degrees. Like other developer
+parameters, the value resets when the app restarts. The debug API can set it via
+`POST /v1/dev-params` with `{"key":"flat_lean_distance","value":2.0}`.
 
 ### Debug & developer keys
 
@@ -118,14 +207,14 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 | Key | Action | Notes |
 | --- | ------ | ----- |
 | `P` | `PathfindingTestCycle` | set start → set goal → show path |
-| `B` | `DebugCycleWeapon` | spawns and wields the next weapon (unlike the number row) |
+| `Alt+B` | `DebugCycleWeapon` | spawns and wields the next weapon (unlike the number row) |
 | `Alt+X` | `EjectClip` | magazine back to the backpack reserve; no Quest button - in VR it is the settings MFD's UNLOAD |
-| `T` / `Y` | `CycleAmmo` / `CyclePsiPower` | no Quest binding: a clip is inserted by hand, and the psi MFD's stick navigation steps the power |
-| - | `SelectPsiPower` | opens the psi power selection MFD; flat clicks the readout's power badge instead, Quest: the amp hand's *upper* face button |
+| `B` (or `T`) / `Y` | `CycleAmmo` / `CyclePsiPower` | no Quest binding: a clip is inserted by hand; the amp selector uses its hand's stick |
+| - | `SelectPsiPower` | opens the lightweight amp selector in VR world mode; flat and the cyber interface retain the power MFD |
 | `F` | `CycleGunSetting` | switch the wielded gun's fire mode (e.g. NORM / BURST); Quest: the gun hand's *upper* face button |
 | `U` | `ReadLastUnreadLog` | on Quest a free hand's *upper* face button resolves to this - see below |
 | `M` | `ToggleMap` | flat only |
-| `Tab` / `I` | `ToggleUseMode` | the cyber interface; Quest: a **short** press of left `Menu` |
+| `Tab` | `ToggleUseMode` | the cyber interface; Quest: a **short** press of left `Menu` |
 | `Space` | `Jump` | the flat key is the held jump channel, not this action; Quest: either *lower* face button |
 | `Esc` | `TogglePauseMenu` | Quest: left `Menu` held ~0.5 s, or the interface's MENU button |
 | `Alt+S` / `Alt+L` | `QuickSave` / `QuickLoad` | |
@@ -156,6 +245,54 @@ VR use mode the same bio and ammo readings appear both on the arms and on the
 interface - deliberately left alone for now (issue #1268), unlike flat, which
 does drop its compact pair.
 
+#### Left and right weapon readouts
+
+The bottom-right ammo panel carries **LEFT** and **RIGHT** selectors above its
+native weapon controls. Both show their hand's loaded rounds, or `PSI` for an
+amp; `--` means the hand has no ammo readout and cannot be selected. A cyan
+underline marks the weapon whose ammo type, condition, settings, and reload
+controls are shown below. Clicking a selector does not equip or fire anything.
+The inventory's hand slots still select the same readout.
+
+Selection follows the weapon if it changes hands. Dropping the selected weapon
+falls back to the other gun or amp. Switching weapons dismisses the old gun's
+settings MFD, while the character MFD remains open. Both presentations use the
+same tab and control rectangles; `/v1/ui.readout` exposes `select_left_hand` and
+`select_right_hand`, each with its own weapon entity ID. Empty hands are
+non-clickable and appear only in `readout_elements`.
+
+#### Character MFD and access cards
+
+The card icon beside the log button opens the collected access-card reader.
+It lists the keyring's named access regions; the cards are credentials, not
+inventory items. The adjacent **MFD** button opens the character sheet, with
+**STATS**, **TECH**, **CMBT**, and **PSI** tabs in the original right-hand panel.
+Stats and skills use arrow meters; Tech also shows installed software versions.
+Point at a stat, skill, software icon, trait, or psi discipline for its authored
+description. The Psi tab browses all five tiers and distinguishes trained powers
+using the same icon grid as the amp selector. Character-sheet browsing is
+read-only and does not change the amp's selected power or browsed tier.
+
+These controls share their layout in flat and VR. `GET /v1/ui` exposes their
+buttons and current contents in `utilities`, including `access_cards`,
+`character_stats`, `character_tab_0` through `character_tab_3`, and `psi_tier_N`.
+
+#### Query item information
+
+Select **?** in the cyber interface to arm the inspection cursor, then select
+an inventory item or a held-item readout. The left QUERY panel shows its short
+name and authored description without using, moving, or consuming the item.
+Selection returns the cursor to normal; select **?** again to cancel before
+selecting anything. An item already being dragged keeps ownership of the cursor.
+The four arrow buttons scroll by line or page, and the top-right X closes the
+reader. Unresearched items show the original research-required message until
+identified. The preview currently uses the inventory icon, not the original
+rotating 3D model.
+
+Flat and VR use the same canvas, selection logic, and text bounds. Debug UI labels
+include `inspect`, `query_title`, `query_line_up`, `query_line_down`,
+`utility_previous`, `utility_next`, and `utility_close`.
+
 #### Quest face buttons are per-hand and contextual
 
 The four face buttons are bound raw, by hand and position - lower is left `X` /
@@ -168,7 +305,7 @@ that hand holds (`shock2vr/src/hand_buttons.rs`):
 | nothing, a melee weapon, or any other item | `Jump` | `ReadLastUnreadLog` |
 | a gun | `Jump` | tap/release switches that gun's fire mode; hold ~0.5 s drops its loaded clip, with progress on its cuff meter |
 | an ammo clip | `Jump` | swap with the next compatible carried ammo type, returning the original clip to the backpack |
-| the psi amp | `Jump` | `SelectPsiPower` - the power selection MFD, in the cyber interface |
+| the psi amp | `Jump` | tap swaps current/alternate; hold 0.5 s opens its power carousel |
 
 The lower button is jump unconditionally: it is the one control a player reaches
 for with both hands full, so a held weapon must not take it away. Only the upper
@@ -211,24 +348,27 @@ bottom readouts) that opens the pause menu directly - drawn and hit-tested
 through the same readout-control list, so it is there in both presentations
 (flat's `Esc` still works too).
 
-#### The psi selection MFD captures a thumbstick
+#### Amp quick selection
 
-While the psi power selection MFD is docked - opened from the flat readout's
-power badge, or from the amp hand's upper face button in VR - **one** thumbstick
-is captured: up/down step the tier, left/right step the power inside it, and
-that stick stops driving the player until the panel closes.
+Each amp saves its own current and alternate power. Tap its upper face button
+(right B / left Y) to swap them. Hold for half a second to open its lightweight
+hologram above the amp; releasing that opening hold leaves it open. Up to three
+curved rows show purchased powers in adjacent trained tiers. Empty tiers and
+unpurchased powers are hidden. The highlighted power sits forward, and icons
+rotate through a fixed focal point as you browse (a 0.25 s eased transition).
+Corner C/A badges identify the saved current/alternate powers. Flick the **amp hand's** stick up/down to
+change tiers, or left/right to browse trained powers in that tier. That stick
+stops driving locomotion while browsing; the other hand remains available.
 
-Which stick is the one the player is not already using to hold or aim the
-weapon, so it differs by presentation:
+B/Y or that amp's trigger confirms and closes. Choosing a different power makes
+the previous current power the alternate; choosing the same power preserves the
+pair. Confirmation consumes the input through release and cannot also cast or
+swap. Dropping the amp, death, tracking loss, the cyber interface or pause cancels
+browsing. The game keeps running while the lightweight selector is open.
 
-| | captured | still drives |
-| --- | --- | --- |
-| flat | the **left** stick (arrow-key turn) | `WASD` still walks |
-| VR | the stick of the hand **not** holding the amp | the amp hand keeps aiming |
-
-Steps are edge-triggered, so a held stick moves one place, and they are the same
-`StepPsiSelection` the readout's four arrows emit - the selection applies live,
-and the panel pages to whatever tier it lands on.
+The full psi MFD is still available inside the cyber interface, with its existing
+pointer controls and thumbstick navigation. Its readout resolves the target amp's
+selection rather than a shared setting.
 
 ### Campaign difficulty
 
@@ -247,12 +387,59 @@ and replicator prices, mission object masks, and Easy ecology and hypo bonuses.
 
 ### Developer options
 
+The main menu's bottom-left build label shows `dev | <commit>` for local builds
+and `v<version> | <commit>` for release builds. Click it three times to enable
+Developer. In VR, point at the label and press/release the trigger three times.
+The extra bottom-left Developer button then appears; the pause menu's Developer
+entry is enabled too. The build label moves into the Developer menu UI while
+developer mode is active. A held press counts only once.
+
+Developer mode survives restarts via the `developer-mode` sentinel in the game
+data directory (`/sdcard/shock2quest/developer-mode` on Quest). Choose **Disable
+developer mode** on the main-menu Developer screen to remove the sentinel and
+hide those entries again. A failed write/removal leaves the current mode intact
+and displays an error. This preference is independent of campaign saves.
+
+While a mission is running, **Pause → Developer → Cheats** includes
+**Add radiation (+10)**, **Add toxin (+10)**, and **Clear radiation + toxin**.
+Repeated clicks add another 10 points, even with protective equipment equipped.
+Clear resets both stored exposure levels to zero; environmental hazards can
+expose you again after resuming. These cheats work in flatscreen and VR.
+
 The **Developer** screen (from the main menu, or the pause overlay's Developer
 page) hosts the live-tunable parameters registered in
 `shock2vr/src/dev_params.rs` - panel distance, pause dim, FOV override, and the
 free-camera switches. Values are read every frame, so a change is live on the
 next one, and the same registry is exposed over HTTP by the debug runtime
 (`GET`/`POST /v1/dev-params`) for headless runs.
+
+**Lighting → Ambient intensity** (`ambient_light_intensity`) scales the
+mission's authored world ambient floor and the fixed `0.5` ambient contribution
+on object and creature materials. It defaults to `1`, ranges from `0` to `3`
+in `0.05` steps, and resets on app restart. `0.5` halves those contributions;
+`0` removes them. Emissive contributions and runtime spotlights remain independent.
+UI, video, and explicitly fullbright world surfaces keep their existing brightness.
+
+**Lighting → Level light intensity** (`level_light_intensity`) scales baked
+world lightmaps and authored object lights, also from `0` to `3` in `0.05` steps
+with default `1`. The ambient floor still applies after this scaling; lower both
+controls to darken both baked lighting and the minimum light level. Authored
+object contributions receive this multiplier once, in addition to
+`object_light_brightness`. Ambient, emissive contributions, and runtime spotlights
+remain independent.
+
+Object lighting is enabled by default for props, creatures, held items, and gloves.
+**Lighting → Object lighting** (`object_lighting`) can disable it live for
+comparison with legacy shading. For example, POST `/v1/dev-params` with
+`{"key":"object_lighting","value":0}`; reset the parameter or set it to `1` to
+restore authored lighting. It resets to on at app restart. Debug scenes without
+world cells retain their existing shading. Quest benchmark fixtures explicitly
+override this parameter for their on/off measurements.
+
+**Lighting → Hand spotlights** (`hand_spotlights`, off by default) casts a
+spotlight along each VR hand's pointing ray, like a torch in each hand.
+`spotlight_intensity`, `spotlight_cone` (outer half-angle in degrees; the
+bright core is half of it) and `spotlight_range` tune it live.
 
 Developer parameters use category submenus. **Back** moves up one category;
 **Resume** on the pause Developer page returns directly to gameplay. Opening
@@ -266,6 +453,18 @@ Hands & zones includes gloves, support grips, clip insertion, ammo pouch,
 holsters, and backpack zones. Combat includes creature hitboxes
 (`show_hitboxes`), held melee contact volumes, and damage numbers. Bulk controls
 only change visualization flags, never fit settings or tuning values.
+
+**Visualizations → Show position** (`show_position`) displays the player's
+world X/Y/Z coordinates, updated live in flat and VR. It defaults off and
+participates in All on / All off. VR places the shared readout on an upright
+panel with lazy recentering; it is hidden while the cyber interface, pause menu,
+or death camera owns the view. Values last until app restart.
+
+**Visualizations → Physics wireframe** (`debug_physics`) toggles collider,
+contact, and joint debug drawing without restarting the mission. It defaults
+off and participates in All on / All off. Desktop and debug runtime
+`--debug-physics` starts it on; menu and HTTP changes can still turn it off
+immediately. Like other live parameters, it lasts until app restart.
 
 **Locked** contains settled tuning, hidden from the ordinary categories but
 editable when opened. HTTP access is unchanged. Initially this includes global
@@ -284,6 +483,16 @@ For persistent card placement **relative to the belt**, use
 belt and lets you save position and rotation to `assets/vr-belt-card.json`.
 Restart the game after saving; include that asset in your next Quest deploy.
 Hand-held card poses remain in the Hand grips editor (`--grip scipass`).
+
+#### Material effects gallery (`debug_nd_materials`)
+
+Run `cargo dr --mission debug_nd_materials --vr` for a walkable gallery of
+metal sparks, plasticrete dust/chips, glass shards, blood, goo, and electrical
+arcs/glow. Effects repeat automatically; metal and plasticrete decal samples
+sit below their stations. Omit `--vr` for flatscreen, or use `cargo dbgr` for
+headless capture. These are preview effects using installed remaster art;
+campaign impacts and extra material passes are separate work. See
+[the gallery notes](projects/debug-nd-materials.md).
 
 #### Glove fit check (`debug_gloves`)
 
@@ -345,6 +554,43 @@ Glove size is deliberately an independent fit experiment and
 does not change the world, stereo separation, tracking conversion or saved grips.
 
 
+#### Psi amp fit check (`debug_psi_fit`)
+
+Open **Developer → Scenes → debug_psi_fit** on Quest. Like the glove fit
+scene, it shows your room through passthrough, with the amp's authored hand
+model on each controller. There are no enemies or casting interactions;
+the previews stay attached without squeezing. Hold Menu, then open
+**Developer → Hands & gloves** to tune:
+
+| Label | HTTP key | Meaning |
+| --- | --- | --- |
+| Psi amp forward cm | `psi_amp_forward_cm` | Offset from the current placement; positive moves forward along hand-local -Z, negative pulls back. Default 2, ±20 cm, 0.5 cm steps. |
+| Psi amp up cm | `psi_amp_up_cm` | Offset along hand-local +Y, rotating with the controller. Default 0, ±20 cm, 0.5 cm steps. |
+| Psi amp scale | `psi_amp_scale` | Uniform size about the hand origin. Default 0.40, range 0.25–2, 0.01 steps. |
+| Psi amp left roll deg | `psi_amp_left_roll_deg` | Left-hand rotation about local forward (−Z), around the hand origin. Default +90°, range −180° to 180°, 5° steps. |
+| Psi amp right roll deg | `psi_amp_right_roll_deg` | Right-hand rotation about local forward (−Z), around the hand origin. Default −90°, range −180° to 180°, 5° steps. |
+| Psi amp left yaw deg | `psi_amp_left_yaw_deg` | Left-hand rotation about local up (+Y), after roll. Default 0°, range −180° to 180°, 5° steps. |
+| Psi amp right yaw deg | `psi_amp_right_yaw_deg` | Right-hand rotation about local up (+Y), after roll. Default 0°, range −180° to 180°, 5° steps. |
+
+These seven controls also apply to the held amp in normal VR gameplay, without
+re-equipping. They reset on app restart; record your preferred values before
+quitting. Defaults use the tuned 0.40 scale and +2 cm forward, with +90° left /
+−90° right roll and zero yaw as the starting grip alignment. Forward/up offsets
+stay on the controller axes. Scale includes the amp's authored hand mesh; it is visual
+tuning and does not resize collision geometry.
+Normal flatscreen viewmodels and dropped amps are unaffected.
+
+**Hands & gloves → Fit experiment → Fit passthrough** switches between the
+room and a black background. The amp scene always uses gameplay's aim pose;
+the glove scene's grip-pose and size previews do not apply here. Global glove
+forward calibration still applies, matching gameplay. Compare both hands at
+several orientations and tune position separately from size. Physical alignment
+needs an in-headset check.
+
+For synthetic desktop captures: `cargo dbgr --mission debug_psi_fit --vr`.
+Desktop/debug show black behind the models. The scene is also visible in flat
+debug presentation, using the same hand transforms.
+
 #### Testing VR weapon handling at different stats
 
 Open `debug_weapons` from the Developer scene list and pick up a gun from the
@@ -377,11 +623,43 @@ it. The axis gains still apply to both baseline and extra recoil; supported
 shots retain baseline recoil regardless of this setting. Downward weight is
 separate. Return all four scales to `1` to restore the profiles.
 
+**Flat scale** is the flatscreen equivalent, and the only recoil row that is
+flat-*specific*: the same spring drives the first-person viewmodel, which
+kicks back along its own barrel and pitches its muzzle up before settling. It
+ranges from `0.25` to `5` in `0.25` steps (default `1`) and rescales the kick
+together with its travel caps, so the knob keeps biting at the top of its
+range. Flat holds the gun in both hands, so the one-hand penalty never applies
+there; **Back/Pitch/Yaw scale**, Strength and Agility still do, underneath.
+The flat kick is presentation only - the camera and the crosshair the shot
+actually follows never move - so it cannot change your accuracy. Note that at
+AGI `6` the authored angular kick is zero (as in the original), leaving only
+kickback: drop **Gun AGI ovrd** to `1` to see muzzle rise at all.
+
+**Flat aim follow** (`flat_recoil_aim`, 0-1, step 0.1, default 1) decides how
+much of that kick the *shot* rides. VR shots leave along the physically
+displaced muzzle, which is why firing faster than the spring recovers walks
+your aim up; flat reproduces that by bending the crosshair fire ray by the
+viewmodel's own kick. `0` restores purely cosmetic recoil (the shot always
+leaves along the crosshair). A settled gun fires exactly on the crosshair at
+every setting, so the reticle only ever lies while the gun is visibly
+displaced - and the camera never moves. This is a **balance-affecting** knob,
+unlike **Flat scale**: it stacks on top of the existing weapon-skill spread.
+
 Quest enables physical held guns, downward gun weight, and particles by default.
 Desktop/debug VR testing needs
 `--vr --experimental physical_held_items,physical_gun_weight`. Automated tests
 can set the same knobs through `game.devParams.set("gun_strength_override", 3)`
 and `game.devParams.set("gun_agility_override", 1)`; `reset(key)` restores `0`.
+
+Physical VR weapons recover if an obstruction keeps their grip more than
+0.5 metres from its target for 150 ms. Recovery waits for valid head/controller
+tracking, a held grip, a clear chest-to-grip corridor, and clearance for the
+entire weapon at its intended orientation. A blocked destination stays blocked;
+bring the controller back into clear space. The same weapon returns immediately,
+with a subtle 180 ms cyan particle trail and no teleport-derived melee strike.
+The deterministic regression uses the button post in `debug_interactions`:
+`tools/shock2-sdk/test/physical-held-recovery.e2e.test.ts` snags a rifle, walks
+past the post, and checks recovery and retained weapon state.
 
 **Free camera** detaches the view from the player: the camera stays where it
 was while the pawn stands still, so you can watch the simulation from outside
@@ -414,6 +692,39 @@ locomotion does.
 Headlessly, `GET /v1/camera` reports whether the camera is detached and the
 pose it is rendering from, so a test can check what the camera did without
 reading pixels - see `tools/shock2-sdk/test/free-camera.e2e.test.ts`.
+
+#### Throw tuning
+
+**Developer → Weapons → Throwing** contains the live, unlocked throw controls.
+They appear in both the main-menu and pause Developer pages introduced in #1541,
+and are also available through `game.devParams.set(key, value)` or
+`POST /v1/dev-params`. Values reset on app restart; Reset restores each default.
+Launch settings apply on the next release, smoothing on the next motion sample,
+and damage settings at impact. Damage window is selected when releasing.
+
+| Key | Default | Controls |
+| --- | --- | --- |
+| `throw_speed_scale` | 1 | Overall hand-speed gain, before the speed cap |
+| `throw_spin_scale` | 1 | Overall angular-speed gain, before the spin cap |
+| `throw_max_speed` | 12 | Maximum hand-derived speed in world units/s; player motion is added afterward |
+| `throw_max_spin` | 25 | Maximum spin in radians/s |
+| `throw_smoothing_ms` | 50 | Recent motion averaging window; 0 uses the latest sample |
+| `throw_strength_override` | 0 | 0 follows the character sheet; 1–6 tests Strength without changing saved stats |
+| `throw_strength_bonus` | 0.25 | Extra speed at Strength 6, interpolated from no bonus at Strength 1 |
+| `throw_weight_exponent` | 0.25 | Slowdown for objects heavier than the reference mug; 0 removes it |
+| `throw_strength_weight_relief` | 0.5 | Fraction of heavy-object slowdown removed at Strength 6 |
+| `throw_min_speed` | 1.5 | Minimum hand speed in world units/s to arm impact damage |
+| `throw_impact_min_speed` | 2 | Minimum closing speed for damage |
+| `throw_damage_speed` | 6 | Reference-mug closing speed that reaches its damage cap |
+| `throw_organic_cap` | 2 | Whole HP per flesh-target hit, adjustable from 0 to 2 |
+| `throw_inorganic_cap` | 1 | Whole HP per other-material hit, adjustable from 0 to 1 |
+| `throw_damage_window` | 5 | Seconds after release during which the first contact can damage |
+
+Start with speed/spin scale and smoothing to tune release feel, then compare
+Strength 1 and 6 with the same object. The mug uses authored mass 30 as the
+reference weight; these are Dark units, not kilograms. First contact spends a
+throw even against scenery. Tracking validity, teleport rejection, and the
+one-impact rule stay fixed.
 
 #### 3b. Oculus Quest 2
 
@@ -449,15 +760,9 @@ reading pixels - see `tools/shock2-sdk/test/free-camera.e2e.test.ts`.
 - Make sure [Developer Mode is enabled on your Quest device](https://www.reddit.com/r/OculusQuest/comments/17sa8n6/tutorial_quest_3_developer_mode_4_easy_steps/)
 - Make sure `adb` is installed and working. With Oculus connected, run `adb devices` and verify your headset shows up
 - Tweak `runtimes/oculus_runtime/set_up_android_sdk.sh` to match your paths
-- Before running for the first time, you'll need to copy over the System Shock 2
-  data files. From your install directory (~1.2 GB):
-  ```sh
-  adb shell mkdir -p /sdcard/shock2quest/mods
-  adb push sshock2.kpf /sdcard/shock2quest/
-  for f in sshock2ee 400 shtup scp patch_ext; do
-    adb push "mods/$f.kpf" /sdcard/shock2quest/mods/
-  done
-  ```
+- Before running for the first time, copy your Remaster KPF archives, mods, and
+  cutscenes to the headset. Follow [Copy your game files](INSTALL.md#copy-your-game-files)
+  for macOS/Linux and Windows commands.
   The runtime switches to the remaster as soon as `sshock2.kpf` is present, and
   does not mount the legacy `.crf` archives at all in that mode — so pushing
   these over an older install is safe and needs no cleanup first.
@@ -522,3 +827,70 @@ installs + launches over the air; `adb logcat` streams logs wirelessly.
   `adb connect` per session, or let Meta Quest Developer Hub manage the
   connection (it auto-reconnects and can keep the headset awake).
 - APK push is slower over Wi-Fi than USB; fine for the normal iterate loop.
+
+### AI hearing and distractions
+
+AI hearing receives player gunshots, player footsteps/landings, and qualifying
+player-caused material impacts (held weapons, released props, and player-fired
+projectiles). Creature footsteps, voices, and enemy projectile impacts play
+normally without generating investigation cues. Audible playback and AI hearing
+are separate; music, narration, ambient audio, and other schema sounds do not
+alert enemies merely because they play.
+
+| Noise | Base range (world units), before listener acuity and cover |
+| --- | --- |
+| Gunshot | 20 |
+| Material impact | 8 |
+| Walking | 6 at Agility 1, falling linearly to 3 at Agility 6 |
+| Crouching | Half the walking range |
+| Landing | 1.5 times the walking/crouching range |
+
+These source ranges and the Agility/cover curves are gameplay tuning, not a
+claim of exact original-engine parity. `P$AI_Hearin` uses the original default
+range multipliers: 0 (deaf), 0.25, 0.65, 1, 1.5, 3 for ratings 0–5. An absent
+property means normal hearing (rating 3). Three rays toward the listener sample
+solid cover, sharing the explosion ray filtering. Full cover reduces range to
+25%; partial cover interpolates toward full range. This approximates muffling,
+not sound paths around corners or a room/portal acoustic simulation.
+
+A heard noise supplies the landing/firing/footstep position to the existing AI
+investigation behavior. Each fresh heard cue renews the loss-of-contact timer,
+including when the AI is already alerted. On arrival, the monster stops and scans
+rather than attacking the empty location. Seeing the player again resumes pursuit/combat.
+The player can throw a cup away from their hiding place to draw a monster there.
+Released props use pre-solve relative contact speed and the existing impact
+sound gate (0.1 world units/s, 0.15 s cooldown per contact partner), independently
+of throw damage. Contacts below that threshold and `NO_COLLISION_SOUND` props are
+silent. Impact noises notify AI only after a sound sample resolves and plays. A rebound may clatter again after the cooldown. Flat inventory tosses
+also use this sound path while retaining their existing speed/damage behavior.
+
+During pursuit/search, mobile monsters can also pick up the player's recent
+scent after reaching their current seen/heard destination. A mission-local buffer
+holds at most 200 grounded positions, sampled every 0.1 simulation seconds with
+nearby samples merged. Scent lasts 20 seconds; pickup range fades from 2.5 to
+0.75 world units. A solid-cover ray must be clear. Idle monsters do not acquire
+scent, and scent does not interrupt travel toward a thrown distraction.
+
+The first pickup chooses the freshest nearby point. Later pickups follow newer
+points in order, each discovered locally after reaching the previous goal. There
+is no access to remote trail points or the unseen player's live position. Sight
+and audible cues keep their existing priority; a trail gap or expiry ends scent
+tracking and leaves the normal search/decay behavior. Trail age and each monster's
+tracking cursor/destination survive save/load. These are initial tuning constants;
+Agility/hearing affect sound detection, not scent lifetime or range.
+
+The acoustic regression tests cover hearing ratings, cover, Agility, and crouch;
+SDK scenarios exercise real footsteps, gunfire, and thrown-cup audio/investigation.
+Footstep pacing retains its existing limits: tracked room-scale head movement
+alone does not move the pawn or generate steps.
+
+### VR thigh holsters
+
+Both left and right thigh holsters are available from the start, independently
+of O/S upgrades. Pack-Rat adds three backpack slots only. Either hand can stow
+a melee weapon, compact pistol, or psi amp in either holster with a deliberate release,
+and retrieve it with a fresh squeeze.
+
+The cyber interface's left and right paperdoll arm wells show the corresponding
+holstered items. They are read-only storage indicators; the weapon selectors
+below still operate on the items actually held in each hand.

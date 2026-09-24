@@ -91,15 +91,26 @@ impl ZipAssetPath {
             }
             asset_to_path.insert(relative.to_owned(), full.clone());
             let base = relative.rsplit('/').next().unwrap_or(relative);
-            if collapse_paths {
+            // A translation (`intrface/german/anim_1.pcx`) only answers to its
+            // full path: as a bare-name alias it could shadow the English file.
+            // German is the only translation the archives ship.
+            let localized = relative.split('/').any(|dir| dir == "german");
+            if collapse_paths && !localized {
                 asset_to_path
                     .entry(base.to_owned())
                     .or_insert_with(|| full.clone());
             }
             if let Some(namespace) = namespace {
+                // Preserve subdirectories for relative material includes;
+                // retain basename aliases used by bitmap/interface callers.
                 asset_to_path
-                    .entry(format!("{namespace}/{base}"))
-                    .or_insert(full);
+                    .entry(format!("{namespace}/{relative}"))
+                    .or_insert_with(|| full.clone());
+                if !localized {
+                    asset_to_path
+                        .entry(format!("{namespace}/{base}"))
+                        .or_insert(full);
+                }
             }
         }
         Box::new(ZipAssetPath {
@@ -160,6 +171,16 @@ mod tests {
     use crate::test_support::write_archive;
     use engine::assets::asset_paths::AssetPath;
 
+    #[test]
+    fn model_family_mounts_expose_qualified_material_keys() {
+        let root = crate::test_support::TempDir::new("qualified-model-materials");
+        let archive = root.path().join("models.zip");
+        write_archive(&archive, &[("mesh/txt16/creature.mtl", b"mesh material")]);
+        let mount = crate::mount_family(archive.to_string_lossy().into_owned(), "mesh/", "mesh");
+        assert!(mount.exists(String::new(), "mesh/txt16/creature.mtl".into()));
+        assert!(mount.exists(String::new(), "txt16/creature.mtl".into()));
+    }
+
     /// `entries()` reports every registered lookup key - each file once as a
     /// primary mount-relative key, plus its basename/namespace aliases marked
     /// `is_alias` - all pointing at the real archive entry serving the bytes.
@@ -210,6 +231,12 @@ mod tests {
                     is_alias: true,
                 },
                 AssetEntry {
+                    key: "obj/txt16/foo.pcx".to_owned(),
+                    source: archive.clone(),
+                    entry_name: "OBJ/txt16/Foo.PCX".to_owned(),
+                    is_alias: true,
+                },
+                AssetEntry {
                     key: "txt16/foo.pcx".to_owned(),
                     source: archive.clone(),
                     entry_name: "OBJ/txt16/Foo.PCX".to_owned(),
@@ -217,6 +244,31 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// A translated file must not answer to the bare name its English original
+    /// uses: patch_ext ships `INTRFACE/german/ANIM_1.PCX` but no English one.
+    #[test]
+    fn localized_files_register_no_basename_alias() {
+        let root = crate::test_support::TempDir::new("zip-localized");
+        let archive = root.path().join("patch_ext.kpf");
+        write_archive(
+            &archive,
+            &[
+                ("INTRFACE/german/ANIM_1.PCX", b"german frame"),
+                ("vbriefs/english/brief1.wav", b"english brief"),
+            ],
+        );
+        let mount = ZipAssetPath::with_prefix_opts(
+            archive.to_string_lossy().into_owned(),
+            "",
+            true,
+            Some("intrface"),
+        );
+        assert!(!mount.exists(String::new(), "anim_1.pcx".into()));
+        assert!(!mount.exists(String::new(), "intrface/anim_1.pcx".into()));
+        assert!(mount.exists(String::new(), "intrface/german/anim_1.pcx".into()));
+        assert!(mount.exists(String::new(), "brief1.wav".into()));
     }
 
     /// A mount that registers no basename aliases (`collapse_paths: false`,

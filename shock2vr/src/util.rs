@@ -362,12 +362,15 @@ pub mod render_source {
     pub const HIT_FEEDBACK: &str = "hit_feedback";
     /// Floating damage readouts, when the `damage_numbers` dev param is on.
     pub const DAMAGE_NUMBERS: &str = "damage_numbers";
-    /// The cyber interface's own rim vignette, eased in/out with its
-    /// entry/exit ramp - layered alongside (not merged with) [`HIT_FEEDBACK`],
-    /// so a hit still reads while the interface is open.
-    pub const USE_MODE_VIGNETTE: &str = "use_mode_vignette";
     /// The Menu button's hold-progress ring, promising the pause menu.
     pub const MENU_HOLD_RING: &str = "menu_hold_ring";
+    /// The `show_position` readout's VR panel. Labelled so the pause/death
+    /// filters drop it exactly as they drop the flat readout with the rest of
+    /// the per-eye scene - a debug overlay must not float in front of the
+    /// pause menu, or drift by while the death camera falls.
+    pub const DEBUG_OVERLAY: &str = "debug_overlay";
+    /// VR status lines and banners; hidden with flat HUD while a menu owns input.
+    pub const GAMEPLAY_HUD: &str = "gameplay_hud";
 }
 
 /// A tag that records only which render path produced an object.
@@ -382,6 +385,16 @@ pub fn render_source_tag(source: &str) -> Rc<SceneObjectDebugTag> {
 pub fn tag_render_source(objects: &mut [SceneObject], source: &str) {
     let tag = render_source_tag(source);
     for object in objects {
-        object.set_debug_tag(Some(tag.clone()));
+        // A render-path label must retain mesh/entity provenance supplied by
+        // the producer (e.g. gloves among the hand HUD and pointer draws).
+        let tag = object.debug_tag().map_or_else(
+            || tag.clone(),
+            |existing| {
+                let mut existing = existing.clone();
+                existing.source = tag.source.clone();
+                Rc::new(existing)
+            },
+        );
+        object.set_debug_tag(Some(tag));
     }
 }

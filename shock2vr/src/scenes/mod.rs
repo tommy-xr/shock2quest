@@ -34,11 +34,11 @@ pub mod debug_ladder;
 pub mod debug_map;
 pub mod debug_melee;
 pub mod debug_minimal;
+pub mod debug_nd_materials;
 pub mod debug_particles;
 pub mod debug_protocol_droid;
 pub mod debug_psi;
 pub mod debug_ragdoll;
-pub mod debug_teleport;
 pub mod debug_turret;
 pub mod debug_weapons;
 pub mod developer;
@@ -64,7 +64,6 @@ pub use debug_particles::DebugParticlesScene;
 pub use debug_protocol_droid::DebugProtocolDroidScene;
 pub use debug_psi::create_debug_psi_scene;
 pub use debug_ragdoll::DebugRagdollScene;
-pub use debug_teleport::DebugTeleportScene;
 pub use debug_turret::DebugTurretScene;
 pub use debug_weapons::create_debug_weapons_scene;
 pub use developer::DeveloperScene;
@@ -178,9 +177,6 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     ("debug_ladder", create_debug_ladder_scene),
     ("debug_psi", create_debug_psi_scene),
     ("debug_annelid", create_debug_annelid_scene),
-    ("debug_teleport", |global, options, assets, audio| {
-        Box::new(DebugTeleportScene::create(global, options, assets, audio))
-    }),
     ("debug_camera", DebugCameraScene::new),
     ("debug_protocol_droid", DebugProtocolDroidScene::new),
     ("debug_turret", DebugTurretScene::new),
@@ -188,6 +184,7 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
         Box::new(DebugHudScene::new())
     }),
     ("debug_gloves", DebugGlovesScene::new),
+    ("debug_psi_fit", DebugGlovesScene::psi_amp),
     ("debug_hand_poses", DebugHandPosesScene::new),
     ("debug_joint_constraint", DebugJointConstraintScene::new),
     ("debug_map", |_global, _options, _assets, _audio| {
@@ -195,6 +192,10 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     }),
     ("debug_ragdoll", DebugRagdollScene::new),
     ("debug_particles", DebugParticlesScene::new),
+    (
+        "debug_nd_materials",
+        debug_nd_materials::create_debug_nd_materials_scene,
+    ),
     ("debug_hitbox", DebugHitboxScene::new),
 ];
 
@@ -622,7 +623,12 @@ mod tests {
             );
         }
         // A few the docs promise by name, so a rename shows up here.
-        for expected in ["debug_ragdoll", "debug_hud", "debug_weapons"] {
+        for expected in [
+            "debug_ragdoll",
+            "debug_hud",
+            "debug_weapons",
+            "debug_nd_materials",
+        ] {
             assert!(names.contains(&expected), "'{expected}' is missing");
         }
         // Nothing else answers to a debug name: an unknown one is not a scene,

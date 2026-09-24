@@ -48,10 +48,13 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 // the Navy door's tripwire (217) switches on a marker literally named
 // "SendToMarines" yet carrying P$Service=1 (Navy): a retail data misnomer - the
 // engine follows P$Service, not the name. Asserting Navy here guards that.
+// Normal difficulty, base END/PSI 1, no unlocked psi tier. Choosing a
+// branch changes the career bit; tour rewards change the character sheet.
+const STARTING_POOLS = { hp: 35, psi: 15 };
 const CAREER_DOORS = {
-  marine: { trip: [-2.4990878, 24.0, 68.16256] as Vec3, bit: "career_marine", maxHp: 45, maxPsi: 20 },
-  navy: { trip: [0.5085414, 24.0, 84.064316] as Vec3, bit: "career_navy", maxHp: 35, maxPsi: 35 },
-  osa: { trip: [16.857706, 24.0, 80.74739] as Vec3, bit: "career_osa", maxHp: 30, maxPsi: 60 },
+  marine: { trip: [-2.4990878, 24.0, 68.16256] as Vec3, bit: "career_marine" },
+  navy: { trip: [0.5085414, 24.0, 84.064316] as Vec3, bit: "career_navy" },
+  osa: { trip: [16.857706, 24.0, 80.74739] as Vec3, bit: "career_osa" },
 } as const;
 
 // station.mis tour tripwire (741) - switches on tour marker 125 (ChooseMission).
@@ -150,11 +153,11 @@ test(
     assert.equal(await game.quests.get("career_marine"), "complete", "Marine career bit should be set");
     assert.equal(await game.quests.get("career_navy"), "unknown", "Navy bit should be clear");
     assert.equal(await game.quests.get("career_osa"), "unknown", "OSA bit should be clear");
-    // Marine loadout applied on the station load.
-    assert.equal(info.player.hit_points, 45, "first Marine selection starts at full career HP");
-    assert.equal(info.player.max_hit_points, 45, "Marine deploys with 45 max HP");
-    assert.equal(info.player.psi_points, 20, "first Marine selection starts at full career psi");
-    assert.equal(info.player.max_psi_points, 20, "Marine deploys with 20 max psi");
+    // Career selection preserves the stat-derived starting pools.
+    assert.equal(info.player.hit_points, STARTING_POOLS.hp, "first Marine selection starts at full career HP");
+    assert.equal(info.player.max_hit_points, STARTING_POOLS.hp, "Marine selection preserves base maximum HP");
+    assert.equal(info.player.psi_points, STARTING_POOLS.psi, "first Marine selection starts at full career psi");
+    assert.equal(info.player.max_psi_points, STARTING_POOLS.psi, "Marine selection preserves base maximum psi");
 
     // #453: the persistent character sheet exists and starts at baseline (no
     // tours completed yet). On `main` this field is absent, so `base` is
@@ -200,7 +203,7 @@ test(
     // Step 2: tours 1 and 2 each set exactly the next training_year bit, loop
     // back to station.mis, and grant the tour-0 reward for that Marine year
     // (#453). hp/psi are unchanged by these grants (they touch STR/skills), so
-    // the loadout stays 45/20 - the observable change is now in player.stats.
+    // the pools stay 35/15 - the observable change is now in player.stats.
     await tripAndArrive(game, TOUR_TRIP, 20);
     info = await game.info();
     assert.equal(info.mission.toLowerCase(), "station.mis", "tour 1 (year < 4) should loop back to station.mis");
@@ -213,8 +216,8 @@ test(
     assert.ok(info.player.stats, "player.stats present after tour 1");
     assert.equal(info.player.stats.strength, baseStr + 2, "#453: tour 1 grants +2 Strength (Mission1)");
     assert.deepEqual(info.player.stats.granted_years, [1], "tour 1 records year 1 granted");
-    assert.equal(info.player.max_hit_points, 45, "tour 1 leaves max HP unchanged (grant is STR)");
-    assert.equal(info.player.max_psi_points, 20, "tour 1 leaves max psi unchanged");
+    assert.equal(info.player.max_hit_points, STARTING_POOLS.hp, "tour 1 leaves max HP unchanged (grant is STR)");
+    assert.equal(info.player.max_psi_points, STARTING_POOLS.psi, "tour 1 leaves max psi unchanged");
     await assertStagedEntity(
       game,
       "Marines 4",
@@ -283,8 +286,8 @@ test(
     );
     // Career and loadout survive the whole chain.
     assert.equal(await game.quests.get("career_marine"), "complete", "Marine career should survive deploy");
-    assert.equal(info.player.max_hit_points, 45, "Marine max HP should survive deploy");
-    assert.equal(info.player.max_psi_points, 20, "Marine max psi should survive deploy");
+    assert.equal(info.player.max_hit_points, STARTING_POOLS.hp, "Marine max HP should survive deploy");
+    assert.equal(info.player.max_psi_points, STARTING_POOLS.psi, "Marine max psi should survive deploy");
     // #453: the cumulative Marine tour-0 sheet survives the deploy into MedSci1.
     assert.ok(info.player.stats, "player.stats present at MedSci1");
     assert.equal(info.player.stats.strength, baseStr + 2, "cumulative +2 STR at MedSci1 (Mission1)");
@@ -342,16 +345,16 @@ test(
     // marker (P$Service=1). Correct engine behavior yields the Navy career.
     const navy = await enlist("navy");
     assert.equal(navy.bit, "complete", "Navy door should set career_navy (despite the 'SendToMarines' misnomer)");
-    assert.equal(navy.hitPoints, CAREER_DOORS.navy.maxHp, "Navy starts at full career HP");
-    assert.equal(navy.maxHp, CAREER_DOORS.navy.maxHp, "Navy deploys with 35 max HP");
-    assert.equal(navy.psiPoints, CAREER_DOORS.navy.maxPsi, "Navy starts at full career psi");
-    assert.equal(navy.maxPsi, CAREER_DOORS.navy.maxPsi, "Navy deploys with 35 max psi");
+    assert.equal(navy.hitPoints, STARTING_POOLS.hp, "Navy starts at full career HP");
+    assert.equal(navy.maxHp, STARTING_POOLS.hp, "Navy selection preserves base maximum HP");
+    assert.equal(navy.psiPoints, STARTING_POOLS.psi, "Navy starts at full career psi");
+    assert.equal(navy.maxPsi, STARTING_POOLS.psi, "Navy selection preserves base maximum psi");
 
     const osa = await enlist("osa");
     assert.equal(osa.bit, "complete", "OSA door should set career_osa");
-    assert.equal(osa.hitPoints, CAREER_DOORS.osa.maxHp, "OSA starts at full career HP");
-    assert.equal(osa.maxHp, CAREER_DOORS.osa.maxHp, "OSA deploys with 30 max HP");
-    assert.equal(osa.psiPoints, CAREER_DOORS.osa.maxPsi, "OSA starts at full career psi");
-    assert.equal(osa.maxPsi, CAREER_DOORS.osa.maxPsi, "OSA deploys with 60 max psi");
+    assert.equal(osa.hitPoints, STARTING_POOLS.hp, "OSA starts at full career HP");
+    assert.equal(osa.maxHp, STARTING_POOLS.hp, "OSA selection preserves base maximum HP");
+    assert.equal(osa.psiPoints, STARTING_POOLS.psi, "OSA starts at full career psi");
+    assert.equal(osa.maxPsi, STARTING_POOLS.psi, "OSA selection preserves base maximum psi");
   },
 );

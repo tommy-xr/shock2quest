@@ -37,10 +37,8 @@ pub struct InteractionContext<'a> {
     pub input: &'a InputContext,
     pub player_pos: Vector3<f32>,
     pub player_rotation: Quaternion<f32>,
-    pub head_rotation: Quaternion<f32>,
-    /// Eye height above `player_pos` in SS2 units - crouch-aware, so the flat
-    /// controller's shot/viewmodel origin follows the actual camera.
-    pub eye_height: f32,
+    /// Shared pawn-space eye for flat rendering, aiming and weapon placement.
+    pub flat_eye: crate::death_camera::EyePose,
     pub step_dt: f32,
     pub support_enabled: bool,
 }
@@ -116,6 +114,19 @@ pub trait PlayerInteraction {
         false
     }
 
+    /// Recoil's deflection of the flat fire ray off the camera axis, in
+    /// radians (+x right, +y up) - what the reticle shifts by. VR aims with the
+    /// gun itself and has no crosshair to deflect.
+    fn flat_aim_bias(&self) -> cgmath::Vector2<f32> {
+        cgmath::vec2(0.0, 0.0)
+    }
+
+    /// Kick a firing weapon's presentation-owned recoil spring. VR kicks the
+    /// held rigid body instead (`PhysicsWorld::kick_held_gun`), so only the
+    /// flat viewmodel implements this.
+    fn kick_viewmodel(&mut self, _entity: EntityId, _impulse: crate::weapon_recoil::RecoilImpulse) {
+    }
+
     /// Primary palm anchor in scaled held-model coordinates, when fitted.
     fn held_grip_anchor(&self, _entity: EntityId) -> Option<Vector3<f32>> {
         None
@@ -145,11 +156,12 @@ pub trait PlayerInteraction {
         _asset_cache: &mut AssetCache,
         _world: &World,
         _use_mode: bool,
+        _lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<SceneObject> {
         Vec::new()
     }
 
-    /// Hand-mounted spotlights (VR enhanced-lighting experiment).
+    /// Hand-mounted spotlights (`hand_spotlights` dev param).
     fn hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
         Vec::new()
     }
@@ -1139,6 +1151,18 @@ impl PlayerInteraction for VrInteraction {
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
         self.update_support(ctx);
+        for (i, hand) in [&mut self.left_hand, &mut self.right_hand]
+            .into_iter()
+            .enumerate()
+        {
+            if ctx
+                .input
+                .pose_tracking
+                .is_some_and(|p| !p.head || !p.hands[i])
+            {
+                hand.reset_throw_motion();
+            }
+        }
         let left_held_entity = self.left_hand.get_held_entity();
         // Read both positions from this frame before either hand updates, so
         // native-toxin self-use has the same distance in either hand.
@@ -1260,6 +1284,7 @@ impl PlayerInteraction for VrInteraction {
         asset_cache: &mut AssetCache,
         world: &World,
         use_mode: bool,
+        lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<SceneObject> {
         let mut glove_slot = self.glove_renderer.borrow_mut();
         let mut glove_renderer = glove_slot
@@ -1304,6 +1329,7 @@ impl PlayerInteraction for VrInteraction {
                     )
                 }),
                 self.visual_hands[index],
+                lighting,
             ));
         }
         if self.grip_overlay {
@@ -1436,18 +1462,24 @@ impl PlayerInteraction for VrInteraction {
         objs
     }
 
-    fn hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
+    fn hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
         let mut lights = Vec::new();
-        if options.experimental_features.contains("enhanced_lighting") {
+        if crate::dev_params::get_bool(crate::dev_params::HAND_SPOTLIGHTS) {
+            let cone = crate::dev_params::get(crate::dev_params::SPOTLIGHT_CONE);
             for hand in [&self.right_hand, &self.left_hand] {
                 let dir = hand.get_rotation() * Vector3::new(0.0, 0.0, -1.0);
                 lights.push(SpotLight {
                     position: hand.get_position(),
                     direction: dir.normalize(),
-                    color_intensity: Vector4::new(1.0, 1.0, 0.8, 2.0),
-                    inner_cone_angle: 15.0_f32.to_radians(),
-                    outer_cone_angle: 30.0_f32.to_radians(),
-                    range: 10.0,
+                    color_intensity: Vector4::new(
+                        1.0,
+                        1.0,
+                        0.8,
+                        crate::dev_params::get(crate::dev_params::SPOTLIGHT_INTENSITY),
+                    ),
+                    inner_cone_angle: (cone / 2.0).to_radians(),
+                    outer_cone_angle: cone.to_radians(),
+                    range: crate::dev_params::get(crate::dev_params::SPOTLIGHT_RANGE),
                 });
             }
         }
@@ -1575,8 +1607,8 @@ impl PlayerInteraction for FlatInteraction {
             &ctx.input.right_hand,
             ctx.player_pos,
             ctx.player_rotation,
-            ctx.head_rotation,
-            ctx.eye_height,
+            ctx.flat_eye,
+            ctx.step_dt,
             ctx.world,
             ctx.physics,
         );
@@ -1621,6 +1653,10 @@ impl PlayerInteraction for FlatInteraction {
         (self.controller.wielded_entity() == Some(entity_id)).then_some(Handedness::Right)
     }
 
+    fn kick_viewmodel(&mut self, entity: EntityId, impulse: crate::weapon_recoil::RecoilImpulse) {
+        self.controller.kick(entity, impulse);
+    }
+
     fn wield(&mut self, entity_id: EntityId) -> Vec<VirtualHandEffect> {
         self.controller.wield(entity_id)
     }
@@ -1631,6 +1667,10 @@ impl PlayerInteraction for FlatInteraction {
 
     fn flat_aim_ray(&self) -> Option<(Point3<f32>, Vector3<f32>)> {
         self.controller.aim_ray()
+    }
+
+    fn flat_aim_bias(&self) -> cgmath::Vector2<f32> {
+        self.controller.aim_bias()
     }
 }
 
@@ -1698,8 +1738,7 @@ mod tests {
             input,
             player_pos: vec3(0.0, 0.0, 0.0),
             player_rotation: identity(),
-            head_rotation: identity(),
-            eye_height: 1.04,
+            flat_eye: crate::death_camera::EyePose::flat(1.04, identity()),
             step_dt: 1.0 / 60.0,
             support_enabled: true,
         }
@@ -2049,7 +2088,7 @@ mod tests {
         let effects = interaction.update(&context(&world, &physics, &input));
         assert_eq!(interaction.held_entities(), (None, None));
         assert!(effects.iter().any(|effect| matches!(
-            effect, VirtualHandEffect::DropItem { entity_id } if *entity_id == item
+            effect, VirtualHandEffect::DropItem { entity_id, .. } if *entity_id == item
         )));
         assert!(!effects.iter().any(|effect| matches!(
             effect, VirtualHandEffect::HoldItem { entity_id } if *entity_id == item

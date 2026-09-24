@@ -1,19 +1,28 @@
 use std::collections::HashMap;
 
 use cgmath::{Vector3, vec3};
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use shipyard::{EntityId, Get, View, World};
 
-use crate::{
-    PresentationMode,
-    mission::{GlobalPresentationMode, stim_response::contact_stim_damage},
-    physics::PhysicsWorld,
-};
+use crate::{mission::stim_response::contact_stim_damage_with_bonus, physics::PhysicsWorld};
 
 use super::{
     Effect, Message, MessagePayload, Script,
     impact_sound::{ImpactSoundGuard, impact_sound_effect},
     script_util::entity_class_template_id,
 };
+
+/// Shared scale for a held player melee attack. Apply before the damage
+/// handler rounds to whole HP; thrown props and enemy attacks never call this.
+pub(super) fn player_melee_damage_scale(world: &World) -> f32 {
+    let lethal = world
+        .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
+        .is_ok_and(|quests| {
+            quests
+                .player_stats()
+                .has_os_trait(crate::scripts::gui::TRAIT_LETHAL_WEAPON)
+        });
+    crate::scripts::berserk::melee_damage_multiplier(world) * if lethal { 1.35 } else { 1.0 }
+}
 
 /// Contact damage for the player's authored melee weapons (`PropLimbModel`).
 ///
@@ -40,6 +49,7 @@ pub struct HeldMeleeWeapon {
     /// partner again. Independent of the damage cooldowns above: a wall makes
     /// a noise whether or not the contact is billable.
     sound_guard: ImpactSoundGuard,
+    charge: super::melee_charge::MeleeCharge,
 }
 
 impl HeldMeleeWeapon {
@@ -47,6 +57,7 @@ impl HeldMeleeWeapon {
         Self {
             free_swing_cooldowns: HashMap::new(),
             sound_guard: ImpactSoundGuard::default(),
+            charge: Default::default(),
         }
     }
 }
@@ -66,8 +77,8 @@ impl Script for HeldMeleeWeapon {
     /// Expire the per-victim cooldowns (free-swing damage, impact sound).
     fn update(
         &mut self,
-        _entity_id: EntityId,
-        _world: &World,
+        entity_id: EntityId,
+        world: &World,
         _physics: &PhysicsWorld,
         time: &crate::time::Time,
     ) -> Effect {
@@ -77,7 +88,8 @@ impl Script for HeldMeleeWeapon {
             *remaining > 0.0
         });
         self.sound_guard.tick(elapsed);
-        Effect::NoEffect
+        self.charge
+            .tick(entity_id, elapsed, self.is_held(world, entity_id))
     }
 
     fn handle_message(
@@ -87,11 +99,21 @@ impl Script for HeldMeleeWeapon {
         physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
-        if !is_vr(world) {
+        if !crate::mission::presentation_is_vr(world) {
             return Effect::NoEffect;
         }
 
         match msg {
+            MessagePayload::Drop => self.charge.cancel(entity_id),
+            MessagePayload::TriggerPull
+                if self.is_held(world, entity_id) && super::melee_charge::owned(world) =>
+            {
+                self.charge.begin(entity_id)
+            }
+            MessagePayload::TriggerRelease if self.is_held(world, entity_id) => self
+                .charge
+                .release(entity_id, true)
+                .unwrap_or(Effect::NoEffect),
             MessagePayload::Collided { with, contact } => {
                 // A creature is struck through its hitboxes: the contact
                 // arrives from the limb proxy, and the *creature* is what owns
@@ -128,23 +150,19 @@ impl Script for HeldMeleeWeapon {
                 } else {
                     vec3(0.0, 0.0, 0.0)
                 };
-                let damage = self
-                    .may_damage(entity_id, owner, physics, *contact, player_velocity)
-                    .then(|| authored_contact_damage(world, entity_id, owner))
-                    .flatten()
-                    // Adrenaline Overproduction scales the *player's* swing,
-                    // so only a weapon in their hand gets the bonus (a wrench
-                    // knocked into a creature is nobody's swing).
-                    .map(|amount| {
-                        if self.is_held(world, entity_id) {
-                            amount * crate::scripts::berserk::melee_damage_multiplier(world)
-                        } else {
-                            amount
-                        }
-                    });
+                // Released weapons use the same capped throw damage as other props.
+                let damage = (is_held
+                    && !self.charge.charging()
+                    && self.may_damage(entity_id, owner, physics, *contact, player_velocity))
+                .then(|| authored_contact_damage(world, entity_id, owner, self.charge.bonus()))
+                .flatten();
 
                 let mut effects = Vec::new();
                 if let Some(amount) = damage {
+                    effects.push(self.charge.landed(entity_id));
+                    // In VR a qualifying strike is the attack gesture; merely
+                    // repositioning a tracked hand must not break stealth.
+                    effects.push(crate::psi_invisibility::attack_effect(world, entity_id));
                     // Addressed to the hitbox, not the creature: forwarding it
                     // is what stamps the struck joint onto the blow.
                     effects.push(contact_damage_effect(*with, amount, *contact));
@@ -209,13 +227,6 @@ impl HeldMeleeWeapon {
             .insert(with, FREE_SWING_COOLDOWN_SECONDS);
         true
     }
-}
-
-fn is_vr(world: &World) -> bool {
-    world
-        .borrow::<UniqueView<GlobalPresentationMode>>()
-        .map(|mode| mode.0 == PresentationMode::Vr)
-        .unwrap_or(false)
 }
 
 /// How fast the two bodies were closing on each other, at the point where they
@@ -300,9 +311,20 @@ fn closing_speed(
 /// `None` means "this contact does no authored damage" (a wall, a victim with
 /// no receptron for the stim): the caller emits nothing at all, so a swing at
 /// scenery is silent rather than a free 1-point tap.
-fn authored_contact_damage(world: &World, weapon: EntityId, victim: EntityId) -> Option<f32> {
+fn authored_contact_damage(
+    world: &World,
+    weapon: EntityId,
+    victim: EntityId,
+    bonus: f32,
+) -> Option<f32> {
     let template_id = entity_class_template_id(world, weapon)?;
-    let damage = contact_stim_damage(world, template_id, victim);
+    let damage = contact_stim_damage_with_bonus(
+        world,
+        template_id,
+        victim,
+        player_melee_damage_scale(world),
+        bonus,
+    );
     (damage > 0.0).then_some(damage)
 }
 
@@ -328,6 +350,8 @@ fn contact_damage_effect(
 
 #[cfg(test)]
 mod tests {
+    use crate::PresentationMode;
+    use crate::mission::GlobalPresentationMode;
     use dark::properties::{CollisionType, PropCollisionType};
     use std::collections::HashMap;
 
@@ -648,6 +672,7 @@ mod tests {
             vec![(WEAPON_BASH, WEAPON_BASH_INTENSITY)],
         )])));
         let weapon = world.add_entity((
+            crate::runtime_props::RuntimePropVrGripOffset(vec3(0.0, 0.0, 0.0)),
             PropCollisionType {
                 collision_type: CollisionType::NO_COLLISION_SOUND,
             },
@@ -696,6 +721,15 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn loose_melee_weapon_does_not_bypass_the_throw_damage_cap() {
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        world.remove::<crate::runtime_props::RuntimePropVrGripOffset>(weapon);
+        let mut script = HeldMeleeWeapon::new();
+        let effect = collide(&mut script, &world, weapon, target);
+        assert_eq!(damage_count(&effect), 0);
+    }
+
     /// The regression behind the damage fix: a landed VR swing must cost the
     /// weapon's *authored* WeaponBash intensity, not a flat placeholder.
     #[test]
@@ -719,6 +753,68 @@ mod tests {
         assert!(
             (amount - WEAPON_BASH_INTENSITY).abs() < f32::EPSILON,
             "got {amount}"
+        );
+    }
+
+    #[test]
+    fn smasher_vr_blocks_windup_then_bonuses_only_one_landed_strike() {
+        let (world, weapon, target) = test_world(PresentationMode::Vr);
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(11);
+        world.add_unique(quests);
+        let mut script = HeldMeleeWeapon::new();
+        let physics = swinging(weapon);
+        script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerPull);
+        script.update(
+            weapon,
+            &world,
+            &physics,
+            &crate::time::Time {
+                elapsed: std::time::Duration::from_millis(400),
+                total: std::time::Duration::from_millis(400),
+            },
+        );
+        assert_eq!(
+            damage_count(&collide(&mut script, &world, weapon, target)),
+            0
+        );
+        script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerRelease);
+        let effect = collide(&mut script, &world, weapon, target);
+        let Effect::Multiple(effects) = effect else {
+            panic!("charged strike missing");
+        };
+        assert!(effects.iter().any(|e| matches!(e, Effect::Send { msg } if matches!(msg.payload,
+            MessagePayload::Damage { amount, .. } if (amount - (WEAPON_BASH_INTENSITY + 6.0)).abs() < 0.00001))));
+        assert_eq!(script.charge.bonus(), 0.0);
+        assert_eq!(
+            damage_count(&collide(&mut script, &world, weapon, target)),
+            0
+        );
+    }
+
+    #[test]
+    fn lethal_weapon_scales_held_vr_melee_but_not_loose_props() {
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(9);
+        world.add_unique(quests);
+        let Effect::Multiple(effects) =
+            collide(&mut HeldMeleeWeapon::new(), &world, weapon, target)
+        else {
+            panic!("expected a landed swing");
+        };
+        assert!(effects.iter().any(|effect| matches!(effect,
+            Effect::Send { msg } if matches!(msg.payload,
+                MessagePayload::Damage { amount, .. } if (amount - WEAPON_BASH_INTENSITY * 1.35).abs() < 0.00001))));
+        world.remove::<crate::runtime_props::RuntimePropVrGripOffset>(weapon);
+        assert_eq!(
+            damage_count(&collide(
+                &mut HeldMeleeWeapon::new(),
+                &world,
+                weapon,
+                target
+            )),
+            0
         );
     }
 

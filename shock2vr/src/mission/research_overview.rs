@@ -21,7 +21,7 @@ use shipyard::{UniqueView, World};
 use std::collections::HashMap;
 
 const PANEL: Rect = Rect::new(2.0, 124.0, 188.0, 296.0);
-const PAGE_LINES: usize = 14;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Selection {
     Project(i32),
@@ -124,8 +124,8 @@ impl ResearchCatalog {
         self.refresh_reports(quests.research(), &strings);
         let (count, total) = match self.selected {
             None => (9, self.rows.len()),
-            Some(Selection::Project(_)) => (7, self.lines().len()),
-            Some(Selection::Report(_)) => (PAGE_LINES, self.lines().len()),
+            Some(Selection::Project(_)) => (self.page_lines(), self.lines().len()),
+            Some(Selection::Report(_)) => (self.page_lines(), self.lines().len()),
         };
         self.page = self.page.min(total.saturating_sub(1) / count);
     }
@@ -177,10 +177,33 @@ impl ResearchCatalog {
         }
         .unwrap_or_default();
         if let Some(font) = &self.font {
-            engine::wrap_text_to_width(&***font, &body, font.base_height(), 136.0)
+            engine::wrap_text_to_width(
+                &***font,
+                &body,
+                font.base_height(),
+                if matches!(self.selected, Some(Selection::Project(_))) {
+                    123.0
+                } else {
+                    136.0
+                },
+            )
         } else {
             wrap_text(&body, 27)
         }
+    }
+    fn line_height(&self) -> f32 {
+        self.font
+            .as_ref()
+            .map(|font| font.base_height().max(1.0))
+            .unwrap_or(13.0)
+    }
+    fn page_lines(&self) -> usize {
+        let height = if matches!(self.selected, Some(Selection::Project(_))) {
+            90.0
+        } else {
+            175.0
+        };
+        (height / self.line_height()).floor().max(1.0) as usize
     }
     /// Close is returned to the owning utility state; all other actions only
     /// navigate the journal and never start, consume or complete research.
@@ -345,7 +368,7 @@ impl ResearchCatalog {
                     None,
                     Some("research_back".into()),
                 );
-                (153.0, 7)
+                (153.0, self.page_lines())
             } else {
                 if let Some(Selection::Report(id)) = self.selected {
                     if let Some(report) = self.reports.get(&id) {
@@ -376,7 +399,7 @@ impl ResearchCatalog {
                     None,
                     Some("research_back".into()),
                 );
-                (105.0, PAGE_LINES)
+                (105.0, self.page_lines())
             };
             for (i, line) in self
                 .lines()
@@ -388,7 +411,16 @@ impl ResearchCatalog {
                 if !line.trim().is_empty() {
                     add(
                         "text",
-                        Rect::new(15.0, top + i as f32 * 12.0, 136.0, 12.0),
+                        Rect::new(
+                            15.0,
+                            top + i as f32 * self.line_height(),
+                            if matches!(self.selected, Some(Selection::Project(_))) {
+                                123.0
+                            } else {
+                                136.0
+                            },
+                            self.line_height(),
+                        ),
                         None,
                         Some(line),
                         Some("utility_text".into()),
@@ -398,8 +430,8 @@ impl ResearchCatalog {
         }
         let (count, total) = match self.selected {
             None => (9, self.rows.len()),
-            Some(Selection::Project(_)) => (7, self.lines().len()),
-            _ => (PAGE_LINES, self.lines().len()),
+            Some(Selection::Project(_)) => (self.page_lines(), self.lines().len()),
+            _ => (self.page_lines(), self.lines().len()),
         };
         if self.page > 0 {
             add(
@@ -432,7 +464,17 @@ impl ResearchCatalog {
                 }
             }
             if let Some(text) = e.text.filter(|_| e.kind == "text") {
-                canvas.text_native_fit(r, &text, MFD_FONT, HAlign::Left, VAlign::Top);
+                canvas.text_native_fit(
+                    r,
+                    &text,
+                    MFD_FONT,
+                    if r.y == PANEL.y + layout::PERCENT.y {
+                        HAlign::Center
+                    } else {
+                        HAlign::Left
+                    },
+                    VAlign::Top,
+                );
             }
         }
     }

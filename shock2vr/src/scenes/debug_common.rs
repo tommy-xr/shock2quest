@@ -242,6 +242,10 @@ impl DebugScene {
 }
 
 impl GameScene for DebugScene {
+    fn cancel_transient_input(&mut self) {
+        self.core.cancel_transient_input();
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }
@@ -327,6 +331,10 @@ impl GameScene for DebugScene {
         self.core.queue_entity_trigger(entity_name)
     }
 
+    fn flat_eye_pose(&self) -> Option<crate::death_camera::EyePose> {
+        self.core.flat_eye_pose()
+    }
+
     fn player_is_crouched(&self) -> bool {
         self.core.player_is_crouched()
     }
@@ -337,14 +345,6 @@ impl GameScene for DebugScene {
 
     fn player_is_gripping(&self) -> bool {
         self.core.player_is_gripping()
-    }
-
-    fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
-        self.core.fov_pull_deg(game_options)
-    }
-
-    fn use_mode_vignette_intensity(&self) -> f32 {
-        self.core.use_mode_vignette_intensity()
     }
 
     fn player_save_position(&self) -> Result<Vector3<f32>, crate::game_scene::PlayerSavePoseError> {
@@ -456,6 +456,10 @@ impl<H> HookedDebugScene<H> {
 }
 
 impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
+    fn cancel_transient_input(&mut self) {
+        self.core.cancel_transient_input();
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }
@@ -567,6 +571,10 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
         self.core.queue_entity_trigger(entity_name)
     }
 
+    fn flat_eye_pose(&self) -> Option<crate::death_camera::EyePose> {
+        self.core.flat_eye_pose()
+    }
+
     fn player_is_crouched(&self) -> bool {
         self.core.player_is_crouched()
     }
@@ -577,14 +585,6 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
 
     fn player_is_gripping(&self) -> bool {
         self.core.player_is_gripping()
-    }
-
-    fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
-        self.core.fov_pull_deg(game_options)
-    }
-
-    fn use_mode_vignette_intensity(&self) -> f32 {
-        self.core.use_mode_vignette_intensity()
     }
 
     fn player_save_position(&self) -> Result<Vector3<f32>, crate::game_scene::PlayerSavePoseError> {

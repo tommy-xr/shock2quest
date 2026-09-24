@@ -80,6 +80,17 @@ pub fn contact_stim_damage_scaled(
     victim: EntityId,
     intensity_scale: f32,
 ) -> f32 {
+    contact_stim_damage_with_bonus(world, emitter_template, victim, intensity_scale, 0.0)
+}
+
+/// Melee charge changes base intensity before source scaling and target armor.
+pub fn contact_stim_damage_with_bonus(
+    world: &World,
+    emitter_template: i32,
+    victim: EntityId,
+    intensity_scale: f32,
+    base_bonus: f32,
+) -> f32 {
     let Ok(contact_stims) = world.borrow::<UniqueView<GlobalContactStims>>() else {
         return 0.0;
     };
@@ -91,7 +102,11 @@ pub fn contact_stim_damage_scaled(
     stims
         .iter()
         .filter_map(|(stim_template_id, intensity)| {
-            resolve_stim_damage(&receptrons, *stim_template_id, *intensity * intensity_scale)
+            resolve_stim_damage(
+                &receptrons,
+                *stim_template_id,
+                (*intensity + base_bonus) * intensity_scale,
+            )
         })
         .filter(|damage| *damage > 0.0)
         .sum()
@@ -151,20 +166,20 @@ pub fn resolve_stim_freeze(
 }
 
 fn victim_receptrons(world: &World, victim: EntityId) -> Vec<(i32, ReceptronOptions)> {
+    // Immolate's caster is fireproof against contact stims too, not just the
+    // radius ones - the power reads as a metaproperty on the player.
+    let mut receptrons = crate::scripts::immolate::immolate_caster_receptrons(world, victim);
     let Ok(v_links) = world.borrow::<View<Links>>() else {
-        return Vec::new();
+        return receptrons;
     };
     let Ok(links) = v_links.get(victim) else {
-        return Vec::new();
+        return receptrons;
     };
-    links
-        .to_links
-        .iter()
-        .filter_map(|link| match &link.link {
-            Link::Receptron(options) => Some((link.to_template_id, options.clone())),
-            _ => None,
-        })
-        .collect()
+    receptrons.extend(links.to_links.iter().filter_map(|link| match &link.link {
+        Link::Receptron(options) => Some((link.to_template_id, options.clone())),
+        _ => None,
+    }));
+    receptrons
 }
 
 /// Resolve what damage a stim deals to a receiver, given the receiver's
@@ -495,6 +510,16 @@ mod tests {
         );
 
         assert_eq!(contact_stim_damage(&world, LEAD_PIPE, victim), 10.0);
+    }
+
+    #[test]
+    fn smasher_adds_base_damage_before_player_scale_and_target_armor() {
+        let (world, victim) = world_with_victim(
+            GlobalContactStims(HashMap::from([(LEAD_PIPE, vec![(WEAPON_BASH, 9.0)])])),
+            vec![(WEAPON_BASH, damage(16, 0.5))],
+        );
+        let damage = contact_stim_damage_with_bonus(&world, LEAD_PIPE, victim, 1.35, 6.0);
+        assert!((damage - (9.0 + 6.0) * 1.35 * 0.5).abs() < 0.00001);
     }
 
     #[test]

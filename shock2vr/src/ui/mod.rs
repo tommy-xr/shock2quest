@@ -39,15 +39,17 @@ mod frontend_menu;
 mod frontend_pointer;
 mod frontend_presentation;
 mod frontend_sfx;
+pub mod horde_report;
 pub mod list_scroll;
 mod panel_anchor;
 mod pointer_visual;
+mod ui_anim;
 pub mod world_dim;
 #[cfg(test)]
 pub use frontend_menu::resolve_flat_click;
 pub use frontend_menu::{
-    FrontendMenu, FrontendMenuItem, flat_pointer_state, hit_menu_item, resolve_click_at,
-    resolve_menu_label, resolve_menu_labels, resolve_menu_rects,
+    FrontendMenu, FrontendMenuItem, flat_pointer_state, hit_menu_item, label_lines,
+    resolve_click_at, resolve_menu_label, resolve_menu_labels, resolve_menu_rects,
 };
 #[cfg(test)]
 pub use frontend_pointer::test_support;
@@ -59,6 +61,7 @@ pub use frontend_presentation::FrontendCanvasPresenter;
 pub use frontend_sfx::FrontendSfx;
 pub use panel_anchor::{FrontendPanelAnchor, PanelPlacement};
 pub use pointer_visual::{PointerVisuals, pointer_beams};
+pub use ui_anim::UiAnims;
 
 /// Font name that resolves to the engine's compiled-in font rather than a
 /// `.FON` asset.
@@ -71,6 +74,20 @@ pub const BUILTIN_FONT: &str = "@builtin";
 
 /// Retail MFDs use MAINAA with the cyan text palette (shkutils.cpp).
 pub const MFD_FONT: &str = "@shock-mfd";
+/// Bold cyan labels replacing the classic MFD art's baked stat headings.
+pub const MFD_LABEL_FONT: &str = "@shock-mfd-label";
+/// The engine's large overlay face (BLUEAA), for a title card.
+pub const TITLE_FONT: &str = "@shock-title";
+
+/// The tints below are FALLBACKS. An antialiased `.FON` carries its own colour
+/// per texel, as indices into `res/iface/fontpal.pcx`, and the font importer
+/// resolves them - so a tint only applies to a data install missing that
+/// palette. Each is the palette entry its font actually draws in, so the
+/// fallback lands close: BLUEAA's body is index 130 `(0,191,143)` (the colour
+/// 25AE's `vector_blueaa.fon` also declares), and MAINAA tops out at index 209
+/// `(0,255,191)`.
+const TITLE_TINT: [u8; 3] = [1, 194, 147];
+const MFD_TINT: [u8; 3] = [0, 255, 190];
 
 /// The font for a `UiElement::Text`, whichever kind it is.
 ///
@@ -80,13 +97,24 @@ pub(crate) fn resolve_font(asset_cache: &mut AssetCache, font: &str) -> Rc<Box<d
     if font == BUILTIN_FONT {
         return engine::shared_builtin_font();
     }
-    if font == MFD_FONT {
+    if font == TITLE_FONT {
+        return asset_cache.get_ext(
+            &dark::importers::TINTED_FONT_IMPORTER,
+            "blueaa.fon",
+            &TITLE_TINT,
+        );
+    }
+    if font == MFD_FONT || font == MFD_LABEL_FONT {
         // Family mounts strip their prefix. The bare key resolves the canonical
         // fonts family; "fonts/mainaa.fon" instead names iface's stripped copy.
         return asset_cache.get_ext(
             &dark::importers::TINTED_FONT_IMPORTER,
-            "mainaa.fon",
-            &[0, 255, 190],
+            if font == MFD_LABEL_FONT {
+                "boldaa.fon"
+            } else {
+                "mainaa.fon"
+            },
+            &MFD_TINT,
         );
     }
     asset_cache.get(&FONT_IMPORTER, font).clone()
@@ -399,6 +427,8 @@ pub enum ImageKind {
     /// `tiles_y` times across the element's rect, with its black dropped and
     /// its lines tinted (see [`HOLOGRAM_TINT`]). Sized like [`Self::Ui`].
     Hologram { tiles_x: u8, tiles_y: u8 },
+    /// Untiled luminous art: dark pixels become transparent, bright pixels cyan.
+    HolographicIcon,
     /// One sub-rectangle of the art, stretched to the element's rect - the
     /// corners in normalized texture coordinates, `v` measured from the top of
     /// the bitmap. Built by [`UiCanvas::cropped_image`]; lets a panel wear a
@@ -486,6 +516,10 @@ pub enum PlacedContent {
         text: String,
         font: String,
     },
+    /// A flat colour over the whole rect. `color` is sRGB 0..255.
+    Fill {
+        color: [u8; 3],
+    },
 }
 
 /// One item in the shared 2D UI description language.
@@ -546,6 +580,14 @@ where
         /// text the same way (see [`UiCanvas::text_native_fit`]).
         fit_to_rect: bool,
     },
+    /// A flat colour rectangle - no art. The plate a banner's text sits on,
+    /// a divider, a scrim. `color` is sRGB 0..255; `alpha` blends it.
+    Fill {
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        color: [u8; 3],
+        alpha: f32,
+    },
 }
 
 impl<TEvent> UiElement<TEvent>
@@ -557,7 +599,8 @@ where
             Self::Image { position, size, .. }
             | Self::Bar { position, size, .. }
             | Self::Button { position, size, .. }
-            | Self::Text { position, size, .. } => (*position, *size),
+            | Self::Text { position, size, .. }
+            | Self::Fill { position, size, .. } => (*position, *size),
         };
         Rect::new(position.x, position.y, size.x, size.y)
     }
@@ -639,9 +682,22 @@ where
                 UiElement::Image { alpha, .. }
                 | UiElement::Bar { alpha, .. }
                 | UiElement::Button { alpha, .. }
-                | UiElement::Text { alpha, .. } => *alpha = o,
+                | UiElement::Text { alpha, .. }
+                | UiElement::Fill { alpha, .. } => *alpha = o,
             }
         }
+        self
+    }
+
+    /// A flat colour rectangle covering `rect`, opaque. Chain
+    /// [`opacity`](Self::opacity) to blend it.
+    pub fn fill(&mut self, rect: Rect, color: [u8; 3]) -> &mut Self {
+        self.elements.push(UiElement::Fill {
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
+            color,
+            alpha: 1.0,
+        });
         self
     }
 
@@ -895,6 +951,16 @@ where
                         fill: *fill,
                     },
                 },
+                UiElement::Fill {
+                    position,
+                    size,
+                    color,
+                    alpha,
+                } => PlacedElement {
+                    rect: Rect::new(position.x, position.y, size.x, size.y),
+                    alpha: *alpha,
+                    content: PlacedContent::Fill { color: *color },
+                },
                 UiElement::Text {
                     position,
                     size,
@@ -1015,16 +1081,24 @@ impl UiCanvas<()> {
 /// asset cache the same way.
 fn texture_options(kind: ImageKind) -> TextureOptions {
     let hologram = matches!(kind, ImageKind::Hologram { .. });
+    let luminous = hologram || matches!(kind, ImageKind::HolographicIcon);
     TextureOptions {
         // A hologram repeats one tile across its cells, so it - and only it -
         // needs the sampler to wrap.
         wrap: hologram,
         transparent_index_0: kind.transparent_index_0(),
-        luminance_alpha_tint: hologram.then_some(HOLOGRAM_TINT),
+        luminance_alpha_tint: luminous.then_some(HOLOGRAM_TINT),
+        // Retail psi icons use dim green (~44 luma) behind bright glyphs
+        // (~108 luma). Remove the plate without fading the glyph itself.
+        luminance_alpha_range: if matches!(kind, ImageKind::HolographicIcon) {
+            [52, 108]
+        } else {
+            [0, 255]
+        },
         // The grid's lines are a texel wide and are drawn well under their
         // authored size, at a distance the VR viewer changes at will; without
         // mipmaps they alias into a swimming, unevenly-bright grid.
-        filter: if hologram {
+        filter: if luminous {
             engine::texture::TextureFilter::LinearMipmap
         } else {
             engine::texture::TextureFilter::Linear
@@ -1137,6 +1211,17 @@ fn place_text(
     }
 }
 
+/// A [`PlacedContent::Fill`] colour as the screen-space material's tint:
+/// sRGB 0..255 to 0..1, with the element's alpha in the fourth channel.
+fn fill_color(color: [u8; 3], alpha: f32) -> cgmath::Vector4<f32> {
+    cgmath::vec4(
+        color[0] as f32 / 255.0,
+        color[1] as f32 / 255.0,
+        color[2] as f32 / 255.0,
+        alpha.clamp(0.0, 1.0),
+    )
+}
+
 /// Canvas rect -> screen pixels, under a canvas->screen `fit`.
 fn canvas_rect_to_screen_px(rect: Rect, scale: Vector2<f32>, offset: Vector2<f32>) -> Rect {
     Rect::new(
@@ -1184,6 +1269,11 @@ fn present_screen(
                 *fill,
             )
         }
+        PlacedContent::Fill { color } => SceneObject::screen_space_color_quad(
+            vec2(rect.x, rect.y),
+            vec2(rect.w, rect.h),
+            fill_color(*color, element.alpha),
+        ),
         PlacedContent::Text { text, font, .. } => {
             let font_obj = resolve_font(asset_cache, font);
             // `screen_space_text` anchors on the glyph box's top-left and takes
@@ -1217,7 +1307,7 @@ fn present_world(
             let texture = asset_cache
                 .get_ext(&TEXTURE_IMPORTER, texture, &texture_options(*kind))
                 .clone();
-            let material = engine::scene::basic_material::create(
+            let material = engine::scene::basic_material::create_with_fixed_ambient(
                 texture as Rc<dyn TextureTrait>,
                 1.0,
                 1.0 - alpha,
@@ -1238,6 +1328,19 @@ fn present_world(
                 *fill,
             );
             SceneObject::new(material, Box::new(engine::scene::quad::create()))
+        }
+        PlacedContent::Fill { color } => {
+            // The same conversion the screen presenter uses, so the two cannot
+            // disagree about a plate's colour.
+            let rgba = fill_color(*color, alpha);
+            let mut object = SceneObject::new(
+                engine::scene::color_material::create(vec3(rgba.x, rgba.y, rgba.z)),
+                Box::new(engine::scene::quad::create()),
+            );
+            // `color_material` authors itself opaque; a blended plate is a
+            // per-object override, as the image path's fixed ambient is.
+            object.set_transparency(Some((1.0 - alpha).clamp(0.0, 1.0)));
+            object
         }
         PlacedContent::Text { text, font, .. } => {
             let font_obj = resolve_font(asset_cache, font);
@@ -1263,7 +1366,10 @@ pub(crate) fn drawn_rect(
     kind: ImageKind,
 ) -> (Vector2<f32>, Vector2<f32>) {
     match kind {
-        ImageKind::Ui | ImageKind::Hologram { .. } | ImageKind::Crop { .. } => (position, size),
+        ImageKind::Ui
+        | ImageKind::Hologram { .. }
+        | ImageKind::HolographicIcon
+        | ImageKind::Crop { .. } => (position, size),
         ImageKind::ObjectIcon => (position + centered_offset(size, texture_px), texture_px),
         ImageKind::ObjectIconFit => {
             let scale = (size.x / texture_px.x).min(size.y / texture_px.y).min(1.0);
@@ -1557,6 +1663,19 @@ mod tests {
         let ui = texture_options(ImageKind::Ui);
         assert!(!ui.wrap);
         assert_eq!(ui.luminance_alpha_tint, None);
+    }
+
+    #[test]
+    fn holographic_icons_drop_dark_pixels_without_grid_tiling_or_uv_shift() {
+        let kind = ImageKind::HolographicIcon;
+        let options = texture_options(kind);
+        assert!(!options.wrap);
+        assert_eq!(options.luminance_alpha_tint, Some(HOLOGRAM_TINT));
+        assert_eq!(kind.uv_rect(), None);
+        assert_eq!(
+            drawn_rect(vec2(3.0, 4.0), vec2(42.0, 42.0), vec2(32.0, 32.0), kind),
+            (vec2(3.0, 4.0), vec2(42.0, 42.0))
+        );
     }
 
     /// A hologram fills its slot like ordinary UI art - the tile scales to the

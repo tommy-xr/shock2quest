@@ -1,18 +1,26 @@
 pub mod audio_log;
+pub mod benchmark_scene;
+pub mod environment_map;
 pub mod game_scene;
 pub mod hand_buttons;
 pub mod hand_pose;
 pub mod hand_pose_library;
 pub mod haptics;
 pub mod hit_feedback;
+pub mod horde_stats;
+pub mod implants;
 pub mod input;
 pub mod input_context;
 pub mod install;
 pub mod inventory;
+mod melee_charge_visual;
 pub mod message_trace;
+pub mod object_lighting;
+pub mod particle_effects;
+pub mod psi_amp_selection;
+mod psi_carousel;
 pub mod save_load;
 pub mod scenes;
-pub mod teleport;
 pub mod time;
 mod weapon_button_hold;
 
@@ -22,7 +30,9 @@ pub mod damage_overlay;
 pub mod data_files;
 pub mod death_camera;
 pub mod dev_params;
+mod developer_mode;
 pub mod difficulty;
+mod flat_lean;
 mod flat_player_controller;
 pub mod free_camera;
 mod glove_fit;
@@ -31,6 +41,7 @@ mod hand_feedback;
 mod hand_glove;
 mod hud;
 mod interaction;
+mod listener_sounds;
 mod mission;
 pub mod palette;
 pub mod pathfinding;
@@ -39,6 +50,14 @@ pub mod pause_menu;
 mod physics;
 pub mod player_stats;
 mod psi;
+mod psi_heal_visual;
+mod psi_invisibility;
+pub mod psi_pull;
+pub mod psi_radar;
+pub mod psi_seekersense;
+pub mod psi_sense;
+mod psi_sword;
+mod psi_visuals;
 pub mod quest_info;
 pub mod research;
 mod runtime_props;
@@ -47,6 +66,7 @@ mod security_alarm;
 mod systems;
 #[cfg(test)]
 mod test_support;
+mod throwing;
 /// Shared 2D canvas UI: layout, the screen-space presentation, and the
 /// world-space (VR) panel. Public so a runtime can check where its simulated
 /// controller ray lands on a frontend panel (`FrontendPanelAnchor` +
@@ -56,8 +76,10 @@ mod util;
 mod virtual_hand;
 pub mod vr_belt;
 mod vr_config;
+pub mod weapon_modification;
 mod weapon_muzzle;
 pub mod weapon_recoil;
+pub mod weapon_repair;
 mod weapon_requirements;
 pub use hand_glove::{GloveRenderer, HandLight};
 /// Re-exported (the module itself stays private) so the `melee_grip` example
@@ -110,9 +132,8 @@ pub const PLAYER_EYE_HEIGHT: f32 = physics::PLAYER_HEAD_POS + physics::PLAYER_EY
 pub const PLAYER_CROUCH_EYE_HEIGHT: f32 = 1.2;
 
 /// Default vertical FOV, in degrees, for the flat runtimes' projection
-/// matrix. `Game::desired_fov_deg` starts here and is driven game-side each
-/// frame (see `Game::set_desired_fov_deg`) by the cyber interface's FOV pull
-/// while its overlay is open. `oculus_runtime` is untouched: OpenXR view
+/// matrix - what `Game::desired_fov_deg` reports unless the dev-param
+/// override forces another value. `oculus_runtime` is untouched: OpenXR view
 /// FOVs must be used as-is.
 pub const DEFAULT_FOV_DEG: f32 = 45.0;
 
@@ -120,7 +141,7 @@ pub const DEFAULT_FOV_DEG: f32 = 45.0;
 /// means "no override - use `base`"; any positive value forces that FOV
 /// instead. Shared by `Game::desired_fov_deg` and the `App::MissingAssets`
 /// fallback so the override rule lives in exactly one place.
-fn resolve_fov_deg(base: f32) -> f32 {
+pub(crate) fn resolve_fov_deg(base: f32) -> f32 {
     let override_deg = dev_params::get(dev_params::FOV_OVERRIDE_DEG);
     if override_deg > 0.0 {
         override_deg
@@ -220,8 +241,22 @@ pub fn is_25th_anniversary_install() -> bool {
 /// This is the same precedence the classic `.crf` mount list uses: `obj` first
 /// so a model material resolves to a model texture, `iface` and friends after.
 const RESOURCE_FAMILIES: &[&str] = &[
-    "obj", "bitmap", "book", "fam", "fonts", "iface", "intrface", "mesh", "motions", "objicon",
-    "snd", "snd2", "song", "strings",
+    "obj",
+    "bitmap",
+    "book",
+    "fam",
+    "fonts",
+    "iface",
+    "intrface",
+    "mesh",
+    "motions",
+    "objicon",
+    "snd",
+    "snd2",
+    "song",
+    "strings",
+    "materials",
+    "env",
 ];
 
 /// The 25AE mod stack, highest priority first, exactly as
@@ -272,7 +307,8 @@ fn mount_family(
 ) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
     match family {
         "strings" => ZipAssetPath::with_prefix_opts(archive, prefix, false, None),
-        "iface" | "bitmap" | "objicon" => {
+        "materials" | "env" => ZipAssetPath::with_prefix_opts(archive, prefix, false, Some(family)),
+        "iface" | "bitmap" | "objicon" | "obj" | "mesh" => {
             ZipAssetPath::with_prefix_opts(archive, prefix, true, Some(family))
         }
         _ => ZipAssetPath::with_prefix(archive, prefix),
@@ -351,7 +387,7 @@ pub fn game_asset_mounts(
             // AssetPath::folder(resource_path("res/mesh/txt16")),
             AssetPath::folder(resource_path("res/obj")),
             // AssetPath::folder(resource_path("res/obj/txt16")),
-            ZipAssetPath::new(resource_path("res/obj.crf")),
+            mount_family(resource_path("res/obj.crf"), "", "obj"),
             mount_family(resource_path("res/bitmap.crf"), "", "bitmap"),
             // Log/email sender portraits + deck icons (the reader panel art).
             ZipAssetPath::new(resource_path("res/book.crf")),
@@ -370,7 +406,7 @@ pub fn game_asset_mounts(
             // archive-qualified "iface/<name>" key instead.
             ZipAssetPath::with_namespace(resource_path("res/iface.crf"), "iface"),
             ZipAssetPath::new(resource_path("res/intrface.crf")),
-            ZipAssetPath::new(resource_path("res/mesh.crf")),
+            mount_family(resource_path("res/mesh.crf"), "", "mesh"),
             ZipAssetPath::new(resource_path("res/motions.crf")),
             ZipAssetPath::with_namespace(resource_path("res/objicon.crf"), "objicon"),
             ZipAssetPath::new(resource_path("res/snd.crf")),
@@ -485,7 +521,6 @@ pub struct GameOptions {
     pub spawn_location: SpawnLocation,
     pub save_file: Option<String>,
     pub render_particles: bool,
-    pub debug_physics: bool,
     pub debug_draw: bool,
     pub debug_portals: bool,
     pub debug_show_ids: bool,
@@ -505,7 +540,6 @@ impl Default for GameOptions {
             save_file: None,
             debug_draw: false,
             debug_portals: false,
-            debug_physics: false,
             debug_show_ids: false,
             debug_skeletons: false,
             debug_ai: false,
@@ -611,7 +645,6 @@ pub struct Game {
     // id_to_physics: HashMap<EntityId, RigidBodyHandle>,
     // scene_objects: Vec<RefCell<SceneObject>>,
     //world: World,
-    last_music_cue: Option<String>,
     last_env_sound: Option<String>,
 
     mission_to_save_data: HashMap<String, EntitySaveData>,
@@ -657,16 +690,9 @@ pub struct Game {
     /// the host knows that (a Quest eye is roughly twice a 45-degree flat
     /// screen, and much closer to square). Carried a frame, because `render`
     /// runs before `render_per_eye` and the projection does not change between
-    /// them - true whenever `desired_fov_deg` is held steady, but a caller
-    /// that changes it every frame (a hypothetical unsmoothed FOV animation)
-    /// would see the rim sized one frame stale. Not a concern for the
-    /// dev-param override (a one-off manual poke) or the planned
-    /// cyber-interface consumer (a single step, not a per-frame tween).
+    /// them - true whenever `desired_fov_deg` is held steady, which it is
+    /// except for the dev-param override (a one-off manual poke).
     view_extents: (f32, f32),
-
-    /// Per-frame desired FOV (vertical, degrees) for the flat runtimes'
-    /// projection matrix. See [`Game::desired_fov_deg`].
-    desired_fov_deg: f32,
 
     /// The detached debug camera. Purely a render-layer override: while it is
     /// detached the pawn stays put and every system that reads the player's
@@ -747,10 +773,13 @@ pub struct PlayerStateSnapshot {
     /// The gamesys names of the currently active sustained psi powers (e.g.
     /// "Inviso"), in activation order. Empty when none are active.
     pub active_psi_powers: Vec<String>,
+    pub radar_contacts: Vec<crate::psi_sense::PsiSenseContact>,
+    pub seekersense_contacts: Vec<crate::psi_sense::PsiSenseContact>,
     /// The player's persistent character sheet (primary stats, skills, mastered
     /// psi disciplines), accumulated from career + training tours. `None` when
     /// the scene has no `QuestInfo` (e.g. a menu). See `crate::player_stats`.
     pub stats: Option<crate::player_stats::PlayerStats>,
+    pub effective_stats: Option<crate::player_stats::PlayerStats>,
     /// The audio logs the player has collected (frobbed), in pickup order. Empty
     /// when the scene has no `QuestInfo`. Persisted in `QuestInfo`, so it
     /// survives level transitions and save/load. See `crate::quest_info`.
@@ -899,13 +928,8 @@ impl Game {
                 .map(|radiation| radiation.level())
                 .unwrap_or(0.0),
             selected_psi_power: (|| {
-                let powers = world
-                    .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
-                    .ok()?;
-                let selection = world
-                    .borrow::<UniqueView<crate::psi::PsiPowerSelection>>()
-                    .ok()?;
-                powers.0.get(selection.index).map(|p| p.name.clone())
+                let amp = crate::psi_amp_selection::target(world)?;
+                crate::psi_amp_selection::selected_power(world, amp).map(|p| p.name)
             })(),
             psi_charge: wielded.and_then(|weapon| {
                 use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
@@ -926,6 +950,15 @@ impl Game {
                 .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
                 .map(|active| active.0.iter().map(|p| p.name.clone()).collect())
                 .unwrap_or_default(),
+            seekersense_contacts: world
+                .borrow::<UniqueView<crate::psi_seekersense::Seekersense>>()
+                .map(|sense| sense.contacts.clone())
+                .unwrap_or_default(),
+            radar_contacts: world
+                .borrow::<UniqueView<crate::psi_radar::Radar>>()
+                .map(|radar| radar.contacts.clone())
+                .unwrap_or_default(),
+            effective_stats: crate::implants::effective_stats(world),
             stats: world
                 .borrow::<UniqueView<QuestInfo>>()
                 .ok()
@@ -1433,7 +1466,6 @@ impl Game {
             pending_transition: None,
             preserved_scene_state: None,
             global_context: Arc::new(global_context),
-            last_music_cue: None,
             last_env_sound: None,
             options,
             mission_to_save_data,
@@ -1450,7 +1482,6 @@ impl Game {
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
             ),
             view_extents: hit_feedback::DEFAULT_VIEW_EXTENTS,
-            desired_fov_deg: DEFAULT_FOV_DEG,
             free_camera: free_camera::FreeCamera::new(),
             free_camera_view_fixup: None,
         }
@@ -1465,7 +1496,10 @@ impl Game {
         let calibrated_input = glove_fit::calibrated_input(
             input_context,
             self.options.presentation_mode,
-            self.active_game_scene.scene_name() == "debug_gloves",
+            matches!(
+                self.active_game_scene.scene_name(),
+                "debug_gloves" | "debug_psi_fit"
+            ),
             dev_params::get(dev_params::GLOVE_FORWARD_CM),
         );
         let input_context = &calibrated_input;
@@ -1541,6 +1575,7 @@ impl Game {
         // close the menu again.
         self.update_pause_menu(time, input_context, actions);
         if self.pause_menu.suspends_scene() {
+            self.active_game_scene.cancel_transient_input();
             self.weapon_buttons.cancel(self.active_game_scene.world());
             // Paused: the scene is not updated (nothing simulates, and
             // `VirtualHand` is never advanced, so hands are inert but keep
@@ -1572,6 +1607,18 @@ impl Game {
         );
         action_effects.extend(input::ActionDispatcher::dispatch(actions, input_context));
         actions.clear_triggered();
+        let jump_button_held = actions.is_held(input::InputAction::LeftHandLowerButton)
+            || actions.is_held(input::InputAction::RightHandLowerButton);
+        let with_jump_button;
+        let input_context = if jump_button_held {
+            with_jump_button = input_context::InputContext {
+                jump_button_held,
+                ..input_context.clone()
+            };
+            &with_jump_button
+        } else {
+            input_context
+        };
 
         // Fly the detached camera, then withhold the channels it consumed from
         // the scene so the pawn does not sleepwalk off while the sticks are
@@ -1595,15 +1642,6 @@ impl Game {
             &mut self.asset_cache,
             &self.options,
             action_effects,
-        );
-
-        // A personal-UI mode (the cyber interface) can pull the flat FOV in a
-        // little while it is open, eased over its own entry/exit ramp -
-        // `fov_pull_deg` already smooths this, so nothing further is needed
-        // here. VR scenes return 0 (OpenXR view FOVs are used as-is), making
-        // this a no-op there.
-        self.set_desired_fov_deg(
-            DEFAULT_FOV_DEG - self.active_game_scene.fov_pull_deg(&self.options),
         );
 
         // Handle ambient audio
@@ -1630,7 +1668,11 @@ impl Game {
 
         let ambient_sounds = if let Some(state) = ambient_state {
             if let Some(cue) = state.music_cue {
-                self.update_music_cue_if_necessary(cue);
+                // Markers contain bare theme names. Re-supply while inside so a
+                // newly loaded song also receives the same theme as the old one.
+                // SongPlayer retains it after the player leaves the marker.
+                self.audio_context
+                    .set_background_music_cue(format!("theme {}", cue.to_ascii_lowercase()));
             }
 
             if let Some(cue_schema) = state.environmental_cue {
@@ -1767,6 +1809,7 @@ impl Game {
     /// instead would mint the short press nobody made.
     pub fn cancel_menu_hold(&mut self) {
         self.menu_hold.cancel();
+        throwing::cancel_tracking(self.active_game_scene.world());
         self.weapon_buttons.cancel(self.active_game_scene.world());
     }
 
@@ -1790,7 +1833,9 @@ impl Game {
 
         // `just_triggered` is a rising edge by construction (mappers trigger on
         // key/button down), so holding the menu button cannot re-toggle.
-        if actions.just_triggered(InputAction::TogglePauseMenu) {
+        if actions.just_triggered(InputAction::TogglePauseMenu)
+            && !self.pause_menu.is_horde_report()
+        {
             if self.pause_menu.is_open() {
                 self.close_pause_menu(false);
             } else {
@@ -1811,6 +1856,10 @@ impl Game {
         self.pause_menu
             .pump_sfx(&mut self.asset_cache, &mut self.audio_context);
         match action {
+            Some(PauseAction::ContinueHorde) => {
+                self.close_pause_menu(true);
+                self.apply_scene_effects(vec![Effect::ContinueHorde]);
+            }
             Some(PauseAction::Resume) => self.close_pause_menu(true),
             Some(PauseAction::QuitToMainMenu) => {
                 self.close_pause_menu(true);
@@ -1827,8 +1876,20 @@ impl Game {
                     CheatAction::Alertness { level, pin } => {
                         Effect::SetAllAIAlertness { level, pin }
                     }
+                    CheatAction::MaxStats => Effect::MaxPlayerStats,
+                    CheatAction::StartHordeWave => Effect::StartHordeWave {
+                        wave: dev_params::get(dev_params::HORDE_START_WAVE) as u32,
+                    },
+                    CheatAction::AddRadiation | CheatAction::AddToxin => Effect::AddPlayerHazard {
+                        toxin: action == CheatAction::AddToxin,
+                        amount: 10.0,
+                    },
+                    CheatAction::ClearExposure => Effect::Multiple(vec![
+                        Effect::ClearHazard { toxin: false },
+                        Effect::ClearHazard { toxin: true },
+                    ]),
                 };
-                self.apply_scene_effects(vec![effect]);
+                self.apply_scene_effects(Effect::flatten(vec![effect]));
             }
             None => {}
         }
@@ -1848,6 +1909,7 @@ impl Game {
         // the player is not left with a cursor-driven overlay under the pause
         // panel.
         self.apply_scene_effects(vec![Effect::CloseUseMode]);
+        throwing::cancel_tracking(self.active_game_scene.world());
         self.pause_menu.open();
     }
 
@@ -2061,6 +2123,12 @@ impl Game {
                     vitals_transition,
                 );
             }
+            GlobalEffect::ShowHordeReport { wave, stats } => {
+                if self.pause_is_allowed() {
+                    self.open_pause_menu();
+                    self.pause_menu.show_horde_report(wave, stats);
+                }
+            }
             GlobalEffect::OpenPauseMenu => {
                 if self.pause_is_allowed() && !self.pause_menu.is_open() {
                     self.open_pause_menu();
@@ -2104,12 +2172,14 @@ impl Game {
                 self.pending_transition = None;
                 self.set_active_scene(Box::new(LoadGameScene::new()));
             }
-            GlobalEffect::StartNewCampaign { difficulty } => {
+            GlobalEffect::StartNewCampaign { difficulty }
+            | GlobalEffect::StartNewHorde { difficulty } => {
+                let horde = matches!(global_effect, GlobalEffect::StartNewHorde { .. });
                 self.pending_transition = None;
                 self.campaign_completed = false;
                 self.mission_to_save_data.clear();
-                // Seed the movie's carried state explicitly: the previous
-                // campaign and the cutscene's empty world must both be irrelevant.
+                // Seed fresh run state explicitly; neither the previous campaign
+                // nor the frontend/cutscene world contributes inventory or difficulty.
                 self.preserved_scene_state = Some(PreservedSceneState {
                     quest_info: QuestInfo::with_difficulty(difficulty),
                     held_data: HeldItemSaveData::empty(),
@@ -2117,12 +2187,15 @@ impl Game {
                     hazards: Default::default(),
                     active_psi: Default::default(),
                 });
-                self.handle_global_effect(
+                let next = if horde {
+                    GlobalEffect::new_game_transition("earth_horde".to_owned())
+                } else {
                     GlobalEffect::new_game_transition(
                         scenes::main_menu::NEW_GAME_MISSION.to_owned(),
                     )
-                    .after_cutscene(scenes::main_menu::NEW_GAME_CUTSCENE),
-                );
+                    .after_cutscene(scenes::main_menu::NEW_GAME_CUTSCENE)
+                };
+                self.handle_global_effect(next);
             }
             GlobalEffect::ShowMainMenu => {
                 self.pending_transition = None;
@@ -2264,7 +2337,7 @@ impl Game {
         self.free_camera_view_fixup = None;
     }
 
-    /// Get hand spotlights for enhanced lighting when experimental flag is enabled
+    /// Hand spotlights, when the `hand_spotlights` dev param is on.
     pub fn get_hand_spotlights(&self) -> Vec<engine::scene::light::SpotLight> {
         // The lights belong to the hands: with the hands suppressed they would
         // be two pools cast by nothing - and, being world lighting, they light
@@ -2285,30 +2358,14 @@ impl Game {
     }
 
     /// Vertical FOV (degrees) the flat runtimes should build their projection
-    /// matrix with this frame. Defaults to [`DEFAULT_FOV_DEG`] and is driven
-    /// each frame by [`Game::set_desired_fov_deg`] - the active scene's
-    /// `GameScene::fov_pull_deg` (the cyber-interface overlay's FOV pull is
-    /// the first consumer). `dev_params::FOV_OVERRIDE_DEG` can force a value
-    /// live for testing without a rebuild.
+    /// matrix with this frame: [`DEFAULT_FOV_DEG`], unless
+    /// `dev_params::FOV_OVERRIDE_DEG` forces a value live for testing without
+    /// a rebuild.
     ///
     /// VR is explicitly out of scope: OpenXR view FOVs must be used as-is, so
     /// `oculus_runtime` does not read this.
     pub fn desired_fov_deg(&self) -> f32 {
-        resolve_fov_deg(self.desired_fov_deg)
-    }
-
-    /// Internal seam for gameplay/UI code to drive [`Game::desired_fov_deg`].
-    /// Driven once per frame from [`Game::update`] by the active scene's
-    /// `GameScene::fov_pull_deg` (the cyber interface's entry/exit ramp is
-    /// the first consumer). Smoothing/easing is the caller's responsibility.
-    /// Rejects non-finite or out-of-range degrees (valid input to
-    /// `cgmath::perspective` is strictly between 0 and 180) by leaving the
-    /// current value unchanged, so a bad caller can't poison the flat
-    /// runtimes' projection into a panic.
-    pub(crate) fn set_desired_fov_deg(&mut self, fov_deg: f32) {
-        if fov_deg.is_finite() && fov_deg > 0.0 && fov_deg < 180.0 {
-            self.desired_fov_deg = fov_deg;
-        }
+        resolve_fov_deg(DEFAULT_FOV_DEG)
     }
 
     /// Height (world units) of the player collider's center above the surface
@@ -2341,7 +2398,7 @@ impl Game {
     /// `EngineRenderContext`, so the fall to the floor is decided once for both
     /// presentations instead of once per runtime (AGENTS.md section 3).
     ///
-    /// While the player is alive this returns its inputs verbatim.
+    /// Flat gameplay supplies its collision-resolved eye; VR retains tracked poses.
     /// Whether the player's own body - VR hands in [`Game::render`], the flat
     /// weapon viewmodel and HUD in [`Game::render_per_eye`] - should be dropped
     /// this frame because the death camera has taken the view.
@@ -2364,11 +2421,31 @@ impl Game {
         tracked_head_offset: Vector3<f32>,
         tracked_head_rotation: Quaternion<f32>,
     ) -> death_camera::CameraPose {
+        let flat_eye = (!self.free_camera.is_detached())
+            .then(|| self.active_game_scene.flat_eye_pose())
+            .flatten();
+        self.resolve_free_camera(
+            pawn_position,
+            pawn_rotation,
+            flat_eye.map_or(tracked_head_offset, |eye| eye.position),
+            flat_eye.map_or(tracked_head_rotation, |eye| eye.rotation),
+        )
+    }
+
+    /// Compose tracked input and death pose without gameplay lean. Placement
+    /// tools use this before detaching, matching the eventual detached view.
+    pub fn resolve_free_camera(
+        &self,
+        pawn_position: Vector3<f32>,
+        pawn_rotation: Quaternion<f32>,
+        head_offset: Vector3<f32>,
+        head_rotation: Quaternion<f32>,
+    ) -> death_camera::CameraPose {
         death_camera::resolve(
             pawn_position,
             pawn_rotation,
-            tracked_head_offset,
-            tracked_head_rotation,
+            head_offset,
+            head_rotation,
             self.active_game_scene.death_camera(),
         )
     }
@@ -2385,10 +2462,15 @@ impl Game {
         // left latched when the menu closes. The same `is_open()` gate drops the
         // scene's screen-space UI in `render_per_eye`.
         // The same drop covers the death camera - see `player_visuals_hidden`.
+        // The `show_position` readout rides along: it is the VR half of an
+        // overlay whose flat half is dropped with the per-eye scene below, so
+        // dropping it here is what keeps the two presentations agreeing.
         if self.pause_menu.is_open() || self.player_visuals_hidden() {
             scene.retain(|object| {
-                object.debug_tag().and_then(|tag| tag.source.as_deref())
-                    != Some(util::render_source::PLAYER_HANDS)
+                let source = object.debug_tag().and_then(|tag| tag.source.as_deref());
+                source != Some(util::render_source::PLAYER_HANDS)
+                    && source != Some(util::render_source::DEBUG_OVERLAY)
+                    && source != Some(util::render_source::GAMEPLAY_HUD)
             });
         }
 
@@ -2398,21 +2480,19 @@ impl Game {
         // pawn transform the runtime builds its camera from.
         let pawn_to_world = Matrix4::from_translation(pos) * Matrix4::from(rot);
 
-        // Eye pose shared by both view-locked rim layers below (the hit tint
-        // and the cyber interface's vignette) - both occupy the explicit
-        // scene-overlay layer: over the world, behind scene UI and the pause
-        // menu, identically in flat and VR.
+        // Eye pose for the view-locked hit tint below, which occupies the
+        // explicit scene-overlay layer: over the world, behind scene UI and
+        // the pause menu, identically in flat and VR.
         // Through the death camera first: these layers are view-LOCKED, and
         // while the player is dying the rendered view is no longer the tracked
         // head. Anchored to the raw tracked pose, the damage tint would slide
         // off to the side as the camera falls away from it - and the killing
         // blow is exactly when it is on screen.
-        let rendered_eye = death_camera::resolve(
+        let rendered_eye = self.resolve_camera(
             vec3(0.0, 0.0, 0.0),
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             self.head_pose.0,
             self.head_pose.1,
-            self.active_game_scene.death_camera(),
         );
         let (mut eye_position, eye_forward) =
             hit_feedback::eye_pose(rendered_eye.head_offset, rendered_eye.head_rotation);
@@ -2424,29 +2504,6 @@ impl Game {
         // rim by ~13 degrees and drag the ramp onto the crosshair. The same
         // clamp the cameras use is a no-op standing.
         eye_position.y = eye_position.y.min(self.player_eye_cap_above_center());
-
-        // The cyber interface's own entry/exit vignette: a second, separately
-        // colored rim layer rather than merged into the hit tint's intensity,
-        // so a hit still reads while the interface is open or easing shut.
-        // Same view-locked geometry as the hit tint
-        // (`hit_feedback::vignette_layer`), identically in flat and VR - only
-        // the eye pose differs. Pushed *before* the hit tint below: within one
-        // render layer the renderer draws in push order (`gl_engine.rs`), so
-        // the damage red always ends up painted on top of the interface cyan
-        // rather than the reverse.
-        let use_mode_vignette = self.active_game_scene.use_mode_vignette_intensity();
-        if use_mode_vignette > 0.0 {
-            let mut layer = hit_feedback::vignette_layer(
-                self.view_extents,
-                eye_position,
-                eye_forward,
-                ui::entry_ramp::VIGNETTE_COLOR,
-                use_mode_vignette,
-                util::render_source::USE_MODE_VIGNETTE,
-            );
-            layer.set_transform(pawn_to_world * layer.get_transform());
-            scene.push(layer);
-        }
 
         // The hit tint occupies the explicit scene-overlay layer: over the
         // world, behind scene UI and the pause menu, identically in flat and
@@ -2627,15 +2684,6 @@ impl Game {
         };
         self.active_game_scene
             .finish_render(&mut self.asset_cache, view, projection, screen_size)
-    }
-
-    fn update_music_cue_if_necessary(&mut self, new_cue: String) {
-        if self.last_music_cue.is_none() || !self.last_music_cue.as_ref().unwrap().eq(&new_cue) {
-            info!("updating music cue: {}", new_cue);
-            self.audio_context
-                .set_background_music_cue(new_cue.to_owned());
-            self.last_music_cue = Some(new_cue);
-        }
     }
 
     /// Snapshot real live looping sinks; duration follows rodio's wall clock.

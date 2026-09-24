@@ -29,6 +29,10 @@ pub struct Font {
 
 const SPACING: f32 = 1.0;
 
+/// Empty texels reserved around each glyph in the atlas, so linear sampling at
+/// a non-integer scale cannot reach a neighbouring glyph.
+const GLYPH_PADDING: u32 = 1;
+
 #[derive(Debug)]
 struct FontHeader {
     format: u16,
@@ -126,6 +130,38 @@ impl FontMetrics {
 /// bitmap strip, with no texture atlas and no GL. [`Font::read`] builds its
 /// atlas from this, and headless tools (dark_explorer's font preview) rasterize
 /// sample strings from it.
+/// The Dark UI font palette, `res/iface/fontpal.pcx`.
+///
+/// The `.PCX` itself is a 2x2 dummy image; the payload is its 256-entry
+/// palette, a green ramp from near-black (index 1) to bright (index 209) with
+/// pure black at 210. An antialiased font's bitmap bytes are indices into it -
+/// see [`glyph_rgba`](FontBitmap::glyph_rgba).
+pub type FontPalette = [[u8; 3]; 256];
+
+/// Read the 256-entry palette out of a `.PCX`. The image data is ignored.
+pub fn read_font_palette(buffer: &[u8]) -> Option<FontPalette> {
+    let mut reader = pcx::Reader::new(io::Cursor::new(buffer)).ok()?;
+    if !reader.is_paletted() {
+        return None;
+    }
+    // The palette sits after the image data, so the rows must be consumed
+    // before it can be read.
+    let mut row = vec![0u8; reader.width() as usize];
+    for _ in 0..reader.height() {
+        reader.next_row_paletted(&mut row).ok()?;
+    }
+    let mut flat = vec![0u8; 256 * 3];
+    reader.read_palette(&mut flat).ok()?;
+    let mut palette = [[0u8; 3]; 256];
+    for (index, entry) in palette.iter_mut().enumerate() {
+        entry.copy_from_slice(&flat[index * 3..index * 3 + 3]);
+    }
+    Some(palette)
+}
+
+/// The bitmap format whose bytes are palette indices rather than coverage.
+const FORMAT_PALETTED: u16 = 0xcccc;
+
 pub struct FontBitmap {
     pub metrics: FontMetrics,
     bitmap: Vec<u8>,
@@ -192,6 +228,54 @@ impl FontBitmap {
         Some((width as usize, alpha))
     }
 
+    /// One glyph as RGBA texels: `(width, rgba)` with `rgba` row-major
+    /// `width * height * 4`. `None` for a code the font does not define.
+    ///
+    /// A `0xCCCC` font's bytes are indices into the shared font palette, NOT
+    /// coverage: index 0 is the transparent background and every other index
+    /// names a colour outright, so such a font antialiases in *colour* (dimmer
+    /// ramp entries at the glyph edge) rather than in alpha, and carries its
+    /// own black outline at index 210. Without a palette - or for the packed
+    /// and coverage formats, which have no palette - the bytes stay coverage
+    /// against `tint`, which is what every caller got before the palette was
+    /// understood.
+    pub fn glyph_rgba(
+        &self,
+        code: i16,
+        palette: Option<&FontPalette>,
+        tint: [u8; 3],
+    ) -> Option<(usize, Vec<u8>)> {
+        let width = self.metrics.glyph_width(code)? as u32;
+        let column = self.metrics.columns[(code - self.metrics.first_char) as usize] as u32;
+        let height = self.metrics.height as u32;
+        let paletted = palette.filter(|_| self.metrics.format == FORMAT_PALETTED);
+
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                match paletted {
+                    Some(palette) => {
+                        let index = self.pixel_index(column + x, y);
+                        let [r, g, b] = palette[index as usize];
+                        rgba.extend_from_slice(&[r, g, b, if index == 0 { 0 } else { 255 }]);
+                    }
+                    None => {
+                        let alpha = self.pixel_alpha(column + x, y);
+                        rgba.extend_from_slice(&[tint[0], tint[1], tint[2], alpha]);
+                    }
+                }
+            }
+        }
+        Some((width as usize, rgba))
+    }
+
+    /// The raw bitmap byte at a strip coordinate. For a `0xCCCC` font this is a
+    /// palette index; reads past a truncated strip give index 0 (transparent).
+    fn pixel_index(&self, x: u32, y: u32) -> u8 {
+        let row_width = self.metrics.row_width as u32;
+        *self.bitmap.get((y * row_width + x) as usize).unwrap_or(&0)
+    }
+
     /// Rasterize `text` at native size into `(width, height, alpha)`, laying
     /// glyphs out left to right on their advances with nothing added between
     /// them (side bearings are baked into the glyph cells), as the UI's
@@ -232,10 +316,13 @@ impl FontBitmap {
 ///   coverage level 0..=15; scale linearly so full coverage (15) is fully
 ///   opaque (255). Without this the whole font renders at max alpha 15 -
 ///   nearly invisible.
-/// - Other formats (e.g. the `0xCCCC` AA fonts): each byte is used as direct
-///   alpha. The `> 205` clamp works around artifacts (random bright pixels)
-///   seen in some of those fonts; the proper fix is palette/coverage
-///   normalization (see `projects/ui-font-fidelity.md` follow-ups).
+/// - Format `0xCCCC`: the bytes are really palette indices (see
+///   [`FontBitmap::glyph_rgba`]) and this is only the fallback for a data
+///   install with no `fontpal.pcx`. Reading an index as alpha renders a glyph
+///   at roughly half opacity, and the `> 205` clamp drops index 210 - which is
+///   the palette's *black*, the glyphs' own outline, and would otherwise read
+///   as near-opaque tint. Neither is right; both keep unpalettable data
+///   legible rather than garish.
 fn unpacked_byte_alpha(format: u16, value: u8) -> u8 {
     if format == 1 {
         value.saturating_mul(17)
@@ -338,6 +425,17 @@ impl Font {
     }
 
     pub fn read_tinted<T: io::Read + io::Seek>(reader: &mut T, tint: [u8; 3]) -> Font {
+        Self::read_paletted(reader, None, tint)
+    }
+
+    /// Build a font, decoding an antialiased bitmap through `palette` when one
+    /// is supplied (see [`FontBitmap::glyph_rgba`]). `tint` applies only to the
+    /// formats that carry coverage rather than palette indices.
+    pub fn read_paletted<T: io::Read + io::Seek>(
+        reader: &mut T,
+        palette: Option<&FontPalette>,
+        tint: [u8; 3],
+    ) -> Font {
         let font_bitmap = FontBitmap::read(reader);
         let metrics = &font_bitmap.metrics;
 
@@ -351,20 +449,23 @@ impl Font {
             let code = metrics.first_char + n as i16;
             let ascii = char::from_u32(code as u32).unwrap();
 
-            let (width, alpha) = font_bitmap.glyph_alpha(code).unwrap();
+            let (width, rgba) = font_bitmap.glyph_rgba(code, palette, tint).unwrap();
 
-            // White glyphs; the bitmap only carries coverage.
             let img: ImageBuffer<image::Rgba<u8>, std::vec::Vec<u8>> =
                 image::ImageBuffer::from_fn(width as u32, metrics.height as u32, |x, y| {
+                    let texel = ((y as usize) * width + x as usize) * 4;
                     image::Rgba([
-                        tint[0],
-                        tint[1],
-                        tint[2],
-                        alpha[(y as usize) * width + x as usize],
+                        rgba[texel],
+                        rgba[texel + 1],
+                        rgba[texel + 2],
+                        rgba[texel + 3],
                     ])
                 });
 
-            let texture_pack_result = texture_packer.pack(&img);
+            // One texel of empty space around every glyph: cells packed flush
+            // together bleed into each other under linear sampling (see
+            // `pack_padded`).
+            let texture_pack_result = texture_packer.pack_padded(&img, GLYPH_PADDING);
             let char_info = CharInfo {
                 width: (width as f32),
                 texture_pack_result,
@@ -373,7 +474,14 @@ impl Font {
             char_to_info.insert(ascii, char_info);
         }
 
-        let textures = texture_packer.generate_textures();
+        // Nearest sampling: a glyph's letter spacing is a single blank texel
+        // column, and blending it with its neighbours at a fractional canvas
+        // scale smears adjacent letters together.
+        let textures = texture_packer.generate_textures_with(&engine::texture::TextureOptions {
+            wrap: false,
+            filter: engine::texture::TextureFilter::Nearest,
+            ..Default::default()
+        });
 
         assert!(textures.len() == 1);
         let texture = textures[0].clone();
@@ -410,13 +518,21 @@ impl engine::Font for Font {
         maybe_info?;
 
         let info = maybe_info.unwrap();
-        let half_pixel = self.get_half_pixel();
-        let min_uv_x = info.texture_pack_result.uv_offset_x;
-        let min_uv_y = info.texture_pack_result.uv_offset_y;
-        let max_uv_x = info.texture_pack_result.uv_offset_x + info.texture_pack_result.uv_width
-            - (half_pixel * 2.0);
-        let max_uv_y = info.texture_pack_result.uv_offset_y + info.texture_pack_result.uv_height
-            - (half_pixel * 2.0);
+        // The cell maps 1:1 onto its quad: the quad is `advance` wide and the
+        // cell IS the advance, bearings included (every glyph's last column is
+        // blank - that is the letter spacing, authored into the font).
+        //
+        // The inset this replaces took a whole texel off `max` while leaving
+        // `min` on the cell boundary, which squeezed the same ink into a
+        // narrower UV range and then stretched it back over the full quad -
+        // so the ink grew into its own bearing and neighbouring letters
+        // touched. `lvl` came out as `M`. Sampling outside the cell is now
+        // harmless anyway: `GLYPH_PADDING` keeps the next glyph a texel away.
+        let result = &info.texture_pack_result;
+        let min_uv_x = result.uv_offset_x;
+        let min_uv_y = result.uv_offset_y;
+        let max_uv_x = result.uv_offset_x + result.uv_width;
+        let max_uv_y = result.uv_offset_y + result.uv_height;
 
         let advance = info.width;
         Some(FontCharacterInfo {
@@ -431,7 +547,7 @@ impl engine::Font for Font {
 
 #[cfg(test)]
 mod tests {
-    use super::{FontBitmap, FontMetrics};
+    use super::{FontBitmap, FontMetrics, read_font_palette};
     use std::io::Cursor;
 
     /// Build a minimal, valid Dark `.FON` byte buffer for `first..=last` with
@@ -543,6 +659,65 @@ mod tests {
             }
         }
         None
+    }
+
+    /// The font palette is the ramp every antialiased `.FON` indexes into, so
+    /// the three entries the UI depends on are worth pinning: the body colour
+    /// BLUEAA draws its glyphs in, the bright entry MAINAA tops out at, and the
+    /// black outline at 210 that a naive alpha read throws away.
+    #[test]
+    fn font_palette_entries_from_the_real_asset_when_present() {
+        let Some(path) = find_asset("res/iface/fontpal.pcx") else {
+            return;
+        };
+        let palette = read_font_palette(&std::fs::read(path).unwrap()).expect("a paletted PCX");
+        assert_eq!(palette[130], [0, 191, 143]);
+        assert_eq!(palette[209], [0, 255, 191]);
+        assert_eq!(palette[210], [0, 0, 0]);
+    }
+
+    /// A `0xCCCC` glyph resolves its colour through the palette, keys index 0
+    /// out, and ignores the caller's tint entirely.
+    #[test]
+    fn a_paletted_glyph_takes_its_colour_from_the_palette_not_the_tint() {
+        let bytes = with_bitmap(synth_font(65, 65, 1, &[0, 2], 0xcccc), &[0, 130]);
+        let bitmap = FontBitmap::read(&mut Cursor::new(bytes));
+        let mut palette = [[0u8; 3]; 256];
+        palette[130] = [0, 191, 143];
+
+        let (width, rgba) = bitmap.glyph_rgba(65, Some(&palette), [255, 0, 0]).unwrap();
+        assert_eq!(width, 2);
+        // Index 0 is the transparent background; index 130 is its palette RGB.
+        assert_eq!(&rgba[0..4], &[0, 0, 0, 0]);
+        assert_eq!(&rgba[4..8], &[0, 191, 143, 255]);
+    }
+
+    /// Without a palette the same glyph falls back to coverage against the
+    /// tint, which is what every caller got before the palette was understood.
+    #[test]
+    fn an_unpalettable_glyph_falls_back_to_tinted_coverage() {
+        let bytes = with_bitmap(synth_font(65, 65, 1, &[0, 2], 0xcccc), &[0, 130]);
+        let bitmap = FontBitmap::read(&mut Cursor::new(bytes));
+
+        let (_, rgba) = bitmap.glyph_rgba(65, None, [255, 0, 0]).unwrap();
+        assert_eq!(&rgba[0..4], &[255, 0, 0, 0]);
+        assert_eq!(&rgba[4..8], &[255, 0, 0, 130]);
+    }
+
+    /// A packed (1-bit) font has no palette to consult, so one must not change
+    /// how it draws.
+    #[test]
+    fn a_packed_glyph_ignores_the_palette() {
+        // One 1x3 glyph, row 0 = 1 0 1 (the `packed_glyph` test's layout).
+        let bytes = with_bitmap(synth_font(65, 65, 1, &[0, 3], 0), &[0b1010_0000, 0, 0]);
+        let bitmap = FontBitmap::read(&mut Cursor::new(bytes));
+        let mut palette = [[0u8; 3]; 256];
+        palette[128] = [1, 2, 3];
+
+        let (_, rgba) = bitmap.glyph_rgba(65, Some(&palette), [9, 9, 9]).unwrap();
+        assert_eq!(&rgba[0..4], &[9, 9, 9, 255]);
+        assert_eq!(&rgba[4..8], &[9, 9, 9, 0]);
+        assert_eq!(&rgba[8..12], &[9, 9, 9, 255]);
     }
 
     /// Real-font parse guarded by asset availability (game `.FON` files are not

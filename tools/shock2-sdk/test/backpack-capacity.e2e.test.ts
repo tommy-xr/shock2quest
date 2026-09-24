@@ -11,8 +11,8 @@ import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 // Retail parity: a full backpack REJECTS a transfer into it (panel Take,
 // flat/VR world pickup, VR strip deposit) rather than silently absorbing the
 // item with no cell to remember it by. The item stays exactly where it was.
-// A full container that still holds a matching stack (same template, both
-// stackable) merges into it instead of refusing.
+// A container that holds something the item combines with (a matching
+// `P$CombineTy` label, both stackable) pools into it instead of refusing.
 //
 // Negative-first: on the parent, `move_live_entity_into_container`'s
 // first-free fallback forces slot 0 regardless of capacity, so every "must
@@ -55,7 +55,7 @@ async function fillBackpackWithWrenches(game: GameServer): Promise<number> {
 }
 
 test(
-  "a full backpack still merges a matching stackable instead of refusing it",
+  "repeated stackable pickups pool into one cell and are never refused",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -64,33 +64,22 @@ test(
     });
     await game.step({ frames: 2 });
 
-    // Spawn 1x1 Standard Clips one at a time until the backpack stops
-    // growing a new distinct item - the point at which every cell is
-    // already a Standard Clip stack and the next one can only merge. On the
-    // parent this loop never plateaus (a "full" backpack still silently
-    // takes every item at slot 0), so it exhausts its budget and throws.
-    let previousCount = (await game.player.inventory()).count;
-    let plateaued = false;
-    for (let i = 0; i < 60 && !plateaued; i++) {
+    // Standard Clips share the `StdClip` combine label, so each one pools
+    // into the stack already carried rather than claiming its own cell - the
+    // deposit merges BEFORE it looks for a free slot, as the original does.
+    // Capacity therefore never gates them: a stackable is accepted whether
+    // the backpack has room or not.
+    const before = (await game.player.inventory()).count;
+    for (let i = 0; i < 20; i++) {
       await game.player.spawnItem(CLIP_TEMPLATE);
-      const currentCount = (await game.player.inventory()).count;
-      if (currentCount === previousCount) {
-        plateaued = true;
-      } else {
-        previousCount = currentCount;
-      }
     }
-    assert.ok(
-      plateaued,
-      "the backpack should fill with distinct clip stacks and then start merging",
-    );
-    assert.ok(previousCount >= 10, `expected a plausible backpack size, got ${previousCount}`);
-
-    // The merge must not have refused the deposit: the spawned entity was
-    // consumed into an existing stack, so the item count is unchanged and
-    // every carried item is still a Standard Clip.
     const inventory = await game.player.inventory();
-    assert.equal(inventory.count, previousCount);
+
+    assert.equal(
+      inventory.count,
+      before + 1,
+      `twenty clips must pool into ONE cell, got ${JSON.stringify(inventory.items)}`,
+    );
     assert.ok(
       inventory.items.every((item) => item.name?.includes("Clip")),
       `expected every carried item to be a Clip, got ${JSON.stringify(inventory.items)}`,

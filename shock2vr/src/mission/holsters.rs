@@ -4,7 +4,7 @@ use crate::{
     input_context::InputContext, runtime_props::RuntimePropHolstered, vr_support::GripPose,
 };
 use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, vec3};
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
 
 const SCALE: f32 = crate::METERS_PER_WORLD_UNIT;
 fn radius() -> f32 {
@@ -33,59 +33,16 @@ mod tests {
     }
 
     #[test]
-    fn enlarged_overlapping_slots_choose_nearest_and_yield_to_shoulders() {
-        let (mut tracker, mut input, ids) = setup();
-        let centers = tracker.centers.unwrap();
-        // Both 35 cm volumes include this point; the left slot is closer.
-        input.left_hand.position = (centers[0] + centers[1]) * 0.5 - vec3(0.02 / SCALE, 0.0, 0.0);
-        let update = |tracker: &mut Holsters, input: &InputContext| {
-            tracker.update(
-                input,
-                [None; 2],
-                [true; 2],
-                [Some(ids[0]), Some(ids[1])],
-                2,
-                [false; 2],
-                [false; 2],
-                true,
-                0.016,
-            )
-        };
-        input.left_hand.squeeze_value = 0.0;
-        update(&mut tracker, &input);
-        assert_eq!(tracker.near[0], Some(1));
-        input.left_hand.squeeze_value = 1.0;
-        assert_eq!(
-            update(&mut tracker, &input)[0],
-            Some(Action::Retrieve {
-                entity: ids[1],
-                slot: 1
-            })
-        );
-        tracker.shoulder_priority[0] = true;
-        input.left_hand.squeeze_value = 0.0;
-        update(&mut tracker, &input);
-        input.left_hand.squeeze_value = 1.0;
-        assert_eq!(update(&mut tracker, &input)[0], None);
-        assert_eq!(tracker.near[0], None);
-        tracker.shoulder_priority[0] = false;
-        input.left_hand.position = centers[0] + vec3(0.0, -0.30 / SCALE, 0.0);
-        update(&mut tracker, &input);
-        assert_eq!(
-            tracker.near[0],
-            Some(0),
-            "30 cm below the slot is reachable"
-        );
-        input.left_hand.position = centers[0] + vec3(0.0, -0.38 / SCALE, 0.0);
-        update(&mut tracker, &input);
-        assert_eq!(
-            tracker.near[0],
-            Some(0),
-            "palm center stays outside while the glove sphere touches"
-        );
-        input.left_hand.position = centers[0] + vec3(0.0, -0.41 / SCALE, 0.0);
-        update(&mut tracker, &input);
-        assert_eq!(tracker.near[0], None, "separated spheres do not touch");
+    fn psi_amp_fits_without_being_a_pistol() {
+        let mut world = World::new();
+        let amp = world.add_entity((dark::properties::PropTemplateId { template_id: -247 },));
+        world.add_unique(super::super::mission_core::GlobalTemplateClassTags(
+            std::collections::HashMap::from([(
+                -247,
+                std::collections::HashMap::from([("weapontype".to_owned(), "psiamp".to_owned())]),
+            )]),
+        ));
+        assert!(accepts(&world, amp));
     }
 
     #[test]
@@ -116,19 +73,6 @@ mod tests {
         }
         let item = world.add_entity(());
         assert!(!accepts(&world, item));
-    }
-
-    #[test]
-    fn pack_rat_stat_unlocks_a_second_slot() {
-        let world = World::new();
-        world.add_unique(crate::quest_info::QuestInfo::new());
-        assert_eq!(slot_count(&world), 1);
-        world
-            .borrow::<shipyard::UniqueViewMut<crate::quest_info::QuestInfo>>()
-            .unwrap()
-            .player_stats_mut()
-            .add_os_trait(crate::scripts::gui::TRAIT_PACK_RAT);
-        assert_eq!(slot_count(&world), 2);
     }
 
     #[test]
@@ -259,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn pack_rat_unlocks_left_slot_and_nonweapons_do_not_claim_releases() {
+    fn capacity_limits_slots_and_nonweapons_do_not_claim_releases() {
         for count in [1, 2] {
             let (mut h, mut input, ids) = setup();
             input.right_hand.position = h.centers.unwrap()[1];
@@ -431,9 +375,10 @@ pub(super) fn occupants(world: &World) -> [Option<EntityId>; 2] {
     slots
 }
 
-/// The thigh slots accept melee arms and the two compact pistols only.
+/// The thigh slots accept melee arms, compact pistols, and psi amps.
 pub(super) fn accepts(world: &World, entity: EntityId) -> bool {
     super::mission_core::is_melee_weapon(world, entity)
+        || crate::wielded_weapon::is_psi_amp(world, entity)
         || world
             .borrow::<View<dark::properties::PropPlayerGun>>()
             .is_ok_and(|guns| {
@@ -446,17 +391,8 @@ pub(super) fn accepts(world: &World, entity: EntityId) -> bool {
             })
 }
 
-pub(super) fn slot_count(world: &World) -> usize {
-    1 + usize::from(
-        world
-            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
-            .is_ok_and(|quests| {
-                quests
-                    .player_stats()
-                    .has_os_trait(crate::scripts::gui::TRAIT_PACK_RAT)
-            }),
-    )
-}
+/// Both thigh holsters are standard equipment, independent of O/S upgrades.
+pub(super) const SLOT_COUNT: usize = 2;
 
 impl Holsters {
     pub fn update(
@@ -599,7 +535,7 @@ impl Holsters {
         rotation: Quaternion<f32>,
     ) -> serde_json::Value {
         serde_json::json!({"centers": self.world_centers(position, rotation).map(|cs| cs.map(|c| [c.x,c.y,c.z])),
-            "radius":radius(), "enabled_slots":slot_count(world), "near":self.near,
+            "radius":radius(), "enabled_slots":SLOT_COUNT, "near":self.near,
             "items":occupants(world).map(|e| e.map(|id| id.inner() as i32)),
             "retained":self.retained.0.map(|e| e.is_some())})
     }
@@ -615,7 +551,7 @@ impl Holsters {
             return vec![];
         };
         let slots = occupants(world);
-        let count = slot_count(world);
+        let count = SLOT_COUNT;
         let debug = crate::dev_params::get_bool(crate::dev_params::VR_HOLSTER_ZONES);
         let mut objects = Vec::new();
         for slot in 0..2 {

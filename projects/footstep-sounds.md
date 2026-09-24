@@ -205,7 +205,7 @@ audio) and it is not a script (the player has no script).
   accrues world-space distance and would step continuously. The accumulator must
   use displacement *relative to the support*, or be suppressed when `support` is
   present and the input stick is centred.
-- **Teleport locomotion** (`teleport` experimental feature) moves the player via
+- **Scripted player teleports** move the player via
   `Effect::SetPlayerPosition`, bypassing `move_player` entirely. A world-position
   delta accumulator would emit a burst of footsteps for a 20-foot hop. The
   accumulator must be driven by the movement call's own return value, and reset

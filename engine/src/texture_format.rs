@@ -63,6 +63,15 @@ fn apply_color_key(pixels: &mut [u8], width: u32, height: u32) {
 /// completely and a bright line stays solid, so a grid bitmap drawn over the
 /// world reads as a hologram rather than as a black panel.
 pub fn tint_alpha_from_luminance(data: RawTextureData, tint: [u8; 3]) -> RawTextureData {
+    tint_alpha_from_luminance_range(data, tint, [0, 255])
+}
+
+/// Map a bounded luminance range to alpha, preserving any authored colour key.
+pub fn tint_alpha_from_luminance_range(
+    data: RawTextureData,
+    tint: [u8; 3],
+    range: [u8; 2],
+) -> RawTextureData {
     let (stride, has_alpha) = match data.format {
         PixelFormat::RGB => (3usize, false),
         PixelFormat::RGBA => (4usize, true),
@@ -75,7 +84,9 @@ pub fn tint_alpha_from_luminance(data: RawTextureData, tint: [u8; 3]) -> RawText
         let g = data.bytes[src + 1] as u32;
         let b = data.bytes[src + 2] as u32;
         // Rec. 601 luma, the usual perceptual weighting.
-        let luma = ((r * 299 + g * 587 + b * 114) / 1000) as u8;
+        let luma = (r * 299 + g * 587 + b * 114) / 1000;
+        let span = range[1].saturating_sub(range[0]).max(1) as u32;
+        let luma = (luma.saturating_sub(range[0] as u32) * 255 / span).min(255) as u8;
         // A source alpha (a colour key, say) still wins: a keyed-out texel
         // must not come back as a lit line.
         let alpha = if has_alpha {
@@ -270,6 +281,20 @@ mod tests {
         assert_eq!(out.bytes[3], 0, "black must drop out entirely");
         assert!(out.bytes[7] > 240, "a bright line stays solid");
         assert_eq!(&out.bytes[4..7], &[80, 220, 255], "lines take the tint");
+    }
+
+    #[test]
+    fn bounded_luminance_removes_psi_icon_plate_and_keeps_glyph_and_colour_key() {
+        let data = RawTextureData {
+            bytes: vec![0, 66, 49, 255, 0, 163, 122, 255, 255, 255, 255, 0],
+            width: 3,
+            height: 1,
+            format: PixelFormat::RGBA,
+        };
+        let out = tint_alpha_from_luminance_range(data, [90, 226, 255], [52, 108]);
+        assert_eq!(out.bytes[3], 0, "retail dark green plate disappears");
+        assert_eq!(out.bytes[7], 255, "retail bright glyph stays legible");
+        assert_eq!(out.bytes[11], 0, "authored transparency still wins");
     }
 
     #[test]

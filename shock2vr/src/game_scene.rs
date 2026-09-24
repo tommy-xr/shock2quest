@@ -140,6 +140,9 @@ pub trait GameScene {
     /// player-visible feedback; every other scene deliberately ignores it.
     fn on_load_failed(&mut self) {}
 
+    /// Cancel scene-local input gestures when a system overlay takes ownership.
+    fn cancel_transient_input(&mut self) {}
+
     /// Whether this scene wants a 2D mouse cursor (e.g. a menu). Flat runtimes
     /// show the OS cursor and populate `InputContext::pointer` when true; by
     /// default scenes capture the mouse for look.
@@ -176,30 +179,16 @@ pub trait GameScene {
         false
     }
 
-    /// Degrees to pull the flat FOV in by this frame (subtracted from the
-    /// base FOV), eased over a personal-UI mode's entry/exit ramp - see the
-    /// cyber interface's `ui::entry_ramp`. Implementations must return 0 in
-    /// VR: OpenXR view FOVs are used as-is, and rendering at a different FOV
-    /// than submitted causes compositor reprojection warping. Default: no
-    /// pull (non-mission scenes have no such mode).
-    fn fov_pull_deg(&self, _game_options: &GameOptions) -> f32 {
-        0.0
-    }
-
-    /// Peak rim-vignette intensity (0..1) this scene wants blended in this
-    /// frame, on top of (not merged with) `HitFeedback`'s own damage tint -
-    /// see the cyber interface's `ui::entry_ramp`. The two are drawn as
-    /// separate layered quads with their own colors, so a hit still reads
-    /// while a personal-UI mode is open. Default: none.
-    fn use_mode_vignette_intensity(&self) -> f32 {
-        0.0
-    }
-
     /// Collision-valid, supported position to serialize for the player.
     /// Mission scenes return a specific refusal reason while transient
     /// locomotion, death, or unsupported space makes a durable save unsafe.
     fn player_save_position(&self) -> Result<Vector3<f32>, PlayerSavePoseError> {
         Err(PlayerSavePoseError::NoPlayer)
+    }
+
+    /// Collision-resolved flat eye, shared with interaction and rendering.
+    fn flat_eye_pose(&self) -> Option<crate::death_camera::EyePose> {
+        None
     }
 
     /// The death camera's contribution to this frame's view, if the player is
@@ -585,6 +574,48 @@ pub struct DebugPlayerStatsRequest {
     pub cyber_modules: Option<i32>,
 }
 
+/// Debug hook for the same timed modifier path used by gameplay effects.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatModifierRequest {
+    pub source: String,
+    pub stat: crate::player_stats::Stat,
+    pub delta: i32,
+    pub duration_secs: f32,
+}
+
+/// Every stat, skill and psi tier at its cap - what the "Max out stats" cheat
+/// asks for. Written as a full struct literal on purpose: a new skill field
+/// then fails to compile here rather than being silently left un-maxed.
+///
+/// The upgrade currency is deliberately absent - modules are their own cheat,
+/// and provisioning the sheet should not also hand out the means to buy it.
+pub(crate) fn max_stats_request() -> DebugPlayerStatsRequest {
+    use crate::player_stats::{PSI_TIER_CAP, SKILL_CAP, STAT_CAP};
+    let stat = Some(STAT_CAP);
+    let skill = Some(SKILL_CAP);
+    DebugPlayerStatsRequest {
+        strength: stat,
+        endurance: stat,
+        agility: stat,
+        psionic_ability: stat,
+        cyber_affinity: stat,
+        skills: DebugSkillLevelsRequest {
+            standard_weapons: skill,
+            energy_weapons: skill,
+            heavy_weapons: skill,
+            exotic_weapons: skill,
+            hack: skill,
+            repair: skill,
+            modify: skill,
+            maintenance: skill,
+            research: skill,
+        },
+        psi_tier: Some(PSI_TIER_CAP),
+        cyber_modules: None,
+    }
+}
+
 /// Target skill levels, mirroring `player.stats.skills`. Named fields (rather
 /// than a map) keep the shape identical to the read side.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -633,6 +664,8 @@ pub struct DebugUiState {
     /// shared interface canvas - the BIOFULL/AMMOFULL backdrops, the health/psi
     /// bars and numbers, the ammo count and labels. Empty outside use mode.
     pub readout_elements: Vec<DebugUiElement>,
+    /// Cyber-interface utility buttons and the current character/access reader.
+    pub utilities: Vec<DebugUiElement>,
     /// Where the pointer last landed on the shared canvas (flat: the mouse;
     /// VR: the controller ray on the cyber-interface panel).
     pub pointer: Option<DebugUiPointer>,
@@ -643,6 +676,9 @@ pub struct DebugUiState {
     /// The HUD status-message lines showing right now, oldest first (the
     /// channel `TrapMessage` and friends write to). Empty when none are up.
     pub messages: Vec<String>,
+    /// The interstitial banner showing right now (the centered title card),
+    /// `\n`-separated lines as authored. `None` when none is up.
+    pub banner: Option<String>,
     /// The station security alarm - `Some` exactly while one is up, which is
     /// when the HUD shows its badge and countdown.
     pub security_alarm: Option<DebugSecurityAlarm>,
@@ -1006,9 +1042,11 @@ pub trait DebuggableScene {
             cursor: None,
             readout: Vec::new(),
             readout_elements: Vec::new(),
+            utilities: Vec::new(),
             pointer: None,
             panel_pose: None,
             messages: Vec::new(),
+            banner: None,
             security_alarm: None,
         }
     }
@@ -1046,6 +1084,13 @@ pub trait DebuggableScene {
         _request: &DebugPlayerStatsRequest,
     ) -> Result<crate::player_stats::PlayerStats, String> {
         Err("scene does not support a character sheet".to_string())
+    }
+
+    fn apply_stat_modifier(
+        &mut self,
+        _request: &StatModifierRequest,
+    ) -> Result<crate::player_stats::PlayerStats, String> {
+        Err("scene does not support stat modifiers".to_string())
     }
 
     /// Level-transition triggers in this scene (where each leads + its position),
@@ -1246,4 +1291,46 @@ pub struct DebugPathfindingTestStatus {
     pub state: String,
     /// Number of waypoints in the computed test path (0 if no path computed)
     pub test_path_waypoints: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::player_stats::{PSI_TIER_CAP, SKILL_CAP, STAT_CAP};
+
+    /// A typo here (a stat cap on the psi tier, say) would provision a
+    /// character that quietly stops short, so assert the values, not just that
+    /// the fields are populated. Exhaustiveness is a compile error by
+    /// construction - `max_stats_request` uses a full struct literal.
+    #[test]
+    fn the_max_stats_cheat_asks_for_every_cap() {
+        let request = max_stats_request();
+        for stat in [
+            request.strength,
+            request.endurance,
+            request.agility,
+            request.psionic_ability,
+            request.cyber_affinity,
+        ] {
+            assert_eq!(stat, Some(STAT_CAP));
+        }
+        let s = &request.skills;
+        for skill in [
+            s.standard_weapons,
+            s.energy_weapons,
+            s.heavy_weapons,
+            s.exotic_weapons,
+            s.hack,
+            s.repair,
+            s.modify,
+            s.maintenance,
+            s.research,
+        ] {
+            assert_eq!(skill, Some(SKILL_CAP));
+        }
+        assert_eq!(request.psi_tier, Some(PSI_TIER_CAP));
+        // Modules are their own cheat: maxing the sheet must not also hand out
+        // the currency to buy things with.
+        assert_eq!(request.cyber_modules, None);
+    }
 }

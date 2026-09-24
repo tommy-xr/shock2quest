@@ -95,7 +95,7 @@ fn identity_quat() -> Quaternion<f32> {
     Quaternion::new(1.0, 0.0, 0.0, 0.0)
 }
 
-fn world_with_floor() -> (PhysicsWorld, PlayerHandle) {
+pub(super) fn world_with_floor() -> (PhysicsWorld, PlayerHandle) {
     let mut world = PhysicsWorld::new();
     let floor = world.create_static_body(
         Isometry::translation(0.0, -1.0, 0.0),
@@ -114,7 +114,10 @@ fn world_with_floor() -> (PhysicsWorld, PlayerHandle) {
     (world, player)
 }
 
-fn spawn_held_wrench(world: &mut PhysicsWorld, at: Vector3<f32>) -> (EntityId, RigidBodyHandle) {
+pub(super) fn spawn_held_wrench(
+    world: &mut PhysicsWorld,
+    at: Vector3<f32>,
+) -> (EntityId, RigidBodyHandle) {
     let weapon = EntityId::from_inner(2).unwrap();
     let handle = world.add_dynamic(
         weapon,
@@ -580,4 +583,88 @@ fn a_swing_stopped_by_a_limb_reports_it_pointing_at_the_limb() {
         "a swept blow carries the speed the sweep measured, got {:?}",
         contact.closing_speed
     );
+}
+
+/// Reproduce production order: targets are authored after physics, while the
+/// player already has its next collision-resolved movement queued for the next
+/// frame. Check starts, reversals and stops without a settling frame.
+#[test]
+fn held_targets_follow_the_pawn_frame_without_counting_walking_as_a_swing() {
+    let (mut world, mut player) = world_with_floor();
+    world.set_player_translation(vec3(0.0, 1.2, 0.0), &mut player);
+    let offset = vec3(0.7, 1.0, 0.0);
+    let mut pawn = world.get_player_translation(&player);
+    let (weapon, handle) = spawn_held_wrench(&mut world, pawn + offset);
+    world.set_position_rotation2(weapon, pawn + offset, identity_quat());
+    for movement in [0.0, 0.1, 0.1, -0.1, -0.1, 0.0, 0.0] {
+        world.set_held_target_frame(pawn, identity_quat(), None);
+        world.rebase_held_targets(&player, identity_quat(), None);
+        (pawn, _) = world.update(vec3(movement, 0.0, 0.0), &mut player);
+        let actual = world.get_position(handle).unwrap();
+        assert!(
+            (actual - pawn - offset).magnitude() < 0.002,
+            "held body {actual:?} must follow current pawn {pawn:?}"
+        );
+        let hand_velocity = world
+            .held_melee_target_velocity_at_point(weapon, actual)
+            .unwrap();
+        assert!(
+            (hand_velocity - world.player_velocity()).magnitude() < 0.002,
+            "walking alone must not register as swing: hand {hand_velocity:?}, player {:?}",
+            world.player_velocity()
+        );
+        // Same late target publication as VirtualHand / fitted grips.
+        world.set_position_rotation2(weapon, pawn + offset, identity_quat());
+    }
+}
+
+/// A teleport already carries both endpoints. It must also carry the recorded
+/// target frame, even without a paused administrative update to refresh it.
+#[test]
+fn held_target_rebase_does_not_apply_a_player_teleport_twice() {
+    let (mut world, mut player) = world_with_floor();
+    let start = world.get_player_translation(&player);
+    let offset = vec3(0.7, 1.0, 0.0);
+    let (weapon, handle) = spawn_held_wrench(&mut world, start + offset);
+    world.set_position_rotation2(weapon, start + offset, identity_quat());
+    world.set_held_target_frame(start, identity_quat(), None);
+    let destination = start + vec3(30.0, 0.0, 0.0);
+    world.set_player_translation(destination, &mut player);
+    world.rebase_held_targets(&player, identity_quat(), None);
+    world.update(vec3(0.0, 0.0, 0.0), &mut player);
+    assert!((world.get_position(handle).unwrap() - destination - offset).magnitude() < 0.002);
+}
+
+#[test]
+fn held_target_rebase_preserves_fixed_stage_hands_through_tracked_crouch() {
+    let (mut world, mut player) = world_with_floor();
+    world.set_player_translation(
+        vec3(0.0, super::player_center_above_floor(false), 0.0),
+        &mut player,
+    );
+    world.update(vec3(0.0, 0.0, 0.0), &mut player);
+    let mut tracking = crate::vr_tracking::TrackingTransform::new(
+        super::player_center_above_floor(false),
+        super::player_eye_cap_above_center(false),
+        0.8,
+        0.0,
+    );
+    let stage_hand = vec3(0.25, 0.7, -0.3);
+    let mut pawn = world.get_player_translation(&player);
+    let start = pawn + tracking.stage_to_pawn(stage_hand);
+    let (weapon, handle) = spawn_held_wrench(&mut world, start);
+    world.set_position_rotation2(weapon, start, identity_quat());
+    for crouched in [true, false, true] {
+        world.set_held_target_frame(pawn, identity_quat(), Some(tracking));
+        world.set_player_crouch(crouched, &mut player);
+        tracking = tracking.with_stance(
+            super::player_center_above_floor(crouched),
+            super::player_eye_cap_above_center(crouched),
+        );
+        world.rebase_held_targets(&player, identity_quat(), Some(tracking));
+        (pawn, _) = world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let target = pawn + tracking.stage_to_pawn(stage_hand);
+        assert!((world.get_position(handle).unwrap() - target).magnitude() < 0.002);
+        world.set_position_rotation2(weapon, target, identity_quat());
+    }
 }

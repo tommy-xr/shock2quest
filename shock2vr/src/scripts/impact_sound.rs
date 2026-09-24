@@ -101,7 +101,16 @@ impl ImpactSoundGuard {
                 None => velocity.magnitude(),
             }
         };
-        if speed < IMPACT_SOUND_MIN_SPEED {
+        self.should_play_speed(with, speed)
+    }
+
+    /// Released props supply pre-solve relative contact speed; the solver may
+    /// have already stopped them by the time scripts receive the collision.
+    pub fn should_play_speed(&mut self, with: EntityId, speed: f32) -> bool {
+        if self.cooldowns.contains_key(&with)
+            || !speed.is_finite()
+            || speed < IMPACT_SOUND_MIN_SPEED
+        {
             return false;
         }
         self.arm(with);
@@ -184,29 +193,7 @@ impl Script for HeldItemImpactSound {
         if !self.guard.should_play(entity_id, *with, physics, *contact) {
             return Effect::NoEffect;
         }
-        match impact_sound_effect(entity_id, *with, world) {
-            Effect::PlayEnvironmentalSound {
-                audio_handle,
-                query,
-                position,
-            } => {
-                // Retail never physically bumped guns into walls. Prefer an
-                // authored gun schema; otherwise reuse the wrench's material-
-                // sensitive solid-metal impact as an explicit VR augmentation.
-                let material = super::script_util::get_impact_material(world, *with);
-                Effect::PlayEnvironmentalSoundWithFallback {
-                    audio_handle,
-                    query,
-                    position,
-                    fallback: dark::EnvSoundQuery::from_tag_values(vec![
-                        ("event", "collision"),
-                        ("weapontype", "wrench"),
-                        ("material", &material),
-                    ]),
-                }
-            }
-            effect => effect,
-        }
+        impact_sound_effect(entity_id, *with, world)
     }
 }
 
@@ -320,7 +307,20 @@ mod tests {
     /// lookup is keyed on the item's class tag.
     fn world_with_audible_gun() -> (World, EntityId) {
         let mut world = World::new();
-        let gun = world.add_entity(PropClassTag::from_string("WeaponType Pistol"));
+        let gun = world.add_entity((
+            PropClassTag::from_string("WeaponType Pistol"),
+            dark::properties::PropPlayerGun {
+                flags: 0,
+                hand_model: String::new(),
+                icon_file: String::new(),
+                model_offset: vec3(0.0, 0.0, 0.0),
+                fire_offset: vec3(0.0, 0.0, 0.0),
+                heading: 0,
+                reload_pitch: 0,
+                reload_rate: 0,
+                gun_type: 0,
+            },
+        ));
         (world, gun)
     }
 

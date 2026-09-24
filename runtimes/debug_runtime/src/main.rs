@@ -114,7 +114,7 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_IDLE_TIMEOUT_SECS)]
     idle_timeout_secs: u64,
 
-    /// Enable debug physics rendering
+    /// Start with physics wireframes on; toggle live in Developer > Visualizations.
     #[arg(long)]
     debug_physics: bool,
 
@@ -252,6 +252,10 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
+    // Seed before any HTTP server or game starts: later live writes must win.
+    if args.debug_physics {
+        shock2vr::dev_params::set(shock2vr::dev_params::DEBUG_PHYSICS, 1.0);
+    }
     let _ = INSTANCE_ID.set(args.instance_id.clone());
 
     info!(
@@ -404,6 +408,10 @@ async fn start_http_server(
         .route("/v1/player/give", axum::routing::post(give_item))
         .route("/v1/player/spawn-item", axum::routing::post(spawn_item))
         .route("/v1/player/stats", axum::routing::post(set_player_stats))
+        .route(
+            "/v1/player/stat-modifier",
+            axum::routing::post(apply_stat_modifier),
+        )
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/scene", get(list_scene_objects))
         .route("/v1/physics/bodies", get(list_physics_bodies))
@@ -497,7 +505,9 @@ async fn start_http_server(
     info!(
         "  POST /v1/dev-params       - Set a dev param {{key, value}} (clamped + snapped, live next frame)"
     );
-    info!("  GET  /v1/audio/recent     - Recently played sounds (sample, tags, duration, source)");
+    info!(
+        "  GET  /v1/audio/recent     - Recently played sounds (sample, tags, duration, source); ?sample= / ?playing=true filter"
+    );
     info!(
         "  GET  /v1/audio/loops      - Live looping sinks (sample, handle, owner, elapsed wall time)"
     );
@@ -597,7 +607,6 @@ fn run_game_blocking(
         spawn_location,
         save_file: args.save_file,
         debug_draw: args.debug_draw,
-        debug_physics: args.debug_physics,
         debug_portals: args.debug_portals,
         debug_show_ids: args.debug_show_ids,
         debug_skeletons: args.debug_skeletons,
@@ -978,7 +987,7 @@ fn run_game_blocking(
         // Add hand spotlights
         let hand_spotlights = game.get_hand_spotlights();
         for spotlight in hand_spotlights {
-            scene_for_render.lights_mut().add_spotlight(spotlight);
+            scene_for_render.lights_mut().add_light(spotlight);
         }
 
         // Actually render the scene
@@ -1043,6 +1052,14 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
                 render_layer: render_layer.as_str().to_owned(),
                 clear_depth: render_layer.clears_depth() && first_in_layer,
                 backface_culling: obj.backface_culling().map(|w| format!("{w:?}")),
+                lighting: obj.lights().map(|lights| {
+                    let position = cgmath::vec3(translation.x, translation.y, translation.z);
+                    commands::ObjectLightingSummary {
+                        light_count: lights.active_count(),
+                        received: shock2vr::object_lighting::received_light(lights, position),
+                        ambient: [lights.ambient.x, lights.ambient.y, lights.ambient.z],
+                    }
+                }),
             }
         })
         .collect()
@@ -1347,9 +1364,11 @@ fn process_command(
                         cursor: ui.cursor,
                         readout: ui.readout,
                         readout_elements: ui.readout_elements,
+                        utilities: ui.utilities,
                         pointer: ui.pointer,
                         panel_pose: ui.panel_pose,
                         messages: ui.messages,
+                        banner: ui.banner,
                         security_alarm: ui.security_alarm,
                     }
                 })
@@ -1361,9 +1380,11 @@ fn process_command(
                     cursor: None,
                     readout: Vec::new(),
                     readout_elements: Vec::new(),
+                    utilities: Vec::new(),
                     pointer: None,
                     panel_pose: None,
                     messages: Vec::new(),
+                    banner: None,
                     security_alarm: None,
                 });
             if reply.send(result).is_err() {
@@ -1509,6 +1530,13 @@ fn process_command(
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send spawn-item result - receiver dropped");
             }
+        }
+        RuntimeCommand::ApplyStatModifier { request, reply } => {
+            let result = match game.debug_scene_mut() {
+                Some(scene) => scene.apply_stat_modifier(&request),
+                None => Err("no debuggable scene available".to_string()),
+            };
+            let _ = reply.send(result);
         }
         RuntimeCommand::SetPlayerStats { request, reply } => {
             let result = match game.debug_scene_mut() {
@@ -1840,20 +1868,7 @@ fn process_command(
             let objects = matched
                 .into_iter()
                 .take(limit.unwrap_or(usize::MAX))
-                .map(|o| commands::SceneObjectSummary {
-                    entity_id: o.entity_id,
-                    name: o.name.clone(),
-                    model: o.model.clone(),
-                    source: o.source.clone(),
-                    position: o.position,
-                    scale: o.scale,
-                    transparency: o.transparency,
-                    depth_write: o.depth_write,
-                    depth_bias: o.depth_bias,
-                    render_layer: o.render_layer.clone(),
-                    clear_depth: o.clear_depth,
-                    backface_culling: o.backface_culling.clone(),
-                })
+                .cloned()
                 .collect();
             let result = commands::SceneListResult {
                 objects,
@@ -2099,6 +2114,7 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
         right_hand: hand(&input.right_hand),
         crouch: input.crouch,
         jump: input.jump,
+        lean: input.lean,
     }
 }
 
@@ -2246,7 +2262,14 @@ fn apply_camera_request(
         );
     }
 
-    let (head_offset, head_rotation) = composed_head(game, input);
+    let (tracked_offset, tracked_rotation) = tracked_head(game, input);
+    let detached_head = game.resolve_free_camera(
+        vec3(0.0, 0.0, 0.0),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        tracked_offset,
+        tracked_rotation,
+    );
+    let (head_offset, head_rotation) = (detached_head.head_offset, detached_head.head_rotation);
     // Patch semantics are against the *eye* pose, which is the pose the caller
     // named last time - not the compensated one stored underneath.
     let current_eye = game
@@ -2468,7 +2491,16 @@ fn capture_frame_snapshot(
                     .as_ref()
                     .map(|s| s.active_psi_powers.clone())
                     .unwrap_or_default(),
+                seekersense_contacts: state
+                    .as_ref()
+                    .map(|s| s.seekersense_contacts.clone())
+                    .unwrap_or_default(),
+                radar_contacts: state
+                    .as_ref()
+                    .map(|s| s.radar_contacts.clone())
+                    .unwrap_or_default(),
                 stats: state.as_ref().and_then(|s| s.stats.clone()),
+                effective_stats: state.as_ref().and_then(|s| s.effective_stats.clone()),
                 collected_logs: state
                     .as_ref()
                     .map(|s| s.collected_logs.clone())
@@ -3376,6 +3408,21 @@ async fn spawn_item(
             tracing::error!("Failed to receive spawn-item result - sender dropped");
             Err(game_loop_unavailable())
         }
+    }
+}
+
+async fn apply_stat_modifier(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<shock2vr::game_scene::StatModifierRequest>,
+) -> Result<Json<shock2vr::player_stats::PlayerStats>, (StatusCode, String)> {
+    let (reply, result) = oneshot::channel();
+    command_tx
+        .send(RuntimeCommand::ApplyStatModifier { request, reply })
+        .map_err(|_| game_loop_unavailable())?;
+    match result.await {
+        Ok(Ok(stats)) => Ok(Json(stats)),
+        Ok(Err(error)) => Err((StatusCode::BAD_REQUEST, error)),
+        Err(_) => Err(game_loop_unavailable()),
     }
 }
 
@@ -4346,8 +4393,23 @@ async fn list_input_actions() -> Json<Value> {
 /// sample + query tags + position). This is the only headless way to observe
 /// audio, e.g. asserting a bullet impact played a material-tagged collision
 /// schema. Reads a process-wide log, so no game-loop round-trip is needed.
-async fn get_recent_audio() -> Json<Value> {
-    Json(serde_json::json!({ "sounds": shock2vr::audio_log::recent() }))
+/// `?sample=` keeps only samples containing it, ignoring case; `?playing=true`
+/// only what is audible now (e.g. two narrations overlapping).
+#[derive(Deserialize)]
+struct RecentAudioQueryParams {
+    sample: Option<String>,
+    playing: Option<bool>,
+}
+
+async fn get_recent_audio(Query(params): Query<RecentAudioQueryParams>) -> Json<Value> {
+    let mut sounds = match params.sample {
+        Some(needle) => shock2vr::audio_log::recent_matching(&needle),
+        None => shock2vr::audio_log::recent(),
+    };
+    if params.playing == Some(true) {
+        sounds.retain(|sound| sound.still_playing);
+    }
+    Json(serde_json::json!({ "sounds": sounds }))
 }
 
 async fn get_audio_loops(

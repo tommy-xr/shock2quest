@@ -31,6 +31,22 @@ async function only(
   return matches[0]!;
 }
 
+/// Whether Xerxes' clip has played: xer02 "Potential threat detected" is
+/// xxyal001, xer03 "Security alert terminated" is xxalrtov, xer01 "Security
+/// system offline" is xxhaksec.
+async function played(game: GameServer, sample: string): Promise<boolean> {
+  return (await game.audio.recent()).sounds.some(
+    (sound) => sound.sample.toLowerCase() === sample,
+  );
+}
+
+/// Whether the klaxon (schema klaxalarm, sample alarm1) is looping.
+async function klaxonLooping(game: GameServer): Promise<boolean> {
+  return (await game.audio.loops()).loops.some((loop) =>
+    loop.sample.toLowerCase().includes("alarm1"),
+  );
+}
+
 async function alarm(game: GameServer) {
   return (await game.ui.state()).security_alarm ?? null;
 }
@@ -87,6 +103,9 @@ test(
       "Alert",
       "an alarm should put the ecology in its alert tier",
     );
+    assert.ok(await played(game, "xxyal001"), "Xerxes should announce the threat");
+    assert.ok(!(await played(game, "xxalrtov")), "the alert has not ended yet");
+    assert.ok(await klaxonLooping(game), "the klaxon should loop through the alert");
 
     // The countdown runs down in real simulation time.
     await game.step({ frames: 5 * 60 });
@@ -136,6 +155,10 @@ test(
       "Normal",
       "the stand-down should reset the alerted ecology",
     );
+    assert.ok(await played(game, "xxalrtov"), "Xerxes should announce the stand-down");
+    assert.ok(await played(game, "xxhaksec"), "Xerxes should announce security offline");
+    assert.ok(!(await klaxonLooping(game)), "the stand-down should stop the klaxon");
+    assert.ok(await played(game, "alarmend"), "the klaxon should sign off");
     assert.notEqual(
       property(await game.entities.detail(camera.id), "AIAlertness"),
       "High",

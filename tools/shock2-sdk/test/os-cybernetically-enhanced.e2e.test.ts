@@ -1,0 +1,54 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { GameServer } from "../src/index.js";
+import { acquireOsUpgrade, standNear } from "./helpers/os-upgrade.js";
+
+test("Cybernetically Enhanced unlocks two distinct powered implants through save and deck travel", {
+  skip: process.env.SHOCK2_E2E !== "1", timeout: 300_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "medsci2.mis" });
+  const brawn = (await game.player.spawnItem(-101)).entity_id;
+  const endurance = (await game.player.spawnItem(-102)).entity_id;
+  const duplicate = (await game.player.spawnItem(-101)).entity_id;
+  const use = async (id: number) => { await game.entities.sendMessage(id, { type: "Frob" }); await game.step({ frames: 2 }); };
+  const prop = async (id: number, name: string) => (await game.entities.detail(id)).properties.find(p => p.name === name)?.value;
+  await use(brawn);
+  assert.equal(await prop(brawn, "ImplantSlot"), "0");
+  assert.equal((await game.info()).player.effective_stats?.strength, 2);
+  await use(endurance);
+  assert.equal(await prop(endurance, "ImplantSlot"), undefined, "second socket is locked before the upgrade");
+  await acquireOsUpgrade(game, "Cybernetically Enhanced");
+  await use(endurance);
+  assert.equal(await prop(endurance, "ImplantSlot"), "1");
+  assert.equal((await game.info()).player.effective_stats?.endurance, 2);
+  assert.equal((await game.info()).player.max_hit_points, 40);
+  assert.equal((await game.info()).player.stats?.endurance, 1, "base training remains unchanged");
+  await use(endurance);
+  await use(duplicate);
+  assert.equal(await prop(duplicate, "ImplantSlot"), undefined, "two copies cannot stack even with an empty socket");
+  await use(endurance);
+  const beforeEnergy = Number(await prop(endurance, "Energy"));
+  await game.step({ frames: 600 });
+  assert.equal(Number(await prop(endurance, "Energy")), beforeEnergy - 1);
+  const savedEnergy = Number(await prop(endurance, "Energy"));
+  const save = `os_implants_${Date.now()}`;
+  assert.ok((await game.save(save)).success);
+  await use(endurance);
+  assert.ok((await game.load(save)).success);
+  await game.step({ frames: 2 });
+  const [restored] = await game.entities.byTemplate(-102);
+  assert.ok(restored);
+  assert.equal(await prop(restored.id, "ImplantSlot"), "1");
+  assert.equal(Number(await prop(restored.id, "Energy")), savedEnergy);
+  assert.equal((await game.info()).player.effective_stats?.endurance, 2);
+  await game.transitionLevel("earth.mis");
+  const [carried] = await game.entities.byTemplate(-102);
+  assert.ok(carried);
+  assert.equal(await prop(carried.id, "ImplantSlot"), "1");
+  await game.player.setStats({ skills: { maintenance: 2 } });
+  const [station] = await game.entities.byTemplate(258);
+  assert.ok(station);
+  await standNear(game, station.id);
+  await use(station.id);
+  assert.equal(Number(await prop(carried.id, "Energy")), 120, "station recharge uses base Maintenance capacity");
+});

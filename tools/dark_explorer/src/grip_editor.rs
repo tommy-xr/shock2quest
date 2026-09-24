@@ -665,13 +665,6 @@ impl GripEditor {
         }
         let mut request_fit = false;
         let doc = self.document.as_mut().unwrap();
-        let hints = self
-            .hints
-            .as_ref()
-            .unwrap()
-            .get(&self.model)
-            .cloned()
-            .unwrap_or_default();
         ui.heading(format!("{} — grip override", self.model));
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.support_mode, false, "Primary grip");

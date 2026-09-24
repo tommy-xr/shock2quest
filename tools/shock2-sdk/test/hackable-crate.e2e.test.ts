@@ -26,10 +26,11 @@ import { clickUiElement } from "./helpers/ui.js";
 // assertion fails and the clip can never be reached.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-/// The loot panel's hologram grid tile - the art a container panel draws
-/// (`ContainerGui::loot_container`), and how a loot panel is told apart from
-/// the hack board.
-const LOOT_GRID_TEXTURE = "shodan/s45.pcx";
+/// The loot panel's backdrop, and how a loot panel is told apart from the hack
+/// board. This suite runs FLAT, where `ContainerGui::loot_container` draws the
+/// retail `contain.pcx` MFD; VR draws the hologram grid tile instead
+/// (`shodan/s45.pcx`), which is what `vr-container-world-panel` checks.
+const LOOT_GRID_TEXTURE = "contain.pcx";
 
 const CLIP_CRATE = 325; // Contains -> Small HE Clip
 const BIG_NANITE_PILE = -1591;

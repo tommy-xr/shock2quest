@@ -66,6 +66,26 @@ const FALLBACK_DONE: Rect = Rect::new(527.0, 405.0, 95.0, 62.0);
 /// launcher - stops its own rows at the same painted border.
 pub const FIELD_TOP_Y: f32 = 323.0;
 
+/// The interior of the backdrop's painted name field - the one line of text
+/// below the list. Its borders are at y=323 and y=344, so the text is inset on
+/// every side rather than straddling that rule or the curved footer.
+///
+/// Shared, because both pages drawn on this backdrop put a line here: the
+/// parameter rows show the category breadcrumb, the Cheats page shows what it
+/// just applied.
+pub fn field_line_rect(rects: PanelRects) -> Rect {
+    Rect::new(
+        rects.list.x + TEXT_INSET,
+        FIELD_TOP_Y + 3.0,
+        rects.list.w - TEXT_INSET * 2.0,
+        14.0,
+    )
+}
+
+/// Font and size the field line is drawn at, so every page matches.
+pub const FIELD_LINE_FONT: &str = ROW_FONT;
+pub const FIELD_LINE_SIZE: f32 = PARAM_FONT_SIZE;
+
 /// The panel's widget rects, resolved from `GAMELODR.BIN`.
 ///
 /// Read from the layout file rather than hardcoded, for the same reason the
@@ -256,7 +276,25 @@ fn wide_row(rects: PanelRects, slot: usize, len: usize) -> Rect {
 
 fn format_value(kind: &DevParamKind, value: f32, bool_labels: Option<[&str; 2]>) -> String {
     match kind {
-        DevParamKind::Float { .. } => format!("{value:.2}"),
+        DevParamKind::Float { min, step, .. } => {
+            // Use the grid's precision instead of spending narrow readout space
+            // on trailing zeroes (50 ms must read "50", not ellipsized "50…").
+            // Include min: a 0.1 grid anchored at 0.25 still needs two decimals.
+            let precision = if *step <= 0.0 {
+                2
+            } else {
+                (0..=4)
+                    .find(|digits| {
+                        let scale = 10_f32.powi(*digits);
+                        [*min, *step].into_iter().all(|v| {
+                            let scaled = v * scale;
+                            (scaled - scaled.round()).abs() < 0.0001
+                        })
+                    })
+                    .unwrap_or(4) as usize
+            };
+            format!("{value:.precision$}")
+        }
         DevParamKind::Bool => {
             bool_labels.unwrap_or(["Off", "On"])[usize::from(value != 0.0)].to_owned()
         }
@@ -321,18 +359,10 @@ fn emit(
         HAlign::Center,
         VAlign::Middle,
     );
-    // Use the interior of the backdrop's name field. Its borders are at
-    // y=323 and y=344; inset the text on every side rather than straddling
-    // that rule or the curved footer. The header already names this category.
     let breadcrumb = navigation.breadcrumb();
     if let Some((parents, _)) = breadcrumb.rsplit_once(" > ") {
         canvas.text_fit(
-            Rect::new(
-                rects.list.x + TEXT_INSET,
-                FIELD_TOP_Y + 3.0,
-                rects.list.w - TEXT_INSET * 2.0,
-                14.0,
-            ),
+            field_line_rect(rects),
             parents,
             ROW_FONT,
             PARAM_FONT_SIZE,
@@ -678,6 +708,21 @@ mod tests {
         });
         assert_eq!(nav.bulk_members().len(), 7);
         assert!(!nav.bulk_members().contains(&dev_params::GLOVE_FIT_VISIBLE));
+        assert!(!nav.bulk_members().contains(&dev_params::SHOW_POSITION));
+        nav.enter(DevParamsLocation {
+            category: Some(DevCategory::Visualizations),
+            locked: false,
+        });
+        assert!(
+            nav.rows()
+                .contains(&DevParamsRow::Parameter(dev_params::SHOW_POSITION))
+        );
+        assert!(nav.bulk_members().contains(&dev_params::SHOW_POSITION));
+        assert!(
+            nav.rows()
+                .contains(&DevParamsRow::Parameter(dev_params::DEBUG_PHYSICS))
+        );
+        assert!(nav.bulk_members().contains(&dev_params::DEBUG_PHYSICS));
     }
 
     #[test]
@@ -757,6 +802,29 @@ mod tests {
             step: 0.02,
         };
         assert_eq!(format_value(&kind, 0.719_999_97, None), "0.72");
+        for (id, value, expected) in [
+            (dev_params::THROW_SMOOTHING_MS, 50.0, "50"),
+            (dev_params::THROW_SMOOTHING_MS, 100.0, "100"),
+            (dev_params::THROW_STRENGTH_BONUS, 0.25, "0.25"),
+            (dev_params::VR_GLOVE_RADIUS, 0.055, "0.055"),
+        ] {
+            assert_eq!(
+                format_value(&dev_params::spec(id).kind, value, None),
+                expected
+            );
+        }
+        assert_eq!(
+            format_value(
+                &DevParamKind::Float {
+                    min: 0.25,
+                    max: 2.0,
+                    step: 0.1
+                },
+                0.35,
+                None
+            ),
+            "0.35"
+        );
         assert_eq!(format_value(&DevParamKind::Bool, 1.0, None), "On");
         assert_eq!(
             format_value(&DevParamKind::Bool, 0.0, Some(["Aim", "Grip"])),

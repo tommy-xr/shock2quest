@@ -2,6 +2,7 @@
 # shock2quest
 
 [![Build & Unit Test](https://github.com/tommy-xr/shock2quest/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/tommy-xr/shock2quest/actions/workflows/build.yml) [![Build Android](https://github.com/tommy-xr/shock2quest/actions/workflows/build-android.yml/badge.svg)](https://github.com/tommy-xr/shock2quest/actions/workflows/build-android.yml)
+[![Latest release](https://img.shields.io/github/v/release/tommy-xr/shock2quest)](https://github.com/tommy-xr/shock2quest/releases/latest)
 
 A project to experience System Shock 2 in virtual reality. System Shock 2 is one of my favorite games of all time, and the story and ambience would be great for VR. 
 
@@ -29,19 +30,23 @@ Once installed, copy `sshock2.kpf` and the `mods/` folder from it - see [DEVELOP
 
 ## Running
 
-> TODO: Provide binaries
+Download the signed Quest APK from the [latest release](https://github.com/tommy-xr/shock2quest/releases/latest),
+then follow the [installation instructions](INSTALL.md) to sideload it and copy
+your Remaster game files.
 
 ### Controls
 
 This is geared towards VR, so the control scheme is really meant for VR headsets and controllers.
 
 However, you can play with a keyboard and a mouse, using the following hard-coded keys:
-- `Mouse` - look around with headset, when `Q` and `E` are not pressed
+- `Mouse` - look around (flat); in `--vr`, aim the head unless `Q` or `E` is held
 - `W` `A` `S` `D` - move around (hold `Shift` to move faster)
-- `Q` `E` - control left hand or right hand, respectively. Mouse look will move the hand, left click will 'trigger', and right click will 'grab'.
+- `Q` / `E` - hold to lean left/right in flat mode; release to return. Both keys cancel. Leaning works while crouched and stops against solid geometry. In `--vr`, these keys still control the simulated left/right hand: mouse aims, left click triggers, and right click grabs.
+- `B` (or `T`) - cycle ammunition type in flatscreen, then automatically reload from matching reserve
+- `R` - reload the current ammunition type
 - `Ctrl` - crouch
 - `Space` - jump
-- `Tab` / `I` - toggle the cyber interface ("use" mode): a cursor-driven UI over the 3D view
+- `Tab` - toggle the cyber interface ("use" mode): a cursor-driven UI over the 3D view
 - `Alt+S` / `Alt+L` - quick save / quick load
 - Quest VR: press the left controller's `Menu` button to toggle the cyber
   interface; hold it for half a second - a ring fills in front of you - to open
@@ -65,6 +70,12 @@ However, you can play with a keyboard and a mouse, using the following hard-code
   Draw your personal access card from the belt buckle to scan credential
   readers and machines. Release it to return it to the belt. Scanning a shop or
   trainer opens its interface; purchases still require an explicit selection.
+
+- Quest VR: throw a held object by moving your hand and releasing the grip.
+  It inherits your hand's velocity and spin; Strength gives a modest speed
+  bonus and helps with heavier objects. Fast impacts deal at most 2 damage to
+  flesh targets or 1 to other materials, once per throw. Releasing a still hand
+  drops the item normally.
 - Quest VR: reload by hand. Pull a clip out of the cyber interface's inventory
   strip with your free hand and bring it to the gun the other hand is holding -
   the clip goes in and the weapon is loaded. A clip of a different ammo type
@@ -84,8 +95,13 @@ However, you can play with a keyboard and a mouse, using the following hard-code
   switch a gun's fire mode, or hold for half a second to drop its loaded clip
   into the world. A thin line fills left to right along the bottom of the cuff
   ammo meter, which shows `EJECT` during the hold. A completed hold does not
-  also switch modes. The psi amp keeps
-  its power selector.
+  also switch modes. With a psi amp, tap the same button to swap its current
+  and alternate powers, or hold for half a second to project a curved, backgroundless selector above
+  the amp. Only purchased powers appear.
+  Move that hand's stick up/down for tiers and left/right for trained powers;
+  press its upper button or trigger to confirm and close. Choosing a new power
+  makes the previous one the alternate. Each amp remembers its own pair through
+  storage, level changes and saves.
 - Directly equip a matching carried weapon with the original number-row bindings:
   `1` Wrench, `2` Pistol, `3` Shotgun, `4` Assault Rifle, `5` Laser Pistol,
   `6` EMP Rifle, `7` Electro Shock, `8` Grenade Launcher, `9` Stasis Field
@@ -109,7 +125,7 @@ The project includes convenient cargo aliases:
 
 Example usage:
 ```bash
-cargo dr --experimental teleport  # Run desktop with teleport feature
+cargo dr --vr --experimental physical_held_items  # Run desktop with physical held items
 cargo dq entities earth.mis --limit 5  # Query entities in mission
 cargo dv grunt_p.bin  # View model file
 ```

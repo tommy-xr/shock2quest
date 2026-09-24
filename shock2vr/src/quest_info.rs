@@ -56,6 +56,8 @@ pub struct QuestInfo {
     /// Campaign-wide research progress, keyed by stable gamesys archetype.
     #[serde(default)]
     research: ResearchState,
+    #[serde(default)]
+    pub(crate) horde_battle: crate::horde_stats::HordeBattleStats,
 }
 
 impl QuestInfo {
@@ -73,6 +75,7 @@ impl QuestInfo {
             collected_logs: Vec::new(),
             explored_maps: HashMap::new(),
             research: ResearchState::default(),
+            horde_battle: Default::default(),
         }
     }
 
@@ -193,6 +196,11 @@ impl QuestInfo {
         self.key_cards.push(key_card)
     }
 
+    /// Collected access credentials; pickups no longer exist in the inventory.
+    pub fn key_cards(&self) -> &[KeyCard] {
+        &self.key_cards
+    }
+
     pub fn can_unlock(&self, key_dst: &KeyCard) -> bool {
         let key_cards = &self.key_cards;
         key_cards.iter().any(|key| key.can_unlock(key_dst))
@@ -251,6 +259,16 @@ mod log_tests {
             quest_info.collect_log(*deck, *log);
         }
         quest_info
+    }
+
+    #[test]
+    fn horde_battle_totals_round_trip_with_campaign_state() {
+        let mut quests = QuestInfo::new();
+        quests.horde_battle.record(true, 40, 30);
+        quests.horde_battle.record(false, 12, 0);
+        let restored: QuestInfo =
+            serde_json::from_str(&serde_json::to_string(&quests).unwrap()).unwrap();
+        assert_eq!(restored.horde_battle, quests.horde_battle);
     }
 
     #[test]

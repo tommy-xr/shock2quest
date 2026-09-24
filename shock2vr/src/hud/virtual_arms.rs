@@ -78,24 +78,36 @@ pub fn create_wrist_hud_panels(
                 );
             objects.extend(canvas.render_world_space(asset_cache, transform, None, None, 0.001));
         }
+        // Some weapons carry an authored hand instead of our glove. Give
+        // their complete shared readout a hologram mount; there is no physical
+        // cuff to host it. Otherwise charging in VR would be invisible.
+        let weapon = crate::wielded_weapon::held_by_hand(world, hand);
+        let readout = ammo_panel::AmmoReadout::for_weapon(world, weapon, false);
         // The refusal is available even when a weapon carries its own hand
         // mesh. Only the physical wrist plates require a visible glove.
         if !crate::virtual_hand::shows_hand_visual(
             world,
             crate::wielded_weapon::held_by_hand(world, hand),
         ) {
+            if readout.psi_power.is_some() || readout.melee_charge.is_some() {
+                let canvas = ammo_panel::build_wrist_canvas(&readout);
+                objects.extend(canvas.render_world_space(
+                    asset_cache,
+                    authored_weapon_readout_transform(
+                        Matrix4::from_translation(poses[i].position)
+                            * Matrix4::from(poses[i].rotation),
+                        canvas.size(),
+                    ),
+                    None,
+                    None,
+                    0.001,
+                ));
+            }
             continue;
         }
         for (ammo, canvas) in [
             (false, readouts::build_watch_canvas(&bio)),
-            (
-                true,
-                ammo_panel::build_wrist_canvas(&ammo_panel::AmmoReadout::for_weapon(
-                    world,
-                    crate::wielded_weapon::weapon_in_hand(world, hand),
-                    false,
-                )),
-            ),
+            (true, ammo_panel::build_wrist_canvas(&readout)),
         ] {
             if canvas.element_count() == 0 {
                 continue;
@@ -111,6 +123,20 @@ pub fn create_wrist_hud_panels(
     }
     crate::util::tag_render_source(&mut objects, crate::util::render_source::PLAYER_HANDS);
     objects
+}
+
+/// An authored weapon hand mesh has no glove cuff. Lift the unchanged shared
+/// readout above its back in the final controller pose, without a glove basis.
+fn authored_weapon_readout_transform(
+    root: Matrix4<f32>,
+    size: cgmath::Vector2<f32>,
+) -> Matrix4<f32> {
+    // The authored fist has no calibrated glove wrist. Use its final hand
+    // pose directly: +Y clears the weapon, and +Z faces back toward the player.
+    let width = 0.24;
+    root * Matrix4::from_translation(vec3(0.0, 0.55, 0.25))
+        * Matrix4::from_angle_x(Deg(-20.0))
+        * Matrix4::from_nonuniform_scale(width, width * size.y / size.x, 1.0)
 }
 
 /// Shared lower-edge hinge for the hazard and alarm canvases. A canvas pixel
@@ -198,13 +224,7 @@ pub(crate) fn get_weapon_psi_power(
         return None;
     }
 
-    let powers = world
-        .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
-        .ok()?;
-    let selection = world
-        .borrow::<UniqueView<crate::psi::PsiPowerSelection>>()
-        .ok()?;
-    let power = powers.0.get(selection.index)?;
+    let power = crate::psi_amp_selection::selected_power(world, weapon?)?;
     let name = power
         .display_name
         .clone()
@@ -330,6 +350,24 @@ mod tests {
             assert!(((upper.y - lower.y) - (upper.z - lower.z)).abs() < 0.00001);
             assert!(transform.determinant() > 0.0);
         }
+    }
+
+    #[test]
+    fn authored_weapon_mount_preserves_the_canvas_aspect_and_reading_direction() {
+        let size = cgmath::vec2(94.0, 64.0);
+        let transform = authored_weapon_readout_transform(Matrix4::identity(), size);
+        assert!(transform.determinant() > 0.0);
+        assert!(
+            (transform.x.truncate().magnitude() / transform.y.truncate().magnitude()
+                - size.x / size.y)
+                .abs()
+                < 0.0001
+        );
+        let lower = transform * cgmath::vec4(0.0, -0.5, 0.0, 1.0);
+        assert!(
+            lower.z > 0.13,
+            "the readout clears the authored hand instead of occupying a nonexistent cuff"
+        );
     }
 
     #[test]

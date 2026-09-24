@@ -9,6 +9,7 @@ use dark::{
 };
 use engine::audio::AudioHandle;
 use shipyard::EntityId;
+use std::time::Duration;
 
 use crate::{
     gui::{GuiComponentRenderInfo, GuiHandle},
@@ -71,10 +72,19 @@ pub enum GlobalEffect {
         difficulty: dark::gamesys::Difficulty,
     },
 
+    /// Begin a fresh horde run with its own difficulty and campaign state.
+    StartNewHorde {
+        difficulty: dark::gamesys::Difficulty,
+    },
+
     /// Open the pause menu over the active scene. The scene cannot open it
     /// itself - the overlay is `Game`'s, and a paused scene is not updated at
     /// all - so the cyber interface's system button asks for it this way.
     OpenPauseMenu,
+    ShowHordeReport {
+        wave: u32,
+        stats: crate::horde_stats::HordeBattleStats,
+    },
 
     /// Open the Developer screen (live-tunable runtime parameters), replacing
     /// whatever scene is active. Reached from the main menu; the pause menu
@@ -184,7 +194,16 @@ pub enum AIPropertyUpdate {
 
 #[derive(Clone, Debug)]
 pub enum Effect {
+    SetPsiSword {
+        amp: EntityId,
+        enabled: bool,
+    },
     NoEffect,
+    /// Cheat: add stored contamination directly, regardless of protection.
+    AddPlayerHazard {
+        toxin: bool,
+        amount: f32,
+    },
     ApplyHazard {
         entity_id: EntityId,
         toxin: bool,
@@ -204,6 +223,21 @@ pub enum Effect {
     },
     ToggleHazardArmor {
         entity_id: EntityId,
+    },
+    ModifyWeapon {
+        entity_id: EntityId,
+        expected_level: i32,
+    },
+    ToggleImplant {
+        entity_id: EntityId,
+    },
+    UnequipImplant {
+        entity_id: EntityId,
+    },
+    AdjustImplantEnergy {
+        entity_id: EntityId,
+        amount: f32,
+        recharge: bool,
     },
 
     AwardXP {
@@ -378,6 +412,12 @@ pub enum Effect {
     ReadLastUnreadLog,
 
     /// Apply a completed tap/hold only while this exact gun remains in this hand.
+    PsiAmpButton {
+        hand: crate::Handedness,
+        amp: EntityId,
+        long_press: bool,
+        epoch: u64,
+    },
     HeldGunButton {
         hand: Handedness,
         weapon: EntityId,
@@ -465,6 +505,12 @@ pub enum Effect {
         template_id: i32,
     },
 
+    /// Validate the unlocked tier, learned set and authored module price,
+    /// then purchase one discipline atomically.
+    PurchasePsiPower {
+        template_id: i32,
+    },
+
     /// Deduct psi points from the player's pool (`PropPsiState`), clamped at
     /// zero. Emitted by the psi amp when a power is cast.
     SpendPsiPoints {
@@ -486,9 +532,9 @@ pub enum Effect {
         amount: i32,
     },
 
-    /// Atomically apply a retail food/drink use against the live player and
-    /// consume the source object. Comestibles always disappear, including at
-    /// full health; the hit-point increase is clamped to the authored maximum.
+    /// Atomically use one food/drink or diagnostic module against the live
+    /// player, decrementing a stack or destroying its final item. Even full
+    /// health consumes one; healing is clamped to the authored maximum.
     UseComestible {
         entity_id: EntityId,
         hit_points: i32,
@@ -522,6 +568,11 @@ pub enum Effect {
         entity_id: EntityId,
         software: crate::player_stats::Software,
         level: i32,
+    },
+
+    /// End one sustained power while preserving the others.
+    DeactivatePsiPower {
+        template_id: i32,
     },
 
     /// Activate (or refresh) a sustained psi power on the player for
@@ -590,11 +641,10 @@ pub enum Effect {
         stim_template_id: i32,
     },
 
-    /// A noise (gunfire, etc.) at `origin`: every creature within `radius`
-    /// hears it, escalates alertness, and investigates the source - so
-    /// firing a weapon draws nearby AIs even with no line of sight. A plain
-    /// Euclidean radius for now (walls don't attenuate it yet).
+    /// A player-caused noise. Range is scaled by listener acuity and cover.
+    /// Source identity excludes the emitting collider from acoustic rays.
     RaiseNoise {
+        source: EntityId,
         origin: Vector3<f32>,
         radius: f32,
     },
@@ -638,6 +688,26 @@ pub enum Effect {
         options: CreateEntityOptions,
     },
 
+    /// Fill `entity_id`'s corpse from its authored loot table (`P$LootInfo`),
+    /// the moment it dies. The roll needs the gamesys archetype names, the
+    /// campaign difficulty and the player's O/S upgrades, none of which a
+    /// script can reach, so the whole generation lives in the applier.
+    GenerateLoot {
+        entity_id: EntityId,
+    },
+
+    /// Create `template_id` directly inside `container_entity_id`'s grid - the
+    /// script cannot do this itself, because the fresh entity's id only exists
+    /// once creation has run. The deposit follows the ordinary container rules
+    /// (stack merge, then first cell that fits the item's footprint), so loot
+    /// added this way reconciles with whatever the container already holds. A
+    /// container with no room refuses it and the fresh entity is destroyed
+    /// rather than left lying in the world.
+    CreateEntityInContainer {
+        template_id: i32,
+        container_entity_id: EntityId,
+    },
+
     /// `TrapSpawn` creation with the Dark ecology bookkeeping that cannot be
     /// expressed until the fresh runtime entity id exists.
     SpawnEcologyEntity {
@@ -645,6 +715,21 @@ pub enum Effect {
         spawn_point: EntityId,
         ecology_type: Option<i32>,
         goto_player: bool,
+    },
+
+    HealingPulse {
+        amp: EntityId,
+    },
+
+    /// Revalidate and acquire an aimed world item before spending psi.
+    PsiPull {
+        amp: EntityId,
+        cost: i32,
+    },
+
+    PsiDrainVisual {
+        from: Vector3<f32>,
+        to: Vector3<f32>,
     },
 
     DrawDebugLines {
@@ -655,6 +740,13 @@ pub enum Effect {
     /// wielded melee weapon). Emitted by the melee attack; a no-op in VR.
     FlatMeleeSwing {
         entity_id: EntityId,
+        bonus_damage: f32,
+    },
+
+    SetMeleeCharge {
+        entity_id: EntityId,
+        fraction: Option<f32>,
+        held_seconds: Option<f32>,
     },
 
     DestroyEntity {
@@ -731,6 +823,11 @@ pub enum Effect {
         template_id: i32,
     },
 
+    ContinueHorde,
+    StartHordeWave {
+        wave: u32,
+    },
+
     Send {
         msg: Message,
     },
@@ -759,12 +856,24 @@ pub enum Effect {
         /// keeps this false even when it has a `source` for attribution.
         spatial: bool,
     },
+    /// Non-spatial [`Effect::PlaySound`] that repeats until `StopSound` when
+    /// the schema authors a seamless loop (`P$SchLoopPa`), else plays once.
+    /// Opt-in: many authored loops are also played as one-shots.
+    PlayLoopingSound {
+        handle: AudioHandle,
+        name: String,
+    },
     PlaySpeech {
         entity_id: EntityId,
         voice_index: usize,
         concept: String,
         tags: Vec<(String, String)>,
     },
+    /// Raise every stat, skill and psi tier to its cap (the "Max out stats"
+    /// cheat). Applied through the same provisioning path the debug HTTP API
+    /// uses, so capping, the backpack resize and the health/psi pool refresh
+    /// all behave exactly as a trainer purchase would.
+    MaxPlayerStats,
     KickHeldGun {
         entity_id: EntityId,
         impulse: crate::weapon_recoil::RecoilImpulse,
@@ -782,9 +891,23 @@ pub enum Effect {
         fallback: EnvSoundQuery,
         position: Vector3<f32>,
     },
+    /// A qualifying player impact: notify AI only if an authored or fallback
+    /// sample actually resolves and plays. Unresolved schemas stay silent.
+    PlayImpactSound {
+        audio_handle: AudioHandle,
+        query: EnvSoundQuery,
+        fallback: Option<EnvSoundQuery>,
+        position: Vector3<f32>,
+        source: EntityId,
+    },
     PositionInventory {
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
+    },
+    /// Standalone-mode music: start the named song and repeat its initial
+    /// theme event at clip boundaries, or stop immediately with None.
+    SetBackgroundMusic {
+        song: Option<String>,
     },
     StopSound {
         handle: AudioHandle,
@@ -831,7 +954,7 @@ pub enum Effect {
         position: Vector3<f32>,
         is_teleport: bool,
         /// What repositioned the player. `ScriptedTrap` arrivals suppress
-        /// tripwire ENTER (#515); `Locomotion` (VR teleport) still fires it.
+        /// tripwire ENTER (#515); `Locomotion` (debug repositioning) still fires it.
         source: TeleportSource,
     },
 
@@ -1043,12 +1166,21 @@ pub enum Effect {
         world_offset: Vector3<f32>,
         world_size: Vector2<f32>,
         components: Vec<GuiComponentRenderInfo>,
+        sidecar: Option<crate::gui::PanelSidecar>,
     },
 
     /// Put a line on the HUD's status-message channel, where it stays for the
     /// original's five-second message time.
     ShowMessage {
         text: String,
+    },
+
+    /// Show a centered interstitial banner - the black title card the original
+    /// opens the Earth mission with. `text` may hold two `\n`-separated lines.
+    /// Replaces any banner already up.
+    ShowBanner {
+        text: String,
+        duration: Duration,
     },
 
     ShowWeaponSkillRequirement {

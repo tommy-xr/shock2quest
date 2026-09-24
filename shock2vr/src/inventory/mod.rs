@@ -10,9 +10,9 @@
 use std::collections::HashMap;
 
 use dark::properties::{Link, PropContainDimensions, PropInventoryDimensions};
-use shipyard::{EntityId, Get, UniqueView, View, ViewMut, World};
+use shipyard::{EntityId, Get, View, ViewMut, World};
 
-use crate::{player_stats::PlayerStats, quest_info::QuestInfo};
+use crate::player_stats::PlayerStats;
 
 pub mod player_inventory_entity;
 pub use player_inventory_entity::*;
@@ -55,9 +55,8 @@ pub fn grid_for(world: &World, container_entity: EntityId) -> (usize, usize) {
         .map(|v| v.get(container_entity).is_ok())
         .unwrap_or(false);
     if is_backpack {
-        return world
-            .borrow::<UniqueView<QuestInfo>>()
-            .map(|quests| (backpack_width(quests.player_stats()), BACKPACK_GRID.1))
+        return crate::implants::effective_stats(world)
+            .map(|stats| (backpack_width(&stats), BACKPACK_GRID.1))
             // Minimal/debug scenes normally install QuestInfo too. Keep the
             // old maximum-size behavior as a graceful fallback for any scene
             // that deliberately has no character sheet.

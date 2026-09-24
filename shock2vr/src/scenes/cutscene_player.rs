@@ -267,7 +267,7 @@ impl CutscenePlayerScene {
         texture: Rc<dyn TextureTrait>,
         aspect_ratio: f32,
     ) -> SceneObject {
-        let material = basic_material::create(texture, 1.0, 0.0);
+        let material = basic_material::create_with_fixed_ambient(texture, 1.0, 0.0);
         let mut quad = SceneObject::new(material, Box::new(engine::scene::quad::create()));
 
         let screen_height = basis.height;

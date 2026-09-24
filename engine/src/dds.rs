@@ -18,6 +18,12 @@ const PF_FLAG_RGB: u32 = 0x40;
 /// Sanity bound on header-declared dimensions, so surface-size arithmetic can't
 /// overflow on a malformed file.
 const MAX_DIMENSION: u32 = 16384;
+/// DDSCAPS2_CUBEMAP, in the legacy header's `caps2`.
+const CAPS2_CUBEMAP: u32 = 0x200;
+/// DDSCAPS2_CUBEMAP plus all six DDSCAPS2_CUBEMAP_POSITIVEX.. face bits.
+const CAPS2_FULL_CUBEMAP: u32 = CAPS2_CUBEMAP | 0xFC00;
+/// DDS_RESOURCE_MISC_TEXTURECUBE, in the DX10 header's `miscFlag`.
+const DX10_MISC_TEXTURECUBE: u32 = 0x4;
 
 /// The subset of surface formats the 25AE assets actually use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +81,10 @@ struct DdsHeader {
     height: u32,
     format: BlockFormat,
     data_offset: usize,
+    /// Mip levels stored per surface; at least 1.
+    mip_count: u32,
+    /// Six faces follow one another, each with its own mip chain.
+    cube: bool,
 }
 
 fn u32_at(buf: &[u8], offset: usize) -> Option<u32> {
@@ -92,6 +102,8 @@ fn parse_header(buf: &[u8]) -> Option<DdsHeader> {
     }
     let height = u32_at(buf, 12)?;
     let width = u32_at(buf, 16)?;
+    let mip_count = u32_at(buf, 28)?.max(1);
+    let legacy_cube = u32_at(buf, 112)? & CAPS2_FULL_CUBEMAP == CAPS2_FULL_CUBEMAP;
 
     // DDS_PIXELFORMAT starts at offset 76 (4 magic + 72 into the header).
     let pf_flags = u32_at(buf, 80)?;
@@ -126,13 +138,15 @@ fn parse_header(buf: &[u8]) -> Option<DdsHeader> {
                 a_mask: u32_at(buf, 104)?,
             },
             data_offset: 128,
+            mip_count,
+            cube: legacy_cube,
         });
     }
 
-    let (format, data_offset) = match four_cc {
-        b"DXT1" => (BlockFormat::Bc1, 128),
-        b"DXT3" => (BlockFormat::Bc2, 128),
-        b"DXT5" => (BlockFormat::Bc3, 128),
+    let (format, data_offset, cube) = match four_cc {
+        b"DXT1" => (BlockFormat::Bc1, 128, legacy_cube),
+        b"DXT3" => (BlockFormat::Bc2, 128, legacy_cube),
+        b"DXT5" => (BlockFormat::Bc3, 128, legacy_cube),
         b"DX10" => {
             // DDS_HEADER_DXT10 follows the base header; dxgiFormat is its first field.
             let dxgi = u32_at(buf, 128)?;
@@ -143,7 +157,8 @@ fn parse_header(buf: &[u8]) -> Option<DdsHeader> {
                 97..=99 => BlockFormat::Bc7, // BC7_TYPELESS/UNORM/UNORM_SRGB
                 _ => return None,
             };
-            (format, 148)
+            let cube = u32_at(buf, 136)? & DX10_MISC_TEXTURECUBE != 0;
+            (format, 148, cube)
         }
         _ => return None,
     };
@@ -153,6 +168,8 @@ fn parse_header(buf: &[u8]) -> Option<DdsHeader> {
         height,
         format,
         data_offset,
+        mip_count,
+        cube,
     })
 }
 
@@ -174,10 +191,51 @@ fn argb_u32_to_rgba8(pixels: &[u32]) -> Vec<u8> {
 pub fn decode_rgba8(buffer: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     let header = parse_header(buffer)?;
     let (w, h) = (header.width as usize, header.height as usize);
-
     let expected = header.format.surface_bytes(w, h);
     let data = buffer.get(header.data_offset..header.data_offset + expected)?;
+    let pixels = decode_surface(header.format, data, w, h)?;
+    Some((pixels, header.width, header.height))
+}
 
+/// A cubemap's six mip-0 faces as RGBA8, in DDS order: +X, -X, +Y, -Y, +Z, -Z
+/// (the same order GL numbers `TEXTURE_CUBE_MAP_POSITIVE_X + i`).
+pub struct CubeFaces {
+    pub size: u32,
+    pub faces: [Vec<u8>; 6],
+}
+
+/// Decode a DDS cubemap. `None` if the buffer is not a square cubemap we
+/// understand, or is truncated. Each face keeps only mip 0, capped like any
+/// other DDS; the renderer builds its own mips.
+pub fn decode_cube_rgba8(buffer: &[u8]) -> Option<CubeFaces> {
+    let header = parse_header(buffer)?;
+    if !header.cube || header.width != header.height {
+        return None;
+    }
+    let size = header.width as usize;
+    // A mip chain ends at 1x1; a larger count is a malformed header.
+    let mip_count = header
+        .mip_count
+        .min(u32::BITS - header.width.leading_zeros());
+    let face_stride: usize = (0..mip_count)
+        .map(|mip| {
+            let edge = (size >> mip).max(1);
+            header.format.surface_bytes(edge, edge)
+        })
+        .sum();
+    let top = header.format.surface_bytes(size, size);
+    let mut faces: [Vec<u8>; 6] = Default::default();
+    let mut edge = header.width;
+    for (index, face) in faces.iter_mut().enumerate() {
+        let start = header.data_offset + index * face_stride;
+        let pixels = decode_surface(header.format, buffer.get(start..start + top)?, size, size)?;
+        (*face, edge, _) = cap_edge(pixels, header.width, header.height);
+    }
+    Some(CubeFaces { size: edge, faces })
+}
+
+/// Decode one `w` x `h` surface of `format` to RGBA8.
+fn decode_surface(format: BlockFormat, data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
     // Uncompressed surfaces are repacked directly; no block decode involved.
     if let BlockFormat::Uncompressed {
         bits_per_pixel,
@@ -185,7 +243,7 @@ pub fn decode_rgba8(buffer: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
         g_mask,
         b_mask,
         a_mask,
-    } = header.format
+    } = format
     {
         let stride = bits_per_pixel as usize / 8;
         let mut out = Vec::with_capacity(w * h * 4);
@@ -203,11 +261,11 @@ pub fn decode_rgba8(buffer: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
                 scale_to_u8((raw & a_mask) >> mask_shift(a_mask), a_mask)
             });
         }
-        return Some((out, header.width, header.height));
+        return Some(out);
     }
 
     let mut pixels = vec![0u32; w * h];
-    let result = match header.format {
+    let result = match format {
         BlockFormat::Bc1 => texture2ddecoder::decode_bc1(data, w, h, &mut pixels),
         BlockFormat::Bc2 => texture2ddecoder::decode_bc2(data, w, h, &mut pixels),
         BlockFormat::Bc3 => texture2ddecoder::decode_bc3(data, w, h, &mut pixels),
@@ -220,10 +278,13 @@ pub fn decode_rgba8(buffer: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
 
     trace!(
         "decoded DDS {:?} {}x{} ({} bytes compressed)",
-        header.format, w, h, expected
+        format,
+        w,
+        h,
+        data.len()
     );
 
-    Some((argb_u32_to_rgba8(&pixels), header.width, header.height))
+    Some(argb_u32_to_rgba8(&pixels))
 }
 
 /// Largest edge a decoded DDS keeps, per platform.
@@ -270,15 +331,20 @@ pub fn downscale_to_fit(
     (data, w, h)
 }
 
+/// Apply the platform's `MAX_EDGE` to a decoded image.
+fn cap_edge(bytes: Vec<u8>, width: u32, height: u32) -> (Vec<u8>, u32, u32) {
+    match MAX_EDGE {
+        Some(max) => downscale_to_fit(bytes, width, height, max),
+        None => (bytes, width, height),
+    }
+}
+
 pub struct DdsFormat {}
 
 impl TextureFormat for DdsFormat {
     fn load(&self, buffer: &[u8]) -> RawTextureData {
         let (bytes, width, height) = decode_rgba8(buffer).expect("Failed to decode DDS texture");
-        let (bytes, width, height) = match MAX_EDGE {
-            Some(max) => downscale_to_fit(bytes, width, height, max),
-            None => (bytes, width, height),
-        };
+        let (bytes, width, height) = cap_edge(bytes, width, height);
         RawTextureData {
             bytes,
             width,
@@ -357,6 +423,77 @@ mod tests {
         let (bytes, w, h) = decode_rgba8(&buf).expect("should decode");
         assert_eq!((w, h), (1, 1));
         assert_eq!(bytes, vec![0x11, 0x22, 0x33, 0x80]);
+    }
+
+    /// A 2x2 BGRA32 cubemap with two mips per face. Face `i` is filled with
+    /// red `i * 10` at mip 0 and red 255 at mip 1, so reading the wrong
+    /// face or into a mip chain shows up as a wrong colour.
+    fn uncompressed_cube() -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(MAGIC);
+        let mut header = [0u8; HEADER_LEN];
+        header[0..4].copy_from_slice(&(HEADER_LEN as u32).to_le_bytes());
+        header[8..12].copy_from_slice(&2u32.to_le_bytes()); // height
+        header[12..16].copy_from_slice(&2u32.to_le_bytes()); // width
+        header[24..28].copy_from_slice(&2u32.to_le_bytes()); // mip count
+        header[76..80].copy_from_slice(&(0x40u32 | 0x1).to_le_bytes());
+        header[84..88].copy_from_slice(&32u32.to_le_bytes());
+        header[88..92].copy_from_slice(&0x00FF0000u32.to_le_bytes());
+        header[92..96].copy_from_slice(&0x0000FF00u32.to_le_bytes());
+        header[96..100].copy_from_slice(&0x000000FFu32.to_le_bytes());
+        header[100..104].copy_from_slice(&0xFF000000u32.to_le_bytes());
+        header[108..112].copy_from_slice(&(CAPS2_CUBEMAP | 0xFC00).to_le_bytes());
+        buf.extend_from_slice(&header);
+        for face in 0..6u8 {
+            for _ in 0..4 {
+                buf.extend_from_slice(&[0, 0, face * 10, 255]); // BGRA
+            }
+            buf.extend_from_slice(&[0, 0, 255, 255]); // 1x1 mip
+        }
+        buf
+    }
+
+    #[test]
+    fn decodes_each_cube_face_past_the_previous_faces_mips() {
+        let cube = decode_cube_rgba8(&uncompressed_cube()).expect("should decode");
+        assert_eq!(cube.size, 2);
+        for (index, face) in cube.faces.iter().enumerate() {
+            assert_eq!(face.len(), 2 * 2 * 4);
+            assert_eq!(&face[0..4], &[index as u8 * 10, 0, 0, 255], "face {index}");
+        }
+    }
+
+    /// A header's mip count is file data: an absurd one must neither panic
+    /// nor loop, and cannot stretch past the 1x1 level.
+    #[test]
+    fn an_absurd_mip_count_stops_at_the_chain_end() {
+        let mut dds = uncompressed_cube();
+        dds[28..32].copy_from_slice(&u32::MAX.to_le_bytes());
+        let cube = decode_cube_rgba8(&dds).expect("should decode");
+        assert_eq!(&cube.faces[5][0..4], &[50, 0, 0, 255]);
+    }
+
+    #[test]
+    fn a_cubemap_missing_faces_is_rejected() {
+        let mut dds = uncompressed_cube();
+        dds[112..116].copy_from_slice(&(CAPS2_CUBEMAP | 0x400).to_le_bytes());
+        assert!(decode_cube_rgba8(&dds).is_none());
+    }
+
+    #[test]
+    fn a_plain_texture_is_not_a_cubemap() {
+        assert!(decode_cube_rgba8(&dx10_bc7(4, 4, &[0u8; 16])).is_none());
+    }
+
+    #[test]
+    fn reads_the_dx10_cube_flag() {
+        let mut dds = dx10_bc7(4, 4, &[0u8; 16 * 6]);
+        dds[136..140].copy_from_slice(&DX10_MISC_TEXTURECUBE.to_le_bytes());
+        assert!(parse_header(&dds).expect("should parse").cube);
+        assert_eq!(
+            decode_cube_rgba8(&dds).expect("should decode").faces.len(),
+            6
+        );
     }
 
     #[test]

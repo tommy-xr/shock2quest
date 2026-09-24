@@ -8,8 +8,7 @@ import { fireOnce } from "./helpers/weapon.js";
 // with the Psi Amp; firing casts the selected psi power. Projectile powers
 // (Projected Cryokinesis is the default selection) spawn the projectile
 // variant matching the caster's PSI stat and deduct the power's tier from the
-// player's psi pool; not-yet-implemented power types are a no-op that spends
-// nothing.
+// player's psi pool; a targeted power with no eligible target spends nothing.
 //
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
@@ -42,7 +41,7 @@ test(
       startPsi !== null && startPsi > 0,
       `player should start with psi points (got ${startPsi})`,
     );
-    assert.equal(player.max_psi_points, 50, "max psi pool comes from The Player template");
+    assert.equal(startPsi, player.max_psi_points, "the debug character starts with its trained psi pool full");
 
     // Cast Cryokinesis (tier 1): one psi point, and the cryo projectile for
     // the caster's PSI stat appears.
@@ -59,8 +58,8 @@ test(
       "the cast picks the projectile tier matching the player's PSI stat",
     );
 
-    // Cycle to the next power (Codebreaker, an unimplemented non-projectile
-    // type): casting is a no-op and spends nothing.
+    // Cycle to Codebreaker: this scene has no eligible hacking target, so
+    // casting is a no-op and spends nothing.
     await game.input.trigger("CyclePsiPower");
     await game.step({ frames: 2 });
     player = (await game.info()).player;
@@ -70,7 +69,7 @@ test(
     assert.equal(
       player.psi_points,
       startPsi! - 1,
-      "casting an unimplemented power spends no psi points",
+      "Codebreaker with no eligible target spends no psi points",
     );
   },
 );
@@ -79,16 +78,26 @@ test(
   "the projectile tier follows the player's PSI stat",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
-    // The same cast from a sheet raised only to PSI 2 fires the PSI-2 bolt,
-    // not the capped one. (`/v1/player/stats` only raises, so the lower stat
-    // needs its own runtime.)
+    // debug_psi caps stats at 6. Start with the minimal scene's low-stat
+    // player instead: provisioning may raise PSI to 2, but never lower it.
+    // Debug scenes already train Cryokinesis; only the amp needs supplying.
     await using game = await GameServer.launch({
-      mission: "debug_psi",
+      mission: "debug_minimal",
     });
 
     await game.step({ frames: 10 });
     await game.player.setStats({ psionic_ability: 2 });
-    assert.equal((await game.info()).player.selected_psi_power, "Cryokinesis");
+    const amp = await game.player.spawnItem(-247); // Psi Amp
+    await game.input.trigger("EquipPsiAmp");
+    await game.step({ frames: 10 });
+    const player = (await game.info()).player;
+    assert.equal(player.stats?.psionic_ability, 2);
+    assert.equal(
+      player.wielded_entity_id,
+      amp.entity_id,
+      "the supplied amp should be wielded",
+    );
+    assert.equal(player.selected_psi_power, "Cryokinesis");
 
     await fireOnce(game);
     await game.step({ frames: 3 });

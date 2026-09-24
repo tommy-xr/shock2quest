@@ -11,9 +11,8 @@
 //! flag is a quest bit keyed by the machine's stable mission object id (also
 //! `QuestInfo`, so it survives save/load and deck re-entry), and
 //! `Effect::AcquireOsTrait` applies the pick atomically. Live effects are
-//! implemented for the subset with existing consumers (Tank, Naturally Able,
-//! Pack-Rat, Pharmo-Friendly, Replicator Expert - see [`live_effect_note`]); everything else stays visible
-//! but cannot consume a one-shot machine or trait slot until its effect exists.
+//! available for all sixteen classic traits; see [`live_effect_note`]. Invalid
+//! trait IDs cannot consume a one-shot machine or trait slot.
 
 use cgmath::{Vector2, Vector3, vec2};
 use engine::assets::asset_cache::AssetCache;
@@ -25,6 +24,9 @@ use crate::quest_info::QuestInfo;
 use crate::scripts::Effect;
 
 use crate::gui;
+use crate::ui::Rect;
+
+use super::panel_text::PanelText;
 
 /// The 16 O/S traits, by the original game's trait id (matching the shipped
 /// `TRAITS.STR` `Trait1..16` order, verified against those strings).
@@ -52,8 +54,20 @@ pub const TRAIT_STRONG_METABOLISM: u8 = 1;
 pub const TRAIT_NATURALLY_ABLE: u8 = 6;
 pub const TRAIT_PACK_RAT: u8 = 3;
 pub const TRAIT_PHARMO_FRIENDLY: u8 = 2;
+pub const TRAIT_TINKER: u8 = 15;
 pub const TRAIT_TANK: u8 = 8;
+pub const TRAIT_SPEEDY: u8 = 4;
+pub const TRAIT_SHARPSHOOTER: u8 = 5;
+pub const TRAIT_LETHAL_WEAPON: u8 = 9;
+pub const TRAIT_SMASHER: u8 = 11;
+pub const TRAIT_CYBERNETICALLY_ENHANCED: u8 = 7;
+pub const TRAIT_SPATIALLY_AWARE: u8 = 16;
+pub const TRAIT_SECURITY_EXPERT: u8 = 10;
+pub const TRAIT_POWER_PSI: u8 = 14;
 pub const TRAIT_REPLICATOR_EXPERT: u8 = 13;
+/// Cyber-Assimilation: unlocks a creature's `P$GuarLoot` drop on top of its
+/// ordinary loot table.
+pub const TRAIT_CYBER_ASSIMILATION: u8 = 12;
 
 /// Tank: "+5 maximum hit points" (TRAITS.STR Trait8). The original raises the
 /// ceiling AND current HP by the bonus on purchase (buying at 25/30 yields
@@ -96,6 +110,14 @@ fn machine_template_id(world: &World, machine: EntityId) -> Option<i32> {
         .and_then(|v| v.get(machine).ok().map(|t| t.template_id))
 }
 
+/// Offline machines remain inspectable but cannot vend an upgrade.
+pub fn trait_machine_locked(world: &World, machine: EntityId) -> bool {
+    world
+        .borrow::<View<dark::properties::PropLocked>>()
+        .is_ok_and(|locked| locked.get(machine).is_ok_and(|lock| lock.0))
+}
+const OFFLINE_LABEL: &str = "Station offline. Check its wave requirement.";
+
 /// Whether the machine bound to this panel has already vended (its used bit
 /// is set). Machines without a stable id read as unused here (the display
 /// path); the pick path refuses them outright.
@@ -115,14 +137,14 @@ const FALLBACK_HEADER_LABEL: &str = "Choose one upgrade.";
 const FALLBACK_USED_LABEL: &str = "Your OS has already been upgraded at this unit.";
 const UNAVAILABLE_LABEL: &str = "Upgrade unavailable in this build.";
 
-/// Preloaded trait-panel strings (`TRAITS.STR` descriptions plus the MISC.STR
-/// header / used-machine lines), added as a world unique at mission load so
+/// Classic-rules descriptions plus the MISC.STR header / used-machine lines,
+/// added as a world unique at mission load so
 /// the (`AssetCache`-less) `TraitGui` can show them - the `ElevatorContext`
 /// pattern.
 #[derive(shipyard::Unique)]
 pub struct TraitsContext {
-    /// `Trait1..16` description strings; index 0 = trait id 1. Falls back to
-    /// the bare trait name when TRAITS.STR is absent.
+    /// Descriptions of the supported classic rules; index 0 = trait id 1.
+    /// Community Patch additions must not leak into these promises.
     pub descriptions: [String; 16],
     /// MISC.STR `TraitHeader` ("Choose one upgrade."), drawn atop the panel.
     pub header_label: String,
@@ -132,17 +154,27 @@ pub struct TraitsContext {
 
 impl TraitsContext {
     pub fn load(asset_cache: &mut AssetCache) -> TraitsContext {
-        let strings = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, "traits.str");
-        let descriptions = std::array::from_fn(|i| {
-            if (i + 1) as u8 == TRAIT_PACK_RAT {
-                return "Pack-Rat: +3 pack slots, +1 holster in VR.".to_owned();
-            }
-            let key = format!("trait{}", i + 1);
-            strings
-                .as_ref()
-                .and_then(|s| s.get(&key).cloned())
-                .unwrap_or_else(|| trait_name((i + 1) as u8).to_owned())
-        });
+        // The mounted Community Patch replaces TRAITS.STR with promises of
+        // additional mechanics. This port targets classic retail: keep the
+        // player-facing descriptions tied to its implemented rules instead.
+        let descriptions = [
+            "Strong Metabolism: Radiation damage reduced by 25%; toxin damage reduced by 50%.",
+            "Pharmo-Friendly: 20% more benefit from healing, psi and hazard-treatment items.",
+            "Pack-Rat: Adds three extra inventory slots.",
+            "Speedy: Movement speed increased by 15%.",
+            "Sharpshooter: Ranged, non-psionic weapons deal 35% more damage.",
+            "Naturally Able: One-time bonus of 8 cyber modules.",
+            "Cybernetically Enhanced: Allows two implants of different types at once.",
+            "Tank: Adds 5 maximum and current hit points.",
+            "Lethal Weapon: Melee attacks deal 35% more damage.",
+            "Security Expert: +2 Hack at security computers. Requires at least Hack 1.",
+            "Smasher: Hold trigger for 380 ms, then release: +6 melee base damage. In VR, strike within 0.8 s.",
+            "Cyber-Assimilation: Destroyed robots drop repair modules that heal 15 hit points.",
+            "Replicator Expert: Replicator purchases cost 20% less.",
+            "Power Psi: Psionic burnout no longer damages you. Failed casts still spend psi points.",
+            "Tinker: Weapon modification nanite costs reduced by 50%.",
+            "Spatially Aware: The entire map of each sublevel is revealed.",
+        ].map(str::to_owned);
         let misc = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, "misc.str");
         let misc_lookup = |key: &str, fallback: &str| -> String {
             misc.as_ref()
@@ -185,30 +217,10 @@ const DESC_X: f32 = 15.0;
 const DESC_Y: f32 = 214.0;
 /// Bottom of the description area ((15,214)-(174,264) in the original).
 const DESC_Y_MAX: f32 = 264.0;
-/// Crude wrap width for the ~160px description column with the engine font.
-const DESC_CHARS_PER_LINE: usize = 34;
-
-/// Greedy word-wrap: split `text` into lines of at most `width` characters
-/// (long single words get their own over-long line rather than splitting).
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if current.is_empty() {
-            current = word.to_string();
-        } else if current.len() + 1 + word.len() <= width {
-            current.push(' ');
-            current.push_str(word);
-        } else {
-            lines.push(std::mem::take(&mut current));
-            current = word.to_string();
-        }
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}
+/// Retail help well. Build-only availability feedback uses the spare space
+/// beneath it so it cannot displace or truncate the authored description.
+const DESC_RECT: Rect = Rect::new(DESC_X, DESC_Y, 159.0, DESC_Y_MAX - DESC_Y);
+const STATUS_RECT: Rect = Rect::new(DESC_X, 266.0, 159.0, 24.0);
 
 /// The trait icon art (`TRAIT01.PCX`..`TRAIT16.PCX`; `TRAIT00.PCX` is the
 /// empty-slot art).
@@ -246,9 +258,7 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
                 .with_position(vec2(0.0, 0.0))
                 .with_size(vec2(188.0, 296.0)),
             // Panel header (MISC.STR TraitHeader), as in the original.
-            gui::text(&header)
-                .with_position(vec2(HEADER_X, HEADER_Y))
-                .with_size(vec2(160.0, 12.0)),
+            PanelText::text(&header, Rect::new(HEADER_X, HEADER_Y, 143.0, 12.0)),
         ];
 
         let owned: Vec<u8> = world
@@ -271,6 +281,9 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
 
         // 4x4 selection matrix: which = col + row*4 + 1.
         for (idx, (trait_id, name)) in OS_TRAITS.iter().enumerate() {
+            if owned.contains(trait_id) {
+                continue;
+            }
             let col = idx % 4;
             let row = idx / 4;
             components.push(
@@ -285,46 +298,39 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
             );
         }
 
-        // Description area: the machine's used state, then purchase feedback,
-        // then the hovered trait's TRAITS.STR text (the original shows the
-        // hovered description there).
-        let mut lines: Vec<String> = Vec::new();
-        if machine_used(world, entity_id) {
-            lines.push(used_label(world));
-        }
-        if let Some(message) = &state.message {
-            // A used-machine refusal repeats the standing used line - skip
-            // the duplicate.
-            if !lines.contains(message) {
-                lines.push(message.clone());
-            }
-        }
-        if let Some(hovered) = cursor.as_ref().and_then(|c| hovered_trait(c.position)) {
-            let description = world
+        // Installed icons have the same hover help as the purchase matrix.
+        // Fresh hover help wins over stale purchase/refusal feedback.
+        let hovered = cursor.as_ref().and_then(|c| {
+            owned
+                .iter()
+                .enumerate()
+                .find_map(|(slot, id)| {
+                    Rect::new(OWNED_X + OWNED_PITCH * slot as f32, OWNED_Y, CELL_W, CELL_H)
+                        .contains(vec2(c.position.x, c.position.y))
+                        .then_some(*id)
+                })
+                .or_else(|| hovered_trait(c.position).filter(|id| !owned.contains(id)))
+        });
+        let description = hovered.map(|id| {
+            world
                 .borrow::<UniqueView<TraitsContext>>()
-                .map(|ctx| ctx.descriptions[(hovered - 1) as usize].clone())
-                .unwrap_or_else(|_| trait_name(hovered).to_owned());
-            lines.push(description);
-            if live_effect_note(hovered).is_none() {
-                lines.push(UNAVAILABLE_LABEL.to_string());
-            }
+                .map(|ctx| ctx.descriptions[(id - 1) as usize].clone())
+                .unwrap_or_else(|_| trait_name(id).to_owned())
+        });
+        if let Some(text) = description.as_ref().or(state.message.as_ref()) {
+            components.extend(PanelText::paragraph(world, text, DESC_RECT));
         }
-        // Word-wrap into the description box (the engine text path draws a
-        // single unwrapped line; sentence-length TRAITS.STR text would run
-        // off the 188px panel).
-        let mut y = DESC_Y;
-        'lines: for line in &lines {
-            for wrapped in wrap_text(line, DESC_CHARS_PER_LINE) {
-                if y > DESC_Y_MAX {
-                    break 'lines;
-                }
-                components.push(
-                    gui::text(&wrapped)
-                        .with_position(vec2(DESC_X, y))
-                        .with_size(vec2(160.0, 12.0)),
-                );
-                y += 12.0;
-            }
+        let status = if trait_machine_locked(world, entity_id) {
+            Some(OFFLINE_LABEL.to_owned())
+        } else if machine_used(world, entity_id) {
+            Some(used_label(world))
+        } else if hovered.is_some_and(|id| live_effect_note(id).is_none()) {
+            Some(UNAVAILABLE_LABEL.to_owned())
+        } else {
+            None
+        };
+        if let Some(text) = status {
+            components.extend(PanelText::paragraph(world, &text, STATUS_RECT));
         }
 
         components
@@ -352,6 +358,8 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
             let stats = quests.player_stats();
             if machine_template_id(world, entity_id).is_none() {
                 Some("This upgrade unit is not responding.".to_string())
+            } else if trait_machine_locked(world, entity_id) {
+                Some(OFFLINE_LABEL.into())
             } else if machine_used(world, entity_id) {
                 Some(used_label(world))
             } else if live_effect_note(*trait_id).is_none() {
@@ -403,10 +411,20 @@ fn hovered_trait(cursor: cgmath::Point2<f32>) -> Option<u8> {
 pub fn live_effect_note(trait_id: u8) -> Option<&'static str> {
     match trait_id {
         TRAIT_STRONG_METABOLISM => Some("25% less radiation damage, 50% less toxin damage"),
+        TRAIT_POWER_PSI => Some("No burnout HP damage; failed casts still cost psi"),
+        TRAIT_SPEEDY => Some("15% faster movement"),
+        TRAIT_CYBER_ASSIMILATION => Some("Robots drop diagnostic modules that heal 15 HP"),
+        TRAIT_SECURITY_EXPERT => Some("+2 effective Hack at security computers"),
+        TRAIT_SPATIALLY_AWARE => Some("Full map layout on every deck"),
+        TRAIT_SHARPSHOOTER => Some("35% more ranged damage (classic retail behavior)"),
+        TRAIT_CYBERNETICALLY_ENHANCED => Some("Two distinct implants equipped simultaneously"),
+        TRAIT_SMASHER => Some("Hold trigger 380 ms for +6 melee base damage"),
+        TRAIT_LETHAL_WEAPON => Some("35% more melee damage"),
+        TRAIT_TINKER => Some("Half-price weapon modification attempts"),
         TRAIT_TANK => Some("+5 max hit points"),
         TRAIT_NATURALLY_ABLE => Some("+8 cyber modules"),
-        TRAIT_PACK_RAT => Some("+3 pack slots, +1 VR holster"),
-        TRAIT_PHARMO_FRIENDLY => Some("20% healing-item bonus"),
+        TRAIT_PACK_RAT => Some("+3 pack slots"),
+        TRAIT_PHARMO_FRIENDLY => Some("20% healing, psi and hazard-item bonus"),
         TRAIT_REPLICATOR_EXPERT => Some("20% replicator discount"),
         _ => None,
     }
@@ -456,22 +474,125 @@ mod tests {
     }
 
     #[test]
-    fn descriptions_word_wrap_to_the_panel_column() {
-        let lines = wrap_text(
-            "Tank: Increases maximum hit points by 5.",
-            DESC_CHARS_PER_LINE,
+    fn hover_help_stays_in_its_well_and_does_not_include_stale_feedback() {
+        let mut world = World::new();
+        world.add_unique(QuestInfo::new());
+        let description = "Cybernetically Enhanced: An extra implant may be installed.";
+        world.add_unique(TraitsContext {
+            descriptions: std::array::from_fn(|_| description.to_owned()),
+            header_label: FALLBACK_HEADER_LABEL.to_owned(),
+            used_label: FALLBACK_USED_LABEL.to_owned(),
+        });
+        let machine = world.add_entity((dark::properties::PropTemplateId { template_id: 133 },));
+        let components = TraitGui.get_components(
+            &Some(GuiCursor {
+                position: point2(MATRIX_X + 1.0, MATRIX_Y + 1.0),
+                held_entity_id: None,
+            }),
+            machine,
+            &world,
+            &TraitGuiState {
+                message: Some("Stale refusal".to_owned()),
+            },
         );
-        assert!(lines.len() >= 2, "sentence text wraps to multiple lines");
-        assert!(lines.iter().all(|l| l.len() <= DESC_CHARS_PER_LINE));
-        // The full text survives the wrap.
-        assert_eq!(lines.join(" "), "Tank: Increases maximum hit points by 5.");
-        // Degenerate inputs.
-        assert!(wrap_text("", 10).is_empty());
-        assert_eq!(wrap_text("word", 10), vec!["word".to_string()]);
+        let mut description_lines = Vec::new();
+        for component in &components {
+            if let GuiComponent::Text {
+                text,
+                position,
+                size,
+                font,
+                ..
+            } = component
+            {
+                assert_ne!(text, "Stale refusal");
+                if position.y >= DESC_Y && position.y < DESC_Y_MAX {
+                    assert_eq!(font, crate::ui::MFD_FONT);
+                    assert!(position.x + size.x <= 174.0);
+                    assert!(position.y + size.y <= DESC_Y_MAX);
+                    description_lines.push(text.as_str());
+                }
+            }
+        }
+        assert_eq!(description_lines.join(" "), description);
     }
 
     #[test]
-    fn storage_only_trait_does_not_consume_the_machine() {
+    fn offline_station_refuses_supported_trait_until_unlocked() {
+        let mut world = World::new();
+        world.add_unique(QuestInfo::new());
+        let machine = world.add_entity((
+            dark::properties::PropTemplateId { template_id: 60301 },
+            dark::properties::PropLocked(true),
+        ));
+        let (state, effect) = TraitGui.handle_msg(
+            machine,
+            &world,
+            &TraitGuiState::default(),
+            &TraitGuiMsg::Pick(TRAIT_TANK),
+        );
+        assert!(matches!(effect, Effect::NoEffect));
+        assert_eq!(state.message.as_deref(), Some(OFFLINE_LABEL));
+        world.add_component(machine, dark::properties::PropLocked(false));
+        let (_, effect) =
+            TraitGui.handle_msg(machine, &world, &state, &TraitGuiMsg::Pick(TRAIT_TANK));
+        assert!(matches!(effect, Effect::AcquireOsTrait { .. }));
+    }
+
+    #[test]
+    fn installed_traits_leave_empty_grid_cells_without_hover_help() {
+        let mut world = World::new();
+        let mut quests = QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(TRAIT_TANK);
+        world.add_unique(quests);
+        let machine = world.add_entity((dark::properties::PropTemplateId { template_id: 133 },));
+        let components = TraitGui.get_components(
+            &Some(GuiCursor {
+                position: point2(
+                    MATRIX_X + MATRIX_PITCH_X * 3.0 + 1.0,
+                    MATRIX_Y + MATRIX_PITCH_Y + 1.0,
+                ),
+                held_entity_id: None,
+            }),
+            machine,
+            &world,
+            &TraitGuiState::default(),
+        );
+        assert_eq!(
+            components
+                .iter()
+                .filter(|c| matches!(c, GuiComponent::Button { .. }))
+                .count(),
+            15
+        );
+        assert!(!components.iter().any(|c| matches!(c,
+            GuiComponent::Text { position, .. } if position.y >= DESC_Y)));
+    }
+
+    #[test]
+    fn installed_icon_exposes_its_description() {
+        let mut world = World::new();
+        let mut quests = QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(TRAIT_TANK);
+        world.add_unique(quests);
+        let machine = world.add_entity((dark::properties::PropTemplateId { template_id: 133 },));
+        let components = TraitGui.get_components(
+            &Some(GuiCursor {
+                position: point2(OWNED_X + 1.0, OWNED_Y + 1.0),
+                held_entity_id: None,
+            }),
+            machine,
+            &world,
+            &TraitGuiState::default(),
+        );
+        assert!(components.iter().any(|component| matches!(
+            component, GuiComponent::Text { text, position, .. }
+                if text == "Tank" && position.y == DESC_Y
+        )));
+    }
+
+    #[test]
+    fn invalid_trait_does_not_consume_the_machine() {
         let mut world = World::new();
         world.add_unique(QuestInfo::new());
         let machine = world.add_entity((dark::properties::PropTemplateId { template_id: 133 },));
@@ -480,7 +601,7 @@ mod tests {
             machine,
             &world,
             &TraitGuiState::default(),
-            &TraitGuiMsg::Pick(4), // Speedy has no locomotion consumer yet.
+            &TraitGuiMsg::Pick(17), // Invalid trait IDs never consume a machine.
         );
 
         assert!(matches!(effect, Effect::NoEffect));

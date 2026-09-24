@@ -11,7 +11,9 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 // contact the creature's own hitboxes, so a swing arrives through the limb it
 // struck and carries that joint: what the damage readouts show, and what
 // per-limb damage will scale by.
-const SWING_FRAMES = 40;
+// Keep the sweep plus message delivery below the 0.4-second victim cooldown.
+// A longer sweep can legitimately hit again after that cooldown expires.
+const SWING_FRAMES = 20;
 const SWING_FROM_X = 0.6;
 const SWING_TO_X = -1.6;
 
@@ -61,6 +63,7 @@ test(
     await game.player.teleport({ x: tx + 1.1, y: ty - 1.0, z: tz });
     await game.step({ frames: 20 });
     const { player: stance } = await game.info();
+    const beforeSwing = (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
 
     // Swing the weapon through the creature at chest height.
     for (let frame = 1; frame <= SWING_FRAMES; frame += 1) {
@@ -72,10 +75,10 @@ test(
       ]);
       await game.step({ frames: 1 });
     }
-    await game.step({ frames: 5 });
+    await game.step({ frames: 2 });
 
     const damage = (await game.messages.recent()).messages.filter(
-      (message) => message.payload === "Damage",
+      (message) => message.payload === "Damage" && message.sequence > beforeSwing,
     );
     assert.ok(damage.length > 0, "the swing should have damaged something");
 

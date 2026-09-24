@@ -39,6 +39,7 @@ import type {
   PlayerInventoryResult,
   PlayerStats,
   PlayerStatsRequest,
+  StatModifierRequest,
   SpawnedItem,
   TransitionsResult,
   WaitForOptions,
@@ -334,6 +335,11 @@ export class PlayerApi {
       "/v1/player/spawn-item",
       typeof template === "number" ? { template_id: template } : { template },
     );
+  }
+
+  /** Add or refresh a timed stat contribution; zero duration removes it. */
+  async applyStatModifier(request: StatModifierRequest): Promise<PlayerStats> {
+    return this.client.post("/v1/player/stat-modifier", request);
   }
 
   /**
@@ -794,9 +800,15 @@ export class AudioApi {
    * query tags, world position, sim time/frame, clip duration, source entity
    * and audio handle. Snapshot the last `sequence` before an action, then
    * filter for higher sequences to find the sounds that action played.
+   * `sample` keeps only samples containing it, ignoring case; `playing`
+   * keeps only sounds still audible now.
    */
-  async recent(): Promise<RecentAudioResult> {
-    return this.client.get<RecentAudioResult>("/v1/audio/recent");
+  async recent(options?: { sample?: string; playing?: boolean }): Promise<RecentAudioResult> {
+    const params = new URLSearchParams();
+    if (options?.sample !== undefined) params.set("sample", options.sample);
+    if (options?.playing) params.set("playing", "true");
+    const query = params.size > 0 ? `?${params}` : "";
+    return this.client.get<RecentAudioResult>(`/v1/audio/recent${query}`);
   }
 }
 

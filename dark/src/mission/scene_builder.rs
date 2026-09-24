@@ -73,11 +73,15 @@ impl AnimatedLightmapController {
             regions = regions.len(),
             "prepared switchable lightmaps"
         );
+        // The atlas starts with static pixels only. Animated lights without
+        // an instantiated property (e.g. a difficulty-filtered owner) stay off
+        // for objects too, rather than falling back to static full brightness.
+        let intensities = light_to_regions.keys().map(|&id| (id, 0.0)).collect();
         Self {
             texture,
             regions,
             light_to_regions,
-            intensities: HashMap::new(),
+            intensities,
             compose_scratch: Vec::new(),
         }
     }
@@ -85,19 +89,29 @@ impl AnimatedLightmapController {
     /// Queue one authored light value. Repeated effects in a script batch mark
     /// rectangles only; [`flush`](Self::flush) recomposes each at most once.
     pub fn set_light_intensity(&mut self, light_number: i16, intensity: f32) -> bool {
-        let Some(affected_regions) = self.light_to_regions.get(&light_number) else {
+        if light_number < 0 || !intensity.is_finite() {
             return false;
-        };
+        }
         let intensity = intensity.clamp(0.0, 1.0);
         if self.intensities.get(&light_number).copied() == Some(intensity) {
             return true;
         }
 
         self.intensities.insert(light_number, intensity);
-        for &region_index in affected_regions {
-            self.regions[region_index].dirty = true;
+        if let Some(affected_regions) = self.light_to_regions.get(&light_number) {
+            for &region_index in affected_regions {
+                self.regions[region_index].dirty = true;
+            }
         }
         true
+    }
+
+    /// The same normalized values drive object lights and wall lightmaps.
+    /// Keep values even for lights without an atlas region: their authored
+    /// object-light entry can still reach a prop. Missing entries are static
+    /// lights, whose table brightness needs no multiplier.
+    pub fn light_intensities(&self) -> &HashMap<i16, f32> {
+        &self.intensities
     }
 
     /// Upload every dirty rectangle. Cost scales with the authored affected
@@ -158,6 +172,10 @@ fn compose_region(
     }
 }
 
+/// World polys wind clockwise as seen from the cell that owns them.
+const WATER_FRONT_FACE: engine::scene::scene_object::FrontFaceWinding =
+    engine::scene::scene_object::FrontFaceWinding::Clockwise;
+
 pub fn to_scene(
     level: &crate::mission::SystemShock2Level,
     asset_cache: &mut AssetCache,
@@ -170,8 +188,26 @@ pub fn to_scene(
     let all_geometry = &level.all_geometry;
     let mut texture_to_vertices: HashMap<&u16, Vec<VertexPositionTextureLightmapAtlasNormal>> =
         HashMap::new();
+    let mut water_texture_to_vertices: HashMap<String, Vec<VertexPositionTextureNormal>> =
+        HashMap::new();
     for geometry in all_geometry {
         let texture_id = &geometry.texture_idx;
+
+        if geometry.is_water_surface() {
+            let flow_group = level.cells[geometry.cell_idx as usize].flow_group;
+            let texture_name = level
+                .water_render_info
+                .texture_name(*texture_id, flow_group);
+            let current_vertices = water_texture_to_vertices.entry(texture_name).or_default();
+            current_vertices.extend(geometry.verts.iter().map(|vertex| {
+                VertexPositionTextureNormal {
+                    position: vertex.position,
+                    uv: vertex.uv,
+                    normal: vertex.normal,
+                }
+            }));
+            continue;
+        }
 
         // Skip empty texture
         if *texture_id == 0 {
@@ -246,7 +282,7 @@ pub fn to_scene(
 
         let material = {
             if tex_info.render_type == RenderType::FullBright {
-                RefCell::new(engine::scene::basic_material::create(
+                RefCell::new(engine::scene::basic_material::create_with_fixed_ambient(
                     animated_texture,
                     1.0,
                     0.0,
@@ -262,6 +298,26 @@ pub fn to_scene(
 
         let scene_object1 = engine::scene::scene_object::SceneObject::create(material, mesh);
         scene_objects.push(scene_object1)
+    }
+
+    for (texture_name, vertices) in water_texture_to_vertices {
+        let Some(texture) = asset_cache.get_opt(&TEXTURE_IMPORTER, &texture_name) else {
+            tracing::warn!("missing authored water texture {texture_name}");
+            continue;
+        };
+        let texture: Rc<dyn TextureTrait> = texture;
+        let mesh: Rc<Box<dyn engine::scene::Geometry>> =
+            Rc::new(Box::new(engine::scene::mesh::create(vertices)));
+        let material = RefCell::new(engine::scene::basic_material::create(
+            texture,
+            1.0,
+            1.0 - level.water_render_info.alpha,
+        ));
+        // 247 and 248 are the two faces of one boundary; cull each to its
+        // own side so only one draws from above and one from below.
+        let mut water = engine::scene::scene_object::SceneObject::create(material, mesh);
+        water.set_backface_culling(Some(WATER_FRONT_FACE));
+        scene_objects.push(water);
     }
 
     MissionScene {

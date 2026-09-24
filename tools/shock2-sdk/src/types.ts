@@ -437,6 +437,14 @@ export interface PhysicsBodyListResult {
  * One object as submitted to the renderer on the last frame
  * (GET /v1/scene). Mirrors `commands::SceneObjectSummary`.
  */
+/** Authored object lights before scene/hand lights are merged for drawing. */
+export interface ObjectLightingSummary {
+  light_count: number;
+  /** Received energy at the origin, ignoring normals and spotlight coverage. */
+  received: number;
+  ambient: Vec3;
+}
+
 export interface SceneObjectSummary {
   entity_id: number | null;
   name: string | null;
@@ -458,6 +466,8 @@ export interface SceneObjectSummary {
   clear_depth: boolean;
   /** Front-face winding used for culling, or null when double-sided. */
   backface_culling: string | null;
+  /** Null unless experimental object lighting resolved a set for this object. */
+  lighting?: ObjectLightingSummary | null;
 }
 
 export interface SceneListResult {
@@ -651,10 +661,14 @@ export interface PlayerSnapshot {
   /** The gamesys names of the active sustained psi powers (e.g. "Inviso"),
    * in activation order; empty when none. */
   active_psi_powers: string[];
+  seekersense_contacts: { entity_id: number; position: Vec3; distance: number; strength: number }[];
+  radar_contacts: { entity_id: number; position: Vec3; distance: number; strength: number }[];
   /** The player's persistent character sheet (primary stats, trained skills,
    * mastered psi disciplines), accumulated from career + station training
    * tours; null when the scene has no player. */
   stats: PlayerStats | null;
+  /** Current stats including powered equipped implants; training is unchanged. */
+  effective_stats: PlayerStats | null;
   /** The audio logs the player has collected (frobbed), in pickup order.
    * Persisted in QuestInfo; survives level transitions and save/load. */
   collected_logs: CollectedLog[];
@@ -756,11 +770,20 @@ export interface SkillLevels {
   research: number;
 }
 
+export type PrimaryStat = "strength" | "endurance" | "agility" | "psionic_ability" | "cyber_affinity";
+export interface StatModifierRequest {
+  source: string;
+  stat: PrimaryStat;
+  delta: number;
+  duration_secs: number;
+}
+
 /** The player's persistent character sheet. Primary stats start at a baseline
  * of 1 and skills at 0; station training tours raise them per the (career,
  * year, tour) reward table. `psi_disciplines` lists OSA-mastered disciplines by
  * display name; `granted_years` records which training years were applied. */
 export interface PlayerStats {
+  modifiers: Array<{ source: string; stat: PrimaryStat; delta: number; remaining: { secs: number; nanos: number } }>;
   strength: number;
   endurance: number;
   agility: number;
@@ -995,7 +1018,9 @@ export interface UiState {
    * `cycle_ammo`, the psi selector's `psi_tier_prev`/`psi_tier_next`/
    * `psi_power_prev`/`psi_power_next`, and `psi_select` (the badge and
    * discipline name themselves, which open the power selection MFD). Empty
-   * outside use mode. Click a control's `screen_rect` center to invoke it.
+   * outside use mode. `select_left_hand` / `select_right_hand` choose which
+   * held weapon feeds the full controls; their entity IDs name their own hand.
+   * Click a control's `screen_rect` center to invoke it.
    */
   readout: UiElement[];
   /**
@@ -1007,6 +1032,8 @@ export interface UiState {
    * carries the same readouts the flat cursor clicks.
    */
   readout_elements: UiElement[];
+  /** Utility buttons and character/access panel contents, empty outside use mode. */
+  utilities: UiElement[];
   /**
    * Where the pointer last landed on the shared canvas: the mouse on flat, the
    * controller ray on the VR cyber-interface panel. null when nothing is

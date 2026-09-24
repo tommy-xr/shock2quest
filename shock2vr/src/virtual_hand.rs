@@ -64,6 +64,7 @@ pub struct VirtualHand {
 
     handedness: Handedness,
     feedback: HandFeedback,
+    motion: crate::throwing::HandMotion,
 }
 
 #[derive(Debug)]
@@ -132,6 +133,7 @@ pub enum VirtualHandEffect {
     /// wield swap is a `StoreItem`, not a drop (#777).
     DropItem {
         entity_id: EntityId,
+        motion: crate::throwing::ReleaseMotion,
     },
 }
 
@@ -163,8 +165,13 @@ impl VirtualHand {
             hand_state: HandState::Empty,
             handedness,
             feedback: HandFeedback::default(),
+            motion: Default::default(),
         }
     }
+    pub(crate) fn reset_throw_motion(&mut self) {
+        self.motion = Default::default();
+    }
+
     pub(crate) fn preserve_restored_grip(&mut self) {
         self.restored_grip_pending = self.get_held_entity().is_some();
     }
@@ -232,6 +239,7 @@ impl VirtualHand {
         hand.feedback = HandFeedback::default();
         hand.raytrace_hit = None;
         hand.last_frobbed_entity = None;
+        hand.reset_throw_motion();
         hand
     }
 
@@ -291,6 +299,15 @@ impl VirtualHand {
         let handedness = prev.handedness;
         let hand_position = hand_world_position(pawn_pos, pawn_rot, input_hand.position);
         let hand_rotation = pawn_rot * input_hand.rotation;
+        let mut motion = prev.motion.clone();
+        motion.sync_epoch(world);
+        let release = motion.sample(
+            input_hand.position,
+            input_hand.rotation,
+            pawn_pos,
+            pawn_rot,
+            dt,
+        );
 
         // Also do a raycast to provide the 'Hover' effect
         let ray_start = point3(hand_position.x, hand_position.y, hand_position.z);
@@ -307,7 +324,10 @@ impl VirtualHand {
 
                 // If we're holding onto something, but not grabbing, we can drop it
                 if input_hand.squeeze_value < 0.5 && !prev.restored_grip_pending {
-                    let mut msgs = vec![VirtualHandEffect::DropItem { entity_id }];
+                    let mut msgs = vec![VirtualHandEffect::DropItem {
+                        entity_id,
+                        motion: release,
+                    }];
 
                     // Releasing a tool against the weapon in the other hand is
                     // the natural two-hand gesture, and it is the one target
@@ -350,6 +370,7 @@ impl VirtualHand {
                         hand_state: HandState::Empty,
                         handedness,
                         feedback: HandFeedback::default(),
+                        motion: Default::default(),
                     };
                     (updated_hand, msgs)
                 } else {
@@ -404,6 +425,7 @@ impl VirtualHand {
                         hand_state: next_hand_state,
                         handedness,
                         feedback: HandFeedback::default(),
+                        motion: Default::default(),
                     };
                     (updated_hand, msgs)
                 }
@@ -443,6 +465,7 @@ impl VirtualHand {
             prev.feedback
         };
         hand.feedback.update(observed, failed, dt);
+        hand.motion = motion;
         let result = if matches!(prev.hand_state, HandState::Empty) {
             hand.raytrace_hit.clone()
         } else {
@@ -482,6 +505,7 @@ impl VirtualHand {
         glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
         grip: Option<(&crate::vr_grip::ResolvedGrip, f32)>,
         visual_pose: Option<crate::vr_support::GripPose>,
+        lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<SceneObject> {
         let hand_pose = visual_pose.unwrap_or(crate::vr_support::GripPose {
             position: self.position,
@@ -493,6 +517,7 @@ impl VirtualHand {
         }
         // The hand itself: the skinned hand model, posed from the analog
         // inputs - unless a wielded weapon's model stands in for it.
+        let hand_lights = lighting.map(|lighting| lighting.at_player_position(hand_pose.position));
         let mut scene_objects = glove_renderer
             .filter(|_| shows_hand_visual(world, self.get_held_entity()))
             .map(|renderer| {
@@ -505,9 +530,17 @@ impl VirtualHand {
                     self.get_held_entity().is_some(),
                     grip.map(|(grip, blend)| (grip.finger_amounts_at(self.trigger_value), blend)),
                     self.feedback.light(),
+                    hand_lights,
                 )
             })
             .unwrap_or_default();
+
+        let invisibility = crate::psi_invisibility::transparency(world);
+        let charge_transform = crate::melee_charge_visual::transform(world, self.get_held_entity());
+        for object in &mut scene_objects {
+            object.set_transform(charge_transform * object.get_transform());
+            crate::psi_invisibility::apply(object, invisibility);
+        }
 
         let hit_color = self.color_from_state();
 
@@ -661,6 +694,7 @@ fn handle_empty_hand_state(
         hand_state: next_hand_state,
         handedness,
         feedback,
+        motion: Default::default(),
     };
     (updated_hand, msgs)
 }

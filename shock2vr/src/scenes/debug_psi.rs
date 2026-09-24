@@ -151,10 +151,7 @@ impl DebugSceneHooks for PsiHooks {
         if !self.populated {
             self.populated = true;
 
-            // Nothing on the psi cast path reads the character sheet yet
-            // (every power is already known in a debug scene, and the amp's
-            // effective PSI stat is a constant), so this is parity with
-            // `debug_weapons` and future-proofing, not a gate being lifted.
+            // Provision every power and stat for deterministic psi scenarios.
             max_player_stats(core, "debug_psi");
             // The psi pool is what actually limits a test session: the player
             // template seeds it short of its maximum. Start full.
@@ -167,10 +164,19 @@ impl DebugSceneHooks for PsiHooks {
                 },
             );
 
-            let spawns = TARGET_POSITIONS
+            let mut spawns: Vec<_> = TARGET_POSITIONS
                 .iter()
                 .map(|(x, z)| spawn_at(TARGET_CREATURE, Point3::new(-x, 1.0, *z)))
                 .collect();
+            // Sense-power fixtures: visible loot, hidden loot behind the backstop,
+            // and a far negative control. Stable templates allow discovery per run.
+            spawns.extend([
+                spawn_at(-52, Point3::new(-4.0, 1.0, 2.0)),
+                spawn_at(-941, Point3::new(-5.0, 1.0, 3.5)),
+                spawn_at(-1358, Point3::new(-4.0, 1.0, -2.0)),
+                spawn_at(-928, Point3::new(-18.0, 1.0, 0.0)),
+                spawn_at(-57, Point3::new(-45.0, 1.0, 0.0)),
+            ]);
             core.handle_effects(
                 spawns,
                 global_context,

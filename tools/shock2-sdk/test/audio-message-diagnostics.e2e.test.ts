@@ -94,7 +94,7 @@ test(
     const afterEnd = (await game.audio.recent()).sounds.find(
       (entry) => entry.sequence === sound.sequence,
     );
-    // The 64-entry ring may have evicted it while the mission ran; eviction is
+    // The ring may have evicted it while the mission ran; eviction is
     // not a failure, reporting it as still playing is.
     assert.notEqual(
       afterEnd?.still_playing,

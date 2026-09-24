@@ -40,11 +40,15 @@ pub enum DevCategory {
     Weapons,
     Recoil,
     Melee,
+    Throwing,
     Camera,
+    Lighting,
+    OrganicShine,
+    Horde,
 }
 
 impl DevCategory {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 15] = [
         Self::Root,
         Self::Visualizations,
         Self::Interaction,
@@ -55,7 +59,11 @@ impl DevCategory {
         Self::Weapons,
         Self::Recoil,
         Self::Melee,
+        Self::Throwing,
         Self::Camera,
+        Self::Lighting,
+        Self::OrganicShine,
+        Self::Horde,
     ];
 
     pub fn label(self) -> &'static str {
@@ -70,7 +78,11 @@ impl DevCategory {
             Self::Weapons => "Weapons",
             Self::Recoil => "Recoil",
             Self::Melee => "Melee",
+            Self::Throwing => "Throwing",
             Self::Camera => "Camera & view",
+            Self::Lighting => "Lighting",
+            Self::OrganicShine => "Organic shine",
+            Self::Horde => "Earth horde",
         }
     }
 
@@ -79,7 +91,8 @@ impl DevCategory {
             Self::Root => None,
             Self::Interaction | Self::Combat => Some(Self::Visualizations),
             Self::Fit => Some(Self::Hands),
-            Self::Recoil | Self::Melee => Some(Self::Weapons),
+            Self::Recoil | Self::Melee | Self::Throwing => Some(Self::Weapons),
+            Self::OrganicShine => Some(Self::Lighting),
             _ => Some(Self::Root),
         }
     }
@@ -210,6 +223,18 @@ macro_rules! dev_params {
 }
 
 dev_params! {
+    /// Applied once to fresh horde runs; the cheat explicitly applies it mid-run.
+    HORDE_START_WAVE = Horde::float("horde_start_wave", "Start / jump to wave", 1.0, 1.0, 100.0, 1.0),
+    /// Pauses new installer movement/construction; existing turrets remain threats.
+    HORDE_TECH_ENABLED = Horde::bool("horde_tech_enabled", "Tech builders", true),
+    HORDE_TECH_WAVE = Horde::float("horde_tech_wave", "Builder first wave", 5.0, 1.0, 20.0, 1.0),
+    /// Read live during construction; changing it adjusts remaining work.
+    HORDE_TECH_BUILD_SECONDS = Horde::float("horde_tech_build_seconds", "Build seconds", 25.0, 5.0, 120.0, 5.0),
+    /// Earliest normal-mode wave that permits growth and new pods. Protection
+    /// still counts down during earlier combat; diagnostic mode bypasses this gate.
+    HORDE_GROWTH_WAVE = Horde::float("horde_growth_wave", "Growth first wave", 4.0, 1.0, 20.0, 1.0),
+    /// Combat seconds from bare to maximum infestation after protection expires.
+    HORDE_GROWTH_SECONDS = Horde::float("horde_growth_seconds", "Growth seconds", 180.0, 30.0, 600.0, 15.0),
     /// Global VR hand-frame offset along controller-local -Z, in centimeters.
     /// Includes menu gloves, wrist UI, held items and interactions; negative pulls back.
     GLOVE_FORWARD_CM = Hands::float_locked("glove_forward_cm", "Glove forward cm", -15.0, -20.0, 20.0, 0.5),
@@ -223,8 +248,18 @@ dev_params! {
     GLOVE_FIT_VISIBLE = Fit::bool("glove_fit_visible", "Fit gloves", true),
     /// Quest only: compare grip pose against gameplay's current aim pose.
     GLOVE_FIT_GRIP_POSE = Fit::bool("glove_fit_grip_pose", "Hand pose", false, "Aim", "Grip"),
-    /// Quest only: show the room behind debug_gloves. Other scenes stay opaque.
+    /// Quest only: show the room behind debug_gloves/debug_psi_fit. Other scenes stay opaque.
     GLOVE_FIT_PASSTHROUGH = Fit::bool("glove_fit_passthrough", "Fit passthrough", true),
+    /// Live VR amp fit, relative to the authored hand placement. Also used by debug_psi_fit.
+    PSI_AMP_FORWARD_CM = Hands::float("psi_amp_forward_cm", "Psi amp forward cm", 2.0, -20.0, 20.0, 0.5),
+    PSI_AMP_UP_CM = Hands::float("psi_amp_up_cm", "Psi amp up cm", 0.0, -20.0, 20.0, 0.5),
+    PSI_AMP_SCALE = Hands::float("psi_amp_scale", "Psi amp scale", 0.40, 0.25, 2.0, 0.01),
+    /// Roll about hand-local forward (-Z), around the hand origin before fit translation.
+    PSI_AMP_LEFT_ROLL_DEG = Hands::float("psi_amp_left_roll_deg", "Psi amp left roll deg", 90.0, -180.0, 180.0, 5.0),
+    PSI_AMP_RIGHT_ROLL_DEG = Hands::float("psi_amp_right_roll_deg", "Psi amp right roll deg", -90.0, -180.0, 180.0, 5.0),
+    /// Yaw about hand-local up (+Y), after roll and before fit translation.
+    PSI_AMP_LEFT_YAW_DEG = Hands::float("psi_amp_left_yaw_deg", "Psi amp left yaw deg", 0.0, -180.0, 180.0, 5.0),
+    PSI_AMP_RIGHT_YAW_DEG = Hands::float("psi_amp_right_yaw_deg", "Psi amp right yaw deg", 0.0, -180.0, 180.0, 5.0),
     /// How far ahead of the head the VR frontend/pause panel hangs, in world
     /// units. Default matches the old `ui::FRONTEND_PANEL_DISTANCE` const.
     FRONTEND_PANEL_DISTANCE = Camera::float("panel_distance", "Panel distance", 2.0, 0.5, 6.0, 0.1),
@@ -251,26 +286,62 @@ dev_params! {
     EYE_HEIGHT_OFFSET = Camera::float("eye_offset", "Eye height (m)", 0.0, -0.5, 0.5, 0.02),
     /// Live override for the flat runtimes' projection FOV, in degrees. `0`
     /// (the default) means "no override - use `Game::desired_fov_deg()`";
-    /// any positive value forces that FOV instead, for verifying the
-    /// game-driven FOV seam (issue #1088) without a rebuild. `oculus_runtime`
+    /// any positive value forces that FOV instead, for checking the flat
+    /// projection without a rebuild. `oculus_runtime`
     /// is untouched: OpenXR view FOVs must be used as-is. (`debug_runtime`
     /// shares its single flat projection between flat and `--vr` mode, so this
     /// override reaches both there.)
     FOV_OVERRIDE_DEG = Camera::float("fov_override_deg", "FOV override", 0.0, 0.0, 120.0, 1.0),
+    /// Maximum flat Q/E eye displacement in SS2 feet, read every frame.
+    /// 2 feet is twice the original lean; 0 disables displacement and roll.
+    /// Geometry still limits the resolved pose. VR uses tracked head motion.
+    FLAT_LEAN_DISTANCE = Camera::float("flat_lean_distance", "Max lean (ft)", 2.0, 0.0, 4.0, 0.1),
+    /// Scale the world ambient floor and model ambient: 0 disables, 1 preserves.
+    AMBIENT_LIGHT_INTENSITY = Lighting::float("ambient_light_intensity", "Ambient intensity", 1.0, 0.0, 3.0, 0.05),
+    /// Scale baked world lighting independently of the ambient floor and spotlights.
+    LEVEL_LIGHT_INTENSITY = Lighting::float("level_light_intensity", "Level light intensity", 1.0, 0.0, 3.0, 0.05),
     /// Weapon-handling test overrides only: 0 follows the character sheet,
     /// 1–6 selects a live test level without changing stats or saves. Strength
     /// affects physical gun recoil and optional weight; Agility affects recoil.
     GUN_STRENGTH_OVERRIDE = Weapons::float("gun_strength_override", "Gun STR ovrd", 0.0, 0.0, 6.0, 1.0),
     GUN_AGILITY_OVERRIDE = Weapons::float("gun_agility_override", "Gun AGI ovrd", 0.0, 0.0, 6.0, 1.0),
+    /// Throw feel and balance. Launch values apply to the next release; damage
+    /// values are read at impact. Tracking/teleport rejection stays fixed.
+    THROW_SPEED_SCALE = Throwing::float("throw_speed_scale", "Speed scale", 1.0, 0.0, 3.0, 0.1),
+    THROW_SPIN_SCALE = Throwing::float("throw_spin_scale", "Spin scale", 1.0, 0.0, 3.0, 0.1),
+    THROW_MAX_SPEED = Throwing::float("throw_max_speed", "Max speed (u/s)", 12.0, 0.5, 20.0, 0.5),
+    THROW_MAX_SPIN = Throwing::float("throw_max_spin", "Max spin (rad/s)", 25.0, 0.0, 50.0, 1.0),
+    THROW_SMOOTHING_MS = Throwing::float("throw_smoothing_ms", "Motion smoothing (ms)", 50.0, 0.0, 100.0, 5.0),
+    THROW_STRENGTH_OVERRIDE = Throwing::float("throw_strength_override", "Strength override", 0.0, 0.0, 6.0, 1.0),
+    THROW_STRENGTH_BONUS = Throwing::float("throw_strength_bonus", "Strength speed bonus", 0.25, 0.0, 1.0, 0.05),
+    THROW_WEIGHT_EXPONENT = Throwing::float("throw_weight_exponent", "Weight slowdown", 0.25, 0.0, 1.0, 0.05),
+    THROW_STRENGTH_WEIGHT_RELIEF = Throwing::float("throw_strength_weight_relief", "Strength weight relief", 0.5, 0.0, 1.0, 0.1),
+    THROW_MIN_SPEED = Throwing::float("throw_min_speed", "Min throw speed (u/s)", 1.5, 0.1, 5.0, 0.1),
+    THROW_IMPACT_MIN_SPEED = Throwing::float("throw_impact_min_speed", "Min impact speed (u/s)", 2.0, 0.1, 10.0, 0.1),
+    THROW_DAMAGE_SPEED = Throwing::float("throw_damage_speed", "Full damage speed (u/s)", 6.0, 0.5, 20.0, 0.5),
+    THROW_ORGANIC_CAP = Throwing::float("throw_organic_cap", "Organic damage cap", 2.0, 0.0, 2.0, 1.0),
+    THROW_INORGANIC_CAP = Throwing::float("throw_inorganic_cap", "Inorganic damage cap", 1.0, 0.0, 1.0, 1.0),
+    THROW_DAMAGE_WINDOW = Throwing::float("throw_damage_window", "Damage window (s)", 5.0, 0.1, 10.0, 0.1),
     /// Per-axis gain for new physical gun recoil impulses (baseline and extra
     /// one-hand spring). 1 preserves the profile; 0 disables new kick on that
     /// axis. Existing displacement caps and recovery rates remain unchanged.
-    GUN_KICKBACK_SCALE = Recoil::float("gun_kickback_scale", "Back scale", 1.0, 0.0, 3.0, 0.1),
-    GUN_PITCH_SCALE = Recoil::float("gun_pitch_scale", "Pitch scale", 1.0, 0.0, 3.0, 0.1),
-    GUN_YAW_SCALE = Recoil::float("gun_yaw_scale", "Yaw scale", 1.0, 0.0, 3.0, 0.1),
+    GUN_KICKBACK_SCALE = Recoil::float("gun_kickback_scale", "Back scale", 4.0, 0.0, 10.0, 0.1),
+    GUN_PITCH_SCALE = Recoil::float("gun_pitch_scale", "Pitch scale", 6.0, 0.0, 10.0, 0.1),
+    GUN_YAW_SCALE = Recoil::float("gun_yaw_scale", "Yaw scale", 5.0, 0.0, 10.0, 0.1),
     /// Additional one-handed recoil only; support already removes this spring.
     /// Applied alongside per-axis gains after Strength, without changing weight.
-    GUN_ONE_HAND_SCALE = Recoil::float("gun_one_hand_scale", "1-hand scale", 1.0, 0.0, 3.0, 0.1),
+    GUN_ONE_HAND_SCALE = Recoil::float("gun_one_hand_scale", "1-hand scale", 4.0, 0.0, 10.0, 0.1),
+    /// Flatscreen viewmodel recoil gain, applied after the per-axis gains and
+    /// Strength. The flat gun is a camera-anchored viewmodel rather than a
+    /// tracked object, so the same authored kick reads at a different size on
+    /// screen; this rescales it (caps included) without touching VR.
+    FLAT_RECOIL_SCALE = Recoil::float("flat_recoil_scale", "Flat scale", 1.0, 0.25, 5.0, 0.25),
+    /// How much of the flat viewmodel's recoil the shot itself follows, the
+    /// flat stand-in for VR's muzzle-launched shots. 0 keeps recoil purely
+    /// cosmetic (the shot always leaves along the crosshair); 1 makes a shot
+    /// fired mid-kick ride the full displacement, so sustained fire walks up.
+    /// A settled gun fires exactly on the crosshair at every setting.
+    FLAT_RECOIL_AIM = Recoil::float("flat_recoil_aim", "Flat aim follow", 1.0, 0.0, 1.0, 0.1),
     /// Ceiling on how fast a physically simulated held melee weapon may be
     /// driven onto its tracked-hand target, in world units per second.
     ///
@@ -316,10 +387,10 @@ dev_params! {
     MELEE_VOLUMES = Combat::bool("melee_volumes", "Melee contact volumes", false),
     /// Visualize shoulder backpack stow zones (cyan; green while reached).
     VR_BACKPACK_ZONES = Interaction::bool("vr_backpack_zones", "Backpack zones", false),
-    VR_BACKPACK_RADIUS = Body::float("vr_backpack_radius", "Backpack reach radius (m)", 0.28, 0.18, 0.35, 0.01),
-    VR_HOLSTER_RADIUS = Body::float("vr_holster_radius", "Holster reach radius (m)", 0.35, 0.14, 0.45, 0.01),
+    VR_BACKPACK_RADIUS = Body::float("vr_backpack_radius", "Backpack reach radius (m)", 0.25, 0.18, 0.5, 0.01),
+    VR_HOLSTER_RADIUS = Body::float("vr_holster_radius", "Holster reach radius (m)", 0.15, 0.14, 0.5, 0.01),
     VR_GLOVE_SPHERES = Interaction::bool("vr_glove_spheres", "Glove contact spheres", false),
-    VR_GLOVE_RADIUS = Body::float("vr_glove_radius", "Glove contact radius (m)", 0.05, 0.02, 0.09, 0.005),
+    VR_GLOVE_RADIUS = Body::float("vr_glove_radius", "Glove contact radius (m)", 0.1, 0.02, 0.1, 0.005),
     VR_AMMO_POUCH_ZONES = Interaction::bool("vr_ammo_pouch_zones", "Ammo pouch zone", false),
     VR_HOLSTER_ZONES = Interaction::bool("vr_holster_zones", "Holster zones", false),
     /// Actual front of the curved belt, including the asset's authored offset.
@@ -368,6 +439,58 @@ dev_params! {
     /// making the arm exactly life-size (0.79) would leave the Wrench at 52,
     /// and making the Wrench right (~0.5) would leave a child's arm.
     MELEE_WIELD_SCALE = Melee::float_locked("melee_scale", "Melee scale", 0.7, 0.25, 1.5, 0.05),
+    /// Authored lighting for world objects, held models and gloves. Disable
+    /// only to compare against legacy shading during testing.
+    OBJECT_LIGHTING = Lighting::bool("object_lighting", "Object lighting", true),
+    /// Paint the mission's environment cubemap around the camera instead of
+    /// the world, to check what reflections sample and that it is oriented
+    /// like the level.
+    ENV_MAP_PREVIEW = Lighting::bool("env_map_preview", "Env map preview", false),
+    /// A spotlight along each VR hand's pointing ray.
+    HAND_SPOTLIGHTS = Lighting::bool("hand_spotlights", "Hand spotlights", false),
+    SPOTLIGHT_INTENSITY = Lighting::float("spotlight_intensity", "Spotlight intensity", 2.0, 0.0, 4.0, 0.1),
+    /// Outer cone half-angle in degrees; the full-brightness core is half of it.
+    SPOTLIGHT_CONE = Lighting::float("spotlight_cone", "Spotlight cone", 30.0, 5.0, 60.0, 1.0),
+    SPOTLIGHT_RANGE = Lighting::float("spotlight_range", "Spotlight range", 10.0, 1.0, 20.0, 0.5),
+    /// Multiplies every object light's brightness. The default 1.0 is the
+    /// faithful value - brightness as authored, divided back down for our
+    /// smaller world units - and exists to be turned up when the authored
+    /// answer reads too dark on a modern display. Objects are legitimately
+    /// dimmer than the walls behind them (lightmapped surfaces never fall
+    /// fully dark, objects do), so this is a taste knob, not a correction.
+    OBJECT_LIGHT_BRIGHTNESS = Lighting::float("object_light_brightness", "Obj light", 1.0, 0.0, 8.0, 0.1),
+    /// Added to the mission's own ambient for objects only. The mission floor
+    /// is often very low (medsci1 authors 0.078), which is faithful but leaves
+    /// an object with no light on it nearly black; raise this to lift the
+    /// shadows without touching what the lamps do.
+    OBJECT_LIGHT_AMBIENT_BOOST = Lighting::float("object_light_ambient", "Obj ambient", 0.0, 0.0, 0.5, 0.01),
+    /// How far light wraps past the terminator on objects. 0 is what the
+    /// original did for objects - a face pointing away from a lamp gets
+    /// nothing but ambient. 1 is the half-lambert it baked into *lightmaps*,
+    /// which is why walls never go fully dark and props do. Raising this lifts
+    /// a prop's shadowed side at the cost of the directional read that makes a
+    /// lamp feel like a lamp.
+    OBJECT_LIGHT_WRAP = Lighting::float("object_light_wrap", "Obj wrap", 0.0, 0.0, 1.0, 0.05),
+    /// Strength of the moving highlight on wet organic surfaces (eggs, grubs,
+    /// arachnids, growth). 0 leaves only the authored view-angle sheen.
+    OBJECT_SPECULAR = Lighting::float("object_specular", "Obj specular", 1.5, 0.0, 4.0, 0.1),
+    /// Strength of the mission's captured surroundings reflected in those same
+    /// wet surfaces. 0 turns reflections off.
+    OBJECT_REFLECTION = Lighting::float("object_reflection", "Obj reflection", 3.0, 0.0, 4.0, 0.1),
+    /// How far the highlight on worm goo gathers onto procedural veins; 0
+    /// spreads it evenly. Growth has no authored glint map of its own.
+    GOO_VEINS = OrganicShine::float("goo_veins", "Goo veins", 1.0, 0.0, 1.0, 0.05),
+    /// 0 keeps goo veins soft and swollen; 1 cuts them to thin, hard lines.
+    GOO_VEIN_SHARPNESS = OrganicShine::float("goo_vein_sharpness", "Goo vein sharp", 0.0, 0.0, 1.0, 0.05),
+    /// Goo's highlight strength relative to `object_specular`; at 1 its veins
+    /// barely glint under a lamp.
+    GOO_SPECULAR = OrganicShine::float("goo_specular", "Goo specular", 3.0, 0.0, 6.0, 0.1),
+    /// As `goo_veins`, for the worm launcher and viral proliferator.
+    WEAPON_VEINS = OrganicShine::float("weapon_veins", "Weapon veins", 1.0, 0.0, 1.0, 0.05),
+    /// As `goo_vein_sharpness`, for the annelid weapons.
+    WEAPON_VEIN_SHARPNESS = OrganicShine::float("weapon_vein_sharpness", "Wpn vein sharp", 0.0, 0.0, 1.0, 0.05),
+    /// As `goo_specular`, for the annelid weapons.
+    WEAPON_SPECULAR = OrganicShine::float("weapon_specular", "Wpn specular", 3.0, 0.0, 6.0, 0.1),
     /// Enables the detached debug ("free") camera. This is the *gate*, not
     /// the camera's own on/off: while it is false the toggle input is not
     /// even read, so a stray `Alt+V` (or controller chord) during normal play
@@ -382,6 +505,15 @@ dev_params! {
     /// something. Inert while the camera is attached (the two poses are the
     /// same pose).
     FREE_CAMERA_CULL_FROM_CAMERA = Camera::bool("free_camera_cull", "Cull from cam", false),
+    /// Draw the player's world position (X/Y/Z) as a text readout over the
+    /// game. Laid out once on the shared HUD canvas; flat draws that canvas in
+    /// screen space, VR presents it on a head-anchored panel. The coordinates a
+    /// bug report needs are otherwise only reachable from a debug-runtime HTTP
+    /// query, which a headset has no way to make.
+    SHOW_POSITION = Visualizations::bool("show_position", "Show position", false),
+    /// Draw collider shapes, contacts and joint anchors live. The desktop and
+    /// debug runtime's `--debug-physics` flag seeds this switch before startup.
+    DEBUG_PHYSICS = Visualizations::bool("debug_physics", "Physics wireframe", false),
     /// How fast the free camera flies, in the player's own speed units - the
     /// default IS [`PLAYER_MOVE_SPEED`], so "walking pace" cannot drift from
     /// what walking actually is. These are pre-scale SS2 units, not world

@@ -22,9 +22,13 @@ for (const difficulty of ["easy", "normal", "hard", "impossible"] as const) {
     await game.step({frames:5});
     const panel = (await game.ui.state()).active_panel;
     assert.ok(panel);
-    assert.ok(panel.elements.some(e => e.text?.includes(`lvl 1 > 2: ${trainerPrice} cm`)));
     const endurance = panel.elements.find(e => e.kind === "button" && e.label === "Endurance");
     assert.ok(endurance);
+    // Retail trainer art places current level, next level and price in
+    // separate cells; assert the values in the chosen row, not an old sentence.
+    const rowNumbers = panel.elements.filter(e => e.kind === "text" && /^\d+$/.test(e.text ?? "")
+      && e.rect[1] >= endurance.rect[1] && e.rect[1] < endurance.rect[1] + endurance.rect[3]);
+    assert.deepEqual(rowNumbers.map(e => e.text), ["1", "2", String(trainerPrice)]);
     await clickUiElement(game,endurance);
     assert.equal((await game.info()).player.stats?.cyber_modules,100-trainerPrice);
     await game.transitionLevel("earth.mis");

@@ -321,6 +321,18 @@ pub struct RuntimePropPsiCharge {
     pub phase: PsiChargePhase,
 }
 
+/// Presentation state only; the charging script owns the transient attack.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropMeleeCharge {
+    pub fraction: f32,
+    /// None once released, even while READY remains armed for one strike.
+    pub held_seconds: Option<f32>,
+}
+
+/// Bonus belonging to the accepted flat animation, immune to trigger chatter.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropFlatMeleeBonus(pub f32);
+
 // RuntimePropFlatAim - the flatscreen camera/crosshair fire ray (world space),
 // set each frame on the player's wielded weapon. When present, weapon firing
 // spawns projectiles from `origin` along `forward` (camera-origin aim) instead
@@ -330,6 +342,16 @@ pub struct RuntimePropPsiCharge {
 pub struct RuntimePropFlatAim {
     pub origin: Point3<f32>,
     pub forward: Vector3<f32>,
+}
+
+/// Whether `entity` is the FLATSCREEN player's wielded weapon: the flat
+/// controller sets its crosshair aim ray on it every frame, and nothing else
+/// carries one. The shared answer to "is this the flat presentation's gun?".
+pub fn is_flat_aimed(world: &shipyard::World, entity: shipyard::EntityId) -> bool {
+    use shipyard::Get;
+    world
+        .borrow::<shipyard::View<RuntimePropFlatAim>>()
+        .is_ok_and(|aims| aims.get(entity).is_ok())
 }
 
 /// Camera-origin ray for a fast projectile fired through the flat crosshair.
@@ -452,3 +474,7 @@ pub struct RuntimePropShoulderWeapon(pub u8);
 /// Explicitly worn armor; saved with its item and effective only while carried.
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropHazardEquipment;
+
+/// Physical implant socket, independent of hands and thigh holsters.
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct RuntimePropImplantSlot(pub u8);

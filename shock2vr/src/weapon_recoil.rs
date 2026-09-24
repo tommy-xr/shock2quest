@@ -2,10 +2,7 @@
 //! excluded: the tracked head is never moved. Citadel's mass=1, stiffness=40,
 //! damping=14 response is integrated analytically, without frame-rate drift.
 use cgmath::{InnerSpace, Vector3, vec3};
-use dark::properties::{
-    GunKickSetting, Link, Links, PropGunKick, PropGunState, PropImplantDesc, PropModelName,
-    PropPlayerGun,
-};
+use dark::properties::{GunKickSetting, PropGunKick, PropGunState, PropModelName, PropPlayerGun};
 use rand::Rng;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
@@ -83,26 +80,7 @@ fn kick_angle<R: Rng + ?Sized>(
 }
 
 fn aiming_implant(world: &World) -> bool {
-    let Ok(player) = world.borrow::<UniqueView<crate::mission::PlayerInfo>>() else {
-        return false;
-    };
-    let Ok((links, implants)) = world.borrow::<(View<Links>, View<PropImplantDesc>)>() else {
-        return false;
-    };
-    // Dark GetEquip: PDOLLBASE 1000 + Special/Special2 (3/4). Merely
-    // carrying an implant in a backpack cell does not activate it.
-    [player.entity_id, player.inventory_entity_id]
-        .into_iter()
-        .any(|owner| {
-            links.get(owner).is_ok_and(|links| {
-                links.to_links.iter().any(|link| {
-                    matches!(link.link, Link::Contains(1003 | 1004))
-                        && link
-                            .to_entity_id
-                            .is_some_and(|id| implants.get(id.0).is_ok_and(|p| p.0 == 6))
-                })
-            })
-        })
+    crate::implants::active(world, 6)
 }
 
 /// Live Strength for physical gun recoil and weight only. The developer knob
@@ -112,16 +90,62 @@ pub fn handling_strength(world: &World) -> i32 {
     if override_level > 0 {
         return override_level;
     }
-    world
-        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
-        .map(|q| q.player_stats().strength)
+    crate::implants::effective_stats(world)
+        .map(|stats| stats.strength)
         .unwrap_or(1)
+}
+
+/// Flatscreen viewmodel recoil. The flat gun is held in both hands, so only
+/// the baseline impulse applies and the one-hand penalty spring never runs.
+/// `flat_recoil_scale` then rescales the whole kick - caps included, unlike
+/// the VR per-axis gains - because the flat kick is purely presentational:
+/// it moves the viewmodel, never the camera or the crosshair the shot follows.
+pub fn flat_impulse(impulse: RecoilImpulse, strength: i32) -> RecoilImpulse {
+    // Supported, so the one-hand argument is never consumed - pass the
+    // baseline rather than advertise a dependency that does not exist.
+    scaled_flat(
+        vr_impulses(impulse, impulse, strength, true).0,
+        crate::dev_params::get(crate::dev_params::FLAT_RECOIL_SCALE),
+    )
+}
+
+/// The pure gain behind [`flat_impulse`]. Deliberately separate from
+/// [`vr_impulses`]'s per-axis gain: this one is uniform and also scales the
+/// travel caps, so the knob keeps biting past the authored ceiling. Recovery
+/// rates are left alone, so scaling changes how far the gun throws, not how
+/// long it takes to settle. A new impulse field needs adding in both.
+fn scaled_flat(base: RecoilImpulse, scale: f32) -> RecoilImpulse {
+    // `f32::MAX` is the "no ceiling" sentinel (heading has none); scaling it
+    // would only turn an unlimited axis into a merely enormous one.
+    // Saturate rather than overflow: an infinite cap would fail `kick`'s
+    // finiteness check and silently drop the whole impulse.
+    let cap = |limit: f32| {
+        if limit.is_finite() && limit < f32::MAX {
+            (limit * scale).min(f32::MAX)
+        } else {
+            limit
+        }
+    };
+    RecoilImpulse {
+        pitch: base.pitch * scale,
+        heading: base.heading * scale,
+        back: base.back * scale,
+        pitch_limit: cap(base.pitch_limit),
+        heading_limit: cap(base.heading_limit),
+        back_limit: cap(base.back_limit),
+        ..base
+    }
 }
 
 /// Called only after the shared firing gate succeeds, once per shell (not pellet).
 pub fn shot_impulse(world: &World, gun: EntityId) -> Option<(RecoilImpulse, RecoilImpulse)> {
-    // Keep the flat/nonphysical firing path free of recoil RNG draws.
-    crate::mission::mission_core::held_item_collision_group(world, gun)?;
+    // Player guns only: a physical VR held body, or the flat viewmodel. AI
+    // weapons never draw recoil RNG.
+    if crate::mission::mission_core::held_item_collision_group(world, gun).is_none()
+        && !crate::runtime_props::is_flat_aimed(world, gun)
+    {
+        return None;
+    }
     let (kicks, states, guns) = world
         .borrow::<(View<PropGunKick>, View<PropGunState>, View<PropPlayerGun>)>()
         .ok()?;
@@ -132,9 +156,8 @@ pub fn shot_impulse(world: &World, gun: EntityId) -> Option<(RecoilImpulse, Reco
     let agility = if override_agility > 0 {
         override_agility
     } else {
-        world
-            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
-            .map(|q| q.player_stats().agility)
+        crate::implants::effective_stats(world)
+            .map(|stats| stats.agility)
             .unwrap_or(1)
     };
     // Shipped Still Hand template, verified against gamesys (power id 2).
@@ -534,12 +557,13 @@ mod tests {
             let still = shotgun(setting, 1, true, false);
             assert_eq!((still.pitch, still.heading), (0.0, 0.0));
             assert!(shotgun(setting, 1, false, true).pitch < low.pitch);
+            let (baseline, weaker) = vr_impulses(authored, low, 1, false);
             let (_, stronger) = vr_impulses(authored, low, 6, false);
-            assert!(stronger.unwrap().pitch < low.pitch);
+            assert!(stronger.unwrap().pitch < weaker.unwrap().pitch);
             let (supported, extra) = vr_impulses(authored, low, 1, true);
             assert!(extra.is_none());
-            assert_eq!(supported.pitch, authored.pitch);
-            assert_eq!(supported.back, authored.back);
+            assert_eq!(supported.pitch, baseline.pitch);
+            assert_eq!(supported.back, baseline.back);
             let mut spring = RecoilState::default();
             for _ in 0..300 {
                 spring.kick(low);
@@ -563,7 +587,14 @@ mod tests {
         assert_eq!((still.pitch, still.heading), (0.0, 0.0));
         assert_eq!(still.back, authored.back);
         let (base, penalty) = vr_impulses(authored, ar, 1, true);
-        assert_eq!((base.pitch, base.heading, base.back), (3.0, 0.0, -0.1));
+        assert_eq!(
+            (base.pitch, base.heading, base.back),
+            (
+                authored.pitch * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE),
+                0.0,
+                authored.back * crate::dev_params::get(crate::dev_params::GUN_KICKBACK_SCALE),
+            )
+        );
         assert!(penalty.is_none());
         let low = vr_impulses(authored, ar, 1, false).1.unwrap();
         let high = vr_impulses(authored, ar, 6, false).1.unwrap();
@@ -576,6 +607,65 @@ mod tests {
             assert!(state.heading.position.abs() <= ar.heading_limit);
             assert!(state.pitch.position.abs() <= ar.pitch_limit);
         }
+    }
+
+    /// Flat holds the gun in both hands, so only the baseline spring runs; the
+    /// flat gain then rescales kick AND caps (a capped axis would otherwise
+    /// stop responding to the knob), leaving recovery rates untouched.
+    #[test]
+    fn flat_recoil_is_two_handed_and_scales_kick_with_its_caps() {
+        let authored = RecoilImpulse {
+            pitch: 0.6,
+            heading: 0.2,
+            back: -0.01,
+            pitch_limit: 8.0,
+            back_limit: 0.2,
+            heading_limit: f32::MAX,
+            angular_rate: 2.0,
+            back_rate: 3.0,
+            forward: -Vector3::unit_x(),
+        };
+        let one_hand = RecoilImpulse {
+            pitch: 30.0,
+            ..authored
+        };
+        // Support is assumed, so the one-hand profile never reaches flat.
+        let base = scaled_flat(vr_impulses(authored, one_hand, 1, true).0, 1.0);
+        assert_eq!(base.pitch, flat_impulse(authored, 1).pitch);
+        let expected_pitch =
+            authored.pitch * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE);
+        let expected_heading =
+            authored.heading * crate::dev_params::get(crate::dev_params::GUN_YAW_SCALE);
+        let expected_back =
+            authored.back * crate::dev_params::get(crate::dev_params::GUN_KICKBACK_SCALE);
+        assert_eq!(
+            (base.pitch, base.heading, base.back),
+            (expected_pitch, expected_heading, expected_back)
+        );
+        for scale in [0.25, 5.0] {
+            let scaled = scaled_flat(base, scale);
+            assert!((scaled.pitch - expected_pitch * scale).abs() < 1e-5);
+            assert!((scaled.heading - expected_heading * scale).abs() < 1e-5);
+            assert!((scaled.back - expected_back * scale).abs() < 1e-6);
+            assert!((scaled.pitch_limit - 8.0 * scale).abs() < 1e-5);
+            assert!((scaled.back_limit - 0.2 * scale).abs() < 1e-6);
+            assert_eq!(scaled.heading_limit, f32::MAX);
+            assert_eq!(scaled.angular_rate, authored.angular_rate);
+            assert_eq!(scaled.back_rate, authored.back_rate);
+            // The scaled kick must survive its own (scaled) ceiling.
+            let mut spring = RecoilState::default();
+            spring.kick(scaled);
+            let peak = (0..120).fold(0.0_f32, |peak, _| {
+                let (_, _) = spring.step(1.0 / 120.0);
+                peak.max(spring.pitch.position)
+            });
+            assert!(
+                (peak - expected_pitch * scale).abs() < 0.05,
+                "peak {peak} at {scale}"
+            );
+        }
+        // Strength still applies underneath the flat gain.
+        assert!(scaled_flat(vr_impulses(authored, one_hand, 6, true).0, 1.0).pitch < base.pitch);
     }
 
     #[test]
@@ -608,11 +698,11 @@ mod tests {
         }
         assert_eq!(
             vr_impulses(authored, authored, 1, true).0.pitch,
-            authored.pitch
+            authored.pitch * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE)
         );
         assert_eq!(
             vr_impulses(authored, authored, -2, true).0.pitch,
-            authored.pitch
+            authored.pitch * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE)
         );
         assert_eq!(
             vr_impulses(authored, authored, 99, true).0.pitch,
@@ -695,12 +785,18 @@ mod tests {
     }
 
     #[test]
-    fn aiming_implant_requires_an_equipped_special_slot() {
-        use crate::mission::PlayerInfo;
-        use dark::properties::{ToLink, WrappedEntityId};
+    fn aiming_implant_requires_powered_equipment_not_backpack_membership() {
+        use crate::{mission::PlayerInfo, runtime_props::RuntimePropImplantSlot};
+        use dark::properties::{Link, Links, PropEnergy, PropImplantDesc, ToLink, WrappedEntityId};
         let mut world = World::new();
-        let implant = world.add_entity(PropImplantDesc(6));
-        let owner = world.add_entity(Links::empty());
+        let implant = world.add_entity((PropImplantDesc(6), PropEnergy(100.0)));
+        let owner = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: 0,
+                to_entity_id: Some(WrappedEntityId(implant)),
+                link: Link::Contains(0),
+            }],
+        });
         world.add_unique(PlayerInfo {
             pos: vec3(0.0, 0.0, 0.0),
             rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
@@ -709,20 +805,10 @@ mod tests {
             left_hand_entity_id: None,
             right_hand_entity_id: None,
         });
-        for (slot, expected) in [(0, false), (1002, false), (1003, true), (1004, true)] {
-            world.add_component(
-                owner,
-                Links {
-                    to_links: vec![ToLink {
-                        to_template_id: 0,
-                        to_entity_id: Some(WrappedEntityId(implant)),
-                        link: Link::Contains(slot),
-                    }],
-                },
-            );
-            assert_eq!(aiming_implant(&world), expected);
-        }
-        world.add_component(implant, PropImplantDesc(5));
+        assert!(!aiming_implant(&world));
+        world.add_component(implant, RuntimePropImplantSlot(0));
+        assert!(aiming_implant(&world));
+        world.add_component(implant, PropEnergy(0.0));
         assert!(!aiming_implant(&world));
     }
 

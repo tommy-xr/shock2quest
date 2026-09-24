@@ -25,7 +25,11 @@ pub(crate) fn load_texture(
         format.load(&buf)
     };
     match config.luminance_alpha_tint {
-        Some(tint) => engine::texture_format::tint_alpha_from_luminance(raw, tint),
+        Some(tint) => engine::texture_format::tint_alpha_from_luminance_range(
+            raw,
+            tint,
+            config.luminance_alpha_range,
+        ),
         None => raw,
     }
 }

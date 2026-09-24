@@ -1,4 +1,6 @@
+pub mod incidence;
 pub mod scene;
+pub mod veins;
 pub use scene::{LegacyScene, Scene};
 
 /// Number of base joint slots in the skinning palette.
@@ -59,7 +61,9 @@ pub use indexed_mesh::IndexedMesh;
 pub mod lines_mesh;
 pub use lines_mesh::LinesMesh;
 
+pub mod environment;
 pub mod material;
+pub mod shine;
 pub use material::Material;
 
 pub mod vertex;

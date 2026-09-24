@@ -1,5 +1,7 @@
 use cgmath::{Vector2, Vector3, vec2};
-use dark::properties::{ObjectState, PropHackDiff, PropKeypadCode, PropObjState, PropTemplateId};
+use dark::properties::{
+    ObjectState, PropHackDiff, PropKeypadCode, PropObjState, PropObjectSound, PropTemplateId,
+};
 use engine::audio::AudioHandle;
 
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -17,7 +19,7 @@ pub struct KeyPadState {
     hack: HackState,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum KeyPadMsg {
     ButtonPressed(u32),
     Clear,
@@ -84,6 +86,27 @@ pub(crate) const fn base_hack_board() -> [HackNode; BOARD_WIDTH * BOARD_HEIGHT] 
     ]
 }
 
+/// Each HRM mode deals its own shape, matching the node outlines printed on
+/// its board art.
+const fn base_board(context: HrmContext) -> [HackNode; BOARD_WIDTH * BOARD_HEIGHT] {
+    use HackNode::{Empty as E, Free as F};
+    match context {
+        HrmContext::Hack { .. } => base_hack_board(),
+        HrmContext::Repair => [
+            E, F, F, F, E, //
+            E, F, F, F, E, //
+            E, F, F, F, E, //
+            E, F, F, F, E,
+        ],
+        HrmContext::Modify => [
+            E, F, F, F, F, //
+            E, F, E, F, E, //
+            E, F, E, F, E, //
+            F, F, F, F, E,
+        ],
+    }
+}
+
 fn next_random(rng_state: &mut u64, upper_exclusive: u32) -> u32 {
     debug_assert!(upper_exclusive > 0);
     let mut value = if *rng_state == 0 {
@@ -124,10 +147,11 @@ fn mix_hack_seed(time_nanoseconds: u64, stable_id: u64) -> u64 {
 }
 
 fn board_with_mines(
+    context: HrmContext,
     mine_count: i32,
     rng_state: &mut u64,
 ) -> [HackNode; BOARD_WIDTH * BOARD_HEIGHT] {
-    let mut nodes = base_hack_board();
+    let mut nodes = base_board(context);
     let mut free: Vec<_> = nodes
         .iter()
         .enumerate()
@@ -175,19 +199,82 @@ fn roll_succeeds(roll: i32, chance: i32) -> bool {
     roll < chance
 }
 
-fn effective_hack_values(world: &World, diff: PropHackDiff) -> (i32, i32) {
-    let (skill, stat) = world
-        .borrow::<UniqueView<QuestInfo>>()
-        .ok()
-        .map(|quest| {
-            let stats = quest.player_stats();
-            (stats.skill_level(Skill::Hack), stats.cyber_affinity)
-        })
-        .unwrap_or((0, 0));
+#[cfg(test)]
+fn effective_hack_values(world: &World, diff: PropHackDiff, security_computer: bool) -> (i32, i32) {
+    effective_hrm_values(world, diff, HrmContext::Hack { security_computer })
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum HrmContext {
+    Hack { security_computer: bool },
+    Modify,
+    Repair,
+}
+
+/// The player's side of an HRM roll: trained skill, the extra levels a
+/// security computer (Security Expert) or the tech implant grant, and CYB.
+struct HrmTerms {
+    skill: i32,
+    bonus_levels: i32,
+    implant: bool,
+    stat: i32,
+}
+
+impl HrmTerms {
+    fn for_context(world: &World, context: HrmContext) -> Self {
+        let Ok(quest) = world.borrow::<UniqueView<QuestInfo>>() else {
+            return Self {
+                skill: 0,
+                bonus_levels: 0,
+                implant: false,
+                stat: 0,
+            };
+        };
+        let stats = quest.player_stats();
+        let skill = stats.skill_level(match context {
+            HrmContext::Hack { .. } => Skill::Hack,
+            HrmContext::Modify => Skill::Modify,
+            HrmContext::Repair => Skill::Repair,
+        });
+        // Retail grants two effective levels only at security computers;
+        // it does not train an unskilled player or change the saved sheet.
+        let bonus_levels = if matches!(
+            context,
+            HrmContext::Hack {
+                security_computer: true
+            }
+        ) && skill > 0
+            && stats.has_os_trait(super::traits::TRAIT_SECURITY_EXPERT)
+        {
+            2
+        } else {
+            0
+        };
+        Self {
+            skill,
+            bonus_levels,
+            implant: skill > 0 && crate::implants::active(world, 7),
+            stat: crate::implants::effective_stats(world)
+                .map_or(stats.cyber_affinity, |effective| effective.cyber_affinity),
+        }
+    }
+
+    fn effective_skill(&self) -> i32 {
+        self.skill + self.bonus_levels + i32::from(self.implant)
+    }
+}
+
+fn hrm_params(world: &World) -> Option<dark::gamesys::HrmParams> {
     world
         .borrow::<UniqueView<GlobalHrmParams>>()
         .ok()
         .and_then(|params| params.0.clone())
+}
+
+fn effective_hrm_values(world: &World, diff: PropHackDiff, context: HrmContext) -> (i32, i32) {
+    let terms = HrmTerms::for_context(world, context);
+    let (skill, stat) = (terms.effective_skill(), terms.stat);
+    hrm_params(world)
         .map(|params| {
             (
                 params.success_chance(diff.success_chance, skill, stat),
@@ -198,6 +285,133 @@ fn effective_hack_values(world: &World, diff: PropHackDiff) -> (i32, i32) {
             diff.success_chance.clamp(0, 85),
             diff.critical_chance.max(0),
         ))
+}
+
+/// Retail's HRM goal well (above the board), the failure chance in the
+/// board's empty top-left cell, and the odds well below it, left of START.
+const GOAL_RECT: crate::ui::Rect = crate::ui::Rect::new(15.0, 12.0, 137.0, 34.0);
+const FAILURE_RECT: crate::ui::Rect = crate::ui::Rect::new(14.0, 49.0, 30.0, 12.0);
+const ODDS_RECT: crate::ui::Rect = crate::ui::Rect::new(15.0, 180.0, 137.0, 104.0);
+
+const FALLBACK_HACK_TEXT: &str = "Complete the circuit to hack this computer.";
+
+/// What hacking `entity` does: its `P$HackText`, resolved against
+/// `hacktext.str`.
+fn hack_goal_text(world: &World, entity: EntityId) -> String {
+    world
+        .borrow::<View<dark::properties::PropHackText>>()
+        .ok()
+        .and_then(|texts| texts.get(entity).ok().map(|text| text.0.clone()))
+        .map(|raw| super::PanelText::object_string(world, "hacktext", &raw))
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| FALLBACK_HACK_TEXT.to_owned())
+}
+
+/// Retail's text on every HRM board, in the MFD font: the goal, the failure
+/// chance and the odds readout.
+pub(crate) fn draw_hrm_text<T: Clone>(
+    world: &World,
+    goal: &str,
+    diff: PropHackDiff,
+    context: HrmContext,
+) -> Vec<GuiComponent<T>> {
+    let mut components = super::PanelText::paragraph(world, goal, GOAL_RECT);
+    components.push(super::PanelText::text(
+        &format!("{}%", hrm_failure_percent(world, diff, context)),
+        FAILURE_RECT,
+    ));
+    components.extend(super::PanelText::paragraph(
+        world,
+        &hrm_breakdown(world, diff, context),
+        ODDS_RECT,
+    ));
+    components
+}
+
+/// A hack board for `entity`: the board plus its goal, failure chance and odds.
+pub(crate) fn draw_hack_panel<TMsg, F>(
+    world: &World,
+    entity: EntityId,
+    state: &HackState,
+    diff: PropHackDiff,
+    security_computer: bool,
+    wrap: F,
+) -> Vec<GuiComponent<TMsg>>
+where
+    TMsg: Clone,
+    F: Fn(KeyPadMsg) -> TMsg + Copy,
+{
+    let mut components = draw_hack_board(state, diff, wrap);
+    components.extend(draw_hrm_text(
+        world,
+        &hack_goal_text(world, entity),
+        diff,
+        HrmContext::Hack { security_computer },
+    ));
+    components
+}
+
+/// Retail's odds readout under the board (`jargon.str`, one key set per
+/// mode): starting difficulty, what skill, CYB and bonuses take off, the
+/// final difficulty and the mine count.
+fn hrm_breakdown(world: &World, diff: PropHackDiff, context: HrmContext) -> String {
+    let mode = match context {
+        HrmContext::Hack { .. } => 0,
+        HrmContext::Repair => 1,
+        HrmContext::Modify => 2,
+    };
+    let line = |key: &str, fallback: &str, args: &[i32]| {
+        let format = super::PanelText::string(world, "jargon", &format!("{key}{mode}"), fallback);
+        super::PanelText::format(&format, args)
+    };
+    let terms = HrmTerms::for_context(world, context);
+    let (skill_bonus, stat_bonus) = hrm_params(world)
+        .map(|p| (p.skill_success_bonus, p.stat_success_bonus))
+        .unwrap_or((0, 0));
+    let (chance, mines) = effective_hrm_values(world, diff, context);
+    let mut lines = vec![
+        line(
+            "JargonBaseDiff",
+            "Initial difficulty: %d%%.",
+            &[100 - diff.success_chance],
+        ),
+        line(
+            "JargonSkill",
+            "Skill %d: -%d%%",
+            &[terms.skill, terms.skill * skill_bonus],
+        ),
+        line(
+            "JargonStat",
+            "CYB stat %d: -%d%%",
+            &[terms.stat, terms.stat * stat_bonus],
+        ),
+    ];
+    if terms.implant {
+        lines.push(line("JargonImplant", "Exper-tech: -%d%%", &[skill_bonus]));
+    }
+    if terms.bonus_levels > 0 {
+        lines.push(line(
+            "JargonBonus",
+            "Bonus: -%d%%",
+            &[terms.bonus_levels * skill_bonus],
+        ));
+    }
+    lines.push(line(
+        "JargonFinalDiff",
+        "Final difficulty: %d%%.",
+        &[100 - chance],
+    ));
+    lines.push(if mines == 1 {
+        line("JargonMinesOne", "%d node.", &[mines])
+    } else {
+        line("JargonMines", "%d nodes.", &[mines])
+    });
+    lines.join("\n")
+}
+
+/// Retail's "N%" readout: the chance a node fails, after skill and stat.
+fn hrm_failure_percent(world: &World, diff: PropHackDiff, context: HrmContext) -> i32 {
+    100 - effective_hrm_values(world, diff, context).0
 }
 
 fn has_connected_three(nodes: &[HackNode; BOARD_WIDTH * BOARD_HEIGHT]) -> bool {
@@ -237,34 +451,18 @@ fn hack_diff_for_entity(world: &World, entity_id: EntityId) -> Option<PropHackDi
         .and_then(|view| view.get(entity_id).ok().copied())
 }
 
-fn get_texture_for_char(char: char) -> String {
-    format!("key{}0.pcx", char)
-}
-
 fn draw_number(num: u32) -> Vec<GuiComponent<KeyPadMsg>> {
-    let num_str = num.to_string();
-
-    let offset_left = 10.0;
-    let offset_top = 10.0;
-    let padding = 1.5;
-    let mut x = 0.0;
-    let numeral_width = 22.5;
-    let numeral_height = 30.0;
-
-    let reversed_chars: Vec<char> = num_str.chars().collect();
-
-    let mut ret = Vec::new();
-    for ch in reversed_chars {
-        ret.push(GuiComponent::Image {
-            position: vec2(x + offset_left, offset_top),
-            size: vec2(numeral_width, numeral_height),
-            texture: get_texture_for_char(ch),
-            alpha: 0.5,
-            kind: crate::ui::ImageKind::Ui,
-        });
-        x += numeral_width + padding;
-    }
-    ret
+    vec![GuiComponent::Text {
+        position: vec2(14.0, 14.0),
+        size: vec2(139.0, 25.0),
+        text: num.to_string(),
+        font: "keyfonta.fon".to_owned(),
+        font_size: 0.0,
+        h: crate::ui::HAlign::Left,
+        v: crate::ui::VAlign::Top,
+        alpha: 1.0,
+        fit_to_rect: false,
+    }]
 }
 
 pub(crate) fn draw_hack_board<TMsg, F>(
@@ -344,8 +542,10 @@ where
         HackPhase::Won => Some("winh.pcx"),
         HackPhase::Lost => Some("loseh.pcx"),
         HackPhase::Unwinnable => Some("failh.pcx"),
-        HackPhase::InsufficientNanites => Some("payh.pcx"),
-        HackPhase::Unpaid | HackPhase::Playing => None,
+        // Retail covers an unpaid board with "CLICK START TO PROCEED" until
+        // START is paid for.
+        HackPhase::Unpaid | HackPhase::InsufficientNanites => Some("payh.pcx"),
+        HackPhase::Playing => None,
     };
     if let Some(texture) = result_texture {
         components.push(
@@ -356,13 +556,12 @@ where
     }
 
     // HACK.PCX already supplies the cyan `COST:` label. Retail draws only the
-    // dynamic numeric value in the 48px slot beginning at x=128, after the
-    // result overlay so WINH/LOSEH/PAYH cannot obscure it.
-    components.push(
-        gui::text(&hack_cost(diff).to_string())
-            .with_position(vec2(147.0, 158.0))
-            .with_size(vec2(29.0, 18.0)),
-    );
+    // dynamic numeric value, in the MFD font, centred in the 48px slot at
+    // (128, 161), after the result overlay so WINH/LOSEH/PAYH cannot obscure it.
+    components.push(super::PanelText::centered(
+        &hack_cost(diff).to_string(),
+        crate::ui::Rect::new(128.0, 161.0, 48.0, 14.0),
+    ));
 
     if !matches!(state.phase, HackPhase::Won | HackPhase::Lost) {
         let (normal, hover, label) =
@@ -394,6 +593,27 @@ pub(crate) fn handle_hack_msg(
     state: &HackState,
     msg: &KeyPadMsg,
     diff: PropHackDiff,
+    security_computer: bool,
+    outcomes: HackOutcomeEffects,
+) -> (HackState, Effect) {
+    handle_hrm_msg(
+        entity_id,
+        world,
+        state,
+        msg,
+        diff,
+        HrmContext::Hack { security_computer },
+        outcomes,
+    )
+}
+
+pub(crate) fn handle_hrm_msg(
+    entity_id: EntityId,
+    world: &World,
+    state: &HackState,
+    msg: &KeyPadMsg,
+    diff: PropHackDiff,
+    context: HrmContext,
     outcomes: HackOutcomeEffects,
 ) -> (HackState, Effect) {
     let mut new_state = state.clone();
@@ -412,10 +632,10 @@ pub(crate) fn handle_hack_msg(
                     },
                 );
             };
-            let (_, mine_count) = effective_hack_values(world, diff);
+            let (_, mine_count) = effective_hrm_values(world, diff, context);
             let mut rng_state = hack_seed(world, entity_id);
             tracing::debug!(entity = entity_id.inner(), rng_state, "HRM rng seed");
-            let nodes = board_with_mines(mine_count, &mut rng_state);
+            let nodes = board_with_mines(context, mine_count, &mut rng_state);
             tracing::debug!(
                 entity = entity_id.inner(),
                 rng_state,
@@ -464,7 +684,7 @@ pub(crate) fn handle_hack_msg(
                 rng_state = new_state.rng_state,
                 "HRM rng outcome"
             );
-            let (chance, _) = effective_hack_values(world, diff);
+            let (chance, _) = effective_hrm_values(world, diff, context);
             if roll_succeeds(roll, chance) {
                 new_state.nodes[index] = HackNode::Lit;
                 if has_connected_three(&new_state.nodes) {
@@ -517,8 +737,23 @@ pub(crate) fn handle_hack_msg(
     }
 }
 
+/// Xerxes' door-hacked line, unless the keypad authors its own sound.
+const DOOR_HACKED_SCHEMA: &str = "xer08";
+
 fn keypad_hack_success(entity_id: EntityId, world: &World) -> Effect {
-    send_to_all_switch_links_and_self(world, entity_id, MessagePayload::TurnOn { from: entity_id })
+    let schema = world
+        .borrow::<View<PropObjectSound>>()
+        .ok()
+        .and_then(|sounds| sounds.get(entity_id).ok().map(|sound| sound.name.clone()))
+        .unwrap_or_else(|| DOOR_HACKED_SCHEMA.to_owned());
+    Effect::combine(vec![
+        send_to_all_switch_links_and_self(
+            world,
+            entity_id,
+            MessagePayload::TurnOn { from: entity_id },
+        ),
+        announce(entity_id, &schema),
+    ])
 }
 
 fn keypad_hack_critical_failure(_entity_id: EntityId, _world: &World) -> Effect {
@@ -535,112 +770,47 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
     ) -> Vec<GuiComponent<KeyPadMsg>> {
         let hack_diff = hack_diff_for_entity(_world, _entity_id);
         if let Some(hack_diff) = hack_diff {
-            return draw_hack_board(&_state.hack, hack_diff, |msg| msg);
+            return draw_hack_panel(_world, _entity_id, &_state.hack, hack_diff, false, |msg| {
+                msg
+            });
         }
 
-        let button_width = 45.0;
-        let button_height = 60.0;
-        let left_margin = 15.0;
-        let top_margin = 42.0;
-        let padding = 1.5;
-
-        let mut components: Vec<GuiComponent<KeyPadMsg>> = vec![
+        // Retail shkkeypd.cpp draws the complete keypad2 artwork and puts
+        // invisible hit regions over it. The old key?0 images obscure the
+        // remaster's higher-resolution digits. The eleven keysel overlays
+        // are pixel-identical; assign one per button in layout order.
+        let mut components = vec![
             gui::image("keypad2.pcx")
                 .with_position(vec2(0.0, 0.0))
-                .with_size(vec2(188.0, 296.0)),
-            // First row of buttons
-            gui::button(KeyPadMsg::ButtonPressed(1))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 0.0,
-                    top_margin,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key10.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key11.pcx".to_owned())),
-            gui::button(KeyPadMsg::ButtonPressed(2))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 1.0,
-                    top_margin,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key20.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key21.pcx".to_owned())),
-            gui::button(KeyPadMsg::ButtonPressed(3))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 2.0,
-                    top_margin,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key30.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key31.pcx".to_owned())),
-            // Second row of buttons
-            gui::button(KeyPadMsg::ButtonPressed(4))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 0.0,
-                    top_margin + (button_height + padding) * 1.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key40.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key41.pcx".to_owned())),
-            gui::button(KeyPadMsg::ButtonPressed(5))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 1.0,
-                    top_margin + (button_height + padding) * 1.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key50.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key51.pcx".to_owned())),
-            gui::button(KeyPadMsg::ButtonPressed(6))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 2.0,
-                    top_margin + (button_height + padding) * 1.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key60.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key61.pcx".to_owned())),
-            // Third row of buttons
-            gui::button(KeyPadMsg::ButtonPressed(7))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 0.0,
-                    top_margin + (button_height + padding) * 2.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key70.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key71.pcx".to_owned())),
-            gui::button(KeyPadMsg::ButtonPressed(8))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 1.0,
-                    top_margin + (button_height + padding) * 2.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key80.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key81.pcx".to_owned())),
-            gui::button(KeyPadMsg::ButtonPressed(9))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 2.0,
-                    top_margin + (button_height + padding) * 2.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key90.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key91.pcx".to_owned())),
-            // Fourth row of buttons
-            gui::button(KeyPadMsg::ButtonPressed(0))
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 0.0,
-                    top_margin + (button_height + padding) * 3.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("key00.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("key01.pcx".to_owned())),
-            gui::button(KeyPadMsg::Clear)
-                .with_position(vec2(
-                    left_margin + (button_width + padding) * 1.0,
-                    top_margin + (button_height + padding) * 3.0,
-                ))
-                .with_size(vec2(button_width, button_height))
-                .with_image("keyn0.pcx")
-                .with_hover(ButtonHoverBehavior::Texture("keyn1.pcx".to_owned())),
+                .with_size(vec2(188.0, 296.0))
+                .with_alpha(1.0),
         ];
+        for (index, digit) in [1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 10].into_iter().enumerate() {
+            let rect = crate::ui::Rect::new(
+                15.0 + (index % 3) as f32 * 47.0,
+                43.0 + (index / 3) as f32 * 61.0,
+                44.0,
+                59.0,
+            );
+            let hovered = _cursor
+                .as_ref()
+                .is_some_and(|cursor| rect.contains(vec2(cursor.position.x, cursor.position.y)));
+            let (msg, label) = if digit == 10 {
+                (KeyPadMsg::Clear, "clear".to_owned())
+            } else {
+                (KeyPadMsg::ButtonPressed(digit), digit.to_string())
+            };
+            components.push(
+                gui::button(msg)
+                    .with_rect(rect)
+                    .with_image(&format!("keysel{index}.png"))
+                    .with_label(&label)
+                    // Selection tint over the authored key, shared by flat
+                    // mouse and VR ray pointing. The PNG supplies translucency;
+                    // clicks retain bkeypad audio.
+                    .with_alpha(if hovered { 1.0 } else { 0.0 }),
+            );
+        }
 
         if let Some(v) = _state.current_value {
             components.extend(draw_number(v))
@@ -670,6 +840,7 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
                 &state.hack,
                 msg,
                 hack_diff,
+                false,
                 HackOutcomeEffects {
                     success: keypad_hack_success,
                     critical_failure: keypad_hack_critical_failure,
@@ -755,6 +926,119 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
 
 #[cfg(test)]
 mod tests {
+    /// An unpaid board is covered by PAYH until START is paid for.
+    #[test]
+    fn an_unpaid_board_asks_for_start() {
+        let diff = PropHackDiff {
+            success_chance: 20,
+            critical_chance: 10,
+            cost: 3.0,
+        };
+        let shows_pay = |phase| {
+            let state = HackState {
+                phase,
+                ..HackState::default()
+            };
+            draw_hack_board(&state, diff, |msg| msg)
+                .iter()
+                .any(|c| matches!(c, GuiComponent::Image { texture, .. } if texture == "payh.pcx"))
+        };
+        assert!(shows_pay(HackPhase::Unpaid));
+        assert!(shows_pay(HackPhase::InsufficientNanites));
+        assert!(!shows_pay(HackPhase::Playing));
+    }
+
+    /// A hack board's goal is the object's `P$HackText`; without one, the
+    /// generic circuit line.
+    #[test]
+    fn the_hack_goal_is_the_objects_hack_text() {
+        let mut world = World::new();
+        let authored = world.add_entity((dark::properties::PropHackText(
+            "ArchReplicator: \"Hack to gain a superior selection of items.\"".to_owned(),
+        ),));
+        let bare = world.add_entity(());
+        assert_eq!(
+            hack_goal_text(&world, authored),
+            "Hack to gain a superior selection of items."
+        );
+        assert_eq!(hack_goal_text(&world, bare), FALLBACK_HACK_TEXT);
+    }
+
+    #[test]
+    fn security_expert_is_a_contextual_bonus_for_trained_hackers() {
+        for (owned, security, base, expected) in [
+            (false, true, 1, (35, 9)),
+            (true, false, 1, (35, 9)),
+            (true, true, 0, (25, 9)),
+            (true, true, 1, (55, 9)),
+            (true, true, 6, (85, 9)),
+        ] {
+            let mut world = World::new();
+            let entity = world.add_entity(());
+            let mut quests = QuestInfo::new();
+            quests.player_stats_mut().skills.hack = base;
+            quests.player_stats_mut().cyber_affinity = 1;
+            if owned {
+                quests.player_stats_mut().add_os_trait(10);
+            }
+            world.add_unique(quests);
+            world.add_unique(GlobalHrmParams(Some(dark::gamesys::HrmParams {
+                // Retail shock2.gam HRM: skill affects chance, stat affects both.
+                skill_critical_bonus: 0,
+                skill_success_bonus: 10,
+                stat_critical_bonus: 1,
+                stat_success_bonus: 5,
+                stat_break_chance: [0.0; 8],
+            })));
+            let diff = PropHackDiff {
+                success_chance: 20,
+                critical_chance: 10,
+                cost: 3.0,
+            };
+            assert_eq!(effective_hack_values(&world, diff, security), expected);
+            // The same roll loses at base Hack 1 (35%) and succeeds at the
+            // security computer with the upgrade (55%). Exercise the actual
+            // node-message path, not only the numerical resolver.
+            let seed = (1..1000)
+                .find(|seed| outcome_roll(&mut seed.clone()) == 40)
+                .unwrap();
+            let state = HackState {
+                phase: HackPhase::Playing,
+                rng_state: seed,
+                ..HackState::default()
+            };
+            let (after, _) = handle_hack_msg(
+                entity,
+                &world,
+                &state,
+                &KeyPadMsg::PlayNode { x: 2, y: 0 },
+                diff,
+                security,
+                HackOutcomeEffects {
+                    success: keypad_hack_success,
+                    critical_failure: keypad_hack_critical_failure,
+                },
+            );
+            assert_eq!(
+                after.nodes[board_index(2, 0)],
+                if expected.0 > 40 {
+                    HackNode::Lit
+                } else {
+                    HackNode::Burned
+                }
+            );
+            assert_eq!(
+                world
+                    .borrow::<UniqueView<QuestInfo>>()
+                    .unwrap()
+                    .player_stats()
+                    .skills
+                    .hack,
+                base
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -789,11 +1073,61 @@ mod tests {
         assert!(has_connected_three(&board));
     }
 
+    /// The odds readout itemizes exactly the terms the board rolls with.
+    #[test]
+    fn the_repair_breakdown_itemizes_the_rolled_odds() {
+        let world = World::new();
+        let mut quests = QuestInfo::new();
+        quests.player_stats_mut().skills.repair = 2;
+        quests.player_stats_mut().cyber_affinity = 3;
+        world.add_unique(quests);
+        world.add_unique(GlobalHrmParams(Some(dark::gamesys::HrmParams {
+            skill_critical_bonus: 1,
+            skill_success_bonus: 10,
+            stat_critical_bonus: 0,
+            stat_success_bonus: 5,
+            stat_break_chance: [0.0; 8],
+        })));
+        let diff = PropHackDiff {
+            success_chance: 20,
+            critical_chance: 4,
+            cost: 3.0,
+        };
+
+        // 20 + 2*10 + 3*5 = 55% success; 4 - 2*1 = 2 mines.
+        assert_eq!(
+            hrm_breakdown(&world, diff, HrmContext::Repair),
+            "Initial difficulty: 80%.\nSkill 2: -20%\nCYB stat 3: -15%\n\
+             Final difficulty: 45%.\n2 nodes."
+        );
+        assert_eq!(hrm_failure_percent(&world, diff, HrmContext::Repair), 45);
+    }
+
+    /// A repair board is dealt on its own shape: the middle three columns,
+    /// all rows - never a hole the repair art prints no outline for.
+    #[test]
+    fn a_repair_board_deals_the_middle_three_columns() {
+        let mut rng_state = 7;
+        let board = board_with_mines(HrmContext::Repair, 4, &mut rng_state);
+        for y in 0..BOARD_HEIGHT {
+            for x in 0..BOARD_WIDTH {
+                let playable = board[board_index(x, y)] != HackNode::Empty;
+                assert_eq!(playable, (1..=3).contains(&x), "node ({x},{y})");
+            }
+        }
+    }
+
     #[test]
     fn seeded_earth_route_uses_three_genuine_success_rolls() {
         let earth_effective_chance = 55;
         let mut rng_state = 7;
-        let board = board_with_mines(1, &mut rng_state);
+        let board = board_with_mines(
+            HrmContext::Hack {
+                security_computer: false,
+            },
+            1,
+            &mut rng_state,
+        );
         let rolls = (0..3)
             .map(|_| outcome_roll(&mut rng_state))
             .collect::<Vec<_>>();
@@ -877,6 +1211,7 @@ mod tests {
             &state,
             &KeyPadMsg::StartHack,
             diff,
+            false,
             HackOutcomeEffects {
                 success: keypad_hack_success,
                 critical_failure: keypad_hack_critical_failure,
@@ -885,5 +1220,16 @@ mod tests {
 
         assert_eq!(after.phase, HackPhase::Lost);
         assert!(matches!(effect, Effect::NoEffect));
+    }
+
+    #[test]
+    fn a_hacked_keypad_announces_its_door_unless_it_authors_a_sound() {
+        let mut world = World::new();
+        let plain = world.add_entity(());
+        let voiced = world.add_entity(PropObjectSound {
+            name: "custom".to_owned(),
+        });
+        assert_eq!(announced(&keypad_hack_success(plain, &world)), ["xer08"]);
+        assert_eq!(announced(&keypad_hack_success(voiced, &world)), ["custom"]);
     }
 }

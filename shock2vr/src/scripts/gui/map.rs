@@ -15,7 +15,7 @@
 //! rides on the entity as `RuntimePropMapData` (attached at mission init).
 //!
 //! Deferred (per the doc): minimap, nav markers/annotations, `MapText`
-//! mouseover, the `page001a` Spatially-Aware variant, multi-page levels.
+//! mouseover, multi-page levels.
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::{PropMapRef, PropPosition};
@@ -208,10 +208,21 @@ impl Gui<MapGuiState, MapGuiMsg> for MapGui {
             return components;
         }
 
+        let (explored, spatially_aware) = world
+            .borrow::<UniqueView<QuestInfo>>()
+            .map(|q| {
+                (
+                    q.explored_map_locations(&data.mission),
+                    q.player_stats()
+                        .has_os_trait(super::traits::TRAIT_SPATIALLY_AWARE),
+                )
+            })
+            .unwrap_or_default();
+        // The full page reveals the layout without mutating exploration history.
         // Per-level art lives under `intrface/<LEVEL>/english/`.
         let level = data.mission.split('.').next().unwrap_or(&data.mission);
         components.push(
-            gui::image(&dark::map::page_art_path(level))
+            gui::image(&dark::map::page_art_path(level, spatially_aware))
                 .with_position(vec2(PAGE_X, PAGE_Y))
                 .with_size(vec2(PAGE_W, PAGE_H)),
         );
@@ -226,10 +237,6 @@ impl Gui<MapGuiState, MapGuiMsg> for MapGui {
         // One dim `X` decal per explored location (rect + art indexed by the
         // room's MapLoc), with the bright `R` art on top only for the current
         // location - original engine behavior.
-        let explored = world
-            .borrow::<UniqueView<QuestInfo>>()
-            .map(|q| q.explored_map_locations(&data.mission))
-            .unwrap_or_default();
         for location in explored {
             let Some(idx) = usize::try_from(location).ok() else {
                 continue;
@@ -307,6 +314,42 @@ impl Gui<MapGuiState, MapGuiMsg> for MapGui {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spatially_aware_uses_full_page_without_marking_rooms_explored() {
+        for owned in [false, true] {
+            let mut world = World::new();
+            let map = world.add_entity((RuntimePropMapData {
+                mission: "medsci1.mis".into(),
+                map_params: Default::default(),
+                revealed_rects: vec![dark::map::MapRect::new(0, 0, 20, 20)],
+                explored_rects: vec![dark::map::MapRect::new(0, 0, 20, 20)],
+            },));
+            let mut quests = QuestInfo::new();
+            if owned {
+                quests.player_stats_mut().add_os_trait(16);
+            }
+            world.add_unique(quests);
+            let components = MapGui.get_components(&None, map, &world, &MapGuiState {});
+            let page = if owned {
+                "MEDSCI1/english/PAGE001A.PCX"
+            } else {
+                "MEDSCI1/english/PAGE001.PCX"
+            };
+            assert!(
+                components
+                    .iter()
+                    .any(|c| matches!(c, GuiComponent::Image { texture, .. } if texture == page))
+            );
+            assert!(
+                world
+                    .borrow::<UniqueView<QuestInfo>>()
+                    .unwrap()
+                    .explored_map_locations("medsci1.mis")
+                    .is_empty()
+            );
+        }
+    }
+
     use super::*;
 
     /// The real medsci1 scale markers (mission ids 1032/1034, `frame == -1`):

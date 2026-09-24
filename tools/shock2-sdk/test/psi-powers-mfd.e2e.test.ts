@@ -12,8 +12,7 @@ import { aimVrHandAt } from "./helpers/vr-hand.js";
 // discipline icons, each icon its own art in three variants (untrained /
 // trained / selected). Clicking a trained power selects it; the tier tabs only
 // change what is browsed. It opens from the AMMOFULL readout's power badge on
-// flat, and from the psi-amp hand's LOWER face button in VR - which brings up
-// the cyber interface around it. While it is docked, one thumbstick is
+// flat, and from SelectPsiPower inside VR's cyber interface. While it is docked, one thumbstick is
 // captured - flat's LEFT (arrow-key turn), VR's off hand - so flicks step the
 // selection live and that stick stops driving the player.
 //
@@ -246,7 +245,7 @@ test(
 );
 
 test(
-  "in VR the amp hand's upper button opens the cyber interface onto the panel",
+  "in VR the full psi MFD remains available inside the cyber interface",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -271,11 +270,13 @@ test(
     );
 
     assert.equal((await game.ui.state()).mode, "shooter");
-    await game.input.trigger("RightHandUpperButton");
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 2 });
+    await game.input.trigger("SelectPsiPower");
     await game.step({ frames: 8 });
 
     const ui = await game.ui.state();
-    assert.equal(ui.mode, "use", "the press brings up the cyber interface");
+    assert.equal(ui.mode, "use", "the full interface stays open");
     assert.equal(
       ui.active_panel?.name,
       PANEL_NAME,

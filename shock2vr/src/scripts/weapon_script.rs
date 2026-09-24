@@ -59,7 +59,7 @@ use super::{
     burst_fire::{BurstState, BurstStep},
     script_util::{
         active_gun_setting, get_all_links_with_template, gun_condition, ordered_projectile_links,
-        play_environmental_sound,
+        play_environmental_sound, play_impact_sound,
     },
 };
 
@@ -106,9 +106,23 @@ fn shot_multiplier(raw: f32) -> f32 {
 /// The damage and speed multipliers this fire setting puts on the projectile it
 /// launches (the EMP rifle's overcharge hits 3x; the fusion cannon's DEATH lob
 /// travels at 0.4x).
-fn shot_modifiers(setting: &GunSettingDesc) -> RuntimePropShotModifiers {
+fn shot_modifiers(
+    world: &World,
+    weapon: EntityId,
+    setting: &GunSettingDesc,
+) -> RuntimePropShotModifiers {
+    // Classic shkplgun.cpp uses the Lethal Weapon multiplier here: 1.35,
+    // despite its 15% tooltip. Preserve actual retail behavior. Applying at
+    // launch lets every impact path consume the bonus exactly once.
+    let sharpshooter = crate::wielded_weapon::held_in_hand(world, weapon)
+        && world
+            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+            .is_ok_and(|q| {
+                q.player_stats()
+                    .has_os_trait(crate::scripts::gui::TRAIT_SHARPSHOOTER)
+            });
     RuntimePropShotModifiers {
-        stim: shot_multiplier(setting.stim_modifier),
+        stim: shot_multiplier(setting.stim_modifier) * if sharpshooter { 1.35 } else { 1.0 },
         speed: shot_multiplier(setting.speed_modifier),
     }
 }
@@ -152,8 +166,8 @@ fn degrade_per_shot(world: &World, entity_id: EntityId) -> Option<f32> {
 }
 
 /// Whether the Anti-entropic Field is running: while it is, a gun neither
-/// breaks nor wears. The power's own casting behaviour is still being sorted
-/// out (#1304) - this only asks whether it is active.
+/// breaks nor wears. Retail `shkplgun.cpp` gates both its break roll and
+/// condition decrement on `!IsActive(kPsiStability)`.
 fn is_weapon_stability_active(world: &World) -> bool {
     world
         .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
@@ -186,7 +200,7 @@ fn weapon_skill_level(world: &World, entity_id: EntityId) -> i32 {
 /// Dark CalcRandAngle: authored error per missing weapon-skill level. Stock
 /// SKILLPARAM sets this to zero. Strength and Sharpshooter do not enter this
 /// calculation (Sharpshooter is a stimulus multiplier in the original).
-fn weapon_inaccuracy(world: &World, entity_id: EntityId) -> u16 {
+pub(crate) fn weapon_inaccuracy(world: &World, entity_id: EntityId) -> u16 {
     let per_level = world
         .borrow::<UniqueView<GlobalSkillParams>>()
         .ok()
@@ -296,6 +310,7 @@ pub struct WeaponScript {
     /// and deliberately not saved: a save taken mid-burst loads with the
     /// trigger at rest, the same call `RuntimePropShotCooldown` makes.
     burst: Option<ActiveBurst>,
+    melee_charge: super::melee_charge::MeleeCharge,
 }
 
 /// A burst in flight, with the setting the pull started in - so switching fire
@@ -307,7 +322,10 @@ struct ActiveBurst {
 
 impl WeaponScript {
     pub fn new() -> WeaponScript {
-        WeaponScript { burst: None }
+        WeaponScript {
+            burst: None,
+            melee_charge: Default::default(),
+        }
     }
 }
 
@@ -321,6 +339,13 @@ impl Script for WeaponScript {
         _physics: &PhysicsWorld,
         time: &crate::time::Time,
     ) -> Effect {
+        if self.melee_charge.charging() {
+            return self.melee_charge.tick(
+                entity_id,
+                time.elapsed.as_secs_f32(),
+                crate::wielded_weapon::held_in_hand(world, entity_id),
+            );
+        }
         let Some(burst) = self.burst.as_mut() else {
             return Effect::NoEffect;
         };
@@ -399,7 +424,16 @@ impl Script for WeaponScript {
                 }
 
                 match fire_one_shot(world, entity_id, &setting) {
-                    ShotOutcome::FlatMeleeSwing => Effect::FlatMeleeSwing { entity_id },
+                    ShotOutcome::FlatMeleeSwing => {
+                        if super::melee_charge::owned(world) {
+                            self.melee_charge.begin(entity_id)
+                        } else {
+                            Effect::FlatMeleeSwing {
+                                entity_id,
+                                bonus_damage: 0.0,
+                            }
+                        }
+                    }
                     ShotOutcome::Empty => dry_fire(world, entity_id),
                     ShotOutcome::NotWorking => play_environmental_sound(
                         world,
@@ -430,7 +464,7 @@ impl Script for WeaponScript {
                 else {
                     return Effect::NoEffect;
                 };
-                flat_melee_hit(physics, aim, world)
+                flat_melee_hit(physics, aim, world, entity_id)
             }
             // The maintenance tool, offered to this weapon on the port's tool
             // channel: a VR hand releasing it onto the gun, or the flat
@@ -444,7 +478,11 @@ impl Script for WeaponScript {
             {
                 crate::scripts::maintenance::apply(world, *entity, Some(entity_id))
             }
+            MessagePayload::Drop => self.melee_charge.cancel(entity_id),
             MessagePayload::TriggerRelease => {
+                if let Some(effect) = self.melee_charge.release(entity_id, false) {
+                    return effect;
+                }
                 // An unlimited burst ends with the trigger. A finite one plays
                 // out regardless - letting go of the pistol's BURST one frame
                 // in still sends all three rounds.
@@ -490,12 +528,7 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
     // visible impact. (VR has no flat aim and damages through its
     // trigger-gated physical contact handler.)
     if maybe_projectile.is_none() {
-        if world
-            .borrow::<View<RuntimePropFlatAim>>()
-            .unwrap()
-            .get(entity_id)
-            .is_ok()
-        {
+        if crate::runtime_props::is_flat_aimed(world, entity_id) {
             return ShotOutcome::FlatMeleeSwing;
         }
     }
@@ -588,7 +621,7 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
                     entity_id,
                     template_id,
                     &options,
-                    shot_modifiers(setting),
+                    shot_modifiers(world, entity_id, setting),
                 )
             })
             .collect(),
@@ -643,12 +676,14 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
     if is_gunshot {
         if let Some(origin) = weapon_world_position(world, entity_id) {
             effects.push(Effect::RaiseNoise {
+                source: entity_id,
                 origin,
                 radius: GUNSHOT_NOISE_RADIUS,
             });
         }
     }
     if is_gunshot {
+        effects.push(crate::psi_invisibility::attack_effect(world, entity_id));
         if let Some((impulse, one_hand)) = crate::weapon_recoil::shot_impulse(world, entity_id) {
             effects.push(Effect::KickHeldGun {
                 entity_id,
@@ -663,7 +698,17 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
 /// Resolve the authored hit event of a flat melee swing: raycast a short
 /// distance along the current crosshair ray and damage the hit entity (hitbox
 /// proxies resolve to their parent).
-fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World) -> Effect {
+pub(super) fn flat_melee_hit(
+    physics: &PhysicsWorld,
+    aim: RuntimePropFlatAim,
+    world: &World,
+    weapon_id: EntityId,
+) -> Effect {
+    let bonus = world
+        .borrow::<View<crate::runtime_props::RuntimePropFlatMeleeBonus>>()
+        .ok()
+        .and_then(|v| v.get(weapon_id).ok().map(|b| b.0))
+        .unwrap_or(0.0);
     // `ray_cast` normalizes its direction and casts a fixed 100 units, so the
     // reach has to be passed as `ray_cast2`'s max_toi - scaling the direction
     // bounds nothing.
@@ -673,7 +718,12 @@ fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World
         MELEE_RANGE,
         InternalCollisionGroups::ENTITIES
             | InternalCollisionGroups::HITBOX
-            | InternalCollisionGroups::SELECTABLE,
+            | InternalCollisionGroups::SELECTABLE
+            | if crate::psi_sword::active(world, weapon_id) {
+                InternalCollisionGroups::WORLD
+            } else {
+                InternalCollisionGroups::empty()
+            },
         None,
         true,
         &|entity| {
@@ -688,13 +738,30 @@ fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World
     }) = hit
     {
         let target = resolve_proxy_entity(world, target);
-        return Effect::Send {
+        // A landed swing is audible: the weapon's collision schema tagged with
+        // what it struck (`weapontype:wrench` + `material:fleshtarget` ->
+        // `hwrefle*`). The VR physical path already does this from real
+        // contacts; the flat path resolves its hit by raycast, so it has to
+        // say so itself.
+        let sound = play_impact_sound(world, weapon_id, target, hit_point.to_vec());
+        let damage = Effect::Send {
             msg: Message {
                 to: target,
                 payload: MessagePayload::Damage {
                     // Adrenaline Overproduction scales the player's melee
                     // damage while it is active (1.0 otherwise).
-                    amount: MELEE_DAMAGE * crate::scripts::berserk::melee_damage_multiplier(world),
+                    amount: if crate::psi_sword::active(world, weapon_id) {
+                        crate::mission::stim_response::contact_stim_damage_with_bonus(
+                            world,
+                            crate::psi_sword::WEAPON,
+                            target,
+                            crate::scripts::melee_weapon::player_melee_damage_scale(world),
+                            bonus,
+                        )
+                    } else {
+                        (MELEE_DAMAGE + bonus)
+                            * crate::scripts::melee_weapon::player_melee_damage_scale(world)
+                    },
                     // Swing direction + contact point seed the victim's
                     // death-ragdoll reaction. No bone: melee resolves a hitbox
                     // proxy to its parent BEFORE sending (so HitBoxScript
@@ -709,6 +776,7 @@ fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World
                 },
             },
         };
+        return Effect::Multiple(vec![damage, sound]);
     }
     Effect::NoEffect
 }
@@ -1069,6 +1137,7 @@ mod tests {
         let mut player =
             physics.create_player(vec3(10.0, 10.0, 10.0), EntityId::from_inner(1000).unwrap());
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let weapon = world.add_entity(());
         let strike = |x, y| {
             flat_melee_hit(
                 &physics,
@@ -1077,10 +1146,11 @@ mod tests {
                     forward: vec3(0.0, 0.0, -1.0),
                 },
                 &world,
+                weapon,
             )
         };
         assert!(matches!(strike(0.0, 0.3), Effect::NoEffect));
-        assert!(matches!(strike(0.4, 0.0), Effect::Send { msg: Message { to, .. } } if to == grub));
+        assert!(includes_damage_to(strike(0.4, 0.0), grub));
     }
 
     fn flat_melee_fixture() -> (World, PhysicsWorld, EntityId, EntityId) {
@@ -1119,6 +1189,7 @@ mod tests {
                         forward: vec3(0.0, 0.0, 1.0),
                     },
                     &world,
+                    weapon,
                 ),
                 target,
             ),
@@ -1126,6 +1197,71 @@ mod tests {
         );
 
         (world, physics, weapon, target)
+    }
+
+    /// A flat melee swing that lands must be audible: the weapon's collision
+    /// schema, tagged with what it struck. A wrench on a hybrid resolves
+    /// `event:collision` + `weapontype:wrench` + `material:fleshtarget` ->
+    /// `hwrefle*`; before this the flat path returned damage alone and
+    /// hitting a creature made no sound at all.
+    #[test]
+    fn a_flat_melee_hit_plays_the_weapon_impact_schema() {
+        use crate::physics::{CollisionGroup, PhysicsWorld};
+        use cgmath::vec3;
+
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+
+        let weapon = world.add_entity((
+            Links::empty(),
+            dark::properties::PropClassTag::from_string("weapontype wrench"),
+        ));
+        let target = world.add_entity(dark::properties::PropMaterial(
+            "Material FleshTarget".to_owned(),
+        ));
+        physics.add_kinematic(
+            target,
+            vec3(0.0, 0.0, 0.6),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.2, 0.2, 0.2),
+            CollisionGroup::selectable(),
+            false,
+        );
+        let player = world.add_entity(());
+        let mut player_handle = physics.create_player(vec3(100.0, 100.0, 100.0), player);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        let effect = flat_melee_hit(
+            &physics,
+            RuntimePropFlatAim {
+                origin: point3(0.0, 0.0, 0.0),
+                forward: vec3(0.0, 0.0, 1.0),
+            },
+            &world,
+            weapon,
+        );
+
+        let tags = Effect::flatten(vec![effect])
+            .into_iter()
+            .find_map(|effect| match effect {
+                Effect::PlayImpactSound { query, .. }
+                | Effect::PlayEnvironmentalSound { query, .. } => Some(query.tag_values()),
+                _ => None,
+            })
+            .expect("a landed swing plays an impact sound");
+        assert!(
+            tags.contains(&("event".to_owned(), "collision".to_owned())),
+            "{tags:?}"
+        );
+        assert!(
+            tags.contains(&("weapontype".to_owned(), "wrench".to_owned())),
+            "{tags:?}"
+        );
+        assert!(
+            tags.contains(&("material".to_owned(), "fleshtarget".to_owned())),
+            "{tags:?}"
+        );
     }
 
     fn includes_damage_to(effect: Effect, target: EntityId) -> bool {
@@ -1309,13 +1445,46 @@ mod tests {
     }
 
     #[test]
+    fn sharpshooter_scales_only_the_players_ranged_damage() {
+        for owned in [false, true] {
+            let mut world = World::new();
+            let player = world.add_entity(());
+            let gun = world.add_entity(());
+            let other_gun = world.add_entity(());
+            world.add_unique(crate::mission::PlayerInfo {
+                pos: cgmath::vec3(0.0, 0.0, 0.0),
+                rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                entity_id: player,
+                left_hand_entity_id: Some(gun),
+                right_hand_entity_id: None,
+                inventory_entity_id: player,
+            });
+            let mut quests = crate::quest_info::QuestInfo::new();
+            if owned {
+                quests.player_stats_mut().add_os_trait(5);
+            }
+            world.add_unique(quests);
+            let setting = GunSettingDesc {
+                stim_modifier: 3.0,
+                speed_modifier: 0.4,
+                ..Default::default()
+            };
+            for (weapon, bonus) in [(gun, if owned { 1.35 } else { 1.0 }), (other_gun, 1.0)] {
+                let shot = shot_modifiers(&world, weapon, &setting);
+                assert!((shot.stim - 3.0 * bonus).abs() < 0.00001);
+                assert_eq!(shot.speed, 0.4);
+            }
+        }
+    }
+
+    #[test]
     fn only_a_positive_multiplier_modifies_a_shot() {
         let emp_over = GunSettingDesc {
             stim_modifier: 3.0,
             speed_modifier: 0.8,
             ..GunSettingDesc::default()
         };
-        let modifiers = shot_modifiers(&emp_over);
+        let modifiers = shot_modifiers(&World::new(), EntityId::dead(), &emp_over);
         assert_eq!(modifiers.stim, 3.0);
         assert_eq!(modifiers.speed, 0.8);
 
@@ -1326,7 +1495,7 @@ mod tests {
             speed_modifier: 0.0,
             ..GunSettingDesc::default()
         };
-        let modifiers = shot_modifiers(&unauthored);
+        let modifiers = shot_modifiers(&World::new(), EntityId::dead(), &unauthored);
         assert_eq!(modifiers.stim, 1.0);
         assert_eq!(modifiers.speed, 1.0);
     }
@@ -1345,6 +1514,55 @@ mod tests {
         assert!(
             !includes_damage_to(effect, target),
             "the trigger edge is only the start of the visible swing"
+        );
+    }
+
+    #[test]
+    fn smasher_waits_for_trigger_release_before_starting_a_flat_swing() {
+        let (world, physics, weapon, _) = flat_melee_fixture();
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(11);
+        world.add_unique(quests);
+        let mut script = WeaponScript::new();
+        let effect = script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerPull);
+        assert!(
+            !matches!(effect, Effect::FlatMeleeSwing { .. }),
+            "charge must precede the swing"
+        );
+        let effect =
+            script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerRelease);
+        assert!(
+            !matches!(effect, Effect::NoEffect),
+            "release must resolve the charged attack"
+        );
+    }
+
+    #[test]
+    fn lethal_weapon_scales_flat_melee_at_the_hit_frame() {
+        let (world, physics, weapon, target) = flat_melee_fixture();
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(9);
+        world.add_unique(quests);
+        let effect = WeaponScript::new().handle_message(
+            weapon,
+            &world,
+            &physics,
+            &MessagePayload::AnimationFlagTriggered {
+                motion_flags: MotionFlags::TRIGGER1,
+            },
+        );
+        fn damage(effect: &Effect, target: EntityId) -> Option<f32> {
+            match effect {
+                Effect::Send { msg } if msg.to == target => match msg.payload {
+                    MessagePayload::Damage { amount, .. } => Some(amount),
+                    _ => None,
+                },
+                Effect::Multiple(effects) => effects.iter().find_map(|e| damage(e, target)),
+                _ => None,
+            }
+        }
+        assert!(
+            (damage(&effect, target).expect("swing hit") - MELEE_DAMAGE * 1.35).abs() < 0.00001
         );
     }
 
@@ -1493,6 +1711,44 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn stability_prevents_even_guaranteed_breakage_and_wear() {
+        let (mut world, gun) = gun_world(Some(ObjectState::Normal));
+        world.add_component(
+            gun,
+            PropGunReliability {
+                min_break: 100.0,
+                max_break: 100.0,
+                degrade_rate: 1.0,
+                thresh_break: 101.0,
+            },
+        );
+        assert!(roll_for_breakage(&world, gun).is_some());
+        world.add_unique(crate::psi::ActivePsiPowers(vec![
+            crate::psi::ActivePsiPower {
+                template_id: crate::psi::STABILITY_TEMPLATE_ID,
+                name: "Stability".into(),
+                remaining_secs: 130.0,
+            },
+        ]));
+        assert!(roll_for_breakage(&world, gun).is_none());
+        let ShotOutcome::Fired(effect) = fire_one_shot(&world, gun, &GunSettingDesc::default())
+        else {
+            panic!("Stability must allow the otherwise guaranteed breaking shot");
+        };
+        assert!(
+            !Effect::flatten(vec![effect])
+                .iter()
+                .any(|effect| matches!(effect, Effect::AdjustWeaponCondition { .. }))
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<crate::psi::ActivePsiPowers>>()
+            .unwrap()
+            .0
+            .clear();
+        assert!(roll_for_breakage(&world, gun).is_some());
+    }
+
     /// A shot that breaks the gun: it does not fire - no projectile, no ammo
     /// spent - but it still wears the gun down, as the engine does.
     #[test]
@@ -1586,6 +1842,7 @@ mod tests {
         );
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
 
+        let weapon = world.add_entity(());
         let aim = RuntimePropFlatAim {
             origin: point3(0.0, 0.0, 0.0),
             forward: vec3(0.0, 0.0, -1.0),
@@ -1609,7 +1866,10 @@ mod tests {
         );
 
         assert!(
-            matches!(flat_melee_hit(&physics, aim, &world), Effect::NoEffect),
+            matches!(
+                flat_melee_hit(&physics, aim, &world, weapon),
+                Effect::NoEffect
+            ),
             "a target 8x past MELEE_RANGE must not be hit"
         );
     }
@@ -1625,6 +1885,7 @@ mod tests {
         let mut physics = PhysicsWorld::new();
 
         let near = world.add_entity(PropWeaponType(0));
+        let weapon = world.add_entity(());
         physics.add_kinematic(
             near,
             vec3(0.0, 0.0, -MELEE_RANGE / 2.0),
@@ -1646,15 +1907,7 @@ mod tests {
         };
 
         assert!(
-            matches!(
-                flat_melee_hit(&physics, aim, &world),
-                Effect::Send {
-                    msg: Message {
-                        to,
-                        payload: MessagePayload::Damage { .. },
-                    },
-                } if to == near
-            ),
+            includes_damage_to(flat_melee_hit(&physics, aim, &world, weapon), near),
             "a target inside MELEE_RANGE must still take the swing"
         );
     }

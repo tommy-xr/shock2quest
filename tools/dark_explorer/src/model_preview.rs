@@ -95,6 +95,9 @@ pub struct ModelPreview {
     /// The scene plays an animation clip, so it re-renders every frame.
     animated: bool,
     error: Option<String>,
+    /// Which geometry the last load drew: `None` for an LGMD object, which has
+    /// no high-detail alternative to choose between.
+    rendered_pmnm: Option<bool>,
     pub debug_skeletons: bool,
     pub debug_hit_boxes: bool,
     pub debug_articulation: bool,
@@ -105,6 +108,10 @@ pub struct ModelPreview {
     /// `advance()` is the only time source - `--screenshot` runs set this to
     /// capture a deterministic pose.
     pub paused: bool,
+    pub ambient: f32,
+    pub light_strengths: [f32; 3],
+    light_colors: [[f32; 3]; 3],
+    lighting_radius: f32,
     // Orbit camera around `target` (dark_viewer's parameterization: pitch 90
     // is horizontal, distance along the orbit radius).
     yaw: f32,
@@ -135,11 +142,16 @@ impl ModelPreview {
             scene: None,
             animated: false,
             error: None,
+            rendered_pmnm: None,
             debug_skeletons: false,
             debug_hit_boxes: false,
             debug_articulation: false,
             articulation: None,
             paused: false,
+            ambient: 0.5,
+            light_strengths: [0.0; 3],
+            light_colors: [[1.0, 0.55, 0.25], [0.25, 0.55, 1.0], [0.35, 1.0, 0.45]],
+            lighting_radius: 1.0,
             yaw: 65.0,
             pitch: 75.0,
             distance: 10.0,
@@ -163,6 +175,13 @@ impl ModelPreview {
         if let Some(error) = &self.error {
             ui.label(format!("Cannot render this model: {error}"));
             return;
+        }
+        if let (PreviewScene::Model, Some(pmnm)) = (scene, self.rendered_pmnm) {
+            ui.label(if pmnm {
+                "Rendered geometry: PMNM high-detail mesh"
+            } else {
+                "Rendered geometry: classic LGMM mesh"
+            });
         }
         if self.animated && !self.paused {
             // Tick the playing clip with real dt and keep frames coming.
@@ -191,6 +210,34 @@ impl ModelPreview {
             }
             ui.label("(drag to orbit, scroll to zoom)");
         });
+
+        egui::CollapsingHeader::new("Lighting")
+            .default_open(true)
+            .show(ui, |ui| {
+                self.needs_render |= ui
+                    .add(egui::Slider::new(&mut self.ambient, 0.0..=1.0).text("Ambient"))
+                    .changed();
+                for (index, label) in ["Warm key", "Cool fill", "Green rim"].iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        self.needs_render |= ui
+                            .add(
+                                egui::Slider::new(&mut self.light_strengths[index], 0.0..=3.0)
+                                    .text(*label),
+                            )
+                            .changed();
+                        self.needs_render |= ui
+                            .color_edit_button_rgb(&mut self.light_colors[index])
+                            .changed();
+                    });
+                }
+                if ui.button("Reset lighting").clicked() {
+                    self.ambient = 0.5;
+                    self.light_strengths = [0.0; 3];
+                    self.light_colors = [[1.0, 0.55, 0.25], [0.25, 0.55, 1.0], [0.35, 1.0, 0.45]];
+                    self.needs_render = true;
+                }
+                ui.label("Lights stay fixed while you orbit. Unlit materials ignore lighting.");
+            });
 
         let available = ui.available_size();
         let size = egui::vec2(available.x.max(1.0), available.y.max(1.0));
@@ -270,6 +317,7 @@ impl ModelPreview {
         self.scene = None;
         self.animated = false;
         self.error = None;
+        self.rendered_pmnm = None;
         self.articulation = None;
         // Load the model eagerly under catch_unwind — the scene itself defers
         // loading to render, and Dark parsers panic on malformed input; a
@@ -303,6 +351,7 @@ impl ModelPreview {
                 return;
             }
         };
+        self.rendered_pmnm = model.is_animated().then(|| model.bind_matrices().is_some());
         // Skeleton scenes frame on their posed joints; an AI mesh has no
         // bounding box for `frame_camera` to use.
         let mut pose_bounds = None;
@@ -384,6 +433,7 @@ impl ModelPreview {
                     true,
                     Some((grip.finger_amounts(), 1.0)),
                     shock2vr::HandLight::Off,
+                    None,
                 ));
                 let mut support_points = Vec::new();
                 if let Some(support) = support {
@@ -425,6 +475,7 @@ impl ModelPreview {
                         false,
                         Some((support_grip.finger_amounts(), 1.0)),
                         shock2vr::HandLight::Off,
+                        None,
                     ));
                     support_points.extend(
                         rig.fingers
@@ -692,6 +743,7 @@ impl ModelPreview {
                 self.pitch = 75.0;
                 self.target = vec3(0.0, 0.0, 0.0);
                 self.distance = 11.0;
+                self.lighting_radius = 3.0;
             }
         }
     }
@@ -702,6 +754,7 @@ impl ModelPreview {
         self.yaw = 65.0;
         self.pitch = 75.0;
         self.target = center;
+        self.lighting_radius = radius.max(0.8);
         self.distance = (radius * 2.9).clamp(min_distance, 150.0);
     }
 
@@ -835,7 +888,7 @@ impl ModelPreview {
         let Some(scene) = &self.scene else { return };
         // Belt-and-braces: the scene loads lazily through the asset cache at
         // render time too (its own model lookup, the grid texture).
-        let rendered = match quiet_catch(|| scene.render(&mut self.asset_cache)) {
+        let mut rendered = match quiet_catch(|| scene.render(&mut self.asset_cache)) {
             Ok(rendered) => rendered,
             Err(msg) => {
                 self.scene = None;
@@ -843,6 +896,37 @@ impl ModelPreview {
                 return;
             }
         };
+
+        // Use the same ambient, inverse-distance falloff and per-fragment cone
+        // evaluation as authored object lights. Keep this rig in model space,
+        // independent of the orbit camera and zoom, and scale it to the bounds.
+        let mut lights = engine::scene::light::LightArray::new()
+            .with_object_lighting(vec3(self.ambient, self.ambient, self.ambient), 0.0)
+            // The game's default `object_specular`.
+            .with_specular(1.5)
+            .with_veins(
+                shock2vr::object_lighting::growth_vein_tuning(),
+                shock2vr::object_lighting::weapon_vein_tuning(),
+            );
+        for (index, offset) in [
+            vec3(2.0, 2.0, 1.0),
+            vec3(-2.0, 1.0, 1.0),
+            vec3(0.0, 1.5, -2.0),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let position = self.target + offset * self.lighting_radius;
+            let mut light = engine::scene::SpotLight::new(
+                position,
+                self.target - position,
+                self.light_colors[index].into(),
+                self.light_strengths[index] * self.lighting_radius * offset.magnitude(),
+            );
+            light.range = self.lighting_radius * 8.0;
+            lights.add_light(light);
+        }
+        rendered.lights = lights;
 
         // dark_viewer's orbit: position on a sphere around `target`, oriented
         // to look back at it.
@@ -856,6 +940,8 @@ impl ModelPreview {
         let pitch_quat = Quaternion::from_angle_x(Rad(pitch_rad - 90.0f32.to_radians()));
         let yaw_quat = Quaternion::from_angle_y(Rad(-yaw_rad + 90.0f32.to_radians()));
         let render_context = engine::EngineRenderContext {
+            ambient_light_intensity: 1.0,
+            level_light_intensity: 1.0,
             time: 0.0,
             camera_offset: self.target + offset,
             camera_rotation: Quaternion {

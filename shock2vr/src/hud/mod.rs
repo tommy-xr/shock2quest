@@ -17,6 +17,12 @@ pub(crate) mod readouts;
 pub(crate) mod message_line;
 pub use message_line::HudMessages;
 
+pub(crate) mod banner;
+pub use banner::{ActiveBanner, HudBanner};
+
+mod debug_overlay;
+pub(crate) use debug_overlay::*;
+
 mod flat_hud;
 pub(crate) use flat_hud::*;
 
@@ -143,3 +149,4 @@ pub(crate) fn hud_strings(world: &World) -> HudStrings {
 }
 
 pub(crate) mod hazards;
+pub(crate) mod reticle;

@@ -4,6 +4,11 @@ use tracing::info;
 mod ammo_pouch;
 mod body_gear_feedback;
 mod body_inventory;
+mod character_sheet;
+pub(crate) mod earth_containment;
+pub(crate) mod earth_horde;
+mod earth_supplies;
+mod earth_tech;
 pub mod entity_populator;
 pub mod flat_ui_host;
 mod holsters;
@@ -12,6 +17,7 @@ pub mod mission_core;
 pub mod pathfinding_debug;
 pub mod pathfinding_test;
 pub mod player_footsteps;
+pub mod player_trail;
 pub(crate) mod projectile_spray;
 pub(crate) mod reload;
 mod research_overview;
@@ -69,7 +75,10 @@ impl Mission {
         // Through the asset paths, not `File::open`: on a 25AE install the
         // missions live inside `sshock2.kpf`.
         let reader = asset_paths
-            .get_reader(base_path.to_owned(), mission.to_ascii_lowercase())
+            .get_reader(
+                base_path.to_owned(),
+                earth_horde::asset_mission(mission).to_ascii_lowercase(),
+            )
             .unwrap_or_else(|| panic!("mission {mission} not found in the mounted data"));
         dark::mission::read(
             asset_paths,
@@ -123,7 +132,10 @@ impl Mission {
             path_database: level.path_database,
         };
 
-        let mission_core = MissionCore::load(
+        let fresh_horde = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let entity_populator =
+            earth_horde::wrap_population(&mission, entity_populator, fresh_horde.clone());
+        let mut mission_core = MissionCore::load(
             mission,
             abstract_mission,
             asset_cache,
@@ -135,6 +147,9 @@ impl Mission {
             held_item_save_data,
             game_options,
         );
+        if fresh_horde.load(std::sync::atomic::Ordering::Relaxed) {
+            earth_horde::provision(&mut mission_core, asset_cache);
+        }
         engine::platform::service_events();
         Mission { mission_core }
     }
@@ -195,8 +210,16 @@ impl Mission {
 
 // Implementation of GameScene trait for Mission
 impl crate::game_scene::GameScene for Mission {
+    fn cancel_transient_input(&mut self) {
+        self.mission_core.cancel_transient_input();
+    }
+
     fn is_pausable(&self) -> bool {
         true
+    }
+
+    fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
+        self.mission_core.on_exit(audio_context);
     }
 
     fn update(
@@ -284,12 +307,8 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.player_is_gripping()
     }
 
-    fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
-        self.mission_core.fov_pull_deg(game_options)
-    }
-
-    fn use_mode_vignette_intensity(&self) -> f32 {
-        self.mission_core.use_mode_vignette_intensity()
+    fn flat_eye_pose(&self) -> Option<crate::death_camera::EyePose> {
+        self.mission_core.flat_eye_pose()
     }
 
     fn death_camera(&self) -> Option<crate::death_camera::DeathCameraSample> {
@@ -463,6 +482,13 @@ impl crate::game_scene::DebuggableScene for Mission {
             .spawn_item_for_player(asset_cache, template)
     }
 
+    fn apply_stat_modifier(
+        &mut self,
+        request: &crate::game_scene::StatModifierRequest,
+    ) -> Result<crate::player_stats::PlayerStats, String> {
+        self.mission_core.apply_stat_modifier(request)
+    }
+
     fn set_player_stats(
         &mut self,
         request: &crate::game_scene::DebugPlayerStatsRequest,
@@ -521,7 +547,11 @@ pub fn create_physics_collider(level: &dark::mission::SystemShock2Level) -> Opti
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
-    for geo in &level.all_geometry {
+    for geo in level
+        .all_geometry
+        .iter()
+        .filter(|geo| !geo.is_water_surface())
+    {
         let verts = &geo.verts;
 
         let mut idx = 0;

@@ -164,6 +164,20 @@ mod tests {
     }
 
     #[test]
+    fn lethal_weapon_composes_with_berserk_without_rounding_early() {
+        let world = world_with_berserk(true, 50.0, 30);
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests
+            .player_stats_mut()
+            .add_os_trait(crate::scripts::gui::TRAIT_LETHAL_WEAPON);
+        world.add_unique(quests);
+        assert!(
+            (crate::scripts::melee_weapon::player_melee_damage_scale(&world) - 1.35 * 1.13).abs()
+                < 0.00001
+        );
+    }
+
+    #[test]
     fn the_drain_bills_one_hp_a_second_and_never_kills_the_caster() {
         let world = world_with_berserk(true, 49.01, 30);
         assert!(matches!(

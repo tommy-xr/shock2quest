@@ -33,16 +33,13 @@ async function button(game: GameServer, label: string): Promise<UiElement> {
   return found;
 }
 
-/**
- * The GAUGE's controls. The interface canvas also carries a `system_menu`
- * button (the pause menu's visible way in), which is always there whatever is
- * wielded and so says nothing about the readout - `vr-buttons-v2.e2e.test.ts`
- * covers it.
- */
+/** Weapon controls only. The same readout collection also exposes the menu,
+ * log reader and held-hand selectors; those remain available independently of
+ * the weapon and have their own VR/holster interaction coverage. */
 async function labels(game: GameServer): Promise<string[]> {
   return (await readout(game))
     .map((e) => e.label ?? "")
-    .filter((label) => label !== "system_menu");
+    .filter((label) => !["system_menu", "logs", "select_left_hand", "select_right_hand"].includes(label));
 }
 
 test(

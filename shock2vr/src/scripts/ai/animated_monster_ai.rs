@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashSet};
 
-use cgmath::{Deg, EuclideanSpace, MetricSpace, Quaternion, Rotation3, vec3, vec4};
+use cgmath::{Deg, EuclideanSpace, InnerSpace, MetricSpace, Quaternion, Rotation3, vec3, vec4};
 use dark::{
     SCALE_FACTOR,
     motion::{MotionFlags, MotionQueryItem},
@@ -283,6 +283,10 @@ pub(crate) fn locomotion_scale_for_heading_error(delta: Deg<f32>) -> f32 {
 }
 
 pub struct AnimatedMonsterAI {
+    /// Last locally acquired scent identity, never a global player-route cursor.
+    scent_cursor: Option<u64>,
+    scent_goal: bool,
+    scent_poll_seconds: f32,
     last_hit_sensor: Option<EntityId>,
     current_behavior: Box<RefCell<dyn Behavior>>,
     current_heading: Deg<f32>,
@@ -348,6 +352,9 @@ impl AnimatedMonsterAI {
             current_heading: Deg(0.0),
             animation_seq: 0,
             locomotion_seq: 0,
+            scent_cursor: None,
+            scent_goal: false,
+            scent_poll_seconds: 0.0,
             last_hit_sensor: None,
             played_ai_watch_obj: HashSet::new(),
             alertness: AlertnessState::default(),
@@ -378,6 +385,9 @@ impl AnimatedMonsterAI {
             current_heading: Deg(0.0),
             animation_seq: 0,
             locomotion_seq: 0,
+            scent_cursor: None,
+            scent_goal: false,
+            scent_poll_seconds: 0.0,
             last_hit_sensor: None,
             played_ai_watch_obj: HashSet::new(),
             alertness: AlertnessState::default(),
@@ -501,6 +511,9 @@ impl AnimatedMonsterAI {
             // Turning in place is not pursuit progress. Let the stall timer
             // span pivots; replacing their clip reports cancellation normally.
             let eligible = self.door_wait.is_none()
+                // Scanning an empty sound location is successful searching,
+                // not failed combat. Do not replace it with a stall gesture.
+                && self.current_behavior.borrow().name() != "Search"
                 && self.current_behavior.borrow().scripted_state() == ScriptedState::NotScripted
                 && matches!(
                     self.alertness.current_level,
@@ -724,9 +737,76 @@ impl AnimatedMonsterAI {
         }
     }
 
-    /// Force alertness to `level` (clamped by the alert cap), reset the
-    /// visibility timers, and swap in the canonical behavior for the
-    /// resulting level. Callers must check the AI is alive first.
+    /// Only acquire scent after reaching a known destination. In particular,
+    /// a nearby player trail must not cancel a thrown-object distraction on
+    /// the way to its sound. Idle creatures never hunt from scent alone.
+    fn follow_local_scent(
+        &mut self,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+        visible: bool,
+        delta: f32,
+    ) -> Effect {
+        self.scent_poll_seconds = (self.scent_poll_seconds - delta).max(0.0);
+        if visible || delta <= 0.0 || self.scent_poll_seconds > 0.0 || self.config.is_none() {
+            return Effect::NoEffect;
+        }
+        let goal = {
+            let behavior = self.current_behavior.borrow();
+            if !matches!(behavior.name(), "Chase" | "Search") {
+                return Effect::NoEffect;
+            }
+            behavior.investigation_goal().or(self.last_known_player_pos)
+        };
+        let arrived = if self.scent_goal {
+            self.current_behavior.borrow().holds_position()
+        } else {
+            goal.is_some_and(|goal| SearchBehavior::at_goal(world, entity_id, goal))
+        };
+        if !arrived {
+            return Effect::NoEffect;
+        }
+        self.scent_poll_seconds = 0.5;
+        let (position, _) = get_position_and_forward(world, entity_id);
+        let scent = world
+            .borrow::<UniqueView<crate::mission::player_trail::PlayerTrail>>()
+            .ok()
+            .and_then(|trail| {
+                trail
+                    .discover(position.to_vec(), self.scent_cursor, |goal| {
+                        let direction = goal - position.to_vec();
+                        let distance = direction.magnitude();
+                        distance < 0.01
+                            || physics
+                                .ray_cast2_as_actor(
+                                    position,
+                                    direction / distance,
+                                    distance,
+                                    InternalCollisionGroups::ALL_COLLIDABLE,
+                                    Some(entity_id),
+                                    true,
+                                )
+                                .is_none()
+                    })
+                    .map(|point| (point.id, point.position))
+            });
+        let Some((id, goal)) = scent else {
+            return Effect::NoEffect;
+        };
+        self.scent_cursor = Some(id);
+        self.scent_goal = true;
+        self.last_known_player_pos = Some(goal);
+        self.alertness.hidden_time = 0.0;
+        self.current_behavior = Box::new(RefCell::new(SearchBehavior::for_scent(goal)));
+        let selection_strategy = self.next_selection(true);
+        Effect::PlayAnimationBySchema {
+            entity_id,
+            motion_queries: self.current_behavior.borrow().animation_queries(),
+            selection_strategy,
+        }
+    }
+
     /// React to a stimulus that locates the player at `origin` - a hit taken,
     /// or a noise heard. Refreshes the last-known position (so a searching or
     /// chasing AI turns toward the fresh cue) and escalates toward Moderate
@@ -754,6 +834,11 @@ impl AnimatedMonsterAI {
         // Refresh even when already alerted - the cue reveals where the
         // player is now, redirecting a stale chase or a search.
         self.last_known_player_pos = Some(origin);
+        self.scent_goal = false;
+        // Fresh contact renews memory even when already alerted. Otherwise
+        // repeated heard footsteps update the goal while the unseen timer
+        // still expires underneath the pursuit.
+        self.alertness.hidden_time = 0.0;
 
         let cap = config.alert_cap.clone();
         // Only force when the clamped target actually raises the level (so a
@@ -852,7 +937,10 @@ impl AnimatedMonsterAI {
         // survives a frame.
         if crate::scripts::script_util::has_death_links(world, entity_id) {
             self.handoff_emitted = true;
-            return Effect::SlayEntity { entity_id };
+            return Effect::combine(vec![
+                Effect::GenerateLoot { entity_id },
+                Effect::SlayEntity { entity_id },
+            ]);
         }
 
         let death_sound_effect = if let Some(voice_index) =
@@ -889,7 +977,13 @@ impl AnimatedMonsterAI {
             selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
         };
 
-        Effect::combine(vec![death_sound_effect, death_animation])
+        Effect::combine(vec![
+            // Before the crumple, so the corpse is already stocked by the
+            // time anything can search it.
+            Effect::GenerateLoot { entity_id },
+            death_sound_effect,
+            death_animation,
+        ])
     }
 
     /// Publish the current behavior name for debug introspection. Update
@@ -1276,14 +1370,35 @@ impl Script for AnimatedMonsterAI {
         Some("shock2vr.animated_combat")
     }
     fn save_state(&self) -> Result<crate::scripts::ScriptState, crate::scripts::ScriptStateError> {
-        crate::scripts::ScriptState::encode(1, &self.combat_frustration, "shock2vr.animated_combat")
+        crate::scripts::ScriptState::encode(
+            2,
+            &(
+                &self.combat_frustration,
+                self.scent_cursor,
+                self.scent_goal,
+                if self.scent_goal {
+                    self.current_behavior
+                        .borrow()
+                        .investigation_goal()
+                        .or(self.last_known_player_pos)
+                } else {
+                    None
+                },
+            ),
+            "shock2vr.animated_combat",
+        )
     }
     fn restore_state(
         &mut self,
         saved: &crate::scripts::ScriptState,
         _: &crate::scripts::ScriptRestoreContext<'_>,
     ) -> Result<(), crate::scripts::ScriptStateError> {
-        self.combat_frustration = saved.decode(1, "shock2vr.animated_combat")?;
+        (
+            self.combat_frustration,
+            self.scent_cursor,
+            self.scent_goal,
+            self.last_known_player_pos,
+        ) = saved.decode(2, "shock2vr.animated_combat")?;
         Ok(())
     }
     fn initialize_after_hydration(
@@ -1292,9 +1407,22 @@ impl Script for AnimatedMonsterAI {
         world: &World,
         _hydrated: bool,
     ) -> Effect {
-        // Only combat lockouts are persisted here; reconstruct the same
-        // configuration/awareness/initial pose as before this state existed.
-        self.initialize(entity, world)
+        let initialized = self.initialize(entity, world);
+        if !self.is_dead && self.config.is_some() {
+            if let Some(goal) = self.last_known_player_pos {
+                self.current_behavior = Box::new(RefCell::new(SearchBehavior::for_scent(goal)));
+                let selection_strategy = self.next_selection(true);
+                return Effect::combine(vec![
+                    alertness::sync_alertness_effect(entity, &self.alertness),
+                    Effect::QueueAnimationBySchema {
+                        entity_id: entity,
+                        motion_queries: self.current_behavior.borrow().animation_queries(),
+                        selection_strategy,
+                    },
+                ]);
+            }
+        }
+        initialized
     }
 
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
@@ -1426,6 +1554,7 @@ impl Script for AnimatedMonsterAI {
         if is_visible {
             if let Ok(player) = world.borrow::<shipyard::UniqueView<PlayerInfo>>() {
                 self.last_known_player_pos = Some(player.pos);
+                self.scent_goal = false;
             }
         }
 
@@ -1434,6 +1563,7 @@ impl Script for AnimatedMonsterAI {
         // the player's true location. Published only on change, and CLEARED
         // when the script forgets (search consumed it / fully calmed) so a
         // stale component can't hijack the true-position fallback forever.
+        let scent_effect = self.follow_local_scent(world, physics, entity_id, is_visible, delta);
         let desired_awareness = self.last_known_player_pos.map(|pos| (pos, is_visible));
         let awareness_effect = if desired_awareness != self.published_awareness {
             self.published_awareness = desired_awareness;
@@ -1497,11 +1627,15 @@ impl Script for AnimatedMonsterAI {
                         // it. This must be checked BEFORE the decay-from-
                         // tracking branch, or a High-origin search is stomped
                         // one decay later.
-                        self.last_known_player_pos.take().map(
-                            |goal| -> Box<RefCell<dyn Behavior>> {
-                                Box::new(RefCell::new(SearchBehavior::new(goal)))
-                            },
-                        )
+                        if self.scent_goal {
+                            None
+                        } else {
+                            self.last_known_player_pos.take().map(
+                                |goal| -> Box<RefCell<dyn Behavior>> {
+                                    Box::new(RefCell::new(SearchBehavior::new(goal)))
+                                },
+                            )
+                        }
                     } else if decayed
                         && matches!(old_level, AIAlertLevel::Moderate | AIAlertLevel::High)
                     {
@@ -1715,6 +1849,7 @@ impl Script for AnimatedMonsterAI {
         Effect::combine(vec![
             alertness_effect,
             awareness_effect,
+            scent_effect,
             behavior_change_effect,
             steering_effects,
             rotation_effect,
@@ -2053,6 +2188,14 @@ impl Script for AnimatedMonsterAI {
                             } else {
                                 behavior
                             };
+                            if self
+                                .current_behavior
+                                .borrow()
+                                .investigation_goal()
+                                .is_none()
+                            {
+                                self.scent_goal = false;
+                            }
                         }
                     };
 
@@ -2269,6 +2412,254 @@ mod tests {
             total: std::time::Duration::from_millis(100),
         };
         Effect::flatten(vec![monster.update(entity_id, world, &physics, &time)])
+    }
+
+    #[test]
+    fn scent_arrival_closes_the_gap_to_the_next_local_sample() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let physics = PhysicsWorld::new();
+        let time = Time {
+            elapsed: std::time::Duration::from_secs_f32(0.1),
+            ..Time::default()
+        };
+        let mut normal = SearchBehavior::new(vec3(1.0, 0.0, 0.0));
+        let mut scent = SearchBehavior::for_scent(vec3(1.0, 0.0, 0.0));
+        normal.steer(Deg(0.0), &world, &physics, entity, &time);
+        let (steering, _) = scent
+            .steer(Deg(0.0), &world, &physics, entity, &time)
+            .unwrap();
+        let expected = crate::scripts::ai::steering::Steering::turn_to_point(
+            cgmath::Point3::new(0.0, 0.0, 0.0),
+            cgmath::Point3::new(1.0, 0.0, 0.0),
+        );
+        assert_eq!(
+            steering.desired_heading, expected.desired_heading,
+            "no-nav search must face its fixed goal, not retain its previous heading"
+        );
+        assert!(normal.holds_position());
+        assert!(
+            !scent.holds_position(),
+            "scent must approach closer before scanning"
+        );
+    }
+
+    #[test]
+    fn completed_scent_search_is_not_resurrected_by_loading() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        monster.scent_cursor = Some(7);
+        monster.scent_goal = true;
+        monster.last_known_player_pos = Some(vec3(0.0, 0.0, 0.0));
+        monster.current_behavior =
+            Box::new(RefCell::new(SearchBehavior::for_scent(vec3(0.0, 0.0, 0.0))));
+        monster.current_behavior.borrow_mut().steer(
+            Deg(0.0),
+            &world,
+            &physics,
+            entity,
+            &Time {
+                elapsed: std::time::Duration::from_secs(7),
+                ..Time::default()
+            },
+        );
+        monster.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::AnimationCompleted,
+        );
+        assert!(!monster.scent_goal);
+        assert_ne!(monster.current_behavior.borrow().name(), "Search");
+        let saved = monster.save_state().unwrap();
+        let mut restored = AnimatedMonsterAI::new();
+        restored
+            .restore_state(
+                &saved,
+                &crate::scripts::ScriptRestoreContext::new(&std::collections::HashMap::new()),
+            )
+            .unwrap();
+        restored.initialize_after_hydration(entity, &world, true);
+        assert_ne!(restored.current_behavior.borrow().name(), "Search");
+        assert_eq!(restored.last_known_player_pos, None);
+    }
+
+    #[test]
+    fn loading_a_brief_sighting_does_not_start_a_scent_search() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        monster.last_known_player_pos = Some(vec3(5.0, 0.0, 0.0));
+        let saved = monster.save_state().unwrap();
+        let mut restored = AnimatedMonsterAI::new();
+        restored
+            .restore_state(
+                &saved,
+                &crate::scripts::ScriptRestoreContext::new(&std::collections::HashMap::new()),
+            )
+            .unwrap();
+        restored.initialize_after_hydration(entity, &world, true);
+        assert_eq!(restored.current_behavior.borrow().name(), "Idle");
+        assert_eq!(restored.last_known_player_pos, None);
+    }
+
+    #[test]
+    fn scent_requires_search_contact_and_never_reveals_remote_player() {
+        let (mut world, entity) = world_with_monster_and_player(Deg(180.0));
+        let mut trail = crate::mission::player_trail::PlayerTrail::default();
+        trail.update(0.5, Some(vec3(2.0, 0.0, 0.0)));
+        trail.update(0.5, Some(vec3(30.0, 0.0, 0.0)));
+        world.add_unique(trail);
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        monster.follow_local_scent(&world, &physics, entity, false, 0.5);
+        assert_eq!(monster.scent_cursor, None, "idle does not hunt by scent");
+        monster.current_behavior = Box::new(RefCell::new(SearchBehavior::new(vec3(8.0, 0.0, 0.0))));
+        monster.follow_local_scent(&world, &physics, entity, false, 0.5);
+        assert_eq!(
+            monster.scent_cursor, None,
+            "a sound distraction keeps priority until arrival"
+        );
+        monster.current_behavior = Box::new(RefCell::new(SearchBehavior::new(vec3(0.0, 0.0, 0.0))));
+        monster.follow_local_scent(&world, &physics, entity, true, 0.5);
+        assert_eq!(monster.scent_cursor, None, "sight takes precedence");
+        monster.follow_local_scent(&world, &physics, entity, false, 0.0);
+        assert_eq!(
+            monster.scent_cursor, None,
+            "paused frames do not acquire scent"
+        );
+        monster.follow_local_scent(&world, &physics, entity, false, 0.5);
+        assert_eq!(monster.last_known_player_pos, Some(vec3(2.0, 0.0, 0.0)));
+        assert_eq!(monster.scent_cursor, Some(1));
+        assert_eq!(monster.current_behavior.borrow().name(), "Search");
+        assert!(monster.scent_goal);
+        let saved = monster.save_state().unwrap();
+        let mut restored = AnimatedMonsterAI::new();
+        restored
+            .restore_state(
+                &saved,
+                &crate::scripts::ScriptRestoreContext::new(&std::collections::HashMap::new()),
+            )
+            .unwrap();
+        restored.initialize_after_hydration(entity, &world, true);
+        assert_eq!(restored.save_state().unwrap(), saved);
+        assert_eq!(restored.current_behavior.borrow().name(), "Search");
+        assert_eq!(restored.scent_cursor, Some(1));
+    }
+
+    #[test]
+    fn scent_cannot_be_acquired_through_solid_cover() {
+        let (mut world, entity) = world_with_monster_and_player(Deg(180.0));
+        let mut trail = crate::mission::player_trail::PlayerTrail::default();
+        trail.update(0.5, Some(vec3(2.0, 0.0, 0.0)));
+        world.add_unique(trail);
+        let mut physics = PhysicsWorld::new();
+        let wall = world.add_entity(());
+        physics.add_collider(
+            wall,
+            rapier3d::prelude::ColliderBuilder::cuboid(0.1, 3.0, 3.0)
+                .translation(rapier3d::na::Vector3::new(1.0, 0.0, 0.0))
+                .build(),
+        );
+        let player = world.add_entity(());
+        let mut handle = physics.create_player(vec3(50.0, 50.0, 50.0), player);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut handle);
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        monster.current_behavior = Box::new(RefCell::new(SearchBehavior::new(vec3(0.0, 0.0, 0.0))));
+        monster.follow_local_scent(&world, &physics, entity, false, 0.5);
+        assert_eq!(monster.scent_cursor, None);
+    }
+
+    #[test]
+    fn invisible_players_can_still_be_heard() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        world.add_unique(crate::psi::ActivePsiPowers(vec![
+            crate::psi::ActivePsiPower {
+                template_id: crate::psi::INVISO_TEMPLATE_ID,
+                name: "Inviso".into(),
+                remaining_secs: 20.0,
+            },
+        ]));
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        let origin = vec3(1.0, 0.0, 5.0);
+        monster.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::HeardNoise { origin },
+        );
+        assert_eq!(monster.last_known_player_pos, Some(origin));
+        assert_ne!(monster.alertness.current_level, AIAlertLevel::Lowest);
+    }
+
+    #[test]
+    fn repeated_heard_cues_renew_memory_without_a_level_change() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let physics = PhysicsWorld::new();
+        for level in [AIAlertLevel::Moderate, AIAlertLevel::High] {
+            let mut monster = AnimatedMonsterAI::new();
+            monster.initialize(entity, &world);
+            monster.alertness.current_level = level;
+            monster.current_behavior = Box::new(RefCell::new(ChaseBehavior::new()));
+            let config = monster.config.as_ref().unwrap().clone();
+            let timeout = if level == AIAlertLevel::High {
+                config.timings.from_high
+            } else {
+                config.timings.from_moderate
+            };
+            for step in 0..3 {
+                monster.alertness.hidden_time = timeout - 0.1;
+                let origin = vec3(step as f32, 0.0, 5.0);
+                monster.handle_message(
+                    entity,
+                    &world,
+                    &physics,
+                    &MessagePayload::HeardNoise { origin },
+                );
+                assert_eq!(monster.alertness.hidden_time, 0.0);
+                assert_eq!(monster.last_known_player_pos, Some(origin));
+                assert!(
+                    alertness::process_alertness_update(
+                        &mut monster.alertness,
+                        false,
+                        0.2,
+                        &config.timings,
+                        &config.alert_cap
+                    )
+                    .is_none()
+                );
+                assert_eq!(monster.alertness.current_level, level);
+            }
+            assert!(
+                alertness::process_alertness_update(
+                    &mut monster.alertness,
+                    false,
+                    timeout,
+                    &config.timings,
+                    &config.alert_cap
+                )
+                .is_some(),
+                "silence must still let memory decay"
+            );
+        }
+    }
+
+    #[test]
+    fn investigating_an_empty_sound_location_is_not_failed_combat() {
+        let world = World::new();
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.alertness.current_level = AIAlertLevel::Moderate;
+        monster.current_behavior = Box::new(RefCell::new(SearchBehavior::new(vec3(0.0, 0.0, 0.0))));
+        for _ in 0..10 {
+            monster.update_combat_frustration(&world, &physics, EntityId::dead(), false, 1.0);
+            assert_eq!(monster.current_behavior.borrow().name(), "Search");
+        }
     }
 
     /// #791: a calm creature that can see the player must turn to look at it.

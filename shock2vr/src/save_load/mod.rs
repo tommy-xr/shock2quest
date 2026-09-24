@@ -206,6 +206,15 @@ pub fn to_save_data_with_scripts(
         }
     }
 
+    let implants: HashMap<_, _> = world
+        .borrow::<View<crate::runtime_props::RuntimePropImplantSlot>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .filter(|(id, _)| !entities_to_filter.contains(&id.inner()))
+        .map(|(id, slot)| (id.inner(), *slot))
+        .collect();
+    let (held_implants, world_implants) = partition_map(implants, |id| held_entities.contains(id));
     let (held_hazard_equipment, world_hazard_equipment): (Vec<_>, Vec<_>) = world
         .borrow::<View<crate::runtime_props::RuntimePropHazardEquipment>>()
         .unwrap()
@@ -214,6 +223,16 @@ pub fn to_save_data_with_scripts(
         .map(|(id, _)| id.inner())
         .filter(|id| !entities_to_filter.contains(id))
         .partition(|id| held_entities.contains(id));
+    let raw_amp_selections = world
+        .borrow::<View<crate::psi_amp_selection::AmpSelection>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .filter(|(id, _)| !entities_to_filter.contains(&id.inner()))
+        .map(|(id, selected)| (id.inner(), *selected))
+        .collect();
+    let (held_amp_selections, world_amp_selections) =
+        partition_map(raw_amp_selections, |id| held_entities.contains(id));
     let raw_selected_ammo: HashMap<u64, usize> = v_selected_ammo
         .iter()
         .with_id()
@@ -292,40 +311,62 @@ pub fn to_save_data_with_scripts(
         partition_map(raw_meta_properties, |entity_id| {
             held_entities.contains(entity_id)
         });
+    let thrown_props = world
+        .borrow::<UniqueView<crate::throwing::SavedThrows>>()
+        .map(|saved| {
+            saved
+                .0
+                .iter()
+                .filter(|(id, _)| !entities_to_filter.contains(id) && !held_entities.contains(id))
+                .map(|(id, value)| (*id, *value))
+                .collect()
+        })
+        .unwrap_or_default();
     let world_entity_data = EntitySaveData {
         security_alarm: Some(crate::security_alarm::status(world)),
+        player_trail: world
+            .borrow::<UniqueView<crate::mission::player_trail::PlayerTrail>>()
+            .ok()
+            .map(|trail| (*trail).clone()),
         properties: world_serialized_properties,
         template_id_to_entity_id: template_id_to_entity_id.0.clone(),
         links: world_serialized_links,
         all_entities: all_world_entities,
         death_poses: world_death_poses,
+        amp_selections: world_amp_selections,
         selected_ammo: world_selected_ammo,
         hazard_equipment: world_hazard_equipment,
+        implant_slots: world_implants,
         holstered: world_holstered,
         shoulder_weapons: world_shoulders,
         canonical_template_ids: world_canonical_templates,
         launched_projectiles: world_launched_projectiles,
         player_fired_projectiles: world_player_fired_projectiles,
         projectile_velocities: world_velocities.into_iter().collect(),
+        thrown_props,
         meta_properties: world_meta_properties,
         script_states: world_script_states,
     };
 
     let held_entity_data = EntitySaveData {
         security_alarm: None,
+        player_trail: None,
         all_entities: all_held_entities,
         template_id_to_entity_id: HashMap::new(),
         links: held_serialized_links,
         properties: held_serialized_properties,
         death_poses: held_death_poses,
+        amp_selections: held_amp_selections,
         selected_ammo: held_selected_ammo,
         hazard_equipment: held_hazard_equipment,
+        implant_slots: held_implants,
         holstered: held_holstered,
         shoulder_weapons: held_shoulders,
         canonical_template_ids: held_canonical_templates,
         launched_projectiles: held_launched_projectiles,
         player_fired_projectiles: held_player_fired_projectiles,
         projectile_velocities: held_velocities.into_iter().collect(),
+        thrown_props: HashMap::new(),
         meta_properties: held_meta_properties,
         script_states: held_script_states,
     };

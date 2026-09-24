@@ -16,6 +16,7 @@ pub struct EntitySaveData {
     /// Mission-local alarm bookkeeping; carried inventory never owns it.
     #[serde(default)]
     pub security_alarm: Option<crate::security_alarm::SecurityAlarmStatus>,
+    pub player_trail: Option<crate::mission::player_trail::PlayerTrail>,
     pub all_entities: Vec<u64>,
     pub template_id_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub properties:
@@ -31,6 +32,10 @@ pub struct EntitySaveData {
     /// Equipped hazard armor/implant identities; remapped with carried entities.
     #[serde(default)]
     pub hazard_equipment: Vec<u64>,
+    pub implant_slots: HashMap<u64, crate::runtime_props::RuntimePropImplantSlot>,
+    /// Current/alternate power templates, owned and remapped with each amp.
+    #[serde(default)]
+    pub amp_selections: HashMap<u64, crate::psi_amp_selection::AmpSelection>,
     /// Selected projectile-link index for weapons whose ammo type has been
     /// changed. Persisted separately because runtime components are not part of
     /// the Dark property registry.
@@ -56,6 +61,8 @@ pub struct EntitySaveData {
     pub player_fired_projectiles: Vec<u64 /* entity id */>,
     #[serde(default)]
     pub projectile_velocities: HashMap<u64, cgmath::Vector3<f32>>,
+    #[serde(default)]
+    pub thrown_props: HashMap<u64, crate::throwing::SavedThrow>,
     /// Runtime Add/Remove metaproperty relation deltas. The resulting Dark
     /// components are already in `properties`; this preserves enough relation
     /// state for a later scripted metaproperty action to recompose correctly.
@@ -72,12 +79,15 @@ impl EntitySaveData {
     pub fn empty() -> EntitySaveData {
         EntitySaveData {
             security_alarm: None,
+            player_trail: None,
             all_entities: Vec::new(),
             template_id_to_entity_id: HashMap::new(),
             properties: HashMap::new(),
             links: HashMap::new(),
             death_poses: HashMap::new(),
             hazard_equipment: Vec::new(),
+            implant_slots: HashMap::new(),
+            amp_selections: HashMap::new(),
             selected_ammo: HashMap::new(),
             holstered: HashMap::new(),
             shoulder_weapons: HashMap::new(),
@@ -85,6 +95,7 @@ impl EntitySaveData {
             launched_projectiles: Vec::new(),
             player_fired_projectiles: Vec::new(),
             projectile_velocities: HashMap::new(),
+            thrown_props: HashMap::new(),
             meta_properties: HashMap::new(),
             script_states: Vec::new(),
         }
@@ -93,6 +104,9 @@ impl EntitySaveData {
         &self,
         world: &mut World,
     ) -> (HashMap<i32, WrappedEntityId>, HashMap<EntityId, EntityId>) {
+        if let Some(trail) = &self.player_trail {
+            world.add_unique(trail.clone());
+        }
         if let Some(alarm) = self.security_alarm {
             world.add_unique(alarm);
         }
@@ -115,6 +129,13 @@ impl EntitySaveData {
 
         let (all_properties, _, _) = dark::properties::get::<File>();
 
+        for (old, saved) in &self.thrown_props {
+            if let Some(new) =
+                EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
+            {
+                world.add_component(*new, *saved);
+            }
+        }
         for (old, velocity) in &self.projectile_velocities {
             if let Some(new) =
                 EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
@@ -134,6 +155,13 @@ impl EntitySaveData {
             }
         }
 
+        for (id, slot) in &self.implant_slots {
+            if let Some(old) = EntityId::from_inner(*id) {
+                if let Some(new) = old_entity_id_to_new_entity_id.get(&old) {
+                    world.add_component(*new, *slot);
+                }
+            }
+        }
         for id in &self.hazard_equipment {
             if let Some(old) = EntityId::from_inner(*id) {
                 if let Some(new) = old_entity_id_to_new_entity_id.get(&old) {
@@ -169,6 +197,13 @@ impl EntitySaveData {
                 EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
             {
                 world.add_component(*new, *slot);
+            }
+        }
+        for (old, selection) in &self.amp_selections {
+            if let Some(new) =
+                EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
+            {
+                world.add_component(*new, *selection);
             }
         }
         for (old_entity_id, selected_ammo) in &self.selected_ammo {
@@ -338,6 +373,7 @@ mod tests {
                 "all_entities": [],
                 "template_id_to_entity_id": {},
                 "properties": {},
+                "implant_slots": {},
                 "links": {}
             }"#,
         )
@@ -419,6 +455,32 @@ mod tests {
     }
 
     #[test]
+    fn distinct_amp_pairs_round_trip_and_remap_with_their_entities() {
+        use crate::psi_amp_selection::AmpSelection;
+        let a = EntityId::new_from_index_and_gen(7, 3);
+        let b = EntityId::new_from_index_and_gen(9, 2);
+        let mut data = EntitySaveData::empty();
+        data.all_entities.extend([a.inner(), b.inner()]);
+        let pa = AmpSelection {
+            current: -10,
+            alternate: Some(-20),
+        };
+        let pb = AmpSelection {
+            current: -30,
+            alternate: Some(-40),
+        };
+        data.amp_selections.insert(a.inner(), pa);
+        data.amp_selections.insert(b.inner(), pb);
+        let restored: EntitySaveData =
+            serde_json::from_str(&serde_json::to_string(&data).unwrap()).unwrap();
+        let mut world = World::new();
+        let (_, map) = restored.instantiate(&mut world);
+        let selections = world.borrow::<View<AmpSelection>>().unwrap();
+        assert_eq!(*selections.get(map[&a]).unwrap(), pa);
+        assert_eq!(*selections.get(map[&b]).unwrap(), pb);
+    }
+
+    #[test]
     fn instantiate_restores_selected_ammo_on_the_remapped_entity() {
         let old_entity = EntityId::new_from_index_and_gen(7, 3);
         let mut data = EntitySaveData::empty();
@@ -472,6 +534,7 @@ mod tests {
             "all_entities": [],
             "template_id_to_entity_id": {},
             "properties": {},
+            "implant_slots": {},
             "links": {}
         }))
         .unwrap();

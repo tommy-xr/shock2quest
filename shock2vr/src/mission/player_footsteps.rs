@@ -106,7 +106,7 @@ impl PlayerFootsteps {
     }
 
     /// Forget the stride and the fall in progress. Called on any direct
-    /// relocation (teleport locomotion, level load, quickload) so the player
+    /// relocation (scripted teleport, level load, quickload) so the player
     /// never arrives owing a footstep from wherever they were before.
     pub fn reset(&mut self) {
         self.distance = 0.0;
@@ -210,6 +210,20 @@ pub fn player_footstep_effect(footstep: PlayerFootstep, position: Vector3<f32>) 
         query,
         position,
     }
+}
+
+/// Gameplay tuning in world units: Agility 1..6 halves walking noise from
+/// 6 to 3. Crouching halves it again; landing carries 50% farther. This is
+/// independent of playback volume and applied before the listener's acuity.
+pub fn footstep_noise_radius(footstep: PlayerFootstep, agility: i32, crouched: bool) -> f32 {
+    let agility = (agility.clamp(1, 6) - 1) as f32 / 5.0;
+    6.0 * (1.0 - 0.5 * agility)
+        * if crouched { 0.5 } else { 1.0 }
+        * if footstep == PlayerFootstep::Landing {
+            1.5
+        } else {
+            1.0
+        }
 }
 
 #[cfg(test)]

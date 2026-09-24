@@ -159,6 +159,11 @@ impl ActionDispatcher {
                 pin: false,
             });
         }
+        if state.just_triggered(InputAction::DebugStartHordeWave) {
+            effects.push(Effect::StartHordeWave {
+                wave: crate::dev_params::get(crate::dev_params::HORDE_START_WAVE) as u32,
+            });
+        }
         if state.just_triggered(InputAction::DebugForceChase) {
             // Pinned: never decays, and every AI keeps hunting the player's
             // live position until DebugCalmAll clears the pin

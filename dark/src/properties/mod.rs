@@ -30,6 +30,7 @@ mod prop_hit_points;
 mod prop_homing;
 mod prop_key;
 mod prop_log;
+mod prop_loot;
 mod prop_obj_state;
 mod prop_particles;
 mod prop_phys_attr;
@@ -43,6 +44,7 @@ mod prop_render_type;
 mod prop_replicator;
 mod prop_research;
 mod prop_room_gravity;
+mod prop_schema_loop_params;
 mod prop_schema_play_params;
 mod prop_service;
 mod prop_spawn;
@@ -82,6 +84,7 @@ pub use prop_hit_points::*;
 pub use prop_homing::*;
 pub use prop_key::*;
 pub use prop_log::*;
+pub use prop_loot::*;
 pub use prop_obj_state::*;
 pub use prop_particles::*;
 pub use prop_phys_attr::*;
@@ -95,6 +98,7 @@ pub use prop_render_type::*;
 pub use prop_replicator::*;
 pub use prop_research::*;
 pub use prop_room_gravity::*;
+pub use prop_schema_loop_params::*;
 pub use prop_schema_play_params::*;
 pub use prop_service::*;
 pub use prop_spawn::*;
@@ -145,8 +149,7 @@ pub struct PropPosition {
 /// be reconstructed without replaying tripwire ENTER.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TeleportSource {
-    /// Player-initiated movement teleport: VR teleport locomotion or a debug
-    /// teleport. Tripwire ENTER fires on arrival.
+    /// Debug player repositioning. Tripwire ENTER fires on arrival.
     #[default]
     Locomotion,
     /// A scripted teleport trap (TrapTeleportPlayer) repositioned the player.
@@ -160,9 +163,9 @@ pub enum TeleportSource {
 }
 
 #[derive(Debug, Component, Serialize, Deserialize)]
-/// Marks an entity as having just teleported (VR teleport locomotion, teleport
-/// traps, debug teleport, or save restore). Tripwires fire on locomotion
-/// teleport-entry like the original engine; the other sources reconstruct
+/// Marks an entity as having just teleported (teleport traps, debug teleport,
+/// or save restore). Tripwires fire on debug teleport-entry like the original
+/// engine; the other sources reconstruct
 /// their arrival without replaying ENTER.
 pub struct PropTeleported {
     pub countdown_timer: f32, // Remaining time to be considered 'recently teleported'
@@ -246,11 +249,28 @@ pub struct PropWeaponType(pub i32);
 #[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
 pub struct PropImplantDesc(pub i32);
 
+/// Stored implant charge and authored drain tuning, in seconds/charge units.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropEnergy(pub f32);
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropDrainRate(pub f32);
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropDrainAmount(pub f32);
+
 /// The count of a stackable object (e.g. how many cyber modules an EXP-cookie
 /// pile is worth - the retail engine stores an EXP cookie's module value as its
 /// stack count, `P$StackCoun`). A 4-byte signed int.
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropStackCount(pub i32);
+
+/// `P$CombineTy`: the label two objects must share to stack together. The
+/// original engine gates every merge on this matching, then bumps the
+/// combinee's `PropStackCount` - so the label, not the template, decides what
+/// pools with what. Small and Large Prism are separate archetypes sharing
+/// `Prism` and do merge; Med Patch and Medical Kit share a parent archetype
+/// but carry different labels and do not.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropCombineType(pub String);
 
 /// The version of a piece of software (`P$SoftLevel`, 1..=3). Authored on the
 /// `Softs` base archetype as 1 and overridden by the V2/V3 archetypes, so a
@@ -406,6 +426,11 @@ impl PropInventoryDimensions {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropObjIcon(pub String);
 
+/// `P$ObjBroken` ("Obj/Broken icon") - the inventory art a Broken object shows
+/// in place of its `P$ObjIcon`.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropObjBrokenIcon(pub String);
+
 /// `P$Sett1` / `P$Sett2` - the description text for a gun's first / second fire
 /// setting, and `P$SHead1` / `P$SHead2` - the short header shown beside it
 /// (e.g. "NORM" / "BURST"). Each holds an object string (`key: "fallback"`)
@@ -416,6 +441,20 @@ pub struct PropGunSettingText1(pub String);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropGunSettingText2(pub String);
+
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropModifyDiff(pub PropHackDiff);
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropModify2Diff(pub PropHackDiff);
+/// `P$Modify1` / `P$Modify2` - the object string describing a gun's first /
+/// second modification, resolved against `MODIFY1.STR` / `MODIFY2.STR`.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropModifyText1(pub String);
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropModifyText2(pub String);
+/// `P$RepairDif` - the terms a Broken object is repaired on.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropRepairDiff(pub PropHackDiff);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropGunSettingHeader1(pub String);
@@ -543,6 +582,10 @@ pub struct PropHasRefs(pub bool);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropImmobile(pub bool);
+
+/// Authored opt-out from Kinetic Redirection.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropPsiNotPullable(pub bool);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPhysDimensions {
@@ -1537,6 +1580,24 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$Energy",
+            |reader, _len| read_single(reader),
+            PropEnergy,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$DrainRate",
+            |reader, _len| read_single(reader),
+            PropDrainRate,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$DrainAmt",
+            |reader, _len| read_single(reader),
+            PropDrainAmount,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$ImplantDe",
             |reader, _len| read_i32(reader),
             PropImplantDesc,
@@ -1546,6 +1607,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ShockWeap",
             |reader, _len| read_i32(reader),
             PropWeaponType,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$CombineTy",
+            read_prop_string,
+            PropCombineType,
             accumulator::latest,
         ),
         define_prop(
@@ -1597,6 +1664,18 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$BaseGunDe",
             PropBaseGunDesc::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Modify1",
+            read_variable_length_string,
+            PropModifyText1,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Modify2",
+            read_variable_length_string,
+            PropModifyText2,
             accumulator::latest,
         ),
         define_prop(
@@ -1654,9 +1733,27 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$ModifyDif",
+            PropHackDiff::read,
+            PropModifyDiff,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Modify2Di",
+            PropHackDiff::read,
+            PropModify2Diff,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$HackDiff",
             PropHackDiff::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RepairDif",
+            PropHackDiff::read,
+            PropRepairDiff,
             accumulator::latest,
         ),
         define_prop(
@@ -1689,6 +1786,24 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ContainDi",
             PropContainDimensions::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$LootInfo",
+            PropLootInfo::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$GuarLoot",
+            read_prop_string,
+            PropGuaranteedLoot,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RGuarLoot",
+            read_prop_string,
+            PropReallyGuaranteedLoot,
             accumulator::latest,
         ),
         define_prop(
@@ -1835,6 +1950,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ObjIcon",
             read_prop_string,
             PropObjIcon,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$ObjBroken",
+            read_prop_string,
+            PropObjBrokenIcon,
             accumulator::latest,
         ),
         define_prop(
@@ -2056,6 +2177,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$SchLoopPa",
+            PropSchemaLoopParams::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$SchPlayPa",
             PropSchemaPlayParams::read,
             identity,
@@ -2095,6 +2222,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$HasRefs",
             |reader, _len| read_bool(reader),
             PropHasRefs,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$NotPullab", // Dark chunk names truncate to 11 characters.
+            |reader, _len| read_bool(reader),
+            PropPsiNotPullable,
             accumulator::latest,
         ),
         define_prop(
@@ -2251,6 +2384,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$AIRCProp",
             PropAIRangedCombat::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_RngSho",
+            PropAIRangedShoot::read,
             identity,
             accumulator::latest,
         ),

@@ -38,6 +38,8 @@ for (const vr of [false, true]) {
     await capture("idle");
     await click(await control("inspect"));
     await capture("select");
+    assert.equal((await elements()).find(e=>e.label === "inspect")?.texture, "iface/ifbtn31.pcx");
+    assert.equal((await elements()).some(e=>e.label === "utility_close"), false, "arming query opens no placeholder panel");
     await click(await control("inspect"));
     assert.equal((await elements()).some(e => e.label === "utility_close"),false,"second ? cancels selection");
     await click(await control("inspect"));
@@ -49,6 +51,13 @@ for (const vr of [false, true]) {
     assert.doesNotMatch(text.map(e=>e.text).join(" "), /No description available/i, "authored hypo description resolves");
     assert.ok(text.every(e => e.entity_id === hypo.entity_id),"description belongs to selected hypo");
     await capture("description");
+    assert.equal((await control("inspect")).texture, "iface/ifbtn30.pcx", "selection exits query mode");
+    assert.ok(text.every(e => e.rect[0] >= 17 && e.rect[0]+e.rect[2] <= 140.01 && e.rect[1]+e.rect[3] <= 409.01), "description fits the retail left text well");
+    const firstLines = text.map(e => e.text);
+    await click(await control("query_line_down"));
+    assert.equal((await elements()).find(e => e.label === "utility_text")?.text, firstLines[1], "line down advances one wrapped row");
+    await click(await control("query_line_up"));
+    assert.deepEqual((await elements()).filter(e => e.label === "utility_text").map(e => e.text), firstLines);
     const next = (await elements()).find(e => e.label === "utility_next");
     assert.ok(next, "medical hypo description exercises pagination");
     if (next) {
@@ -64,6 +73,18 @@ for (const vr of [false, true]) {
     assert.deepEqual(await game.player.inventory(),before,"inspection does not consume or move hypo");
     assert.deepEqual((await game.ui.state()).cursor,cursor,"inspection leaves cursor item unchanged");
     await capture("closed");
+    const toxin = await game.player.spawnItem(-1341);
+    const withToxin = await game.player.inventory();
+    await click(await control("inspect"));
+    const specimen = (await elements()).find(e=>e.entity_id === toxin.entity_id && e.kind === "button");
+    assert.ok(specimen);
+    await click(specimen);
+    assert.match((await control("query_title")).text!, /unresearched/i);
+    const withheld = (await elements()).filter(e=>e.label === "utility_text").map(e=>e.text).join(" ");
+    assert.equal(withheld, "This item is not yet researched.", "localized retail research message resolves");
+    assert.doesNotMatch(withheld, /Summary:|Analysis:|Recommendation:/, "query cannot reveal an unresearched item's report");
+    await click(await control("utility_close"));
+    assert.deepEqual(await game.player.inventory(), withToxin, "query never starts research or consumes a specimen");
   });
 }
 
@@ -92,7 +113,7 @@ test("VR inspection reserves an off-panel held hypo trigger through cancel until
   await game.step({frames:2});
   await game.input.set("left_hand.trigger",0);
   await game.step({frames:2});
-  assert.ok((await game.ui.state()).strip!.elements.some(e=>e.label === "utility_close"));
+  assert.equal((await game.ui.state()).strip!.elements.find(e=>e.label === "inspect")?.texture, "iface/ifbtn31.pcx");
   // The holding hand points outside every panel. Its trigger must still be reserved.
   await game.input.set("right_hand.rotation",[0,1,0,0]);
   await game.input.set("right_hand.trigger",1);
@@ -294,17 +315,26 @@ for (const vr of [false,true]) {
     await capture("idle");
     const inventory=await game.player.inventory();const original=(await game.info()).player.stats;
     await click(await button());assert.equal((await button()).texture?.toLowerCase(),"iface/ifbtn21.pcx");
-    await capture("base");await click(await button());assert.ok(!(await game.ui.state()).strip!.elements.some(e=>e.label==="character_stat"));
+    await capture("base");await click(await button());assert.ok(!(await game.ui.state()).utilities.some(e=>e.label==="character_tab_0"));
     assert.deepEqual((await game.info()).player.stats,original);assert.deepEqual(await game.player.inventory(),inventory);
     // Explicit debug fixture to expose every bar length; panel reads remain inert.
     await game.player.setStats({strength:6,endurance:4,psionic_ability:2,agility:5,cyber_affinity:3});
     const stats=(await game.info()).player.stats!;
     await click(await button());
-    const labels=(await game.ui.state()).strip!.elements.filter(e=>e.label==="character_stat").map(e=>e.text);
-    assert.deepEqual(labels,[`STRENGTH ${stats.strength}`,`ENDURANCE ${stats.endurance}`,`PSIONICS ${stats.psionic_ability}`,`AGILITY ${stats.agility}`,`CYBER ${stats.cyber_affinity}`]);
+    const sheet=(await game.ui.state()).utilities;
+    assert.ok(sheet.some(e=>e.label==="character_tab_0"),"the character sheet is open");
+    const rows=[['STRENGTH',stats.strength],['ENDURANCE',stats.endurance],['PSIONICS',stats.psionic_ability],['AGILITY',stats.agility],['CYBER',stats.cyber_affinity]] as const;
+    // The retail sheet renders names and level arrows separately, rather
+    // than the obsolete combined text labels in the inventory strip.
+    for(const [index,[name,level]] of rows.entries()) {
+      const rowTop=132+index*26;
+      assert.ok(sheet.some(e=>e.kind==="text" && e.text===name && e.rect[1]>=rowTop && e.rect[1]<rowTop+14),name);
+      const arrows=sheet.filter(e=>e.texture?.toLowerCase()==="iface/skilstat.pcx" && Math.abs(e.rect[1]-(rowTop+14))<0.001);
+      assert.equal(arrows.length,level,`${name} renders its live level`);
+    }
     await capture("varied");
     const close=(await game.ui.state()).strip!.elements.find(e=>e.label==="utility_close");assert.ok(close);await click(close);
-    assert.ok(!(await game.ui.state()).strip!.elements.some(e=>e.label==="character_stat"));assert.equal((await game.ui.state()).mode,"use");
+    assert.ok(!(await game.ui.state()).utilities.some(e=>e.label==="character_tab_0"));assert.equal((await game.ui.state()).mode,"use");
     assert.deepEqual((await game.info()).player.stats,stats);assert.deepEqual(await game.player.inventory(),inventory);
   });
 }

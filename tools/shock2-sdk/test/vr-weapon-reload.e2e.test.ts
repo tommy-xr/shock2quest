@@ -113,12 +113,13 @@ test(
     assert.equal(emptyCue?.sample, "out_pist", "an empty VR pull must play its authored click");
 
 
-    // Reserve rounds are what a reload consumes. Two standard clips so the
-    // reload has to drain the first and dip into the second.
+    // Reserve rounds are what a reload consumes. Two standard clips, which
+    // pool into one carried stack (they share the `StdClip` combine label),
+    // so the reserve holds more than a single clip's worth.
     const first = await game.player.spawnItem(STD_CLIP);
-    const second = await game.player.spawnItem(STD_CLIP);
-    const perClip = stackOf(await game.entities.detail(first.entity_id));
-    assert.ok(perClip > 0, "a spawned standard clip carries rounds");
+    await game.player.spawnItem(STD_CLIP);
+    const reserveBefore = await remainingRounds(game, first.entity_id);
+    assert.ok(reserveBefore > 0, "a spawned standard clip carries rounds");
 
     const before = await game.audio.recent();
     const lastSequence = before.sounds.at(-1)?.sequence ?? 0;
@@ -148,10 +149,7 @@ test(
     );
 
     // Reserve accounting: exactly `capacity` rounds left the backpack.
-    const drained =
-      2 * perClip -
-      ((await remainingRounds(game, first.entity_id)) +
-        (await remainingRounds(game, second.entity_id)));
+    const drained = reserveBefore - (await remainingRounds(game, first.entity_id));
     assert.equal(drained, capacity, "reserve stacks drain by exactly the rounds loaded");
 
     // A reload at capacity is a no-op, so the remainder is never minted away.

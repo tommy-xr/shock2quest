@@ -35,7 +35,8 @@ use engine::audio::{
 use serde::Serialize;
 use shipyard::EntityId;
 
-const MAX_ENTRIES: usize = 64;
+/// Room for a one-off line to survive the footsteps that follow it.
+const MAX_ENTRIES: usize = 512;
 
 /// The debug runtime steps at a fixed 60 Hz, so a frame number is a faithful
 /// index into a stepped session.
@@ -272,12 +273,14 @@ fn record_stops(handles: &[u64]) {
 pub fn record_stop(handle: u64) {
     let sim_time = sim_time();
     let mut guard = RECENT.lock().unwrap();
-    if let Some(entry) = guard
-        .1
-        .iter_mut()
-        .rev()
-        .find(|entry| entry.handle == Some(handle) && entry.stopped_at_sim_time.is_none())
-    {
+    // A stop after a clip already ran out cut nothing short.
+    if let Some(entry) = guard.1.iter_mut().rev().find(|entry| {
+        entry.handle == Some(handle)
+            && entry.stopped_at_sim_time.is_none()
+            && entry
+                .duration_secs
+                .is_none_or(|duration| entry.sim_time + duration > sim_time)
+    }) {
         entry.stopped_at_sim_time = Some(sim_time);
     }
 }
@@ -289,6 +292,16 @@ fn resolve_still_playing(entry: &PlayedSound, now: f64) -> bool {
         && entry
             .duration_secs
             .is_some_and(|duration| entry.sim_time + duration > now)
+}
+
+/// [`recent`], narrowed to samples whose name contains `needle`, ignoring
+/// case - e.g. one Xerxes line among a stream of footsteps.
+pub fn recent_matching(needle: &str) -> Vec<PlayedSound> {
+    let needle = needle.to_ascii_lowercase();
+    recent()
+        .into_iter()
+        .filter(|entry| entry.sample.to_ascii_lowercase().contains(&needle))
+        .collect()
 }
 
 /// The most recent played sounds, oldest first, with `still_playing` resolved
@@ -510,5 +523,61 @@ mod tests {
         assert_eq!(spatial.position, [1.0, 2.0, 3.0]);
         assert_eq!(spatial.gain, 0.75);
         assert!(!spatial.pan_applied);
+    }
+
+    #[test]
+    fn a_matched_sound_outlives_a_burst_of_footsteps() {
+        let clip = std::rc::Rc::new(engine::audio::AudioClip::from_raw(1, 1, vec![0; 5]));
+        let record = |sample: &str| {
+            play_and_record_with(
+                engine::audio::AudioHandle::new(),
+                None,
+                clip.clone(),
+                PlayOptions::ListenerRelative(engine::audio::AudioPlaybackSettings::default()),
+                PlayRecord {
+                    sample,
+                    volume_millibels: None,
+                    pan_millibels: None,
+                    tags: vec![],
+                    source_entity: None,
+                },
+                |_, _, _, _| vec![],
+            );
+        };
+        record("Filter-Needle");
+        for _ in 0..100 {
+            record("filter-footstep");
+        }
+
+        let matched = recent_matching("filter-needle");
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].sample, "Filter-Needle");
+    }
+
+    #[test]
+    fn stopping_a_finished_clip_records_no_stop() {
+        // Zero-length, so it has already run out when the stop arrives
+        // (without touching the shared sim clock other tests read).
+        let clip = std::rc::Rc::new(engine::audio::AudioClip::from_raw(1, 1, vec![]));
+        let handle = engine::audio::AudioHandle::new();
+        play_and_record_with(
+            handle.clone(),
+            None,
+            clip,
+            PlayOptions::ListenerRelative(engine::audio::AudioPlaybackSettings::default()),
+            PlayRecord {
+                sample: "finished-before-stop",
+                volume_millibels: None,
+                pan_millibels: None,
+                tags: vec![],
+                source_entity: None,
+            },
+            |_, _, _, _| vec![],
+        );
+
+        record_stop(handle.id());
+
+        let entry = recent_matching("finished-before-stop").remove(0);
+        assert_eq!(entry.stopped_at_sim_time, None);
     }
 }

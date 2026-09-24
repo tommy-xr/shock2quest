@@ -428,6 +428,11 @@ For debugging visual/rendering changes without a full interactive session:
    # (Teleporting into a trigger volume fires it, same as walking in.)
    curl -X POST http://127.0.0.1:8080/v1/control/input -d '{"right_hand.thumbstick": [0.0, 1.0]}'
 
+   # Aim the head with head.look [yaw_deg, pitch_deg]. Pitch is POSITIVE DOWN
+   # (+60 looks at the floor, -60 at the ceiling), like mouse-look. For an
+   # exact world direction, place the debug camera with look_at instead.
+   curl -X POST http://127.0.0.1:8080/v1/control/input -d '{"head.look": [90.0, -30.0]}'
+
    # Place the debug (free) camera anywhere and aim it - the only way to
    # photograph something the player's own eye cannot see, the player and
    # whatever they are holding included. `position` is the world-space EYE
@@ -490,6 +495,45 @@ For debugging visual/rendering changes without a full interactive session:
    advance via `/v1/step`; physics also advances while free-running because it
    uses its own fixed substep.)
 
+   **Driving the 2D UI headlessly.** Two traps cost a whole verification pass
+   each; neither is a runtime limitation.
+
+   - **A frobbed object panel auto-closes unless the player is standing next to
+     it.** `POST /v1/entities/:id/message '{"type":"Frob"}'` on a keypad,
+     replicator or corpse really does open its panel - and `FlatUiHost` then
+     closes it on the very next frame when the object is further than
+     `PANEL_AUTO_CLOSE_DISTANCE` (4.0 world units, the original's per-overlay
+     `distance` check). So `/v1/ui` reports `active_panel: null` and the frob
+     looks like it did nothing. **Teleport within ~4 units first**, then frob;
+     one `/v1/step` frame is enough:
+
+     ```bash
+     curl -X POST .../v1/player/teleport -d '{"x":-25.2,"y":0.9,"z":-11.4}'
+     curl -X POST .../v1/entities/195/message -d '{"type":"Frob"}'
+     curl -X POST .../v1/step -d '{"frames":1}'      # active_panel is now the keypad
+     ```
+
+   - **`pointer.pressed` is a NUMBER channel, not a boolean.** `{"pointer.pressed":
+     true}` is rejected with `channel 'pointer.pressed' expects a number, got true`
+     in the response body - and since `curl` still exits 0, a script that does not
+     read the body sees a silent no-op and concludes the button is unimplemented.
+     Use `1.0` / `0.0`, and press *and release* to make a click edge. This is how
+     the use-mode utility buttons (`ACCESS`, `MFD`, `RES`, `MAP`, `?`) open the
+     character sheet, research overview and access-card list:
+
+     ```bash
+     curl -X POST .../v1/input/action -d '{"action":"ToggleUseMode"}'
+     # rects come from /v1/ui `utilities`; normalize by the 640x480 canvas
+     curl -X POST .../v1/control/input -d '{"pointer.position":[0.74375,0.9375]}'
+     curl -X POST .../v1/control/input -d '{"pointer.pressed":1.0}'
+     curl -X POST .../v1/step -d '{"frames":2}'
+     curl -X POST .../v1/control/input -d '{"pointer.pressed":0.0}'
+     curl -X POST .../v1/step -d '{"frames":5}'      # character sheet is up
+     ```
+
+   In general: **read the response body of `/v1/control/input`.** It reports
+   per-channel rejections, and every channel is a float.
+
 3. **TypeScript SDK (`tools/shock2-sdk`)** — **preferred for multi-step testing and verification**. A Playwright-style wrapper over the debug runtime HTTP API that handles the full lifecycle: spawning the runtime, waiting for readiness, capturing logs, and automatic shutdown via `await using`. See `tools/shock2-sdk/README.md` for the full API.
 
    ```bash
@@ -522,7 +566,6 @@ For debugging visual/rendering changes without a full interactive session:
    | `debug_hitbox`           | View fitted hitbox shapes vs ragdoll colliders across poses |
    | `debug_gloves`           | Test VR hand/glove rendering                 |
    | `debug_hand_poses`       | 25AE authored hand poses, anchored at a common hand origin |
-   | `debug_teleport`         | Test VR teleport locomotion                  |
    | `debug_joint_constraint` | Test physics joint constraints               |
    | `debug_hud`              | Test HUD rendering                           |
    | `debug_map`              | Test map/automap rendering                   |
@@ -624,23 +667,23 @@ See `references/entities.md` for comprehensive documentation of:
 
 ### Building
 
-- Desktop: `cd runtimes/desktop_runtime && cargo run --release`
+- Desktop: `cargo dr`
 - Quest VR: `cd runtimes/oculus_runtime && source ./set_up_android_sdk.sh && cargo apk run --release`
 
 ### Cargo Aliases
 
-For faster development, the project includes convenient cargo aliases (defined in `.cargo/config.toml`):
+For faster development, the project includes convenient cargo aliases (defined in `.cargo/config.toml`). They run the optimized dev profile (see `[profile.dev]` in `Cargo.toml`), the same build `cargo test`/`cargo check` use - prefer them to `--release`, which compiles a second multi-GB tree.
 
 - `cargo dr` - Desktop runtime (shorthand for `cargo run -p desktop_runtime --`)
 - `cargo dq` - Dark query CLI tool (shorthand for `cargo run -p dark_query --`)
 - `cargo dv` - Dark viewer tool (shorthand for `cargo run -p dark_viewer --`)
 - `cargo dbgr` - Debug runtime with HTTP control (shorthand for `cargo run -p debug_runtime --`)
 - `cargo dbgc` - Debug command client (shorthand for `cargo run -p debug_command --`)
-- `cargo bn` - Benchmark CLI (shorthand for `cargo run --release -p bench --`; `bench` collides with the built-in cargo command)
+- `cargo bn` - Benchmark CLI (shorthand for `cargo run -p bench --`; `bench` collides with the built-in cargo command)
 
 Example usage:
 ```bash
-cargo dr --release --experimental teleport
+cargo run -p desktop_runtime -- --vr --experimental physical_held_items
 cargo dq entities earth.mis --filter "*Door*" --limit 10
 cargo dv grunt_p.bin
 ```
@@ -656,15 +699,10 @@ The project supports experimental flags for gating in-progress features during d
 #### Using Experimental Flags
 
 - Add `--experimental` flag followed by feature names when running desktop runtime
-- Example: `cargo run -- --experimental teleport`
-- Multiple features: `cargo run -- --experimental teleport,feature2`
+- Example: `cargo run -p desktop_runtime -- --vr --experimental physical_held_items`
+- Multiple features: `cargo run -p desktop_runtime -- --vr --experimental physical_held_items,physical_gun_weight`
 
 #### Available Experimental Features
-
-- **`teleport`**: VR teleport movement system
-  - Enables point-and-teleport locomotion for VR comfort
-  - Alternative to smooth movement that can cause motion sickness
-  - Triggered via controller trigger button
 
 - **`ragdoll`**: spawn a physics ragdoll on creature death (`SlayEntity`) instead of
   just removing the entity. Without it, death is unchanged.
@@ -708,6 +746,32 @@ The project supports experimental flags for gating in-progress features during d
 
 2. **Update this documentation** to list the new experimental feature
 
+### Object lighting (enabled by default)
+
+Objects (props, creatures, held items) are lit from the mission's own lights.
+The `object_lighting` developer parameter can disable it for testing.
+When disabled every object is shaded a flat ambient plus
+the player's hand lights, so a prop under a lamp and one in a black corridor
+look identical. With it, each object takes the lights its cell says reach it,
+ranked and capped at the renderer's slots, and is shaded the way the original
+did - inverse-*distance* falloff over the mission's authored ambient. Objects
+are legitimately dimmer than the lightmapped walls behind them; three dev
+params (`object_light_brightness`, `object_light_ambient`,
+`object_light_wrap`) tune that live over HTTP. **No-op in `debug_*` scenes**,
+which have no world rep and therefore no cells to take lights from. Inspect
+the result with `GET /v1/scene`, whose `lighting` block reports each object's
+resolved light count and the light it receives (authored lights before hand
+lights are merged). Switched `P$AnimLight` sources use the same live intensity
+map as the wall lightmaps, including restored save state; an off source does
+not occupy a light slot. This does not add temporal flicker/pulse modes beyond
+the existing controller. VR gloves sample at each rendered hand pose; VR held
+models and flat first-person weapons use the same selection path. A held
+visual outside the world rep falls back to the player's cell. Lit gloves drop
+full-texture emission while keeping their emissive status-light mask. Flat weapon
+FOV is a per-object projection override, preserving world positions/normals
+for lighting; its emissive attachments and the HUD remain independent.
+This is no longer an experimental flag.
+
 ### Code Quality
 
 - Check code: `cargo check`
@@ -721,11 +785,14 @@ The project supports experimental flags for gating in-progress features during d
 
 #### CI Compiles with `-D warnings`
 
-The Build & Unit Test workflow sets `RUSTFLAGS="-D warnings"`, so **any warning (including `dead_code`) fails CI** even though it compiles locally. Validate with CI's flags before pushing:
+The Build & Unit Test workflow sets `RUSTFLAGS="-D warnings"`, so **any warning (including `dead_code`) fails CI** even though it compiles locally. Before pushing, check with no warnings printed (cargo replays cached warnings, so a no-op check still reports them):
 
 ```bash
-RUSTFLAGS="-D warnings" cargo check -p shock2vr -p desktop_runtime -p debug_runtime
+cargo check -p shock2vr -p desktop_runtime -p debug_runtime 2>&1 | grep -E '^(warning|error)'   # must print nothing
 ```
+
+Don't set `RUSTFLAGS` locally: it is part of every crate's fingerprint, so
+switching it on and off rebuilds all dependencies each time.
 
 #### Always Scope to Packages (`-p`)
 
