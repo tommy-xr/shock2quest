@@ -69,6 +69,12 @@ pub fn route_blocked(
 }
 
 pub(crate) fn eligible(world: &World, item: EntityId) -> bool {
+    pullable(world, item) && !contained(world, item)
+}
+
+/// The per-frame flight check. It skips the containment scan: containing an
+/// item removes its physics body, which already cancels the flight.
+pub(crate) fn pullable(world: &World, item: EntityId) -> bool {
     if !crate::virtual_hand::can_grab_item(world, item) || !crate::util::has_refs(world, item) {
         return false;
     }
@@ -80,13 +86,12 @@ pub(crate) fn eligible(world: &World, item: EntityId) -> bool {
     {
         return false;
     }
-    let (ais, immobile, blocked, render, links) = world
+    let (ais, immobile, blocked, render) = world
         .borrow::<(
             View<PropAI>,
             View<PropImmobile>,
             View<PropPsiNotPullable>,
             View<PropRenderType>,
-            View<Links>,
         )>()
         .unwrap();
     !ais.contains(item)
@@ -95,11 +100,14 @@ pub(crate) fn eligible(world: &World, item: EntityId) -> bool {
         && !render
             .get(item)
             .is_ok_and(|p| matches!(p.0, RenderType::NoRender | RenderType::EditorOnly))
-        && !links.iter().any(|l| {
-            l.to_links.iter().any(|l| {
-                matches!(l.link, Link::Contains(_)) && l.to_entity_id.is_some_and(|e| e.0 == item)
-            })
+}
+
+fn contained(world: &World, item: EntityId) -> bool {
+    world.borrow::<View<Links>>().unwrap().iter().any(|l| {
+        l.to_links.iter().any(|l| {
+            matches!(l.link, Link::Contains(_)) && l.to_entity_id.is_some_and(|e| e.0 == item)
         })
+    })
 }
 
 pub fn resolve(world: &World, physics: &PhysicsWorld, amp: EntityId) -> Option<EntityId> {

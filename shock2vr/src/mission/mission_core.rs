@@ -7610,7 +7610,7 @@ impl MissionCore {
         let valid = self.player_is_alive()
             && self.interaction.is_holding(flight.amp)
             && !self.interaction.is_holding(item)
-            && crate::psi_pull::eligible(&self.world, item)
+            && crate::psi_pull::pullable(&self.world, item)
             && destination.is_some()
             && flight.age < crate::psi_pull::FLIGHT_TIMEOUT;
         let Some(position) = position.filter(|_| valid) else {
