@@ -210,8 +210,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                 // settings rows.
                 components.push(
                     gui::button(ReplicatorMsg::SelectItem(i))
-                        .with_position(vec2(rect.x, rect.y))
-                        .with_size(vec2(rect.w, rect.h))
+                        .with_rect(rect)
                         .with_image("repsel.pcx")
                         .with_alpha(0.0)
                         .with_label(&format!("buy:{obj_name}")),
@@ -246,13 +245,11 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                 ));
                 if state.selected == Some(i) {
                     // Palette index 0 is REPSEL's transparent interior.
-                    components.push(GuiComponent::Image {
-                        position: vec2(rect.x, rect.y),
-                        size: vec2(SELECT_SIZE.0, SELECT_SIZE.1),
-                        texture: "repsel.pcx".to_owned(),
-                        alpha: 1.0,
-                        kind: crate::ui::ImageKind::ObjectIcon,
-                    });
+                    components.push(
+                        gui::image("repsel.pcx")
+                            .with_object_icon()
+                            .with_rect(Rect::new(rect.x, rect.y, SELECT_SIZE.0, SELECT_SIZE.1)),
+                    );
                 }
             }
         }
