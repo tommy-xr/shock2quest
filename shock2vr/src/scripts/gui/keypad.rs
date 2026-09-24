@@ -286,6 +286,47 @@ fn effective_hrm_values(world: &World, diff: PropHackDiff, context: HrmContext) 
         ))
 }
 
+/// Retail's HRM goal well (above the board), the failure chance in the
+/// board's empty top-left cell, and the odds well below it, left of START.
+const GOAL_RECT: crate::ui::Rect = crate::ui::Rect::new(15.0, 12.0, 137.0, 34.0);
+const FAILURE_RECT: crate::ui::Rect = crate::ui::Rect::new(14.0, 49.0, 30.0, 12.0);
+const ODDS_RECT: crate::ui::Rect = crate::ui::Rect::new(15.0, 180.0, 137.0, 104.0);
+
+const FALLBACK_HACK_TEXT: &str = "Complete the circuit to hack this computer.";
+
+/// What hacking `entity` does: its `P$HackText`, resolved against
+/// `hacktext.str`.
+pub(crate) fn hack_goal_text(world: &World, entity: EntityId) -> String {
+    world
+        .borrow::<View<dark::properties::PropHackText>>()
+        .ok()
+        .and_then(|texts| texts.get(entity).ok().map(|text| text.0.clone()))
+        .map(|raw| super::PanelText::object_string(world, "hacktext", &raw))
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| FALLBACK_HACK_TEXT.to_owned())
+}
+
+/// Retail's text on every HRM board, in the MFD font: the goal, the failure
+/// chance and the odds readout.
+pub(crate) fn draw_hrm_text<T: Clone>(
+    world: &World,
+    goal: &str,
+    diff: PropHackDiff,
+    context: HrmContext,
+) -> Vec<GuiComponent<T>> {
+    let mut components = super::PanelText::paragraph(world, goal, GOAL_RECT);
+    components.push(super::PanelText::text(
+        &format!("{}%", hrm_failure_percent(world, diff, context)),
+        FAILURE_RECT,
+    ));
+    components.extend(super::PanelText::paragraph(
+        world,
+        &hrm_breakdown(world, diff, context),
+        ODDS_RECT,
+    ));
+    components
+}
+
 /// Retail's odds readout under the board (`jargon.str`, one key set per
 /// mode): starting difficulty, what skill, CYB and bonuses take off, the
 /// final difficulty and the mine count.
@@ -705,7 +746,16 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
     ) -> Vec<GuiComponent<KeyPadMsg>> {
         let hack_diff = hack_diff_for_entity(_world, _entity_id);
         if let Some(hack_diff) = hack_diff {
-            return draw_hack_board(&_state.hack, hack_diff, |msg| msg);
+            let mut components = draw_hack_board(&_state.hack, hack_diff, |msg| msg);
+            components.extend(draw_hrm_text(
+                _world,
+                &hack_goal_text(_world, _entity_id),
+                hack_diff,
+                HrmContext::Hack {
+                    security_computer: false,
+                },
+            ));
+            return components;
         }
 
         // Retail shkkeypd.cpp draws the complete keypad2 artwork and puts
@@ -879,6 +929,22 @@ mod tests {
         assert!(shows_pay(HackPhase::Unpaid));
         assert!(shows_pay(HackPhase::InsufficientNanites));
         assert!(!shows_pay(HackPhase::Playing));
+    }
+
+    /// A hack board's goal is the object's `P$HackText`; without one, the
+    /// generic circuit line.
+    #[test]
+    fn the_hack_goal_is_the_objects_hack_text() {
+        let mut world = World::new();
+        let authored = world.add_entity((dark::properties::PropHackText(
+            "ArchReplicator: \"Hack to gain a superior selection of items.\"".to_owned(),
+        ),));
+        let bare = world.add_entity(());
+        assert_eq!(
+            hack_goal_text(&world, authored),
+            "Hack to gain a superior selection of items."
+        );
+        assert_eq!(hack_goal_text(&world, bare), FALLBACK_HACK_TEXT);
     }
 
     #[test]

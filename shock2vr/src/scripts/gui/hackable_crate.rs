@@ -36,8 +36,8 @@ use crate::scripts::Effect;
 
 use super::container::{ContainerGui, ContainerGuiMsg, ContainerGuiState};
 use super::keypad::{
-    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
-    handle_hack_msg, object_state,
+    HackOutcomeEffects, HackPhase, HackState, HrmContext, KeyPadMsg, draw_hack_board,
+    draw_hrm_text, hack_diff, hack_goal_text, handle_hack_msg, object_state,
 };
 
 /// The ICE Pick's authored script name (`P$Scripts` on gamesys template -73).
@@ -171,7 +171,16 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
         } else {
             state.hack.clone()
         };
-        draw_hack_board(&hack, diff, HackableCrateMsg::Hack)
+        let mut components = draw_hack_board(&hack, diff, HackableCrateMsg::Hack);
+        components.extend(draw_hrm_text(
+            world,
+            &hack_goal_text(world, entity_id),
+            diff,
+            HrmContext::Hack {
+                security_computer: false,
+            },
+        ));
+        components
     }
 
     fn get_config(&self) -> GuiConfig {
