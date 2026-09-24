@@ -134,6 +134,12 @@ fn can_hack(world: &World, entity_id: EntityId) -> bool {
     ) && hackable(world, entity_id)
 }
 
+/// Whether the catalog shows a plug: HACK while hackable, the inert repair
+/// plug once broken.
+fn shows_plug(world: &World, entity_id: EntityId) -> bool {
+    can_hack(world, entity_id) || object_state(world, entity_id) == ObjectState::Broken
+}
+
 /// Whether the canvas keeps room for a plug. Unlike `can_hack` this survives
 /// a hack's win or critical failure, so the VR quad never resizes while open.
 fn has_plug_room(world: &World, entity_id: EntityId) -> bool {
@@ -317,11 +323,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         state: &ReplicatorState,
     ) -> Option<PanelSidecar> {
         has_plug_room(world, entity_id).then(|| {
-            plug_sidecar(
-                state.panel == ReplicatorPanel::Inventory
-                    && (can_hack(world, entity_id)
-                        || object_state(world, entity_id) == ObjectState::Broken),
-            )
+            plug_sidecar(state.panel == ReplicatorPanel::Inventory && shows_plug(world, entity_id))
         })
     }
 

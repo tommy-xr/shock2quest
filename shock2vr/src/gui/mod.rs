@@ -64,8 +64,8 @@ where
     fn get_config(&self) -> GuiConfig;
 
     /// State-aware panel geometry. Most panels are fixed-size and use
-    /// `get_config`; overlays with a companion plug (the retail replicator
-    /// PLUGHACK sidecar) can widen only while that companion is present.
+    /// `get_config`; panels with a companion plug (the HRM plug) keep its room
+    /// for as long as they are open, so the VR quad never resizes.
     fn get_config_for(&self, _entity_id: EntityId, _world: &World, _state: &TState) -> GuiConfig {
         self.get_config()
     }
