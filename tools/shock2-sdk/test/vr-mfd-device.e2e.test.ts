@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { test } from "node:test";
-import { GameServer } from "../src/index.js";
+import { AimOcclusionError, GameServer } from "../src/index.js";
 import { add, aimVrHandAt, drawPersonalCard, quatMultiply, quatRotate, scale } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
@@ -51,6 +51,46 @@ async function clickDevice(game: GameServer, canvas: [number, number]) {
   await aimAtDeviceCanvas(game, canvas, 0);
   await game.step({ frames: 4 });
 }
+
+/** Stand near the entity with a clear view (the given spots, else a ring
+ * around it at `standY`), draw the device and scan it. */
+async function scanWithDevice(
+  game: GameServer,
+  template: number,
+  standY: number,
+  spots?: { x: number; y: number; z: number }[],
+) {
+  const [target] = await game.entities.byTemplate(template);
+  assert.ok(target, `no entity with template ${template}`);
+  const [x, , z] = target.position;
+  const ring = [[-1.2, 0], [1.2, 0], [0, -1.2], [0, 1.2], [-1, -1], [1, 1], [-1, 1], [1, -1]];
+  let aim;
+  for (const spot of spots ?? ring.map(([dx, dz]) => ({ x: x + dx, y: standY, z: z + dz }))) {
+    await game.player.teleport(spot);
+    await game.step({ frames: 60 });
+    try {
+      aim = await game.player.aimAt(target.id, { hitbox: "center", visibility: "required" });
+      if (aim.target_confirmed) break;
+    } catch (error) {
+      if (!(error instanceof AimOcclusionError)) throw error;
+      aim = undefined;
+    }
+  }
+  assert.ok(aim?.target_confirmed, `no clear view of template ${template}`);
+  await drawPersonalCard(game, "left");
+  const windowsBefore = (await face(game)).windows.length;
+  await aimVrHandAt(game, aim.world_point, 0.05, 1, 0, { hand: "left" });
+  await game.step({ frames: 12 });
+  const card = (await game.info()).player.hand_feedback!.body_gear!.personal_card;
+  assert.equal(card.scans, 1);
+  assert.equal(card.on_device, true);
+  assert.equal((await game.ui.state()).active_panel?.template_id, template);
+  assert.equal(card.device_face!.windows.length, windowsBefore + 1, "the panel adds the screen window");
+  await raiseDevice(game);
+  return target;
+}
+
+const center = (r: number[]): [number, number] => [r[0] + r[2] / 2, r[1] + r[3] / 2];
 
 /** Capture the player's view and a debug-camera close-up of the face. */
 async function capture(game: GameServer, name: string) {
@@ -122,4 +162,80 @@ test("VR cyber interface takes the canvas over from a held device", {
   await game.step({ frames: 3 });
   assert.equal((await game.ui.state()).mode, "shooter");
   assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.hand, null);
+});
+
+test("VR scanning a keypad with the device opens its panel on the device screen", {
+  skip: !enabled, timeout: 240_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  await scanWithDevice(game, 266, 21.404);
+  await aimAtDeviceCanvas(game, center((await face(game)).windows[0].src));
+  await capture(game, "device-keypad");
+  await game.input.set("left_hand.squeeze", 0);
+  await game.step({ frames: 3 });
+  assert.equal((await game.ui.state()).active_panel, null, "returning the device closes the panel");
+});
+
+test("VR scanning a crate shows its loot on the device; a squeeze pulls an item into the hand", {
+  skip: !enabled, timeout: 240_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  await scanWithDevice(game, 307, 21.404);
+  const item = (await game.ui.state()).active_panel!.elements.find((e) => e.entity_id != null);
+  assert.ok(item, "the crate panel lists its contents");
+  await aimAtDeviceCanvas(game, center(item.rect));
+  await capture(game, "device-loot");
+  await game.input.set("right_hand.squeeze", 1);
+  await game.step({ frames: 6 });
+  assert.equal((await game.info()).player.right_hand_entity_id, item.entity_id);
+  await capture(game, "device-loot-taken");
+});
+
+test("VR scanning a replicator opens its shop on the device without buying", {
+  skip: !enabled, timeout: 240_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  const [rep] = await game.entities.byTemplate(262);
+  const [x, , z] = rep.position;
+  await scanWithDevice(game, 262, 21.404, [{ x: x - 1.59, y: 21.404, z: z - 2.23 }]);
+  await aimAtDeviceCanvas(game, center((await face(game)).windows[0].src));
+  await capture(game, "device-replicator");
+});
+
+test("VR scanning a corpse shows its loot on the device", {
+  skip: !enabled, timeout: 600_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "hydro2.mis", port: 0, debugFlags: ["--vr"] });
+  await game.step({ frames: 5 });
+  await scanWithDevice(game, 754, -0.76, [{ x: 73.08, y: -0.76, z: -14.92 }]);
+  const items = (await game.ui.state()).active_panel!.elements.filter((e) => e.entity_id != null);
+  assert.ok(items.length > 0, "the corpse panel lists its contents");
+  await aimAtDeviceCanvas(game, center(items[0].rect));
+  await capture(game, "device-corpse");
+});
+
+test("VR a device scan replaces an open world panel", {
+  skip: !enabled, timeout: 240_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  const [crate] = await game.entities.byTemplate(307);
+  const [x, , z] = crate.position;
+  await game.player.teleport({ x: x - 1.2, y: 21.404, z });
+  await game.step({ frames: 60 });
+  const aim = await game.player.aimAt(crate.id, { hitbox: "center", visibility: "required" });
+  // Hand frob: the crate's world quad opens.
+  await aimVrHandAt(game, aim.world_point);
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 2 });
+  await game.input.set("right_hand.trigger", 0);
+  await game.step({ frames: 8 });
+  const uiBodies = async () =>
+    (await game.physics.bodies()).bodies.filter((b) => b.collision_groups.includes("ui")).length;
+  assert.ok((await uiBodies()) > 0, "the hand frob opens a world panel");
+  await scanWithDevice(game, 307, 21.404, [{ x: x - 1.2, y: 21.404, z }]);
+  assert.equal(await uiBodies(), 0, "the device scan closes the world panel");
 });

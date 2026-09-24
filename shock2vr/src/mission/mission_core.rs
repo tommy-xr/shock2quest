@@ -5876,23 +5876,27 @@ impl MissionCore {
                     let entity = hit.maybe_entity_id?;
                     ((hit.hit_point - vec3_to_point3(position)).magnitude()
                         <= 0.20 / crate::METERS_PER_WORLD_UNIT
-                        && super::personal_card::is_reader(&self.world, entity))
+                        && super::personal_card::is_scannable(&self.world, entity))
                     .then_some(entity)
                 });
             if let Some(entity) = self.personal_card.scan(target, time.elapsed.as_secs_f32()) {
-                let denied = crate::scripts::script_util::is_entity_locked(&self.world, entity);
+                let reader = super::personal_card::is_reader(&self.world, entity);
+                let denied =
+                    reader && crate::scripts::script_util::is_entity_locked(&self.world, entity);
                 self.script_world.dispatch(Message {
                     to: entity,
                     payload: MessagePayload::Frob,
                 });
-                effects.push(Effect::ShowMessage {
-                    text: if denied {
-                        "Access denied"
-                    } else {
-                        "Access authorized"
-                    }
-                    .to_owned(),
-                });
+                if reader {
+                    effects.push(Effect::ShowMessage {
+                        text: if denied {
+                            "Access denied"
+                        } else {
+                            "Access authorized"
+                        }
+                        .to_owned(),
+                    });
+                }
                 effects.push(Effect::PlaySound {
                     handle: AudioHandle::new(),
                     source: None,
@@ -9716,6 +9720,18 @@ impl MissionCore {
                     // quad beside the object.
                     match game_options.presentation_mode {
                         crate::PresentationMode::Flat => self.flat_ui.open(entity),
+                        // With the device out, every panel opens on its
+                        // screen - the same MFD slot flat docks them in - and,
+                        // one UI at a time, replaces an open world quad.
+                        crate::PresentationMode::Vr if self.use_mode_on_device => {
+                            self.gui.close_panel(
+                                &mut self.world,
+                                &mut self.physics,
+                                &mut self.script_world,
+                                &mut self.id_to_physics,
+                            );
+                            self.flat_ui.open(entity)
+                        }
                         crate::PresentationMode::Vr => {
                             // The other half of "one UI at a time": a world
                             // panel replaces an open log reader, exactly as the

@@ -28,6 +28,26 @@ pub(crate) fn is_reader(world: &World, entity: EntityId) -> bool {
         .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))
 }
 
+/// What the device can scan: credential readers and machines, plus anything
+/// whose frob opens an MFD panel. The list mirrors the panel-opening
+/// `gui_script` mappings in `scripts/mod.rs`; a live creature's loot stays
+/// sealed until it can be looted.
+pub(crate) fn is_scannable(world: &World, entity: EntityId) -> bool {
+    let has = |script: &str| crate::scripts::script_util::entity_has_script(world, entity, script);
+    is_reader(world, entity)
+        || (has("CreatureContainer") && crate::scripts::gui::creature_is_lootable(world, entity))
+        || [
+            "ContainerScript",
+            "Keypad",
+            "KeypadUnhackable",
+            "HackableCrate",
+            "ElevatorButton",
+            "MiniGameBoy",
+        ]
+        .into_iter()
+        .any(has)
+}
+
 pub(super) struct PersonalCard {
     pub center: Option<Vector3<f32>>,
     pub hand: Option<usize>,

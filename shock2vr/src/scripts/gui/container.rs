@@ -131,7 +131,7 @@ const STANDARD_IMPACT_STIM: i32 = -385;
 /// is read straight off the creature's own receptrons - an invulnerable NPC
 /// `Abort`s the basic weapon-impact stim, which no killable hostile ever does
 /// - so this predicate can never open a live threat's inventory.
-fn creature_is_lootable(world: &World, entity_id: EntityId) -> bool {
+pub(crate) fn creature_is_lootable(world: &World, entity_id: EntityId) -> bool {
     if crate::scripts::ai::ai_util::is_killed(entity_id, world) {
         return true;
     }
