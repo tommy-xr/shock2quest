@@ -175,7 +175,7 @@ impl Script for HeldMeleeWeapon {
                     .should_play(entity_id, owner, physics, *contact)
                     | damage.is_some()
                 {
-                    let sound = impact_sound_effect(entity_id, owner, world);
+                    let sound = impact_sound_effect(entity_id, owner, world, physics, *contact);
                     if !matches!(sound, Effect::NoEffect) {
                         effects.push(sound);
                     }
@@ -401,6 +401,7 @@ mod tests {
             point,
             normal: vec3(1.0, 0.0, 0.0),
             closing_speed: None,
+            surface_material: None,
         })
     }
 
@@ -419,6 +420,7 @@ mod tests {
             point: vec3(0.0, 0.0, 0.0),
             normal: vec3(1.0, 0.0, 0.0),
             closing_speed: Some(7.5),
+            surface_material: None,
         });
 
         assert_eq!(
@@ -915,6 +917,7 @@ mod tests {
                     point: vec3(2.0, 3.0, 4.0),
                     normal: vec3(1.0, 0.0, 0.0),
                     closing_speed: None,
+                    surface_material: None,
                 }),
             },
         )

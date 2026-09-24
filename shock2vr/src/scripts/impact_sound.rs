@@ -126,9 +126,16 @@ impl ImpactSoundGuard {
 
 /// Impact sound for a contact: the item's collision schema (its class tag +
 /// the hit material - wrench on metal clangs, on a creature thuds), unless its
-/// collision type opts out. Needs no damage value: unmaterialed surfaces
-/// (world geometry, a bench) fall back to the default material tag.
-pub fn impact_sound_effect(entity_id: EntityId, with: EntityId, world: &World) -> Effect {
+/// collision type opts out. Needs no damage value. World geometry names its
+/// own surface through the contact; an unmaterialed surface (a bench, an
+/// untextured floor) falls back to the default material tag.
+pub fn impact_sound_effect(
+    entity_id: EntityId,
+    with: EntityId,
+    world: &World,
+    physics: &PhysicsWorld,
+    contact: Option<crate::physics::CollisionContact>,
+) -> Effect {
     let no_sound = world
         .borrow::<View<PropCollisionType>>()
         .ok()
@@ -138,7 +145,15 @@ pub fn impact_sound_effect(entity_id: EntityId, with: EntityId, world: &World) -
         return Effect::NoEffect;
     }
     let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
-    play_impact_sound(world, entity_id, with, position.to_vec())
+    play_impact_sound(
+        world,
+        entity_id,
+        with,
+        position.to_vec(),
+        contact
+            .and_then(|contact| contact.surface_material)
+            .and_then(|material| physics.surface_material_name(material)),
+    )
 }
 
 /// The audible half of a physically-held item that is *not* a melee weapon -
@@ -193,7 +208,7 @@ impl Script for HeldItemImpactSound {
         if !self.guard.should_play(entity_id, *with, physics, *contact) {
             return Effect::NoEffect;
         }
-        impact_sound_effect(entity_id, *with, world)
+        impact_sound_effect(entity_id, *with, world, physics, *contact)
     }
 }
 
@@ -286,6 +301,7 @@ mod tests {
                                 point: contact.point,
                                 normal: -contact.normal,
                                 closing_speed: contact.closing_speed,
+                                surface_material: contact.surface_material,
                             }),
                         });
                     } else if entity1_id == gun {

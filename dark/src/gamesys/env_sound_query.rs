@@ -23,6 +23,10 @@ pub struct EnvSoundQuery {
     /// `Gamesys::get_random_environmental_sound`). Off by default so existing
     /// lookups keep resolving exactly as they did.
     prefer_most_specific: bool,
+    /// Tried, in order, when this query resolves to no sample. The schema does
+    /// not author every (event, material) pair - a pistol round on tile has no
+    /// entry - and silence is a worse answer there than a less specific one.
+    fallback: Option<Box<EnvSoundQuery>>,
 }
 
 impl EnvSoundQueryItem {
@@ -40,6 +44,7 @@ impl EnvSoundQuery {
         Self {
             items: Vec::new(),
             prefer_most_specific: false,
+            fallback: None,
         }
     }
 
@@ -47,6 +52,7 @@ impl EnvSoundQuery {
         Self {
             items,
             prefer_most_specific: false,
+            fallback: None,
         }
     }
 
@@ -57,6 +63,7 @@ impl EnvSoundQuery {
                 .map(|(tag, value)| EnvSoundQueryItem::new(tag, value))
                 .collect(),
             prefer_most_specific: false,
+            fallback: None,
         }
     }
 
@@ -69,6 +76,18 @@ impl EnvSoundQuery {
 
     pub fn prefers_most_specific(&self) -> bool {
         self.prefer_most_specific
+    }
+
+    /// Return this query with a less specific one to fall back on when it
+    /// resolves to nothing.
+    pub fn with_fallback(mut self, fallback: EnvSoundQuery) -> Self {
+        self.fallback = Some(Box::new(fallback));
+        self
+    }
+
+    /// The query to try next when this one resolves to no sample.
+    pub fn fallback(&self) -> Option<&EnvSoundQuery> {
+        self.fallback.as_deref()
     }
 
     /// The (tag, value) pairs of this query, e.g. for logging/introspection.

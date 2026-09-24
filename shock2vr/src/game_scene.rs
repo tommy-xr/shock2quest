@@ -344,6 +344,9 @@ pub struct DebugRayHit {
     pub body_id: Option<u32>,
     pub collision_group: Option<String>,
     pub is_sensor: bool,
+    /// Sound-schema material of the world surface hit ("metal", "fabric", ...),
+    /// when the ray landed on level geometry.
+    pub surface_material: Option<String>,
 }
 
 /// A climbing hold reported by `GET /v1/physics/grip`. `kind` is "ladder"
