@@ -192,6 +192,9 @@ pub struct LightArray {
     /// a capture or at 0.
     pub environment: Option<std::rc::Rc<crate::texture::CubeTexture>>,
     pub reflection: f32,
+    /// Vein tuning for shine on growth and on the annelid weapons.
+    pub growth_veins: super::shine::VeinTuning,
+    pub weapon_veins: super::shine::VeinTuning,
 }
 
 impl LightArray {
@@ -205,6 +208,8 @@ impl LightArray {
             specular: 0.0,
             environment: None,
             reflection: 0.0,
+            growth_veins: Default::default(),
+            weapon_veins: Default::default(),
         }
     }
 
@@ -250,6 +255,16 @@ impl LightArray {
         self
     }
 
+    pub fn with_veins(
+        mut self,
+        growth: super::shine::VeinTuning,
+        weapon: super::shine::VeinTuning,
+    ) -> Self {
+        self.growth_veins = growth;
+        self.weapon_veins = weapon;
+        self
+    }
+
     /// This array's lights plus as many of `scene`'s as still fit, with the
     /// scene's taking priority.
     ///
@@ -271,6 +286,8 @@ impl LightArray {
             specular: self.specular,
             environment: self.environment.clone(),
             reflection: self.reflection,
+            growth_veins: self.growth_veins,
+            weapon_veins: self.weapon_veins,
         };
         for source in [scene, self] {
             for (index, light) in source.iter_active() {

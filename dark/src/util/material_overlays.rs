@@ -8,7 +8,7 @@ use engine::{
         SceneObject, SkinnedMaterial, basic_material,
         incidence::IncidencePass,
         scene_object::BlendMode,
-        shine::{Shine, ShineBlend},
+        shine::{Shine, ShineBlend, VeinProfile},
     },
     texture::TextureTrait,
 };
@@ -110,11 +110,12 @@ pub(crate) fn append_incidence_overlays(
                     unlit: pass.unlit,
                     blend,
                     passes: count,
-                    // At 1x the highlight barely reads on the weapons under a lamp.
-                    specular: if profile == Profile::OrganicWeapon {
-                        3.0
+                    veins: vein_profile(profile, pass.texture.is_some()),
+                    // Growth UVs span less of its surface than the weapons'.
+                    vein_scale: if profile == Profile::WetGrowth {
+                        2.0
                     } else {
-                        1.0
+                        1.5
                     },
                 });
             }
@@ -145,6 +146,17 @@ pub(crate) fn append_incidence_overlays(
         overlay.blend_mode = blend_mode;
         overlay.set_depth_write(false);
         objects.push(overlay);
+    }
+}
+
+/// The live vein tuning a shine follows. A diffuse reused as the mask spreads
+/// the highlight evenly, so it gathers onto veins; authored glint maps keep
+/// their own.
+fn vein_profile(profile: Profile, authored_mask: bool) -> Option<VeinProfile> {
+    match (profile, authored_mask) {
+        (Profile::WetGrowth, false) => Some(VeinProfile::Growth),
+        (Profile::OrganicWeapon, false) => Some(VeinProfile::Weapon),
+        _ => None,
     }
 }
 
@@ -222,6 +234,20 @@ mod tests {
         assert_eq!(uniform_stack(&stack), Some((&stack[0], 2)));
         assert_eq!(uniform_stack(&[pass("a"), pass("b")]), None);
         assert_eq!(uniform_stack(&[]), None);
+    }
+
+    #[test]
+    fn only_unmasked_shine_gathers_onto_veins() {
+        assert_eq!(vein_profile(Profile::Organic, true), None);
+        assert_eq!(vein_profile(Profile::WetGrowth, true), None);
+        assert_eq!(
+            vein_profile(Profile::WetGrowth, false),
+            Some(VeinProfile::Growth)
+        );
+        assert_eq!(
+            vein_profile(Profile::OrganicWeapon, false),
+            Some(VeinProfile::Weapon)
+        );
     }
 
     #[test]

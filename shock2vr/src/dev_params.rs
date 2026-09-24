@@ -43,11 +43,12 @@ pub enum DevCategory {
     Throwing,
     Camera,
     Lighting,
+    OrganicShine,
     Horde,
 }
 
 impl DevCategory {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Root,
         Self::Visualizations,
         Self::Interaction,
@@ -61,6 +62,7 @@ impl DevCategory {
         Self::Throwing,
         Self::Camera,
         Self::Lighting,
+        Self::OrganicShine,
         Self::Horde,
     ];
 
@@ -79,6 +81,7 @@ impl DevCategory {
             Self::Throwing => "Throwing",
             Self::Camera => "Camera & view",
             Self::Lighting => "Lighting",
+            Self::OrganicShine => "Organic shine",
             Self::Horde => "Earth horde",
         }
     }
@@ -89,6 +92,7 @@ impl DevCategory {
             Self::Interaction | Self::Combat => Some(Self::Visualizations),
             Self::Fit => Some(Self::Hands),
             Self::Recoil | Self::Melee | Self::Throwing => Some(Self::Weapons),
+            Self::OrganicShine => Some(Self::Lighting),
             _ => Some(Self::Root),
         }
     }
@@ -469,6 +473,20 @@ dev_params! {
     /// Strength of the mission's captured surroundings reflected in those same
     /// wet surfaces. 0 turns reflections off.
     OBJECT_REFLECTION = Lighting::float("object_reflection", "Obj reflection", 3.0, 0.0, 4.0, 0.1),
+    /// How far the highlight on worm goo gathers onto procedural veins; 0
+    /// spreads it evenly. Growth has no authored glint map of its own.
+    GOO_VEINS = OrganicShine::float("goo_veins", "Goo veins", 1.0, 0.0, 1.0, 0.05),
+    /// 0 keeps goo veins soft and swollen; 1 cuts them to thin, hard lines.
+    GOO_VEIN_SHARPNESS = OrganicShine::float("goo_vein_sharpness", "Goo vein sharp", 0.0, 0.0, 1.0, 0.05),
+    /// Goo's highlight strength relative to `object_specular`; at 1 its veins
+    /// barely glint under a lamp.
+    GOO_SPECULAR = OrganicShine::float("goo_specular", "Goo specular", 3.0, 0.0, 6.0, 0.1),
+    /// As `goo_veins`, for the worm launcher and viral proliferator.
+    WEAPON_VEINS = OrganicShine::float("weapon_veins", "Weapon veins", 1.0, 0.0, 1.0, 0.05),
+    /// As `goo_vein_sharpness`, for the annelid weapons.
+    WEAPON_VEIN_SHARPNESS = OrganicShine::float("weapon_vein_sharpness", "Wpn vein sharp", 0.0, 0.0, 1.0, 0.05),
+    /// As `goo_specular`, for the annelid weapons.
+    WEAPON_SPECULAR = OrganicShine::float("weapon_specular", "Wpn specular", 3.0, 0.0, 6.0, 0.1),
     /// Enables the detached debug ("free") camera. This is the *gate*, not
     /// the camera's own on/off: while it is false the toggle input is not
     /// even read, so a stray `Alt+V` (or controller chord) during normal play

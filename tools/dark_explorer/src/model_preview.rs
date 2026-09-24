@@ -844,7 +844,11 @@ impl ModelPreview {
         let mut lights = engine::scene::light::LightArray::new()
             .with_object_lighting(vec3(self.ambient, self.ambient, self.ambient), 0.0)
             // The game's default `object_specular`.
-            .with_specular(1.5);
+            .with_specular(1.5)
+            .with_veins(
+                shock2vr::object_lighting::growth_vein_tuning(),
+                shock2vr::object_lighting::weapon_vein_tuning(),
+            );
         for (index, offset) in [
             vec3(2.0, 2.0, 1.0),
             vec3(-2.0, 1.0, 1.0),
