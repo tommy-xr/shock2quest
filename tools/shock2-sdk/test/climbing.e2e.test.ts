@@ -89,6 +89,80 @@ test(
   },
 );
 
+// Issue #802: after Sector C's ladder top-out, the returning office route
+// leaves about one player footprint between the landing edge and the first
+// contact-qualified rung. A downward approach must preserve descent intent
+// across that gap instead of accelerating under gravity before it grips.
+test(
+  "flat climbing: hydro2 Sector C office lip starts a controlled descent",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "hydro2.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    const rungs = (
+      await game.entities.list({ filter: "Rick Ladder", limit: 100 })
+    ).entities;
+    const anchor = rungs.find((entity) => entity.template_id === 551);
+    assert.ok(anchor, "hydro2 should contain Sector C Rick Ladder object 551");
+    const [ladderX, , ladderZ] = anchor.position;
+    const column = rungs.filter(
+      (entity) =>
+        entity.name === "Rick Ladder" &&
+        Math.hypot(
+          entity.position[0] - ladderX,
+          entity.position[2] - ladderZ,
+        ) < 0.05,
+    );
+    const ladderBottom = Math.min(...column.map((entity) => entity.position[1]));
+    assert.equal(column.length, 11, "expected the authored Sector C rung stack");
+
+    // Geometry-relative setup on the lower office floor reached by PR #679's
+    // campaign top-out. Teleport is setup only; approach, acquisition, and
+    // descent all use ordinary production look/locomotion input.
+    await game.player.teleport({
+      x: ladderX,
+      y: ladderBottom + 5.644,
+      z: ladderZ + 1.8,
+    });
+    await game.step({ frames: 30 });
+    const start = await game.player.position();
+    await game.input.lookAtWorldPoint([
+      ladderX,
+      ladderBottom - 2,
+      ladderZ - 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    const hpBefore = (await game.info()).player.hit_points;
+
+    let previous = start;
+    let maxFrameDrop = 0;
+    for (let frame = 0; frame < 60; frame += 1) {
+      await game.step({ frames: 1 });
+      const current = await game.player.position();
+      maxFrameDrop = Math.max(maxFrameDrop, previous.y - current.y);
+      previous = current;
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    const descended = previous;
+    const hpAfter = (await game.info()).player.hit_points;
+
+    assert.ok(
+      start.y - descended.y > 3 &&
+        Math.abs(descended.z - ladderZ) < 1.2 &&
+        maxFrameDrop < 0.1 &&
+        hpAfter === hpBefore,
+      `the office-lip approach must descend at climb speed without health loss; ` +
+        `ladder=(${ladderX.toFixed(2)}, ${ladderBottom.toFixed(2)}, ${ladderZ.toFixed(2)}), ` +
+        `start=${JSON.stringify(start)}, ended=${JSON.stringify(descended)}, ` +
+        `maxFrameDrop=${maxFrameDrop.toFixed(3)}, hp=${hpBefore}->${hpAfter}`,
+    );
+  },
+);
+
 // Issue #626: rick1's opening ladder extends above the upper-deck landing.
 // Vertical-only climbing reaches the cap at about (20.4, 19.2, 2.0), but
 // ordinary collision then keeps the standing capsule on the shaft side. This
