@@ -502,7 +502,7 @@ async fn start_http_server(
         "  POST /v1/dev-params       - Set a dev param {{key, value}} (clamped + snapped, live next frame)"
     );
     info!(
-        "  GET  /v1/audio/recent     - Recently played sounds (sample, tags, duration, source); ?sample= filters"
+        "  GET  /v1/audio/recent     - Recently played sounds (sample, tags, duration, source); ?sample= / ?playing=true filter"
     );
     info!(
         "  GET  /v1/audio/loops      - Live looping sinks (sample, handle, owner, elapsed wall time)"
@@ -4367,17 +4367,22 @@ async fn list_input_actions() -> Json<Value> {
 /// sample + query tags + position). This is the only headless way to observe
 /// audio, e.g. asserting a bullet impact played a material-tagged collision
 /// schema. Reads a process-wide log, so no game-loop round-trip is needed.
-/// `?sample=` keeps only samples containing it, ignoring case.
+/// `?sample=` keeps only samples containing it, ignoring case; `?playing=true`
+/// only what is audible now (e.g. two narrations overlapping).
 #[derive(Deserialize)]
 struct RecentAudioQueryParams {
     sample: Option<String>,
+    playing: Option<bool>,
 }
 
 async fn get_recent_audio(Query(params): Query<RecentAudioQueryParams>) -> Json<Value> {
-    let sounds = match params.sample {
+    let mut sounds = match params.sample {
         Some(needle) => shock2vr::audio_log::recent_matching(&needle),
         None => shock2vr::audio_log::recent(),
     };
+    if params.playing == Some(true) {
+        sounds.retain(|sound| sound.still_playing);
+    }
     Json(serde_json::json!({ "sounds": sounds }))
 }
 
