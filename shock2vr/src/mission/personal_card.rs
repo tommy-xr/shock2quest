@@ -158,6 +158,10 @@ impl PersonalCard {
                     (hand.position - center).magnitude()
                         <= 0.05 / crate::METERS_PER_WORLD_UNIT
                             + super::body_inventory::hand_radius()
+                        && body.is_none_or(|body| {
+                            (hand.position - center).magnitude2()
+                                < (hand.position - super::ammo_pouch::center_for(body)).magnitude2()
+                        })
                 })
             {
                 self.hand = Some(i);
