@@ -292,6 +292,8 @@ dev_params! {
     /// shares its single flat projection between flat and `--vr` mode, so this
     /// override reaches both there.)
     FOV_OVERRIDE_DEG = Camera::float("fov_override_deg", "FOV override", 0.0, 0.0, 120.0, 1.0),
+    /// Experimental horizontal physical walking with strict capsule correction.
+    VR_ROOMSCALE = Camera::bool("vr_roomscale", "Roomscale spike", false),
     /// Maximum flat Q/E eye displacement in SS2 feet, read every frame.
     /// 2 feet is twice the original lean; 0 disables displacement and roll.
     /// Geometry still limits the resolved pose. VR uses tracked head motion.

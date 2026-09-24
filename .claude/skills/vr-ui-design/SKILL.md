@@ -5,7 +5,8 @@ description: >-
   shock2quest - panels, pointers, pause/system UI, input edges, and the
   verification discipline that catches VR-only bugs. Load whenever designing or
   building a VR interaction (menus, panels, HUD, inventory, diegetic UI,
-  controller input), reviewing such a change, or planning a VR UX feature.
+  controller input, roomscale locomotion and collision), reviewing such a
+  change, or planning a VR UX feature.
   Complements AGENTS.md section 3 (flat/VR render parity) with the
   interaction-level rules learned in the frontend-menu campaign (PRs
   #994-#1009).
@@ -13,7 +14,8 @@ description: >-
 
 # VR UI & interaction principles
 
-Each rule below was paid for with a real bug or device round-trip. A `#N`
+Existing rules below come from bugs and device round-trips; the roomscale
+section explicitly records proposed guidance awaiting implementation. A `#N`
 citation is the PR that implemented the rule or the issue that tracks a
 remaining gap - PR/issue and open/closed state are marked where it matters.
 
@@ -238,3 +240,75 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
     hand cases. Show the interaction's approach and release, not just an empty
     hand afterward. Label debug zones as instrumentation; they do not establish
     production discoverability or headset tracking reliability.
+
+
+## Roomscale locomotion and collision
+
+Design guidance from the September 2026 roomscale review. The user selected
+**strict correction for the initial spike**; comfort is not yet headset-validated.
+Track implementation and remaining work in [the roomscale project](../../../projects/vr-roomscale.md).
+Do not treat an experimental policy as proven shipping behavior.
+
+- **Track the body as well as the view.** Physical horizontal walking must
+  request collision-resolved player movement, so grounding, triggers and player
+  location follow the wearer. At review time, `vr_tracking::TrackingTransform`
+  converts STAGE poses with a vertical stance correction; ordinary walking in
+  `mission_core` derives from stick input. Tracked X/Z can move the eyes away
+  from the capsule without moving that capsule. Recheck these paths before
+  implementation rather than assuming this gap remains.
+- **Separate tracked poses, body collision and the rig transform.** Keep raw
+  tracking intact. Maintain an explicit mapping from tracking space into the
+  world and resolve it once for gameplay head/hands and both rendered eyes.
+  When transferring physical travel into the pawn, compensate its local rig
+  offset so accepted motion is not counted twice. Distinguish roomscale travel
+  from stick motion, gravity, platform carry and hand climbing; correction must
+  not accidentally cancel those other sources or integrate physics twice.
+- **Resolve the blocked displacement deliberately.** For a world-space tracked
+  displacement `d` and allowed displacement `a`, strict correction changes the
+  tracking-to-world translation by `a - d`. Convert this vector into the right
+  space if storing a pawn-local offset. This shifts the entire tracked rig,
+  never individual eyes or just the rendered camera. Leave head rotation live.
+  In free space the correction is zero. Do not apply this formula again if the
+  pawn/rig rebase already accounts for the same rejected motion.
+- **Body following and head protection are separate constraints.** A capsule
+  under the head alone cannot represent leaning over a railing or under an
+  overhang. Decide how much head/body separation to allow. Sweep a head volume
+  from a safe pose to the requested pose, with clearance for stereo eyes and
+  their near planes; an endpoint overlap or a single point ray can miss thin
+  walls. Reuse `physics::sphere_clearance` / `lean_distance` machinery where
+  appropriate, but do not assume the flat lean radius or response fits VR.
+  Account for initial overlaps and geometry moving into a stationary head.
+- **Correction has a comfort cost.** Cancelling blocked physical movement
+  creates a visual/physical mismatch. Compare strict correction with an opaque
+  obstruction fade or directional vignette that preserves tracking and guides
+  the wearer back. A hybrid (small correction, fade for larger conflicts) is a
+  candidate, not an established default. Avoid springy camera recovery and
+  accumulated blocked travel that launches the player when an obstacle clears.
+  A fade must hide forbidden views and define interaction behavior while the
+  tracked head is beyond a wall; hiding pixels alone does not stop remote frobs
+  or firing. Virtual wall handling is separate from the headset's real-world
+  boundary system.
+- **Preserve spatial invariants across transitions.** Artificial turns pivot
+  around the resolved wearer position, avoiding an orbit around the old STAGE
+  origin. Teleports and mission spawns place the wearer at the destination even
+  when they stand away from that origin. Rebase tracking history after tracking
+  recovery or recentering: a reference-space jump is not walking. OpenXR space
+  changes apply at `changeTime`; use `poseInPreviousSpace` when valid to preserve
+  continuity, otherwise establish a fresh baseline. Define ownership during
+  pause, death and hand climbing. Rig rebases must not become throw velocity or
+  duplicate climbing motion. Keep feet/grounding distinct from physical head Y;
+  do not turn every crouch into vertical locomotion.
+- **Verify real movement explicitly.** In `debug_runtime --vr`, inject head and
+  hand translations with zero stick input and assert capsule, resolved eye and
+  trigger behavior. Cover unobstructed travel without doubling, wall approach
+  and retreat, thin walls/corners, leaning over a rail, low ceilings, moving
+  doors/platforms, turning off-origin, teleporting and tracking discontinuities.
+  Assert stereo separation and head/hand relative geometry across corrections.
+  Use the normal visual evidence workflow and a Quest pass; simulated poses
+  establish geometry, while physical walking is needed to judge comfort.
+
+References: Meta's [character controller guidance](https://developers.meta.com/horizon/documentation/unity/unity-isdk-character-controller/)
+describes capsule following, camera-rig reconciliation and wall-obstruction
+vignettes. OpenXR's [reference-space change event](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrEventDataReferenceSpaceChangePending.html)
+defines recenter timing and the previous-space transform. These inform the
+proposal; they do not establish this game's final collision policy.
