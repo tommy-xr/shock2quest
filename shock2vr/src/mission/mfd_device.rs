@@ -342,3 +342,55 @@ mod scan_tests {
         assert!(scan.trigger(true, true));
     }
 }
+
+/// A miniature of the real target mesh, never a new gameplay entity. The
+/// bounding sphere fits at every rotation; authored pivots are recentered so
+/// even large machines remain above the screen instead of orbiting the grip.
+pub fn hologram(
+    model: &dark::model::Model,
+    panel: WorldPanel,
+    seconds: f32,
+) -> Vec<engine::scene::SceneObject> {
+    use cgmath::{EuclideanSpace, InnerSpace, Matrix4};
+    let Some(bounds) = model.bounding_box() else {
+        return vec![];
+    };
+    let diameter = (bounds.max - bounds.min).magnitude();
+    if !diameter.is_finite() || diameter <= 0.0001 {
+        return vec![];
+    }
+    let size = 0.085 / crate::METERS_PER_WORLD_UNIT;
+    let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
+    // Above the top edge, with clearance for the miniature's bounding sphere.
+    let anchor = vec3(
+        -32.0 / SIZE.x * panel.size.x,
+        panel.size.y * 0.5 + size * 0.5 + 0.012 / crate::METERS_PER_WORLD_UNIT,
+        0.025 / crate::METERS_PER_WORLD_UNIT,
+    );
+    let root = Matrix4::from_translation(panel.center)
+        * Matrix4::from(panel.rotation)
+        * Matrix4::from_translation(anchor)
+        * Matrix4::from_angle_y(cgmath::Deg((seconds * 35.0) % 360.0))
+        * Matrix4::from_scale(size / diameter)
+        * Matrix4::from_translation(-center);
+    // Keep the original texture/skin material and its recognizable detail.
+    // Per-object overrides do not alter the world object's shared material.
+    let lights = std::rc::Rc::new(
+        engine::scene::light::LightArray::new().with_object_lighting(vec3(0.35, 1.0, 0.7), 1.0),
+    );
+    let mut objects = model.to_scene_objects().clone();
+    for object in &mut objects {
+        object.set_transform(root);
+        object.set_transparency(Some(0.45));
+        object.set_depth_write(false);
+        object.set_depth_bias(false);
+        object.set_lights(Some(lights.clone()));
+        object.set_debug_tag(Some(std::rc::Rc::new(engine::scene::SceneObjectDebugTag {
+            entity_id: None,
+            name: None,
+            model: None,
+            source: Some("mfd_hologram".into()),
+        })));
+    }
+    objects
+}

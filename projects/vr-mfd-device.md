@@ -114,3 +114,20 @@ scenarios cover the flag-off baseline. Rust tests cover tile/input geometry,
 trigger recovery, shared panel behavior and card ownership. PR media records
 additional exercised interactions; claims about unexercised paths remain
 implementation scope, not measured device evidence.
+
+## Retail layout and hologram refinement
+
+AMMOFULL is drawn at its authored 260×64 size. Its two left black wells
+contain nanites (N) and cyber modules (CM); the right recess contains LOG,
+KEY, MFD, RES and ? controls. Scan mode uses a green screen and the shared
+MFD font for aiming/trigger instructions. Device loot uses the complete
+`contain.pcx` canvas and its original grid; free-standing VR loot keeps its
+holographic grid. Both renderers and hit tests consume the same resolved layout.
+
+A committed scan retains a translucent copy of the target model above the
+screen until another scan or holstering. The model's bounding sphere is fitted
+to an 8.5 cm diameter and rotates at 35 degrees per simulation second. This is
+render-only geometry, with per-object opacity and lighting overrides: it has no
+collider or inventory identity and does not alter the target's material. Targets
+without a loaded model simply omit the miniature. The wider lower housing and
+hologram clearance still need headset comfort testing.

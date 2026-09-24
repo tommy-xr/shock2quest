@@ -23,10 +23,14 @@ for (const hand of ["left", "right"] as const) {
     await aimVrHandAt(game, aim.world_point, .55, 1, 0, { hand });
     await game.step({ frames: 12 });
     assert.equal((await game.ui.state()).active_panel, null, "aiming cannot open a shop");
+    assert.equal((await game.scene.fromSource("mfd_hologram")).length, 0);
     const before = (await game.info()).player.stats?.nanites;
     await game.input.set(`${hand}_hand.trigger`, 1);
     await game.step({ frames: 12 });
     assert.equal((await game.ui.state()).active_panel?.template_id, 262);
+    const miniature = await game.scene.fromSource("mfd_hologram");
+    assert.ok(miniature.length > 0, "scanning creates a mesh preview");
+    assert.ok(miniature.every(o => Math.abs(o.transparency! - .45) < .001 && !o.depth_write));
     const count = (await game.info()).player.hand_feedback!.body_gear!.personal_card.scans;
     await game.step({ frames: 30 });
     assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.scans, count);
@@ -50,6 +54,7 @@ for (const hand of ["left", "right"] as const) {
     await game.input.set(`${hand}_hand.squeeze`, 0);
     await game.step({ frames: 3 });
     assert.equal((await game.ui.state()).panel_pose, null);
+    assert.equal((await game.scene.fromSource("mfd_hologram")).length, 0);
     assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.hand, null);
     await drawPersonalCard(game, hand);
     assert.equal((await game.ui.state()).active_panel, null);
