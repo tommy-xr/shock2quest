@@ -36,7 +36,7 @@ use crate::scripts::Effect;
 
 use super::container::{ContainerGui, ContainerGuiMsg, ContainerGuiState};
 use super::keypad::{
-    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
+    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_panel, hack_diff,
     handle_hack_msg, object_state,
 };
 
@@ -171,7 +171,7 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
         } else {
             state.hack.clone()
         };
-        draw_hack_board(&hack, diff, HackableCrateMsg::Hack)
+        draw_hack_panel(world, entity_id, &hack, diff, false, HackableCrateMsg::Hack)
     }
 
     fn get_config(&self) -> GuiConfig {

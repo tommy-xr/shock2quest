@@ -19,7 +19,7 @@ use crate::scripts::{Effect, script_util::*};
 use super::{
     hrm_plug::{self, PlugKind, draw_plug, plug_sidecar},
     keypad::{
-        HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
+        HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_panel, hack_diff,
         handle_hack_msg, object_state,
     },
     traits::TRAIT_REPLICATOR_EXPERT,
@@ -190,7 +190,14 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
     ) -> Vec<GuiComponent<ReplicatorMsg>> {
         if state.panel == ReplicatorPanel::Hacking {
             if let Some(diff) = hack_diff(world, entity_id) {
-                return draw_hack_board(&state.hack, diff, ReplicatorMsg::Hack);
+                return draw_hack_panel(
+                    world,
+                    entity_id,
+                    &state.hack,
+                    diff,
+                    false,
+                    ReplicatorMsg::Hack,
+                );
             }
         }
 

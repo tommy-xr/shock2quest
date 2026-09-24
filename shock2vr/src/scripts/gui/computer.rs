@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{Vector2, Vector3, vec2};
+use cgmath::{Vector2, Vector3};
 use dark::{
     properties::{
         Link, Links, ObjectState, PropHackDiff, PropHackText, PropTemplateId, ToLink,
@@ -8,8 +8,7 @@ use dark::{
     },
     ss2_entity_info::SystemShock2EntityInfo,
 };
-use engine::assets::asset_cache::AssetCache;
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, Unique, UniqueView, View, World};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
 
 use crate::{
     gui::{Gui, GuiComponent, GuiConfig, GuiCursor},
@@ -17,38 +16,12 @@ use crate::{
 };
 
 use super::keypad::{
-    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
+    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_panel, hack_diff,
     handle_hack_msg, object_state,
 };
 
 /// Xerxes: "Security system offline."
 const SECURITY_HACKED_SCHEMA: &str = "xer01";
-const FALLBACK_HACK_TEXT: &str = "Complete the circuit to hack this computer.";
-const HACK_TEXT_LINE_LENGTH: usize = 25;
-
-/// Localized text displayed above Computer HRM boards. `Gui::get_components`
-/// has no asset cache, so HACKTEXT.STR is loaded once with the mission.
-#[derive(Clone, Debug, Unique)]
-pub struct ComputerContext {
-    hack_text: HashMap<String, String>,
-}
-
-impl ComputerContext {
-    pub fn load(asset_cache: &mut AssetCache) -> Self {
-        Self {
-            hack_text: asset_cache
-                .get_opt(&dark::importers::STRINGS_IMPORTER, "hacktext.str")
-                .map(|strings| (*strings).clone())
-                .unwrap_or_default(),
-        }
-    }
-
-    fn resolve(&self, key: &str) -> Option<&str> {
-        self.hack_text
-            .get(&key.to_ascii_lowercase())
-            .map(String::as_str)
-    }
-}
 
 /// Older saves made before `P$HackText` / `L$HackingLi` were parsed cannot
 /// contain those components. Restore them from the same authored object data
@@ -187,39 +160,6 @@ fn computer_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect
     }
 }
 
-fn authored_hack_text(world: &World, entity_id: EntityId) -> String {
-    let key = world
-        .borrow::<View<PropHackText>>()
-        .ok()
-        .and_then(|texts| texts.get(entity_id).ok().map(|text| text.0.clone()));
-    let Some(key) = key else {
-        return FALLBACK_HACK_TEXT.to_owned();
-    };
-    world
-        .borrow::<UniqueView<ComputerContext>>()
-        .ok()
-        .and_then(|context| context.resolve(&key).map(str::to_owned))
-        .unwrap_or(key)
-}
-
-fn wrap_hack_text(text: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut line = String::new();
-    for word in text.split_whitespace() {
-        if !line.is_empty() && line.len() + 1 + word.len() > HACK_TEXT_LINE_LENGTH {
-            lines.push(std::mem::take(&mut line));
-        }
-        if !line.is_empty() {
-            line.push(' ');
-        }
-        line.push_str(word);
-    }
-    if !line.is_empty() {
-        lines.push(line);
-    }
-    lines
-}
-
 impl Gui<ComputerState, ComputerMsg> for ComputerGui {
     fn get_components(
         &self,
@@ -231,19 +171,14 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
         let Some(diff) = hack_diff(world, entity_id) else {
             return Vec::new();
         };
-        let mut components = draw_hack_board(&state.hack, diff, ComputerMsg::Hack);
-        for (line, text) in wrap_hack_text(&authored_hack_text(world, entity_id))
-            .into_iter()
-            .take(3)
-            .enumerate()
-        {
-            components.push(
-                crate::gui::text(&text)
-                    .with_position(vec2(15.0, 10.0 + line as f32 * 11.0))
-                    .with_size(vec2(158.0, 11.0)),
-            );
-        }
-        components
+        draw_hack_panel(
+            world,
+            entity_id,
+            &state.hack,
+            diff,
+            self.security,
+            ComputerMsg::Hack,
+        )
     }
 
     fn get_config(&self) -> GuiConfig {
@@ -393,14 +328,6 @@ mod tests {
             ));
             assert!(!gui.opens_on_frob(computer, &world));
         }
-    }
-
-    #[test]
-    fn localized_hack_text_is_wrapped_without_losing_words() {
-        let text = "Hack all three Interlocks to disable shields.";
-        let lines = wrap_hack_text(text);
-        assert_eq!(lines.join(" "), text);
-        assert!(lines.iter().all(|line| line.len() <= HACK_TEXT_LINE_LENGTH));
     }
 
     #[test]

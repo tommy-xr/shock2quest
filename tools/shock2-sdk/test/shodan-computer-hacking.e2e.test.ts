@@ -169,17 +169,14 @@ async function frobComputer(game: GameServer, templateId: number): Promise<void>
     ),
     "the Computer panel should render the shared authored HRM board",
   );
+  // The goal wraps across lines in its well.
+  const text = panel.elements
+    .filter((element) => element.kind === "text")
+    .map((element) => element.text)
+    .join(" ");
   assert.ok(
-    panel.elements.some(
-      (element) =>
-        element.kind === "text" &&
-        element.text?.includes("Hack all three Interlocks"),
-    ),
-    `the board should resolve Shield_Interlock through HACKTEXT.STR; text=${JSON.stringify(
-      panel.elements
-        .filter((element) => element.kind === "text")
-        .map((element) => element.text),
-    )}`,
+    text.includes("Hack all three Interlocks"),
+    `the board should resolve Shield_Interlock through HACKTEXT.STR; text=${text}`,
   );
 }
 

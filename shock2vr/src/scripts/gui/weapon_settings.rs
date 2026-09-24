@@ -24,7 +24,7 @@ use shipyard::{EntityId, Get, View, World};
 use super::hrm_plug::{self, PlugKind, draw_plug, plug_sidecar};
 use super::keypad::{
     HackOutcomeEffects, HackPhase, HackState, HrmContext, KeyPadMsg, draw_hack_board,
-    handle_hrm_msg, hrm_breakdown, hrm_failure_percent,
+    draw_hrm_text, handle_hrm_msg,
 };
 use crate::gui::{
     self, ButtonHoverBehavior, Gui, GuiComponent, GuiConfig, GuiCursor, PanelSidecar,
@@ -81,13 +81,6 @@ const MOD_LEVEL_Y: f32 = ROWS[0].y - 50.0;
 const UNLOAD_RECT: Rect = Rect::new(23.0, 278.0, 142.0, 22.0);
 
 const BACKDROP: &str = "iface/settings.pcx";
-
-/// Retail's HRM goal well (TEXT_X/TEXT_Y/TEXT_W, above the board) and the
-/// failure chance it prints at (14, 49).
-const GOAL_RECT: Rect = Rect::new(15.0, 12.0, 137.0, 34.0);
-const FAILURE_RECT: Rect = Rect::new(14.0, 49.0, 30.0, 12.0);
-/// Retail's odds well below the board (TEXT_Y2), left of the START button.
-const ODDS_RECT: Rect = Rect::new(15.0, 180.0, 137.0, 104.0);
 
 const HIGHLIGHT: &str = "iface/setsel.pcx";
 /// The UNLOAD button's rest and lit art, the pair every shipped button ships as.
@@ -284,18 +277,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             if let Some(GuiComponent::Image { texture, .. }) = components.first_mut() {
                 *texture = backdrop.into();
             }
-            // Retail's goal well above the board, and the failure chance in
-            // the board's empty top-left cell.
-            components.extend(super::PanelText::paragraph(world, &goal, GOAL_RECT));
-            components.push(super::PanelText::text(
-                &format!("{}%", hrm_failure_percent(world, shown_diff, job.context())),
-                FAILURE_RECT,
-            ));
-            components.extend(super::PanelText::paragraph(
-                world,
-                &hrm_breakdown(world, shown_diff, job.context()),
-                ODDS_RECT,
-            ));
+            components.extend(draw_hrm_text(world, &goal, shown_diff, job.context()));
             return components;
         }
         // Retail raises its HRM plug beside the settings MFD: repair for a
