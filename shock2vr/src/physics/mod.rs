@@ -345,6 +345,10 @@ const PLAYER_STEP_HEIGHT: f32 = 2.0;
 const PLAYER_JUMP_SPEED: f32 = 28.0;
 const PLAYER_JUMP_GRAVITY: f32 = 40.0;
 const PLAYER_MAX_FALL_SPEED: f32 = 30.0;
+/// Swimming: locomotion is scaled down and a held jump rises at 2.5 SS2
+/// feet per second, with neutral buoyancy (no gravity) otherwise.
+const PLAYER_SWIM_SPEED_SCALE: f32 = 0.7;
+const PLAYER_SWIM_UP_SPEED: f32 = 2.5;
 /// The jump's launch speed in world units/second. Doubles as the ceiling on
 /// any other way of throwing the player into the air (see
 /// [`crate::vr_climb::CLIMB_RELEASE_MAX_SPEED`]).
@@ -1411,6 +1415,43 @@ fn plan_climb_top_out(
     })
 }
 
+/// Plan a mantle out of water: a swimmer holding jump whose forward stroke is
+/// blocked (a pool lip) takes the same top-out a ladder climber would.
+/// Unlike [`plan_jump_mantle`] this never picks a lower landing, which in a
+/// pool would be the floor beneath the swimmer.
+fn plan_swim_mantle(
+    controller: &KinematicCharacterController,
+    queries: &QueryPipeline,
+    scripted_queries: &QueryPipeline,
+    shape: &dyn Shape,
+    pos: &Isometry<Real>,
+    desired: Vector<Real>,
+    facing: Vector<Real>,
+    dt: Real,
+) -> Option<PlayerMovement> {
+    let direction = climb_top_out_direction(desired, facing)?;
+    let desired_h = vector![desired.x, 0.0, desired.z];
+    let attempted = desired_h.norm();
+    if attempted <= 1.0e-6 {
+        return None;
+    }
+    let probe = controller.move_shape(dt, queries, shape, pos, desired_h, |_c| ());
+    let progress = probe.translation.dot(&(desired_h / attempted));
+    if progress > PLAYER_MOVE_PROGRESS_FRACTION * attempted {
+        return None;
+    }
+    plan_climb_top_out(
+        controller,
+        queries,
+        queries,
+        scripted_queries,
+        pos,
+        direction,
+        CLIMB_TOP_OUT_PROBE_FORWARD,
+        dt,
+    )
+}
+
 /// Plan Dark's ordinary jump-through/mantle for a grounded player pressing
 /// into a non-climbable low obstacle.
 ///
@@ -2066,7 +2107,9 @@ fn step_player_movement(
     };
     mvt.translation += fall.translation;
     mvt.grounded = fall.grounded;
-    if mvt.grounded {
+    // Only a downward gravity pass consumes the lift again; without one (a
+    // swimmer resting on the pool floor) it would accumulate into a rise.
+    if mvt.grounded && gravity < 0.0 {
         mvt.translation += Vector::y() * (PLAYER_REST_LIFT / SCALE_FACTOR);
     }
     // Stairs: if grounded walking was blocked, probe for a step and hop onto
@@ -2490,6 +2533,16 @@ pub struct ClimbGrip {
     pub normal: Vector3<f32>,
 }
 
+/// The medium around the player's body, from the world cell it occupies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayerMedium {
+    Air,
+    Water,
+    /// Treading water with the body center just above the surface: no
+    /// gravity and no further swim-up, but the swim mantle stays available.
+    WaterSurface,
+}
+
 /// What the player's movement pass is being asked to do this frame.
 ///
 /// Physics stays presentation-agnostic: flat resolves "push into a ladder"
@@ -2503,6 +2556,7 @@ pub enum PlayerMoveRequest {
         facing: Vector3<f32>,
         jump_pressed: bool,
         push_to_climb: bool,
+        medium: PlayerMedium,
     },
     /// A gripping VR hand demands this body translation (see
     /// [`crate::vr_climb`]). Gravity and the walk pass are both suspended.
@@ -3036,7 +3090,11 @@ impl PhysicsWorld {
 
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        for geo in &level.all_geometry {
+        for geo in level
+            .all_geometry
+            .iter()
+            .filter(|geo| !geo.is_water_surface())
+        {
             let verts = &geo.verts;
 
             let mut idx = 0;
@@ -5672,6 +5730,7 @@ impl PhysicsWorld {
                 facing,
                 jump_pressed,
                 push_to_climb: true,
+                medium: PlayerMedium::Air,
             },
             player_handle,
         )
@@ -6217,17 +6276,19 @@ impl PhysicsWorld {
             PlayerMoveRequest::HandClimb { translation } => Some(vec_to_nvec(translation)),
             PlayerMoveRequest::Walk { .. } => None,
         };
-        let (desired_movement, facing, jump_pressed, push_to_climb) = match request {
+        let (desired_movement, facing, jump_pressed, push_to_climb, medium) = match request {
             PlayerMoveRequest::Walk {
                 movement,
                 facing,
                 jump_pressed,
                 push_to_climb,
+                medium,
             } => (
                 vec_to_nvec(movement),
                 vec_to_nvec(facing),
                 jump_pressed,
                 push_to_climb,
+                medium,
             ),
             // A hand climb has no locomotion input at all. Reporting the jump
             // button as unchanged leaves its edge state exactly where the last
@@ -6238,11 +6299,13 @@ impl PhysicsWorld {
                 Vector::zeros(),
                 player_handle.jump_was_pressed,
                 false,
+                PlayerMedium::Air,
             ),
         };
-        if hand_climb.is_some() {
-            // Hanging: the hand owns the body, so any ballistic arc ends here
-            // and no gravity pass runs below.
+        let swimming = medium != PlayerMedium::Air;
+        if hand_climb.is_some() || swimming {
+            // Hanging or swimming: the hand or the water owns the body, so any
+            // ballistic arc ends here and no gravity pass runs below.
             player_handle.jump_velocity = None;
             player_handle.air_velocity = Vector::zeros();
         }
@@ -6250,12 +6313,16 @@ impl PhysicsWorld {
         // this frame; it lives only as long as the arc that started it.
         let desired_movement = if player_handle.jump_velocity.is_some() {
             desired_movement + player_handle.air_velocity * self.integration_parameters.dt
+        } else if swimming {
+            desired_movement * PLAYER_SWIM_SPEED_SCALE
         } else {
             desired_movement
         };
         let jump_edge = jump_pressed && !player_handle.jump_was_pressed;
         player_handle.jump_was_pressed = jump_pressed;
-        let launch_jump = jump_edge && player_handle.is_grounded && player_handle.top_out.is_none();
+        // Underwater the held button swims up (below) instead of launching.
+        let launch_jump =
+            !swimming && jump_edge && player_handle.is_grounded && player_handle.top_out.is_none();
         if launch_jump {
             player_handle.jump_velocity = Some(PLAYER_JUMP_LAUNCH_SPEED);
             player_handle.air_velocity = Vector::zeros();
@@ -6278,7 +6345,11 @@ impl PhysicsWorld {
         let character_shape = character_collider.shared_shape().clone();
         let character_pos = *character_collider.position();
 
-        let gravity = player_gravity_step(&self.rigid_body_set[player_handle.character_handle]);
+        let gravity = if swimming {
+            0.0
+        } else {
+            player_gravity_step(&self.rigid_body_set[player_handle.character_handle])
+        };
 
         let movement_filter = player_movement_filter(player_handle.character_handle);
         let dispatcher = self.narrow_phase.query_dispatcher();
@@ -6473,13 +6544,39 @@ impl PhysicsWorld {
                             player_handle.is_crouched,
                         )
                     })
-                    .flatten();
+                    .flatten()
+                    .or_else(|| {
+                        (swimming && jump_pressed)
+                            .then(|| {
+                                plan_swim_mantle(
+                                    &player_handle.controller,
+                                    &queries,
+                                    &queries.with_filter(scripted_top_out_filter),
+                                    character_shape.as_ref(),
+                                    &character_pos,
+                                    desired_movement,
+                                    facing,
+                                    self.integration_parameters.dt,
+                                )
+                            })
+                            .flatten()
+                    });
                 if let Some(jump_mantle) = jump_mantle {
                     jump_mantle
                 } else {
-                    let airborne_vertical = player_handle
-                        .jump_velocity
-                        .map(|velocity| velocity * self.integration_parameters.dt);
+                    // Swimming reuses the airborne pass (no ground snap) so a
+                    // held jump can lift off the pool floor.
+                    let airborne_vertical = if swimming {
+                        Some(if jump_pressed && medium == PlayerMedium::Water {
+                            PLAYER_SWIM_UP_SPEED / SCALE_FACTOR * self.integration_parameters.dt
+                        } else {
+                            0.0
+                        })
+                    } else {
+                        player_handle
+                            .jump_velocity
+                            .map(|velocity| velocity * self.integration_parameters.dt)
+                    };
                     step_player_movement(
                         &player_handle.controller,
                         &queries,
@@ -8952,6 +9049,152 @@ mod tests {
                 authored
             );
         }
+    }
+
+    fn swim(
+        world: &mut PhysicsWorld,
+        player: &mut PlayerHandle,
+        movement: Vector3<f32>,
+        jump: bool,
+    ) {
+        world.update_player_movement(
+            PlayerMoveRequest::Walk {
+                movement,
+                facing: Vector3::new(1.0, 0.0, 0.0),
+                jump_pressed: jump,
+                push_to_climb: true,
+                medium: PlayerMedium::Water,
+            },
+            player,
+        );
+    }
+
+    #[test]
+    fn water_medium_suspends_gravity_and_jump_swims_upward() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 10.0, 0.0), EntityId::from_inner(1101).unwrap());
+        let start = world.get_player_translation(&player);
+
+        for _ in 0..60 {
+            swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), false);
+        }
+        let floating = world.get_player_translation(&player);
+        assert!(
+            (floating.y - start.y).abs() < 0.05,
+            "neutral buoyancy must hold the player in place, moved from {start:?} to {floating:?}"
+        );
+
+        for _ in 0..60 {
+            swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), true);
+        }
+        let swum = world.get_player_translation(&player);
+        assert!(
+            swum.y > floating.y + 0.2,
+            "holding jump in water must swim upward, moved from {floating:?} to {swum:?}"
+        );
+    }
+
+    #[test]
+    fn treading_water_holds_height_without_swimming_up() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 10.0, 0.0), EntityId::from_inner(1150).unwrap());
+        let start = world.get_player_translation(&player);
+        for _ in 0..60 {
+            world.update_player_movement(
+                PlayerMoveRequest::Walk {
+                    movement: Vector3::new(0.0, 0.0, 0.0),
+                    facing: Vector3::new(1.0, 0.0, 0.0),
+                    jump_pressed: true,
+                    push_to_climb: true,
+                    medium: PlayerMedium::WaterSurface,
+                },
+                &mut player,
+            );
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            (end.y - start.y).abs() < 0.01,
+            "treading water must neither sink nor rise, moved from {start:?} to {end:?}"
+        );
+    }
+
+    #[test]
+    fn held_jump_swims_up_off_the_pool_floor() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1200).unwrap(),
+            ColliderBuilder::cuboid(10.0, 1.0, 10.0)
+                .translation(vector![0.0, -1.0, 0.0])
+                .build(),
+        );
+        let mut player = world.create_player(
+            vec3(0.0, player_center_above_floor(false) + 0.1, 0.0),
+            EntityId::from_inner(1201).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+        let settled = world.get_player_translation(&player);
+
+        for _ in 0..60 {
+            swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), false);
+        }
+        let floor = world.get_player_translation(&player);
+        assert!(
+            (floor.y - settled.y).abs() < 0.02,
+            "an idle swimmer must rest on the floor, moved from {settled:?} to {floor:?}"
+        );
+
+        for _ in 0..60 {
+            swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), true);
+        }
+        let swum = world.get_player_translation(&player);
+        assert!(
+            swum.y > floor.y + 0.2,
+            "a held jump must lift a swimmer off the floor, moved from {floor:?} to {swum:?}"
+        );
+    }
+
+    #[test]
+    fn held_jump_mantles_a_blocking_pool_lip_without_a_ladder() {
+        let quad = |x0: f32, x1: f32, y: f32| {
+            let verts = vec![
+                point![x0, y, -100.0],
+                point![x1, y, -100.0],
+                point![x1, y, 100.0],
+                point![x0, y, 100.0],
+            ];
+            ColliderBuilder::trimesh(verts, vec![[0u32, 1, 2], [0, 2, 3]]).expect("trimesh")
+        };
+
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1300).unwrap(),
+            quad(-100.0, 100.0, 0.0).build(),
+        );
+        world.add_collider(
+            EntityId::from_inner(1301).unwrap(),
+            quad(-5.2, 100.0, 1.2).build(),
+        );
+        let mut player =
+            world.create_player(vec3(-6.0, 1.3, 0.0), EntityId::from_inner(1302).unwrap());
+
+        let walk = 25.0 / SCALE_FACTOR / 60.0;
+        let mut saw_mantle = false;
+        for _ in 0..180 {
+            swim(&mut world, &mut player, Vector3::new(walk, 0.0, 0.0), true);
+            saw_mantle |= player.top_out.is_some();
+        }
+        let end = world.get_player_translation(&player);
+
+        assert!(
+            saw_mantle,
+            "a held jump against a pool lip must enter the mantle transition"
+        );
+        assert!(
+            end.x > -4.5 && end.y > 1.5,
+            "the mantle must leave the player standing beyond the upper lip, ended {end:?}"
+        );
     }
 
     fn step(world: &mut PhysicsWorld, player: &mut PlayerHandle, frames: usize) {

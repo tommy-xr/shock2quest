@@ -125,6 +125,9 @@ pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 /// floor-lying crumple pose doesn't start deeply interpenetrating the level
 /// trimesh (see `spawn_ragdoll`).
 const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
+/// How far above the water a treading swimmer's body center may sit (1 ft):
+/// well over one frame of swim-up, so surfacing settles instead of bobbing.
+const WATER_SURFACE_BAND: f32 = 1.0 / SCALE_FACTOR;
 
 /// Where `Effect::RainItems` puts its spawns, relative to the player's body
 /// ORIGIN (the capsule centre, three feet off the floor - not the feet).
@@ -2832,6 +2835,9 @@ pub struct MissionCore {
     /// A discrete [`Effect::Jump`] waiting for the next movement pass. One
     /// frame of the held jump channel; see where it is consumed in `update`.
     button_jump: bool,
+    /// The lower-button press behind `button_jump` is still held: the jump
+    /// channel stays down with it, so a held press keeps swimming up.
+    button_jump_held: bool,
 
     /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the VR
     /// comfort dim's strength - see [`crate::ui::entry_ramp`]. Advanced every
@@ -3818,6 +3824,7 @@ impl MissionCore {
             psi_powers_open: false,
             psi_nav_latched: false,
             button_jump: false,
+            button_jump_held: false,
             use_mode_shortcut: None,
             use_mode_ramp: crate::ui::entry_ramp::EntryExitRamp::new(),
             vr_use_mode_anchor: crate::ui::FrontendPanelAnchor::new(),
@@ -4195,6 +4202,7 @@ impl MissionCore {
         // the player died would hop the corpse.
         if suppressed_input.is_some() {
             self.button_jump = false;
+            self.button_jump_held = false;
         }
         // The camera still follows the tracked head while controls are
         // suppressed: a dead player can look around the fallen view.
@@ -4648,7 +4656,10 @@ impl MissionCore {
             // `Jump` action) rides the same held channel the runtimes drive,
             // for exactly one frame - so the controller's edge detection sees
             // one jump per press however the request arrived.
-            let jump = input_context.jump || std::mem::take(&mut self.button_jump);
+            self.button_jump_held &= input_context.jump_button_held;
+            let jump = input_context.jump
+                || std::mem::take(&mut self.button_jump)
+                || self.button_jump_held;
             let request = match hand_climb.translation {
                 Some(translation) => crate::physics::PlayerMoveRequest::HandClimb { translation },
                 None => crate::physics::PlayerMoveRequest::Walk {
@@ -4658,6 +4669,7 @@ impl MissionCore {
                     // Push-to-climb is the FLAT climb input; VR's hands are
                     // its own (see `vr_climb`).
                     push_to_climb: game_options.presentation_mode == crate::PresentationMode::Flat,
+                    medium: self.player_medium(jump),
                 },
             };
             let held = self.interaction.held_entities();
@@ -9175,7 +9187,10 @@ impl MissionCore {
                 // One frame of the held jump channel, consumed by the next
                 // movement pass - the effect is handled after this frame's,
                 // and the physics controller wants a rising edge, not a level.
-                Effect::Jump => self.button_jump = true,
+                Effect::Jump => {
+                    self.button_jump = true;
+                    self.button_jump_held = true;
+                }
 
                 Effect::PsiAmpButton {
                     hand,
@@ -14557,6 +14572,26 @@ impl MissionCore {
 
     pub fn player_is_crouched(&self) -> bool {
         self.player_handle.is_crouched()
+    }
+
+    /// Water when the player's body center is in an authored water cell.
+    /// A swimmer holding jump whose center has just broken the surface treads
+    /// water there, instead of alternating a gravity frame with a swim frame.
+    fn player_medium(&self, jump: bool) -> crate::physics::PlayerMedium {
+        let center = self.physics.get_player_translation(&self.player_handle);
+        let in_water = |position: Vector3<f32>| {
+            self.spatial_data
+                .as_deref()
+                .and_then(|spatial| spatial.get_cell_from_position(position))
+                .is_some_and(|cell| cell.medium == dark::mission::CellMedium::Water)
+        };
+        if in_water(center) {
+            crate::physics::PlayerMedium::Water
+        } else if jump && in_water(center - cgmath::vec3(0.0, WATER_SURFACE_BAND, 0.0)) {
+            crate::physics::PlayerMedium::WaterSurface
+        } else {
+            crate::physics::PlayerMedium::Air
+        }
     }
 
     /// The actual held surface, after a deliberate upward or inward pull.

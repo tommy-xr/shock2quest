@@ -1606,6 +1606,18 @@ impl Game {
         );
         action_effects.extend(input::ActionDispatcher::dispatch(actions, input_context));
         actions.clear_triggered();
+        let jump_button_held = actions.is_held(input::InputAction::LeftHandLowerButton)
+            || actions.is_held(input::InputAction::RightHandLowerButton);
+        let with_jump_button;
+        let input_context = if jump_button_held {
+            with_jump_button = input_context::InputContext {
+                jump_button_held,
+                ..input_context.clone()
+            };
+            &with_jump_button
+        } else {
+            input_context
+        };
 
         // Fly the detached camera, then withhold the channels it consumed from
         // the scene so the pawn does not sleepwalk off while the sticks are

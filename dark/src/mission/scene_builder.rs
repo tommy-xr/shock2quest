@@ -172,6 +172,10 @@ fn compose_region(
     }
 }
 
+/// World polys wind clockwise as seen from the cell that owns them.
+const WATER_FRONT_FACE: engine::scene::scene_object::FrontFaceWinding =
+    engine::scene::scene_object::FrontFaceWinding::Clockwise;
+
 pub fn to_scene(
     level: &crate::mission::SystemShock2Level,
     asset_cache: &mut AssetCache,
@@ -184,8 +188,26 @@ pub fn to_scene(
     let all_geometry = &level.all_geometry;
     let mut texture_to_vertices: HashMap<&u16, Vec<VertexPositionTextureLightmapAtlasNormal>> =
         HashMap::new();
+    let mut water_texture_to_vertices: HashMap<String, Vec<VertexPositionTextureNormal>> =
+        HashMap::new();
     for geometry in all_geometry {
         let texture_id = &geometry.texture_idx;
+
+        if geometry.is_water_surface() {
+            let flow_group = level.cells[geometry.cell_idx as usize].flow_group;
+            let texture_name = level
+                .water_render_info
+                .texture_name(*texture_id, flow_group);
+            let current_vertices = water_texture_to_vertices.entry(texture_name).or_default();
+            current_vertices.extend(geometry.verts.iter().map(|vertex| {
+                VertexPositionTextureNormal {
+                    position: vertex.position,
+                    uv: vertex.uv,
+                    normal: vertex.normal,
+                }
+            }));
+            continue;
+        }
 
         // Skip empty texture
         if *texture_id == 0 {
@@ -276,6 +298,26 @@ pub fn to_scene(
 
         let scene_object1 = engine::scene::scene_object::SceneObject::create(material, mesh);
         scene_objects.push(scene_object1)
+    }
+
+    for (texture_name, vertices) in water_texture_to_vertices {
+        let Some(texture) = asset_cache.get_opt(&TEXTURE_IMPORTER, &texture_name) else {
+            tracing::warn!("missing authored water texture {texture_name}");
+            continue;
+        };
+        let texture: Rc<dyn TextureTrait> = texture;
+        let mesh: Rc<Box<dyn engine::scene::Geometry>> =
+            Rc::new(Box::new(engine::scene::mesh::create(vertices)));
+        let material = RefCell::new(engine::scene::basic_material::create(
+            texture,
+            1.0,
+            1.0 - level.water_render_info.alpha,
+        ));
+        // 247 and 248 are the two faces of one boundary; cull each to its
+        // own side so only one draws from above and one from below.
+        let mut water = engine::scene::scene_object::SceneObject::create(material, mesh);
+        water.set_backface_culling(Some(WATER_FRONT_FACE));
+        scene_objects.push(water);
     }
 
     MissionScene {

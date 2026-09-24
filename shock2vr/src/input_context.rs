@@ -29,6 +29,10 @@ pub struct InputContext {
     // cannot repeatedly add upward velocity.
     pub jump: bool,
 
+    // A VR hand's lower face button (`Jump` in the world) is held. Set by
+    // `Game` from the raw button state so a held press keeps swimming up.
+    pub jump_button_held: bool,
+
     /// Flat-only held lean axis: -1 left, +1 right.
     pub lean: f32,
 
@@ -55,6 +59,7 @@ impl InputContext {
             pointer: None,
             crouch: false,
             jump: false,
+            jump_button_held: false,
             lean: 0.0,
             tracking: None,
             pose_tracking: None,
@@ -80,6 +85,7 @@ impl InputContext {
         suppressed.pointer = None;
         suppressed.crouch = false;
         suppressed.jump = false;
+        suppressed.jump_button_held = false;
         suppressed.lean = 0.0;
         suppressed
     }
