@@ -64,6 +64,7 @@ mod once_router;
 mod picture_swap;
 pub mod player_script;
 mod psi_amp_script;
+pub(crate) use psi_amp_script::{amp_aim_ray, player_psi_points};
 mod psi_kit;
 mod psi_mine;
 mod psi_sword;

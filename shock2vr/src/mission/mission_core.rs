@@ -2706,6 +2706,7 @@ pub struct MissionCore {
     pub rag_doll_manager: RagDollManager,
     pub debug_lines: Vec<DebugLine>,
     psi_drain_trails: Vec<crate::psi_visuals::DrainTrail>,
+    psi_pull: Option<crate::psi_pull::Flight>,
     healing_pulses: HashMap<EntityId, f32>,
     pub entity_info: Arc<SystemShock2EntityInfo>,
     pub physics: PhysicsWorld,
@@ -3790,6 +3791,7 @@ impl MissionCore {
             spatial_data: abstract_mission.spatial_data,
             debug_lines: Vec::new(),
             psi_drain_trails: Vec::new(),
+            psi_pull: None,
             healing_pulses: HashMap::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
@@ -4923,6 +4925,8 @@ impl MissionCore {
             let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             (player_info.pos, player_info.rotation)
         };
+
+        effects.extend(self.update_psi_pull(time.elapsed));
 
         self.healing_pulses.retain(|_, age| {
             *age += time.elapsed.as_secs_f32();
@@ -7581,6 +7585,82 @@ impl MissionCore {
         true
     }
 
+    /// Fly the loose body toward the visible amp; catching remains an ordinary
+    /// hand interaction. Arrival or cancellation simply restores gravity.
+    fn update_psi_pull(&mut self, elapsed: std::time::Duration) -> Vec<Effect> {
+        if elapsed.is_zero() {
+            return vec![];
+        }
+        let Some(mut flight) = self.psi_pull.take() else {
+            return vec![];
+        };
+        flight.age += elapsed.as_secs_f32();
+        flight.trail_age += elapsed.as_secs_f32();
+        let item = flight.item;
+        let player = self
+            .world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .unwrap()
+            .clone();
+        let position = self
+            .id_to_physics
+            .get(&item)
+            .and_then(|h| self.physics.get_position(*h));
+        let destination = crate::psi_pull::amp_position(&self.world, flight.amp);
+        let valid = self.player_is_alive()
+            && self.interaction.is_holding(flight.amp)
+            && !self.interaction.is_holding(item)
+            && crate::psi_pull::pullable(&self.world, item)
+            && destination.is_some()
+            && flight.age < crate::psi_pull::FLIGHT_TIMEOUT;
+        let Some(position) = position.filter(|_| valid) else {
+            self.physics.set_gravity(item, flight.gravity);
+            self.physics.set_velocity(item, Vector3::zero());
+            return vec![];
+        };
+        let destination = destination.unwrap();
+        let delta = destination - position;
+        let distance = delta.magnitude();
+        let held = self.interaction.held_entities();
+        let blocked = distance > crate::psi_pull::RANGE * 1.5
+            || crate::psi_pull::route_blocked(
+                &self.physics,
+                position,
+                destination,
+                &[
+                    item,
+                    player.entity_id,
+                    held.0.unwrap_or(player.entity_id),
+                    held.1.unwrap_or(player.entity_id),
+                ],
+            );
+        if blocked {
+            self.physics.set_gravity(item, flight.gravity);
+            self.physics.set_velocity(item, Vector3::zero());
+            return vec![];
+        }
+        if distance <= crate::psi_pull::ARRIVAL_DISTANCE {
+            self.physics.set_gravity(item, flight.gravity);
+            self.physics.set_velocity(item, Vector3::zero());
+            return vec![];
+        }
+        self.physics.set_velocity(
+            item,
+            delta / distance * crate::psi_pull::FLIGHT_SPEED.min(distance * 10.0),
+        );
+        let visual = if flight.trail_age >= 0.1 {
+            flight.trail_age = 0.0;
+            vec![Effect::PsiDrainVisual {
+                from: position,
+                to: destination,
+            }]
+        } else {
+            vec![]
+        };
+        self.psi_pull = Some(flight);
+        visual
+    }
+
     pub fn make_physical(&mut self, entity_id: EntityId) {
         let current_entity = self.id_to_physics.get(&entity_id);
         if current_entity.is_some() {
@@ -10116,6 +10196,38 @@ impl MissionCore {
                 Effect::HealingPulse { amp } => {
                     self.healing_pulses.insert(amp, 0.0);
                 }
+                Effect::PsiPull { amp, cost } => {
+                    if self.psi_pull.is_some()
+                        || cost < 0
+                        || crate::scripts::player_psi_points(&self.world) < cost
+                    {
+                        continue;
+                    }
+                    let Some(target) = crate::psi_pull::resolve(&self.world, &self.physics, amp)
+                    else {
+                        continue;
+                    };
+                    let Some(gravity) = self.physics.begin_psi_pull(target) else {
+                        continue;
+                    };
+                    self.thrown_items.cancel(target);
+                    update_player_psi_points(&self.world, |current| current.saturating_sub(cost));
+                    self.psi_pull = Some(crate::psi_pull::Flight {
+                        item: target,
+                        amp,
+                        gravity,
+                        age: 0.0,
+                        trail_age: 0.1,
+                    });
+                    effects.push_back(crate::scripts::script_util::play_environmental_sound(
+                        &self.world,
+                        amp,
+                        "shoot",
+                        vec![],
+                        engine::audio::AudioHandle::new(),
+                    ));
+                }
+
                 Effect::PsiDrainVisual { from, to } => {
                     if self.psi_drain_trails.len() < 8 {
                         self.psi_drain_trails

@@ -583,6 +583,10 @@ pub struct PropHasRefs(pub bool);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropImmobile(pub bool);
 
+/// Authored opt-out from Kinetic Redirection.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropPsiNotPullable(pub bool);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPhysDimensions {
     pub radius0: f32,
@@ -2218,6 +2222,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$HasRefs",
             |reader, _len| read_bool(reader),
             PropHasRefs,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$NotPullab", // Dark chunk names truncate to 11 characters.
+            |reader, _len| read_bool(reader),
+            PropPsiNotPullable,
             accumulator::latest,
         ),
         define_prop(

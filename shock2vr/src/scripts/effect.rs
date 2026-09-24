@@ -721,6 +721,12 @@ pub enum Effect {
         amp: EntityId,
     },
 
+    /// Revalidate and acquire an aimed world item before spending psi.
+    PsiPull {
+        amp: EntityId,
+        cost: i32,
+    },
+
     PsiDrainVisual {
         from: Vector3<f32>,
         to: Vector3<f32>,
