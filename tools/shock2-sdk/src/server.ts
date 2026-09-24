@@ -267,7 +267,7 @@ export class GameServer extends Game implements AsyncDisposable {
   }
 
   /**
-   * Spawn a debug runtime via `cargo run -p debug_runtime` and wait for it to
+   * Spawn a debug runtime via `cargo run --release -p debug_runtime` and wait for it to
    * be ready.
    *
    * By default the child binds an ephemeral port (`--port 0`) and announces it
@@ -299,6 +299,9 @@ export class GameServer extends Game implements AsyncDisposable {
 
     const args = [
       "run",
+      // Release, like manual playtesting: one shared build instead of a
+      // second multi-GB debug tree.
+      "--release",
       "-p",
       "debug_runtime",
       "--",
