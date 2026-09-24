@@ -26,26 +26,43 @@ pub fn source(character: bool) -> Rect {
     )
 }
 
+/// Native AMMOFULL is 260×64: two 33×32 resource wells on the left,
+/// with the utility controls occupying its right-hand recess.
 pub fn buttons() -> [(Rect, Vector2<f32>, &'static str); 5] {
     [
-        (Rect::new(8.0, 338.0, 36.0, 32.0), vec2(402.0, 450.0), "LOG"),
         (
-            Rect::new(46.0, 338.0, 36.0, 32.0),
+            Rect::new(126.0, 321.0, 42.0, 20.0),
+            vec2(402.0, 450.0),
+            "LOG",
+        ),
+        (
+            Rect::new(170.0, 321.0, 42.0, 20.0),
             vec2(441.0, 450.0),
             "KEY",
         ),
         (
-            Rect::new(84.0, 338.0, 36.0, 32.0),
+            Rect::new(214.0, 321.0, 42.0, 20.0),
             vec2(476.0, 450.0),
             "MFD",
         ),
         (
-            Rect::new(122.0, 338.0, 36.0, 32.0),
+            Rect::new(126.0, 343.0, 64.0, 20.0),
             vec2(133.0, 450.0),
             "RES",
         ),
-        (Rect::new(160.0, 338.0, 36.0, 32.0), vec2(166.0, 440.0), "?"),
+        (Rect::new(192.0, 343.0, 64.0, 20.0), vec2(166.0, 440.0), "?"),
     ]
+}
+
+/// Container scripts resolve their canvas before either renderer sees it.
+/// A physical device is a screen, so it uses the retail loot canvas even in VR.
+#[derive(shipyard::Unique)]
+pub(crate) struct ScreenActive(pub bool);
+
+pub(crate) fn screen_active(world: &shipyard::World) -> bool {
+    world
+        .borrow::<shipyard::UniqueView<ScreenActive>>()
+        .is_ok_and(|v| v.0)
 }
 
 pub fn to_native(point: Vector2<f32>, character: bool) -> Option<Vector2<f32>> {
@@ -103,19 +120,28 @@ pub fn compose(
     // an imported mesh. Sidecar art remains exposed beside the main body.
     canvas.fill(Rect::new(3.0, 0.0, 198.0, 398.0), [24, 31, 35]);
     canvas.fill(Rect::new(0.0, 3.0, 204.0, 392.0), [24, 31, 35]);
+    canvas.fill(Rect::new(3.0, 304.0, 264.0, 94.0), [24, 31, 35]);
     canvas.fill(Rect::new(6.0, 6.0, 192.0, 386.0), [3, 8, 10]);
     if !occupied {
+        canvas.fill(Rect::new(8.0, 8.0, 188.0, 296.0), [3, 30, 20]);
         canvas.text_native_fit(
             Rect::new(18.0, 100.0, 170.0, 24.0),
-            "PERSONAL MFD",
-            "mainfont.fon",
+            "SCAN MODE",
+            crate::ui::MFD_FONT,
             HAlign::Center,
             VAlign::Middle,
         );
         canvas.text_native_fit(
             Rect::new(18.0, 132.0, 170.0, 24.0),
-            "POINT + TRIGGER TO SCAN",
-            "mainfont.fon",
+            "POINT AT AN OBJECT",
+            crate::ui::MFD_FONT,
+            HAlign::Center,
+            VAlign::Middle,
+        );
+        canvas.text_native_fit(
+            Rect::new(18.0, 157.0, 170.0, 24.0),
+            "PULL TRIGGER TO SCAN",
+            crate::ui::MFD_FONT,
             HAlign::Center,
             VAlign::Middle,
         );
@@ -136,26 +162,38 @@ pub fn compose(
         }
         canvas.push(element);
     }
-    canvas.image(Rect::new(8.0, 306.0, 188.0, 64.0), "ammofull.pcx");
+    canvas.image(Rect::new(8.0, 306.0, 260.0, 64.0), "ammofull.pcx");
     for (i, label) in ["N", "CM"].iter().enumerate() {
-        let rect = Rect::new(12.0 + i as f32 * 92.0, 310.0, 88.0, 22.0);
-        canvas.fill(rect, [0, 0, 0]);
+        let x = 13.0 + i as f32 * 39.0;
         canvas.text_native_fit(
-            rect,
-            &format!("{label} {}", balances[i]),
-            "mainfont.fon",
+            Rect::new(x, 326.0, 33.0, 12.0),
+            label,
+            crate::ui::MFD_FONT,
+            HAlign::Center,
+            VAlign::Middle,
+        );
+        canvas.text_native_fit(
+            Rect::new(x, 339.0, 33.0, 19.0),
+            &balances[i].to_string(),
+            crate::ui::MFD_FONT,
             HAlign::Center,
             VAlign::Middle,
         );
     }
     for (rect, _, label) in buttons() {
         canvas.image(rect, "IFBTN00.PCX");
-        canvas.text_native_fit(rect, label, "mainfont.fon", HAlign::Center, VAlign::Middle);
+        canvas.text_native_fit(
+            rect,
+            label,
+            crate::ui::MFD_FONT,
+            HAlign::Center,
+            VAlign::Middle,
+        );
     }
     canvas.text_native_fit(
         Rect::new(8.0, 376.0, 188.0, 18.0),
         target.unwrap_or("POINT TO SCAN"),
-        "mainfont.fon",
+        crate::ui::MFD_FONT,
         HAlign::Center,
         VAlign::Middle,
     );
@@ -173,7 +211,7 @@ mod tests {
             Some(vec2(215.0, 364.0))
         );
         assert_eq!(to_native(vec2(24.0, 28.0), true), Some(vec2(466.0, 144.0)));
-        assert_eq!(to_native(vec2(240.0, 350.0), false), None);
+        assert_eq!(to_native(vec2(240.0, 380.0), false), None);
     }
     #[test]
     fn utilities_and_balances_are_not_scanning_targets() {
@@ -251,6 +289,21 @@ pub fn shell(panel: WorldPanel) -> engine::scene::SceneObject {
         panel.transform()
             * Matrix4::from_translation(vec3(-32.0 / SIZE.x, 0.0, -0.014))
             * Matrix4::from_nonuniform_scale(204.0 / SIZE.x, 1.0, 0.025),
+    );
+    object
+}
+
+pub fn footer_shell(panel: WorldPanel) -> engine::scene::SceneObject {
+    use cgmath::Matrix4;
+    use engine::scene::{SceneObject, color_material, cube};
+    let mut object = SceneObject::new(
+        color_material::create(vec3(0.035, 0.05, 0.06)),
+        Box::new(cube::create()),
+    );
+    object.set_transform(
+        panel.transform()
+            * Matrix4::from_translation(vec3(0.0, -152.0 / SIZE.y, -0.014))
+            * Matrix4::from_nonuniform_scale(1.0, 96.0 / SIZE.y, 0.025),
     );
     object
 }

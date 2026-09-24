@@ -5065,6 +5065,12 @@ impl MissionCore {
                 && game_options
                     .experimental_features
                     .contains("mfd_device_preview"));
+        self.world
+            .add_unique(super::mfd_device::ScreenActive(false));
+        self.world
+            .borrow::<UniqueViewMut<super::mfd_device::ScreenActive>>()
+            .unwrap()
+            .0 = device_active;
         if !device_active {
             self.device_scanner.trigger(false, false);
         }
@@ -14879,7 +14885,10 @@ impl MissionCore {
         if let Some(panel) = self.device_panel.filter(|_| self.flat_ui.device) {
             let pawn_to_world =
                 Matrix4::from_translation(player.pos) * Matrix4::from(player.rotation);
-            let mut objects = vec![super::mfd_device::shell(panel)];
+            let mut objects = vec![
+                super::mfd_device::shell(panel),
+                super::mfd_device::footer_shell(panel),
+            ];
             objects.extend(self.flat_ui.render_world_space(asset_cache, &panel));
             if let Some(pass) = &self.vr_use_mode_pointer {
                 objects.extend(crate::ui::pointer_beams(

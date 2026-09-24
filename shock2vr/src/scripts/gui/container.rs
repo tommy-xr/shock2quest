@@ -277,7 +277,12 @@ impl ContainerGui {
     /// Read off the world so the panel's style follows the running
     /// presentation rather than whatever mode the script was constructed under.
     fn spec(&self, world: &World) -> PanelSpec {
-        self.spec_for(crate::mission::presentation_is_vr(world))
+        // The handheld screen owns the same retail canvas as the flat MFD.
+        // World-space loot panels retain their transparent grid.
+        self.spec_for(
+            crate::mission::presentation_is_vr(world)
+                && !crate::mission::mfd_device::screen_active(world),
+        )
     }
 
     fn spec_for(&self, is_vr: bool) -> PanelSpec {
@@ -1150,6 +1155,30 @@ mod tests {
         assert_eq!(
             flat.world_offset, vr.world_offset,
             "only the drawing differs - placement is shared"
+        );
+    }
+
+    #[test]
+    fn handheld_loot_uses_retail_art_and_hit_geometry_in_vr() {
+        let (mut world, container, ..) = loot_world();
+        present_in_vr(&mut world);
+        world.add_unique(crate::mission::mfd_device::ScreenActive(true));
+        let gui = ContainerGui::loot_container();
+        let spec = gui.spec(&world);
+        assert_eq!(spec.backdrop.texture(), "contain.pcx");
+        assert_eq!(spec.grid_origin, LOOT_ART_GRID_ORIGIN);
+        assert_eq!(
+            gui.get_config_for(container, &world, &ContainerGuiState {})
+                .screen_size_in_pixels,
+            vec2(188.0, 296.0)
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<crate::mission::mfd_device::ScreenActive>>()
+            .unwrap()
+            .0 = false;
+        assert_eq!(
+            gui.spec(&world).backdrop.texture(),
+            crate::ui::HOLOGRAM_TILE_TEXTURE
         );
     }
 
