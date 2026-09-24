@@ -15466,6 +15466,7 @@ fn resolve_schema(global_context: &GlobalContext, name: &str) -> (dark::Resolved
                 sample_name: name.to_owned(),
                 volume_millibels: 0,
                 pan_millibels: 0,
+                looping: false,
             },
             false,
         )
