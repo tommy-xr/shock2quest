@@ -1,6 +1,6 @@
 use crate::engine::EngineRenderContext;
 use crate::scene::light::LightArray;
-use cgmath::Matrix4;
+use cgmath::{Matrix, Matrix3, Matrix4, SquareMatrix};
 use std::any::Any;
 
 pub trait Material: Any {
@@ -54,5 +54,35 @@ pub trait Material: Any {
     /// for debug inspection only. `None` for materials without transparency.
     fn transparency(&self) -> Option<f32> {
         None
+    }
+}
+
+/// Maps object-space normals to world space: the inverse-transpose of the
+/// world matrix's 3x3, so normals stay perpendicular under non-uniform scale.
+/// Computed once per draw rather than per vertex in the shader.
+pub fn normal_matrix(world: &Matrix4<f32>) -> Matrix3<f32> {
+    let linear = Matrix3::from_cols(world.x.truncate(), world.y.truncate(), world.z.truncate());
+    linear
+        .invert()
+        .map_or(linear, |inverse| inverse.transpose())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cgmath::{InnerSpace, Vector3};
+
+    /// A 45-degree slope squashed 4x along x: its normal must stay
+    /// perpendicular to the squashed surface.
+    #[test]
+    fn normal_matrix_keeps_normals_perpendicular_under_non_uniform_scale() {
+        let world = Matrix4::from_nonuniform_scale(4.0, 1.0, 1.0);
+        let tangent = Vector3::new(1.0, 1.0, 0.0);
+        let normal = Vector3::new(1.0, -1.0, 0.0);
+
+        let world_tangent = (world * tangent.extend(0.0)).truncate();
+        let world_normal = normal_matrix(&world) * normal;
+
+        assert!(world_tangent.dot(world_normal).abs() < 1e-5);
     }
 }
