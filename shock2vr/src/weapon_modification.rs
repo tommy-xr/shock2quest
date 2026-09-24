@@ -3,7 +3,8 @@
 use crate::{player_stats::Skill, quest_info::QuestInfo};
 use dark::properties::{
     ObjectState, PropBaseGunDesc, PropGunKick, PropGunState, PropHackDiff, PropModify2Diff,
-    PropModifyDiff, PropObjState, PropRequiredTechDesc, PropScripts,
+    PropModifyDiff, PropModifyText1, PropModifyText2, PropObjState, PropRequiredTechDesc,
+    PropScripts,
 };
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
@@ -56,8 +57,28 @@ pub fn supported(world: &World, weapon: EntityId) -> bool {
     kind(world, weapon).is_some()
 }
 
-pub fn description(world: &World, weapon: EntityId) -> &'static str {
-    match (kind(world, weapon), level(world, weapon)) {
+/// What modifying `weapon` from `level` does: its authored `P$Modify1` /
+/// `P$Modify2` text, else a summary of the applied effect.
+pub fn description(world: &World, weapon: EntityId, level: i32) -> String {
+    let authored = match level {
+        0 => world
+            .borrow::<View<PropModifyText1>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|p| ("modify1", p.0.clone()))),
+        1 => world
+            .borrow::<View<PropModifyText2>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|p| ("modify2", p.0.clone()))),
+        _ => None,
+    };
+    authored
+        .map(|(table, raw)| crate::scripts::gui::PanelText::object_string(world, table, &raw))
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| effect_summary(world, weapon, level).to_owned())
+}
+
+fn effect_summary(world: &World, weapon: EntityId, level: i32) -> &'static str {
+    match (kind(world, weapon), Some(level)) {
         (Some(Kind::Pistol), Some(0)) => "+12 clip capacity; +10% damage.",
         (Some(Kind::Pistol), Some(1)) => "Reload time divided by three; +14% damage.",
         (Some(Kind::Rifle | Kind::Shotgun), Some(0)) => {
@@ -94,7 +115,12 @@ pub fn quote(world: &World, weapon: EntityId) -> Result<PropHackDiff, String> {
     }
     let level = level(world, weapon).ok_or("No gun state.")?;
     if !(0..2).contains(&level) {
-        return Err("Weapon is fully modified.".into());
+        return Err(crate::scripts::gui::PanelText::hrm(
+            world,
+            "ModifyResult3",
+            "This weapon cannot be modified any further.",
+            &[],
+        ));
     }
     let required = world
         .borrow::<View<PropRequiredTechDesc>>()
@@ -106,7 +132,12 @@ pub fn quote(world: &World, weapon: EntityId) -> Result<PropHackDiff, String> {
         .borrow::<UniqueView<QuestInfo>>()
         .map_err(|_| "No player stats.")?;
     if quests.player_stats().skill_level(Skill::Modify) < required {
-        return Err(format!("Requires trained Modify {required}."));
+        return Err(crate::scripts::gui::PanelText::hrm(
+            world,
+            "techminskill2",
+            "Modify skill %d required.",
+            &[required],
+        ));
     }
     let diff = if level == 0 {
         world
@@ -289,7 +320,7 @@ mod tests {
         assert_eq!(quote(&world, gun).unwrap().cost, 10.0);
         assert!(apply(&mut world, gun, 0));
         assert!(!apply(&mut world, gun, 0));
-        assert!(quote(&world, gun).unwrap_err().contains("Modify 4"));
+        assert!(quote(&world, gun).unwrap_err().contains("Modify skill 4"));
         world
             .borrow::<shipyard::UniqueViewMut<QuestInfo>>()
             .unwrap()
@@ -299,7 +330,11 @@ mod tests {
         assert_eq!(quote(&world, gun).unwrap().cost, 1.0);
         assert!(apply(&mut world, gun, 1));
         assert!(!apply(&mut world, gun, 1));
-        assert!(quote(&world, gun).unwrap_err().contains("fully modified"));
+        assert!(
+            quote(&world, gun)
+                .unwrap_err()
+                .contains("modified any further")
+        );
         world
             .borrow::<shipyard::UniqueViewMut<crate::mission::PlayerInfo>>()
             .unwrap()

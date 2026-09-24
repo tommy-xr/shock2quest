@@ -130,11 +130,10 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
                 ..layout::PROGRESS
             }));
         }
-        let mut percent = PanelText::text(&format!("{:.1} %", fraction * 100.0), layout::PERCENT);
-        if let GuiComponent::Text { h, .. } = &mut percent {
-            *h = crate::ui::HAlign::Center;
-        }
-        components.push(percent);
+        components.push(PanelText::centered(
+            &format!("{:.1} %", fraction * 100.0),
+            layout::PERCENT,
+        ));
         components.push(
             gui::button(ResearchGuiMsg::ToggleReport)
                 .with_image("iface/report0.pcx")

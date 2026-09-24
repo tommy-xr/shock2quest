@@ -228,6 +228,7 @@ pub struct FlatUiHost {
     /// Panel size in panel-local pixels (from `SetUI.world_size`); `None`
     /// until the panel's first `SetUI` arrives (the frame after opening).
     panel_size_px: Option<Vector2<f32>>,
+    panel_sidecar: Option<crate::gui::PanelSidecar>,
     /// Latest `SetUI` components for the active panel (normalized panel
     /// coordinates, as `GuiScript` emits them).
     components: Vec<GuiComponentRenderInfo>,
@@ -338,6 +339,7 @@ impl FlatUiHost {
         FlatUiHost {
             active_panel: None,
             panel_size_px: None,
+            panel_sidecar: None,
             components: Vec::new(),
             strip: None,
             cursor_item: None,
@@ -824,6 +826,7 @@ impl FlatUiHost {
         if self.active_panel != Some(entity) {
             self.components.clear();
             self.panel_size_px = None;
+            self.panel_sidecar = None;
         }
         self.active_panel = Some(entity);
         self.sticky_panel = false;
@@ -848,6 +851,7 @@ impl FlatUiHost {
         self.active_panel = None;
         self.sticky_panel = false;
         self.panel_size_px = None;
+        self.panel_sidecar = None;
         self.components.clear();
         self.hover_close = false;
     }
@@ -860,6 +864,7 @@ impl FlatUiHost {
         world: &World,
         parent_entity: EntityId,
         world_size: Vector2<f32>,
+        sidecar: Option<crate::gui::PanelSidecar>,
         components: &[GuiComponentRenderInfo],
     ) {
         let is_strip = self
@@ -891,6 +896,7 @@ impl FlatUiHost {
             return;
         }
         self.panel_size_px = Some(size_px);
+        self.panel_sidecar = sidecar;
         self.components = components;
     }
 
@@ -920,6 +926,33 @@ impl FlatUiHost {
     /// `SetUI` arrives).
     fn panel_rect(&self) -> Option<Rect> {
         self.panel_size_px.map(panel_canvas_rect)
+    }
+
+    /// The host close button, on the panel body's corner rather than the
+    /// canvas's, so a companion beside the body cannot carry it off the MFD.
+    fn close_rect(&self, panel: Rect) -> Rect {
+        let body = match self.panel_sidecar {
+            Some(sidecar) => Rect::new(panel.x, panel.y, sidecar.body_width, panel.h),
+            None => panel,
+        };
+        close_button_canvas_rect(body)
+    }
+
+    /// Whether `canvas_pos` is on the panel: its body, or its companion.
+    /// Sidecar offsets are in unscaled panel pixels; no sidecar panel is wide
+    /// enough to be scaled onto the canvas.
+    fn panel_hit(&self, panel: Rect, canvas_pos: Vector2<f32>) -> bool {
+        match self.panel_sidecar {
+            Some(sidecar) => {
+                let body = Rect::new(panel.x, panel.y, sidecar.body_width, panel.h);
+                body.contains(canvas_pos)
+                    || sidecar.rect.is_some_and(|rect| {
+                        Rect::new(panel.x + rect.x, panel.y + rect.y, rect.w, rect.h)
+                            .contains(canvas_pos)
+                    })
+            }
+            None => panel.contains(canvas_pos),
+        }
     }
 
     /// The inventory strip's top-docked rect on the 640x480 canvas (None
@@ -1145,7 +1178,7 @@ impl FlatUiHost {
         // panel rect; treat both as "over the panel" so a held item is never
         // thrown from there.
         let over_panel = panel_rect
-            .map(|r| r.contains(canvas_pos) || close_button_canvas_rect(r).contains(canvas_pos))
+            .map(|r| self.panel_hit(r, canvas_pos) || self.close_rect(r).contains(canvas_pos))
             .unwrap_or(false);
         let readout_hit = self
             .readout_buttons()
@@ -1308,14 +1341,14 @@ impl FlatUiHost {
 
         // Host-drawn close button (the shared guis have no close component;
         // VR uses its world-space distance close instead).
-        let close_rect = close_button_canvas_rect(rect);
+        let close_rect = self.close_rect(rect);
         self.hover_close = close_rect.contains(canvas_pos);
         if pressed_edge && self.hover_close {
             self.close();
             return (Vec::new(), Vec::new());
         }
 
-        if rect.contains(canvas_pos) {
+        if self.panel_hit(rect, canvas_pos) {
             (
                 vec![gui_hover(panel, rect, canvas_pos, pointer.pressed, pointer)],
                 Vec::new(),
@@ -1495,7 +1528,7 @@ impl FlatUiHost {
         if let Some(rect) = panel_rect {
             draw_components(&mut canvas, &self.components, rect, None, false);
             canvas.image(
-                close_button_canvas_rect(rect),
+                self.close_rect(rect),
                 if self.hover_close {
                     "closeon.pcx"
                 } else {
@@ -1590,7 +1623,7 @@ impl FlatUiHost {
         };
         let mut out = self.elements_for(world, &self.components, rect, None);
         // The host-drawn close button is clickable too.
-        let close = close_button_canvas_rect(rect);
+        let close = self.close_rect(rect);
         out.push(crate::game_scene::DebugUiElement {
             kind: "button".to_string(),
             texture: Some("closeoff.pcx".to_string()),
@@ -2206,6 +2239,39 @@ mod tests {
         assert!(!is_gui_cursor(&backdrop));
     }
 
+    /// A companion beside the body keeps the close button on the body's
+    /// corner, takes clicks on itself, and leaves the canvas around it
+    /// click-through.
+    #[test]
+    fn a_sidecar_keeps_close_on_the_body_and_its_surroundings_click_through() {
+        let mut world = World::new();
+        let panel = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.open(panel);
+        let sidecar = crate::gui::PanelSidecar {
+            body_width: 188.0,
+            rect: Some(Rect::new(179.0, 96.0, 73.0, 194.0)),
+        };
+        host.on_set_ui(
+            &world,
+            panel,
+            vec2(252.0, 300.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            Some(sidecar),
+            &[],
+        );
+        let rect = host.panel_rect().unwrap();
+        let body = Rect::new(rect.x, rect.y, 188.0, rect.h);
+        assert_eq!(host.close_rect(rect), close_button_canvas_rect(body));
+
+        let at = |x: f32, y: f32| vec2(rect.x + x, rect.y + y);
+        assert!(host.panel_hit(rect, at(100.0, 50.0)), "the body");
+        assert!(host.panel_hit(rect, at(220.0, 200.0)), "the plug");
+        assert!(
+            !host.panel_hit(rect, at(220.0, 50.0)),
+            "canvas above the plug"
+        );
+    }
+
     #[test]
     fn held_button_at_open_does_not_close_the_panel() {
         // The (shift+)LMB frob that opened the panel is typically still held
@@ -2219,6 +2285,7 @@ mod tests {
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
         let bare_view_pressed = Pointer2D {
@@ -2259,6 +2326,7 @@ mod tests {
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[GuiComponentRenderInfo::Image {
                 position: vec2(15.0 / 188.0, 160.0 / 296.0),
                 size: vec2(35.0 / 188.0, 32.0 / 296.0),
@@ -2312,6 +2380,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
 
@@ -2355,6 +2424,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
 
@@ -2413,6 +2483,7 @@ mod tests {
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
         host.set_name_strip(Some("Keypad".to_owned()));
@@ -2470,12 +2541,14 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
         host.on_set_ui(
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
 
@@ -2513,12 +2586,14 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
         host.on_set_ui(
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
         // Release first (open() swallows the held button), then click on the
@@ -2579,6 +2654,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[
                 GuiComponentRenderInfo::Image {
                     position: vec2(0.0, 0.0),
@@ -2712,6 +2788,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[strip_item(wrench, 0)],
         );
         (world, host, wrench, inventory)
@@ -2801,6 +2878,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
         for x in 0..15 {
@@ -3062,6 +3140,7 @@ mod tests {
                 &world,
                 inventory,
                 vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+                None,
                 &[strip_item(pickup, 0)],
             );
 
@@ -3106,6 +3185,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[strip_item(loot, 0)],
         );
         press_edge(&mut host, &world, (23.5, 34.0));
@@ -3133,6 +3213,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[strip_item(held, 0), strip_item(pickup, 1)],
         );
 
@@ -3199,6 +3280,7 @@ mod tests {
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[strip_item(wrench, 0)],
         );
         let wrench_id = wrench.inner() as i32;
@@ -3239,6 +3321,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[strip_item(wrench, 0)],
         );
 
@@ -3283,6 +3366,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[strip_item(wrench, 0), strip_item(pistol, 1)],
         );
         press_edge(&mut host, &world, (23.5, 34.0)); // lift the Wrench
@@ -3573,6 +3657,7 @@ mod tests {
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
         press_edge(&mut host, &world, (23.5, 34.0)); // lift the Wrench
