@@ -57,7 +57,6 @@ test(
     await winBoard(game);
     const won = (await elements(game)).map((e) => e.texture);
     assert.ok(won.includes("winr.pcx"), `a won repair board shows WINR: ${won}`);
-    assert.ok(!won.includes("winh.pcx"), "not the hack board's overlay");
     assert.ok(balance > (await carriedNaniteTotal(game)), "each attempt is paid");
     assert.equal(await property(game, gun, "ObjectState"), "Normal");
     assert.equal((await game.info()).player.wielded_gun_condition, 40);

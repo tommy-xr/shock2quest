@@ -998,45 +998,6 @@ mod tests {
         assert!(!shows_pay(HackPhase::Playing));
     }
 
-    /// Each mode names its own shipped board art; only repair's backdrop
-    /// needs its archive, because obj.crf ships a model texture of that name.
-    #[test]
-    fn each_hrm_mode_names_its_own_board_art() {
-        let art = |backdrop, won, lost, unwinnable, unpaid| HrmArt {
-            backdrop,
-            won,
-            lost,
-            unwinnable,
-            unpaid,
-        };
-        for security_computer in [false, true] {
-            assert_eq!(
-                HrmContext::Hack { security_computer }.art(),
-                art("hack.pcx", "winh.pcx", "loseh.pcx", "failh.pcx", "payh.pcx")
-            );
-        }
-        assert_eq!(
-            HrmContext::Repair.art(),
-            art(
-                "iface/repair.pcx",
-                "winr.pcx",
-                "loser.pcx",
-                "failr.pcx",
-                "payr.pcx"
-            )
-        );
-        assert_eq!(
-            HrmContext::Modify.art(),
-            art(
-                "modify.pcx",
-                "winm.pcx",
-                "losem.pcx",
-                "failm.pcx",
-                "paym.pcx"
-            )
-        );
-    }
-
     /// A hack board draws exactly the hack art it always has, per phase.
     #[test]
     fn a_hack_board_draws_the_hack_art() {

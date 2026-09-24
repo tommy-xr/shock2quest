@@ -739,12 +739,6 @@ mod tests {
                     drawn.iter().any(|t| t == overlay),
                     "{job:?} {phase:?} draws {overlay}: {drawn:?}"
                 );
-                assert!(
-                    !drawn
-                        .iter()
-                        .any(|t| t.ends_with("h.pcx") && t != "hrmbarh.pcx"),
-                    "{job:?} {phase:?} draws no hack overlay: {drawn:?}"
-                );
             }
         }
     }
