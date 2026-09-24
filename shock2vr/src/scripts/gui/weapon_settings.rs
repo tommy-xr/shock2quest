@@ -186,11 +186,35 @@ fn lost_repair(state: &WeaponSettingsGuiState) -> bool {
     matches!(&state.board, Some((HrmJob::Repair, _, board)) if board.phase == HackPhase::Lost)
 }
 
+/// The repair board's goal line.
+fn repair_goal(world: &World) -> String {
+    super::PanelText::string(
+        world,
+        "hrm",
+        "RepairText",
+        "Return this item to normal functionality.",
+    )
+}
+
+/// An open HRM board: the board, then its goal, failure chance and odds.
+fn board_components(
+    world: &World,
+    job: HrmJob,
+    diff: dark::properties::PropHackDiff,
+    board: &HackState,
+    goal: &str,
+) -> Vec<GuiComponent<WeaponSettingsGuiMsg>> {
+    let mut components = draw_hack_board(board, diff, job.context(), WeaponSettingsGuiMsg::Board);
+    components.extend(draw_hrm_text(world, goal, diff, job.context()));
+    components
+}
+
 /// Whether an open settings panel must now close. The panel is opened for the
 /// gun that was wielded at the time and shows only that gun, so unwielding it -
 /// dropping it, holstering it, or cycling to another weapon - dismisses it.
-/// A gun that no longer exists was not put away: a repair critical failure
-/// destroys it, and the panel stays up showing that loss until it is closed.
+/// A gun that no longer exists was not put away: only a repair critical
+/// failure destroys a wielded gun, and the panel stays up showing that loss
+/// until it is closed.
 pub fn should_close_settings_panel(
     opened_for: EntityId,
     wielded: Option<EntityId>,
@@ -257,43 +281,29 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         // The panel owns an explicit gun target. Losing it makes the panel
         // inert immediately; a second held gun is never a fallback. A lost
         // repair board is the exception: it outlives the gun it destroyed.
-        let weapon = WeaponSettingsTarget::resolve(world);
-        if weapon.is_none() && !lost_repair(state) {
-            return components;
-        }
+        let Some(weapon) = WeaponSettingsTarget::resolve(world) else {
+            return match &state.board {
+                Some((job, diff, board)) if lost_repair(state) => {
+                    board_components(world, *job, *diff, board, &repair_goal(world))
+                }
+                _ => components,
+            };
+        };
 
         if let Some((job, diff, board)) = &state.board {
-            let shown_diff = match weapon {
-                Some(weapon) if !matches!(board.phase, HackPhase::Won | HackPhase::Lost) => {
-                    job.quote(world, weapon).unwrap_or(*diff)
-                }
-                _ => *diff,
+            let shown_diff = if matches!(board.phase, HackPhase::Won | HackPhase::Lost) {
+                *diff
+            } else {
+                job.quote(world, weapon).unwrap_or(*diff)
             };
             let goal = match job {
                 // The level the board was opened at: after a win the gun
                 // already carries the next one.
-                HrmJob::Modify(level) => weapon
-                    .map(|weapon| weapon_modification::description(world, weapon, *level))
-                    .unwrap_or_default(),
-                HrmJob::Repair => super::PanelText::string(
-                    world,
-                    "hrm",
-                    "RepairText",
-                    "Return this item to normal functionality.",
-                ),
+                HrmJob::Modify(level) => weapon_modification::description(world, weapon, *level),
+                HrmJob::Repair => repair_goal(world),
             };
-            let mut components = draw_hack_board(
-                board,
-                shown_diff,
-                job.context(),
-                WeaponSettingsGuiMsg::Board,
-            );
-            components.extend(draw_hrm_text(world, &goal, shown_diff, job.context()));
-            return components;
+            return board_components(world, *job, shown_diff, board, &goal);
         }
-        let Some(weapon) = weapon else {
-            return components;
-        };
         // Retail raises its HRM plug beside the settings MFD: repair for a
         // Broken gun, modify for a working one.
         if let Some((kind, msg, label)) = plug_for(world, weapon) {

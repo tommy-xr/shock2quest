@@ -8116,16 +8116,16 @@ impl MissionCore {
         ret
     }
 
-    /// Canonical destruction cleanup for one runtime entity. Keep interaction
-    /// state and incoming inventory links in sync before the entity id can be
-    /// recycled, then tear down its scripts, physics, render state, and
-    /// attached children through [`Self::remove_entity`].
     fn entity_exists(&self, entity_id: EntityId) -> bool {
         self.world
             .borrow::<EntitiesView>()
             .is_ok_and(|entities| entities.is_alive(entity_id))
     }
 
+    /// Canonical destruction cleanup for one runtime entity. Keep interaction
+    /// state and incoming inventory links in sync before the entity id can be
+    /// recycled, then tear down its scripts, physics, render state, and
+    /// attached children through [`Self::remove_entity`].
     fn destroy_entity(&mut self, entity_id: EntityId) {
         self.interaction.on_entity_destroyed(entity_id);
         self.flat_ui.on_entity_destroyed(entity_id);
