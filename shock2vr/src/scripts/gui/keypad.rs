@@ -211,6 +211,47 @@ pub(crate) enum HrmContext {
     Repair,
 }
 
+/// An HRM board's pictures: its backdrop and the overlay each finished or
+/// unpaid phase draws over the nodes. The three modes share board geometry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HrmArt {
+    pub(crate) backdrop: &'static str,
+    pub(crate) won: &'static str,
+    pub(crate) lost: &'static str,
+    pub(crate) unwinnable: &'static str,
+    pub(crate) unpaid: &'static str,
+}
+
+impl HrmContext {
+    /// The one place each mode's board art is named.
+    pub(crate) const fn art(self) -> HrmArt {
+        match self {
+            HrmContext::Hack { .. } => HrmArt {
+                backdrop: "hack.pcx",
+                won: "winh.pcx",
+                lost: "loseh.pcx",
+                unwinnable: "failh.pcx",
+                unpaid: "payh.pcx",
+            },
+            HrmContext::Repair => HrmArt {
+                // Archive-qualified: obj.crf also ships a repair.pcx texture.
+                backdrop: "iface/repair.pcx",
+                won: "winr.pcx",
+                lost: "loser.pcx",
+                unwinnable: "failr.pcx",
+                unpaid: "payr.pcx",
+            },
+            HrmContext::Modify => HrmArt {
+                backdrop: "modify.pcx",
+                won: "winm.pcx",
+                lost: "losem.pcx",
+                unwinnable: "failm.pcx",
+                unpaid: "paym.pcx",
+            },
+        }
+    }
+}
+
 /// The player's side of an HRM roll: trained skill, the extra levels a
 /// security computer (Security Expert) or the tech implant grant, and CYB.
 struct HrmTerms {
@@ -341,12 +382,13 @@ where
     TMsg: Clone,
     F: Fn(KeyPadMsg) -> TMsg + Copy,
 {
-    let mut components = draw_hack_board(state, diff, wrap);
+    let context = HrmContext::Hack { security_computer };
+    let mut components = draw_hack_board(state, diff, context, wrap);
     components.extend(draw_hrm_text(
         world,
         &hack_goal_text(world, entity),
         diff,
-        HrmContext::Hack { security_computer },
+        context,
     ));
     components
 }
@@ -468,14 +510,16 @@ fn draw_number(num: u32) -> Vec<GuiComponent<KeyPadMsg>> {
 pub(crate) fn draw_hack_board<TMsg, F>(
     state: &HackState,
     diff: PropHackDiff,
+    context: HrmContext,
     wrap: F,
 ) -> Vec<GuiComponent<TMsg>>
 where
     TMsg: Clone,
     F: Fn(KeyPadMsg) -> TMsg + Copy,
 {
+    let art = context.art();
     let mut components = vec![
-        gui::image("hack.pcx")
+        gui::image(art.backdrop)
             .with_position(vec2(0.0, 0.0))
             .with_size(vec2(188.0, 296.0)),
     ];
@@ -524,7 +568,7 @@ where
                         .with_size(vec2(16.0, 16.0)),
                 );
             }
-            // The unlit node outline is already part of HACK.PCX. This
+            // The unlit node outline is already part of the backdrop. This
             // zero-alpha button supplies a normal 16x16 hit target without
             // painting a placeholder over that authored art.
             components.push(
@@ -539,12 +583,12 @@ where
     }
 
     let result_texture = match state.phase {
-        HackPhase::Won => Some("winh.pcx"),
-        HackPhase::Lost => Some("loseh.pcx"),
-        HackPhase::Unwinnable => Some("failh.pcx"),
+        HackPhase::Won => Some(art.won),
+        HackPhase::Lost => Some(art.lost),
+        HackPhase::Unwinnable => Some(art.unwinnable),
         // Retail covers an unpaid board with "CLICK START TO PROCEED" until
         // START is paid for.
-        HackPhase::Unpaid | HackPhase::InsufficientNanites => Some("payh.pcx"),
+        HackPhase::Unpaid | HackPhase::InsufficientNanites => Some(art.unpaid),
         HackPhase::Playing => None,
     };
     if let Some(texture) = result_texture {
@@ -555,9 +599,9 @@ where
         );
     }
 
-    // HACK.PCX already supplies the cyan `COST:` label. Retail draws only the
+    // The backdrop already supplies the cyan `COST:` label. Retail draws only the
     // dynamic numeric value, in the MFD font, centred in the 48px slot at
-    // (128, 161), after the result overlay so WINH/LOSEH/PAYH cannot obscure it.
+    // (128, 161), after the result overlay so it cannot obscure it.
     components.push(super::PanelText::centered(
         &hack_cost(diff).to_string(),
         crate::ui::Rect::new(128.0, 161.0, 48.0, 14.0),
@@ -939,13 +983,62 @@ mod tests {
                 phase,
                 ..HackState::default()
             };
-            draw_hack_board(&state, diff, |msg| msg)
-                .iter()
-                .any(|c| matches!(c, GuiComponent::Image { texture, .. } if texture == "payh.pcx"))
+            draw_hack_board(
+                &state,
+                diff,
+                HrmContext::Hack {
+                    security_computer: false,
+                },
+                |msg| msg,
+            )
+            .iter()
+            .any(|c| matches!(c, GuiComponent::Image { texture, .. } if texture == "payh.pcx"))
         };
         assert!(shows_pay(HackPhase::Unpaid));
         assert!(shows_pay(HackPhase::InsufficientNanites));
         assert!(!shows_pay(HackPhase::Playing));
+    }
+
+    /// A hack board draws exactly the hack art it always has, per phase.
+    #[test]
+    fn a_hack_board_draws_the_hack_art() {
+        let diff = PropHackDiff {
+            success_chance: 20,
+            critical_chance: 10,
+            cost: 3.0,
+        };
+        for (phase, overlay) in [
+            (HackPhase::Unpaid, Some("payh.pcx")),
+            (HackPhase::InsufficientNanites, Some("payh.pcx")),
+            (HackPhase::Playing, None),
+            (HackPhase::Won, Some("winh.pcx")),
+            (HackPhase::Lost, Some("loseh.pcx")),
+            (HackPhase::Unwinnable, Some("failh.pcx")),
+        ] {
+            let state = HackState {
+                phase,
+                ..HackState::default()
+            };
+            let textures: Vec<String> = draw_hack_board(
+                &state,
+                diff,
+                HrmContext::Hack {
+                    security_computer: true,
+                },
+                |msg| msg,
+            )
+            .into_iter()
+            .filter_map(|c| match c {
+                GuiComponent::Image { texture, .. } => Some(texture),
+                _ => None,
+            })
+            .collect();
+            let expected: Vec<String> = std::iter::once("hack.pcx")
+                .chain(overlay)
+                .map(str::to_owned)
+                .collect();
+            assert_eq!(textures, expected, "{phase:?}");
+        }
     }
 
     /// A hack board's goal is the object's `P$HackText`; without one, the

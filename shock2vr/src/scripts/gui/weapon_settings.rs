@@ -254,29 +254,23 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             } else {
                 job.quote(world, weapon).unwrap_or(*diff)
             };
-            // Archive-qualified: obj.crf also ships a repair.pcx.
-            let (backdrop, goal) = match job {
+            let goal = match job {
                 // The level the board was opened at: after a win the gun
                 // already carries the next one.
-                HrmJob::Modify(level) => (
-                    "modify.pcx",
-                    weapon_modification::description(world, weapon, *level),
-                ),
-                HrmJob::Repair => (
-                    "iface/repair.pcx",
-                    super::PanelText::string(
-                        world,
-                        "hrm",
-                        "RepairText",
-                        "Return this item to normal functionality.",
-                    ),
+                HrmJob::Modify(level) => weapon_modification::description(world, weapon, *level),
+                HrmJob::Repair => super::PanelText::string(
+                    world,
+                    "hrm",
+                    "RepairText",
+                    "Return this item to normal functionality.",
                 ),
             };
-            let mut components = draw_hack_board(board, shown_diff, WeaponSettingsGuiMsg::Board);
-            // The authored Modify and Repair boards share HRM geometry with Hack.
-            if let Some(GuiComponent::Image { texture, .. }) = components.first_mut() {
-                *texture = backdrop.into();
-            }
+            let mut components = draw_hack_board(
+                board,
+                shown_diff,
+                job.context(),
+                WeaponSettingsGuiMsg::Board,
+            );
             components.extend(draw_hrm_text(world, &goal, shown_diff, job.context()));
             return components;
         }
@@ -680,6 +674,73 @@ mod tests {
             board.first(),
             Some(GuiComponent::Image { texture, .. }) if texture == "iface/repair.pcx"
         ));
+    }
+
+    /// Repair and modify boards draw their own backdrop and result overlays,
+    /// not the hack board's.
+    #[test]
+    fn repair_and_modify_boards_draw_their_own_overlays() {
+        use dark::properties::PropHackDiff;
+
+        let (world, _) = pistol_world(0);
+        let diff = PropHackDiff {
+            success_chance: 20,
+            critical_chance: 4,
+            cost: 3.0,
+        };
+        let textures = |job, phase| {
+            let state = WeaponSettingsGuiState {
+                board: Some((
+                    job,
+                    diff,
+                    HackState {
+                        phase,
+                        ..HackState::default()
+                    },
+                )),
+            };
+            WeaponSettingsGui
+                .get_components(&None, EntityId::dead(), &world, &state)
+                .into_iter()
+                .filter_map(|c| match c {
+                    GuiComponent::Image { texture, .. } => Some(texture),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for (job, backdrop, won, lost, unwinnable, unpaid) in [
+            (
+                HrmJob::Repair,
+                "iface/repair.pcx",
+                "winr.pcx",
+                "loser.pcx",
+                "failr.pcx",
+                "payr.pcx",
+            ),
+            (
+                HrmJob::Modify(1),
+                "modify.pcx",
+                "winm.pcx",
+                "losem.pcx",
+                "failm.pcx",
+                "paym.pcx",
+            ),
+        ] {
+            for (phase, overlay) in [
+                (HackPhase::Won, won),
+                (HackPhase::Lost, lost),
+                (HackPhase::Unwinnable, unwinnable),
+                (HackPhase::Unpaid, unpaid),
+                (HackPhase::InsufficientNanites, unpaid),
+            ] {
+                let drawn = textures(job, phase);
+                assert_eq!(drawn.first().map(String::as_str), Some(backdrop));
+                assert!(
+                    drawn.iter().any(|t| t == overlay),
+                    "{job:?} {phase:?} draws {overlay}: {drawn:?}"
+                );
+            }
+        }
     }
 
     /// Repairing a gun that cannot be modified removes its plug; the canvas

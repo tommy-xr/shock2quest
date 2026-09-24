@@ -31,7 +31,8 @@ test("Tinker halves actual paid Modify attempts; two pistol modifications surviv
   await click(game, "start-hack");
   assert.equal(await carriedNaniteTotal(game), balance, "insufficient payment leaves balance unchanged");
   assert.equal(await property(game, gun, "Modification"), "0");
-  assert.ok((await elements(game)).some(e => /pay[hm]\.pcx/.test(e.texture ?? "")));
+  const unpaid = (await elements(game)).map(e => e.texture);
+  assert.ok(unpaid.includes("modify.pcx") && unpaid.includes("paym.pcx"), "the modify board wears its own art");
   await closeSettings(game);
   await acquireOsUpgrade(game, "Tinker");
   for (let i = 0; i < 20; i++) await game.player.spawnItem("20 Nanites");
@@ -43,6 +44,7 @@ test("Tinker halves actual paid Modify attempts; two pistol modifications surviv
   assert.equal(paidBefore - await carriedNaniteTotal(game), after);
   // First paid board may be reset; each reset is another honest payment.
   await winBoard(game);
+  assert.ok((await elements(game)).some(e => e.texture === "winm.pcx"), "a won modify board shows WINM");
   assert.equal(await property(game, gun, "Modification"), "1");
   const first = JSON.parse(await property(game, gun, "GunDescription"));
   assert.equal(first.settings[0].clip, base.settings[0].clip + 12);
