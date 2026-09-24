@@ -217,6 +217,10 @@ impl crate::game_scene::GameScene for Mission {
         true
     }
 
+    fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
+        self.mission_core.on_exit(audio_context);
+    }
+
     fn update(
         &mut self,
         time: &Time,

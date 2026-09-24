@@ -15,6 +15,7 @@
 //! them can disagree about whether the badge is up.
 
 use dark::properties::{PropEcoState, PropEcology};
+use engine::audio::AudioHandle;
 use shipyard::{
     EntityId, Get, IntoIter, IntoWithId, Unique, UniqueView, UniqueViewMut, View, World,
 };
@@ -248,6 +249,53 @@ impl SecurityAlarm {
             Ok(mut published) => *published = status,
             Err(_) => world.add_unique(status),
         }
+    }
+}
+
+/// Looped while any ecology is alerted.
+const KLAXON_SCHEMA: &str = "klaxalarm";
+/// Played once when the last alert stands down.
+const KLAXON_OFF_SCHEMA: &str = "alarmoff";
+
+/// The alert klaxon: retail's ecologies start it on alert and stop it on
+/// stand-down. Derived from ecology state each frame, so a save loaded
+/// mid-alert restarts it.
+#[derive(Default)]
+pub struct Klaxon {
+    handle: Option<AudioHandle>,
+}
+
+impl Klaxon {
+    pub fn update(&mut self, world: &World) -> Vec<Effect> {
+        let alerted = !alerted_ecologies(world).is_empty();
+        match (alerted, self.handle.take()) {
+            (true, None) => {
+                let handle = AudioHandle::new();
+                self.handle = Some(handle.clone());
+                vec![Effect::PlayLoopingSound {
+                    handle,
+                    name: KLAXON_SCHEMA.to_owned(),
+                }]
+            }
+            (false, Some(handle)) => vec![
+                Effect::StopSound { handle },
+                Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    name: KLAXON_OFF_SCHEMA.to_owned(),
+                    source: None,
+                    spatial: false,
+                },
+            ],
+            (_, handle) => {
+                self.handle = handle;
+                Vec::new()
+            }
+        }
+    }
+
+    /// The loop's handle, for a scene leaving mid-alert to stop it silently.
+    pub fn take(&mut self) -> Option<AudioHandle> {
+        self.handle.take()
     }
 }
 
@@ -532,5 +580,41 @@ mod tests {
         // alarm at all.
         let unlinked = world.add_entity(());
         assert_eq!(authored_alarm_seconds(&world, unlinked), 0.0);
+    }
+
+    #[test]
+    fn the_klaxon_loops_through_an_alert_and_signs_off_once() {
+        let (mut world, ecology_id, _) = ecology_world(ECOLOGY_STATE_NORMAL);
+        let mut klaxon = Klaxon::default();
+        assert!(klaxon.update(&world).is_empty());
+
+        world.add_component(ecology_id, PropEcoState(ECOLOGY_STATE_ALERT));
+        let started = klaxon.update(&world);
+        let [Effect::PlayLoopingSound { handle, name }] = started.as_slice() else {
+            panic!("expected the klaxon loop, got {started:?}");
+        };
+        assert_eq!(name, KLAXON_SCHEMA);
+        let loop_id = handle.id();
+        assert!(klaxon.update(&world).is_empty(), "one loop per alert");
+
+        world.add_component(ecology_id, PropEcoState(ECOLOGY_STATE_NORMAL));
+        let stopped = klaxon.update(&world);
+        assert!(matches!(
+            stopped.as_slice(),
+            [Effect::StopSound { handle }, Effect::PlaySound { name, spatial: false, .. }]
+                if handle.id() == loop_id && name == KLAXON_OFF_SCHEMA
+        ));
+        assert!(klaxon.update(&world).is_empty());
+    }
+
+    #[test]
+    fn a_mission_loaded_mid_alert_restarts_the_klaxon() {
+        let (world, _, _) = ecology_world(ECOLOGY_STATE_ALERT);
+        let mut klaxon = Klaxon::default();
+        assert!(matches!(
+            klaxon.update(&world).as_slice(),
+            [Effect::PlayLoopingSound { .. }]
+        ));
+        assert!(klaxon.take().is_some(), "leaving the scene stops the loop");
     }
 }
