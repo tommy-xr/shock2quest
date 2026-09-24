@@ -1,5 +1,4 @@
 use dark::properties::{PropEcoState, PropEcoType, PropEcology, PropHitPoints, PropTemplateId};
-use engine::audio::AudioHandle;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
@@ -8,7 +7,7 @@ use crate::{mission::mission_core::GlobalTemplateHierarchy, physics::PhysicsWorl
 
 use super::{
     Effect, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError,
-    script_util::{entity_class_template_id, send_to_all_switch_links},
+    script_util::{announce, entity_class_template_id, send_to_all_switch_links},
 };
 
 const PHYSICAL_TEMPLATE_ID: i32 = -11;
@@ -42,16 +41,6 @@ pub struct TriggerEcology {
     /// Alarms (or Resets) in one frame would both see the stale state and
     /// announce twice.
     alerted: bool,
-}
-
-/// Station-wide Xerxes announcement, non-positional like retail's SchemaPlay.
-fn announce(entity_id: EntityId, schema: &str) -> Effect {
-    Effect::PlaySound {
-        handle: AudioHandle::new(),
-        name: schema.to_owned(),
-        source: Some(entity_id),
-        spatial: false,
-    }
 }
 
 impl TriggerEcology {

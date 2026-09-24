@@ -32,7 +32,8 @@ async function only(
 }
 
 /// Whether Xerxes' clip has played: xer02 "Potential threat detected" is
-/// xxyal001, xer03 "Security alert terminated" is xxalrtov.
+/// xxyal001, xer03 "Security alert terminated" is xxalrtov, xer01 "Security
+/// system offline" is xxhaksec.
 async function played(game: GameServer, sample: string): Promise<boolean> {
   return (await game.audio.recent()).sounds.some(
     (sound) => sound.sample.toLowerCase() === sample,
@@ -155,6 +156,7 @@ test(
       "the stand-down should reset the alerted ecology",
     );
     assert.ok(await played(game, "xxalrtov"), "Xerxes should announce the stand-down");
+    assert.ok(await played(game, "xxhaksec"), "Xerxes should announce security offline");
     assert.ok(!(await klaxonLooping(game)), "the stand-down should stop the klaxon");
     assert.ok(await played(game, "alarmend"), "the klaxon should sign off");
     assert.notEqual(
