@@ -994,7 +994,7 @@ export interface UiCursor {
 
 /** Active-presentation UI snapshot (GET /v1/ui). */
 export interface UiState {
-  mode: "shooter" | "use";
+  mode: "shooter" | "use" | "device";
   /** The open MFD panel, or null when none is open. */
   active_panel: UiPanel | null;
   /**

@@ -51,6 +51,14 @@ pub(crate) struct MfdUtilities {
 }
 
 impl MfdUtilities {
+    pub(crate) fn character_open(&self) -> bool {
+        self.character
+    }
+    pub(crate) fn inspect_entity(&mut self, entity: EntityId) {
+        *self = Self::default();
+        self.selected = Some(entity);
+    }
+
     pub(crate) fn has_left_panel(&self) -> bool {
         self.research || self.empty_logs || self.access_cards || self.selected.is_some()
     }

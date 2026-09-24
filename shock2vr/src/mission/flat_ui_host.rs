@@ -224,6 +224,8 @@ struct CursorItem {
 /// open, the panel's latest components (from `Effect::SetUI`), and the
 /// cursor/pointer bookkeeping needed to render and hit-test them.
 pub struct FlatUiHost {
+    pub(crate) device: bool,
+    pub(crate) scan_label: Option<String>,
     active_panel: Option<EntityId>,
     /// Panel size in panel-local pixels (from `SetUI.world_size`); `None`
     /// until the panel's first `SetUI` arrives (the frame after opening).
@@ -337,6 +339,8 @@ struct PlacementPreview {
 impl FlatUiHost {
     pub fn new() -> FlatUiHost {
         FlatUiHost {
+            device: false,
+            scan_label: None,
             active_panel: None,
             panel_size_px: None,
             panel_sidecar: None,
@@ -680,7 +684,7 @@ impl FlatUiHost {
 
     /// Utility geometry uses the same viewport mapping as the readouts.
     pub fn utility_elements_debug(&self) -> Vec<crate::game_scene::DebugUiElement> {
-        if self.strip.is_none() {
+        if self.strip.is_none() && !self.device {
             return Vec::new();
         }
         self.utilities
@@ -982,11 +986,22 @@ impl FlatUiHost {
         // themselves live in the shared core below.
         let pointer = pointer.map(|pointer| CanvasPointer {
             canvas_pos: pointer_to_canvas(
-                CANVAS_SIZE,
+                if self.device {
+                    super::mfd_device::SIZE
+                } else {
+                    CANVAS_SIZE
+                },
                 pointer.position,
                 self.screen_size,
                 ScaleMode::PreserveAspect,
-            ),
+            )
+            .and_then(|point| {
+                if self.device {
+                    super::mfd_device::to_native(point, self.utilities.character_open())
+                } else {
+                    Some(point)
+                }
+            }),
             pressed: pointer.pressed,
             grabbing: false,
             grabbing_hands: [false; 2],
@@ -1068,7 +1083,7 @@ impl FlatUiHost {
             }
         }
 
-        if self.active_panel.is_none() && self.strip.is_none() {
+        if self.active_panel.is_none() && self.strip.is_none() && !self.device {
             self.cursor_canvas = None;
             return (Vec::new(), Vec::new());
         }
@@ -1106,7 +1121,7 @@ impl FlatUiHost {
             .and_then(|s| s.size_px)
             .map(strip_canvas_rect);
         let over_strip = strip_rect.map(|r| r.contains(canvas_pos)).unwrap_or(false);
-        if let Some(rect) = strip_rect {
+        if let Some(rect) = strip_rect.or(self.device.then_some(Rect::new(0.0, 0.0, 0.0, 0.0))) {
             let holster_item = holster_readout_rects(rect)
                 .iter()
                 .position(|r| r.contains(canvas_pos))
@@ -1405,14 +1420,17 @@ impl FlatUiHost {
     fn build_canvas(&self) -> Option<UiCanvas> {
         let strip_rect = self.strip_rect();
         let panel_rect = self.panel_rect();
-        if strip_rect.is_none() && panel_rect.is_none() && self.readouts.is_none() {
+        if strip_rect.is_none() && panel_rect.is_none() && self.readouts.is_none() && !self.device {
             return None;
         }
         let mut canvas = UiCanvas::new(CANVAS_SIZE);
+        if self.device {
+            self.utilities.draw(&mut canvas);
+        }
         // The bottom readouts paint FIRST, so the MFD slot keeps the 10 px it
         // overlaps the bio panel by - the stacking the flat HUD had when it
         // drew them under this canvas.
-        if let Some(readouts) = self.readouts.as_ref() {
+        if let Some(readouts) = self.readouts.as_ref().filter(|_| !self.device) {
             readouts::emit_use_mode(&mut canvas, readouts);
         }
         if let (Some(strip), Some(rect)) = (self.strip.as_ref(), strip_rect) {
@@ -1573,7 +1591,22 @@ impl FlatUiHost {
                 ),
             };
         }
-        Some(canvas)
+        Some(if self.device {
+            super::mfd_device::compose(
+                canvas,
+                self.utilities.character_open(),
+                self.readouts
+                    .as_ref()
+                    .map(|r| r.resources)
+                    .unwrap_or([0; 2]),
+                self.scan_label.as_deref(),
+                panel_rect.is_some()
+                    || self.utilities.has_left_panel()
+                    || self.utilities.character_open(),
+            )
+        } else {
+            canvas
+        })
     }
 
     /// Screen-space presentation (flat): the canvas letterboxed onto the
@@ -1723,6 +1756,34 @@ impl FlatUiHost {
             }
             _ => Vec::new(),
         }
+    }
+
+    pub(super) fn device_debug_elements(
+        &self,
+        elements: Vec<crate::game_scene::DebugUiElement>,
+    ) -> Vec<crate::game_scene::DebugUiElement> {
+        if !self.device {
+            return elements;
+        }
+        elements
+            .into_iter()
+            .filter_map(|mut element| {
+                let [x, y, w, h] = element.rect;
+                let rect = super::mfd_device::from_native(
+                    Rect::new(x, y, w, h),
+                    self.utilities.character_open(),
+                )?;
+                element.rect = [rect.x, rect.y, rect.w, rect.h];
+                let screen = crate::ui::canvas_rect_to_screen(
+                    rect,
+                    super::mfd_device::SIZE,
+                    self.screen_size,
+                    ScaleMode::PreserveAspect,
+                );
+                element.screen_rect = [screen.x, screen.y, screen.w, screen.h];
+                Some(element)
+            })
+            .collect()
     }
 
     fn to_screen_rect(&self, r: Rect) -> [f32; 4] {

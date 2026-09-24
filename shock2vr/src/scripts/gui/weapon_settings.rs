@@ -92,16 +92,46 @@ const ROW_LABELS: [&str; 2] = ["setting_0", "setting_1"];
 const UNLOAD_LABEL: &str = "unload";
 
 #[derive(shipyard::Unique, Clone, Copy, Default)]
-pub(crate) struct WeaponSettingsTarget(pub Option<EntityId>);
+pub(crate) struct WeaponSettingsTarget {
+    entity: Option<EntityId>,
+    scanned: bool,
+}
 
 impl WeaponSettingsTarget {
     pub(crate) fn select(world: &World, weapon: EntityId) {
         world.add_unique(Self::default());
-        world.borrow::<shipyard::UniqueViewMut<Self>>().unwrap().0 = Some(weapon);
+        *world.borrow::<shipyard::UniqueViewMut<Self>>().unwrap() = Self {
+            entity: Some(weapon),
+            scanned: false,
+        };
+    }
+
+    pub(crate) fn select_scanned(world: &World, weapon: EntityId) {
+        Self::select(world, weapon);
+        world
+            .borrow::<shipyard::UniqueViewMut<Self>>()
+            .unwrap()
+            .scanned = true;
     }
 
     fn resolve(world: &World) -> Option<EntityId> {
-        let target = world.borrow::<shipyard::UniqueView<Self>>().ok()?.0?;
+        let selection = *world.borrow::<shipyard::UniqueView<Self>>().ok()?;
+        let target = selection.entity?;
+        if selection.scanned {
+            use cgmath::InnerSpace;
+            let player = world
+                .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
+                .ok()?;
+            let positions = world
+                .borrow::<shipyard::View<dark::properties::PropPosition>>()
+                .ok()?;
+            let position = positions.get(target).ok()?.position;
+            return (world
+                .borrow::<shipyard::View<dark::properties::PropBaseGunDesc>>()
+                .is_ok_and(|v| v.get(target).is_ok())
+                && (position - player.pos).magnitude() <= 3.0 / crate::METERS_PER_WORLD_UNIT)
+                .then_some(target);
+        }
         crate::wielded_weapon::resolve_weapon_target(world, Some(target))
     }
 }

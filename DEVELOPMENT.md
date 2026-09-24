@@ -907,3 +907,14 @@ and retrieve it with a fresh squeeze.
 The cyber interface's left and right paperdoll arm wells show the corresponding
 holstered items. They are read-only storage indicators; the weapon selectors
 below still operate on the items actually held in each hand.
+
+### Experimental belt MFD device
+
+`cargo dbgr --mission earth.mis --vr --experimental mfd_device` replaces the
+belt card with a handheld MFD prototype. Draw with squeeze, aim and pull its
+trigger to scan; use the free hand's pointer to click or squeeze loot out of the
+screen. Release to return it. Nanites/modules and LOG / KEY / MFD / RES / ? sit
+below the original panel, with the HRM plug alongside when applicable.
+`--experimental mfd_device_preview` presents the same compact canvas in flat
+mode for layout checks. See [the spike notes](projects/vr-mfd-device.md) for
+scope, controls, verification and the remaining headset/asset work.
