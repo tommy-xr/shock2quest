@@ -5,7 +5,9 @@ returns to the authored belt anchor when released. Player balances, credentials,
 logs and research stay in their existing owners; the device is a transient
 presentation, not another inventory item or a second copy of player state.
 
-Run the handheld experiment:
+Enable **Pause → Developer → Body inventory → MFD device prototype** on Quest
+or any VR runtime. The session-only `vr_mfd_device` toggle defaults off and
+is also available through the debug API. For a repeatable desktop launch, run:
 
 ```sh
 cargo dbgr --mission earth.mis --vr --experimental mfd_device

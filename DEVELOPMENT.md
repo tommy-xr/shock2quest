@@ -910,6 +910,8 @@ below still operate on the items actually held in each hand.
 
 ### Experimental belt MFD device
 
+Enable **Developer → Body inventory → MFD device prototype** (`vr_mfd_device`,
+session-only, default off), or launch with the flag below.
 `cargo dbgr --mission earth.mis --vr --experimental mfd_device` replaces the
 belt card with a handheld MFD prototype. Draw with squeeze, aim and pull its
 trigger to scan; use the free hand's pointer to click or squeeze loot out of the

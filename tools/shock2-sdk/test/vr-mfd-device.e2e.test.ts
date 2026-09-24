@@ -9,7 +9,8 @@ for (const hand of ["left", "right"] as const) {
     skip: !enabled, timeout: 180_000,
   }, async () => {
     await using game = await GameServer.launch({ mission: "earth.mis", port: 0,
-      debugFlags: ["--vr", "--experimental", "mfd_device"] });
+      debugFlags: hand === "left" ? ["--vr", "--experimental", "mfd_device"] : ["--vr"] });
+    if (hand === "right") await game.devParams.set("vr_mfd_device", 1);
     await game.step({ frames: 30 });
     const [reader] = await game.entities.byTemplate(262);
     assert.ok(reader);
@@ -52,6 +53,11 @@ for (const hand of ["left", "right"] as const) {
     assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.hand, null);
     await drawPersonalCard(game, hand);
     assert.equal((await game.ui.state()).active_panel, null);
+    if (hand === "right") {
+      await game.devParams.set("vr_mfd_device", 0);
+      await game.step({ frames: 3 });
+      assert.equal((await game.ui.state()).panel_pose, null, "live toggle releases device UI ownership");
+    }
   });
 }
 

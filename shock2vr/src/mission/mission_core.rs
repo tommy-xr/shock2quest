@@ -5048,7 +5048,8 @@ impl MissionCore {
         // clear the weapon-safe latch once every trigger is released.
         self.vr_use_mode_pointer = None;
         self.device_panel = None;
-        let device_enabled = game_options.experimental_features.contains("mfd_device");
+        let device_enabled = game_options.experimental_features.contains("mfd_device")
+            || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE);
         let device_hand = self.personal_card.hand.filter(|i| {
             device_enabled
                 && !self.use_mode
@@ -14521,7 +14522,9 @@ impl MissionCore {
         ));
 
         if options.presentation_mode == crate::PresentationMode::Vr {
-            if options.experimental_features.contains("mfd_device") {
+            if options.experimental_features.contains("mfd_device")
+                || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE)
+            {
                 if self.personal_card.hand.is_none() {
                     if let Some(transform) =
                         self.personal_card.transform(player.pos, player.rotation)
