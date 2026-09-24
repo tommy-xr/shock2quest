@@ -4184,6 +4184,9 @@ impl MissionCore {
         if suppressed_input.is_some() {
             self.button_jump = false;
         }
+        // The camera still follows the tracked head while controls are
+        // suppressed: a dead player can look around the fallen view.
+        let tracked_head_rotation = input_context.head.rotation;
         let input_context = suppressed_input.as_ref().unwrap_or(input_context);
         // Refill the per-frame AI pathfind budget - only on advancing frames,
         // so paused zero-dt ticks (debug runtime introspection) can't grant
@@ -5548,7 +5551,7 @@ impl MissionCore {
 
         let neutral_eye = death_camera::EyePose::flat(
             crate::player_eye_height_for(self.player_handle.is_crouched()),
-            input_context.head.rotation,
+            tracked_head_rotation,
         );
         self.flat_eye =
             (game_options.presentation_mode == crate::PresentationMode::Flat).then(|| {
