@@ -104,6 +104,10 @@ pub enum RuntimeCommand {
         request: shock2vr::game_scene::DebugPlayerStatsRequest,
         reply: oneshot::Sender<Result<shock2vr::player_stats::PlayerStats, String>>,
     },
+    ApplyStatModifier {
+        request: shock2vr::game_scene::StatModifierRequest,
+        reply: oneshot::Sender<Result<shock2vr::player_stats::PlayerStats, String>>,
+    },
 
     /// Get current player position
     GetPlayerPosition(oneshot::Sender<Vector3<f32>>),

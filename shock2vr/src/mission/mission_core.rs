@@ -3934,6 +3934,10 @@ impl MissionCore {
             .0
             .clear();
 
+        self.world.run(|mut quests: UniqueViewMut<QuestInfo>| {
+            quests.player_stats_mut().modifiers.clear();
+        });
+        self.refresh_implant_effects();
         self.death_camera = Some(self.begin_death_camera());
 
         vec![Effect::PlaySound {
@@ -4871,6 +4875,13 @@ impl MissionCore {
                 }
             },
         );
+
+        let expired = self.world.run(|mut quests: UniqueViewMut<QuestInfo>| {
+            quests.player_stats_mut().tick_modifiers(time.elapsed)
+        });
+        if expired {
+            self.refresh_implant_effects();
+        }
 
         // Tick the player's sustained psi powers down and expire them.
         self.world
@@ -17263,6 +17274,32 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             template_id,
             name,
         })
+    }
+
+    fn apply_stat_modifier(
+        &mut self,
+        request: &crate::game_scene::StatModifierRequest,
+    ) -> Result<crate::player_stats::PlayerStats, String> {
+        if request.source.trim().is_empty() {
+            return Err("modifier source must not be empty".into());
+        }
+        let duration = std::time::Duration::try_from_secs_f32(request.duration_secs)
+            .map_err(|_| "modifier duration must be finite and nonnegative".to_string())?;
+        let mut quests = self
+            .world
+            .borrow::<UniqueViewMut<QuestInfo>>()
+            .map_err(|_| "scene has no character sheet".to_string())?;
+        let stats = quests.player_stats_mut();
+        stats.apply_modifier(crate::player_stats::TimedStatModifier {
+            source: request.source.clone(),
+            stat: request.stat,
+            delta: request.delta,
+            remaining: duration,
+        });
+        let result = stats.clone();
+        drop(quests);
+        self.refresh_implant_effects();
+        Ok(result)
     }
 
     fn set_player_stats(

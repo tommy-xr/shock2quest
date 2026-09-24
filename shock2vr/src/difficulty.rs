@@ -71,8 +71,7 @@ impl GlobalDifficultyParams {
     }
     pub fn limits(&self, difficulty: Difficulty, stats: &PlayerStats) -> (i32, i32) {
         let p = self.coefficients(difficulty);
-        // The current sheet contains base stats; when temporary stat modifiers
-        // gain a consumer, only HP should use effective Endurance. Psi uses base PSI.
+        // Retail uses effective Endurance for HP, but base PSI for pool capacity.
         let tank = if stats.has_os_trait(crate::scripts::gui::TRAIT_TANK) {
             crate::scripts::gui::TANK_HP_BONUS
         } else {

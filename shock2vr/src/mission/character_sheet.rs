@@ -183,7 +183,12 @@ impl CharacterSheet {
                     HAlign::Left,
                     VAlign::Top,
                 );
-                for arrow in 0..(*level).clamp(0, 6) {
+                let cap = if self.tab == 0 {
+                    crate::player_stats::EFFECTIVE_STAT_CAP
+                } else {
+                    6
+                };
+                for arrow in 0..(*level).clamp(0, cap) {
                     canvas.image(
                         Rect::new(
                             483.0 + arrow as f32 * 17.0,
