@@ -1210,6 +1210,21 @@ impl PlayerInteraction for VrInteraction {
         self.left_hand = left_hand;
 
         left_msgs.append(&mut right_msgs);
+        if ctx
+            .input
+            .pose_tracking
+            .is_some_and(|p| !p.head || !p.hands[0] || !p.hands[1])
+        {
+            // Feeding is a deliberate two-hand gesture. A tracking-loss release
+            // may drop the item normally, but must not irreversibly recycle it.
+            left_msgs.retain(|effect| {
+                !matches!(effect,
+                    VirtualHandEffect::OutMessage { message }
+                    if matches!(message.payload, crate::scripts::MessagePayload::ProvideForConsumption { .. })
+                        && crate::scripts::item_tool::is_recycler(ctx.world, message.to)
+                )
+            });
+        }
         left_msgs
     }
 

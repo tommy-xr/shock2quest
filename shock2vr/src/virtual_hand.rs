@@ -339,7 +339,11 @@ impl VirtualHand {
                     // e.g. post any dropped item into a held container.
                     let two_hand_target = held_by_other_hand.filter(|other_held| {
                         (hand_position - other_hand_position).magnitude() <= TWO_HAND_TOOL_REACH
-                            && crate::scripts::maintenance::offers_to(world, entity_id, *other_held)
+                            && (crate::scripts::maintenance::offers_to(
+                                world,
+                                entity_id,
+                                *other_held,
+                            ) || crate::scripts::item_tool::is_recycler(world, *other_held))
                     });
 
                     // Exactly one recipient: a deliberate two-hand gesture wins

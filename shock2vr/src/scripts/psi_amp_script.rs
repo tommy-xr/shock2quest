@@ -266,7 +266,7 @@ impl Script for PsiAmpScript {
 }
 
 /// The player's current psi points (0 when the player has no psi pool).
-fn player_psi_points(world: &World) -> i32 {
+pub(super) fn player_psi_points(world: &World) -> i32 {
     let player_info = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
     let v_psi = world
         .borrow::<View<dark::properties::PropPsiState>>()
@@ -329,7 +329,7 @@ fn burnout(world: &World, amp_entity: EntityId) -> Effect {
 /// selected; this is the belt-and-braces check on the cast paths. Fails
 /// closed: the unique is seeded unconditionally at mission load, so a
 /// missing one is a setup bug - don't let it disable the gate.
-fn power_is_known(world: &World, template_id: i32) -> bool {
+pub(super) fn power_is_known(world: &World, template_id: i32) -> bool {
     world
         .borrow::<UniqueView<crate::psi::PlayerPsiKnownPowers>>()
         .map(|known| known.0.contains(&template_id))
@@ -370,6 +370,17 @@ fn cast_selected_power(
     // duration instead of firing a projectile.
     if power.power.activation_type == psi::ACTIVATION_TYPE_SUSTAINED {
         return cast_sustained_power(world, amp_entity, &power, effective_psi);
+    }
+
+    if super::item_tool::is_item_power(power.template_id) {
+        return super::item_tool::begin(
+            world,
+            super::item_tool::ItemUse {
+                tool: amp_entity,
+                power: Some(power.template_id),
+                effective_psi,
+            },
+        );
     }
 
     // Instant powers resolve immediately - no duration, no projectile. Some
@@ -837,7 +848,7 @@ fn clamped_self_heal(data: &[f32; 4], effective_psi: i32, current_hp: i32, max_h
 }
 
 /// The amp's `GunFlash` links supply the cast visual (Spinning Psi Ring).
-fn amp_cast_flashes(world: &World, amp_entity: EntityId) -> Vec<Effect> {
+pub(super) fn amp_cast_flashes(world: &World, amp_entity: EntityId) -> Vec<Effect> {
     super::script_util::get_all_links_with_template(world, amp_entity, |link| match link {
         dark::properties::Link::GunFlash(data) => Some(*data),
         _ => None,

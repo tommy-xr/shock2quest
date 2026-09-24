@@ -194,6 +194,17 @@ pub enum AIPropertyUpdate {
 
 #[derive(Clone, Debug)]
 pub enum Effect {
+    BeginItemUse {
+        request: super::item_tool::ItemUse,
+    },
+    ApplyItemUse {
+        request: super::item_tool::ItemUse,
+        target: EntityId,
+    },
+    RechargeItemEnergy {
+        entity_id: EntityId,
+        level: f32,
+    },
     SetPsiSword {
         amp: EntityId,
         enabled: bool,

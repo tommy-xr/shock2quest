@@ -263,6 +263,19 @@ pub struct PropDrainAmount(pub f32);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropStackCount(pub i32);
 
+/// Item-authored quantities and prices for duplication, transmutation and recycling.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropFabricate(pub i32);
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropFabricateCost(pub i32);
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropAlchemy(pub f32);
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropRecycle(pub i32);
+/// Number of units removed by a single item operation (e.g. one ammo clip).
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropStackIncrement(pub i32);
+
 /// `P$CombineTy`: the label two objects must share to stack together. The
 /// original engine gates every merge on this matching, then bumps the
 /// combinee's `PropStackCount` - so the label, not the template, decides what
@@ -1615,6 +1628,36 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$StackCoun",
             |reader, _len| read_i32(reader),
             PropStackCount,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Fabricate",
+            |r, _| read_i32(r),
+            PropFabricate,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$FabCost",
+            |r, _| read_i32(r),
+            PropFabricateCost,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Alchemy",
+            |r, _| read_single(r),
+            PropAlchemy,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Recycle",
+            |r, _| read_i32(r),
+            PropRecycle,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$StackInc",
+            |r, _| read_i32(r),
+            PropStackIncrement,
             accumulator::latest,
         ),
         define_prop(
@@ -3110,6 +3153,69 @@ mod tests {
             .into_iter()
             .find(|p| p.name() == "P$Scale")
             .expect("P$Scale definition should be registered")
+    }
+
+    #[test]
+    fn item_conversion_properties_read_authored_integer_and_float_values() {
+        let (props, _, _) = get::<Box<dyn ReadAndSeek>>();
+        let mut world = World::new();
+        let item = world.add_entity(());
+        for (name, bytes) in [
+            ("P$Fabricate", 6i32.to_le_bytes()),
+            ("P$FabCost", 45i32.to_le_bytes()),
+            ("P$Alchemy", 1.25f32.to_le_bytes()),
+            ("P$Recycle", 2i32.to_le_bytes()),
+            ("P$StackInc", 12i32.to_le_bytes()),
+        ] {
+            let definition = props.iter().find(|p| p.name() == name).unwrap();
+            let mut reader: Box<dyn ReadAndSeek> = Box::new(Cursor::new(bytes.to_vec()));
+            definition.read(&mut reader, 4).initialize(&mut world, item);
+        }
+        assert_eq!(
+            world
+                .borrow::<View<PropFabricate>>()
+                .unwrap()
+                .get(item)
+                .unwrap()
+                .0,
+            6
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropFabricateCost>>()
+                .unwrap()
+                .get(item)
+                .unwrap()
+                .0,
+            45
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropAlchemy>>()
+                .unwrap()
+                .get(item)
+                .unwrap()
+                .0,
+            1.25
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropRecycle>>()
+                .unwrap()
+                .get(item)
+                .unwrap()
+                .0,
+            2
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropStackIncrement>>()
+                .unwrap()
+                .get(item)
+                .unwrap()
+                .0,
+            12
+        );
     }
 
     #[test]
