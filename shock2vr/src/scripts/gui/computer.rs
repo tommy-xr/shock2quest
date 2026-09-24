@@ -16,8 +16,8 @@ use crate::{
 };
 
 use super::keypad::{
-    HackOutcomeEffects, HackPhase, HackState, HrmContext, KeyPadMsg, draw_hack_board,
-    draw_hrm_text, hack_diff, hack_goal_text, handle_hack_msg, object_state,
+    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_panel, hack_diff,
+    handle_hack_msg, object_state,
 };
 
 /// Xerxes: "Security system offline."
@@ -171,16 +171,14 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
         let Some(diff) = hack_diff(world, entity_id) else {
             return Vec::new();
         };
-        let mut components = draw_hack_board(&state.hack, diff, ComputerMsg::Hack);
-        components.extend(draw_hrm_text(
+        draw_hack_panel(
             world,
-            &hack_goal_text(world, entity_id),
+            entity_id,
+            &state.hack,
             diff,
-            HrmContext::Hack {
-                security_computer: self.security,
-            },
-        ));
-        components
+            self.security,
+            ComputerMsg::Hack,
+        )
     }
 
     fn get_config(&self) -> GuiConfig {

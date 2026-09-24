@@ -296,7 +296,7 @@ const FALLBACK_HACK_TEXT: &str = "Complete the circuit to hack this computer.";
 
 /// What hacking `entity` does: its `P$HackText`, resolved against
 /// `hacktext.str`.
-pub(crate) fn hack_goal_text(world: &World, entity: EntityId) -> String {
+fn hack_goal_text(world: &World, entity: EntityId) -> String {
     world
         .borrow::<View<dark::properties::PropHackText>>()
         .ok()
@@ -327,10 +327,33 @@ pub(crate) fn draw_hrm_text<T: Clone>(
     components
 }
 
+/// A hack board for `entity`: the board plus its goal, failure chance and odds.
+pub(crate) fn draw_hack_panel<TMsg, F>(
+    world: &World,
+    entity: EntityId,
+    state: &HackState,
+    diff: PropHackDiff,
+    security_computer: bool,
+    wrap: F,
+) -> Vec<GuiComponent<TMsg>>
+where
+    TMsg: Clone,
+    F: Fn(KeyPadMsg) -> TMsg + Copy,
+{
+    let mut components = draw_hack_board(state, diff, wrap);
+    components.extend(draw_hrm_text(
+        world,
+        &hack_goal_text(world, entity),
+        diff,
+        HrmContext::Hack { security_computer },
+    ));
+    components
+}
+
 /// Retail's odds readout under the board (`jargon.str`, one key set per
 /// mode): starting difficulty, what skill, CYB and bonuses take off, the
 /// final difficulty and the mine count.
-pub(crate) fn hrm_breakdown(world: &World, diff: PropHackDiff, context: HrmContext) -> String {
+fn hrm_breakdown(world: &World, diff: PropHackDiff, context: HrmContext) -> String {
     let mode = match context {
         HrmContext::Hack { .. } => 0,
         HrmContext::Repair => 1,
@@ -386,7 +409,7 @@ pub(crate) fn hrm_breakdown(world: &World, diff: PropHackDiff, context: HrmConte
 }
 
 /// Retail's "N%" readout: the chance a node fails, after skill and stat.
-pub(crate) fn hrm_failure_percent(world: &World, diff: PropHackDiff, context: HrmContext) -> i32 {
+fn hrm_failure_percent(world: &World, diff: PropHackDiff, context: HrmContext) -> i32 {
     100 - effective_hrm_values(world, diff, context).0
 }
 
@@ -746,16 +769,9 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
     ) -> Vec<GuiComponent<KeyPadMsg>> {
         let hack_diff = hack_diff_for_entity(_world, _entity_id);
         if let Some(hack_diff) = hack_diff {
-            let mut components = draw_hack_board(&_state.hack, hack_diff, |msg| msg);
-            components.extend(draw_hrm_text(
-                _world,
-                &hack_goal_text(_world, _entity_id),
-                hack_diff,
-                HrmContext::Hack {
-                    security_computer: false,
-                },
-            ));
-            return components;
+            return draw_hack_panel(_world, _entity_id, &_state.hack, hack_diff, false, |msg| {
+                msg
+            });
         }
 
         // Retail shkkeypd.cpp draws the complete keypad2 artwork and puts
