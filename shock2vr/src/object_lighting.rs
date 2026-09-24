@@ -157,7 +157,8 @@ pub fn lights_for_position(
     let ambient = spatial.get_ambient_light() + vec3(ambient_boost, ambient_boost, ambient_boost);
     let mut lights = LightArray::new()
         .with_object_lighting(ambient, dev_params::get(dev_params::OBJECT_LIGHT_WRAP))
-        .with_specular(dev_params::get(dev_params::OBJECT_SPECULAR));
+        .with_specular(dev_params::get(dev_params::OBJECT_SPECULAR))
+        .with_veins(dev_params::get(dev_params::SHINE_VEINS));
 
     let Some(cell) = spatial.get_cell_from_position(position) else {
         // Outside the world rep (or in a scene with none) - no cell, no lights.

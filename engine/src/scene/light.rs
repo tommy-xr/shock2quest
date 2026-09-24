@@ -192,6 +192,8 @@ pub struct LightArray {
     /// a capture or at 0.
     pub environment: Option<std::rc::Rc<crate::texture::CubeTexture>>,
     pub reflection: f32,
+    /// Scales how far unmasked shine highlights gather onto veins.
+    pub veins: f32,
 }
 
 impl LightArray {
@@ -205,6 +207,7 @@ impl LightArray {
             specular: 0.0,
             environment: None,
             reflection: 0.0,
+            veins: 0.0,
         }
     }
 
@@ -250,6 +253,11 @@ impl LightArray {
         self
     }
 
+    pub fn with_veins(mut self, veins: f32) -> Self {
+        self.veins = veins;
+        self
+    }
+
     /// This array's lights plus as many of `scene`'s as still fit, with the
     /// scene's taking priority.
     ///
@@ -271,6 +279,7 @@ impl LightArray {
             specular: self.specular,
             environment: self.environment.clone(),
             reflection: self.reflection,
+            veins: self.veins,
         };
         for source in [scene, self] {
             for (index, light) in source.iter_active() {

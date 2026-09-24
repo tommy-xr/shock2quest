@@ -28,6 +28,12 @@ pub struct Shine {
     pub passes: u32,
     /// Scales the lights' highlight strength on this surface.
     pub specular: f32,
+    /// How far the highlight gathers onto the procedural vein mask
+    /// (`super::veins`): 0 leaves it untouched, 1 confines it to the veins.
+    /// For surfaces whose mask is their own diffuse, not an authored glint map.
+    pub veins: f32,
+    /// Vein repeats per UV unit.
+    pub vein_scale: f32,
 }
 
 /// `light` is ambient plus the lamps reaching the fragment, before albedo:
@@ -46,6 +52,9 @@ uniform float shinePasses;
 uniform float shineSpecular;
 uniform samplerCube shineEnvironment;
 uniform float shineReflection;
+uniform sampler2D shineVeins;
+uniform float shineVeinStrength;
+uniform float shineVeinScale;
 
 // Highlight exponent. Higher reads wetter but sparkles on low-poly meshes in
 // a headset.
@@ -58,6 +67,9 @@ const float REFLECTION_LOD = 3.0;
 // Schlick reflectance head-on (above water's 0.02 so it reads at a glance);
 // grazing angles approach 1.
 const float REFLECTION_F0 = 0.05;
+// Vein-mask gain: the mask covers ~1/10 of a surface, so its ridges shine
+// brighter than the even highlight they replace.
+const float SHINE_VEIN_GAIN = 2.5;
 
 bool shineHighlights() {
     return shineEnabled && shineSpecular > 0.0;
@@ -95,6 +107,11 @@ vec4 applyShine(vec4 base, vec3 light, vec3 specular, float opacity, vec2 uv, ve
     // the glossiest glints. The ramp only shapes the authored sheen.
     float gloss = mix(SHINE_BASE_GLOSS, 1.0, mask.a) * opacity;
     vec3 highlight = mask.rgb * gloss * specular * shineSpecular;
+    // Uniform per draw: surfaces without veins skip the extra sample.
+    if (shineVeinStrength > 0.0) {
+        float vein = texture(shineVeins, uv * shineVeinScale).r;
+        highlight *= mix(1.0, vein * SHINE_VEIN_GAIN, min(shineVeinStrength, 1.0));
+    }
     if (shineReflection > 0.0) {
         vec3 mirrored = reflect(-toEye, normal);
         vec3 seen = textureLod(shineEnvironment, environmentDirection(mirrored), REFLECTION_LOD).rgb;
@@ -121,6 +138,7 @@ vec4 applyShine(vec4 base, vec3 light, vec3 specular, float opacity, vec2 uv, ve
 const MASK_UNIT: u32 = 2;
 const RAMP_UNIT: u32 = 3;
 const ENVIRONMENT_UNIT: u32 = 4;
+const VEINS_UNIT: u32 = 5;
 
 pub(crate) struct ShineUniforms {
     enabled: i32,
@@ -134,6 +152,9 @@ pub(crate) struct ShineUniforms {
     specular: i32,
     environment: i32,
     reflection: i32,
+    veins: i32,
+    vein_strength: i32,
+    vein_scale: i32,
 }
 impl ShineUniforms {
     pub fn new(program: u32) -> Self {
@@ -152,6 +173,9 @@ impl ShineUniforms {
             specular: loc("shineSpecular"),
             environment: loc("shineEnvironment"),
             reflection: loc("shineReflection"),
+            veins: loc("shineVeins"),
+            vein_strength: loc("shineVeinStrength"),
+            vein_scale: loc("shineVeinScale"),
         }
     }
 
@@ -167,6 +191,7 @@ impl ShineUniforms {
             gl::Uniform1i(self.mask, MASK_UNIT as i32);
             gl::Uniform1i(self.ramp, RAMP_UNIT as i32);
             gl::Uniform1i(self.environment, ENVIRONMENT_UNIT as i32);
+            gl::Uniform1i(self.veins, VEINS_UNIT as i32);
             // Unsampled when disabled: the branch is uniform across the draw.
             let Some(shine) = shine else {
                 return;
@@ -191,6 +216,12 @@ impl ShineUniforms {
                 None => 0.0,
             };
             gl::Uniform1f(self.reflection, reflection);
+            let vein_strength = lights.veins * shine.veins;
+            gl::Uniform1f(self.vein_strength, vein_strength);
+            if vein_strength > 0.0 {
+                super::veins::shared_vein_texture().bind_to(context, VEINS_UNIT);
+                gl::Uniform1f(self.vein_scale, shine.vein_scale);
+            }
         }
     }
 }

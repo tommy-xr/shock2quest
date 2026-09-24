@@ -459,6 +459,10 @@ dev_params! {
     /// Strength of the mission's captured surroundings reflected in those same
     /// wet surfaces. 0 turns reflections off.
     OBJECT_REFLECTION = Lighting::float("object_reflection", "Obj reflection", 3.0, 0.0, 4.0, 0.1),
+    /// Scales how far the highlight on organic surfaces without an authored
+    /// glint map (worm launcher, growth) gathers onto procedural veins. 0
+    /// spreads it evenly across the surface.
+    SHINE_VEINS = Lighting::float("shine_veins", "Shine veins", 1.0, 0.0, 1.0, 0.05),
     /// Enables the detached debug ("free") camera. This is the *gate*, not
     /// the camera's own on/off: while it is false the toggle input is not
     /// even read, so a stray `Alt+V` (or controller chord) during normal play

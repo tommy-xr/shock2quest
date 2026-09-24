@@ -116,6 +116,8 @@ pub(crate) fn append_incidence_overlays(
                     } else {
                         1.0
                     },
+                    veins: vein_strength(profile, pass.texture.is_some()),
+                    vein_scale: 2.0,
                 });
             }
             return;
@@ -145,6 +147,18 @@ pub(crate) fn append_incidence_overlays(
         overlay.blend_mode = blend_mode;
         overlay.set_depth_write(false);
         objects.push(overlay);
+    }
+}
+
+/// How far a shine's highlight gathers onto procedural veins. A diffuse
+/// reused as the mask spreads the highlight evenly; authored glint maps keep
+/// their own. Growth keeps half its even gloss: its painted veins do not
+/// follow the procedural ones.
+fn vein_strength(profile: Profile, authored_mask: bool) -> f32 {
+    match (profile, authored_mask) {
+        (_, true) => 0.0,
+        (Profile::WetGrowth, false) => 0.5,
+        (_, false) => 0.8,
     }
 }
 
@@ -222,6 +236,13 @@ mod tests {
         assert_eq!(uniform_stack(&stack), Some((&stack[0], 2)));
         assert_eq!(uniform_stack(&[pass("a"), pass("b")]), None);
         assert_eq!(uniform_stack(&[]), None);
+    }
+
+    #[test]
+    fn only_unmasked_shine_gathers_onto_veins() {
+        assert_eq!(vein_strength(Profile::Organic, true), 0.0);
+        assert!(vein_strength(Profile::OrganicWeapon, false) > 0.0);
+        assert!(vein_strength(Profile::WetGrowth, false) > 0.0);
     }
 
     #[test]
