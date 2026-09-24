@@ -2811,54 +2811,66 @@ impl LevelGeometry {
 }
 
 /// Build a level's collision geometry. `None` when the level has no geometry.
-///
-/// The trimesh and its per-triangle materials are pushed together in one pass,
-/// so "one material entry per triangle" is structural rather than asserted.
 pub fn build_level_geometry(level: &SystemShock2Level) -> Option<LevelGeometry> {
     if level.all_geometry.is_empty() {
         return None;
     }
 
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
-    let mut per_triangle_material = Vec::new();
-    let mut material_names: Vec<String> = Vec::new();
-
-    for geo in level.all_geometry.iter().filter(|geo| !geo.is_water_surface()) {
-        let material = intern_surface_material(
-            level
-                .textures
-                .0
-                .get(geo.texture_idx as usize)
-                .and_then(|texture| texture.material.as_deref()),
-            &mut material_names,
-        );
-
-        let verts = &geo.verts;
-        let mut idx = 0;
-        let len = verts.len();
-
-        while idx + 2 < len {
-            let dest_idx = vertices.len() as u32;
-
-            vertices.push(vec_to_npoint(verts[idx].position));
-            vertices.push(vec_to_npoint(verts[idx + 1].position));
-            vertices.push(vec_to_npoint(verts[idx + 2].position));
-
-            indices.push([dest_idx, dest_idx + 1, dest_idx + 2]);
-            per_triangle_material.push(material);
-
-            idx += 3;
-        }
-    }
-
-    let collider = ColliderBuilder::trimesh(vertices, indices).ok()?.build();
+    let triangles = level_triangles(&level.all_geometry, &level.textures.0);
+    let collider = ColliderBuilder::trimesh(triangles.vertices, triangles.indices)
+        .ok()?
+        .build();
 
     Some(LevelGeometry {
         collider,
-        per_triangle_material,
-        material_names,
+        per_triangle_material: triangles.per_triangle_material,
+        material_names: triangles.material_names,
     })
+}
+
+/// A level's trimesh buffers and the material of each triangle.
+struct LevelTriangles {
+    vertices: Vec<Point<Real>>,
+    indices: Vec<[u32; 3]>,
+    per_triangle_material: Vec<u16>,
+    material_names: Vec<String>,
+}
+
+/// The trimesh and its per-triangle materials, pushed together in one pass so
+/// "one material entry per triangle" is structural rather than asserted.
+fn level_triangles(
+    geometry: &[dark::mission::SystemShock2Geometry],
+    textures: &[dark::mission::texture_list::SystemShock2Texture],
+) -> LevelTriangles {
+    let mut triangles = LevelTriangles {
+        vertices: Vec::new(),
+        indices: Vec::new(),
+        per_triangle_material: Vec::new(),
+        material_names: Vec::new(),
+    };
+
+    // Water boundaries render, but must not block swimming or consume a material slot.
+    for geo in geometry.iter().filter(|geo| !geo.is_water_surface()) {
+        let material = intern_surface_material(
+            textures
+                .get(geo.texture_idx as usize)
+                .and_then(|texture| texture.material.as_deref()),
+            &mut triangles.material_names,
+        );
+
+        for verts in geo.verts.chunks_exact(3) {
+            let dest_idx = triangles.vertices.len() as u32;
+            triangles
+                .vertices
+                .extend(verts.iter().map(|vert| vec_to_npoint(vert.position)));
+            triangles
+                .indices
+                .push([dest_idx, dest_idx + 1, dest_idx + 2]);
+            triangles.per_triangle_material.push(material);
+        }
+    }
+
+    triangles
 }
 
 /// The table entry for a texture's material, interning its tag in `names`.
@@ -2884,32 +2896,6 @@ fn intern_surface_material(material: Option<&str>, names: &mut Vec<String>) -> u
 
     names.push(material.to_owned());
     (names.len() - 1) as u16
-}
-
-/// The per-triangle material table for a level's geometry, in the same order
-/// [`build_level_geometry`] pushes triangles into the trimesh.
-///
-/// Pure, so the ordering contract is testable without building a trimesh; the
-/// shipped path interleaves the same interning with the trimesh build.
-#[cfg(test)]
-fn build_surface_material_table(
-    geometry: &[dark::mission::SystemShock2Geometry],
-    textures: &[dark::mission::texture_list::SystemShock2Texture],
-) -> (Vec<u16>, Vec<String>) {
-    let mut per_triangle = Vec::new();
-    let mut names: Vec<String> = Vec::new();
-
-    for geo in geometry {
-        let material = intern_surface_material(
-            textures
-                .get(geo.texture_idx as usize)
-                .and_then(|texture| texture.material.as_deref()),
-            &mut names,
-        );
-        per_triangle.extend(std::iter::repeat_n(material, geo.verts.len() / 3));
-    }
-
-    (per_triangle, names)
 }
 
 /// How hard a swing landed: the smaller of two readings, because a blow has to
@@ -13806,7 +13792,11 @@ mod tests {
             texture_with(None),
         ];
 
-        let (per_triangle, names) = build_surface_material_table(&geometry, &textures);
+        let LevelTriangles {
+            per_triangle_material: per_triangle,
+            material_names: names,
+            ..
+        } = level_triangles(&geometry, &textures);
 
         assert_eq!(per_triangle.len(), 6, "one entry per triangle");
         assert_eq!(names, vec!["metal".to_owned(), "fabric".to_owned()]);
@@ -13889,8 +13879,11 @@ mod tests {
         let Some(level) = try_load_level("medsci1.mis") else {
             return;
         };
-        let (per_triangle, names) =
-            build_surface_material_table(&level.all_geometry, &level.textures.0);
+        let LevelTriangles {
+            per_triangle_material: per_triangle,
+            material_names: names,
+            ..
+        } = level_triangles(&level.all_geometry, &level.textures.0);
 
         eprintln!("medsci1 surface materials: {names:?}");
         assert!(

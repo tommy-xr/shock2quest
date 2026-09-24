@@ -70,7 +70,10 @@ test(
       "expected MedSci's creatures to be walking around",
     );
     assert.ok(
-      footsteps.some((sound) => tagValue(sound, "material2") !== "metal"),
+      footsteps.some((sound) => {
+        const ground = tagValue(sound, "material2");
+        return ground !== undefined && ground !== "metal";
+      }),
       `footsteps should name the deck underfoot: ${describe(footsteps)}`,
     );
   },
