@@ -650,7 +650,7 @@ See `references/entities.md` for comprehensive documentation of:
 For faster development, the project includes convenient cargo aliases (defined in `.cargo/config.toml`):
 
 - `cargo dr` - Desktop runtime (shorthand for `cargo run -p desktop_runtime --`)
-- `cargo dq` - Dark query CLI tool (shorthand for `cargo run -p dark_query --`)
+- `cargo dq` - Dark query CLI tool (shorthand for `cargo run --release -p dark_query --`)
 - `cargo dv` - Dark viewer tool (shorthand for `cargo run -p dark_viewer --`)
 - `cargo dbgr` - Debug runtime with HTTP control (shorthand for `cargo run --release -p debug_runtime --`; release, like manual playtesting, so agents and humans share one build)
 - `cargo dbgc` - Debug command client (shorthand for `cargo run -p debug_command --`)
