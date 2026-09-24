@@ -475,8 +475,10 @@ where
         HackPhase::Won => Some("winh.pcx"),
         HackPhase::Lost => Some("loseh.pcx"),
         HackPhase::Unwinnable => Some("failh.pcx"),
-        HackPhase::InsufficientNanites => Some("payh.pcx"),
-        HackPhase::Unpaid | HackPhase::Playing => None,
+        // Retail covers an unpaid board with "CLICK START TO PROCEED" until
+        // START is paid for.
+        HackPhase::Unpaid | HackPhase::InsufficientNanites => Some("payh.pcx"),
+        HackPhase::Playing => None,
     };
     if let Some(texture) = result_texture {
         components.push(
@@ -840,6 +842,28 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
 
 #[cfg(test)]
 mod tests {
+    /// An unpaid board is covered by PAYH until START is paid for.
+    #[test]
+    fn an_unpaid_board_asks_for_start() {
+        let diff = PropHackDiff {
+            success_chance: 20,
+            critical_chance: 10,
+            cost: 3.0,
+        };
+        let shows_pay = |phase| {
+            let state = HackState {
+                phase,
+                ..HackState::default()
+            };
+            draw_hack_board(&state, diff, |msg| msg)
+                .iter()
+                .any(|c| matches!(c, GuiComponent::Image { texture, .. } if texture == "payh.pcx"))
+        };
+        assert!(shows_pay(HackPhase::Unpaid));
+        assert!(shows_pay(HackPhase::InsufficientNanites));
+        assert!(!shows_pay(HackPhase::Playing));
+    }
+
     #[test]
     fn security_expert_is_a_contextual_bonus_for_trained_hackers() {
         for (owned, security, base, expected) in [
