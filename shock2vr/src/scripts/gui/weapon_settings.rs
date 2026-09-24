@@ -21,6 +21,7 @@ use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::PropGunState;
 use shipyard::{EntityId, Get, View, World};
 
+use super::hrm_plug::{self, PlugKind, draw_plug, plug_sidecar};
 use super::keypad::{
     HackOutcomeEffects, HackPhase, HackState, HrmContext, KeyPadMsg, draw_hack_board,
     handle_hrm_msg, hrm_breakdown, hrm_failure_percent,
@@ -88,14 +89,6 @@ const FAILURE_RECT: Rect = Rect::new(14.0, 49.0, 30.0, 12.0);
 /// Retail's odds well below the board (TEXT_Y2), left of the START button.
 const ODDS_RECT: Rect = Rect::new(15.0, 180.0, 137.0, 104.0);
 
-/// Retail's 73x194 HRM plug beside the MFD, dropped 96px from its top, with
-/// its 52x74 button at plug-local (16, 114). Retail puts it at screen x 181
-/// beside an MFD at x 2, so it overlaps the body's right edge by 9px.
-const PLUG_X: f32 = 179.0;
-const PLUG_Y: f32 = 96.0;
-const PLUG_W: f32 = 73.0;
-const PLUG_H: f32 = 194.0;
-const PLUG_BUTTON: Rect = Rect::new(16.0, 114.0, 52.0, 74.0);
 const HIGHLIGHT: &str = "iface/setsel.pcx";
 /// The UNLOAD button's rest and lit art, the pair every shipped button ships as.
 const UNLOAD_ART: &str = "iface/unload0.pcx";
@@ -127,29 +120,24 @@ pub struct WeaponSettingsGuiState {
     board: Option<(HrmJob, dark::properties::PropHackDiff, HackState)>,
 }
 
-struct Plug {
-    backdrop: &'static str,
-    button: [&'static str; 2],
-    label: &'static str,
-    msg: WeaponSettingsGuiMsg,
-}
-
-/// The plug the settings panel raises for `weapon`, if any.
-fn plug_for(world: &World, weapon: EntityId) -> Option<Plug> {
+/// The plug the settings panel raises for `weapon`, if any, with its button's
+/// message and label.
+fn plug_for(
+    world: &World,
+    weapon: EntityId,
+) -> Option<(PlugKind, WeaponSettingsGuiMsg, &'static str)> {
     if weapon_repair::is_broken(world, weapon) {
-        weapon_repair::supported(world, weapon).then_some(Plug {
-            backdrop: "plugrep.pcx",
-            button: ["plugr0.pcx", "plugr1.pcx"],
-            label: "repair",
-            msg: WeaponSettingsGuiMsg::Repair,
-        })
+        weapon_repair::supported(world, weapon).then_some((
+            PlugKind::Repair,
+            WeaponSettingsGuiMsg::Repair,
+            "repair",
+        ))
     } else {
-        weapon_modification::supported(world, weapon).then_some(Plug {
-            backdrop: "plugmod.pcx",
-            button: ["plugm0.pcx", "plugm1.pcx"],
-            label: "modify",
-            msg: WeaponSettingsGuiMsg::Modify,
-        })
+        weapon_modification::supported(world, weapon).then_some((
+            PlugKind::Modify,
+            WeaponSettingsGuiMsg::Modify,
+            "modify",
+        ))
     }
 }
 
@@ -312,20 +300,8 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         }
         // Retail raises its HRM plug beside the settings MFD: repair for a
         // Broken gun, modify for a working one.
-        if let Some(plug) = plug_for(world, weapon) {
-            components.push(
-                gui::image(plug.backdrop)
-                    .with_position(vec2(PLUG_X, PLUG_Y))
-                    .with_size(vec2(PLUG_W, PLUG_H)),
-            );
-            components.push(
-                gui::button(plug.msg)
-                    .with_position(vec2(PLUG_X + PLUG_BUTTON.x, PLUG_Y + PLUG_BUTTON.y))
-                    .with_size(vec2(PLUG_BUTTON.w, PLUG_BUTTON.h))
-                    .with_image(plug.button[0])
-                    .with_hover(ButtonHoverBehavior::Texture(plug.button[1].to_owned()))
-                    .with_label(plug.label),
-            );
+        if let Some((kind, msg, label)) = plug_for(world, weapon) {
+            components.extend(draw_plug(kind, Some((msg, label))));
         }
 
         let modification = world
@@ -430,7 +406,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
     ) -> GuiConfig {
         let mut config = self.get_config();
         if WeaponSettingsTarget::resolve(world).is_some_and(|w| has_plug_room(world, w)) {
-            config.screen_size_in_pixels.x = PLUG_X + PLUG_W;
+            config.screen_size_in_pixels.x = hrm_plug::CANVAS_W;
         }
         config
     }
@@ -447,11 +423,9 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         if !has_plug_room(world, weapon) {
             return None;
         }
-        Some(PanelSidecar {
-            body_width: PANEL_W,
-            rect: (state.board.is_none() && plug_for(world, weapon).is_some())
-                .then_some(Rect::new(PLUG_X, PLUG_Y, PLUG_W, PLUG_H)),
-        })
+        Some(plug_sidecar(
+            state.board.is_none() && plug_for(world, weapon).is_some(),
+        ))
     }
 
     fn handle_msg(
@@ -709,7 +683,7 @@ mod tests {
                 .get_config_for(EntityId::dead(), &world, &WeaponSettingsGuiState::default())
                 .screen_size_in_pixels
                 .x,
-            PLUG_X + PLUG_W,
+            hrm_plug::CANVAS_W,
             "the plug widens the canvas beside the settings",
         );
 
@@ -751,10 +725,10 @@ mod tests {
                 .screen_size_in_pixels
                 .x
         };
-        assert_eq!(width(&world), PLUG_X + PLUG_W);
+        assert_eq!(width(&world), hrm_plug::CANVAS_W);
 
         world.add_component(weapon, PropObjState(ObjectState::Normal));
-        assert_eq!(width(&world), PLUG_X + PLUG_W);
+        assert_eq!(width(&world), hrm_plug::CANVAS_W);
         let sidecar = WeaponSettingsGui.sidecar(EntityId::dead(), &world, &state);
         assert_eq!(sidecar.map(|s| s.rect), Some(None), "no plug to click");
     }

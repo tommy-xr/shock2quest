@@ -2935,8 +2935,8 @@ mod tests {
 
     #[test]
     fn replicator_with_hack_sidecar_keeps_native_size() {
-        let rect = panel_canvas_rect(vec2(261.0, 296.0));
-        assert_eq!((rect.w, rect.h), (261.0, 296.0));
+        let rect = panel_canvas_rect(vec2(252.0, 296.0));
+        assert_eq!((rect.w, rect.h), (252.0, 296.0));
     }
 
     #[test]

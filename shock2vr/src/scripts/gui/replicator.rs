@@ -5,7 +5,7 @@ use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
-    gui::{ButtonHoverBehavior, Gui, GuiComponent, GuiConfig, GuiCursor},
+    gui::{Gui, GuiComponent, GuiConfig, GuiCursor, PanelSidecar},
     mission::GlobalEntityMetadata,
     quest_info::QuestInfo,
     ui::Rect,
@@ -17,6 +17,7 @@ use crate::gui;
 use crate::scripts::{Effect, script_util::*};
 
 use super::{
+    hrm_plug::{self, PlugKind, draw_plug, plug_sidecar},
     keypad::{
         HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
         handle_hack_msg, object_state,
@@ -117,11 +118,9 @@ fn refusal(world: &World, entity_id: EntityId) -> Effect {
     ])
 }
 
-fn can_hack(world: &World, entity_id: EntityId) -> bool {
-    !matches!(
-        object_state(world, entity_id),
-        ObjectState::Broken | ObjectState::Destroyed | ObjectState::Hacked
-    ) && hack_diff(world, entity_id).is_some()
+/// Whether the replicator has a hacked catalog and the HRM data to reach it.
+fn hackable(world: &World, entity_id: EntityId) -> bool {
+    hack_diff(world, entity_id).is_some()
         && world
             .borrow::<View<PropReplicatorHackedContents>>()
             .ok()
@@ -130,6 +129,25 @@ fn can_hack(world: &World, entity_id: EntityId) -> bool {
 
 /// Xerxes' replicator-hacked line.
 const REPLICATOR_HACKED_SCHEMA: &str = "xer07";
+
+fn can_hack(world: &World, entity_id: EntityId) -> bool {
+    !matches!(
+        object_state(world, entity_id),
+        ObjectState::Broken | ObjectState::Destroyed | ObjectState::Hacked
+    ) && hackable(world, entity_id)
+}
+
+/// Whether the catalog shows a plug: HACK while hackable, the inert repair
+/// plug once broken.
+fn shows_plug(world: &World, entity_id: EntityId) -> bool {
+    can_hack(world, entity_id) || object_state(world, entity_id) == ObjectState::Broken
+}
+
+/// Whether the canvas keeps room for a plug. Unlike `can_hack` this survives
+/// a hack's win or critical failure, so the VR quad never resizes while open.
+fn has_plug_room(world: &World, entity_id: EntityId) -> bool {
+    hackable(world, entity_id) || object_state(world, entity_id) == ObjectState::Broken
+}
 
 fn replicator_hack_success(entity_id: EntityId, _world: &World) -> Effect {
     Effect::combine(vec![
@@ -177,9 +195,6 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         }
 
         let current_state = object_state(world, entity_id);
-        let has_sidecar = can_hack(world, entity_id) || current_state == ObjectState::Broken;
-        let main_x = if has_sidecar { 73.0 } else { 0.0 };
-        let at = |rect: Rect| Rect::new(main_x + rect.x, rect.y, rect.w, rect.h);
 
         // A broken replicator draws only BREPLIC.PCX's static.
         let backdrop = if current_state == ObjectState::Broken {
@@ -189,7 +204,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         };
         let mut components: Vec<GuiComponent<ReplicatorMsg>> = vec![
             gui::image(backdrop)
-                .with_position(vec2(main_x, 0.0))
+                .with_position(vec2(0.0, 0.0))
                 .with_size(vec2(188.0, 296.0)),
         ];
         if let Some(contents) = active_inventory(world, entity_id) {
@@ -210,7 +225,6 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                 }
                 let metadata = entity_metadata.0.get(obj_name).unwrap();
                 let obj_icon = metadata.obj_icon.as_ref().unwrap();
-                let rect = at(rect);
 
                 // Zero-alpha hit target over the box art, like the weapon
                 // settings rows.
@@ -261,30 +275,15 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         }
 
         if can_hack(world, entity_id) {
-            // Retail raises this 73x194 companion beside the MFD, with its
-            // 52x74 PLUGH button at sidecar-local (16,114).
-            components.push(
-                gui::image("plughack.pcx")
-                    .with_position(vec2(0.0, 96.0))
-                    .with_size(vec2(73.0, 194.0)),
-            );
-            components.push(
-                gui::button(ReplicatorMsg::OpenHack)
-                    .with_position(vec2(16.0, 210.0))
-                    .with_size(vec2(52.0, 74.0))
-                    .with_image("plugh0.pcx")
-                    .with_hover(ButtonHoverBehavior::Texture("plugh1.pcx".to_owned()))
-                    .with_label("hack-replicator"),
-            );
+            components.extend(draw_plug(
+                PlugKind::Hack,
+                Some((ReplicatorMsg::OpenHack, "hack-replicator")),
+            ));
         } else if current_state == ObjectState::Broken {
             // Original raises the repair plug for a broken replicator. Repair
             // is not implemented yet, so expose the authored status art but
             // deliberately no clickable repair/hack/purchase path.
-            components.push(
-                gui::image("plugrep.pcx")
-                    .with_position(vec2(0.0, 96.0))
-                    .with_size(vec2(73.0, 194.0)),
-            );
+            components.extend(draw_plug(PlugKind::Repair, None));
             return components;
         }
 
@@ -292,12 +291,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         // live balance at (104, 274) beside it.
         components.push(super::PanelText::text(
             &format!("{:04}", player_nanite_total(world)),
-            Rect::new(
-                main_x + 104.0,
-                274.0,
-                48.0,
-                super::PanelText::line_height(world),
-            ),
+            Rect::new(104.0, 274.0, 48.0, super::PanelText::line_height(world)),
         ));
 
         components
@@ -314,15 +308,29 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         &self,
         entity_id: EntityId,
         world: &World,
-        state: &ReplicatorState,
+        _state: &ReplicatorState,
     ) -> GuiConfig {
-        let has_sidecar = state.panel == ReplicatorPanel::Inventory
-            && (can_hack(world, entity_id)
-                || object_state(world, entity_id) == ObjectState::Broken);
+        let width = if has_plug_room(world, entity_id) {
+            hrm_plug::CANVAS_W
+        } else {
+            188.0
+        };
         GuiConfig {
             world_offset: Vector3::new(0.0, 0.0, -1.0),
-            screen_size_in_pixels: Vector2::new(if has_sidecar { 261.0 } else { 188.0 }, 296.0),
+            screen_size_in_pixels: Vector2::new(width, 296.0),
         }
+    }
+
+    /// The plug shows beside the catalog, not the board.
+    fn sidecar(
+        &self,
+        entity_id: EntityId,
+        world: &World,
+        state: &ReplicatorState,
+    ) -> Option<PanelSidecar> {
+        has_plug_room(world, entity_id).then(|| {
+            plug_sidecar(state.panel == ReplicatorPanel::Inventory && shows_plug(world, entity_id))
+        })
     }
 
     fn prepare_state_on_frob(&self, state: &mut ReplicatorState) {
@@ -576,6 +584,72 @@ mod tests {
             },
         );
         assert!(can_hack(&world, replicator));
+    }
+
+    /// The HACK plug sits right of the MFD, as retail raises it, and winning
+    /// the hack hides it without resizing the canvas.
+    #[test]
+    fn the_hack_plug_sits_right_and_its_room_outlives_the_win() {
+        let mut world = World::new();
+        let names = || {
+            [
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ]
+        };
+        let replicator = world.add_entity((
+            PropHackDiff {
+                success_chance: 50,
+                critical_chance: 0,
+                cost: 3.0,
+            },
+            PropReplicatorContents {
+                costs: [0; 6],
+                object_names: names(),
+            },
+            PropReplicatorHackedContents {
+                costs: [0; 6],
+                object_names: names(),
+            },
+        ));
+        world.add_unique(GlobalEntityMetadata(HashMap::new()));
+        let state = ReplicatorState::default();
+        let width = |world: &World| {
+            ReplicatorGui
+                .get_config_for(replicator, world, &state)
+                .screen_size_in_pixels
+                .x
+        };
+        let plug_x = ReplicatorGui
+            .get_components(&None, replicator, &world, &state)
+            .into_iter()
+            .find_map(|c| match c {
+                GuiComponent::Button {
+                    label: Some(label),
+                    position,
+                    ..
+                } if label == "hack-replicator" => Some(position.x),
+                _ => None,
+            });
+        assert!(
+            plug_x.is_some_and(|x| x > 188.0),
+            "plug right of the body: {plug_x:?}"
+        );
+        assert_eq!(width(&world), hrm_plug::CANVAS_W);
+
+        world.add_component(replicator, PropObjState(ObjectState::Hacked));
+        assert_eq!(width(&world), hrm_plug::CANVAS_W);
+        assert_eq!(
+            ReplicatorGui
+                .sidecar(replicator, &world, &state)
+                .map(|s| s.rect),
+            Some(None),
+            "no plug to click once hacked"
+        );
     }
 
     #[test]
