@@ -8,10 +8,15 @@ use super::{
     script_util::{play_environmental_sound, send_to_all_switch_links},
 };
 
-pub struct BaseButton {}
+pub struct BaseButton {
+    /// Presses whose own TurnOn is still in flight; their relay already happened.
+    pending_self_notifications: u32,
+}
 impl BaseButton {
     pub fn new() -> BaseButton {
-        BaseButton {}
+        BaseButton {
+            pending_self_notifications: 0,
+        }
     }
 
     pub fn is_locked(&self, entity_id: EntityId, world: &World) -> bool {
@@ -72,6 +77,7 @@ impl Script for BaseButton {
                         to: entity_id,
                     },
                 };
+                self.pending_self_notifications += 1;
                 let unlock = self
                     .lock_is_set(entity_id, world)
                     .then_some(Effect::SetLocked {
@@ -85,6 +91,14 @@ impl Script for BaseButton {
                         .collect(),
                 )
             }),
+
+            // A press's own notification is skipped: Frob already relayed.
+            MessagePayload::TurnOn { from }
+                if *from == entity_id && self.pending_self_notifications > 0 =>
+            {
+                self.pending_self_notifications -= 1;
+                Effect::NoEffect
+            }
 
             // In some places (like the computer for the engine room in eng1), invisible buttons are used as proxies -
             // there will be an actual button that sends a 'TurnOn' message to an invisible button. Not sure why
@@ -147,6 +161,7 @@ mod tests {
         let target = world.add_entity(());
         let locked = button_with_switch_link(&mut world, target, true);
         let unlocked = button_with_switch_link(&mut world, target, false);
+        let remote = world.add_entity(());
         let physics = PhysicsWorld::new();
         let mut button = BaseButton::new();
 
@@ -154,7 +169,7 @@ mod tests {
             locked,
             &world,
             &physics,
-            &MessagePayload::TurnOn { from: locked },
+            &MessagePayload::TurnOn { from: remote },
         );
         assert!(
             sent_messages(&locked_effect).is_empty(),
@@ -165,7 +180,7 @@ mod tests {
             unlocked,
             &world,
             &physics,
-            &MessagePayload::TurnOn { from: unlocked },
+            &MessagePayload::TurnOn { from: remote },
         );
         assert!(
             sent_messages(&unlocked_effect)
@@ -199,6 +214,7 @@ mod tests {
                 }],
             },
         ));
+        let remote = world.add_entity(());
         let physics = PhysicsWorld::new();
         let mut button = BaseButton::new();
 
@@ -206,7 +222,7 @@ mod tests {
             reader,
             &world,
             &physics,
-            &MessagePayload::TurnOn { from: reader },
+            &MessagePayload::TurnOn { from: remote },
         );
 
         assert!(
@@ -294,5 +310,31 @@ mod tests {
                 .can_unlock(&key),
             "unlocking a reader must retain the key card"
         );
+    }
+
+    #[test]
+    fn a_press_relays_to_each_switch_link_once() {
+        let mut world = World::new();
+        world.add_unique(QuestInfo::new());
+        let target = world.add_entity(());
+        let pressed = button_with_switch_link(&mut world, target, false);
+        let physics = PhysicsWorld::new();
+        let mut button = BaseButton::new();
+
+        let frob = button.handle_message(pressed, &world, &physics, &MessagePayload::Frob);
+        let notify_self = sent_messages(&frob)
+            .into_iter()
+            .find(|(to, _)| *to == pressed)
+            .expect("a press notifies the button itself")
+            .1;
+        // The mission delivers that notification back to the button next.
+        let relayed_again = button.handle_message(pressed, &world, &physics, &notify_self);
+
+        let to_target = sent_messages(&frob)
+            .into_iter()
+            .chain(sent_messages(&relayed_again))
+            .filter(|(to, _)| *to == target)
+            .count();
+        assert_eq!(to_target, 1);
     }
 }

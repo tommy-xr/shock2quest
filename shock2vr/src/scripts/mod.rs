@@ -1174,7 +1174,7 @@ impl ScriptWorld {
             "keypadunhackable" => gui_script(Box::new(KeyPadGui)),
             "keypad" => gui_script(Box::new(KeyPadGui)),
             "securitycomputer" => gui_script(Box::new(ComputerGui { security: true })),
-            "resurrectmachine" => Box::new(BaseButton {}),
+            "resurrectmachine" => Box::new(BaseButton::new()),
             "twostatebutton" => Box::new(BaseButton::new()),
 
             // weapons:
