@@ -2767,6 +2767,7 @@ pub struct MissionCore {
     /// Station security alarm bookkeeping, persisted with this mission.
     pub security_alarm: crate::security_alarm::SecurityAlarm,
     klaxon: crate::security_alarm::Klaxon,
+    listener_sounds: crate::listener_sounds::ListenerSounds,
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
     /// the next animation deterministically (debug hitbox inspection).
     pub debug_pose_index: u32,
@@ -3800,6 +3801,7 @@ impl MissionCore {
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
             security_alarm,
             klaxon: Default::default(),
+            listener_sounds: Default::default(),
             debug_pose_index: 0,
             debug_weapon_index: 0,
             player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),
@@ -10990,17 +10992,24 @@ impl MissionCore {
                     name,
                     source,
                     spatial,
-                } => play_schema_sound(
-                    &self.world,
-                    global_context,
-                    asset_cache,
-                    audio_context,
-                    handle,
-                    &name,
-                    source,
-                    spatial,
-                    false,
-                ),
+                } => {
+                    if !spatial
+                        && let Some(previous) = self.listener_sounds.replace(&name, handle.clone())
+                    {
+                        stop_sound(audio_context, previous);
+                    }
+                    play_schema_sound(
+                        &self.world,
+                        global_context,
+                        asset_cache,
+                        audio_context,
+                        handle,
+                        &name,
+                        source,
+                        spatial,
+                        false,
+                    );
+                }
                 Effect::PlayLoopingSound { handle, name } => play_schema_sound(
                     &self.world,
                     global_context,

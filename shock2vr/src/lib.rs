@@ -40,6 +40,7 @@ mod hand_feedback;
 mod hand_glove;
 mod hud;
 mod interaction;
+mod listener_sounds;
 mod mission;
 pub mod palette;
 pub mod pathfinding;
