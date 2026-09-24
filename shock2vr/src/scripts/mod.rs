@@ -1106,7 +1106,7 @@ impl ScriptWorld {
             "trapteleportplayer" => Box::new(TrapTeleportPlayer::new()),
             "traprouter" => Box::new(TrapRouter::new()),
             "trapsound" => Box::new(TrapSound::new()),
-            "trapsoundamb" => Box::new(TrapSound::new()),
+            "trapsoundamb" => Box::new(TrapSound::ambient()),
             "trapteleport" => Box::new(TrapTeleport::new()),
             "traptriplevel" => Box::new(TrapTripLevel::new()),
             "triggermulti" => Box::new(TriggerMulti::new()), // nacelle control

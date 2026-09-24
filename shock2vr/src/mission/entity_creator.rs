@@ -406,21 +406,19 @@ pub fn create_entity_core(
         .unwrap();
 
     let mut processed_scripts = if let Ok(scripts) = v_scripts.get(entity_id) {
-        // Map TrapSoundAmb -> TrapSound
-        scripts
-            .scripts
-            .iter()
-            .map(|s| {
-                if s == "TrapSoundAmb" {
-                    "TrapSound".to_owned()
-                } else {
-                    s.to_owned()
-                }
-            })
-            .collect()
+        scripts.scripts.clone()
     } else {
         Vec::new()
     };
+    // An object running both flavours (earth's narration traps: their own
+    // TrapSoundAmb plus the archetype's TrapSound) keeps one play, at the trap,
+    // so a late montage segment stays distant rather than at the ears.
+    if processed_scripts
+        .iter()
+        .any(|script| script.eq_ignore_ascii_case("TrapSound"))
+    {
+        processed_scripts.retain(|script| !script.eq_ignore_ascii_case("TrapSoundAmb"));
+    }
 
     // Create any internal scripts to power some properties
 
