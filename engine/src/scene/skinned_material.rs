@@ -2,6 +2,7 @@ extern crate gl;
 use std::rc::Rc;
 
 use super::incidence::{IncidencePass, IncidenceUniforms};
+use super::shine::{Shine, ShineUniforms};
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
@@ -186,11 +187,7 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
                 return;
             }
 
-            // Base material color (ambient)
-            vec3 finalColor = texColor.rgb * ambientLight * ambientIntensity;
-
-            // Add emissive contribution
-            finalColor += texColor.rgb * emissivity;
+            vec3 finalColor = texColor.rgb * emissivity;
 
             // Add the painted-on light. The branch is uniform across the draw,
             // so a mesh without a light never pays the second fetch.
@@ -198,18 +195,22 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
                 finalColor += texture(emissiveMask, texCoord).r * emissiveTint;
             }
 
-            // Calculate contribution from all 6 spotlights
+            // Light reaching the surface before albedo, shared with the shine.
             vec3 normal = normalize(worldNormal);
+            vec3 light = ambientLight * ambientIntensity;
             for (int i = 0; i < 6; i++) {
-                finalColor += calculateSpotlight(i, worldPos, normal, texColor.rgb);
+                light += calculateSpotlight(i, worldPos, normal, vec3(1.0));
             }
+            finalColor += texColor.rgb * light;
+            vec4 shaded = applyShine(vec4(finalColor, texColor.a * (1.0 - transparency)), light, 1.0 - transparency, texCoord, worldPos, normal);
 
-            fragColor = applyIncidence(vec4(finalColor, texColor.a * (1.0 - transparency)), texColor, worldPos, worldNormal);
+            fragColor = applyIncidence(shaded, texColor, worldPos, worldNormal);
         }
 "#;
 
 struct UnifiedUniforms {
     incidence: IncidenceUniforms,
+    shine: ShineUniforms,
     // Basic transformation matrices
     world_loc: i32,
     view_loc: i32,
@@ -244,6 +245,7 @@ static UNIFIED_SHADER_PROGRAM: OnceCell<(ShaderProgram, UnifiedUniforms)> = Once
 #[derive(Clone)]
 pub struct SkinnedMaterial {
     incidence: Option<IncidencePass>,
+    shine: Option<Shine>,
     silhouette_color: Option<Vector3<f32>>,
     has_initialized: bool,
     diffuse_texture: Rc<dyn TextureTrait>,
@@ -265,6 +267,7 @@ impl SkinnedMaterial {
         let mut material = self.clone();
         material.silhouette_color = Some(color);
         material.incidence = None;
+        material.shine = None;
         Box::new(material)
     }
 
@@ -301,6 +304,9 @@ impl SkinnedMaterial {
             uniforms
                 .incidence
                 .bind(self.incidence.as_ref(), render_context, view_matrix);
+            uniforms
+                .shine
+                .bind(self.shine.as_ref(), render_context, view_matrix);
 
             let projection = render_context.projection_matrix;
 
@@ -434,6 +440,10 @@ impl Material for SkinnedMaterial {
         self
     }
 
+    fn set_shine(&mut self, shine: Shine) {
+        self.shine = Some(shine);
+    }
+
     fn set_transparency_override(&mut self, transparency: Option<f32>) {
         self.transparency = match transparency {
             Some(value) => value.clamp(0.0, 1.0),
@@ -460,8 +470,9 @@ impl Material for SkinnedMaterial {
 
             let fragment_shader = crate::shader::build(
                 &format!(
-                    "{}\n{}",
+                    "{}\n{}\n{}",
                     super::incidence::GLSL,
+                    super::shine::GLSL,
                     UNIFIED_FRAGMENT_SHADER_SOURCE
                 ),
                 crate::shader::ShaderType::Fragment,
@@ -491,6 +502,7 @@ impl Material for SkinnedMaterial {
 
                 let uniforms = UnifiedUniforms {
                     incidence: IncidenceUniforms::new(shader.gl_id),
+                    shine: ShineUniforms::new(shader.gl_id),
                     // Basic transformation matrices
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
                     view_loc: gl::GetUniformLocation(shader.gl_id, c_str!("view").as_ptr()),
@@ -760,6 +772,7 @@ impl SkinnedMaterial {
     ) -> Box<dyn Material> {
         Box::new(Self {
             incidence: Some(pass),
+            shine: None,
             silhouette_color: None,
             diffuse_texture: texture,
             has_initialized: false,
@@ -780,6 +793,7 @@ impl SkinnedMaterial {
     ) -> Box<dyn Material> {
         Box::new(SkinnedMaterial {
             incidence: None,
+            shine: None,
             silhouette_color: None,
             diffuse_texture,
             has_initialized: false,

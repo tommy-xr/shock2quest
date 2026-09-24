@@ -61,6 +61,7 @@ pub mod lines_mesh;
 pub use lines_mesh::LinesMesh;
 
 pub mod material;
+pub mod shine;
 pub use material::Material;
 
 pub mod vertex;

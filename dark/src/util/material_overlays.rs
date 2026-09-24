@@ -1,9 +1,15 @@
 //! The first verified consumers of additive incidence passes. Keep selection
 //! narrow until other material profiles have their own rendering comparisons.
+use super::MaterialIncidencePass;
 use crate::importers::TEXTURE_IMPORTER;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, SkinnedMaterial, basic_material, incidence::IncidencePass},
+    scene::{
+        SceneObject, SkinnedMaterial, basic_material,
+        incidence::IncidencePass,
+        scene_object::BlendMode,
+        shine::{Shine, ShineBlend},
+    },
     texture::TextureTrait,
 };
 use std::{cell::RefCell, path::Path, rc::Rc};
@@ -45,16 +51,12 @@ pub(crate) fn append_incidence_overlays(
     let Some(profile) = profile(name) else {
         return;
     };
-    // Mounted goo's flat underside lies on the floor and z-fights it; the
-    // bias carries over to the overlay duplicated below.
+    // Mounted goo's flat underside lies on the floor and z-fights it.
     if profile == Profile::WetGrowth {
         if let Some(base) = objects.last_mut() {
             base.set_depth_bias(true);
         }
     }
-    let Some(base) = objects.last().map(SceneObject::duplicate) else {
-        return;
-    };
     // Mesh materials can share a basename with incomplete obj-family stubs.
     // Preserve the family through script includes and mask texture lookup.
     let material_name = if skinned {
@@ -67,31 +69,53 @@ pub(crate) fn append_incidence_overlays(
         // this surface's diffuse/alpha rather than another model's UV mask, and
         // keep it lit so dark rooms do not acquire glowing growth. Missing ramp
         // art follows the normal fallback below and adds no overlay.
-        vec![super::MaterialIncidencePass {
+        vec![MaterialIncidencePass {
             texture: None,
             ramp: "materials/nd-ir_shine".into(),
             tint: cgmath::vec3(0.5, 0.5, 0.5),
             unlit: false,
-            blend_mode: engine::scene::scene_object::BlendMode::AdditiveAlpha,
+            blend_mode: BlendMode::AdditiveAlpha,
         }]
     } else {
         super::object_material_incidence_passes(assets, &material_name)
     };
-    for pass in passes {
-        // Organic profiles first opt into their dedicated specular textures.
+    let passes: Vec<_> = passes
+        .into_iter()
+        // Organic profiles opt into their dedicated specular textures only.
         // Shared fill/rim passes using the diffuse texture remain a follow-up.
-        if profile == Profile::Organic && pass.texture.is_none() {
-            continue;
-        }
-        let texture: Rc<dyn TextureTrait> = if let Some(name) = pass.texture.as_deref() {
-            let Some(texture) = super::load_texture_with_fallback(assets, name) else {
-                continue;
-            };
-            texture
-        } else {
-            diffuse.clone()
+        .filter(|pass| profile != Profile::Organic || pass.texture.is_some())
+        .collect();
+    // Solid surfaces draw a uniform stack in their own pass. Decals keep
+    // separate overlays: their base is itself translucent.
+    if profile != Profile::PlanarDecal {
+        let blend = |pass: &MaterialIncidencePass| match pass.blend_mode {
+            BlendMode::AdditiveAlpha => Some(ShineBlend::Additive),
+            BlendMode::AlphaOverlay => Some(ShineBlend::Alpha),
+            _ => None,
         };
-        let Some(ramp) = load_incidence_ramp(assets, &pass.ramp) else {
+        if let Some((pass, count, blend)) =
+            uniform_stack(&passes).and_then(|(pass, count)| Some((pass, count, blend(pass)?)))
+        {
+            if let (Some(base), Some((mask, ramp))) =
+                (objects.last(), load_pass_art(assets, pass, &diffuse))
+            {
+                base.material.borrow_mut().set_shine(Shine {
+                    mask,
+                    ramp,
+                    tint: pass.tint,
+                    unlit: pass.unlit,
+                    blend,
+                    passes: count,
+                });
+            }
+            return;
+        }
+    }
+    let Some(base) = objects.last().map(SceneObject::duplicate) else {
+        return;
+    };
+    for pass in passes {
+        let Some((texture, ramp)) = load_pass_art(assets, &pass, &diffuse) else {
             continue;
         };
         let blend_mode = pass.blend_mode;
@@ -112,6 +136,30 @@ pub(crate) fn append_incidence_overlays(
         overlay.set_depth_write(false);
         objects.push(overlay);
     }
+}
+
+/// Authored materials repeat one pass to strengthen it: `(pass, count)` when
+/// every pass is that same pass.
+fn uniform_stack(passes: &[MaterialIncidencePass]) -> Option<(&MaterialIncidencePass, u32)> {
+    let first = passes.first()?;
+    passes
+        .iter()
+        .all(|pass| pass == first)
+        .then_some((first, passes.len() as u32))
+}
+
+/// The pass's bitmap (its own, or the surface diffuse) and ramp. Missing art
+/// omits the pass.
+fn load_pass_art(
+    assets: &mut AssetCache,
+    pass: &MaterialIncidencePass,
+    diffuse: &Rc<dyn TextureTrait>,
+) -> Option<(Rc<dyn TextureTrait>, Rc<dyn TextureTrait>)> {
+    let texture = match pass.texture.as_deref() {
+        Some(name) => super::load_texture_with_fallback(assets, name)?,
+        None => diffuse.clone(),
+    };
+    Some((texture, load_incidence_ramp(assets, &pass.ramp)?))
 }
 
 fn load_incidence_ramp(assets: &mut AssetCache, name: &str) -> Option<Rc<dyn TextureTrait>> {
@@ -145,6 +193,25 @@ mod tests {
         for name in ["got2_1", "goo2_", "ND-boss_head", "ordinary"] {
             assert!(profile(name).is_none(), "{name} must remain unchanged");
         }
+    }
+
+    fn pass(texture: &str) -> MaterialIncidencePass {
+        MaterialIncidencePass {
+            blend_mode: BlendMode::AdditiveAlpha,
+            texture: Some(texture.into()),
+            ramp: "materials/nd-ir_shine".into(),
+            tint: cgmath::vec3(1.0, 1.0, 1.0),
+            unlit: false,
+        }
+    }
+
+    /// ND-anegg repeats one pass twice; only that shape folds into the base.
+    #[test]
+    fn only_a_repeated_pass_folds_into_one_shine() {
+        let stack = [pass("nd-anegg_s"), pass("nd-anegg_s")];
+        assert_eq!(uniform_stack(&stack), Some((&stack[0], 2)));
+        assert_eq!(uniform_stack(&[pass("a"), pass("b")]), None);
+        assert_eq!(uniform_stack(&[]), None);
     }
 
     #[test]
