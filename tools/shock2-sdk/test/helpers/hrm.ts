@@ -37,7 +37,7 @@ export async function property(game: GameServer, entity: number, name: string) {
 /** Play paid HRM boards through the real UI until one is won. Avoids known
  * mines; a burned board is re-dealt, each re-deal another honest payment. */
 export async function winBoard(game: GameServer) {
-  const won = async () => (await elements(game)).some((e) => /win[hm]\.pcx/.test(e.texture ?? ""));
+  const won = async () => (await elements(game)).some((e) => /win[hmr]\.pcx/.test(e.texture ?? ""));
   for (let attempt = 0; attempt < 20; attempt++) {
     const start = (await elements(game)).find(
       (e) => e.label === "start-hack" || e.label === "reset-hack",
@@ -46,7 +46,7 @@ export async function winBoard(game: GameServer) {
     await clickElement(game, start);
     for (const node of (await elements(game)).filter((e) => e.label?.startsWith("node-"))) {
       const current = await elements(game);
-      if (current.some((e) => /(win|fail)[hm]\.pcx/.test(e.texture ?? ""))) break;
+      if (current.some((e) => /(win|fail)[hmr]\.pcx/.test(e.texture ?? ""))) break;
       const overlay = current.find(
         (e) => e.kind === "image" && e.rect[0] === node.rect[0] && e.rect[1] === node.rect[1],
       );
