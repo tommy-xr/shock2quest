@@ -392,5 +392,28 @@ pub fn hologram(
             source: Some("mfd_hologram".into()),
         })));
     }
+    // Dark authored textures can disappear against a dark room. A faint unlit
+    // copy keeps the projection readable while the textured copy supplies its
+    // detail. Retain skinning for creature meshes (the sensory-psi rim shader).
+    let glow: Vec<_> = objects
+        .iter()
+        .map(|object| {
+            let material = object.material.borrow();
+            let color = vec3(0.05, 1.0, 0.65);
+            let replacement = if let Some(skinned) = material
+                .as_any()
+                .downcast_ref::<engine::scene::SkinnedMaterial>()
+            {
+                skinned.silhouette(color)
+            } else {
+                engine::scene::color_material::create(color)
+            };
+            let mut glow = object.clone();
+            glow.material = std::rc::Rc::new(std::cell::RefCell::new(replacement));
+            glow.set_transparency(Some(0.80));
+            glow
+        })
+        .collect();
+    objects.extend(glow);
     objects
 }

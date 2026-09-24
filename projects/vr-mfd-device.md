@@ -128,6 +128,7 @@ A committed scan retains a translucent copy of the target model above the
 screen until another scan or holstering. The model's bounding sphere is fitted
 to an 8.5 cm diameter and rotates at 35 degrees per simulation second. This is
 render-only geometry, with per-object opacity and lighting overrides: it has no
-collider or inventory identity and does not alter the target's material. Targets
+collider or inventory identity and does not alter the target's material. A faint
+unlit green copy preserves its silhouette against dark backgrounds. Targets
 without a loaded model simply omit the miniature. The wider lower housing and
 hologram clearance still need headset comfort testing.

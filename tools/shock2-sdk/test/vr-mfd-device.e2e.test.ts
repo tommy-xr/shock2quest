@@ -30,7 +30,7 @@ for (const hand of ["left", "right"] as const) {
     assert.equal((await game.ui.state()).active_panel?.template_id, 262);
     const miniature = await game.scene.fromSource("mfd_hologram");
     assert.ok(miniature.length > 0, "scanning creates a mesh preview");
-    assert.ok(miniature.every(o => Math.abs(o.transparency! - .45) < .001 && !o.depth_write));
+    assert.ok(miniature.every(o => (Math.abs(o.transparency! - .45) < .001 || Math.abs(o.transparency! - .80) < .001) && !o.depth_write));
     const count = (await game.info()).player.hand_feedback!.body_gear!.personal_card.scans;
     await game.step({ frames: 30 });
     assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.scans, count);
