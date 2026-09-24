@@ -5,7 +5,7 @@ use shipyard::{Get, View, World};
 use tracing::trace;
 
 use crate::{
-    properties::{PropSchemaPlayParams, PropSymName},
+    properties::{PropSchemaLoopParams, PropSchemaPlayParams, PropSymName},
     ss2_chunk_file_reader::ChunkFileTableOfContents,
     ss2_common::{read_i32, read_string_with_size, read_u8, read_u32},
     ss2_entity_info::SystemShock2EntityInfo,
@@ -24,6 +24,9 @@ pub struct ResolvedSoundSchema {
     pub sample_name: String,
     pub volume_millibels: i32,
     pub pan_millibels: i32,
+    /// Repeat seamlessly until stopped (`P$SchLoopPa` with zero intervals).
+    /// Interval re-trigger loops still play once.
+    pub looping: bool,
 }
 
 impl ResolvedSoundSchema {
@@ -50,6 +53,7 @@ pub struct SoundSchema {
     name_to_schema_id: HashMap<String, i32>,
     pub id_to_samples: HashMap<i32, Vec<SchemaSample>>,
     id_to_play_params: HashMap<i32, PropSchemaPlayParams>,
+    id_to_loop_params: HashMap<i32, PropSchemaLoopParams>,
 }
 
 impl SoundSchema {
@@ -106,6 +110,10 @@ impl SoundSchema {
             sample_name,
             volume_millibels: params.volume,
             pan_millibels,
+            looping: self
+                .id_to_loop_params
+                .get(&schema_id)
+                .is_some_and(PropSchemaLoopParams::is_seamless),
         })
     }
 
@@ -155,8 +163,10 @@ impl SoundSchema {
         // and inherited playback values.
         let mut name_to_schema_id = HashMap::new();
         let mut id_to_play_params = HashMap::new();
+        let mut id_to_loop_params = HashMap::new();
         let v_sym_name = world.borrow::<View<PropSymName>>().unwrap();
         let v_play_params = world.borrow::<View<PropSchemaPlayParams>>().unwrap();
+        let v_loop_params = world.borrow::<View<PropSchemaLoopParams>>().unwrap();
         for k in id_to_samples.keys() {
             let entity = template_id_to_entity.get(k).unwrap();
             if let Ok(name) = v_sym_name.get(*entity) {
@@ -165,6 +175,9 @@ impl SoundSchema {
             if let Ok(params) = v_play_params.get(*entity) {
                 id_to_play_params.insert(*k, params.clone());
             }
+            if let Ok(params) = v_loop_params.get(*entity) {
+                id_to_loop_params.insert(*k, params.clone());
+            }
         }
 
         trace!("{:?}", name_to_schema_id);
@@ -172,6 +185,7 @@ impl SoundSchema {
             name_to_schema_id,
             id_to_samples,
             id_to_play_params,
+            id_to_loop_params,
         }
     }
 }
@@ -181,6 +195,13 @@ mod tests {
     use super::*;
 
     fn schema_with_params(params: PropSchemaPlayParams) -> SoundSchema {
+        schema_with(params, None)
+    }
+
+    fn schema_with(
+        params: PropSchemaPlayParams,
+        loop_params: Option<PropSchemaLoopParams>,
+    ) -> SoundSchema {
         SoundSchema {
             name_to_schema_id: HashMap::from([("test".to_owned(), -1)]),
             id_to_samples: HashMap::from([(
@@ -191,6 +212,7 @@ mod tests {
                 }],
             )]),
             id_to_play_params: HashMap::from([(-1, params)]),
+            id_to_loop_params: loop_params.into_iter().map(|p| (-1, p)).collect(),
         }
     }
 
@@ -200,6 +222,7 @@ mod tests {
             sample_name: "sample".to_owned(),
             volume_millibels: -2500,
             pan_millibels: -1000,
+            looping: false,
         };
         assert!((resolved.linear_gain() - 0.056_234_132).abs() < 0.000_001);
         let [left, right] = resolved.channel_gains();
@@ -230,5 +253,25 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(unpanned.resolve("test").unwrap().pan_millibels, 0);
+    }
+
+    #[test]
+    fn only_seamless_loop_params_resolve_as_looping() {
+        let resolve = |loop_params| {
+            schema_with(PropSchemaPlayParams::default(), loop_params)
+                .resolve("test")
+                .unwrap()
+                .looping
+        };
+        assert!(!resolve(None));
+        assert!(resolve(Some(PropSchemaLoopParams {
+            max_samples: 1,
+            ..Default::default()
+        })));
+        assert!(!resolve(Some(PropSchemaLoopParams {
+            interval_min: 500,
+            interval_max: 1500,
+            ..Default::default()
+        })));
     }
 }
