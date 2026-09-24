@@ -16,7 +16,7 @@
 //! heals) and aimed (Soma Transference) - cast so far; the remaining kinds are
 //! logged and skipped without spending points.
 
-use cgmath::{EuclideanSpace, InnerSpace, Point3, Transform, Vector3, point3, vec3};
+use cgmath::{EuclideanSpace, InnerSpace, Point3, Transform, Vector3};
 use engine::{audio::AudioHandle, game_log};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
@@ -742,21 +742,10 @@ fn amp_aim_ray(world: &World, amp_entity: EntityId) -> Option<(Point3<f32>, Vect
         .borrow::<View<crate::runtime_props::RuntimePropTransform>>()
         .ok()?;
     let transform = v_transform.get(amp_entity).ok()?.0;
-    let muzzle = world
-        .borrow::<View<crate::runtime_props::RuntimePropVhots>>()
-        .ok()
-        .and_then(|v_vhots| {
-            v_vhots
-                .get(amp_entity)
-                .ok()
-                .and_then(|v| v.0.first().map(|vhot| vhot.point))
-        })
-        .unwrap_or_else(|| point3(0.0, 0.0, 0.0));
-    // The barrel runs down the model's -X (the vhot sits at the -X tip), which
-    // is the axis `create_projectile` sends the bolt along.
+    let muzzle = crate::weapon_muzzle::resolve(world, amp_entity);
     Some((
-        transform.transform_point(muzzle),
-        transform.transform_vector(vec3(-1.0, 0.0, 0.0)).normalize(),
+        transform.transform_point(muzzle.point),
+        transform.transform_vector(muzzle.axis).normalize(),
     ))
 }
 
@@ -852,6 +841,7 @@ mod tests {
     use super::*;
     use crate::psi::{GlobalPsiPowers, PsiPowerSelection};
     use crate::quest_info::QuestInfo;
+    use cgmath::{point3, vec3};
 
     #[test]
     fn power_psi_prevents_burnout_damage_but_keeps_cost_and_failed_cast() {
@@ -917,6 +907,41 @@ mod tests {
                     | Effect::SetPsiCharge { .. }
             )));
         }
+    }
+
+    #[test]
+    fn soma_vr_aim_uses_visible_muzzle_without_vhots_and_authored_id_zero() {
+        use crate::runtime_props::{RuntimePropTransform, RuntimePropVhots};
+        use crate::weapon_muzzle::MuzzleFallback;
+        use cgmath::Matrix4;
+        use dark::ss2_bin_obj_loader::Vhot;
+        let mut world = World::new();
+        let amp = world.add_entity((
+            RuntimePropTransform(Matrix4::from_translation(vec3(10.0, 2.0, 3.0))),
+            MuzzleFallback {
+                point: point3(-0.6, 0.2, 0.1),
+                axis: vec3(0.0, 0.0, -1.0),
+            },
+        ));
+        let (origin, forward) = amp_aim_ray(&world, amp).unwrap();
+        assert!((origin - point3(9.4, 2.2, 3.1)).magnitude() < 0.0001);
+        assert_eq!(forward, vec3(0.0, 0.0, -1.0));
+        world.add_component(
+            amp,
+            RuntimePropVhots(vec![
+                Vhot {
+                    id: 2,
+                    point: point3(99.0, 99.0, 99.0),
+                },
+                Vhot {
+                    id: 0,
+                    point: point3(-1.0, 0.5, 0.0),
+                },
+            ]),
+        );
+        let (origin, forward) = amp_aim_ray(&world, amp).unwrap();
+        assert_eq!(origin, point3(9.0, 2.5, 3.0));
+        assert_eq!(forward, vec3(0.0, 0.0, -1.0));
     }
 
     #[test]

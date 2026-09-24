@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import { selectPsiPower } from "./helpers/psi.js";
+import { aimVrHandAt } from "./helpers/vr-hand.js";
 import { pullTrigger } from "./helpers/weapon.js";
 
 // End-to-end test for Soma Transference (SomaDrain), the tier-5 instant aimed
@@ -164,3 +165,25 @@ test(
     );
   },
 );
+
+test("VR Soma drains along the held amp muzzle", { skip: !e2eEnabled, timeout: 180_000 }, async () => {
+  await using game = await GameServer.launch({ mission: "debug_psi", debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  const [amp] = await game.entities.byTemplate(-247);
+  await aimVrHandAt(game, amp.position, 0.35);
+  await game.input.set("right_hand.squeeze", 1);
+  await game.step({ frames: 8 });
+  assert.equal((await game.info()).player.right_hand_entity_id, amp.id);
+  const monster = await spawnTarget(game);
+  const initialHp = await hitPoints(game, monster.id);
+  const playerId = (await game.info()).player.entity_id!;
+  await game.entities.sendMessage(playerId, { type: "Damage", amount: 20 });
+  await selectPsiPower(game, "SomaDrain");
+  await aimVrHandAt(game, (await game.entities.detail(monster.id)).position, 2.0, 1);
+  const before = (await game.info()).player;
+  await pullTrigger(game);
+  await game.step({ frames: 30 });
+  assert.equal((await game.info()).player.psi_points, before.psi_points! - PSI_COST);
+  assert.equal(await hitPoints(game, monster.id), Math.max(0, initialHp - DAMAGE));
+  assert.equal((await game.info()).player.hit_points, before.hit_points! + Math.min(TRANSFER, initialHp));
+});
