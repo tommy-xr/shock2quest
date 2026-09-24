@@ -850,6 +850,13 @@ pub enum Effect {
         /// keeps this false even when it has a `source` for attribution.
         spatial: bool,
     },
+    /// Non-spatial [`Effect::PlaySound`] that repeats until `StopSound` when
+    /// the schema authors a seamless loop (`P$SchLoopPa`), else plays once.
+    /// Opt-in: many authored loops are also played as one-shots.
+    PlayLoopingSound {
+        handle: AudioHandle,
+        name: String,
+    },
     PlaySpeech {
         entity_id: EntityId,
         voice_index: usize,

@@ -2766,6 +2766,7 @@ pub struct MissionCore {
     pub pathfinding_test: crate::mission::pathfinding_test::PathfindingTest,
     /// Station security alarm bookkeeping, persisted with this mission.
     pub security_alarm: crate::security_alarm::SecurityAlarm,
+    klaxon: crate::security_alarm::Klaxon,
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
     /// the next animation deterministically (debug hitbox inspection).
     pub debug_pose_index: u32,
@@ -3798,6 +3799,7 @@ impl MissionCore {
             path_visualization: PathVisualizationSystem::new(),
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
             security_alarm,
+            klaxon: Default::default(),
             debug_pose_index: 0,
             debug_weapon_index: 0,
             player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),
@@ -4318,6 +4320,7 @@ impl MissionCore {
         // Both HUD paths (the flat overlay and the VR forearm) read the alarm
         // from the world, so neither presentation owns it.
         self.security_alarm.publish(&self.world);
+        effects.extend(self.klaxon.update(&self.world));
 
         if let Some(aura) =
             crate::scripts::immolate::tick_immolate_aura(&self.world, time.elapsed.as_secs_f32())
@@ -10996,61 +10999,28 @@ impl MissionCore {
                     name,
                     source,
                     spatial,
-                } => {
-                    println!("Trying to play sound: {}", &name);
-                    let (resolved, has_schema) = resolve_schema(global_context, &name);
-                    let maybe_audio_clip = asset_cache
-                        .get_opt(&AUDIO_IMPORTER, &format!("{}.wav", resolved.sample_name));
-
-                    if let Some(audio_clip) = maybe_audio_clip {
-                        info!("Playing clip: {} handle: {:?}", name, &handle);
-                        let gain = resolved.linear_gain();
-                        // Spatial emitters (TrapSound narrations anchored at
-                        // their authored station) play at the source entity,
-                        // like the original engine's object sounds. Everything
-                        // else - UI feedback, audio logs, cutscene narration -
-                        // stays non-spatial at the ears even when it carries a
-                        // `source` for attribution.
-                        let maybe_position = if spatial {
-                            source.and_then(|id| get_entity_position(&self.world, id))
-                        } else {
-                            None
-                        };
-                        let play_options = if let Some(position) = maybe_position {
-                            crate::audio_log::PlayOptions::Spatial {
-                                position,
-                                source,
-                                gain,
-                            }
-                        } else {
-                            crate::audio_log::PlayOptions::ListenerRelative(
-                                AudioPlaybackSettings::listener_relative(
-                                    gain,
-                                    resolved.channel_gains(),
-                                ),
-                            )
-                        };
-                        // Observability: record scripted one-shot sounds (audio
-                        // logs, keypad beeps, ...) so headless tooling can assert
-                        // a schema actually resolved and played.
-                        crate::audio_log::play_and_record(
-                            audio_context,
-                            handle,
-                            None,
-                            audio_clip,
-                            play_options,
-                            crate::audio_log::PlayRecord {
-                                sample: &resolved.sample_name,
-                                volume_millibels: has_schema.then_some(resolved.volume_millibels),
-                                pan_millibels: has_schema.then_some(resolved.pan_millibels),
-                                tags: vec![("kind".to_string(), "sound".to_string())],
-                                source_entity: source.map(|id| source_entity(&self.world, id)),
-                            },
-                        );
-                    } else {
-                        warn!("Unable to load clip: {}", name)
-                    }
-                }
+                } => play_schema_sound(
+                    &self.world,
+                    global_context,
+                    asset_cache,
+                    audio_context,
+                    handle,
+                    &name,
+                    source,
+                    spatial,
+                    false,
+                ),
+                Effect::PlayLoopingSound { handle, name } => play_schema_sound(
+                    &self.world,
+                    global_context,
+                    asset_cache,
+                    audio_context,
+                    handle,
+                    &name,
+                    None,
+                    false,
+                    true,
+                ),
                 Effect::PlaySpeech {
                     entity_id,
                     voice_index,
@@ -11309,10 +11279,7 @@ impl MissionCore {
                     );
                 }
                 Effect::StopSound { handle } => {
-                    // Observability: mark the matching play as stopped so
-                    // `still_playing` in the audio log stops reporting it.
-                    crate::audio_log::record_stop(handle.id());
-                    engine::audio::stop_audio(audio_context, handle);
+                    stop_sound(audio_context, handle);
                 }
                 Effect::RaiseSecurityAlarm { seconds } => {
                     for effect in self.security_alarm.add(&self.world, seconds) {
@@ -15451,6 +15418,81 @@ pub fn make_un_physical2(
     id_to_physics.remove(&entity_id);
 }
 
+/// Resolve `name` (a schema, else a bare sample) and play it. `allow_loop`
+/// repeats a listener-relative play when the schema authors a seamless loop;
+/// spatial plays never loop.
+#[allow(clippy::too_many_arguments)]
+fn play_schema_sound(
+    world: &World,
+    global_context: &GlobalContext,
+    asset_cache: &mut AssetCache,
+    audio_context: &mut AudioContext<EntityId, String>,
+    handle: AudioHandle,
+    name: &str,
+    source: Option<EntityId>,
+    spatial: bool,
+    allow_loop: bool,
+) {
+    println!("Trying to play sound: {}", name);
+    let (resolved, has_schema) = resolve_schema(global_context, name);
+    let maybe_audio_clip =
+        asset_cache.get_opt(&AUDIO_IMPORTER, &format!("{}.wav", resolved.sample_name));
+
+    if let Some(audio_clip) = maybe_audio_clip {
+        info!("Playing clip: {} handle: {:?}", name, &handle);
+        let gain = resolved.linear_gain();
+        // Spatial emitters (TrapSound narrations anchored at
+        // their authored station) play at the source entity,
+        // like the original engine's object sounds. Everything
+        // else - UI feedback, audio logs, cutscene narration -
+        // stays non-spatial at the ears even when it carries a
+        // `source` for attribution.
+        let maybe_position = if spatial {
+            source.and_then(|id| get_entity_position(world, id))
+        } else {
+            None
+        };
+        let play_options = if let Some(position) = maybe_position {
+            crate::audio_log::PlayOptions::Spatial {
+                position,
+                source,
+                gain,
+            }
+        } else {
+            crate::audio_log::PlayOptions::ListenerRelative(AudioPlaybackSettings {
+                looping: allow_loop && resolved.looping,
+                ..AudioPlaybackSettings::listener_relative(gain, resolved.channel_gains())
+            })
+        };
+        // Observability: record scripted one-shot sounds (audio
+        // logs, keypad beeps, ...) so headless tooling can assert
+        // a schema actually resolved and played.
+        crate::audio_log::play_and_record(
+            audio_context,
+            handle,
+            None,
+            audio_clip,
+            play_options,
+            crate::audio_log::PlayRecord {
+                sample: &resolved.sample_name,
+                volume_millibels: has_schema.then_some(resolved.volume_millibels),
+                pan_millibels: has_schema.then_some(resolved.pan_millibels),
+                tags: vec![("kind".to_string(), "sound".to_string())],
+                source_entity: source.map(|id| source_entity(world, id)),
+            },
+        );
+    } else {
+        warn!("Unable to load clip: {}", name)
+    }
+}
+
+fn stop_sound(audio_context: &mut AudioContext<EntityId, String>, handle: AudioHandle) {
+    // Observability: mark the matching play as stopped so `still_playing` in
+    // the audio log stops reporting it.
+    crate::audio_log::record_stop(handle.id());
+    engine::audio::stop_audio(audio_context, handle);
+}
+
 fn resolve_schema(global_context: &GlobalContext, name: &str) -> (dark::ResolvedSoundSchema, bool) {
     let sound_schema = &global_context.gamesys.sound_schema;
     if let Some(resolved) = sound_schema.resolve(name) {
@@ -18948,6 +18990,12 @@ fn wildcard_match(text: &str, pattern: &str) -> bool {
 impl crate::game_scene::GameScene for MissionCore {
     fn cancel_transient_input(&mut self) {
         self.dismiss_amp_carousel();
+    }
+
+    fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
+        if let Some(handle) = self.klaxon.take() {
+            stop_sound(audio_context, handle);
+        }
     }
 
     fn is_pausable(&self) -> bool {
