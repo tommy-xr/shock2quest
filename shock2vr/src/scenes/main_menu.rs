@@ -34,7 +34,8 @@ use crate::{
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
-        FrontendMenu, FrontendMenuItem, HAlign, Rect, ScaleMode, UiCanvas, VAlign, hit_menu_item,
+        FrontendMenu, FrontendMenuItem, HAlign, Rect, ScaleMode, UiAnims, UiCanvas, VAlign,
+        hit_menu_item,
     },
 };
 
@@ -353,6 +354,8 @@ pub struct MainMenuScene {
     version_clicks: u8,
     persistence_error: bool,
     difficulty: dark::gamesys::Difficulty,
+    /// The backdrop's looping anims, loaded on the first update.
+    anims: Option<UiAnims>,
 }
 
 impl MainMenuScene {
@@ -367,12 +370,22 @@ impl MainMenuScene {
             version_clicks: 0,
             persistence_error: false,
             difficulty: dark::gamesys::Difficulty::Normal,
+            anims: None,
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
         }
     }
 }
 
 impl MainMenuScene {
+    /// The main page's panel: its backdrop is `<panel>.PCX`, its anims `<panel>M.STR`.
+    fn panel(&self) -> &'static str {
+        if self.developer_enabled {
+            "NETMAIN"
+        } else {
+            "MAIN"
+        }
+    }
+
     fn main_rects(&self, asset_cache: &mut AssetCache) -> Vec<Rect> {
         self.menu.rects(
             asset_cache,
@@ -518,12 +531,11 @@ impl MainMenuScene {
         }
         canvas.image(
             Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H),
-            if self.developer_enabled {
-                "NETMAIN.PCX"
-            } else {
-                "MAIN.PCX"
-            },
+            &format!("{}.PCX", self.panel()),
         );
+        if let Some(anims) = &self.anims {
+            anims.draw(&mut canvas);
+        }
         let rects = self.main_rects(asset_cache);
         let labels = self.menu.labels(asset_cache, LABELS_FILE, MENU_ITEMS);
         for ((item, rect), label) in MENU_ITEMS.iter().zip(&rects).zip(&labels) {
@@ -590,6 +602,14 @@ impl GameScene for MainMenuScene {
     ) -> Vec<Effect> {
         if let Ok(mut world_time) = self.world.borrow::<UniqueViewMut<Time>>() {
             *world_time = time.clone();
+        }
+
+        // Unlocking developer mode swaps the backdrop, and its anims with it.
+        if self.anims.as_ref().is_none_or(|a| a.panel() != self.panel()) {
+            self.anims = Some(UiAnims::load(asset_cache, self.panel()));
+        }
+        if let Some(anims) = &mut self.anims {
+            anims.advance(time.elapsed.as_secs_f32());
         }
 
         let rects = if self.choosing_difficulty.is_some() {

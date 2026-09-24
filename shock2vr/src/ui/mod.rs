@@ -43,6 +43,7 @@ pub mod horde_report;
 pub mod list_scroll;
 mod panel_anchor;
 mod pointer_visual;
+mod ui_anim;
 pub mod world_dim;
 #[cfg(test)]
 pub use frontend_menu::resolve_flat_click;
@@ -60,6 +61,7 @@ pub use frontend_presentation::FrontendCanvasPresenter;
 pub use frontend_sfx::FrontendSfx;
 pub use panel_anchor::{FrontendPanelAnchor, PanelPlacement};
 pub use pointer_visual::{PointerVisuals, pointer_beams};
+pub use ui_anim::UiAnims;
 
 /// Font name that resolves to the engine's compiled-in font rather than a
 /// `.FON` asset.
