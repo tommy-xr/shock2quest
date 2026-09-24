@@ -842,7 +842,9 @@ impl ModelPreview {
         // evaluation as authored object lights. Keep this rig in model space,
         // independent of the orbit camera and zoom, and scale it to the bounds.
         let mut lights = engine::scene::light::LightArray::new()
-            .with_object_lighting(vec3(self.ambient, self.ambient, self.ambient), 0.0);
+            .with_object_lighting(vec3(self.ambient, self.ambient, self.ambient), 0.0)
+            // The game's default `object_specular`.
+            .with_specular(1.5);
         for (index, offset) in [
             vec3(2.0, 2.0, 1.0),
             vec3(-2.0, 1.0, 1.0),

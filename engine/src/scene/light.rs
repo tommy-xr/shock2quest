@@ -186,6 +186,8 @@ pub struct LightArray {
     /// facing away still catches half). Between the two trades directional
     /// contrast for lifted shadows.
     pub lambert_wrap: f32,
+    /// Strength of the moving highlight on shine materials; 0 draws none.
+    pub specular: f32,
 }
 
 impl LightArray {
@@ -196,6 +198,7 @@ impl LightArray {
             ambient: Vector3::new(DEFAULT_AMBIENT, DEFAULT_AMBIENT, DEFAULT_AMBIENT),
             falloff: [LightFalloff::Smooth; 6],
             lambert_wrap: 0.0,
+            specular: 0.0,
         }
     }
 
@@ -226,6 +229,11 @@ impl LightArray {
         self
     }
 
+    pub fn with_specular(mut self, specular: f32) -> Self {
+        self.specular = specular;
+        self
+    }
+
     /// This array's lights plus as many of `scene`'s as still fit, with the
     /// scene's taking priority.
     ///
@@ -244,6 +252,7 @@ impl LightArray {
             ambient: self.ambient,
             falloff: self.falloff,
             lambert_wrap: self.lambert_wrap,
+            specular: self.specular,
         };
         for source in [scene, self] {
             for (index, light) in source.iter_active() {
@@ -428,6 +437,14 @@ impl SpotLight {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hand lights merge in every frame; the object's highlight strength must
+    /// survive it or shine materials lose their highlight under a torch.
+    #[test]
+    fn merging_keeps_the_object_specular_strength() {
+        let object = LightArray::new().with_specular(1.5);
+        assert_eq!(object.merged_with(&LightArray::new()).specular, 1.5);
+    }
 
     #[test]
     fn merging_authored_lights_preserves_flashlight_falloff() {
