@@ -12,7 +12,7 @@ use cgmath::{Vector2, vec2};
 use dark::importers::{STRINGS_IMPORTER, TEXTURE_IMPORTER};
 use engine::assets::asset_cache::AssetCache;
 
-use super::{ImageKind, Rect, UiCanvas, texture_options};
+use super::{ImageKind, Rect, UiCanvas, texture_options, texture_px};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Mode {
@@ -85,8 +85,8 @@ impl Anim {
     fn advance(&mut self, dt: f32) {
         self.banked += dt;
         if self.banked > self.spec.seconds_per_frame {
-            self.banked = (self.banked - self.spec.seconds_per_frame)
-                .min(self.spec.seconds_per_frame);
+            self.banked =
+                (self.banked - self.spec.seconds_per_frame).min(self.spec.seconds_per_frame);
             self.tick += 1;
         }
     }
@@ -151,12 +151,15 @@ fn load_frames(asset_cache: &mut AssetCache, name: &str) -> Vec<(String, Vector2
     let options = texture_options(ImageKind::Ui);
     let mut frames = Vec::new();
     for number in 1.. {
-        let found = [format!("{name}_{number}.PCX"), format!("{name}_{number:02}.PCX")]
-            .into_iter()
-            .find_map(|file| {
-                let texture = asset_cache.get_ext_opt(&TEXTURE_IMPORTER, &file, &options)?;
-                Some((file, vec2(texture.width() as f32, texture.height() as f32)))
-            });
+        let found = [
+            format!("{name}_{number}.PCX"),
+            format!("{name}_{number:02}.PCX"),
+        ]
+        .into_iter()
+        .find_map(|file| {
+            let texture = asset_cache.get_ext_opt(&TEXTURE_IMPORTER, &file, &options)?;
+            Some((file, texture_px(&texture)))
+        });
         match found {
             Some(frame) => frames.push(frame),
             None => break,

@@ -605,7 +605,11 @@ impl GameScene for MainMenuScene {
         }
 
         // Unlocking developer mode swaps the backdrop, and its anims with it.
-        if self.anims.as_ref().is_none_or(|a| a.panel() != self.panel()) {
+        if self
+            .anims
+            .as_ref()
+            .is_none_or(|a| a.panel() != self.panel())
+        {
             self.anims = Some(UiAnims::load(asset_cache, self.panel()));
         }
         if let Some(anims) = &mut self.anims {
