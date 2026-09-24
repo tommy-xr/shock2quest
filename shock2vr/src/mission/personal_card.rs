@@ -28,13 +28,21 @@ pub(crate) fn is_reader(world: &World, entity: EntityId) -> bool {
         .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script))
 }
 
-/// What the device can scan: credential readers and machines, plus anything
-/// whose frob opens an MFD panel. The list mirrors the panel-opening
-/// `gui_script` mappings in `scripts/mod.rs`; a live creature's loot stays
-/// sealed until it can be looted.
-pub(crate) fn is_scannable(world: &World, entity: EntityId) -> bool {
+/// What a device scan does to its target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScanKind {
+    /// Frob it: a credential reader or machine, or anything whose frob opens
+    /// an MFD panel. The list mirrors the panel-opening `gui_script` mappings
+    /// in `scripts/mod.rs`; a live creature's loot stays sealed until it can
+    /// be looted.
+    Frob,
+    /// Describe it, as "?" does: any loose item the hand could pick up.
+    Inspect,
+}
+
+pub(crate) fn scan_kind(world: &World, entity: EntityId) -> Option<ScanKind> {
     let has = |script: &str| crate::scripts::script_util::entity_has_script(world, entity, script);
-    is_reader(world, entity)
+    let opens_panel = is_reader(world, entity)
         || (has("CreatureContainer") && crate::scripts::gui::creature_is_lootable(world, entity))
         || [
             "ContainerScript",
@@ -45,7 +53,14 @@ pub(crate) fn is_scannable(world: &World, entity: EntityId) -> bool {
             "MiniGameBoy",
         ]
         .into_iter()
-        .any(has)
+        .any(has);
+    if opens_panel {
+        Some(ScanKind::Frob)
+    } else if crate::virtual_hand::can_grab_item(world, entity) {
+        Some(ScanKind::Inspect)
+    } else {
+        None
+    }
 }
 
 pub(super) struct PersonalCard {

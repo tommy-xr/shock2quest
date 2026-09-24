@@ -69,6 +69,14 @@ impl MfdUtilities {
             self.research_catalog.select_project(id);
         }
     }
+    /// Show `entity`'s description, as picking it with "?" does.
+    pub(crate) fn inspect(&mut self, entity: EntityId) {
+        *self = Self::default();
+        self.selected = Some(entity);
+    }
+    pub(crate) fn selected(&self) -> Option<EntityId> {
+        self.selected
+    }
     pub(crate) fn is_open(&self) -> bool {
         self.inspecting
             || self.selected.is_some()

@@ -1618,6 +1618,12 @@ impl FlatUiHost {
         self.panel_rect().or_else(|| self.utilities.panel_rect())
     }
 
+    /// What the device's screen is about: the object whose panel is open,
+    /// else the item being inspected.
+    pub fn device_subject(&self) -> Option<EntityId> {
+        self.active_panel().or_else(|| self.utilities.selected())
+    }
+
     /// Device presentation: windows of the same canvas mapped onto the
     /// device face. Placement stays with the shared layout.
     pub fn render_world_viewports(

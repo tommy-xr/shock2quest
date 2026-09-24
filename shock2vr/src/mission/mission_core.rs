@@ -5888,6 +5888,8 @@ impl MissionCore {
             // Use the hand's aim to identify the reader, then require the card
             // itself within contact reach. Starting a parallel ray at a pinch
             // offset misses narrow card slots even when held against them.
+            let (left_held, right_held) = self.interaction.held_entities();
+            let held_now = [left_held, right_held];
             let target = self
                 .personal_card
                 .held_pose
@@ -5907,10 +5909,27 @@ impl MissionCore {
                     let entity = hit.maybe_entity_id?;
                     ((hit.hit_point - vec3_to_point3(position)).magnitude()
                         <= 0.20 / crate::METERS_PER_WORLD_UNIT
-                        && super::personal_card::is_scannable(&self.world, entity))
+                        && super::personal_card::scan_kind(&self.world, entity).is_some()
+                        // Never the item in either hand (a held wrench's collider).
+                        && !held_now.contains(&Some(entity)))
                     .then_some(entity)
                 });
-            if let Some(entity) = self.personal_card.scan(target, time.elapsed.as_secs_f32()) {
+            let scanned = self.personal_card.scan(target, time.elapsed.as_secs_f32());
+            let inspect = scanned.filter(|entity| {
+                super::personal_card::scan_kind(&self.world, *entity)
+                    == Some(super::personal_card::ScanKind::Inspect)
+            });
+            if let Some(entity) = inspect {
+                // An item: its description on the screen, nothing picked up.
+                self.flat_ui.close();
+                self.flat_ui.utilities.inspect(entity);
+                effects.push(Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    source: None,
+                    name: "bset".to_owned(),
+                    spatial: false,
+                });
+            } else if let Some(entity) = scanned {
                 let reader = super::personal_card::is_reader(&self.world, entity);
                 let denied =
                     reader && crate::scripts::script_util::is_entity_locked(&self.world, entity);
@@ -14036,7 +14055,7 @@ impl MissionCore {
         // A hologram of the object whose panel is on the screen.
         if let Some(model) = self
             .flat_ui
-            .active_panel()
+            .device_subject()
             .and_then(|entity| self.id_to_model.get(&entity))
             && let Some(device) = self.personal_card.transform(player_pos, player_rot)
         {

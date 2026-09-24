@@ -60,6 +60,7 @@ async function scanWithDevice(
   template: number,
   standY: number,
   spots?: { x: number; y: number; z: number }[],
+  opensPanel = true,
 ) {
   const [target] = await game.entities.byTemplate(template);
   assert.ok(target, `no entity with template ${template}`);
@@ -85,8 +86,8 @@ async function scanWithDevice(
   const card = (await game.info()).player.hand_feedback!.body_gear!.personal_card;
   assert.equal(card.scans, 1);
   assert.equal(card.on_device, true);
-  assert.equal((await game.ui.state()).active_panel?.template_id, template);
-  assert.equal(card.device_face!.windows.length, windowsBefore + 1, "the panel adds the screen window");
+  if (opensPanel) assert.equal((await game.ui.state()).active_panel?.template_id, template);
+  assert.equal(card.device_face!.windows.length, windowsBefore + 1, "the scan adds the screen window");
   await raiseDevice(game);
   return target;
 }
@@ -289,4 +290,22 @@ test("VR the scanned object's hologram spins above the device", {
     "the hologram spins",
   );
   await captureHologram(game, "holo-replicator", 24);
+});
+
+test("VR scanning a loose item shows its description on the device, without picking it up", {
+  skip: !enabled, timeout: 240_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  const [pile] = await game.entities.byTemplate(257);
+  assert.ok(pile);
+  await scanWithDevice(game, 257, 0, [{ x: pile.position[0] + 0.3, y: pile.position[1] + 0.15, z: pile.position[2] + 0.3 }], false);
+  const windows = (await face(game)).windows;
+  assert.deepEqual(windows[0].src, [2, 124, 188, 296], "the item's query page fills the screen");
+  assert.equal((await game.ui.state()).active_panel, null, "inspecting opens no object panel");
+  assert.equal((await game.entities.byTemplate(257)).length, 1, "the item stays in the world");
+  assert.equal((await game.info()).player.stats?.nanites, 0, "nothing collected");
+  await aimAtDeviceCanvas(game, center(windows[0].src));
+  await capture(game, "device-inspect");
+  await captureHologram(game, "holo-inspect", 1);
 });
