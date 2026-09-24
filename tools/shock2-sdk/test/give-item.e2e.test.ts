@@ -28,6 +28,7 @@ test(
     const worldItems = await game.entities.byTemplate(1050);
     assert.equal(worldItems.length, 1, "expected exactly one world-placed Cryo Card");
     const item = worldItems[0];
+    assert.equal(item.location, "world", "the pickup should initially be in the world");
 
     // It should not be carried yet.
     const before = await game.player.inventory();
@@ -48,6 +49,21 @@ test(
       "inventory",
       "a given item lands in the backpack, not a hand",
     );
+
+    const afterListing = await game.entities.list();
+    const listedCarried = afterListing.entities.find((e) => e.id === item.id);
+    assert.ok(listedCarried, "the carried item should remain discoverable by runtime id");
+    assert.equal(
+      listedCarried.location,
+      "inventory",
+      "the entity listing should identify a given item as carried",
+    );
+    assert.deepEqual(
+      listedCarried.position,
+      afterListing.player_position,
+      "a carried item should not retain a stale floor position",
+    );
+    assert.equal(listedCarried.distance, 0, "a carried item is at the player, not on the floor");
 
     // A bad id is rejected without crashing the runtime.
     await assert.rejects(
@@ -78,6 +94,11 @@ test(
     assert.ok(
       sameTemplate.some((e) => e.id === item.id),
       "byTemplate should include the item among its template's instances",
+    );
+    assert.equal(
+      sameTemplate.find((e) => e.id === item.id)?.location,
+      "inventory",
+      "byTemplate should preserve the carried item's inventory state",
     );
   },
 );

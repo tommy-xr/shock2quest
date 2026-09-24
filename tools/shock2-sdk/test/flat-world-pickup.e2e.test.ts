@@ -27,6 +27,8 @@ test(
     );
     assert.ok(pistol, "expected Earth Weapons Training pistol 246");
     assert.ok(clip, "expected Earth Weapons Training standard clip 249");
+    assert.equal(pistol.location, "world", "the pistol should initially be in the world");
+    assert.equal(clip.location, "world", "the clip should initially be in the world");
 
     await earthWorldUse(game, pistol);
     assert.equal(
@@ -59,5 +61,21 @@ test(
       0,
       "a backpack item must no longer have a world physics body",
     );
+
+    // Entity discovery remains available after the real aim+squeeze pickup,
+    // but its spatial state must follow the player rather than the old shelf.
+    const listing = await game.entities.list();
+    const listedPistol = listing.entities.find((entity) => entity.id === pistol.id);
+    const listedClip = listing.entities.find((entity) => entity.id === clip.id);
+    assert.equal(listedPistol?.location, "left_hand");
+    assert.equal(listedClip?.location, "inventory");
+    assert.ok(listedPistol, "the held pistol should remain discoverable by runtime id");
+    assert.ok(
+      listedPistol.position.every(Number.isFinite),
+      "the held pistol should retain its live viewmodel position",
+    );
+    assert.ok(listedClip, "the backpack clip should remain discoverable by runtime id");
+    assert.deepEqual(listedClip.position, listing.player_position);
+    assert.equal(listedClip.distance, 0);
   },
 );
