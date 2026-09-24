@@ -12,8 +12,8 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const EARTH_NANITES = 257;
 const EARTH_REPLICATOR = 262;
 
-// A second vend restarts the replicator's "thank you" instead of stacking a
-// second copy over the first, as the original does.
+// A second vend restarts the replicator's "thank you" line rather than
+// stacking a second copy over the first.
 test(
   "a repeated non-spatial sound restarts rather than overlapping",
   { skip: !e2eEnabled, timeout: 600_000 },

@@ -273,12 +273,14 @@ fn record_stops(handles: &[u64]) {
 pub fn record_stop(handle: u64) {
     let sim_time = sim_time();
     let mut guard = RECENT.lock().unwrap();
-    if let Some(entry) = guard
-        .1
-        .iter_mut()
-        .rev()
-        .find(|entry| entry.handle == Some(handle) && entry.stopped_at_sim_time.is_none())
-    {
+    // A stop after a clip already ran out cut nothing short.
+    if let Some(entry) = guard.1.iter_mut().rev().find(|entry| {
+        entry.handle == Some(handle)
+            && entry.stopped_at_sim_time.is_none()
+            && entry
+                .duration_secs
+                .is_none_or(|duration| entry.sim_time + duration > sim_time)
+    }) {
         entry.stopped_at_sim_time = Some(sim_time);
     }
 }
@@ -550,5 +552,32 @@ mod tests {
         let matched = recent_matching("filter-needle");
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0].sample, "Filter-Needle");
+    }
+
+    #[test]
+    fn stopping_a_finished_clip_records_no_stop() {
+        // Zero-length, so it has already run out when the stop arrives
+        // (without touching the shared sim clock other tests read).
+        let clip = std::rc::Rc::new(engine::audio::AudioClip::from_raw(1, 1, vec![]));
+        let handle = engine::audio::AudioHandle::new();
+        play_and_record_with(
+            handle.clone(),
+            None,
+            clip,
+            PlayOptions::ListenerRelative(engine::audio::AudioPlaybackSettings::default()),
+            PlayRecord {
+                sample: "finished-before-stop",
+                volume_millibels: None,
+                pan_millibels: None,
+                tags: vec![],
+                source_entity: None,
+            },
+            |_, _, _, _| vec![],
+        );
+
+        record_stop(handle.id());
+
+        let entry = recent_matching("finished-before-stop").remove(0);
+        assert_eq!(entry.stopped_at_sim_time, None);
     }
 }
