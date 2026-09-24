@@ -8,11 +8,22 @@ use super::{Effect, MessagePayload, Script};
 
 pub struct TrapSound {
     playing_sounds: Vec<AudioHandle>,
+    spatial: bool,
 }
 impl TrapSound {
     pub fn new() -> TrapSound {
         TrapSound {
             playing_sounds: Vec::new(),
+            spatial: true,
+        }
+    }
+
+    /// `TrapSoundAmb`: plays at the listener, not the trap - e.g. a Xerxes
+    /// announcement triggered from a button a floor away.
+    pub fn ambient() -> TrapSound {
+        TrapSound {
+            spatial: false,
+            ..Self::new()
         }
     }
 }
@@ -35,10 +46,10 @@ impl Script for TrapSound {
                         handle,
                         name: sound.name.to_owned(),
                         source: Some(entity_id),
-                        // TrapSound(Amb) narrations are anchored at their
-                        // authored station - a stale montage segment two rooms
-                        // away should be distant, not at the player's ears.
-                        spatial: true,
+                        // TrapSound narrations are anchored at their authored
+                        // station - a stale montage segment two rooms away
+                        // should be distant, not at the player's ears.
+                        spatial: self.spatial,
                     }
                 } else {
                     Effect::NoEffect
@@ -56,5 +67,35 @@ impl Script for TrapSound {
             }
             _ => Effect::NoEffect,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn turn_on(mut trap: TrapSound) -> Effect {
+        let mut world = World::new();
+        let entity = world.add_entity(PropObjectSound {
+            name: "xxrmsg12".to_owned(),
+        });
+        trap.handle_message(
+            entity,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::TurnOn { from: entity },
+        )
+    }
+
+    #[test]
+    fn only_the_ambient_variant_plays_at_the_listener() {
+        assert!(matches!(
+            turn_on(TrapSound::new()),
+            Effect::PlaySound { spatial: true, .. }
+        ));
+        assert!(matches!(
+            turn_on(TrapSound::ambient()),
+            Effect::PlaySound { spatial: false, .. }
+        ));
     }
 }

@@ -406,18 +406,7 @@ pub fn create_entity_core(
         .unwrap();
 
     let mut processed_scripts = if let Ok(scripts) = v_scripts.get(entity_id) {
-        // Map TrapSoundAmb -> TrapSound
-        scripts
-            .scripts
-            .iter()
-            .map(|s| {
-                if s == "TrapSoundAmb" {
-                    "TrapSound".to_owned()
-                } else {
-                    s.to_owned()
-                }
-            })
-            .collect()
+        scripts.scripts.clone()
     } else {
         Vec::new()
     };
