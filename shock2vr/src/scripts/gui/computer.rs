@@ -21,6 +21,8 @@ use super::keypad::{
     handle_hack_msg, object_state,
 };
 
+/// Xerxes: "Security system offline."
+const SECURITY_HACKED_SCHEMA: &str = "xer01";
 const FALLBACK_HACK_TEXT: &str = "Complete the circuit to hack this computer.";
 const HACK_TEXT_LINE_LENGTH: usize = 25;
 
@@ -142,7 +144,10 @@ fn can_hack(world: &World, entity_id: EntityId) -> bool {
 }
 
 fn security_hack_success(entity_id: EntityId, _world: &World) -> Effect {
-    Effect::ClearSecurityAlarm { from: entity_id }
+    Effect::combine(vec![
+        Effect::ClearSecurityAlarm { from: entity_id },
+        announce(entity_id, SECURITY_HACKED_SCHEMA),
+    ])
 }
 
 fn computer_hack_success(entity_id: EntityId, world: &World) -> Effect {
@@ -415,5 +420,15 @@ mod tests {
         state.hack.phase = HackPhase::Won;
         gui.prepare_state_on_frob(&mut state);
         assert_eq!(state.hack.phase, HackPhase::Unpaid);
+    }
+
+    #[test]
+    fn a_hacked_security_computer_announces_security_offline() {
+        let mut world = World::new();
+        let computer = world.add_entity(());
+        assert_eq!(
+            announced(&security_hack_success(computer, &world)),
+            ["xer01"]
+        );
     }
 }

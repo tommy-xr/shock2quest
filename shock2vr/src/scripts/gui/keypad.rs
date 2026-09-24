@@ -1,5 +1,7 @@
 use cgmath::{Vector2, Vector3, vec2};
-use dark::properties::{ObjectState, PropHackDiff, PropKeypadCode, PropObjState, PropTemplateId};
+use dark::properties::{
+    ObjectState, PropHackDiff, PropKeypadCode, PropObjState, PropObjectSound, PropTemplateId,
+};
 use engine::audio::AudioHandle;
 
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -670,8 +672,23 @@ pub(crate) fn handle_hrm_msg(
     }
 }
 
+/// Xerxes' door-hacked line, unless the keypad authors its own sound.
+const DOOR_HACKED_SCHEMA: &str = "xer08";
+
 fn keypad_hack_success(entity_id: EntityId, world: &World) -> Effect {
-    send_to_all_switch_links_and_self(world, entity_id, MessagePayload::TurnOn { from: entity_id })
+    let schema = world
+        .borrow::<View<PropObjectSound>>()
+        .ok()
+        .and_then(|sounds| sounds.get(entity_id).ok().map(|sound| sound.name.clone()))
+        .unwrap_or_else(|| DOOR_HACKED_SCHEMA.to_owned());
+    Effect::combine(vec![
+        send_to_all_switch_links_and_self(
+            world,
+            entity_id,
+            MessagePayload::TurnOn { from: entity_id },
+        ),
+        announce(entity_id, &schema),
+    ])
 }
 
 fn keypad_hack_critical_failure(_entity_id: EntityId, _world: &World) -> Effect {
@@ -1120,5 +1137,16 @@ mod tests {
 
         assert_eq!(after.phase, HackPhase::Lost);
         assert!(matches!(effect, Effect::NoEffect));
+    }
+
+    #[test]
+    fn a_hacked_keypad_announces_its_door_unless_it_authors_a_sound() {
+        let mut world = World::new();
+        let plain = world.add_entity(());
+        let voiced = world.add_entity(PropObjectSound {
+            name: "custom".to_owned(),
+        });
+        assert_eq!(announced(&keypad_hack_success(plain, &world)), ["xer08"]);
+        assert_eq!(announced(&keypad_hack_success(voiced, &world)), ["custom"]);
     }
 }

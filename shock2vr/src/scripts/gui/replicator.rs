@@ -94,11 +94,17 @@ fn can_hack(world: &World, entity_id: EntityId) -> bool {
             .is_some_and(|contents| contents.get(entity_id).is_ok())
 }
 
+/// Xerxes' replicator-hacked line.
+const REPLICATOR_HACKED_SCHEMA: &str = "xer07";
+
 fn replicator_hack_success(entity_id: EntityId, _world: &World) -> Effect {
-    Effect::SetObjectState {
-        entity_id,
-        state: ObjectState::Hacked,
-    }
+    Effect::combine(vec![
+        Effect::SetObjectState {
+            entity_id,
+            state: ObjectState::Hacked,
+        },
+        announce(entity_id, REPLICATOR_HACKED_SCHEMA),
+    ])
 }
 
 fn replicator_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
@@ -897,6 +903,16 @@ mod tests {
             effective_replicator_cost(&world, i32::MAX),
             1_717_986_917,
             "the retail integer discount must not saturate before division"
+        );
+    }
+
+    #[test]
+    fn a_hacked_replicator_announces_itself() {
+        let mut world = World::new();
+        let replicator = world.add_entity(());
+        assert_eq!(
+            announced(&replicator_hack_success(replicator, &world)),
+            ["xer07"]
         );
     }
 }

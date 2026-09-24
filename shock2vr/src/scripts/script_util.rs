@@ -1291,6 +1291,33 @@ pub fn play_impact_sound(
     }
 }
 
+/// A station-wide Xerxes line, non-positional like retail's schema play.
+pub fn announce(source: EntityId, schema: &str) -> Effect {
+    Effect::PlaySound {
+        handle: AudioHandle::new(),
+        name: schema.to_owned(),
+        source: Some(source),
+        spatial: false,
+    }
+}
+
+/// The names of the non-spatial sounds an effect plays - what [`announce`]
+/// emits.
+#[cfg(test)]
+pub fn announced(effect: &Effect) -> Vec<String> {
+    Effect::flatten(vec![effect.clone()])
+        .into_iter()
+        .filter_map(|effect| match effect {
+            Effect::PlaySound {
+                name,
+                spatial: false,
+                ..
+            } => Some(name),
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn send_to_all_switch_links(
     world: &World,
     producing_entity_id: EntityId,
