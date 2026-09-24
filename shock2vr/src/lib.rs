@@ -2323,7 +2323,7 @@ impl Game {
         self.free_camera_view_fixup = None;
     }
 
-    /// Get hand spotlights for enhanced lighting when experimental flag is enabled
+    /// Hand spotlights, when the `hand_spotlights` dev param is on.
     pub fn get_hand_spotlights(&self) -> Vec<engine::scene::light::SpotLight> {
         // The lights belong to the hands: with the hands suppressed they would
         // be two pools cast by nothing - and, being world lighting, they light

@@ -436,6 +436,9 @@ restore authored lighting. It resets to on at app restart. Debug scenes without
 world cells retain their existing shading. Quest benchmark fixtures explicitly
 override this parameter for their on/off measurements.
 
+**Lighting → Hand spotlights** (`hand_spotlights`, off by default) casts a
+spotlight along each VR hand's pointing ray, like a torch in each hand.
+
 Developer parameters use category submenus. **Back** moves up one category;
 **Resume** on the pause Developer page returns directly to gameplay. Opening
 Pause still starts at the pause root, but choosing Developer restores the last
