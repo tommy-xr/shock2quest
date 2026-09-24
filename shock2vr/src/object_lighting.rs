@@ -14,7 +14,10 @@ use std::collections::HashMap;
 
 use cgmath::{InnerSpace, Vector3, Vector4, vec3};
 use dark::mission::WorldLight;
-use engine::scene::light::{LightArray, PointLight, SceneLight, SpotLight};
+use engine::scene::{
+    light::{LightArray, PointLight, SceneLight, SpotLight},
+    shine::VeinTuning,
+};
 
 use crate::dev_params;
 use crate::mission::spatial_query::SpatialQueryEngine;
@@ -143,6 +146,24 @@ pub fn received_light(lights: &LightArray, position: Vector3<f32>) -> f32 {
         .sum()
 }
 
+/// Live vein tuning for growth shine.
+pub fn growth_vein_tuning() -> VeinTuning {
+    VeinTuning {
+        strength: dev_params::get(dev_params::GOO_VEINS),
+        sharpness: dev_params::get(dev_params::GOO_VEIN_SHARPNESS),
+        specular: dev_params::get(dev_params::GOO_SPECULAR),
+    }
+}
+
+/// Live vein tuning for the annelid weapons' shine.
+pub fn weapon_vein_tuning() -> VeinTuning {
+    VeinTuning {
+        strength: dev_params::get(dev_params::WEAPON_VEINS),
+        sharpness: dev_params::get(dev_params::WEAPON_VEIN_SHARPNESS),
+        specular: dev_params::get(dev_params::WEAPON_SPECULAR),
+    }
+}
+
 /// The lights that shade an object at `position`, strongest first.
 pub fn lights_for_position(
     spatial: &dyn SpatialQueryEngine,
@@ -158,7 +179,7 @@ pub fn lights_for_position(
     let mut lights = LightArray::new()
         .with_object_lighting(ambient, dev_params::get(dev_params::OBJECT_LIGHT_WRAP))
         .with_specular(dev_params::get(dev_params::OBJECT_SPECULAR))
-        .with_veins(dev_params::get(dev_params::SHINE_VEINS));
+        .with_veins(growth_vein_tuning(), weapon_vein_tuning());
 
     let Some(cell) = spatial.get_cell_from_position(position) else {
         // Outside the world rep (or in a scene with none) - no cell, no lights.

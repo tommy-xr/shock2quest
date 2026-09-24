@@ -223,7 +223,10 @@ impl DebugSceneHooks for AnnelidHooks {
                 self.environment.clone(),
                 dev_params::get(dev_params::OBJECT_REFLECTION),
             )
-            .with_veins(dev_params::get(dev_params::SHINE_VEINS));
+            .with_veins(
+                crate::object_lighting::growth_vein_tuning(),
+                crate::object_lighting::weapon_vein_tuning(),
+            );
         let brightness = 2.5
             * dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS)
             * dev_params::get(dev_params::LEVEL_LIGHT_INTENSITY);
