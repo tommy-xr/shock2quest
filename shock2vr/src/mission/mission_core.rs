@@ -5737,6 +5737,7 @@ impl MissionCore {
             let put_away = crate::scripts::gui::should_close_settings_panel(
                 opened_for,
                 crate::wielded_weapon::held_in_hand(&self.world, opened_for).then_some(opened_for),
+                self.entity_exists(opened_for),
             );
             if put_away {
                 if ours_is_docked {
@@ -5870,10 +5871,13 @@ impl MissionCore {
         self.flat_ui
             .set_placement_preview(&self.world, placement_preview);
         self.refresh_readouts();
-        if self
-            .weapon_settings_gun
-            .is_some_and(|gun| Some(gun) != self.flat_ui.ammo_selection().0)
-        {
+        if self.weapon_settings_gun.is_some_and(|gun| {
+            crate::scripts::gui::should_close_settings_panel(
+                gun,
+                self.flat_ui.ammo_selection().0,
+                self.entity_exists(gun),
+            )
+        }) {
             let panel = self
                 .world
                 .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
@@ -8116,6 +8120,12 @@ impl MissionCore {
     /// state and incoming inventory links in sync before the entity id can be
     /// recycled, then tear down its scripts, physics, render state, and
     /// attached children through [`Self::remove_entity`].
+    fn entity_exists(&self, entity_id: EntityId) -> bool {
+        self.world
+            .borrow::<EntitiesView>()
+            .is_ok_and(|entities| entities.is_alive(entity_id))
+    }
+
     fn destroy_entity(&mut self, entity_id: EntityId) {
         self.interaction.on_entity_destroyed(entity_id);
         self.flat_ui.on_entity_destroyed(entity_id);

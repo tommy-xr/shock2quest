@@ -180,11 +180,23 @@ pub enum WeaponSettingsGuiMsg {
     Board(KeyPadMsg),
 }
 
+/// A repair board lost to a critical failure. The failure destroys the gun, so
+/// the board is drawn from its pinned `(job, diff, board)` alone.
+fn lost_repair(state: &WeaponSettingsGuiState) -> bool {
+    matches!(&state.board, Some((HrmJob::Repair, _, board)) if board.phase == HackPhase::Lost)
+}
+
 /// Whether an open settings panel must now close. The panel is opened for the
 /// gun that was wielded at the time and shows only that gun, so unwielding it -
 /// dropping it, holstering it, or cycling to another weapon - dismisses it.
-pub fn should_close_settings_panel(opened_for: EntityId, wielded: Option<EntityId>) -> bool {
-    wielded != Some(opened_for)
+/// A gun that no longer exists was not put away: a repair critical failure
+/// destroys it, and the panel stays up showing that loss until it is closed.
+pub fn should_close_settings_panel(
+    opened_for: EntityId,
+    wielded: Option<EntityId>,
+    gun_exists: bool,
+) -> bool {
+    gun_exists && wielded != Some(opened_for)
 }
 
 /// The line each row shows: "{header}: {description}". A gun that names no
@@ -243,21 +255,26 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         ];
 
         // The panel owns an explicit gun target. Losing it makes the panel
-        // inert immediately; a second held gun is never a fallback.
-        let Some(weapon) = WeaponSettingsTarget::resolve(world) else {
+        // inert immediately; a second held gun is never a fallback. A lost
+        // repair board is the exception: it outlives the gun it destroyed.
+        let weapon = WeaponSettingsTarget::resolve(world);
+        if weapon.is_none() && !lost_repair(state) {
             return components;
-        };
+        }
 
         if let Some((job, diff, board)) = &state.board {
-            let shown_diff = if matches!(board.phase, HackPhase::Won | HackPhase::Lost) {
-                *diff
-            } else {
-                job.quote(world, weapon).unwrap_or(*diff)
+            let shown_diff = match weapon {
+                Some(weapon) if !matches!(board.phase, HackPhase::Won | HackPhase::Lost) => {
+                    job.quote(world, weapon).unwrap_or(*diff)
+                }
+                _ => *diff,
             };
             let goal = match job {
                 // The level the board was opened at: after a win the gun
                 // already carries the next one.
-                HrmJob::Modify(level) => weapon_modification::description(world, weapon, *level),
+                HrmJob::Modify(level) => weapon
+                    .map(|weapon| weapon_modification::description(world, weapon, *level))
+                    .unwrap_or_default(),
                 HrmJob::Repair => super::PanelText::string(
                     world,
                     "hrm",
@@ -274,6 +291,9 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             components.extend(draw_hrm_text(world, &goal, shown_diff, job.context()));
             return components;
         }
+        let Some(weapon) = weapon else {
+            return components;
+        };
         // Retail raises its HRM plug beside the settings MFD: repair for a
         // Broken gun, modify for a working one.
         if let Some((kind, msg, label)) = plug_for(world, weapon) {
@@ -378,10 +398,13 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         &self,
         _entity_id: EntityId,
         world: &World,
-        _state: &WeaponSettingsGuiState,
+        state: &WeaponSettingsGuiState,
     ) -> GuiConfig {
         let mut config = self.get_config();
-        if WeaponSettingsTarget::resolve(world).is_some_and(|w| has_plug_room(world, w)) {
+        // A lost repair board was dealt beside a repair plug, so it has room.
+        if lost_repair(state)
+            || WeaponSettingsTarget::resolve(world).is_some_and(|w| has_plug_room(world, w))
+        {
             config.screen_size_in_pixels.x = hrm_plug::CANVAS_W;
         }
         config
@@ -395,6 +418,9 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         world: &World,
         state: &WeaponSettingsGuiState,
     ) -> Option<PanelSidecar> {
+        if lost_repair(state) {
+            return Some(plug_sidecar(false));
+        }
         let weapon = WeaponSettingsTarget::resolve(world)?;
         if !has_plug_room(world, weapon) {
             return None;
@@ -1060,9 +1086,116 @@ mod tests {
         let mut world = World::new();
         let gun = world.add_entity(());
         let other = world.add_entity(());
-        assert!(!should_close_settings_panel(gun, Some(gun)));
-        assert!(should_close_settings_panel(gun, Some(other)));
-        assert!(should_close_settings_panel(gun, None));
+        assert!(!should_close_settings_panel(gun, Some(gun), true));
+        assert!(should_close_settings_panel(gun, Some(other), true));
+        assert!(should_close_settings_panel(gun, None, true));
+        // A destroyed gun was not put away: its panel stays to show the loss.
+        assert!(!should_close_settings_panel(gun, None, false));
+        assert!(!should_close_settings_panel(gun, Some(other), false));
+    }
+
+    /// A repair critical failure destroys the gun; the lost board still draws
+    /// its loss from the pinned terms, keeps its canvas, and takes no input.
+    #[test]
+    fn a_lost_repair_board_outlives_its_destroyed_gun() {
+        use dark::properties::{ObjectState, PropHackDiff, PropObjState, PropRepairDiff};
+
+        let (mut world, weapon) = pistol_world(0);
+        let diff = PropHackDiff {
+            success_chance: 20,
+            critical_chance: 4,
+            cost: 3.0,
+        };
+        world.add_component(
+            weapon,
+            (PropRepairDiff(diff), PropObjState(ObjectState::Broken)),
+        );
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().skills.repair = 1;
+        world.add_unique(quests);
+
+        // Deal a board, then play a mine that loses.
+        let (dealt, _) = WeaponSettingsGui.handle_msg(
+            EntityId::dead(),
+            &world,
+            &WeaponSettingsGuiState::default(),
+            &WeaponSettingsGuiMsg::Repair,
+        );
+        let (job, diff, mut board) = dealt.board.clone().unwrap();
+        board.phase = HackPhase::Playing;
+        board.nodes[super::super::keypad::board_index(1, 0)] = super::super::keypad::HackNode::Mine;
+        board.rng_state = 0;
+        let playing = WeaponSettingsGuiState {
+            board: Some((job, diff, board)),
+        };
+        let (lost, effect) = (0..64)
+            .map(|seed| {
+                let mut state = playing.clone();
+                state.board.as_mut().unwrap().2.rng_state = seed;
+                WeaponSettingsGui.handle_msg(
+                    EntityId::dead(),
+                    &world,
+                    &state,
+                    &WeaponSettingsGuiMsg::Board(KeyPadMsg::PlayNode { x: 1, y: 0 }),
+                )
+            })
+            .find(|(state, _)| state.board.as_ref().unwrap().2.phase == HackPhase::Lost)
+            .expect("some seed rolls a failure on a 20% board");
+        assert!(
+            Effect::flatten(vec![effect])
+                .iter()
+                .any(|e| matches!(e, Effect::DestroyEntity { entity_id } if *entity_id == weapon)),
+            "a repair critical failure destroys the gun"
+        );
+
+        // What the destroy does to the world.
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .right_hand_entity_id = None;
+        world.delete_entity(weapon);
+
+        let drawn = WeaponSettingsGui.get_components(&None, EntityId::dead(), &world, &lost);
+        let textures: Vec<_> = drawn
+            .iter()
+            .filter_map(|c| match c {
+                GuiComponent::Image { texture, .. } => Some(texture.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(textures.first(), Some(&"iface/repair.pcx"));
+        assert!(textures.contains(&"loser.pcx"), "{textures:?}");
+        assert!(
+            !labels(&drawn)
+                .iter()
+                .any(|l| l == "start-hack" || l == "reset-hack"),
+            "a lost board offers no new deal"
+        );
+        assert_eq!(
+            WeaponSettingsGui
+                .get_config_for(EntityId::dead(), &world, &lost)
+                .screen_size_in_pixels
+                .x,
+            hrm_plug::CANVAS_W,
+            "the canvas keeps its width"
+        );
+        assert_eq!(
+            WeaponSettingsGui
+                .sidecar(EntityId::dead(), &world, &lost)
+                .map(|s| s.rect),
+            Some(None),
+            "the plug's room is kept, hidden"
+        );
+        for msg in [
+            WeaponSettingsGuiMsg::Board(KeyPadMsg::StartHack),
+            WeaponSettingsGuiMsg::Board(KeyPadMsg::PlayNode { x: 2, y: 0 }),
+            WeaponSettingsGuiMsg::Repair,
+        ] {
+            let (state, effect) =
+                WeaponSettingsGui.handle_msg(EntityId::dead(), &world, &lost, &msg);
+            assert!(matches!(effect, Effect::NoEffect));
+            assert_eq!(state.board.map(|b| b.2.phase), Some(HackPhase::Lost));
+        }
     }
 
     /// Row text stays inside its row and above UNLOAD, with room for at least
