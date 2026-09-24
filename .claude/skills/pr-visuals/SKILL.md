@@ -36,7 +36,7 @@ follows.
 
 ## 1. Prerequisites
 
-- Built runtime: `cargo build --release -p debug_runtime` (incremental after a change is
+- Built runtime: `cargo build -p debug_runtime` (incremental after a change is
   seconds; a cold build takes minutes).
 - `python3` with PIL (`Pillow`) for GIF assembly + verification.
 - Run multi-step shell blocks under **`bash`** (heredoc), not the default zsh —
@@ -124,9 +124,9 @@ fresh launch (deterministic stepping makes them frame-comparable).
   ```bash
   BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || echo main)
   git worktree add /tmp/before "$BASE"
-  ( cd /tmp/before && cargo build --release -p debug_runtime \
+  ( cd /tmp/before && cargo build -p debug_runtime \
       && DARK_ASSET_PATH="$(git -C "$(git rev-parse --show-toplevel)" rev-parse --show-toplevel)/Data" \
-         ./target/release/debug_runtime --mission debug_weapons --port 8086 & )
+         ./target/debug/debug_runtime --mission debug_weapons --port 8086 & )
   # ...same capture sequence against port 8086, then /v1/shutdown...
   git worktree remove /tmp/before --force
   ```

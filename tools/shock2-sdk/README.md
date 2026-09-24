@@ -19,7 +19,7 @@ npm run test:e2e    # launches a real debug runtime against medsci1.mis
 ```ts
 import { GameServer } from "@shock2vr/sdk";
 
-// Spawns `cargo run --release -p debug_runtime`, waits for /v1/health, captures logs.
+// Spawns `cargo run -p debug_runtime`, waits for /v1/health, captures logs.
 // `await using` shuts the runtime down automatically at scope exit.
 // No port: the runtime binds an OS-assigned one and announces it, so
 // concurrent launches never collide. `game.baseUrl` reports it.

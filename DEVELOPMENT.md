@@ -96,18 +96,18 @@ commits). Bypass in a pinch with `git push --no-verify`.
 ##### Running
 
 - `cd runtimes/desktop_runtime`
-- `cargo run --release`
+- `cargo run` (the dev profile is optimized; `--release` builds a second tree)
 
 ##### Quick Start with Cargo Aliases
 
 Alternatively, use the project's cargo aliases from the root directory:
-- `cargo dr --release` - Run desktop runtime
+- `cargo dr` - Run desktop runtime
 - `cargo dq entities --help` - Use dark_query CLI tool
 - `cargo dv --help` - Use dark_viewer tool
 
 Example:
 ```bash
-cargo run --release -p desktop_runtime -- --vr --experimental physical_held_items
+cargo run -p desktop_runtime -- --vr --experimental physical_held_items
 ```
 
 ### Song explorer

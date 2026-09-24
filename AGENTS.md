@@ -642,23 +642,23 @@ See `references/entities.md` for comprehensive documentation of:
 
 ### Building
 
-- Desktop: `cd runtimes/desktop_runtime && cargo run --release`
+- Desktop: `cargo dr`
 - Quest VR: `cd runtimes/oculus_runtime && source ./set_up_android_sdk.sh && cargo apk run --release`
 
 ### Cargo Aliases
 
-For faster development, the project includes convenient cargo aliases (defined in `.cargo/config.toml`): All build release, so every tool shares one set of compiled dependencies with manual playtesting instead of a second multi-GB debug tree.
+For faster development, the project includes convenient cargo aliases (defined in `.cargo/config.toml`). They run the optimized dev profile (see `[profile.dev]` in `Cargo.toml`), the same build `cargo test`/`cargo check` use - prefer them to `--release`, which compiles a second multi-GB tree.
 
-- `cargo dr` - Desktop runtime (shorthand for `cargo run --release -p desktop_runtime --`)
-- `cargo dq` - Dark query CLI tool (shorthand for `cargo run --release -p dark_query --`)
-- `cargo dv` - Dark viewer tool (shorthand for `cargo run --release -p dark_viewer --`)
-- `cargo dbgr` - Debug runtime with HTTP control (shorthand for `cargo run --release -p debug_runtime --`)
-- `cargo dbgc` - Debug command client (shorthand for `cargo run --release -p debug_command --`)
-- `cargo bn` - Benchmark CLI (shorthand for `cargo run --release -p bench --`; `bench` collides with the built-in cargo command)
+- `cargo dr` - Desktop runtime (shorthand for `cargo run -p desktop_runtime --`)
+- `cargo dq` - Dark query CLI tool (shorthand for `cargo run -p dark_query --`)
+- `cargo dv` - Dark viewer tool (shorthand for `cargo run -p dark_viewer --`)
+- `cargo dbgr` - Debug runtime with HTTP control (shorthand for `cargo run -p debug_runtime --`)
+- `cargo dbgc` - Debug command client (shorthand for `cargo run -p debug_command --`)
+- `cargo bn` - Benchmark CLI (shorthand for `cargo run -p bench --`; `bench` collides with the built-in cargo command)
 
 Example usage:
 ```bash
-cargo run --release -p desktop_runtime -- --vr --experimental physical_held_items
+cargo run -p desktop_runtime -- --vr --experimental physical_held_items
 cargo dq entities earth.mis --filter "*Door*" --limit 10
 cargo dv grunt_p.bin
 ```
@@ -760,11 +760,14 @@ This is no longer an experimental flag.
 
 #### CI Compiles with `-D warnings`
 
-The Build & Unit Test workflow sets `RUSTFLAGS="-D warnings"`, so **any warning (including `dead_code`) fails CI** even though it compiles locally. Validate with CI's flags before pushing:
+The Build & Unit Test workflow sets `RUSTFLAGS="-D warnings"`, so **any warning (including `dead_code`) fails CI** even though it compiles locally. Before pushing, check with no warnings printed (cargo replays cached warnings, so a no-op check still reports them):
 
 ```bash
-RUSTFLAGS="-D warnings" cargo check -p shock2vr -p desktop_runtime -p debug_runtime
+cargo check -p shock2vr -p desktop_runtime -p debug_runtime 2>&1 | grep -E '^(warning|error)'   # must print nothing
 ```
+
+Don't set `RUSTFLAGS` locally: it is part of every crate's fingerprint, so
+switching it on and off rebuilds all dependencies each time.
 
 #### Always Scope to Packages (`-p`)
 
