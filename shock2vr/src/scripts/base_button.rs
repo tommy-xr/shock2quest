@@ -9,13 +9,13 @@ use super::{
 };
 
 pub struct BaseButton {
-    /// A press's own TurnOn is in flight; its relay already happened.
-    notified_self: bool,
+    /// Presses whose own TurnOn is still in flight; their relay already happened.
+    pending_self_notifications: u32,
 }
 impl BaseButton {
     pub fn new() -> BaseButton {
         BaseButton {
-            notified_self: false,
+            pending_self_notifications: 0,
         }
     }
 
@@ -77,7 +77,7 @@ impl Script for BaseButton {
                         to: entity_id,
                     },
                 };
-                self.notified_self = true;
+                self.pending_self_notifications += 1;
                 let unlock = self
                     .lock_is_set(entity_id, world)
                     .then_some(Effect::SetLocked {
@@ -92,15 +92,18 @@ impl Script for BaseButton {
                 )
             }),
 
+            // A press's own notification is skipped: Frob already relayed.
+            MessagePayload::TurnOn { from }
+                if *from == entity_id && self.pending_self_notifications > 0 =>
+            {
+                self.pending_self_notifications -= 1;
+                Effect::NoEffect
+            }
+
             // In some places (like the computer for the engine room in eng1), invisible buttons are used as proxies -
             // there will be an actual button that sends a 'TurnOn' message to an invisible button. Not sure why
             // this pattern is used. A remote press still honors the proxy's lock;
             // otherwise tripwires can relay through authored locked card slots.
-            // A press's own notification is skipped: Frob already relayed.
-            MessagePayload::TurnOn { from } if *from == entity_id && self.notified_self => {
-                self.notified_self = false;
-                Effect::NoEffect
-            }
             MessagePayload::TurnOn { from: _ } if !self.lock_is_set(entity_id, world) => {
                 send_to_all_switch_links(
                     world,
