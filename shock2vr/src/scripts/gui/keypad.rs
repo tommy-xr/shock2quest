@@ -963,7 +963,7 @@ mod tests {
         let voiced = world.add_entity(PropObjectSound {
             name: "custom".to_owned(),
         });
-        assert!(announced(keypad_hack_success(plain, &world)).contains(&"xer08".to_owned()));
-        assert!(announced(keypad_hack_success(voiced, &world)).contains(&"custom".to_owned()));
+        assert_eq!(announced(&keypad_hack_success(plain, &world)), ["xer08"]);
+        assert_eq!(announced(&keypad_hack_success(voiced, &world)), ["custom"]);
     }
 }

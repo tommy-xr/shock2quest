@@ -911,7 +911,7 @@ mod tests {
         let mut world = World::new();
         let replicator = world.add_entity(());
         assert_eq!(
-            announced(replicator_hack_success(replicator, &world)),
+            announced(&replicator_hack_success(replicator, &world)),
             ["xer07"]
         );
     }

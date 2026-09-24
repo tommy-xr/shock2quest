@@ -364,6 +364,7 @@ mod tests {
 
     use super::*;
     use crate::runtime_props::RuntimePropCanonicalTemplateId;
+    use crate::scripts::script_util::announced;
 
     #[test]
     fn easy_diff_ecology_scales_derived_values_without_mutating_authored_data() {
@@ -447,11 +448,7 @@ mod tests {
     }
 
     fn announces(effect: &Effect, schema: &str) -> bool {
-        match effect {
-            Effect::PlaySound { name, spatial, .. } => name == schema && !spatial,
-            Effect::Combined { effects } => effects.iter().any(|e| announces(e, schema)),
-            _ => false,
-        }
+        announced(effect).iter().any(|name| name == schema)
     }
 
     fn sets_state(effect: Effect, target: EntityId, expected: i32) -> bool {

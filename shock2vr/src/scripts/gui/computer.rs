@@ -427,7 +427,7 @@ mod tests {
         let mut world = World::new();
         let computer = world.add_entity(());
         assert_eq!(
-            announced(security_hack_success(computer, &world)),
+            announced(&security_hack_success(computer, &world)),
             ["xer01"]
         );
     }

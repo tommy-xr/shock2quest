@@ -1304,8 +1304,8 @@ pub fn announce(source: EntityId, schema: &str) -> Effect {
 /// The names of the non-spatial sounds an effect plays - what [`announce`]
 /// emits.
 #[cfg(test)]
-pub fn announced(effect: Effect) -> Vec<String> {
-    Effect::flatten(vec![effect])
+pub fn announced(effect: &Effect) -> Vec<String> {
+    Effect::flatten(vec![effect.clone()])
         .into_iter()
         .filter_map(|effect| match effect {
             Effect::PlaySound {
