@@ -39,15 +39,16 @@ fn vein_intensity(p: [f32; 2], seed: u32) -> f32 {
     // branching runs; varying width makes a vein taper.
     let presence = smoothstep(0.25, 0.55, value_noise(p, 6, seed ^ 0x33));
     let taper = value_noise(p, 6, seed ^ 0x44);
-    let main = ridge(cell_border(q, 6, seed ^ 0x55), 0.006 + 0.014 * taper) * presence;
+    let main = ridge(cell_border(q, 6, seed ^ 0x55), 0.008 + 0.012 * taper) * presence;
     let patch = smoothstep(0.5, 0.8, value_noise(p, 4, seed ^ 0x66));
-    let capillaries = ridge(cell_border(q, 12, seed ^ 0x88), 0.005) * 0.6 * patch;
+    let capillaries = ridge(cell_border(q, 12, seed ^ 0x88), 0.007) * 0.35 * patch;
     main.max(capillaries)
 }
 
-/// 1 on a border, falling smoothly to 0 at `width` away from it.
+/// 1 on a border, a soft Gaussian falloff away from it (~0.37 at `width`):
+/// a swollen, wet ridge rather than a crisp crack.
 fn ridge(distance: f32, width: f32) -> f32 {
-    1.0 - smoothstep(0.0, width, distance)
+    (-(distance / width).powi(2)).exp()
 }
 
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -202,6 +203,6 @@ mod tests {
         let bright = texels.iter().filter(|&&v| v > 128).count() as f32 / texels.len() as f32;
         let dark = texels.iter().filter(|&&v| v < 16).count() as f32 / texels.len() as f32;
         assert!((0.03..0.25).contains(&bright), "bright coverage {bright}");
-        assert!(dark > 0.5, "dark field {dark}");
+        assert!(dark > 0.4, "dark field {dark}");
     }
 }

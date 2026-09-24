@@ -67,9 +67,10 @@ const float REFLECTION_LOD = 3.0;
 // Schlick reflectance head-on (above water's 0.02 so it reads at a glance);
 // grazing angles approach 1.
 const float REFLECTION_F0 = 0.05;
-// Vein-mask gain: the mask covers ~1/10 of a surface, so its ridges shine
-// brighter than the even highlight they replace.
-const float SHINE_VEIN_GAIN = 2.5;
+// Vein mask response: the field between veins keeps SHINE_VEIN_BASE of the
+// even highlight; a ridge peaks at BASE + GAIN.
+const float SHINE_VEIN_BASE = 0.3;
+const float SHINE_VEIN_GAIN = 1.8;
 
 bool shineHighlights() {
     return shineEnabled && shineSpecular > 0.0;
@@ -110,7 +111,10 @@ vec4 applyShine(vec4 base, vec3 light, vec3 specular, float opacity, vec2 uv, ve
     // Uniform per draw: surfaces without veins skip the extra sample.
     if (shineVeinStrength > 0.0) {
         float vein = texture(shineVeins, uv * shineVeinScale).r;
-        highlight *= mix(1.0, vein * SHINE_VEIN_GAIN, min(shineVeinStrength, 1.0));
+        // Tint the ridge toward the surface's own hue so it reads wet, not white.
+        vec3 hue = mask.rgb / max(max(mask.r, max(mask.g, mask.b)), 1e-3);
+        vec3 ridge = (SHINE_VEIN_BASE + vein * SHINE_VEIN_GAIN) * mix(vec3(1.0), hue, 0.35);
+        highlight *= mix(vec3(1.0), ridge, min(shineVeinStrength, 1.0));
     }
     if (shineReflection > 0.0) {
         vec3 mirrored = reflect(-toEye, normal);
