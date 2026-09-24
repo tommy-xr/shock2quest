@@ -9,6 +9,11 @@ use std::{
 use engine::assets::asset_paths::{AbstractAssetPath, AssetEntry, ReadableAndSeekable};
 use zip::ZipArchive;
 
+/// Non-English language folders shipped in the archives.
+const LOCALIZED_DIRS: &[&str] = &[
+    "german", "french", "italian", "spanish", "russian", "polish",
+];
+
 pub struct ZipAssetPath {
     zip_path: String,
     archive: Mutex<ZipArchive<BufReader<File>>>,
@@ -91,7 +96,10 @@ impl ZipAssetPath {
             }
             asset_to_path.insert(relative.to_owned(), full.clone());
             let base = relative.rsplit('/').next().unwrap_or(relative);
-            if collapse_paths {
+            // A translation (`intrface/german/anim_1.pcx`) only answers to its
+            // full path: as a bare-name alias it could shadow the English file.
+            let localized = relative.split('/').any(|dir| LOCALIZED_DIRS.contains(&dir));
+            if collapse_paths && !localized {
                 asset_to_path
                     .entry(base.to_owned())
                     .or_insert_with(|| full.clone());
@@ -102,9 +110,11 @@ impl ZipAssetPath {
                 asset_to_path
                     .entry(format!("{namespace}/{relative}"))
                     .or_insert_with(|| full.clone());
-                asset_to_path
-                    .entry(format!("{namespace}/{base}"))
-                    .or_insert(full);
+                if !localized {
+                    asset_to_path
+                        .entry(format!("{namespace}/{base}"))
+                        .or_insert(full);
+                }
             }
         }
         Box::new(ZipAssetPath {
@@ -238,6 +248,31 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// A translated file must not answer to the bare name its English original
+    /// uses: patch_ext ships `INTRFACE/german/ANIM_1.PCX` but no English one.
+    #[test]
+    fn localized_files_register_no_basename_alias() {
+        let root = crate::test_support::TempDir::new("zip-localized");
+        let archive = root.path().join("patch_ext.kpf");
+        write_archive(
+            &archive,
+            &[
+                ("INTRFACE/german/ANIM_1.PCX", b"german frame"),
+                ("vbriefs/english/brief1.wav", b"english brief"),
+            ],
+        );
+        let mount = ZipAssetPath::with_prefix_opts(
+            archive.to_string_lossy().into_owned(),
+            "",
+            true,
+            Some("intrface"),
+        );
+        assert!(!mount.exists(String::new(), "anim_1.pcx".into()));
+        assert!(!mount.exists(String::new(), "intrface/anim_1.pcx".into()));
+        assert!(mount.exists(String::new(), "intrface/german/anim_1.pcx".into()));
+        assert!(mount.exists(String::new(), "brief1.wav".into()));
     }
 
     /// A mount that registers no basename aliases (`collapse_paths: false`,
