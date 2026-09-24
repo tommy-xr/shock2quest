@@ -690,6 +690,17 @@ export interface PlayerSnapshot {
         center: Vec3 | null;
         scans: number;
         last_scan: number | null;
+        /** Use mode is presented on the held device's face. */
+        on_device: boolean;
+        /** The device face (world space) and the use-mode canvas windows it
+         * shows: `src` in canvas pixels, `dst` in face pixels. */
+        device_face: {
+          center: Vec3;
+          rotation: [number, number, number, number];
+          size: [number, number];
+          canvas: [number, number];
+          windows: { src: [number, number, number, number]; dst: [number, number, number, number] }[];
+        } | null;
       };
       shoulder_weapons: [number | null, number | null];
       pouch: { weapon: number | null; icon: string | null; state: "inactive" | "ready" | "empty" | "refused"; near: boolean };

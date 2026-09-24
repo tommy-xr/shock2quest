@@ -77,6 +77,18 @@ impl MfdUtilities {
             || self.character
             || self.access_cards
     }
+    /// The canvas rect of the open utility panel, if one is drawn.
+    pub(crate) fn panel_rect(&self) -> Option<Rect> {
+        if self.character {
+            Some(CHARACTER_PANEL)
+        } else if self.research || self.empty_logs || self.access_cards {
+            Some(Rect::new(2.0, 124.0, 188.0, 296.0))
+        } else if self.selected.is_some() {
+            Some(PANEL)
+        } else {
+            None
+        }
+    }
     pub(crate) fn take_map_request(&mut self) -> bool {
         std::mem::take(&mut self.map_requested)
     }

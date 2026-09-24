@@ -2871,6 +2871,16 @@ pub struct MissionCore {
     /// drawn beam/dot can never disagree about where the player is pointing
     /// (rule 5 of the vr-ui-design skill).
     vr_use_mode_pointer: Option<crate::ui::FrontendPointerPass>,
+    /// Use mode is presented on the handheld MFD device rather than the
+    /// head-anchored cyber-interface panel: entered by drawing the device,
+    /// left by returning it.
+    use_mode_on_device: bool,
+    /// Whether the device was in hand last frame: use mode opens on the draw
+    /// edge only, so a mode closed by something else (the pause menu) stays
+    /// closed while the device is still held.
+    device_was_drawn: bool,
+    /// The device face and its face-pixel pointer pass, for the beams.
+    vr_device_pointer: Option<(crate::ui::FrontendPointerPass, crate::ui::WorldPanel)>,
 
     /// VR grab swallow, per hand (indexed by [`hand_slot`]): while the cyber
     /// interface masks a hand's squeeze, that hand keeps seeing a released
@@ -3832,6 +3842,9 @@ impl MissionCore {
             vr_use_mode_head: crate::ui::world_dim::UNTRACKED_HEAD,
             vr_trigger_swallow: false,
             vr_use_mode_pointer: None,
+            use_mode_on_device: false,
+            device_was_drawn: false,
+            vr_device_pointer: None,
             vr_squeeze_swallow: [false; 2],
             vr_trigger_safe_latch: [None; 2],
             vr_clip_insert_engaged: [false; 2],
@@ -5065,7 +5078,44 @@ impl MissionCore {
             self.show_position_anchor = crate::ui::FrontendPanelAnchor::new();
         }
 
-        if game_options.presentation_mode == crate::PresentationMode::Vr && self.use_mode {
+        self.vr_device_pointer = None;
+        if game_options.presentation_mode == crate::PresentationMode::Vr
+            && self.use_mode
+            && self.use_mode_on_device
+        {
+            // The device face is the panel. Rays are resolved in world space
+            // (the device is), in face pixels, then mapped back through the
+            // face's windows into canvas pixels for the shared host.
+            // Sample this frame's hand pose first, so hits land on the face
+            // rendered this frame rather than last frame's.
+            self.personal_card
+                .sample_hand(input_context, player_pos, player_rot);
+            let face = self.personal_card.hand.and_then(|holding| {
+                let device = self.personal_card.transform(player_pos, player_rot)?;
+                Some((holding, super::mfd_device::face_panel(device)?))
+            });
+            if let Some((holding, panel)) = face {
+                let (left_carrying, right_carrying) = self.interaction.held_entities();
+                let mut carrying = [false; 2];
+                carrying[hand_slot(crate::vr_config::Handedness::Left)] = left_carrying.is_some();
+                carrying[hand_slot(crate::vr_config::Handedness::Right)] = right_carrying.is_some();
+                let pass = crate::ui::vr_pointer_pass(
+                    &super::mfd_device::pointer_input(
+                        input_context,
+                        player_pos,
+                        player_rot,
+                        holding,
+                    ),
+                    super::mfd_device::FACE_PX,
+                    &panel,
+                    crate::ui::PointerEngagement::TriggerOrGrab { carrying },
+                );
+                let viewports = super::mfd_device::viewports(self.flat_ui.device_screen_source());
+                self.vr_use_mode_pointer =
+                    Some(super::mfd_device::to_canvas_pass(&pass, &viewports));
+                self.vr_device_pointer = Some((pass, panel));
+            }
+        } else if game_options.presentation_mode == crate::PresentationMode::Vr && self.use_mode {
             let panel = self.vr_use_mode_anchor.update(
                 input_context.head.position,
                 input_context.head.rotation,
@@ -5133,6 +5183,13 @@ impl MissionCore {
                 }
             }
         }
+        // On the device, a ray on the bezel or glass is on the device too,
+        // even where it maps to no canvas window: it must not reach the world.
+        if let Some((pass, _)) = self.vr_device_pointer.as_ref() {
+            for ray in pass.rays.iter().filter(|ray| ray.canvas_hit.is_some()) {
+                on_panel[hand_slot(ray.handedness)] = true;
+            }
+        }
         let squeezing = [
             input_context.left_hand.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD,
             input_context.right_hand.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD,
@@ -5176,7 +5233,17 @@ impl MissionCore {
         let mut trigger_safe = latch_trigger_safe(
             &mut self.vr_trigger_safe_latch,
             pressed,
-            trigger_safe_mask(self.use_mode, on_panel, holds_weapon),
+            // With the device out only a hand aimed at its face is safed; a
+            // gun in the other hand still fires.
+            trigger_safe_mask(
+                self.use_mode,
+                on_panel,
+                if self.use_mode_on_device {
+                    [false; 2]
+                } else {
+                    holds_weapon
+                },
+            ),
         );
         for safe in trigger_safe.iter_mut() {
             *safe |= self.vr_trigger_swallow;
@@ -5299,10 +5366,26 @@ impl MissionCore {
                     && !self.shoulder_backpack.near[i]
             }),
             game_options.presentation_mode == crate::PresentationMode::Vr
-                && !self.use_mode
+                && (!self.use_mode || self.use_mode_on_device)
                 && self.player_is_alive()
                 && self.player_controls_enabled,
         );
+        // Drawing the device opens use mode on its face; returning it closes
+        // the mode again - unless the cyber interface took the canvas over.
+        if game_options.presentation_mode == crate::PresentationMode::Vr {
+            let drawn = self.personal_card.hand.is_some();
+            let draw_edge = drawn && !std::mem::replace(&mut self.device_was_drawn, drawn);
+            if draw_edge && !self.use_mode {
+                effects.push(self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT));
+                // No comfort dim or tint: the world stays in view around a
+                // device held in the hand.
+                self.use_mode_ramp.snap_closed();
+                self.use_mode_on_device = true;
+            } else if !drawn && self.use_mode_on_device {
+                effects.push(self.leave_use_mode());
+                self.use_mode_ramp.snap_closed();
+            }
+        }
         self.personal_card
             .sample_hand(hands_input, player_pos, player_rot);
         self.interaction
@@ -5703,10 +5786,6 @@ impl MissionCore {
             &mut interaction_msgs,
             game_options,
         );
-        self.personal_card.grip = self
-            .personal_card
-            .hand
-            .and_then(|hand| self.interaction.personal_card_grip(hand));
         // Claim actual hand releases, anywhere, before backpack/world ownership
         // changes. The shared rewrite preserves Drop and removes competing offers.
         let downloads: Vec<_> = interaction_msgs
@@ -6029,7 +6108,13 @@ impl MissionCore {
                 let pointer = self.vr_use_mode_pointer.as_ref().map(|pass| {
                     crate::mission::flat_ui_host::vr_canvas_pointer(pass, input_context)
                 });
-                self.flat_ui.update_canvas(&self.world, pointer)
+                match pointer {
+                    // The device's first frame has no face pass yet; a
+                    // pointer-less update would clear the held-press guard and
+                    // let a trigger held across the draw click next frame.
+                    None if self.use_mode_on_device => (Vec::new(), Vec::new()),
+                    pointer => self.flat_ui.update_canvas(&self.world, pointer),
+                }
             }
             crate::PresentationMode::Vr => (Vec::new(), Vec::new()),
         };
@@ -8703,6 +8788,7 @@ impl MissionCore {
 
     fn leave_use_mode(&mut self) -> Effect {
         self.use_mode = false;
+        self.use_mode_on_device = false;
         self.flat_ui.take_cursor_item();
         self.flat_ui.set_strip(None);
         self.refresh_readouts();
@@ -9481,7 +9567,9 @@ impl MissionCore {
                     // holding says it means - except while the cyber interface
                     // is up, which takes both buttons back on both hands so
                     // the press that opened it can always close it.
-                    let mode = if self.use_mode {
+                    // The handheld device is a tool, not a mode: its buttons
+                    // keep their world meaning (jump, fire mode).
+                    let mode = if self.use_mode && !self.use_mode_on_device {
                         crate::hand_buttons::HandButtonMode::Interface
                     } else {
                         crate::hand_buttons::HandButtonMode::World
@@ -9541,7 +9629,17 @@ impl MissionCore {
                             // world dimmed behind it and the weapon safed. The
                             // world keeps simulating - unlike the pause menu,
                             // this is a mode of play, not a suspension of it.
-                            if self.use_mode {
+                            if self.use_mode && self.use_mode_on_device {
+                                // Hand the open canvas to the head panel. The
+                                // device is disabled while the head panel
+                                // owns use mode, so it returns to the belt.
+                                self.use_mode_on_device = false;
+                                self.reset_vr_use_mode_placement();
+                                // Device entry skipped the comfort ramp; the
+                                // head panel wants it.
+                                self.use_mode_ramp
+                                    .open(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT);
+                            } else if self.use_mode {
                                 effects.push_front(self.leave_use_mode());
                             } else if self.player_is_alive() {
                                 // Edge policy: no cyber interface over the
@@ -13834,6 +13932,70 @@ impl MissionCore {
             && (!is_vr || self.use_mode_ramp.is_settled_closed())
     }
 
+    /// The device face in world space and the canvas windows it shows, so a
+    /// client can aim a hand ray at a canvas point on it.
+    fn device_face_debug(&self) -> Option<serde_json::Value> {
+        let (pos, rot) = {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+            (player.pos, player.rotation)
+        };
+        let panel = super::mfd_device::face_panel(self.personal_card.transform(pos, rot)?)?;
+        let rect = |r: crate::ui::Rect| [r.x, r.y, r.w, r.h];
+        let windows: Vec<_> = super::mfd_device::viewports(self.flat_ui.device_screen_source())
+            .into_iter()
+            .map(|v| serde_json::json!({ "src": rect(v.src), "dst": rect(v.dst) }))
+            .collect();
+        let q = panel.rotation;
+        Some(serde_json::json!({
+            "center": [panel.center.x, panel.center.y, panel.center.z],
+            "rotation": [q.v.x, q.v.y, q.v.z, q.s],
+            "size": [panel.size.x, panel.size.y],
+            "canvas": [super::mfd_device::FACE_PX.x, super::mfd_device::FACE_PX.y],
+            "windows": windows,
+        }))
+    }
+
+    /// The use-mode canvas on the held device's face: its MFD and bar
+    /// windows, the pointer's beam and dot. World space, drawn with the scene.
+    fn render_vr_device_screen(
+        &self,
+        asset_cache: &mut AssetCache,
+        player_pos: Vector3<f32>,
+        player_rot: Quaternion<f32>,
+    ) -> Vec<SceneObject> {
+        let Some(panel) = self
+            .personal_card
+            .transform(player_pos, player_rot)
+            .and_then(super::mfd_device::face_panel)
+        else {
+            return Vec::new();
+        };
+        let viewports = super::mfd_device::viewports(self.flat_ui.device_screen_source());
+        let mut objects = super::mfd_device::bar_chrome().render_world_space(
+            asset_cache,
+            panel.transform(),
+            None,
+            None,
+            0.0,
+        );
+        // The canvas windows sit just in front of the bar backdrop.
+        let lift = Matrix4::from_translation(panel.normal() * crate::ui::VR_COMPONENT_Z_STEP);
+        objects.extend(self.flat_ui.render_world_viewports(
+            asset_cache,
+            lift * panel.transform(),
+            super::mfd_device::FACE_PX,
+            &viewports,
+        ));
+        if let Some((pass, _)) = self.vr_device_pointer.as_ref() {
+            objects.extend(crate::ui::pointer_beams_undotted(
+                pass,
+                super::mfd_device::FACE_PX,
+                &panel,
+            ));
+        }
+        objects
+    }
+
     fn render_vr_use_mode(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
         use crate::ui::world_dim;
         let panel = self.vr_use_mode_anchor.panel();
@@ -14307,10 +14469,14 @@ impl MissionCore {
         ));
 
         if options.presentation_mode == crate::PresentationMode::Vr {
-            scene.extend(
-                self.personal_card
-                    .render(asset_cache, player.pos, player.rotation),
-            );
+            scene.extend(self.personal_card.render(player.pos, player.rotation));
+            if self.use_mode && self.use_mode_on_device {
+                scene.extend(self.render_vr_device_screen(
+                    asset_cache,
+                    player.pos,
+                    player.rotation,
+                ));
+            }
             scene.extend(
                 self.holsters
                     .render(&self.world, player.pos, player.rotation),
@@ -14660,6 +14826,7 @@ impl MissionCore {
         // exit ramp finishes releasing, so the comfort dim eases out instead
         // of vanishing the instant the panel does.
         if options.presentation_mode == crate::PresentationMode::Vr
+            && !self.use_mode_on_device
             && (self.use_mode || !self.use_mode_ramp.is_settled_closed())
         {
             let mut use_mode_objects = self.render_vr_use_mode(asset_cache);
@@ -16845,6 +17012,8 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     "center": self.personal_card.center.map(|v| [v.x, v.y, v.z]),
                     "scans": self.personal_card.scans,
                     "last_scan": self.personal_card.last_scan.map(|e| e.inner()),
+                    "on_device": self.use_mode_on_device,
+                    "device_face": self.device_face_debug(),
                 },
                 "shoulder_weapons": self.world.borrow::<UniqueView<PlayerInfo>>().ok().map(|player| super::shoulder_backpack::weapons(&self.world, player.inventory_entity_id).map(|item| item.map(|id| id.inner() as i32))),
                 "pouch": self.body_pouch_readout(),

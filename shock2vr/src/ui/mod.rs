@@ -31,6 +31,7 @@ use shipyard::EntityId;
 
 use crate::vr_config::Handedness;
 
+pub mod canvas_viewport;
 pub mod cheats_panel;
 pub mod dev_params_navigation;
 pub mod dev_params_panel;
@@ -60,7 +61,7 @@ pub use frontend_pointer::{
 pub use frontend_presentation::FrontendCanvasPresenter;
 pub use frontend_sfx::FrontendSfx;
 pub use panel_anchor::{FrontendPanelAnchor, PanelPlacement};
-pub use pointer_visual::{PointerVisuals, pointer_beams};
+pub use pointer_visual::{PointerVisuals, pointer_beams, pointer_beams_undotted};
 pub use ui_anim::UiAnims;
 
 /// Font name that resolves to the engine's compiled-in font rather than a
@@ -1032,22 +1033,75 @@ where
         component_z_step: f32,
     ) -> Vec<SceneObject> {
         let placed = self.layout_with_pointer(asset_cache, pointer);
-        let mut objects = Vec::with_capacity(placed.len());
-        let layers = overlap_layers(placed.iter().map(|element| element.rect));
-        for (element, layer) in placed.iter().zip(layers) {
+        present_placed_world(
+            asset_cache,
+            &placed,
+            self.size,
+            root_transform,
+            force_alpha,
+            component_z_step,
+        )
+    }
+}
+
+impl<TEvent> UiCanvas<TEvent>
+where
+    TEvent: Clone,
+{
+    /// [`render_world_space`](Self::render_world_space) through viewports:
+    /// windows of this canvas re-mapped onto a surface of `target_size`
+    /// pixels, which `root_transform` places as a unit square. `pointer` is in
+    /// this canvas's pixels, for hover art.
+    pub fn render_world_viewports(
+        &self,
+        asset_cache: &mut AssetCache,
+        root_transform: Matrix4<f32>,
+        target_size: Vector2<f32>,
+        viewports: &[canvas_viewport::CanvasViewport],
+        pointer: Option<Vector2<f32>>,
+        component_z_step: f32,
+    ) -> Vec<SceneObject> {
+        let placed = canvas_viewport::place_through(
+            &self.layout_with_pointer(asset_cache, pointer),
+            viewports,
+        );
+        present_placed_world(
+            asset_cache,
+            &placed,
+            target_size,
+            root_transform,
+            None,
+            component_z_step,
+        )
+    }
+}
+
+/// Place already-laid-out elements on a unit panel at `root_transform`.
+/// Only overlapping art is stepped forward: stepping every element gave
+/// adjacent backdrop crops different perspective scales in VR, breaking
+/// borders that join exactly on screen.
+fn present_placed_world(
+    asset_cache: &mut AssetCache,
+    placed: &[PlacedElement],
+    canvas_size: Vector2<f32>,
+    root_transform: Matrix4<f32>,
+    force_alpha: Option<f32>,
+    component_z_step: f32,
+) -> Vec<SceneObject> {
+    let layers = overlap_layers(placed.iter().map(|element| element.rect));
+    placed
+        .iter()
+        .zip(layers)
+        .map(|(element, layer)| {
             let alpha = force_alpha.unwrap_or(element.alpha);
-            let mut object = present_world(asset_cache, element, alpha, self.size);
-            // Only overlapping art needs separation. Stepping every element
-            // forward gave adjacent backdrop crops different perspective
-            // scales in VR, breaking borders that join exactly on screen.
+            let mut object = present_world(asset_cache, element, alpha, canvas_size);
             object.set_transform(
                 root_transform
                     * Matrix4::from_translation(vec3(0.0, 0.0, component_z_step * layer as f32)),
             );
-            objects.push(object);
-        }
-        objects
-    }
+            object
+        })
+        .collect()
 }
 
 /// Preserve painter order where rectangles overlap, keeping adjoining pieces

@@ -12,6 +12,7 @@ mod earth_tech;
 pub mod entity_populator;
 pub mod flat_ui_host;
 mod holsters;
+mod mfd_device;
 mod mfd_utilities;
 pub mod mission_core;
 pub mod pathfinding_debug;

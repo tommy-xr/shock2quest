@@ -42,7 +42,6 @@ pub(super) struct PersonalCard {
     withdrawn: f32,
     pub scans: u64,
     pub last_scan: Option<EntityId>,
-    pub grip: Option<crate::vr_grip::ResolvedGrip>,
     downloads: Vec<(Vector3<f32>, f32)>,
     pub held_pose: Option<(Vector3<f32>, Quaternion<f32>)>,
 }
@@ -65,7 +64,6 @@ impl Default for PersonalCard {
             last_scan: None,
             held_pose: None,
             downloads: Vec::new(),
-            grip: None,
         }
     }
 }
@@ -211,16 +209,9 @@ impl PersonalCard {
     }
 
     pub fn transform(&self, pawn: Vector3<f32>, rotation: Quaternion<f32>) -> Option<Matrix4<f32>> {
-        if self.hand.is_some() {
+        if let Some(hand) = self.hand {
             self.held_pose.map(|(position, orientation)| {
-                let grip = self.grip.as_ref();
-                Matrix4::from_translation(position)
-                    * Matrix4::from(orientation)
-                    * grip
-                        .map(|grip| {
-                            Matrix4::from_translation(grip.offset) * Matrix4::from(grip.rotation)
-                        })
-                        .unwrap_or_else(|| Matrix4::from_translation(vec3(0.0, 0.0, -0.1)))
+                super::mfd_device::held_transform(position, orientation, hand)
             })
         } else {
             self.center.map(|center| {
@@ -234,43 +225,13 @@ impl PersonalCard {
 
     pub fn render(
         &self,
-        assets: &mut engine::assets::asset_cache::AssetCache,
         pawn: Vector3<f32>,
         rotation: Quaternion<f32>,
     ) -> Vec<engine::scene::SceneObject> {
         let Some(transform) = self.transform(pawn, rotation) else {
             return vec![];
         };
-        let Some(model) = assets
-            .get_opt::<_, dark::model::Model, _>(&dark::importers::MODELS_IMPORTER, "scipass.bin")
-        else {
-            return vec![];
-        };
-        let Some(bounds) = model.bounding_box() else {
-            return vec![];
-        };
-        let scale = crate::vr_belt::card_model_scale(bounds.min.to_vec(), bounds.max.to_vec());
-        let centered_model =
-            crate::vr_belt::card_model_transform(bounds.min.to_vec(), bounds.max.to_vec());
-        let model_transform = if self.hand.is_some() {
-            if let Some(grip) = &self.grip {
-                let anchor = vec3(grip.anchor[0], grip.anchor[1], grip.anchor[2]);
-                Matrix4::from_translation(anchor * (grip.item_scale - scale))
-                    * Matrix4::from_scale(scale)
-            } else {
-                centered_model
-            }
-        } else {
-            centered_model
-        };
-        let mut scene: Vec<_> = model
-            .clone_scene_objects()
-            .into_iter()
-            .map(|mut object| {
-                object.set_transform(transform * model_transform);
-                object
-            })
-            .collect();
+        let mut scene = super::mfd_device::render_body(transform);
         // Camera-facing binary fragments spiral along the transfer direction.
         // Two trailing samples make motion readable without solid geometry;
         // texture glow and fade keep the stream airy at headset distances.
@@ -338,7 +299,6 @@ impl PersonalCard {
         scene
     }
 }
-use cgmath::EuclideanSpace;
 
 /// A tiny glowing bitmap glyph, cached once per mission. RGBA sprites use the
 /// existing per-eye billboard material, so fragments face each eye correctly.

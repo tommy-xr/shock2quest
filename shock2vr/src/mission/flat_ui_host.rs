@@ -1612,6 +1612,34 @@ impl FlatUiHost {
         }
     }
 
+    /// The MFD the handheld device's screen shows: the object panel, else an
+    /// open utility panel. Canvas pixels.
+    pub fn device_screen_source(&self) -> Option<Rect> {
+        self.panel_rect().or_else(|| self.utilities.panel_rect())
+    }
+
+    /// Device presentation: windows of the same canvas mapped onto the
+    /// device face. Placement stays with the shared layout.
+    pub fn render_world_viewports(
+        &self,
+        asset_cache: &mut AssetCache,
+        root_transform: cgmath::Matrix4<f32>,
+        target_size: Vector2<f32>,
+        viewports: &[crate::ui::canvas_viewport::CanvasViewport],
+    ) -> Vec<SceneObject> {
+        match self.build_canvas() {
+            Some(canvas) => canvas.render_world_viewports(
+                asset_cache,
+                root_transform,
+                target_size,
+                viewports,
+                None,
+                crate::ui::VR_COMPONENT_Z_STEP * 0.1,
+            ),
+            None => Vec::new(),
+        }
+    }
+
     /// Introspection snapshot of the active panel's elements for `GET /v1/ui`:
     /// canvas + normalized-screen rects and semantic labels, so clients click
     /// widgets by meaning instead of hardcoded pixels. Entity-bound buttons

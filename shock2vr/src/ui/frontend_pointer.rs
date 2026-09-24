@@ -161,6 +161,19 @@ impl FrontendPointerPass {
     pub fn active_ray(&self) -> Option<&FrontendRay> {
         self.active.map(|index| &self.rays[index])
     }
+
+    /// The same pass with every hit re-expressed through `map` (a surface
+    /// showing windows of a canvas maps its own pixels back into the
+    /// canvas's). A ray whose hit maps to nothing is off the canvas, and stops
+    /// driving it.
+    pub fn remap_hits(&self, map: impl Fn(Vector2<f32>) -> Option<Vector2<f32>>) -> Self {
+        let mut out = self.clone();
+        for ray in &mut out.rays {
+            ray.canvas_hit = ray.canvas_hit.and_then(&map);
+        }
+        out.active = out.active.filter(|i| out.rays[*i].canvas_hit.is_some());
+        out
+    }
 }
 
 /// Resolve one frame of frontend pointing.

@@ -288,6 +288,26 @@ pub fn pointer_beams(
     objects
 }
 
+/// Beams without the hit dot, for a small surface that draws its own canvas
+/// cursor (the handheld device) - a menu-sized dot would cover a third of it.
+pub fn pointer_beams_undotted(
+    pass: &FrontendPointerPass,
+    canvas_size: Vector2<f32>,
+    panel: &WorldPanel,
+) -> Vec<SceneObject> {
+    let mut objects = Vec::new();
+    for ray in &pass.rays {
+        let geometry = pointer_ray_geometry(ray, canvas_size, panel, 0, false);
+        let along = geometry.end - geometry.start;
+        let length = along.magnitude();
+        if length >= 1e-4 {
+            objects.extend(beam_objects(geometry.start, along, length));
+        }
+    }
+    crate::util::tag_render_source(&mut objects, crate::util::render_source::USE_MODE_POINTER);
+    objects
+}
+
 /// The pointer's objects for one frame. Split out from [`PointerVisuals`] so
 /// the geometry can be exercised without an asset cache (`glove: None` with
 /// `draw_hand` draws the fallback proxy, exactly as a missing model does at
