@@ -2699,6 +2699,8 @@ pub const PLAYER_MOVE_SPEED: f32 = 25.0;
 
 pub struct MissionCore {
     pub level_name: String,
+    /// What reflective materials see; `None` without a 25AE capture.
+    environment: Option<Rc<engine::texture::CubeTexture>>,
     pub gui: GuiManager,
     pub hit_boxes: HitBoxManager,
     pub rag_doll_manager: RagDollManager,
@@ -3760,6 +3762,7 @@ impl MissionCore {
             crate::security_alarm::SecurityAlarm::restore(crate::security_alarm::status(&world));
         let mut mission_core = MissionCore {
             interaction,
+            environment: crate::environment_map::load(asset_cache, &mission),
             level_name: mission,
             entity_info: entity_info_rc.clone(),
             template_to_particle_riders,
@@ -12948,6 +12951,21 @@ impl MissionCore {
         options: &crate::GameOptions,
     ) -> Vec<SceneObject> {
         let mut ret = vec![];
+        if let Some(environment) = self
+            .environment
+            .as_ref()
+            .filter(|_| crate::dev_params::get_bool(crate::dev_params::ENV_MAP_PREVIEW))
+        {
+            // Per-eye objects draw after a depth clear, so the box only has
+            // to clear the near plane even at the wide corners of a VR view.
+            let eye = engine::scene::material::eye_position(&view);
+            let mut preview = SceneObject::new(
+                engine::scene::environment::create_preview(environment.clone()),
+                Box::new(engine::scene::cube::create()),
+            );
+            preview.set_transform(Matrix4::from_translation(eye) * Matrix4::from_scale(10.0));
+            ret.push(preview);
+        }
         // The interaction layer reports what the reticle / hand rays picked;
         // whether that pick may be *highlighted* is a separate, data-driven
         // question (`P$HUDSelect`), answered once here so the flat and VR
