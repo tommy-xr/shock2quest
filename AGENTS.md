@@ -647,13 +647,13 @@ See `references/entities.md` for comprehensive documentation of:
 
 ### Cargo Aliases
 
-For faster development, the project includes convenient cargo aliases (defined in `.cargo/config.toml`):
+For faster development, the project includes convenient cargo aliases (defined in `.cargo/config.toml`): All build release, so every tool shares one set of compiled dependencies with manual playtesting instead of a second multi-GB debug tree.
 
-- `cargo dr` - Desktop runtime (shorthand for `cargo run -p desktop_runtime --`)
+- `cargo dr` - Desktop runtime (shorthand for `cargo run --release -p desktop_runtime --`)
 - `cargo dq` - Dark query CLI tool (shorthand for `cargo run --release -p dark_query --`)
-- `cargo dv` - Dark viewer tool (shorthand for `cargo run -p dark_viewer --`)
-- `cargo dbgr` - Debug runtime with HTTP control (shorthand for `cargo run --release -p debug_runtime --`; release, like manual playtesting, so agents and humans share one build)
-- `cargo dbgc` - Debug command client (shorthand for `cargo run -p debug_command --`)
+- `cargo dv` - Dark viewer tool (shorthand for `cargo run --release -p dark_viewer --`)
+- `cargo dbgr` - Debug runtime with HTTP control (shorthand for `cargo run --release -p debug_runtime --`)
+- `cargo dbgc` - Debug command client (shorthand for `cargo run --release -p debug_command --`)
 - `cargo bn` - Benchmark CLI (shorthand for `cargo run --release -p bench --`; `bench` collides with the built-in cargo command)
 
 Example usage:
