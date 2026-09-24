@@ -794,9 +794,14 @@ export class AudioApi {
    * query tags, world position, sim time/frame, clip duration, source entity
    * and audio handle. Snapshot the last `sequence` before an action, then
    * filter for higher sequences to find the sounds that action played.
+   * `sample` keeps only samples containing it, ignoring case.
    */
-  async recent(): Promise<RecentAudioResult> {
-    return this.client.get<RecentAudioResult>("/v1/audio/recent");
+  async recent(options?: { sample?: string }): Promise<RecentAudioResult> {
+    const query =
+      options?.sample !== undefined
+        ? `?${new URLSearchParams({ sample: options.sample })}`
+        : "";
+    return this.client.get<RecentAudioResult>(`/v1/audio/recent${query}`);
   }
 }
 
