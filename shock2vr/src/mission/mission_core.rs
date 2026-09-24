@@ -2879,6 +2879,8 @@ pub struct MissionCore {
     /// edge only, so a mode closed by something else (the pause menu) stays
     /// closed while the device is still held.
     device_was_drawn: bool,
+    /// Hologram spin angle (radians), advanced while the device is out.
+    hologram_spin: f32,
     /// The device face and its face-pixel pointer pass, for the beams.
     vr_device_pointer: Option<(crate::ui::FrontendPointerPass, crate::ui::WorldPanel)>,
 
@@ -3844,6 +3846,7 @@ impl MissionCore {
             vr_use_mode_pointer: None,
             use_mode_on_device: false,
             device_was_drawn: false,
+            hologram_spin: 0.0,
             vr_device_pointer: None,
             vr_squeeze_swallow: [false; 2],
             vr_trigger_safe_latch: [None; 2],
@@ -5374,6 +5377,10 @@ impl MissionCore {
         // the mode again - unless the cyber interface took the canvas over.
         if game_options.presentation_mode == crate::PresentationMode::Vr {
             let drawn = self.personal_card.hand.is_some();
+            if drawn {
+                self.hologram_spin =
+                    (self.hologram_spin + time.elapsed.as_secs_f32() * 1.2) % std::f32::consts::TAU;
+            }
             let draw_edge = drawn && !std::mem::replace(&mut self.device_was_drawn, drawn);
             if draw_edge && !self.use_mode {
                 effects.push(self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT));
@@ -14002,6 +14009,19 @@ impl MissionCore {
             super::mfd_device::FACE_PX,
             &viewports,
         ));
+        // A hologram of the object whose panel is on the screen.
+        if let Some(model) = self
+            .flat_ui
+            .active_panel()
+            .and_then(|entity| self.id_to_model.get(&entity))
+            && let Some(device) = self.personal_card.transform(player_pos, player_rot)
+        {
+            objects.extend(super::mfd_device::render_hologram(
+                model,
+                device,
+                self.hologram_spin,
+            ));
+        }
         if let Some((pass, _)) = self.vr_device_pointer.as_ref() {
             objects.extend(crate::ui::pointer_beams_undotted(
                 pass,

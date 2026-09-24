@@ -8,6 +8,7 @@
 use crate::input_context::InputContext;
 use crate::ui::canvas_viewport::CanvasViewport;
 use crate::ui::{FrontendPointerPass, Rect, WorldPanel};
+use cgmath::EuclideanSpace;
 use cgmath::{
     InnerSpace, Matrix3, Matrix4, Quaternion, SquareMatrix, Vector2, Vector3, Zero, vec2, vec3,
     vec4,
@@ -219,6 +220,66 @@ pub fn bar_chrome() -> crate::ui::UiCanvas {
     let mut canvas = crate::ui::UiCanvas::new(FACE_PX);
     canvas.image(BAR, BAR_ART);
     canvas
+}
+
+/// Hologram of the scanned object: its model shrunk to [`HOLOGRAM_M`],
+/// translucent, spinning about world up a hand's width above the device's
+/// top edge.
+const HOLOGRAM_M: f32 = 0.09;
+const HOLOGRAM_LIFT_M: f32 = 0.07;
+const HOLOGRAM_TRANSPARENCY: f32 = 0.4;
+const HOLOGRAM_GLOW_TRANSPARENCY: f32 = 0.7;
+
+pub fn render_hologram(
+    model: &dark::model::Model,
+    device: Matrix4<f32>,
+    spin: f32,
+) -> Vec<SceneObject> {
+    // Jointed object models report their extent only through object bounds.
+    let Some(bounds) = model.bounding_box().or_else(|| model.object_model_bounds()) else {
+        return Vec::new();
+    };
+    let (min, max) = (bounds.min.to_vec(), bounds.max.to_vec());
+    let extent = (max - min)
+        .x
+        .max((max - min).y)
+        .max((max - min).z)
+        .max(0.001);
+    let top = device * vec4(0.0, FACE_M.y / 2.0 / crate::METERS_PER_WORLD_UNIT, 0.0, 1.0);
+    let center = top.truncate()
+        + vec3(
+            0.0,
+            (HOLOGRAM_LIFT_M + HOLOGRAM_M / 2.0) / crate::METERS_PER_WORLD_UNIT,
+            0.0,
+        );
+    let placement = Matrix4::from_translation(center)
+        * Matrix4::from_angle_y(cgmath::Rad(spin))
+        * Matrix4::from_scale(HOLOGRAM_M / crate::METERS_PER_WORLD_UNIT / extent)
+        * Matrix4::from_translation(-(min + max) * 0.5);
+    // Each piece twice: its own texture, translucent, then a faint unlit green
+    // overlay of the same geometry, so it still reads in a dark room. The
+    // colour material is unskinned, so an animated model gets no overlay
+    // rather than one in its bind pose.
+    let glow_pass = !model.is_animated();
+    let mut objects = Vec::new();
+    for mut object in model.clone_scene_objects() {
+        object.set_transform(placement);
+        object.set_transparency(Some(HOLOGRAM_TRANSPARENCY));
+        if !glow_pass {
+            objects.push(object);
+            continue;
+        }
+        let mut glow = object.clone();
+        glow.material = Rc::new(std::cell::RefCell::new(
+            engine::scene::color_material::create(vec3(0.25, 0.95, 0.55)),
+        ));
+        glow.set_transparency(Some(HOLOGRAM_GLOW_TRANSPARENCY));
+        glow.set_depth_write(false);
+        objects.push(object);
+        objects.push(glow);
+    }
+    crate::util::tag_render_source(&mut objects, crate::util::render_source::MFD_HOLOGRAM);
+    objects
 }
 
 /// A face-pixel rect as a transform of the centered unit quad, `lift` metres

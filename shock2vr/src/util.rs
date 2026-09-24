@@ -371,6 +371,8 @@ pub mod render_source {
     pub const DEBUG_OVERLAY: &str = "debug_overlay";
     /// VR status lines and banners; hidden with flat HUD while a menu owns input.
     pub const GAMEPLAY_HUD: &str = "gameplay_hud";
+    /// The MFD device's hologram of the scanned object.
+    pub const MFD_HOLOGRAM: &str = "mfd_hologram";
 }
 
 /// A tag that records only which render path produced an object.

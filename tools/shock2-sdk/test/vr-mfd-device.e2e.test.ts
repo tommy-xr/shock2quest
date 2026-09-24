@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { test } from "node:test";
 import { AimOcclusionError, GameServer } from "../src/index.js";
+import type { SceneListResult } from "../src/types.js";
 import { add, aimVrHandAt, drawPersonalCard, quatMultiply, quatRotate, scale } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
@@ -91,6 +92,29 @@ async function scanWithDevice(
 }
 
 const center = (r: number[]): [number, number] => [r[0] + r[2] / 2, r[1] + r[3] / 2];
+
+/** Frame the device and its hologram with the debug camera and capture
+ * `frames` stills, 0.1 s apart, into `<shots>/<name>/`. */
+async function captureHologram(game: GameServer, name: string, frames: number) {
+  if (!shots) return;
+  mkdirSync(`${shots}/${name}`, { recursive: true });
+  // Pointer hand out of shot; let the pawn settle so the frame holds still.
+  await game.input.set("right_hand.position", [0.35, 0.3, 0]);
+  await game.step({ frames: 90 });
+  const f = await face(game);
+  const normal = quatRotate(f.rotation, [0, 0, 1]);
+  const lookAt = add(f.center, [0, 0.2, 0]);
+  await fetch(`${game.baseUrl}/v1/camera`, {
+    method: "POST",
+    body: JSON.stringify({ position: add(lookAt, add(scale(normal, 0.8), [0, 0.1, 0])), look_at: lookAt }),
+  });
+  for (let i = 0; i < frames; i++) {
+    await game.step({ frames: 6 });
+    await game.screenshot(`${shots}/${name}/frame_${String(i).padStart(2, "0")}.png`);
+  }
+  await fetch(`${game.baseUrl}/v1/camera`, { method: "POST", body: JSON.stringify({ detached: false }) });
+  await game.step({ frames: 1 });
+}
 
 /** Capture the player's view and a debug-camera close-up of the face. */
 async function capture(game: GameServer, name: string) {
@@ -190,7 +214,7 @@ test("VR scanning a crate shows its loot on the device; a squeeze pulls an item 
   await game.input.set("right_hand.squeeze", 1);
   await game.step({ frames: 6 });
   assert.equal((await game.info()).player.right_hand_entity_id, item.entity_id);
-  await capture(game, "device-loot-taken");
+  await captureHologram(game, "holo-crate", 24);
 });
 
 test("VR scanning a replicator opens its shop on the device without buying", {
@@ -238,4 +262,28 @@ test("VR a device scan replaces an open world panel", {
   assert.ok((await uiBodies()) > 0, "the hand frob opens a world panel");
   await scanWithDevice(game, 307, 21.404, [{ x: x - 1.2, y: 21.404, z }]);
   assert.equal(await uiBodies(), 0, "the device scan closes the world panel");
+});
+
+test("VR the scanned object's hologram spins above the device", {
+  skip: !enabled, timeout: 240_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  const [rep] = await game.entities.byTemplate(262);
+  await scanWithDevice(game, 262, 21.404, [{ x: rep.position[0] - 1.59, y: 21.404, z: rep.position[2] - 2.23 }]);
+  const hologram = async () => {
+    const scene = (await (await fetch(`${game.baseUrl}/v1/scene`)).json()) as SceneListResult;
+    return scene.objects
+      .filter((o) => o.source === "mfd_hologram")
+      .map((o) => o.position);
+  };
+  const before = await hologram();
+  assert.ok(before.length > 0, "the scanned replicator's hologram renders");
+  await game.step({ frames: 20 });
+  const after = await hologram();
+  assert.ok(
+    after.some((p, i) => p.some((v, k) => Math.abs(v - before[i][k]) > 1e-4)),
+    "the hologram spins",
+  );
+  await captureHologram(game, "holo-replicator", 24);
 });
