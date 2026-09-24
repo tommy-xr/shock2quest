@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { GameServer } from "../../src/index.js";
 import type { UiPanelPose, Vec3 } from "../../src/types.js";
 
@@ -210,4 +211,24 @@ export async function squeezeWorldPanelElement(
   await game.step({ frames: 4 });
   await game.input.set("right_hand.squeeze", 0);
   await game.step({ frames: 8 });
+}
+
+/** Put `id` in the right hand: a VR squeeze-grab, or the flat equip action. */
+export async function equipRightHand(
+  game: GameServer,
+  vr: boolean,
+  id: number,
+  action: "EquipPistol" | "EquipPsiAmp",
+): Promise<void> {
+  if (vr) {
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 3 });
+    await aimVrHandAt(game, (await game.entities.detail(id)).position, 0.3);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 8 });
+    assert.equal((await game.info()).player.right_hand_entity_id, id);
+  } else {
+    await game.input.trigger(action);
+    await game.step({ frames: 10 });
+  }
 }
