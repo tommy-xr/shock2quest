@@ -305,6 +305,10 @@ dev_params! {
     /// affects physical gun recoil and optional weight; Agility affects recoil.
     GUN_STRENGTH_OVERRIDE = Weapons::float("gun_strength_override", "Gun STR ovrd", 0.0, 0.0, 6.0, 1.0),
     GUN_AGILITY_OVERRIDE = Weapons::float("gun_agility_override", "Gun AGI ovrd", 0.0, 0.0, 6.0, 1.0),
+    /// HRM test override: every HRM board - hack, repair and modify alike - is
+    /// dealt all mines and every roll fails, so a critical failure (a repair
+    /// destroying its gun) is drivable headlessly.
+    HRM_FORCE_CRITICAL = Weapons::bool("hrm_force_critical", "Force HRM critical", false),
     /// Throw feel and balance. Launch values apply to the next release; damage
     /// values are read at impact. Tracking/teleport rejection stays fixed.
     THROW_SPEED_SCALE = Throwing::float("throw_speed_scale", "Speed scale", 1.0, 0.0, 3.0, 0.1),

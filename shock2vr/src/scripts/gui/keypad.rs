@@ -195,6 +195,11 @@ fn outcome_roll(rng_state: &mut u64) -> i32 {
     next_random(rng_state, 100) as i32
 }
 
+/// The `hrm_force_critical` dev param: all mines, every roll fails.
+fn hrm_force_critical() -> bool {
+    crate::dev_params::get(crate::dev_params::HRM_FORCE_CRITICAL) > 0.5
+}
+
 fn roll_succeeds(roll: i32, chance: i32) -> bool {
     roll < chance
 }
@@ -677,6 +682,11 @@ pub(crate) fn handle_hrm_msg(
                 );
             };
             let (_, mine_count) = effective_hrm_values(world, diff, context);
+            let mine_count = if hrm_force_critical() {
+                i32::MAX
+            } else {
+                mine_count
+            };
             let mut rng_state = hack_seed(world, entity_id);
             tracing::debug!(entity = entity_id.inner(), rng_state, "HRM rng seed");
             let nodes = board_with_mines(context, mine_count, &mut rng_state);
@@ -729,6 +739,7 @@ pub(crate) fn handle_hrm_msg(
                 "HRM rng outcome"
             );
             let (chance, _) = effective_hrm_values(world, diff, context);
+            let chance = if hrm_force_critical() { 0 } else { chance };
             if roll_succeeds(roll, chance) {
                 new_state.nodes[index] = HackNode::Lit;
                 if has_connected_three(&new_state.nodes) {
