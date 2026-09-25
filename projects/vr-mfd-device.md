@@ -5,7 +5,7 @@ returns to the authored belt anchor when released. Player balances, credentials,
 logs and research stay in their existing owners; the device is a transient
 presentation, not another inventory item or a second copy of player state.
 
-Enable **Pause → Developer → Body inventory → MFD device prototype** on Quest
+Enable **Pause → Developer → Tricorder → MFD device prototype** on Quest
 or any VR runtime. The session-only `vr_mfd_device` toggle defaults off and
 is also available through the debug API. For a repeatable desktop launch, run:
 
@@ -59,7 +59,7 @@ wide by default (`vr_mfd_width`). The optional extra bezel
 The ss2ex grip editor has a **Tricorder** library, with independent left/right
 position, rotation and finger curls saved to `assets/vr-tricorder-grips.json`.
 It previews the same physical frame and rear lens used in the game. Restart the
-game after saving. **Developer → Hands & gloves → Tricorder grips** adds live
+game after saving. **Developer → Tricorder → Hand grips** adds live
 six-axis offsets and alternate edge experiments on top of these saved poses;
 edge 0 preserves the authored grip. Automatic edge acquisition is not implemented.
 See DEVELOPMENT.md for commands and HTTP keys.
@@ -174,7 +174,7 @@ wielding. Runtime captures completed a 20-nanite pistol modification and a
 ## Hologram placement comparison
 
 The default now hovers over the screen's upper image area. Disable
-**Developer → Body inventory → MFD hologram over screen**
+**Developer → Tricorder → MFD hologram over screen**
 (`vr_mfd_hologram_screen`) to compare the original top-edge placement. The
 hovering model's bounding sphere clears the glass by 8 mm, with the same model, size, rotation and transparency.
 The original 2D art stays visible underneath so this experiment can reveal

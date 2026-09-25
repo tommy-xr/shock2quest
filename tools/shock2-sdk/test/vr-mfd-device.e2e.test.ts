@@ -483,3 +483,39 @@ test("belt display previews a lens target without activating it, then transfers 
   await game.step({ frames: 3 });
   assert.ok((await game.scene.fromSource("mfd_stowed_ui")).length > 0, "returning restores the passive belt screen");
 });
+
+test("tricorder belt height moves the screen, scanner and grab point together", {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
+    debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await game.devParams.set("vr_mfd_focus_scan", 0);
+  await game.step({ frames: 30 });
+  const center = async () => (await game.info()).player.hand_feedback!.body_gear!.personal_card.center!;
+  const initial = await center();
+  const scanner = (await game.ui.state()).scanner_pose!;
+  await game.devParams.set("vr_mfd_belt_y", .08);
+  await game.step({ frames: 3 });
+  const raised = await center();
+  const raisedScanner = (await game.ui.state()).scanner_pose!;
+  // World units are 2.5 feet; developer offsets are metres.
+  const delta = .08 / .762;
+  for (let axis = 0; axis < 3; axis++) {
+    const expected = axis === 1 ? delta : 0;
+    assert.ok(Math.abs(raised[axis] - initial[axis] - expected) < .0001);
+    assert.ok(Math.abs(raisedScanner.origin[axis] - scanner.origin[axis] - expected) < .0001);
+  }
+  assert.deepEqual(raisedScanner.rotation, scanner.rotation);
+  await drawPersonalCard(game, "left");
+  const held = (await game.ui.state()).panel_pose!;
+  assert.ok(held, "raised grab point draws the device");
+  await game.devParams.set("vr_mfd_belt_y", 0);
+  await game.step({ frames: 3 });
+  assert.deepEqual((await game.ui.state()).panel_pose, held, "belt tuning leaves the held grip unchanged");
+  await game.input.set("left_hand.squeeze", 0);
+  await game.step({ frames: 3 });
+  const restored = await center();
+  for (let axis = 0; axis < 3; axis++) {
+    assert.ok(Math.abs(restored[axis] - initial[axis]) < .0001, "zero restores the centered mount");
+  }
+});

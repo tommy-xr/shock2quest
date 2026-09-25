@@ -117,7 +117,7 @@ impl PersonalCard {
                     // A small magnetic standoff at the original belt mount.
                     // Keep the grab center on the rendered device.
                     + if self.device_mode {
-                        vec3(0.0, 0.0, -0.015)
+                        vec3(0.0, crate::dev_params::get(crate::dev_params::VR_MFD_BELT_Y), -0.015)
                     } else {
                         vec3(0.0, 0.0, 0.0)
                     })

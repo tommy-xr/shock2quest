@@ -910,7 +910,7 @@ below still operate on the items actually held in each hand.
 
 ### Experimental belt MFD device
 
-Enable **Developer → Body inventory → MFD device prototype** (`vr_mfd_device`,
+Enable **Developer → Tricorder → MFD device prototype** (`vr_mfd_device`,
 session-only, default off), or launch with the flag below.
 `cargo dbgr --mission earth.mis --vr --experimental mfd_device` replaces the
 belt card with a handheld MFD prototype. Draw with squeeze and focus on a target
@@ -944,7 +944,7 @@ disable it to compare holding-hand trigger scanning. A stable target scans
 once; look away and reacquire to scan it again. Only empty hands operate the
 screen, so a held weapon keeps its trigger and face-button behavior.
 
-**Developer → Hands & gloves → Tricorder grips** adjusts this device independently
+**Developer → Tricorder → Hand grips** adjusts this device independently
 of the access-card fit. Each hand has an edge selector (0 authored, 1 left,
 2 top, 3 right), XYZ translation in controller-local metres, and pitch/yaw/roll
 in degrees. Edge 0 uses the saved phone pose; alternate edges reposition the
@@ -970,7 +970,7 @@ Run `cargo dx ui --grip tricorder --grip-hand left` (or `right`), or select
 rotation and finger curls against the same stepped body and rear scanner lens
 used in the game. Save writes `assets/vr-tricorder-grips.json`; restart the game
 to load it. These poses are separate from the access card and ordinary pickups.
-Reset the live Tricorder grips offsets/angles to zero and edge to **authored**
+Reset the live Tricorder → Hand grips offsets/angles to zero and edge to **authored**
 when comparing the editor to the runtime. The shipped poses are an initial
 phone-style side hold; headset comfort still needs hands-on tuning.
 
@@ -994,3 +994,11 @@ preview never activates readers, opens action panels, consumes chemicals or
 claims the UI pointer. Drawing removes the belt screen and enables the normal
 handheld interaction. The stowed device uses `vr_mfd_width`; per-hand scale
 applies once that hand draws it.
+
+**Developer → Tricorder → Belt vertical offset (m)** (`vr_mfd_belt_y`)
+raises/lowers the centered mount live, from -0.15 to +0.20 metres in 0.005 m
+steps. Zero is the default; positive moves up. The screen, rear lens and grab
+point move together, while the held hand poses stay unchanged. Tricorder device,
+scan, map, body and hologram settings live in this top-level category; per-hand
+placement controls are under its **Hand grips** subcategory. Existing HTTP keys
+are unchanged.

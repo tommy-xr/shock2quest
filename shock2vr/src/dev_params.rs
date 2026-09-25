@@ -37,6 +37,7 @@ pub enum DevCategory {
     Hands,
     Fit,
     Tricorder,
+    TricorderGrips,
     Body,
     Weapons,
     Recoil,
@@ -49,7 +50,7 @@ pub enum DevCategory {
 }
 
 impl DevCategory {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Root,
         Self::Visualizations,
         Self::Interaction,
@@ -57,6 +58,7 @@ impl DevCategory {
         Self::Hands,
         Self::Fit,
         Self::Tricorder,
+        Self::TricorderGrips,
         Self::Body,
         Self::Weapons,
         Self::Recoil,
@@ -76,7 +78,8 @@ impl DevCategory {
             Self::Combat => "Combat",
             Self::Hands => "Hands & gloves",
             Self::Fit => "Fit experiment",
-            Self::Tricorder => "Tricorder grips",
+            Self::Tricorder => "Tricorder",
+            Self::TricorderGrips => "Hand grips",
             Self::Body => "Body inventory",
             Self::Weapons => "Weapons",
             Self::Recoil => "Recoil",
@@ -93,7 +96,8 @@ impl DevCategory {
         match self {
             Self::Root => None,
             Self::Interaction | Self::Combat => Some(Self::Visualizations),
-            Self::Fit | Self::Tricorder => Some(Self::Hands),
+            Self::Fit => Some(Self::Hands),
+            Self::TricorderGrips => Some(Self::Tricorder),
             Self::Recoil | Self::Melee | Self::Throwing => Some(Self::Weapons),
             Self::OrganicShine => Some(Self::Lighting),
             _ => Some(Self::Root),
@@ -405,29 +409,31 @@ dev_params! {
     VR_BELT_DISTANCE = Body::float("vr_belt_distance", "Belt forward (m)", 0.20, 0.10, 0.45, 0.01),
     VR_BELT_DROP = Body::float("vr_belt_drop", "Belt below eyes (m)", 0.55, 0.30, 0.90, 0.01),
     /// Session-only handheld experiment, also available on Quest without CLI flags.
-    VR_MFD_DEVICE = Body::bool("vr_mfd_device", "MFD device prototype", false),
-    VR_MFD_FOCUS_SCAN = Body::bool("vr_mfd_focus_scan", "MFD scan automatically on focus", true),
-    VR_MFD_MAP_WIDE = Body::bool("vr_mfd_map_wide", "MFD map: wider panel above", false),
-    VR_MFD_BODY = Body::float("vr_mfd_body", "MFD body: 0 card, 1 upgrade, 2 magazine, 3 frame", 3.0, 0.0, 3.0, 1.0),
-    VR_MFD_GRIP_MARGIN = Body::float("vr_mfd_grip_margin", "MFD grip-edge bezel (m)", 0.0, 0.0, 0.08, 0.005),
-    VR_MFD_WIDTH = Body::float("vr_mfd_width", "MFD face width (m)", 0.14, 0.08, 0.24, 0.01),
-    VR_MFD_HOLOGRAM_SCREEN = Body::bool("vr_mfd_hologram_screen", "MFD hologram over screen", true),
-    VR_MFD_LEFT_GRIP_EDGE = Tricorder::float("vr_mfd_left_grip_edge", "Left edge: 0 authored, 1 left, 2 top, 3 right", 0.0, 0.0, 3.0, 1.0),
-    VR_MFD_LEFT_GRIP_CLEARANCE = Tricorder::float("vr_mfd_left_grip_clearance", "Left alternate-edge clearance (m)", 0.0, 0.0, 0.06, 0.005),
-    VR_MFD_LEFT_GRIP_X = Tricorder::float("vr_mfd_left_grip_x", "Left position x (m)", 0.0, -0.10, 0.10, 0.005),
-    VR_MFD_LEFT_GRIP_Y = Tricorder::float("vr_mfd_left_grip_y", "Left position y (m)", 0.0, -0.10, 0.10, 0.005),
-    VR_MFD_LEFT_GRIP_Z = Tricorder::float("vr_mfd_left_grip_z", "Left position z (m)", 0.0, -0.10, 0.10, 0.005),
-    VR_MFD_LEFT_GRIP_PITCH = Tricorder::float("vr_mfd_left_grip_pitch", "Left pitch (deg)", 0.0, -90.0, 90.0, 5.0),
-    VR_MFD_LEFT_GRIP_YAW = Tricorder::float("vr_mfd_left_grip_yaw", "Left yaw (deg)", 0.0, -90.0, 90.0, 5.0),
-    VR_MFD_LEFT_GRIP_ROLL = Tricorder::float("vr_mfd_left_grip_roll", "Left roll (deg)", 0.0, -90.0, 90.0, 5.0),
-    VR_MFD_RIGHT_GRIP_EDGE = Tricorder::float("vr_mfd_right_grip_edge", "Right edge: 0 authored, 1 left, 2 top, 3 right", 0.0, 0.0, 3.0, 1.0),
-    VR_MFD_RIGHT_GRIP_CLEARANCE = Tricorder::float("vr_mfd_right_grip_clearance", "Right alternate-edge clearance (m)", 0.0, 0.0, 0.06, 0.005),
-    VR_MFD_RIGHT_GRIP_X = Tricorder::float("vr_mfd_right_grip_x", "Right position x (m)", 0.0, -0.10, 0.10, 0.005),
-    VR_MFD_RIGHT_GRIP_Y = Tricorder::float("vr_mfd_right_grip_y", "Right position y (m)", 0.0, -0.10, 0.10, 0.005),
-    VR_MFD_RIGHT_GRIP_Z = Tricorder::float("vr_mfd_right_grip_z", "Right position z (m)", 0.0, -0.10, 0.10, 0.005),
-    VR_MFD_RIGHT_GRIP_PITCH = Tricorder::float("vr_mfd_right_grip_pitch", "Right pitch (deg)", 0.0, -90.0, 90.0, 5.0),
-    VR_MFD_RIGHT_GRIP_YAW = Tricorder::float("vr_mfd_right_grip_yaw", "Right yaw (deg)", 0.0, -90.0, 90.0, 5.0),
-    VR_MFD_RIGHT_GRIP_ROLL = Tricorder::float("vr_mfd_right_grip_roll", "Right roll (deg)", 0.0, -90.0, 90.0, 5.0),
+    VR_MFD_DEVICE = Tricorder::bool("vr_mfd_device", "MFD device prototype", false),
+    /// Positive raises the stowed device and its grab point; zero keeps the centered mount.
+    VR_MFD_BELT_Y = Tricorder::float("vr_mfd_belt_y", "Belt vertical offset (m)", 0.0, -0.15, 0.20, 0.005),
+    VR_MFD_FOCUS_SCAN = Tricorder::bool("vr_mfd_focus_scan", "MFD scan automatically on focus", true),
+    VR_MFD_MAP_WIDE = Tricorder::bool("vr_mfd_map_wide", "MFD map: wider panel above", false),
+    VR_MFD_BODY = Tricorder::float("vr_mfd_body", "MFD body: 0 card, 1 upgrade, 2 magazine, 3 frame", 3.0, 0.0, 3.0, 1.0),
+    VR_MFD_GRIP_MARGIN = Tricorder::float("vr_mfd_grip_margin", "MFD grip-edge bezel (m)", 0.0, 0.0, 0.08, 0.005),
+    VR_MFD_WIDTH = Tricorder::float("vr_mfd_width", "MFD face width (m)", 0.14, 0.08, 0.24, 0.01),
+    VR_MFD_HOLOGRAM_SCREEN = Tricorder::bool("vr_mfd_hologram_screen", "MFD hologram over screen", true),
+    VR_MFD_LEFT_GRIP_EDGE = TricorderGrips::float("vr_mfd_left_grip_edge", "Left edge: 0 authored, 1 left, 2 top, 3 right", 0.0, 0.0, 3.0, 1.0),
+    VR_MFD_LEFT_GRIP_CLEARANCE = TricorderGrips::float("vr_mfd_left_grip_clearance", "Left alternate-edge clearance (m)", 0.0, 0.0, 0.06, 0.005),
+    VR_MFD_LEFT_GRIP_X = TricorderGrips::float("vr_mfd_left_grip_x", "Left position x (m)", 0.0, -0.10, 0.10, 0.005),
+    VR_MFD_LEFT_GRIP_Y = TricorderGrips::float("vr_mfd_left_grip_y", "Left position y (m)", 0.0, -0.10, 0.10, 0.005),
+    VR_MFD_LEFT_GRIP_Z = TricorderGrips::float("vr_mfd_left_grip_z", "Left position z (m)", 0.0, -0.10, 0.10, 0.005),
+    VR_MFD_LEFT_GRIP_PITCH = TricorderGrips::float("vr_mfd_left_grip_pitch", "Left pitch (deg)", 0.0, -90.0, 90.0, 5.0),
+    VR_MFD_LEFT_GRIP_YAW = TricorderGrips::float("vr_mfd_left_grip_yaw", "Left yaw (deg)", 0.0, -90.0, 90.0, 5.0),
+    VR_MFD_LEFT_GRIP_ROLL = TricorderGrips::float("vr_mfd_left_grip_roll", "Left roll (deg)", 0.0, -90.0, 90.0, 5.0),
+    VR_MFD_RIGHT_GRIP_EDGE = TricorderGrips::float("vr_mfd_right_grip_edge", "Right edge: 0 authored, 1 left, 2 top, 3 right", 0.0, 0.0, 3.0, 1.0),
+    VR_MFD_RIGHT_GRIP_CLEARANCE = TricorderGrips::float("vr_mfd_right_grip_clearance", "Right alternate-edge clearance (m)", 0.0, 0.0, 0.06, 0.005),
+    VR_MFD_RIGHT_GRIP_X = TricorderGrips::float("vr_mfd_right_grip_x", "Right position x (m)", 0.0, -0.10, 0.10, 0.005),
+    VR_MFD_RIGHT_GRIP_Y = TricorderGrips::float("vr_mfd_right_grip_y", "Right position y (m)", 0.0, -0.10, 0.10, 0.005),
+    VR_MFD_RIGHT_GRIP_Z = TricorderGrips::float("vr_mfd_right_grip_z", "Right position z (m)", 0.0, -0.10, 0.10, 0.005),
+    VR_MFD_RIGHT_GRIP_PITCH = TricorderGrips::float("vr_mfd_right_grip_pitch", "Right pitch (deg)", 0.0, -90.0, 90.0, 5.0),
+    VR_MFD_RIGHT_GRIP_YAW = TricorderGrips::float("vr_mfd_right_grip_yaw", "Right yaw (deg)", 0.0, -90.0, 90.0, 5.0),
+    VR_MFD_RIGHT_GRIP_ROLL = TricorderGrips::float("vr_mfd_right_grip_roll", "Right roll (deg)", 0.0, -90.0, 90.0, 5.0),
     /// Optional download visuals; collection, sound and haptics remain active.
     VR_DOWNLOAD_PARTICLES = Body::bool("vr_download_particles", "Download particles", false),
     VR_HOLSTER_DROP = Body::float("vr_holster_drop", "Holster below eyes (m)", 0.78, 0.55, 1.1, 0.02),
@@ -656,6 +662,23 @@ mod tests {
     // rules are tested through the pure [`apply`]; that `set`/`reset` really
     // move what consumers render is proven end-to-end by the SDK e2e
     // (`dev-params.e2e.test.ts`), which watches the VR panel move over HTTP.
+
+    #[test]
+    fn tricorder_settings_share_a_root_category_with_nested_hand_grips() {
+        assert_eq!(DevCategory::Tricorder.parent(), Some(DevCategory::Root));
+        assert_eq!(
+            DevCategory::TricorderGrips.parent(),
+            Some(DevCategory::Tricorder)
+        );
+        for (_, param) in all().filter(|(_, param)| param.key.starts_with("vr_mfd_")) {
+            assert!(
+                DevCategory::Tricorder.contains(param.category),
+                "{}",
+                param.key
+            );
+        }
+        assert_eq!(spec(VR_MFD_BELT_Y).default, 0.0);
+    }
 
     /// The registry replaced two consts; anything but these exact defaults
     /// is a behavior change at launch.
