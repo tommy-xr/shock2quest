@@ -273,7 +273,13 @@ pub fn compose(native: UiCanvas, screen: Option<Rect>, target: Option<&str>) -> 
             HAlign::Left,
             VAlign::Top,
         );
-        let lines: &[&str] = if target.is_some() {
+        let lines: &[&str] = if crate::dev_params::get_bool(crate::dev_params::VR_MFD_FOCUS_SCAN) {
+            if target.is_some() {
+                &["Hold steady to scan", "this object."]
+            } else {
+                &["Point at an object", "to scan it."]
+            }
+        } else if target.is_some() {
             &["Pull trigger to scan", "this object."]
         } else {
             &[
@@ -490,14 +496,44 @@ pub fn opens_panel(world: &shipyard::World, entity: shipyard::EntityId) -> bool 
 /// One trigger pull commits one scan. Drawing/recovery starts disarmed.
 pub struct Scanner {
     pressed: bool,
+    focus: Option<(shipyard::EntityId, f32, bool)>,
 }
 impl Default for Scanner {
     fn default() -> Self {
-        Self { pressed: true }
+        Self {
+            pressed: true,
+            focus: None,
+        }
     }
 }
 impl Scanner {
+    /// A stable target commits once; looking away or at another object rearms it.
+    pub fn focus(
+        &mut self,
+        target: Option<shipyard::EntityId>,
+        dt: f32,
+    ) -> Option<shipyard::EntityId> {
+        let Some(target) = target else {
+            self.focus = None;
+            return None;
+        };
+        if self.focus.is_none_or(|(previous, _, _)| previous != target) {
+            self.focus = Some((target, 0.0, false));
+        }
+        let (_, elapsed, committed) = self.focus.as_mut().unwrap();
+        *elapsed += dt.max(0.0);
+        if !*committed && *elapsed >= 0.4 {
+            *committed = true;
+            Some(target)
+        } else {
+            None
+        }
+    }
+
     pub fn trigger(&mut self, enabled: bool, pressed: bool) -> bool {
+        if !enabled {
+            self.focus = None;
+        }
         let edge = enabled && pressed && !self.pressed;
         self.pressed = !enabled || pressed;
         edge
@@ -609,6 +645,24 @@ pub fn body_frame(panel: WorldPanel) -> cgmath::Matrix4<f32> {
 #[cfg(test)]
 mod scan_tests {
     use super::Scanner;
+    #[test]
+    fn focus_requires_dwell_and_rearms_only_after_target_changes() {
+        let mut world = shipyard::World::new();
+        let a = world.add_entity(());
+        let b = world.add_entity(());
+        let mut scan = Scanner::default();
+        assert_eq!(scan.focus(Some(a), 0.1), None);
+        assert_eq!(scan.focus(Some(a), 0.2), None);
+        assert_eq!(scan.focus(Some(b), 0.1), None);
+        assert_eq!(scan.focus(Some(b), 0.3), Some(b));
+        assert_eq!(scan.focus(Some(b), 3.0), None);
+        assert_eq!(scan.focus(None, 0.1), None);
+        assert_eq!(scan.focus(Some(b), 0.2), None);
+        assert_eq!(scan.focus(Some(b), 0.2), Some(b));
+        scan.trigger(false, false);
+        assert_eq!(scan.focus(Some(b), 0.1), None);
+    }
+
     #[test]
     fn drawing_and_tracking_recovery_require_a_fresh_trigger_edge() {
         let mut scan = Scanner::default();

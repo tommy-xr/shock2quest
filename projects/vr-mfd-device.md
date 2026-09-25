@@ -29,7 +29,9 @@ flag is supplied.
 1. Squeeze an empty hand at the belt buckle to draw the instrument.
 2. Point that hand at an object within two metres. A cyan beam/hit marker and
    the idle screen's target name identify the object that will receive the scan.
-3. Pull the holding hand's trigger once. A held trigger cannot repeat scans.
+3. Hold the target steady for 0.4 seconds to scan automatically, including items
+   held in the other hand. Each continuous focus scans once. Disable
+   `vr_mfd_focus_scan` to compare explicit holding-hand trigger scans.
    An empty other hand points at the screen: trigger clicks, squeeze pulls loot out.
    An occupied hand retains its weapon trigger and contextual face buttons.
 4. Release the holding squeeze anywhere to return the instrument and close
@@ -37,7 +39,7 @@ flag is supplied.
 
 Credential readers retain the card's close-range automatic scan. This is useful
 for presenting a credential to a locked switch; it still checks the actual
-keyring and lock rules. Other scans require the trigger. A purchase, keypad
+keyring and lock rules. Other targets use the focus dwell (or the optional trigger mode). A purchase, keypad
 entry or HRM attempt still requires a subsequent UI action.
 
 The footer contains nanites, cyber modules, LOG, ACCESS, MFD, RES, MAP and ?. Press ?
@@ -68,7 +70,9 @@ input use the same resolved rectangles and inverse transform. This supports
 left panels, the right character sheet, query pages and the wide map without
 panel-specific element positioning. Device geometry uses ordinary world depth.
 
-Scans resolve one physics hit for target feedback and dispatch. Known UI scripts
+Scans resolve one target for feedback and dispatch. World physics occludes the
+ray; held items use their visible model bounds because their colliders do not
+participate in ordinary interaction rays. Known UI scripts
 receive their ordinary frob; unrelated world props are only inspected. Weapon
 settings receive an explicit scanned target, validated as a nearby gun; ordinary
 weapon-settings selection continues to require a held weapon. Existing HRM
@@ -97,8 +101,8 @@ code retains requirements, costs and outcomes.
 ## Edge policy
 
 Death, disabled player controls, or the cyber interface suppress the device.
-Mission transitions create fresh transient state. Draw and tracking recovery
-start trigger-disarmed; a release must be observed before a new scan. The
+Mission transitions create fresh transient state. Draw and tracking recovery restart the focus dwell. In trigger mode they
+start disarmed; a release must be observed before a new scan. The
 holding ray and occupied hands are excluded from UI arbitration. An empty hand beginning a grab
 on the panel cannot also grab the world. Returning the device clears its panel
 and utilities. Entering pointer control also requires releasing trigger/grab;
@@ -116,8 +120,10 @@ npm run build
 SHOCK2_E2E=1 node --test dist/test/vr-mfd-device.e2e.test.js
 ```
 
-It covers both hands, explicit scan/no auto-purchase, held-trigger debounce,
-free-hand utility selection, return and redraw. The existing personal-card
+It covers both hands, explicit scan/no auto-purchase, focus dwell and one-shot
+scanning, world/held chemical consumption, held-weapon targeting, occupied-hand
+firing, empty-hand utility selection, world-quad replacement, return/redraw,
+and both landscape map modes. The existing personal-card
 scenarios cover the flag-off baseline. Rust tests cover tile/input geometry,
 trigger recovery, shared panel behavior and card ownership. PR media records
 additional exercised interactions; claims about unexercised paths remain

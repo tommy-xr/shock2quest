@@ -403,6 +403,7 @@ dev_params! {
     VR_BELT_DROP = Body::float("vr_belt_drop", "Belt below eyes (m)", 0.55, 0.30, 0.90, 0.01),
     /// Session-only handheld experiment, also available on Quest without CLI flags.
     VR_MFD_DEVICE = Body::bool("vr_mfd_device", "MFD device prototype", false),
+    VR_MFD_FOCUS_SCAN = Body::bool("vr_mfd_focus_scan", "MFD scan automatically on focus", true),
     VR_MFD_MAP_WIDE = Body::bool("vr_mfd_map_wide", "MFD map: wider panel above", false),
     VR_MFD_BODY = Body::float("vr_mfd_body", "MFD body: 0 card, 1 upgrade, 2 magazine", 0.0, 0.0, 2.0, 1.0),
     VR_MFD_GRIP_MARGIN = Body::float("vr_mfd_grip_margin", "MFD lower grip bezel (m)", 0.035, 0.0, 0.08, 0.005),

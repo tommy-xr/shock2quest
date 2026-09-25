@@ -13,6 +13,7 @@ for (const hand of ["left", "right"] as const) {
     await using game = await GameServer.launch({ mission: "earth.mis", port: 0,
       debugFlags: hand === "left" ? ["--vr", "--experimental", "mfd_device"] : ["--vr"] });
     if (hand === "right") await game.devParams.set("vr_mfd_device", 1);
+    await game.devParams.set("vr_mfd_focus_scan", 0);
     await game.step({ frames: 30 });
     const [reader] = await game.entities.byTemplate(262);
     assert.ok(reader);
@@ -34,7 +35,8 @@ for (const hand of ["left", "right"] as const) {
     assert.ok(miniature.length > 0, "scanning creates a mesh preview");
     assert.ok(miniature.every(o => (Math.abs(o.transparency! - .45) < .001 || Math.abs(o.transparency! - .80) < .001) && !o.depth_write));
     const count = (await game.info()).player.hand_feedback!.body_gear!.personal_card.scans;
-    await game.step({ frames: 30 });
+
+  await game.step({ frames: 30 });
     assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.scans, count);
     assert.equal((await game.info()).player.stats?.nanites, before, "scan cannot purchase");
     await game.input.set(`${hand}_hand.trigger`, 0);
@@ -86,12 +88,13 @@ for (const hand of ["left", "right"] as const) {
   });
 }
 
-for (const held of [false, true]) {
-  test(`MFD device scans a needed ${held ? "held" : "world"} chemical once and preserves an unneeded chemical`, {
+for (const [held, focus] of [[false, false], [true, false], [true, true]]) {
+  test(`MFD device scans a needed ${held ? "held" : "world"} chemical ${focus ? "on focus" : "on trigger"} once and preserves an unneeded chemical`, {
     skip: !enabled, timeout: 180_000,
   }, async () => {
     await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
       debugFlags: ["--vr", "--experimental", "mfd_device"] });
+    await game.devParams.set("vr_mfd_focus_scan", focus ? 1 : 0);
     await game.step({ frames: 30 });
     await game.player.setStats({ skills: { research: 6 } });
     const specimen = await game.player.spawnItem(-1341);
@@ -122,8 +125,8 @@ for (const held of [false, true]) {
       const target = await game.entities.detail(chemical.entity_id);
       await aimVrHandAt(game, target.position, .25, 1, 0, { hand: "left" });
       await game.step({ frames: 3 });
-      await game.input.set("left_hand.trigger", 1);
-      await game.step({ frames: 5 });
+      if (!focus) await game.input.set("left_hand.trigger", 1);
+      await game.step({ frames: focus ? 35 : 5 });
       assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.last_scan, chemical.entity_id,
         "the real scanner must identify the chemical being tested");
       const remaining = (await game.entities.list({ limit: 1000 })).entities.some(e => e.id === chemical.entity_id);
@@ -143,6 +146,7 @@ test("scanned world weapons offer state-specific repair and modify boards", {
 }, async () => {
   await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
     debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await game.devParams.set("vr_mfd_focus_scan", 0);
   await game.step({ frames: 30 });
   const [gun] = await game.entities.byTemplate(-17);
   assert.ok(gun);
@@ -194,6 +198,7 @@ test("MFD screen ignores a gun hand while its trigger and face button still work
 }, async () => {
   await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
     debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await game.devParams.set("vr_mfd_focus_scan", 0);
   await game.step({ frames: 30 });
   const [gun] = await game.entities.byTemplate(-17);
   assert.ok(gun);
@@ -223,8 +228,8 @@ test("MFD screen ignores a gun hand while its trigger and face button still work
   await aimVrHandAt(game, (await game.entities.detail(gun.id)).position, .3, 1, 0, { hand: "left", lookAtTarget: false });
   await game.input.set("left_hand.trigger", 1);
   await game.step({ frames: 3 });
-  assert.notEqual((await game.info()).player.hand_feedback!.body_gear!.personal_card.last_scan, gun.id,
-    "the object in the other hand is not a scan target");
+  assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.last_scan, gun.id,
+    "the held gun can be scanned without becoming a screen pointer");
 });
 
 
@@ -233,6 +238,7 @@ test("drawing the device replaces a world quad and hand frobs stay on its screen
 }, async () => {
   await using game = await GameServer.launch({ mission: "earth.mis", port: 0,
     debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await game.devParams.set("vr_mfd_focus_scan", 0);
   await game.step({ frames: 30 });
   const [crate] = await game.entities.byTemplate(307);
   assert.ok(crate);
@@ -264,6 +270,7 @@ test("a trigger held before drawing cannot click the device until released", {
 }, async () => {
   await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
     debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await game.devParams.set("vr_mfd_focus_scan", 0);
   await game.step({ frames: 30 });
   await game.input.set("right_hand.trigger", 1);
   await game.step({ frames: 2 });
@@ -287,6 +294,7 @@ for (const hand of ["left", "right"] as const) {
   }, async () => {
     await using game = await GameServer.launch({ mission: "medsci1.mis", port: 0,
       debugFlags: ["--vr", "--experimental", "mfd_device"] });
+    await game.devParams.set("vr_mfd_focus_scan", 0);
     await game.step({ frames: 30 });
     await drawPersonalCard(game, hand);
     await game.input.set(`${hand}_hand.position`, [hand === "left" ? -.25 : .25, .4, -.7]);
@@ -338,3 +346,27 @@ for (const hand of ["left", "right"] as const) {
     assert.equal((await game.ui.state()).active_panel, null, "rotated close button maps back to the host");
   });
 }
+
+test("focus scan opens a held weapon without trigger and does not repeat", {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
+    debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await game.step({ frames: 30 });
+  const [gun] = await game.entities.byTemplate(-17);
+  await game.player.teleport({ x: gun.position[0], y: .9, z: 0 });
+  await game.step({ frames: 120 });
+  await equipRightHand(game, true, gun.id, "EquipPistol");
+  await drawPersonalCard(game, "left");
+  await aimVrHandAt(game, (await game.entities.detail(gun.id)).position, .3, 1, 0,
+    { hand: "left", lookAtTarget: false });
+  await game.step({ frames: 12 });
+  const card = async () => (await game.info()).player.hand_feedback!.body_gear!.personal_card;
+  assert.notEqual((await card()).last_scan, gun.id, "a glance does not commit");
+  await game.step({ frames: 25 });
+  assert.equal((await card()).last_scan, gun.id);
+  const scans = (await card()).scans;
+  await game.step({ frames: 90 });
+  assert.equal((await card()).scans, scans, "steady focus scans only once");
+  assert.ok((await game.ui.state()).active_panel, "focus opens the weapon panel");
+});

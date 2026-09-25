@@ -935,3 +935,9 @@ rotates the map within the screen so the device can be turned sideways; on
 opens a wider panel immediately above the body. The footer remains usable in
 both modes. Changing the mode while holding a UI trigger requires releasing it
 before another click.
+
+The MFD prototype now scans its focused target after a 0.4-second dwell,
+including objects held in the other hand. `vr_mfd_focus_scan` defaults true;
+disable it to compare holding-hand trigger scanning. A stable target scans
+once; look away and reacquire to scan it again. Only empty hands operate the
+screen, so a held weapon keeps its trigger and face-button behavior.

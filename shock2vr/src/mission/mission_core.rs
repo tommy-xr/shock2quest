@@ -5906,25 +5906,16 @@ impl MissionCore {
                 let (left, right) = self.interaction.held_entities();
                 let mut target = world_hit.and_then(|hit| {
                     let entity = hit.maybe_entity_id?;
-                    // Held items have a separate, explicit research-only path below.
+                    // Held items use their visible bounds below.
                     (!self.flat_ui.device || ![left, right].contains(&Some(entity)))
                         .then_some((entity, hit.hit_point.to_vec()))
                 });
                 if self.flat_ui.device {
                     // Held objects no longer participate in ordinary world rays.
-                    // Test the actual transformed model bounds for research supplies,
+                    // Test the actual transformed model bounds for held items,
                     // retaining nearer world geometry as an occluder.
                     let transforms = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
                     for entity in [left, right].into_iter().flatten() {
-                        if !["Chemical", "ResearchableScript"].iter().any(|script| {
-                            crate::scripts::script_util::entity_has_script(
-                                &self.world,
-                                entity,
-                                script,
-                            )
-                        }) {
-                            continue;
-                        }
                         let Some(bounds) =
                             self.id_to_model.get(&entity).and_then(|m| m.bounding_box())
                         else {
@@ -5990,8 +5981,22 @@ impl MissionCore {
                             .is_ok_and(|v| v.get(entity).is_ok())))
                 .then_some(entity)
             });
-            let scan = if self.flat_ui.device && trigger_edge {
-                hit.map(|(entity, ..)| {
+            let focus_mode = crate::dev_params::get_bool(crate::dev_params::VR_MFD_FOCUS_SCAN);
+            let focused = self.device_scanner.focus(
+                (self.flat_ui.device && focus_mode)
+                    .then(|| hit.map(|(entity, ..)| entity))
+                    .flatten(),
+                time.elapsed.as_secs_f32(),
+            );
+            let requested = if focus_mode {
+                focused
+            } else if trigger_edge {
+                hit.map(|(entity, ..)| entity)
+            } else {
+                None
+            };
+            let scan = if self.flat_ui.device && requested.is_some() {
+                requested.map(|entity| {
                     self.personal_card.scans += 1;
                     self.personal_card.last_scan = Some(entity);
                     entity
