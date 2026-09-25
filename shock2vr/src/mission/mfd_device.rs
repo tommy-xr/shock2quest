@@ -140,28 +140,34 @@ pub fn compose(
     canvas.fill(Rect::new(3.0, 304.0, 264.0, 70.0), [24, 31, 35]);
     canvas.fill(Rect::new(6.0, 6.0, 192.0, 362.0), [3, 8, 10]);
     if !occupied {
-        canvas.image(Rect::new(8.0, 8.0, 188.0, 296.0), "iface/media.pcx");
+        canvas.image(Rect::new(8.0, 8.0, 188.0, 296.0), "iface/query.pcx");
+        // Match the retail query title and description wells (native panel
+        // origin 2,124 translated to 8,8). Keep hints out of the image well.
         canvas.text_native_fit(
-            Rect::new(18.0, 100.0, 140.0, 24.0),
-            "SCAN MODE",
+            Rect::new(32.0, 141.0, 129.0, 12.0),
+            target.unwrap_or("SCANNER"),
             crate::ui::MFD_FONT,
-            HAlign::Center,
-            VAlign::Middle,
+            HAlign::Left,
+            VAlign::Top,
         );
-        canvas.text_native_fit(
-            Rect::new(18.0, 132.0, 140.0, 24.0),
-            target.unwrap_or("POINT AT AN OBJECT"),
-            crate::ui::MFD_FONT,
-            HAlign::Center,
-            VAlign::Middle,
-        );
-        canvas.text_native_fit(
-            Rect::new(18.0, 157.0, 140.0, 24.0),
-            "PULL TRIGGER TO SCAN",
-            crate::ui::MFD_FONT,
-            HAlign::Center,
-            VAlign::Middle,
-        );
+        let lines: &[&str] = if target.is_some() {
+            &["Pull trigger to scan", "this object."]
+        } else {
+            &[
+                "Point at an object,",
+                "then pull the trigger",
+                "to scan it.",
+            ]
+        };
+        for (i, line) in lines.iter().enumerate() {
+            canvas.text_native_fit(
+                Rect::new(23.0, 161.0 + i as f32 * 12.0, 123.0, 12.0),
+                line,
+                crate::ui::MFD_FONT,
+                HAlign::Left,
+                VAlign::Top,
+            );
+        }
     }
     // Mirror only the housing bitmap: the raised end supports the right HRM
     // plug, while every icon, label and hit target remains upright.

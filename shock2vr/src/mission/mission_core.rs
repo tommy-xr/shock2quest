@@ -5893,8 +5893,7 @@ impl MissionCore {
             {
                 self.device_beam = Some((start, end));
                 self.flat_ui.scan_label =
-                    crate::hud::resolve_item_name(asset_cache, &self.world, entity)
-                        .map(|name| format!("> {name}"));
+                    crate::hud::resolve_item_name(asset_cache, &self.world, entity);
             }
             let near_reader = hit.and_then(|(entity, _, end, distance)| {
                 // Keep the card's original contact origin outside the experiment.
