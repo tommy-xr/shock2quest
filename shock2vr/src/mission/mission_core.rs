@@ -5887,25 +5887,73 @@ impl MissionCore {
             self.device_beam = None;
             self.flat_ui.scan_label = None;
             let hit = self.personal_card.held_pose.and_then(|(origin, rotation)| {
-                let hit = crate::virtual_hand::interaction_ray_cast(
+                use cgmath::{SquareMatrix, Transform};
+                use collision::{Continuous, Ray3};
+                let forward = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+                let world_hit = crate::virtual_hand::interaction_ray_cast(
                     &self.physics,
                     &self.world,
                     vec3_to_point3(origin),
-                    rotation.rotate_vector(vec3(0.0, 0.0, -1.0)),
+                    forward,
                     None,
-                )?;
-                let entity = hit.maybe_entity_id?;
+                );
+                let reach = 2.0 / crate::METERS_PER_WORLD_UNIT;
+                let mut nearest = world_hit.as_ref().map_or(reach, |hit| {
+                    (hit.hit_point - vec3_to_point3(origin))
+                        .magnitude()
+                        .min(reach)
+                });
                 let (left, right) = self.interaction.held_entities();
-                if self.flat_ui.device && [left, right].contains(&Some(entity)) {
-                    return None;
+                let mut target = world_hit.and_then(|hit| {
+                    let entity = hit.maybe_entity_id?;
+                    // Held items have a separate, explicit research-only path below.
+                    (!self.flat_ui.device || ![left, right].contains(&Some(entity)))
+                        .then_some((entity, hit.hit_point.to_vec()))
+                });
+                if self.flat_ui.device {
+                    // Held objects no longer participate in ordinary world rays.
+                    // Test the actual transformed model bounds for research supplies,
+                    // retaining nearer world geometry as an occluder.
+                    let transforms = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+                    for entity in [left, right].into_iter().flatten() {
+                        if !["Chemical", "ResearchableScript"].iter().any(|script| {
+                            crate::scripts::script_util::entity_has_script(
+                                &self.world,
+                                entity,
+                                script,
+                            )
+                        }) {
+                            continue;
+                        }
+                        let Some(bounds) =
+                            self.id_to_model.get(&entity).and_then(|m| m.bounding_box())
+                        else {
+                            continue;
+                        };
+                        let Ok(transform) = transforms.get(entity).map(|t| t.0) else {
+                            continue;
+                        };
+                        let Some(inverse) = transform.invert() else {
+                            continue;
+                        };
+                        let ray = Ray3::new(
+                            inverse.transform_point(vec3_to_point3(origin)),
+                            inverse.transform_vector(forward),
+                        );
+                        let Some(local_hit) = bounds.intersection(&ray) else {
+                            continue;
+                        };
+                        let point = transform.transform_point(local_hit).to_vec();
+                        let distance = (point - origin).magnitude();
+                        if distance <= nearest {
+                            nearest = distance;
+                            target = Some((entity, point));
+                        }
+                    }
                 }
-                let distance = (hit.hit_point - vec3_to_point3(origin)).magnitude();
-                (distance <= 2.0 / crate::METERS_PER_WORLD_UNIT).then_some((
-                    entity,
-                    origin,
-                    hit.hit_point.to_vec(),
-                    distance,
-                ))
+                let (entity, point) = target?;
+                let distance = (point - origin).magnitude();
+                (distance <= reach).then_some((entity, origin, point, distance))
             });
             let device_trigger = self.personal_card.hand.is_some_and(|i| {
                 [&input_context.left_hand, &input_context.right_hand][i].trigger_value > 0.5

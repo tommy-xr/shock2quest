@@ -86,54 +86,57 @@ for (const hand of ["left", "right"] as const) {
   });
 }
 
-test("MFD device scans a needed world chemical once and preserves an unneeded chemical", {
-  skip: !enabled, timeout: 180_000,
-}, async () => {
-  await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
-    debugFlags: ["--vr", "--experimental", "mfd_device"] });
-  await game.step({ frames: 30 });
-  await game.player.setStats({ skills: { research: 6 } });
-  const specimen = await game.player.spawnItem(-1341);
-  // Provision an active project; the behavior under test is the real scanner
-  // accepting/refusing physical chemicals, not the inventory's research shortcut.
-  await game.entities.sendMessage(specimen.entity_id, { type: "Frob" });
-  await game.step({ frames: 75 });
-  for (const [name, consumed] of [["Chem #2", false], ["Chem #4", true]] as const) {
-    const chemical = await game.player.spawnItem(name);
-    await game.input.trigger("ToggleUseMode");
-    await game.step({ frames: 5 });
-    let ui = await game.ui.state();
-    const slot = ui.strip!.elements.find(e => e.kind === "button" && e.entity_id === chemical.entity_id)!;
-    assert.ok(slot, "provisioned chemical must be on the shared inventory strip");
-    await aimVrHandAtCanvas(game, ui.panel_pose!, [slot.rect[0] + slot.rect[2] / 2, slot.rect[1] + slot.rect[3] / 2], { hand: "right" });
-    await game.step({ frames: 2 });
-    await game.input.set("right_hand.squeeze", 1);
-    await game.step({ frames: 3 });
-    assert.equal((await game.info()).player.right_hand_entity_id, chemical.entity_id);
-    await game.input.trigger("ToggleUseMode");
-    await game.step({ frames: 3 });
-    await game.input.set("right_hand.position", [.2, .5, -.7]);
-    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
-    await game.step({ frames: 3 });
-    await game.input.set("right_hand.squeeze", 0);
-    await game.step({ frames: 10 });
-    await drawPersonalCard(game, "left");
-    const target = await game.entities.detail(chemical.entity_id);
-    await aimVrHandAt(game, target.position, .25, 1, 0, { hand: "left" });
-    await game.step({ frames: 3 });
-    await game.input.set("left_hand.trigger", 1);
-    await game.step({ frames: 5 });
-    assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.last_scan, chemical.entity_id,
-      "the real scanner must identify the chemical being tested");
-    const remaining = (await game.entities.list({ limit: 1000 })).entities.some(e => e.id === chemical.entity_id);
-    assert.equal(remaining, !consumed, `${name}: only the requested chemical may be consumed`);
-    await game.step({ frames: 5 });
-    assert.equal((await game.entities.list({ limit: 1000 })).entities.some(e => e.id === chemical.entity_id), !consumed);
-    await game.input.set("left_hand.trigger", 0);
-    await game.input.set("left_hand.squeeze", 0);
-    await game.step({ frames: 3 });
-  }
-});
+for (const held of [false, true]) {
+  test(`MFD device scans a needed ${held ? "held" : "world"} chemical once and preserves an unneeded chemical`, {
+    skip: !enabled, timeout: 180_000,
+  }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
+      debugFlags: ["--vr", "--experimental", "mfd_device"] });
+    await game.step({ frames: 30 });
+    await game.player.setStats({ skills: { research: 6 } });
+    const specimen = await game.player.spawnItem(-1341);
+    // Provision an active project; the behavior under test is the real scanner
+    // accepting/refusing physical chemicals, not the inventory's research shortcut.
+    await game.entities.sendMessage(specimen.entity_id, { type: "Frob" });
+    await game.step({ frames: 75 });
+    for (const [name, consumed] of [["Chem #2", false], ["Chem #4", true]] as const) {
+      const chemical = await game.player.spawnItem(name);
+      await game.input.trigger("ToggleUseMode");
+      await game.step({ frames: 5 });
+      let ui = await game.ui.state();
+      const slot = ui.strip!.elements.find(e => e.kind === "button" && e.entity_id === chemical.entity_id)!;
+      assert.ok(slot, "provisioned chemical must be on the shared inventory strip");
+      await aimVrHandAtCanvas(game, ui.panel_pose!, [slot.rect[0] + slot.rect[2] / 2, slot.rect[1] + slot.rect[3] / 2], { hand: "right" });
+      await game.step({ frames: 2 });
+      await game.input.set("right_hand.squeeze", 1);
+      await game.step({ frames: 3 });
+      assert.equal((await game.info()).player.right_hand_entity_id, chemical.entity_id);
+      await game.input.trigger("ToggleUseMode");
+      await game.step({ frames: 3 });
+      await game.input.set("right_hand.position", [.2, .5, -.7]);
+      await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+      await game.step({ frames: 3 });
+      if (!held) await game.input.set("right_hand.squeeze", 0);
+      await game.step({ frames: 10 });
+      await drawPersonalCard(game, "left");
+      const target = await game.entities.detail(chemical.entity_id);
+      await aimVrHandAt(game, target.position, .25, 1, 0, { hand: "left" });
+      await game.step({ frames: 3 });
+      await game.input.set("left_hand.trigger", 1);
+      await game.step({ frames: 5 });
+      assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.last_scan, chemical.entity_id,
+        "the real scanner must identify the chemical being tested");
+      const remaining = (await game.entities.list({ limit: 1000 })).entities.some(e => e.id === chemical.entity_id);
+      assert.equal(remaining, !consumed, `${name}: only the requested chemical may be consumed`);
+      await game.step({ frames: 5 });
+      assert.equal((await game.entities.list({ limit: 1000 })).entities.some(e => e.id === chemical.entity_id), !consumed);
+      await game.input.set("left_hand.trigger", 0);
+      await game.input.set("left_hand.squeeze", 0);
+      await game.input.set("right_hand.squeeze", 0);
+      await game.step({ frames: 3 });
+    }
+  });
+}
 
 test("scanned world weapons offer state-specific repair and modify boards", {
   skip: !enabled, timeout: 180_000,
