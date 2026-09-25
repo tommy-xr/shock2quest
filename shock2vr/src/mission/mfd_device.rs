@@ -573,6 +573,9 @@ pub fn body(
         texture::TextureTrait,
     };
     use std::{cell::RefCell, rc::Rc};
+    if crate::dev_params::get(crate::dev_params::VR_MFD_BODY).round() as u8 == 3 {
+        return stepped_frame(face);
+    }
     let name = match crate::dev_params::get(crate::dev_params::VR_MFD_BODY).round() as u8 {
         1 => "upgrade.bin",
         2 => "magci.bin",
@@ -630,6 +633,55 @@ pub fn body(
             object
         })
         .collect()
+}
+
+/// Original stepped outline with a solid eight-millimetre backing.
+fn stepped_frame(face: cgmath::Matrix4<f32>) -> Vec<engine::scene::SceneObject> {
+    use cgmath::{Deg, Matrix4};
+    use engine::scene::{SceneObject, SceneObjectDebugTag, color_material, cube};
+    let display = face_size();
+    let pixel = display.x / SIZE.x;
+    let depth = 0.008 / crate::METERS_PER_WORLD_UNIT;
+    let margin = grip_margin();
+    let root = face
+        * Matrix4::from_angle_z(Deg(180.0))
+        * Matrix4::from_translation(vec3(0.0, margin * 0.5, 0.0));
+    [
+        (
+            -32.0 * pixel,
+            -margin * 0.5,
+            204.0 * pixel,
+            display.y + margin,
+        ),
+        (
+            0.0,
+            -152.0 * pixel - margin * 0.5,
+            display.x,
+            72.0 * pixel + margin,
+        ),
+    ]
+    .into_iter()
+    .map(|(x, y, width, height)| {
+        let mut object = SceneObject::new(
+            color_material::create(vec3(0.035, 0.05, 0.06)),
+            Box::new(cube::create()),
+        );
+        object.set_transform(
+            root * Matrix4::from_translation(vec3(
+                x,
+                y,
+                -depth * 0.5 - 0.001 / crate::METERS_PER_WORLD_UNIT,
+            )) * Matrix4::from_nonuniform_scale(width, height, depth),
+        );
+        object.set_debug_tag(Some(std::rc::Rc::new(SceneObjectDebugTag {
+            entity_id: None,
+            name: None,
+            model: Some("tricorder_frame".into()),
+            source: Some("mfd_body".into()),
+        })));
+        object
+    })
+    .collect()
 }
 
 pub fn body_frame(panel: WorldPanel) -> cgmath::Matrix4<f32> {
