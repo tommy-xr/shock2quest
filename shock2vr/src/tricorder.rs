@@ -108,16 +108,33 @@ pub fn triangles() -> Vec<[Point3<f32>; 3]> {
         })
         .collect()
 }
-pub fn model() -> dark::model::Model {
+/// The same idle canvas used in-game; no editor-only text or button layout.
+pub fn idle_screen(
+    assets: &mut engine::assets::asset_cache::AssetCache,
+    panel: &crate::ui::WorldPanel,
+    resources: [i32; 2],
+) -> Vec<SceneObject> {
+    let mut host = crate::mission::flat_ui_host::FlatUiHost::new();
+    host.device = true;
+    host.set_readouts(Some(crate::hud::readouts::UseModeReadouts {
+        resources,
+        ..Default::default()
+    }));
+    host.render_world_space(assets, panel)
+}
+
+pub fn model(assets: &mut engine::assets::asset_cache::AssetCache) -> dark::model::Model {
     let w = width();
     let p = w / CANVAS[0];
     let mut objects = frame_objects(w);
-    // Screen reference is behind the runtime canvas; the editor needs its facing.
-    objects.push(box_object(
-        vec3(-32.0 * p, 32.0 * p, 0.0001),
-        vec3(188.0 * p, 296.0 * p, 0.0001),
-        vec3(0.0, 0.15, 0.12),
-        "mfd_screen_reference",
+    objects.extend(idle_screen(
+        assets,
+        &crate::ui::WorldPanel {
+            center: vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            size: cgmath::vec2(w, CANVAS[1] * p),
+        },
+        [0, 0],
     ));
     objects.extend(lens_objects(w));
     dark::model::Model::from_glb(

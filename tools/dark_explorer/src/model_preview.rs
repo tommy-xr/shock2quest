@@ -212,7 +212,7 @@ impl ModelPreview {
         });
 
         egui::CollapsingHeader::new("Lighting")
-            .default_open(true)
+            .default_open(!shock2vr::tricorder::is_model(key))
             .show(ui, |ui| {
                 self.needs_render |= ui
                     .add(egui::Slider::new(&mut self.ambient, 0.0..=1.0).text("Ambient"))
@@ -326,7 +326,7 @@ impl ModelPreview {
         // families currently share no `.bin` basenames).
         let model = match quiet_catch(|| {
             if shock2vr::tricorder::is_model(key) {
-                return std::rc::Rc::new(shock2vr::tricorder::model());
+                return std::rc::Rc::new(shock2vr::tricorder::model(&mut self.asset_cache));
             }
             if matches!(scene, PreviewScene::VrReference) {
                 return std::rc::Rc::new(
