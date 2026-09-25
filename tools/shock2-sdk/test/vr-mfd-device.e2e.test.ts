@@ -51,6 +51,24 @@ for (const hand of ["left", "right"] as const) {
     await game.step({ frames: 3 });
     assert.ok((await game.ui.state()).utilities.some(e => e.label === "access_cards"));
     assert.equal((await game.ui.state()).active_panel, null);
+    // The newly mapped MAP control opens the whole wide canvas on the device.
+    await aimVrHandAtCanvas(game, (await game.ui.state()).panel_pose!, [66, 350], { hand: free });
+    await game.step({ frames: 2 });
+    await game.input.set(`${free}_hand.trigger`, 1);
+    await game.step({ frames: 3 });
+    await game.input.set(`${free}_hand.trigger`, 0);
+    await game.step({ frames: 2 });
+    const map = (await game.ui.state()).active_panel;
+    assert.ok(map?.elements.some(e => e.texture?.toLowerCase().endsWith("mapback.pcx")), "MAP opens from the handheld host");
+    const mapFrame = map.elements.find(e => e.texture?.toLowerCase().endsWith("mapback.pcx"))!;
+    assert.ok(mapFrame.rect[0] >= 8 && mapFrame.rect[0] + mapFrame.rect[2] <= 196.1, "the complete map fits the main screen");
+    await aimVrHandAtCanvas(game, (await game.ui.state()).panel_pose!, [136, 341], { hand: free });
+    await game.step({ frames: 2 });
+    await game.input.set(`${free}_hand.trigger`, 1);
+    await game.step({ frames: 3 });
+    await game.input.set(`${free}_hand.trigger`, 0);
+    await game.step({ frames: 2 });
+    assert.equal((await game.ui.state()).active_panel, null, "MFD replaces the compact map");
     await game.input.set(`${hand}_hand.squeeze`, 0);
     await game.step({ frames: 3 });
     assert.equal((await game.ui.state()).panel_pose, null);

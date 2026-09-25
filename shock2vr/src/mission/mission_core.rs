@@ -10096,6 +10096,7 @@ impl MissionCore {
                     // VR uses this host while the cyber interface is active.
                     if game_options.presentation_mode == crate::PresentationMode::Flat
                         || self.use_mode
+                        || self.flat_ui.device
                     {
                         if let Ok(map) = self.world.borrow::<UniqueView<MapPanelEntity>>() {
                             let entity = map.0;

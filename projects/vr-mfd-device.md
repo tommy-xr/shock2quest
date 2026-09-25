@@ -157,3 +157,16 @@ clears the glass by 8 mm, with the same model, size, rotation and transparency.
 The original 2D art stays visible underneath so this experiment can reveal
 occlusion/readability tradeoffs before choosing a default. This placement has
 only been inspected in headless VR captures, not stereo on a headset.
+
+## Button gallery and map
+
+The gallery uses collected logs, a research project, player stats and an access
+card rather than empty placeholders. The MAP button now opens from the device,
+and the complete wide automap fits proportionally inside the main screen.
+The same fitted rectangle controls both rendering and close-button input in
+flat preview and VR. At handheld size this is an overview; it has no zoom or
+pan controls yet. Selecting MFD replaces the map, and MAP toggles it closed.
+
+The belt-draw recording drives the real squeeze/release path with simulated
+controller poses. It shows the current placeholder belt shell and glove fit,
+not a headset recording or a finished grip animation.

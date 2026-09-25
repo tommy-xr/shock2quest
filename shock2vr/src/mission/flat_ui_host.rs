@@ -929,7 +929,17 @@ impl FlatUiHost {
     /// The active panel's rect on the 640x480 canvas (None until its first
     /// `SetUI` arrives).
     fn panel_rect(&self) -> Option<Rect> {
-        self.panel_size_px.map(panel_canvas_rect)
+        self.panel_size_px.map(|size| {
+            if self.device && size.x > super::mfd_device::SCREEN.w {
+                // Wide panels (the automap) fit whole in the handheld screen.
+                // Resolve this once for components, hit testing and both renderers.
+                let width = 188.0;
+                let height = size.y * width / size.x;
+                Rect::new(2.0, 124.0 + (296.0 - height) * 0.5, width, height)
+            } else {
+                panel_canvas_rect(size)
+            }
+        })
     }
 
     /// The host close button, on the panel body's corner rather than the
@@ -1141,9 +1151,13 @@ impl FlatUiHost {
                 }
                 self.hover_close = false;
                 if self.utilities.is_open()
-                    && self
+                    && (self
                         .panel_rect()
                         .is_some_and(|rect| rect.x + rect.w > 450.0)
+                        || (self.device
+                            && self
+                                .panel_size_px
+                                .is_some_and(|size| size.x > super::mfd_device::SCREEN.w)))
                 {
                     // A wide map and the right utility reader share space.
                     // Switching utilities must not leave an opaque map over it.
@@ -2143,6 +2157,23 @@ fn is_gui_cursor(info: &GuiComponentRenderInfo) -> bool {
 mod tests {
     use super::*;
     use cgmath::vec2;
+
+    #[test]
+    fn device_fits_the_entire_wide_map_and_its_close_button() {
+        let mut host = FlatUiHost::new();
+        host.device = true;
+        host.panel_size_px = Some(Vector2::new(636.0, 296.0));
+        let rect = host.panel_rect().unwrap();
+        assert!((rect.w / rect.h - 636.0 / 296.0).abs() < 0.001);
+        let mapped = super::super::mfd_device::from_native(rect, false).unwrap();
+        assert_eq!(mapped.w, 188.0);
+        assert!(mapped.y >= super::super::mfd_device::SCREEN.y);
+        assert!(
+            mapped.y + mapped.h
+                <= super::super::mfd_device::SCREEN.y + super::super::mfd_device::SCREEN.h
+        );
+        assert!(super::super::mfd_device::from_native(host.close_rect(rect), false).is_some());
+    }
 
     #[test]
     fn panel_anchors_at_the_original_left_mfd_slot() {
