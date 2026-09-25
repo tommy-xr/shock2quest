@@ -114,3 +114,53 @@ test("MFD device scans a needed world chemical once and preserves an unneeded ch
     await game.step({ frames: 3 });
   }
 });
+
+test("scanned world weapons offer state-specific repair and modify boards", {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
+    debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await game.step({ frames: 30 });
+  const [gun] = await game.entities.byTemplate(-17);
+  assert.ok(gun);
+  await game.player.teleport({ x: gun.position[0], y: .9, z: 0 });
+  await game.step({ frames: 120 });
+  const aim = await game.player.aimAt(gun.id, { hitbox: "center", visibility: "required" });
+  assert.ok(aim.target_confirmed);
+  await game.input.set("right_hand.position", [.6, .7, -.8]);
+  await drawPersonalCard(game, "left");
+  async function scan() {
+    await aimVrHandAt(game, aim.world_point, 1.1, 1, 0, { hand: "left", lookAtTarget: false });
+    await game.step({ frames: 2 });
+    await game.input.set("left_hand.trigger", 1);
+    await game.step({ frames: 3 });
+    await game.input.set("left_hand.trigger", 0);
+    await game.input.set("left_hand.position", [-.25, 1, -.8]);
+    await game.input.set("left_hand.rotation", [0, 0, 0, 1]);
+    await game.step({ frames: 3 });
+  }
+  async function click(label: string) {
+    const ui = await game.ui.state();
+    const button = ui.active_panel?.elements.find(e => e.label === label);
+    assert.ok(button, `missing ${label}`);
+    const [x, y, w, h] = button.rect;
+    await aimVrHandAtCanvas(game, ui.panel_pose!, [x + w / 2, y + h / 2]);
+    await game.step({ frames: 3 });
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 3 });
+    await game.input.set("right_hand.trigger", 0);
+    await game.step({ frames: 3 });
+  }
+  const art = async (texture: string) => (await game.ui.state()).active_panel?.elements.some(e => e.texture === texture);
+  await scan();
+  await game.player.setStats({ skills: { modify: 6, repair: 6 }, cyber_affinity: 6 });
+  await click("modify");
+  assert.ok(await art("modify.pcx"), "the scanned world gun opens its Modify board");
+  await game.entities.sendMessage(gun.id, { type: "SetObjectState", state: "Broken" });
+  await game.entities.sendMessage(gun.id, { type: "SetGunCondition", condition: 30 });
+  await game.step({ frames: 2 });
+  await scan();
+  assert.ok(!(await game.ui.state()).active_panel?.elements.some(e => e.label === "modify"));
+  await click("repair");
+  assert.ok(await art("iface/repair.pcx"), "the same broken gun opens its Repair board");
+});

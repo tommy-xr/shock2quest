@@ -101,7 +101,9 @@ fn effect_summary(world: &World, weapon: EntityId, level: i32) -> &'static str {
 }
 
 pub fn quote(world: &World, weapon: EntityId) -> Result<PropHackDiff, String> {
-    if crate::wielded_weapon::resolve_weapon_target(world, Some(weapon)) != Some(weapon) {
+    if crate::wielded_weapon::resolve_weapon_target(world, Some(weapon)) != Some(weapon)
+        && !crate::scripts::gui::WeaponSettingsTarget::permits_device_job(world, weapon)
+    {
         return Err("Wield the weapon to modify it.".into());
     }
     if !supported(world, weapon) {

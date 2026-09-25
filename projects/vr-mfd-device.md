@@ -28,7 +28,7 @@ flag is supplied.
 
 1. Squeeze an empty hand at the belt buckle to draw the instrument.
 2. Point that hand at an object within two metres. A cyan beam/hit marker and
-   the footer's target name identify the object that will receive the scan.
+   the idle screen's target name identify the object that will receive the scan.
 3. Pull the holding hand's trigger once. A held trigger cannot repeat scans.
    The free hand points at the screen: trigger clicks, squeeze pulls loot out.
 4. Release the holding squeeze anywhere to return the instrument and close
@@ -39,19 +39,20 @@ for presenting a credential to a locked switch; it still checks the actual
 keyring and lock rules. Other scans require the trigger. A purchase, keypad
 entry or HRM attempt still requires a subsequent UI action.
 
-The footer contains nanites, cyber modules, LOG, KEY, MFD, RES and ?. Press ?
+The footer contains nanites, cyber modules, LOG, ACCESS, MFD, RES, MAP and ?. Press ?
 to make the next scan read-only, including a machine or weapon that would
 normally open an interactive panel. Ordinary props open item information.
-LOG uses the existing collected-log reader, KEY the access-card list, MFD the
+LOG uses the existing collected-log reader, ACCESS the access-card list, MFD the
 character sheet, and RES the research overview.
 
 ## Composition and reuse
 
 The body is a simple solid slab with a stepped-corner bezel. Its main screen is
 188 native pixels wide (16 cm in this first fit), preserving the original
-MFD proportions. Its 268×400 canvas reserves space to the right for the
+MFD proportions. Its 268×376 canvas reserves space to the right for the
 original 73×194 hack/repair/modify plug. The bottom uses AMMOFULL art with
-balance wells and utility buttons. A separate line displays the scan target.
+balance wells and the original utility button art. Scan hints and the target name
+appear on the idle screen; there is no separate status footer.
 This is deliberately placeholder geometry; the inherited card hand pose needs
 proper device-specific authoring before shipping.
 
@@ -117,9 +118,12 @@ implementation scope, not measured device evidence.
 
 ## Retail layout and hologram refinement
 
-AMMOFULL is drawn at its authored 260×64 size. Its two left black wells
-contain nanites (N) and cyber modules (CM); the right recess contains LOG,
-KEY, MFD, RES and ? controls. Scan mode uses a green screen and the shared
+AMMOFULL is drawn at its authored 260×64 size. Its black wells
+contain nanites and cyber modules with their original icons and counts. The
+housing alone is mirrored: the raised end sits on the right below HRM, its
+wells are on the right, and the native button strip is on the left. The
+RES, ?/MAP, LOG and MFD strip follows #1705; ACCESS occupies the remaining
+space between the strip and the wells. Icons and text are never mirrored. Scan mode uses a green screen and the shared
 MFD font for aiming/trigger instructions. Device loot uses the complete
 `contain.pcx` canvas and its original grid; free-standing VR loot keeps its
 holographic grid. Both renderers and hit tests consume the same resolved layout.
@@ -132,3 +136,14 @@ collider or inventory identity and does not alter the target's material. A faint
 unlit green copy preserves its silhouette against dark backgrounds. Targets
 without a loaded model simply omit the miniature. The wider lower housing and
 hologram clearance still need headset comfort testing.
+
+## Weapon HRM from the device
+
+Working supported guns offer MODIFY; broken guns offer REPAIR. The scanned
+world gun may enter and complete the existing paid HRM board without being
+wielded, but only while it is the active device's explicit target and remains
+within three metres. Skill, condition, modification-level and nanite checks
+still run on each attempt. Holstering, leaving reach, or selecting another
+weapon invalidates that authorization. Normal weapon interfaces still require
+wielding. Runtime captures completed a 20-nanite pistol modification and a
+3-nanite repair on the same world entity.

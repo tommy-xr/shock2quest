@@ -20,10 +20,12 @@ pub fn supported(world: &World, weapon: EntityId) -> bool {
         .is_ok_and(|v| v.contains(weapon))
 }
 
-/// The terms of one repair attempt on the wielded `weapon`, or why it cannot
+/// The terms of one repair attempt on the wielded or device-scanned `weapon`, or why it cannot
 /// be attempted.
 pub fn quote(world: &World, weapon: EntityId) -> Result<PropHackDiff, String> {
-    if crate::wielded_weapon::resolve_weapon_target(world, Some(weapon)) != Some(weapon) {
+    if crate::wielded_weapon::resolve_weapon_target(world, Some(weapon)) != Some(weapon)
+        && !crate::scripts::gui::WeaponSettingsTarget::permits_device_job(world, weapon)
+    {
         return Err("Wield the weapon to repair it.".into());
     }
     if !is_broken(world, weapon) {
@@ -122,6 +124,39 @@ mod tests {
         quests.player_stats_mut().skills.repair = repair_skill;
         world.add_unique(quests);
         (world, gun)
+    }
+
+    #[test]
+    fn device_scanning_does_not_bypass_repair_skill() {
+        use dark::properties::{PropBaseGunDesc, PropPosition};
+        let (mut world, gun) = broken_pistol(0);
+        world.add_component(
+            gun,
+            (
+                PropBaseGunDesc {
+                    settings: Default::default(),
+                },
+                PropPosition {
+                    position: cgmath::vec3(0.0, 0.0, 1.0),
+                    cell: 0,
+                    rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                },
+            ),
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .right_hand_entity_id = None;
+        world.add_unique(crate::mission::mfd_device::ScreenActive(true));
+        crate::scripts::gui::WeaponSettingsTarget::select_scanned(&world, gun);
+        assert_eq!(quote(&world, gun).unwrap_err(), "Repair skill 2 required.");
+        world
+            .borrow::<shipyard::UniqueViewMut<QuestInfo>>()
+            .unwrap()
+            .player_stats_mut()
+            .skills
+            .repair = 2;
+        assert_eq!(quote(&world, gun).unwrap().cost, 3.0);
     }
 
     #[test]
