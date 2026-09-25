@@ -403,7 +403,7 @@ dev_params! {
     VR_BELT_DROP = Body::float("vr_belt_drop", "Belt below eyes (m)", 0.55, 0.30, 0.90, 0.01),
     /// Session-only handheld experiment, also available on Quest without CLI flags.
     VR_MFD_DEVICE = Body::bool("vr_mfd_device", "MFD device prototype", false),
-    VR_MFD_HOLOGRAM_SCREEN = Body::bool("vr_mfd_hologram_screen", "MFD hologram over screen", false),
+    VR_MFD_HOLOGRAM_SCREEN = Body::bool("vr_mfd_hologram_screen", "MFD hologram over screen", true),
     /// Optional download visuals; collection, sound and haptics remain active.
     VR_DOWNLOAD_PARTICLES = Body::bool("vr_download_particles", "Download particles", false),
     VR_HOLSTER_DROP = Body::float("vr_holster_drop", "Holster below eyes (m)", 0.78, 0.55, 1.1, 0.02),

@@ -140,23 +140,23 @@ pub fn compose(
     canvas.fill(Rect::new(3.0, 304.0, 264.0, 70.0), [24, 31, 35]);
     canvas.fill(Rect::new(6.0, 6.0, 192.0, 362.0), [3, 8, 10]);
     if !occupied {
-        canvas.fill(Rect::new(8.0, 8.0, 188.0, 296.0), [3, 30, 20]);
+        canvas.image(Rect::new(8.0, 8.0, 188.0, 296.0), "iface/media.pcx");
         canvas.text_native_fit(
-            Rect::new(18.0, 100.0, 170.0, 24.0),
+            Rect::new(18.0, 100.0, 140.0, 24.0),
             "SCAN MODE",
             crate::ui::MFD_FONT,
             HAlign::Center,
             VAlign::Middle,
         );
         canvas.text_native_fit(
-            Rect::new(18.0, 132.0, 170.0, 24.0),
+            Rect::new(18.0, 132.0, 140.0, 24.0),
             target.unwrap_or("POINT AT AN OBJECT"),
             crate::ui::MFD_FONT,
             HAlign::Center,
             VAlign::Middle,
         );
         canvas.text_native_fit(
-            Rect::new(18.0, 157.0, 170.0, 24.0),
+            Rect::new(18.0, 157.0, 140.0, 24.0),
             "PULL TRIGGER TO SCAN",
             crate::ui::MFD_FONT,
             HAlign::Center,

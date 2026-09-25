@@ -150,12 +150,12 @@ wielding. Runtime captures completed a 20-nanite pistol modification and a
 
 ## Hologram placement comparison
 
-The default remains above the device's top edge. Enable **Developer → Body
-inventory → MFD hologram over screen** (`vr_mfd_hologram_screen`) to compare a
-projection hovering over the screen's upper image area. Its bounding sphere
-clears the glass by 8 mm, with the same model, size, rotation and transparency.
+The default now hovers over the screen's upper image area. Disable
+**Developer → Body inventory → MFD hologram over screen**
+(`vr_mfd_hologram_screen`) to compare the original top-edge placement. The
+hovering model's bounding sphere clears the glass by 8 mm, with the same model, size, rotation and transparency.
 The original 2D art stays visible underneath so this experiment can reveal
-occlusion/readability tradeoffs before choosing a default. This placement has
+occlusion/readability tradeoffs while tuning the display. This placement has
 only been inspected in headless VR captures, not stereo on a headset.
 
 ## Button gallery and map
@@ -170,3 +170,7 @@ pan controls yet. Selecting MFD replaces the map, and MAP toggles it closed.
 The belt-draw recording drives the real squeeze/release path with simulated
 controller poses. It shows the current placeholder belt shell and glove fit,
 not a headset recording or a finished grip animation.
+
+The idle scan screen uses the retail `MEDIA.PCX` blank green panel and frame.
+Instructions and target names fit inside its content area, preserving the
+same chrome as the other MFD pages in both presentations.
