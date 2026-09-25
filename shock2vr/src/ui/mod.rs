@@ -493,6 +493,8 @@ impl ImageKind {
 /// rectangle into its own space.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlacedElement {
+    /// Resolved canvas rotation, shared by both presenters.
+    pub turns: u8,
     pub rect: Rect,
     pub alpha: f32,
     pub content: PlacedContent,
@@ -957,6 +959,7 @@ where
                     fill,
                     alpha,
                 } => PlacedElement {
+                    turns: 0,
                     rect: Rect::new(position.x, position.y, size.x, size.y),
                     alpha: *alpha,
                     content: PlacedContent::Bar {
@@ -970,6 +973,7 @@ where
                     color,
                     alpha,
                 } => PlacedElement {
+                    turns: 0,
                     rect: Rect::new(position.x, position.y, size.x, size.y),
                     alpha: *alpha,
                     content: PlacedContent::Fill { color: *color },
@@ -1165,6 +1169,7 @@ fn place_image(
     };
     let (position, size) = drawn_rect(position, size, authored, kind);
     PlacedElement {
+        turns: 0,
         rect: Rect::new(position.x, position.y, size.x, size.y),
         alpha,
         content: PlacedContent::Image {
@@ -1219,6 +1224,7 @@ fn place_text(
         VAlign::Bottom => rect.y + rect.h - font_size,
     };
     PlacedElement {
+        turns: 0,
         // The glyph box, not the authored widget box: its height IS the font
         // size and its width the measured text width, so "draw this text in
         // this rect" means the same thing to every presentation.
@@ -1259,7 +1265,18 @@ fn present_screen(
     element: &PlacedElement,
     rect: Rect,
 ) -> SceneObject {
-    match &element.content {
+    let center = rect.center();
+    let rect = if element.turns % 2 == 1 {
+        Rect::new(
+            center.x - rect.h * 0.5,
+            center.y - rect.w * 0.5,
+            rect.h,
+            rect.w,
+        )
+    } else {
+        rect
+    };
+    let mut object = match &element.content {
         PlacedContent::Image { texture, kind } => {
             let texture = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options(*kind));
             match kind.uv_rect() {
@@ -1304,7 +1321,15 @@ fn present_screen(
             // vertical factor only, since bitmap text has one size.
             SceneObject::screen_space_text(text, font_obj, rect.h, element.alpha, rect.x, rect.y)
         }
+    };
+    if element.turns != 0 {
+        object.set_transform(
+            Matrix4::from_translation(vec3(center.x, center.y, 0.0))
+                * Matrix4::from_angle_z(Deg(90.0 * f32::from(element.turns)))
+                * Matrix4::from_translation(vec3(-center.x, -center.y, 0.0)),
+        );
     }
+    object
 }
 
 /// World-space (panel) presentation of one placed element.
@@ -1367,12 +1392,28 @@ fn present_world(
             SceneObject::world_space_text(text, font_obj, (1.0 - alpha).clamp(0.0, 1.0))
         }
     };
-    object.set_local_transform(world_element_transform(
-        vec2(rect.x, rect.y),
-        vec2(rect.w, rect.h),
-        canvas_size,
-        0.0,
-    ));
+    let center = rect.center();
+    let (w, h) = if element.turns % 2 == 1 {
+        (rect.h, rect.w)
+    } else {
+        (rect.w, rect.h)
+    };
+    // Rotate in canvas pixels before normalization; rotating normalized panel
+    // coordinates would stretch a quarter-turned element on non-square panels.
+    let transform = if element.turns == 0 {
+        world_element_transform(vec2(rect.x, rect.y), vec2(rect.w, rect.h), canvas_size, 0.0)
+    } else {
+        Matrix4::from_angle_x(Deg(180.0))
+            * Matrix4::from_nonuniform_scale(1.0 / canvas_size.x, 1.0 / canvas_size.y, 1.0)
+            * Matrix4::from_translation(vec3(
+                center.x - canvas_size.x * 0.5,
+                center.y - canvas_size.y * 0.5,
+                0.0,
+            ))
+            * Matrix4::from_angle_z(Deg(90.0 * f32::from(element.turns)))
+            * Matrix4::from_nonuniform_scale(w, h, 1.0)
+    };
+    object.set_local_transform(transform);
     object
 }
 
@@ -1888,6 +1929,7 @@ mod tests {
                 assert_parity(
                     "image",
                     &PlacedElement {
+                        turns: 0,
                         rect,
                         alpha: 1.0,
                         content: PlacedContent::Image {
@@ -1899,6 +1941,7 @@ mod tests {
                 assert_parity(
                     "bar",
                     &PlacedElement {
+                        turns: 0,
                         rect,
                         alpha: 1.0,
                         content: PlacedContent::Bar {
@@ -1922,6 +1965,7 @@ mod tests {
                 false,
             );
             let image = PlacedElement {
+                turns: 0,
                 rect: placed.rect,
                 alpha: 1.0,
                 content: PlacedContent::Image {

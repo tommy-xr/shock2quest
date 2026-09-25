@@ -151,6 +151,7 @@ pub fn viewports(screen: Option<Rect>) -> Vec<CanvasViewport> {
         ));
     }
     windows.extend(footer_tiles().map(|(src, dst)| CanvasViewport {
+        turns: 0,
         src,
         dst: Rect::new(dst.x, dst.y, src.w, src.h),
     }));

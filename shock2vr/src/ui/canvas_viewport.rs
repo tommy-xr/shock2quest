@@ -12,50 +12,82 @@ use cgmath::{Vector2, vec2};
 pub struct CanvasViewport {
     pub src: Rect,
     pub dst: Rect,
+    /// Clockwise quarter turns in canvas coordinates.
+    pub turns: u8,
 }
 
 impl CanvasViewport {
     /// `src` scaled uniformly to fit inside `dst`, centered - e.g. a tall
     /// 188x296 MFD panel in a squarer screen letterboxes left and right.
     pub fn fit(src: Rect, dst: Rect) -> Self {
-        let (scale, offset) = super::fit(
-            vec2(src.w, src.h),
-            vec2(dst.w, dst.h),
-            super::ScaleMode::PreserveAspect,
-        );
+        Self::fit_rotated(src, dst, 0)
+    }
+
+    pub fn fit_rotated(src: Rect, dst: Rect, turns: u8) -> Self {
+        let turns = turns % 4;
+        let extent = if turns % 2 == 0 {
+            vec2(src.w, src.h)
+        } else {
+            vec2(src.h, src.w)
+        };
+        let (scale, offset) =
+            super::fit(extent, vec2(dst.w, dst.h), super::ScaleMode::PreserveAspect);
         Self {
             src,
             dst: Rect::new(
                 dst.x + offset.x,
                 dst.y + offset.y,
-                src.w * scale.x,
-                src.h * scale.y,
+                extent.x * scale.x,
+                extent.y * scale.y,
             ),
+            turns,
         }
     }
 
-    fn scale(&self) -> Vector2<f32> {
-        vec2(self.dst.w / self.src.w, self.dst.h / self.src.h)
-    }
-
     pub fn to_dst(&self, r: Rect) -> Rect {
-        let s = self.scale();
+        if self.turns % 4 == 0 {
+            let sx = self.dst.w / self.src.w;
+            let sy = self.dst.h / self.src.h;
+            return Rect::new(
+                self.dst.x + (r.x - self.src.x) * sx,
+                self.dst.y + (r.y - self.src.y) * sy,
+                r.w * sx,
+                r.h * sy,
+            );
+        }
+        let center = r.center();
+        let u = (center.x - self.src.x) / self.src.w;
+        let v = (center.y - self.src.y) / self.src.h;
+        let (u, v) = match self.turns % 4 {
+            1 => (1.0 - v, u),
+            2 => (1.0 - u, 1.0 - v),
+            3 => (v, 1.0 - u),
+            _ => (u, v),
+        };
+        let (w, h) = if self.turns % 2 == 0 {
+            (r.w / self.src.w * self.dst.w, r.h / self.src.h * self.dst.h)
+        } else {
+            (r.h / self.src.h * self.dst.w, r.w / self.src.w * self.dst.h)
+        };
         Rect::new(
-            self.dst.x + (r.x - self.src.x) * s.x,
-            self.dst.y + (r.y - self.src.y) * s.y,
-            r.w * s.x,
-            r.h * s.y,
+            self.dst.x + u * self.dst.w - w * 0.5,
+            self.dst.y + v * self.dst.h - h * 0.5,
+            w,
+            h,
         )
     }
 
-    /// Target-surface point -> shared-canvas point, when it lands in `dst`.
     pub fn to_src_point(&self, p: Vector2<f32>) -> Option<Vector2<f32>> {
         self.dst.contains(p).then(|| {
-            let s = self.scale();
-            vec2(
-                self.src.x + (p.x - self.dst.x) / s.x,
-                self.src.y + (p.y - self.dst.y) / s.y,
-            )
+            let x = (p.x - self.dst.x) / self.dst.w;
+            let y = (p.y - self.dst.y) / self.dst.h;
+            let (u, v) = match self.turns % 4 {
+                1 => (y, 1.0 - x),
+                2 => (1.0 - x, 1.0 - y),
+                3 => (1.0 - y, x),
+                _ => (x, y),
+            };
+            vec2(self.src.x + u * self.src.w, self.src.y + v * self.src.h)
         })
     }
 }
@@ -79,6 +111,7 @@ pub fn place_through(placed: &[PlacedElement], viewports: &[CanvasViewport]) -> 
             if let Some(clipped) = clip(element, viewport.src) {
                 out.push(PlacedElement {
                     rect: viewport.to_dst(clipped.rect),
+                    turns: (clipped.turns + viewport.turns) % 4,
                     ..clipped
                 });
             }
@@ -114,13 +147,25 @@ fn clip(element: &PlacedElement, window: Rect) -> Option<PlacedElement> {
     // Linear in both axes, so the clipped fraction of the rect is the clipped
     // fraction of its UV span.
     let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-    let (tx0, tx1) = ((x0 - r.x) / r.w, (x1 - r.x) / r.w);
-    let (ty0, ty1) = ((y0 - r.y) / r.h, (y1 - r.y) / r.h);
+    let (x0, x1) = ((x0 - r.x) / r.w, (x1 - r.x) / r.w);
+    let (y0, y1) = ((y0 - r.y) / r.h, (y1 - r.y) / r.h);
+    let (tx0, tx1, ty0, ty1) = match element.turns % 4 {
+        1 => (y0, y1, 1.0 - x1, 1.0 - x0),
+        2 => (1.0 - x1, 1.0 - x0, 1.0 - y1, 1.0 - y0),
+        3 => (1.0 - y1, 1.0 - y0, x0, x1),
+        _ => (x0, x1, y0, y1),
+    };
     let PlacedContent::Image { texture, .. } = &element.content else {
         unreachable!()
     };
     Some(PlacedElement {
-        rect: Rect::new(x0, y0, x1 - x0, y1 - y0),
+        rect: Rect::new(
+            r.x + x0 * r.w,
+            r.y + y0 * r.h,
+            (x1 - x0) * r.w,
+            (y1 - y0) * r.h,
+        ),
+        turns: element.turns,
         alpha: element.alpha,
         content: PlacedContent::Image {
             texture: texture.clone(),
@@ -140,6 +185,7 @@ mod tests {
 
     fn image(rect: Rect) -> PlacedElement {
         PlacedElement {
+            turns: 0,
             rect,
             alpha: 1.0,
             content: PlacedContent::Image {
@@ -151,6 +197,7 @@ mod tests {
 
     fn text(rect: Rect) -> PlacedElement {
         PlacedElement {
+            turns: 0,
             rect,
             alpha: 1.0,
             content: PlacedContent::Text {
@@ -158,6 +205,36 @@ mod tests {
                 font: "f".into(),
             },
         }
+    }
+
+    #[test]
+    fn rotated_windows_keep_corners_and_pointer_coordinates_in_agreement() {
+        let src = Rect::new(2.0, 124.0, 636.0, 296.0);
+        for turn in 0..4 {
+            let v = CanvasViewport::fit_rotated(src, Rect::new(8.0, 8.0, 188.0, 296.0), turn);
+            for p in [
+                vec2(src.x, src.y),
+                vec2(src.x + src.w, src.y + src.h),
+                src.center(),
+            ] {
+                let mapped = v.to_dst(Rect::new(p.x, p.y, 0.0, 0.0)).center();
+                let back = v.to_src_point(mapped).unwrap();
+                assert!((back.x - p.x).abs() < 0.001 && (back.y - p.y).abs() < 0.001);
+            }
+            let out = place_through(&[image(src), text(Rect::new(12.0, 144.0, 40.0, 8.0))], &[v]);
+            assert!(out.iter().all(|element| element.turns == turn));
+            assert_eq!(out[0].rect, v.dst);
+            assert_eq!(out[1].rect, v.to_dst(Rect::new(12.0, 144.0, 40.0, 8.0)));
+        }
+        let clockwise = CanvasViewport::fit_rotated(src, Rect::new(0.0, 0.0, 296.0, 636.0), 1);
+        assert_eq!(
+            clockwise.to_src_point(vec2(296.0, 0.0)),
+            Some(vec2(2.0, 124.0))
+        );
+        assert_eq!(
+            clockwise.to_src_point(vec2(0.0, 636.0)),
+            Some(vec2(638.0, 420.0))
+        );
     }
 
     #[test]
@@ -179,6 +256,7 @@ mod tests {
     #[test]
     fn straddling_art_is_cropped_with_matching_uvs() {
         let v = CanvasViewport {
+            turns: 0,
             src: Rect::new(100.0, 0.0, 100.0, 100.0),
             dst: Rect::new(0.0, 0.0, 50.0, 50.0),
         };
@@ -197,6 +275,7 @@ mod tests {
     #[test]
     fn text_is_kept_whole_by_its_center_or_dropped() {
         let v = CanvasViewport {
+            turns: 0,
             src: Rect::new(0.0, 0.0, 100.0, 100.0),
             dst: Rect::new(0.0, 0.0, 100.0, 100.0),
         };
