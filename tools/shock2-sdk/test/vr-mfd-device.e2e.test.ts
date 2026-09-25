@@ -144,9 +144,9 @@ test("VR drawing the device opens use mode on its face; returning closes it", {
   assert.equal((await game.ui.state()).mode, "use");
   const card = (await game.info()).player.hand_feedback!.body_gear!.personal_card;
   assert.equal(card.on_device, true);
-  // No MFD open: only the bar's windows (two wells, four buttons).
+  // No MFD open: only the bar's windows (two wells, five buttons).
   const barWindows = card.device_face!.windows.length;
-  assert.equal(barWindows, 6);
+  assert.equal(barWindows, 7);
   await capture(game, "device-idle");
 
   // The bar's MFD button, pressed with the other hand's ray, puts the
@@ -225,7 +225,10 @@ test("VR scanning a replicator opens its shop on the device without buying", {
   const [rep] = await game.entities.byTemplate(262);
   const [x, , z] = rep.position;
   await scanWithDevice(game, 262, 21.404, [{ x: x - 1.59, y: 21.404, z: z - 2.23 }]);
-  await aimAtDeviceCanvas(game, center((await face(game)).windows[0].src));
+  const [panel] = (await face(game)).windows;
+  // The HRM plug stands right of the 188 px body, over the bar's glow.
+  assert.ok(panel.src[2] > 188, "the replicator panel carries its HRM plug");
+  await aimAtDeviceCanvas(game, [panel.src[0] + 179 + 36, panel.src[1] + 96 + 97]);
   await capture(game, "device-replicator");
 });
 

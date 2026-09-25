@@ -277,7 +277,12 @@ impl ContainerGui {
     /// Read off the world so the panel's style follows the running
     /// presentation rather than whatever mode the script was constructed under.
     fn spec(&self, world: &World) -> PanelSpec {
-        self.spec_for(crate::mission::presentation_is_vr(world))
+        // The handheld device's screen is the flat canvas; only world-space
+        // loot panels take the VR hologram grid.
+        self.spec_for(
+            crate::mission::presentation_is_vr(world)
+                && !crate::mission::device_screen_active(world),
+        )
     }
 
     fn spec_for(&self, is_vr: bool) -> PanelSpec {

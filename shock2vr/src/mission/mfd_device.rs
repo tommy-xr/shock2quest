@@ -1,10 +1,10 @@
 //! The handheld MFD device: the personal card's VR body, a phone-sized slab
 //! whose face presents windows of the shared use-mode canvas.
 //!
-//! The face is its own pixel surface ([`FACE_PX`]). The MFD slot is shown on
-//! the screen and a strip of the bottom bar (utilities, nanites, modules, log,
-//! MFD) beneath it, each through a [`CanvasViewport`]; the canvas layout itself
-//! is never re-decided here (AGENTS.md section 3).
+//! The face is its own pixel surface ([`FACE_PX`]). The open panel, and the
+//! bottom bar's readouts and buttons, are each shown through a
+//! [`CanvasViewport`]; the canvas layout itself is never re-decided here
+//! (AGENTS.md section 3).
 use crate::input_context::InputContext;
 use crate::ui::canvas_viewport::CanvasViewport;
 use crate::ui::{FrontendPointerPass, Rect, WorldPanel};
@@ -16,21 +16,32 @@ use cgmath::{
 use engine::scene::{SceneObject, VertexPosition};
 use std::{cell::OnceCell, rc::Rc};
 
-/// Face size in metres (a large phone) and its pixel surface.
-const FACE_M: Vector2<f32> = Vector2 { x: 0.09, y: 0.16 };
+/// The face is a pixel surface where one shared-canvas pixel is one face
+/// pixel: an open panel draws 1:1 - its 188 px body, and an HRM plug beside
+/// it (`hrm_plug`, body x 179) - over a horizontally flipped AMMOFULL bar
+/// whose raised, glowing section sits under the plug.
+pub const FACE_PX: Vector2<f32> = Vector2 { x: 268.0, y: 361.0 };
+/// Metres per face pixel: a 10 cm wide device.
+const M_PER_PX: f32 = 0.10 / 268.0;
+const FACE_M: Vector2<f32> = Vector2 {
+    x: FACE_PX.x * M_PER_PX,
+    y: FACE_PX.y * M_PER_PX,
+};
 const THICKNESS_M: f32 = 0.012;
 const CORNER_M: f32 = 0.010;
-pub const FACE_PX: Vector2<f32> = Vector2 { x: 180.0, y: 320.0 };
 
-/// Screen and bottom-bar areas on the face, in face pixels. The bar is the
-/// AMMOFULL backdrop (260x64) at the face's width.
-const SCREEN: Rect = Rect::new(6.0, 8.0, 168.0, 262.0);
-const BAR: Rect = Rect::new(6.0, 274.0, 168.0, 168.0 * 64.0 / 260.0);
+/// Where an open panel's top-left lands. Chosen so the plug (73 px at body x
+/// 179) centres on the bar's glow and the body rests on the bar's lower run.
+const PANEL_ORIGIN: Vector2<f32> = Vector2 { x: 10.0, y: 4.0 };
+/// Room for a panel above the bar; a wider one (the map) is scaled into it.
+const PANEL_AREA: Rect = Rect::new(4.0, 4.0, 260.0, 289.0);
+const BAR: Rect = Rect::new(4.0, 293.0, 260.0, 64.0);
 pub const BAR_ART: &str = "AMMOFULL.PCX";
-/// Glass behind both areas, so empty canvas regions read as a dark display.
-const GLASS: Rect = Rect::new(4.0, 6.0, 172.0, 308.0);
+/// Glass behind the panel body, so an empty screen reads as a dark display.
+const GLASS: Rect = Rect::new(8.0, 2.0, 192.0, 300.0);
 
-/// AMMOFULL's two square wells and its long recess, in art pixels.
+/// AMMOFULL's two square wells and its long recess, in (unflipped) art
+/// pixels.
 const ART_WELLS: [Rect; 2] = [
     Rect::new(5.0, 20.0, 33.0, 33.0),
     Rect::new(44.0, 20.0, 33.0, 33.0),
@@ -43,19 +54,25 @@ const WELL_SOURCES: [Rect; 2] = [
     Rect::new(185.0, 434.0, 36.0, 34.0),
     Rect::new(224.0, 434.0, 36.0, 34.0),
 ];
-/// Shared-canvas buttons shown in the recess, left to right: RES, ? over
-/// MAP (`mission::mfd_utilities`), LOG (`hud::readouts`), MFD.
-const BUTTON_SOURCES: [Rect; 4] = [
+/// Shared-canvas buttons shown in the recess, left to right: RES, ? over MAP,
+/// LOG, ACCESS, MFD (`mission::mfd_utilities`, `hud::readouts`).
+const BUTTON_SOURCES: [Rect; 5] = [
     Rect::new(117.0, 431.0, 32.0, 40.0),
     Rect::new(150.0, 431.0, 32.0, 40.0),
     Rect::new(383.0, 432.0, 38.0, 36.0),
+    Rect::new(422.0, 432.0, 38.0, 36.0),
     Rect::new(460.0, 430.0, 32.0, 40.0),
 ];
 
-/// An AMMOFULL art rect placed on the face's bar.
+/// An AMMOFULL art rect placed on the face's flipped bar.
 fn art_to_face(r: Rect) -> Rect {
     let s = BAR.w / 260.0;
-    Rect::new(BAR.x + r.x * s, BAR.y + r.y * s, r.w * s, r.h * s)
+    Rect::new(
+        BAR.x + (260.0 - r.x - r.w) * s,
+        BAR.y + r.y * s,
+        r.w * s,
+        r.h * s,
+    )
 }
 
 /// Held like a phone: resting against the palm with the face looking out of
@@ -82,14 +99,24 @@ pub fn held_transform(
     Matrix4::from_translation(position) * Matrix4::from(orientation) * in_hand(hand)
 }
 
-/// The windows the face shows: the active MFD (if any) fitted to the screen,
-/// the nanite and module readouts in the bar's wells, and the utility buttons
-/// in its recess.
+/// The windows the face shows: the active panel (if any) 1:1 at the panel
+/// origin, the nanite and module readouts in the bar's wells, and the utility
+/// buttons in its recess.
 pub fn viewports(screen_source: Option<Rect>) -> Vec<CanvasViewport> {
-    let mut out: Vec<_> = screen_source
-        .map(|src| CanvasViewport::fit(src, SCREEN))
-        .into_iter()
-        .collect();
+    let mut out = Vec::new();
+    if let Some(src) = screen_source {
+        let fits = PANEL_ORIGIN.x + src.w <= PANEL_AREA.x + PANEL_AREA.w
+            && PANEL_ORIGIN.y + src.h <= PANEL_AREA.y + PANEL_AREA.h + 8.0;
+        out.push(if fits {
+            CanvasViewport {
+                src,
+                dst: Rect::new(PANEL_ORIGIN.x, PANEL_ORIGIN.y, src.w, src.h),
+            }
+        } else {
+            CanvasViewport::fit(src, PANEL_AREA)
+        });
+    }
+    // Nanites in the outer (right) well, modules beside it.
     for (src, well) in WELL_SOURCES.into_iter().zip(ART_WELLS) {
         out.push(CanvasViewport::fit(src, art_to_face(well)));
     }
@@ -218,7 +245,13 @@ pub fn render_body(device: Matrix4<f32>) -> Vec<SceneObject> {
 /// The bar backdrop, as device chrome under the canvas windows.
 pub fn bar_chrome() -> crate::ui::UiCanvas {
     let mut canvas = crate::ui::UiCanvas::new(FACE_PX);
-    canvas.image(BAR, BAR_ART);
+    // Mirrored: the source interval runs right to left.
+    canvas.cropped_image(
+        BAR,
+        BAR_ART,
+        Rect::new(260.0, 0.0, -260.0, 64.0),
+        Vector2::new(260.0, 64.0),
+    );
     canvas
 }
 
@@ -352,7 +385,10 @@ mod tests {
         for (i, well) in ART_WELLS.into_iter().enumerate() {
             assert!(inside(v[i].dst, art_to_face(well)));
         }
+        // Flipped: nanites in the outer right well, modules left of it.
+        assert!(v[0].dst.x > v[1].dst.x);
         let recess = art_to_face(ART_RECESS);
+        assert!(recess.x < v[1].dst.x, "the recess is on the left");
         for pair in v[2..].windows(2) {
             assert!(inside(pair[0].dst, recess));
             assert!((pair[0].dst.x + pair[0].dst.w - pair[1].dst.x).abs() < 1e-3);
@@ -360,16 +396,25 @@ mod tests {
     }
 
     #[test]
-    fn a_face_hit_maps_into_the_mfd_slot_and_the_bezel_maps_nowhere() {
-        let mfd = Rect::new(2.0, 124.0, 188.0, 296.0);
-        let v = viewports(Some(mfd));
-        let screen_center = SCREEN.center();
-        let hit = crate::ui::canvas_viewport::target_to_canvas(&v, screen_center).unwrap();
-        assert!(mfd.contains(hit));
+    fn a_panel_draws_one_to_one_with_its_plug_over_the_glow() {
+        // The replicator's canvas: 188 px body plus the plug at body x 179.
+        let src = Rect::new(2.0, 124.0, 252.0, 296.0);
+        let v = viewports(Some(src));
         assert_eq!(
-            crate::ui::canvas_viewport::target_to_canvas(&v, vec2(1.0, 1.0)),
-            None
+            v[0].dst,
+            Rect::new(PANEL_ORIGIN.x, PANEL_ORIGIN.y, 252.0, 296.0)
         );
+        // The plug column's centre lands over the flipped art's raised glow
+        // (art x 6..69, flipped to 190..253).
+        let plug_centre = PANEL_ORIGIN.x + 179.0 + 73.0 / 2.0;
+        let glow = art_to_face(Rect::new(6.0, 0.0, 64.0, 1.0));
+        assert!((plug_centre - glow.center().x).abs() < 1.0);
+        let hit = crate::ui::canvas_viewport::target_to_canvas(&v, v[0].dst.center()).unwrap();
+        assert!(src.contains(hit));
+        // The scaled map does not fit 1:1 and is fitted into the panel area.
+        let map = Rect::new(2.0, 124.0, 636.0 * 248.0 / 296.0, 248.0);
+        let fitted = viewports(Some(map))[0].dst;
+        assert!(fitted.w <= PANEL_AREA.w + 1e-3);
     }
 
     #[test]

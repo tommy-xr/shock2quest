@@ -2253,6 +2253,17 @@ pub fn presentation_is_vr(world: &World) -> bool {
         .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr)
 }
 
+/// Whether use mode is shown on the handheld MFD device. Its screen is the
+/// flat canvas, so a panel drawn there takes its flat style even in VR.
+#[derive(Unique, Clone, Copy, Default)]
+pub struct DeviceScreenActive(pub bool);
+
+pub fn device_screen_active(world: &World) -> bool {
+    world
+        .borrow::<UniqueView<DeviceScreenActive>>()
+        .is_ok_and(|active| active.0)
+}
+
 /// Whether `--experimental physical_held_items` is on: a VR-held gun keeps a
 /// swept body, like a held melee weapon, so it stops at the level's geometry
 /// instead of passing through it. Accessible from the paths that establish
@@ -5388,9 +5399,22 @@ impl MissionCore {
                 // device held in the hand.
                 self.use_mode_ramp.snap_closed();
                 self.use_mode_on_device = true;
+                // One UI at a time: the device replaces an open world quad,
+                // which would otherwise restyle to the device's flat art.
+                self.gui.close_panel(
+                    &mut self.world,
+                    &mut self.physics,
+                    &mut self.script_world,
+                    &mut self.id_to_physics,
+                );
             } else if !drawn && self.use_mode_on_device {
                 effects.push(self.leave_use_mode());
                 self.use_mode_ramp.snap_closed();
+            }
+            let on_device = self.use_mode && self.use_mode_on_device;
+            match self.world.borrow::<UniqueViewMut<DeviceScreenActive>>() {
+                Ok(mut active) => active.0 = on_device,
+                Err(_) => self.world.add_unique(DeviceScreenActive(on_device)),
             }
         }
         self.personal_card
