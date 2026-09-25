@@ -3,7 +3,7 @@
 use crate::ui::{HAlign, Rect, UiCanvas, UiElement, VAlign, WorldPanel};
 use cgmath::{Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
 
-pub const SIZE: Vector2<f32> = Vector2::new(268.0, 400.0);
+pub const SIZE: Vector2<f32> = Vector2::new(268.0, 376.0);
 pub const SCREEN: Rect = Rect::new(8.0, 8.0, 252.0, 296.0);
 
 pub fn panel(position: Vector3<f32>, rotation: Quaternion<f32>) -> WorldPanel {
@@ -11,7 +11,7 @@ pub fn panel(position: Vector3<f32>, rotation: Quaternion<f32>) -> WorldPanel {
     // faces controller-local +Z, above the grip, like a handheld instrument.
     let scale = 0.16 / 188.0 / crate::METERS_PER_WORLD_UNIT;
     WorldPanel {
-        center: position + rotation.rotate_vector(vec3(32.0 * scale, 165.0 * scale, 0.04)),
+        center: position + rotation.rotate_vector(vec3(32.0 * scale, 153.0 * scale, 0.04)),
         rotation,
         size: SIZE * scale,
     }
@@ -26,31 +26,49 @@ pub fn source(character: bool) -> Rect {
     )
 }
 
-/// Native AMMOFULL is 260×64: two 33×32 resource wells on the left,
-/// with the utility controls occupying its right-hand recess.
-pub fn buttons() -> [(Rect, Vector2<f32>, &'static str); 5] {
+/// Retail controls retain their authored art and dimensions. The four-button
+/// strip follows #1705 (RES, ?/MAP, LOG, MFD); ACCESS fills the spare recess
+/// between the two balance wells and the strip.
+fn footer_tiles() -> [(Rect, Vector2<f32>); 7] {
+    [
+        (Rect::new(185.0, 434.0, 36.0, 34.0), vec2(191.0, 326.0)),
+        (Rect::new(224.0, 434.0, 36.0, 34.0), vec2(230.0, 326.0)),
+        (Rect::new(422.0, 432.0, 38.0, 36.0), vec2(153.0, 323.0)),
+        (Rect::new(117.0, 431.0, 32.0, 40.0), vec2(18.0, 321.0)),
+        (Rect::new(150.0, 431.0, 32.0, 40.0), vec2(50.0, 321.0)),
+        (Rect::new(383.0, 432.0, 38.0, 36.0), vec2(82.0, 323.0)),
+        (Rect::new(460.0, 430.0, 32.0, 40.0), vec2(120.0, 321.0)),
+    ]
+}
+
+pub fn buttons() -> [(Rect, Vector2<f32>, &'static str); 6] {
     [
         (
-            Rect::new(126.0, 321.0, 42.0, 20.0),
+            Rect::new(82.0, 323.0, 38.0, 36.0),
             vec2(402.0, 450.0),
             "LOG",
         ),
         (
-            Rect::new(170.0, 321.0, 42.0, 20.0),
+            Rect::new(153.0, 323.0, 38.0, 36.0),
             vec2(441.0, 450.0),
             "KEY",
         ),
         (
-            Rect::new(214.0, 321.0, 42.0, 20.0),
+            Rect::new(120.0, 321.0, 32.0, 40.0),
             vec2(476.0, 450.0),
             "MFD",
         ),
         (
-            Rect::new(126.0, 343.0, 64.0, 20.0),
+            Rect::new(18.0, 321.0, 32.0, 40.0),
             vec2(133.0, 450.0),
             "RES",
         ),
-        (Rect::new(192.0, 343.0, 64.0, 20.0), vec2(166.0, 440.0), "?"),
+        (Rect::new(50.0, 321.0, 32.0, 18.0), vec2(166.0, 440.0), "?"),
+        (
+            Rect::new(50.0, 341.0, 32.0, 18.0),
+            vec2(166.0, 460.0),
+            "MAP",
+        ),
     ]
 }
 
@@ -111,17 +129,16 @@ pub fn from_native(rect: Rect, character: bool) -> Option<Rect> {
 pub fn compose(
     native: UiCanvas,
     character: bool,
-    balances: [i32; 2],
     target: Option<&str>,
     occupied: bool,
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(SIZE);
     // Stepped corners give the prototype a solid, softly squared bezel without
     // an imported mesh. Sidecar art remains exposed beside the main body.
-    canvas.fill(Rect::new(3.0, 0.0, 198.0, 398.0), [24, 31, 35]);
-    canvas.fill(Rect::new(0.0, 3.0, 204.0, 392.0), [24, 31, 35]);
-    canvas.fill(Rect::new(3.0, 304.0, 264.0, 94.0), [24, 31, 35]);
-    canvas.fill(Rect::new(6.0, 6.0, 192.0, 386.0), [3, 8, 10]);
+    canvas.fill(Rect::new(3.0, 0.0, 198.0, 374.0), [24, 31, 35]);
+    canvas.fill(Rect::new(0.0, 3.0, 204.0, 368.0), [24, 31, 35]);
+    canvas.fill(Rect::new(3.0, 304.0, 264.0, 70.0), [24, 31, 35]);
+    canvas.fill(Rect::new(6.0, 6.0, 192.0, 362.0), [3, 8, 10]);
     if !occupied {
         canvas.fill(Rect::new(8.0, 8.0, 188.0, 296.0), [3, 30, 20]);
         canvas.text_native_fit(
@@ -133,7 +150,7 @@ pub fn compose(
         );
         canvas.text_native_fit(
             Rect::new(18.0, 132.0, 170.0, 24.0),
-            "POINT AT AN OBJECT",
+            target.unwrap_or("POINT AT AN OBJECT"),
             crate::ui::MFD_FONT,
             HAlign::Center,
             VAlign::Middle,
@@ -146,13 +163,30 @@ pub fn compose(
             VAlign::Middle,
         );
     }
+    // Mirror only the housing bitmap: the raised end supports the right HRM
+    // plug, while every icon, label and hit target remains upright.
+    canvas.cropped_image(
+        Rect::new(8.0, 306.0, 260.0, 64.0),
+        "ammofull.pcx",
+        Rect::new(260.0, 0.0, -260.0, 64.0),
+        vec2(260.0, 64.0),
+    );
     let src = source(character);
     for mut element in native.into_elements() {
         let rect = element.rect();
-        if !src.contains(rect.center()) {
+        let delta = if let Some((tile, destination)) =
+            footer_tiles().into_iter().find(|(tile, _)| {
+                rect.x >= tile.x
+                    && rect.y >= tile.y
+                    && rect.x + rect.w <= tile.x + tile.w
+                    && rect.y + rect.h <= tile.y + tile.h
+            }) {
+            destination - vec2(tile.x, tile.y)
+        } else if src.contains(rect.center()) {
+            vec2(SCREEN.x - src.x, SCREEN.y - src.y)
+        } else {
             continue;
-        }
-        let delta = vec2(SCREEN.x - src.x, SCREEN.y - src.y);
+        };
         match &mut element {
             UiElement::Image { position, .. }
             | UiElement::Bar { position, .. }
@@ -162,41 +196,6 @@ pub fn compose(
         }
         canvas.push(element);
     }
-    canvas.image(Rect::new(8.0, 306.0, 260.0, 64.0), "ammofull.pcx");
-    for (i, label) in ["N", "CM"].iter().enumerate() {
-        let x = 13.0 + i as f32 * 39.0;
-        canvas.text_native_fit(
-            Rect::new(x, 326.0, 33.0, 12.0),
-            label,
-            crate::ui::MFD_FONT,
-            HAlign::Center,
-            VAlign::Middle,
-        );
-        canvas.text_native_fit(
-            Rect::new(x, 339.0, 33.0, 19.0),
-            &balances[i].to_string(),
-            crate::ui::MFD_FONT,
-            HAlign::Center,
-            VAlign::Middle,
-        );
-    }
-    for (rect, _, label) in buttons() {
-        canvas.image(rect, "IFBTN00.PCX");
-        canvas.text_native_fit(
-            rect,
-            label,
-            crate::ui::MFD_FONT,
-            HAlign::Center,
-            VAlign::Middle,
-        );
-    }
-    canvas.text_native_fit(
-        Rect::new(8.0, 376.0, 188.0, 18.0),
-        target.unwrap_or("POINT TO SCAN"),
-        crate::ui::MFD_FONT,
-        HAlign::Center,
-        VAlign::Middle,
-    );
     canvas
 }
 
@@ -219,7 +218,7 @@ mod tests {
             assert_eq!(to_native(rect.center(), false), Some(native));
             assert_eq!(point_from_native(native, false), Some(rect.center()));
         }
-        assert_eq!(to_native(vec2(30.0, 320.0), false), None);
+        assert_eq!(to_native(vec2(205.0, 345.0), false), None);
     }
 }
 
@@ -303,7 +302,7 @@ pub fn footer_shell(panel: WorldPanel) -> engine::scene::SceneObject {
     object.set_transform(
         panel.transform()
             * Matrix4::from_translation(vec3(0.0, -152.0 / SIZE.y, -0.014))
-            * Matrix4::from_nonuniform_scale(1.0, 96.0 / SIZE.y, 0.025),
+            * Matrix4::from_nonuniform_scale(1.0, 72.0 / SIZE.y, 0.025),
     );
     object
 }

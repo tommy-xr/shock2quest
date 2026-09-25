@@ -1424,14 +1424,14 @@ impl FlatUiHost {
             return None;
         }
         let mut canvas = UiCanvas::new(CANVAS_SIZE);
-        if self.device {
-            self.utilities.draw(&mut canvas);
-        }
         // The bottom readouts paint FIRST, so the MFD slot keeps the 10 px it
         // overlaps the bio panel by - the stacking the flat HUD had when it
         // drew them under this canvas.
-        if let Some(readouts) = self.readouts.as_ref().filter(|_| !self.device) {
+        if let Some(readouts) = self.readouts.as_ref() {
             readouts::emit_use_mode(&mut canvas, readouts);
+        }
+        if self.device {
+            self.utilities.draw(&mut canvas);
         }
         if let (Some(strip), Some(rect)) = (self.strip.as_ref(), strip_rect) {
             self.utilities.draw(&mut canvas);
@@ -1595,10 +1595,6 @@ impl FlatUiHost {
             super::mfd_device::compose(
                 canvas,
                 self.utilities.character_open(),
-                self.readouts
-                    .as_ref()
-                    .map(|r| r.resources)
-                    .unwrap_or([0; 2]),
                 self.scan_label.as_deref(),
                 panel_rect.is_some()
                     || self.utilities.has_left_panel()

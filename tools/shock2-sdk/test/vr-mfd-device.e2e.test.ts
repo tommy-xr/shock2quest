@@ -41,9 +41,9 @@ for (const hand of ["left", "right"] as const) {
     await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
     await game.step({ frames: 4 });
     const panel = (await game.ui.state()).panel_pose!;
-    assert.deepEqual(panel.canvas, [268, 400]);
+    assert.deepEqual(panel.canvas, [268, 376]);
     const free = hand === "left" ? "right" : "left";
-    await aimVrHandAtCanvas(game, panel, [191, 331], { hand: free });
+    await aimVrHandAtCanvas(game, panel, [172, 341], { hand: free });
     await game.step({ frames: 3 });
     await game.input.set(`${free}_hand.trigger`, 1);
     await game.step({ frames: 3 });
