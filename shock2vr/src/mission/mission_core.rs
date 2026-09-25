@@ -6207,10 +6207,7 @@ impl MissionCore {
                         crate::mission::flat_ui_host::vr_canvas_pointer(pass, input_context);
                     if self.flat_ui.device {
                         pointer.canvas_pos = pointer.canvas_pos.and_then(|point| {
-                            super::mfd_device::to_native(
-                                point,
-                                self.flat_ui.utilities.character_open(),
-                            )
+                            super::mfd_device::to_native(point, self.flat_ui.device_screen_source())
                         });
                     }
                     pointer
@@ -17578,7 +17575,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         .and_then(|[x, y]| {
                             super::mfd_device::point_from_native(
                                 cgmath::vec2(x, y),
-                                self.flat_ui.utilities.character_open(),
+                                self.flat_ui.device_screen_source(),
                             )
                         })
                         .map(|p| [p.x, p.y])

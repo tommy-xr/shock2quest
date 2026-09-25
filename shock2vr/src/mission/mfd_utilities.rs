@@ -51,9 +51,17 @@ pub(crate) struct MfdUtilities {
 }
 
 impl MfdUtilities {
-    pub(crate) fn character_open(&self) -> bool {
-        self.character
+    /// The utility owns its native placement; device presenters only map it.
+    pub(crate) fn panel_rect(&self) -> Option<Rect> {
+        if self.character {
+            Some(CHARACTER_PANEL)
+        } else if self.has_left_panel() {
+            Some(PANEL)
+        } else {
+            None
+        }
     }
+
     pub(crate) fn inspect_entity(&mut self, entity: EntityId) {
         *self = Self::default();
         self.selected = Some(entity);

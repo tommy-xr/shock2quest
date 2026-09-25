@@ -63,7 +63,7 @@ for (const hand of ["left", "right"] as const) {
     const map = (await game.ui.state()).active_panel;
     assert.ok(map?.elements.some(e => e.texture?.toLowerCase().endsWith("mapback.pcx")), "MAP opens from the handheld host");
     const mapFrame = map!.elements.find(e => e.texture?.toLowerCase().endsWith("mapback.pcx"))!;
-    assert.ok(mapFrame.rect[0] >= 8 && mapFrame.rect[0] + mapFrame.rect[2] <= 196.1, "the complete map fits the main screen");
+    assert.ok(mapFrame.rect[0] >= 8 && mapFrame.rect[0] + mapFrame.rect[2] <= 260.1, "the complete map fits the main screen");
     await aimVrHandAtCanvas(game, (await game.ui.state()).panel_pose!, [136, 341], { hand: free });
     await game.step({ frames: 2 });
     await game.input.set(`${free}_hand.trigger`, 1);

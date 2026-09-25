@@ -929,17 +929,11 @@ impl FlatUiHost {
     /// The active panel's rect on the 640x480 canvas (None until its first
     /// `SetUI` arrives).
     fn panel_rect(&self) -> Option<Rect> {
-        self.panel_size_px.map(|size| {
-            if self.device && size.x > super::mfd_device::SCREEN.w {
-                // Wide panels (the automap) fit whole in the handheld screen.
-                // Resolve this once for components, hit testing and both renderers.
-                let width = 188.0;
-                let height = size.y * width / size.x;
-                Rect::new(2.0, 124.0 + (296.0 - height) * 0.5, width, height)
-            } else {
-                panel_canvas_rect(size)
-            }
-        })
+        self.panel_size_px.map(panel_canvas_rect)
+    }
+
+    pub(crate) fn device_screen_source(&self) -> Option<Rect> {
+        self.panel_rect().or_else(|| self.utilities.panel_rect())
     }
 
     /// The host close button, on the panel body's corner rather than the
@@ -1007,7 +1001,7 @@ impl FlatUiHost {
             )
             .and_then(|point| {
                 if self.device {
-                    super::mfd_device::to_native(point, self.utilities.character_open())
+                    super::mfd_device::to_native(point, self.device_screen_source())
                 } else {
                     Some(point)
                 }
@@ -1608,11 +1602,8 @@ impl FlatUiHost {
         Some(if self.device {
             super::mfd_device::compose(
                 canvas,
-                self.utilities.character_open(),
+                self.device_screen_source(),
                 self.scan_label.as_deref(),
-                panel_rect.is_some()
-                    || self.utilities.has_left_panel()
-                    || self.utilities.character_open(),
             )
         } else {
             canvas
@@ -1781,7 +1772,7 @@ impl FlatUiHost {
                 let [x, y, w, h] = element.rect;
                 let rect = super::mfd_device::from_native(
                     Rect::new(x, y, w, h),
-                    self.utilities.character_open(),
+                    self.device_screen_source(),
                 )?;
                 element.rect = [rect.x, rect.y, rect.w, rect.h];
                 let screen = crate::ui::canvas_rect_to_screen(
@@ -2165,14 +2156,14 @@ mod tests {
         host.panel_size_px = Some(Vector2::new(636.0, 296.0));
         let rect = host.panel_rect().unwrap();
         assert!((rect.w / rect.h - 636.0 / 296.0).abs() < 0.001);
-        let mapped = super::super::mfd_device::from_native(rect, false).unwrap();
-        assert_eq!(mapped.w, 188.0);
+        let mapped = super::super::mfd_device::from_native(rect, Some(rect)).unwrap();
+        assert!((mapped.w - super::super::mfd_device::SCREEN.w).abs() < 0.001);
         assert!(mapped.y >= super::super::mfd_device::SCREEN.y);
         assert!(
             mapped.y + mapped.h
                 <= super::super::mfd_device::SCREEN.y + super::super::mfd_device::SCREEN.h
         );
-        assert!(super::super::mfd_device::from_native(host.close_rect(rect), false).is_some());
+        assert!(super::super::mfd_device::from_native(host.close_rect(rect), Some(rect)).is_some());
     }
 
     #[test]

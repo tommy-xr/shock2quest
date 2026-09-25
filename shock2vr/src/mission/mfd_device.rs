@@ -1,6 +1,7 @@
 //! Experimental handheld composition of the existing MFD. Tiles translate whole
 //! native panels; glyph layout and widget geometry remain owned by the shared UI.
-use crate::ui::{HAlign, Rect, UiCanvas, UiElement, VAlign, WorldPanel};
+use crate::ui::canvas_viewport::{CanvasViewport, target_to_canvas};
+use crate::ui::{HAlign, Rect, UiCanvas, VAlign, WorldPanel};
 use cgmath::{Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
 
 pub const SIZE: Vector2<f32> = Vector2::new(268.0, 376.0);
@@ -36,15 +37,6 @@ pub fn filter_pointer_hands(
     }
 }
 
-pub fn source(character: bool) -> Rect {
-    Rect::new(
-        if character { 450.0 } else { 2.0 },
-        124.0,
-        if character { 188.0 } else { 252.0 },
-        296.0,
-    )
-}
-
 /// Retail controls retain their authored art and dimensions. The four-button
 /// strip follows #1705 (RES, ?/MAP, LOG, MFD); ACCESS fills the spare recess
 /// between the two balance wells and the strip.
@@ -60,35 +52,21 @@ fn footer_tiles() -> [(Rect, Vector2<f32>); 7] {
     ]
 }
 
-pub fn buttons() -> [(Rect, Vector2<f32>, &'static str); 6] {
-    [
-        (
-            Rect::new(82.0, 323.0, 38.0, 36.0),
-            vec2(402.0, 450.0),
-            "LOG",
-        ),
-        (
-            Rect::new(153.0, 323.0, 38.0, 36.0),
-            vec2(441.0, 450.0),
-            "KEY",
-        ),
-        (
-            Rect::new(120.0, 321.0, 32.0, 40.0),
-            vec2(476.0, 450.0),
-            "MFD",
-        ),
-        (
-            Rect::new(18.0, 321.0, 32.0, 40.0),
-            vec2(133.0, 450.0),
-            "RES",
-        ),
-        (Rect::new(50.0, 321.0, 32.0, 18.0), vec2(166.0, 440.0), "?"),
-        (
-            Rect::new(50.0, 341.0, 32.0, 18.0),
-            vec2(166.0, 460.0),
-            "MAP",
-        ),
-    ]
+/// Source windows own both rendering and input: a ray maps continuously back
+/// into the original host's controls rather than synthesizing fixed clicks.
+pub fn viewports(screen: Option<Rect>) -> Vec<CanvasViewport> {
+    let mut windows = Vec::new();
+    if let Some(src) = screen {
+        windows.push(CanvasViewport::fit(
+            src,
+            Rect::new(SCREEN.x, SCREEN.y, src.w.min(SCREEN.w), src.h.min(SCREEN.h)),
+        ));
+    }
+    windows.extend(footer_tiles().map(|(src, dst)| CanvasViewport {
+        src,
+        dst: Rect::new(dst.x, dst.y, src.w, src.h),
+    }));
+    windows
 }
 
 /// Container scripts resolve their canvas before either renderer sees it.
@@ -102,55 +80,25 @@ pub(crate) fn screen_active(world: &shipyard::World) -> bool {
         .is_ok_and(|v| v.0)
 }
 
-pub fn to_native(point: Vector2<f32>, character: bool) -> Option<Vector2<f32>> {
-    for (rect, native, _) in buttons() {
-        if rect.contains(point) {
-            return Some(native);
-        }
-    }
-    let src = source(character);
-    let destination = Rect::new(SCREEN.x, SCREEN.y, src.w, src.h);
-    destination
-        .contains(point)
-        .then(|| point + vec2(src.x - SCREEN.x, src.y - SCREEN.y))
+pub fn to_native(point: Vector2<f32>, screen: Option<Rect>) -> Option<Vector2<f32>> {
+    target_to_canvas(&viewports(screen), point)
 }
 
-pub fn point_from_native(point: Vector2<f32>, character: bool) -> Option<Vector2<f32>> {
-    if let Some((rect, _, _)) = buttons()
-        .into_iter()
-        .find(|(_, native, _)| *native == point)
-    {
-        return Some(rect.center());
-    }
-    let src = source(character);
-    src.contains(point)
-        .then(|| point + vec2(SCREEN.x - src.x, SCREEN.y - src.y))
+pub fn point_from_native(point: Vector2<f32>, screen: Option<Rect>) -> Option<Vector2<f32>> {
+    viewports(screen)
+        .iter()
+        .find(|v| v.src.contains(point))
+        .map(|v| v.to_dst(Rect::new(point.x, point.y, 0.0, 0.0)).center())
 }
 
-/// Debug geometry uses the same tile translation as composition/input.
-pub fn from_native(rect: Rect, character: bool) -> Option<Rect> {
-    for (destination, native, _) in buttons() {
-        if rect.contains(native) {
-            return Some(destination);
-        }
-    }
-    let src = source(character);
-    src.contains(rect.center()).then(|| {
-        Rect::new(
-            rect.x + SCREEN.x - src.x,
-            rect.y + SCREEN.y - src.y,
-            rect.w,
-            rect.h,
-        )
-    })
+pub fn from_native(rect: Rect, screen: Option<Rect>) -> Option<Rect> {
+    viewports(screen)
+        .iter()
+        .find(|v| v.src.contains(rect.center()))
+        .map(|v| v.to_dst(rect))
 }
 
-pub fn compose(
-    native: UiCanvas,
-    character: bool,
-    target: Option<&str>,
-    occupied: bool,
-) -> UiCanvas {
+pub fn compose(native: UiCanvas, screen: Option<Rect>, target: Option<&str>) -> UiCanvas {
     let mut canvas = UiCanvas::new(SIZE);
     // Stepped corners give the prototype a solid, softly squared bezel without
     // an imported mesh. Sidecar art remains exposed beside the main body.
@@ -158,7 +106,7 @@ pub fn compose(
     canvas.fill(Rect::new(0.0, 3.0, 204.0, 368.0), [24, 31, 35]);
     canvas.fill(Rect::new(3.0, 304.0, 264.0, 70.0), [24, 31, 35]);
     canvas.fill(Rect::new(6.0, 6.0, 192.0, 362.0), [3, 8, 10]);
-    if !occupied {
+    if screen.is_none() {
         canvas.image(Rect::new(8.0, 8.0, 188.0, 296.0), "iface/query.pcx");
         // Match the retail query title and description wells (native panel
         // origin 2,124 translated to 8,8). Keep hints out of the image well.
@@ -196,31 +144,7 @@ pub fn compose(
         Rect::new(260.0, 0.0, -260.0, 64.0),
         vec2(260.0, 64.0),
     );
-    let src = source(character);
-    for mut element in native.into_elements() {
-        let rect = element.rect();
-        let delta = if let Some((tile, destination)) =
-            footer_tiles().into_iter().find(|(tile, _)| {
-                rect.x >= tile.x
-                    && rect.y >= tile.y
-                    && rect.x + rect.w <= tile.x + tile.w
-                    && rect.y + rect.h <= tile.y + tile.h
-            }) {
-            destination - vec2(tile.x, tile.y)
-        } else if src.contains(rect.center()) {
-            vec2(SCREEN.x - src.x, SCREEN.y - src.y)
-        } else {
-            continue;
-        };
-        match &mut element {
-            UiElement::Image { position, .. }
-            | UiElement::Bar { position, .. }
-            | UiElement::Button { position, .. }
-            | UiElement::Text { position, .. }
-            | UiElement::Fill { position, .. } => *position += delta,
-        }
-        canvas.push(element);
-    }
+    canvas.project(native, viewports(screen));
     canvas
 }
 
@@ -253,22 +177,30 @@ mod tests {
     }
 
     #[test]
-    fn main_and_sidecar_keep_their_native_hit_coordinates() {
-        assert_eq!(to_native(vec2(24.0, 218.0), false), Some(vec2(18.0, 334.0)));
-        assert_eq!(
-            to_native(vec2(221.0, 248.0), false),
-            Some(vec2(215.0, 364.0))
-        );
-        assert_eq!(to_native(vec2(24.0, 28.0), true), Some(vec2(466.0, 144.0)));
-        assert_eq!(to_native(vec2(240.0, 380.0), false), None);
-    }
-    #[test]
-    fn utilities_and_balances_are_not_scanning_targets() {
-        for (rect, native, _) in buttons() {
-            assert_eq!(to_native(rect.center(), false), Some(native));
-            assert_eq!(point_from_native(native, false), Some(rect.center()));
+    fn arbitrary_panels_and_footer_points_round_trip() {
+        for src in [
+            Rect::new(2.0, 124.0, 252.0, 296.0),
+            Rect::new(450.0, 124.0, 188.0, 296.0),
+            Rect::new(23.0, 19.0, 636.0, 296.0),
+            Rect::new(400.0, 70.0, 100.0, 330.0),
+        ] {
+            let window = viewports(Some(src))[0];
+            assert!(window.dst.w <= SCREEN.w && window.dst.h <= SCREEN.h);
+            assert!((window.dst.w / window.dst.h - src.w / src.h).abs() < 0.001);
+            for p in [src.center(), vec2(src.x + 1.0, src.y + 1.0)] {
+                let mapped = point_from_native(p, Some(src)).unwrap();
+                let round_trip = to_native(mapped, Some(src)).unwrap();
+                assert!((round_trip.x - p.x).abs() < 0.001);
+                assert!((round_trip.y - p.y).abs() < 0.001);
+            }
         }
-        assert_eq!(to_native(vec2(205.0, 345.0), false), None);
+        for (src, _) in footer_tiles() {
+            // An arbitrary point in each control, not a synthetic centre click.
+            let p = vec2(src.x + 3.0, src.y + 5.0);
+            let mapped = point_from_native(p, None).unwrap();
+            assert_eq!(to_native(mapped, None), Some(p));
+        }
+        assert_eq!(to_native(vec2(2.0, 2.0), None), None);
     }
 }
 

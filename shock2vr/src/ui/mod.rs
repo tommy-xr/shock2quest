@@ -31,6 +31,7 @@ use shipyard::EntityId;
 
 use crate::vr_config::Handedness;
 
+pub mod canvas_viewport;
 pub mod cheats_panel;
 pub mod dev_params_navigation;
 pub mod dev_params_panel;
@@ -635,6 +636,7 @@ where
 {
     size: Vector2<f32>,
     elements: Vec<UiElement<TEvent>>,
+    projections: Vec<(UiCanvas<TEvent>, Vec<canvas_viewport::CanvasViewport>)>,
 }
 
 impl<TEvent> UiCanvas<TEvent>
@@ -645,11 +647,22 @@ where
         Self {
             size,
             elements: Vec::new(),
+            projections: Vec::new(),
         }
     }
 
     pub fn from_elements(size: Vector2<f32>, elements: Vec<UiElement<TEvent>>) -> Self {
-        Self { size, elements }
+        Self {
+            size,
+            elements,
+            projections: Vec::new(),
+        }
+    }
+
+    /// Project a shared canvas after layout. Both presenters consume the same
+    /// resolved rectangles, including text metrics and cropped artwork.
+    pub fn project(&mut self, canvas: Self, viewports: Vec<canvas_viewport::CanvasViewport>) {
+        self.projections.push((canvas, viewports));
     }
 
     pub fn size(&self) -> Vector2<f32> {
@@ -986,6 +999,13 @@ where
                     )
                 }
             });
+        }
+        for (canvas, viewports) in &self.projections {
+            let pointer = pointer.and_then(|p| canvas_viewport::target_to_canvas(viewports, p));
+            placed.extend(canvas_viewport::place_through(
+                &canvas.layout_with_pointer(asset_cache, pointer),
+                viewports,
+            ));
         }
         placed
     }
