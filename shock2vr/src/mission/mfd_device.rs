@@ -360,12 +360,22 @@ pub fn hologram(
     }
     let size = 0.085 / crate::METERS_PER_WORLD_UNIT;
     let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
-    // Above the top edge, with clearance for the miniature's bounding sphere.
-    let anchor = vec3(
-        -32.0 / SIZE.x * panel.size.x,
-        panel.size.y * 0.5 + size * 0.5 + 0.012 / crate::METERS_PER_WORLD_UNIT,
-        0.025 / crate::METERS_PER_WORLD_UNIT,
-    );
+    // Compare a projection from the display glass with the original top-edge
+    // placement. This changes only the physical miniature, never canvas layout.
+    let (y, z) = if crate::dev_params::get_bool(crate::dev_params::VR_MFD_HOLOGRAM_SCREEN) {
+        // Center over the upper image area, with the fitted sphere's nearest
+        // point 8 mm above the glass even as it rotates.
+        (
+            (SIZE.y * 0.5 - (SCREEN.y + 70.0)) * panel.size.y / SIZE.y,
+            size * 0.5 + 0.008 / crate::METERS_PER_WORLD_UNIT,
+        )
+    } else {
+        (
+            panel.size.y * 0.5 + size * 0.5 + 0.012 / crate::METERS_PER_WORLD_UNIT,
+            0.025 / crate::METERS_PER_WORLD_UNIT,
+        )
+    };
+    let anchor = vec3(-32.0 / SIZE.x * panel.size.x, y, z);
     let root = Matrix4::from_translation(panel.center)
         * Matrix4::from(panel.rotation)
         * Matrix4::from_translation(anchor)

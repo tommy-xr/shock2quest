@@ -147,3 +147,13 @@ still run on each attempt. Holstering, leaving reach, or selecting another
 weapon invalidates that authorization. Normal weapon interfaces still require
 wielding. Runtime captures completed a 20-nanite pistol modification and a
 3-nanite repair on the same world entity.
+
+## Hologram placement comparison
+
+The default remains above the device's top edge. Enable **Developer → Body
+inventory → MFD hologram over screen** (`vr_mfd_hologram_screen`) to compare a
+projection hovering over the screen's upper image area. Its bounding sphere
+clears the glass by 8 mm, with the same model, size, rotation and transparency.
+The original 2D art stays visible underneath so this experiment can reveal
+occlusion/readability tradeoffs before choosing a default. This placement has
+only been inspected in headless VR captures, not stereo on a headset.
