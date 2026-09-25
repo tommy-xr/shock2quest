@@ -52,12 +52,12 @@ fn authored_panel(
     (base, contact)
 }
 
-/// Fixed to the body yaw, tilted up for a glance down; never tracks head pitch.
+/// Upright at the belt: +Z screen faces the player, -Z lens faces outward.
+/// Follow body yaw only, so a glance down never tips the magnetic mount.
 pub(super) fn stowed_panel(center: Vector3<f32>, body_rotation: Quaternion<f32>) -> WorldPanel {
-    use cgmath::{Deg, Rotation3};
     WorldPanel {
         center,
-        rotation: body_rotation * Quaternion::from_angle_x(Deg(-55.0)),
+        rotation: body_rotation,
         size: face_size(),
     }
 }
@@ -349,6 +349,22 @@ pub fn compose(native: UiCanvas, screen: Option<Rect>, target: Option<&str>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn belt_mount_stays_upright_with_the_lens_facing_outward() {
+        use cgmath::{Deg, Rotation3};
+        let center = vec3(0.2, 1.0, -0.4);
+        for yaw in [-150.0, 0.0, 90.0] {
+            let rotation = Quaternion::from_angle_y(Deg(yaw));
+            let panel = stowed_panel(center, rotation);
+            assert_eq!(panel.center, center);
+            assert!((panel.rotation * Vector3::unit_y() - Vector3::unit_y()).magnitude() < 0.00001);
+            assert!(
+                (panel.rotation * -Vector3::unit_z() - rotation * -Vector3::unit_z()).magnitude()
+                    < 0.00001
+            );
+        }
+    }
+
     #[test]
     fn saved_scale_matches_editor_body_screen_and_lens_in_both_hands() {
         use cgmath::{Deg, Rotation3};

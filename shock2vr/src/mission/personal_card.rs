@@ -114,10 +114,10 @@ impl PersonalCard {
                 crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) - 0.30,
             ) + (Matrix4::from_angle_y(cgmath::Rad(-body.yaw))
                 * ((Vector3::from(self.rest_pose.position_m)
-                    // The wider tilted screen must clear the belt and pouch.
-                    // Offset the grab center with the mesh so drawing still matches.
+                    // A small magnetic standoff at the original belt mount.
+                    // Keep the grab center on the rendered device.
                     + if self.device_mode {
-                        vec3(-0.04, 0.06, -0.10)
+                        vec3(0.0, 0.0, -0.015)
                     } else {
                         vec3(0.0, 0.0, 0.0)
                     })

@@ -985,7 +985,9 @@ including query chrome, instructions, resource wells and utility buttons.
 leaving the glove unchanged; each hand saves its own scale. The preview is
 read-only and uses zero balances.
 
-On the belt, the screen tilts toward the player and shows live balances. Its rear
+On the belt, the device stays upright at its original mount with a 1.5 cm
+magnetic standoff. The screen faces the player and shows live balances; the
+rear lens faces outward. Its rear
 lens passively queries named objects as the player moves: a target shows its
 query icon/name/description, and moving away restores the idle screen. This
 preview never activates readers, opens action panels, consumes chemicals or
