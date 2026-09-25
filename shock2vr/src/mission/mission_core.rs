@@ -2908,6 +2908,7 @@ pub struct MissionCore {
     ammo_pouch: super::ammo_pouch::AmmoPouch,
     personal_card: super::personal_card::PersonalCard,
     device_panel: Option<crate::ui::WorldPanel>,
+    device_pointer_gate: super::mfd_device::PointerGate,
     device_inspect_only: bool,
     device_scanner: super::mfd_device::Scanner,
     device_beam: Option<(Vector3<f32>, Vector3<f32>)>,
@@ -3847,6 +3848,7 @@ impl MissionCore {
             ammo_pouch: Default::default(),
             personal_card: Default::default(),
             device_panel: None,
+            device_pointer_gate: Default::default(),
             device_inspect_only: false,
             device_scanner: Default::default(),
             device_beam: None,
@@ -5074,6 +5076,7 @@ impl MissionCore {
             .unwrap()
             .0 = device_active;
         if !device_active {
+            self.device_pointer_gate = Default::default();
             self.device_scanner.trigger(false, false);
         }
         if self.flat_ui.device != device_active {
@@ -5156,7 +5159,7 @@ impl MissionCore {
             // Only empty hands can operate the device. In particular, aiming a
             // gun across the screen must neither hover a widget nor safe the gun.
             let (left, right) = self.interaction.held_entities();
-            super::mfd_device::filter_pointer_hands(
+            self.device_pointer_gate.filter(
                 &mut pointer_input,
                 device_hand,
                 [left.is_some(), right.is_some()],

@@ -255,3 +255,25 @@ test("drawing the device replaces a world quad and hand frobs stay on its screen
   assert.equal((await game.ui.state()).active_panel?.entity_id, crate.id);
   assert.equal(await uiBodies(), 0, "hand frob routes to the device with no duplicate quad");
 });
+
+test("a trigger held before drawing cannot click the device until released", {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
+    debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await game.step({ frames: 30 });
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 2 });
+  await drawPersonalCard(game, "left");
+  await game.input.set("left_hand.position", [-.25, .4, -.7]);
+  await game.step({ frames: 3 });
+  const ui = await game.ui.state();
+  await aimVrHandAtCanvas(game, ui.panel_pose!, [136, 341], { hand: "right", trigger: 1 });
+  await game.step({ frames: 5 });
+  assert.ok((await game.ui.state()).utilities.every(e => e.rect[1] >= 300), "held trigger cannot open the character page");
+  await game.input.set("right_hand.trigger", 0);
+  await game.step({ frames: 2 });
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 3 });
+  assert.ok((await game.ui.state()).utilities.some(e => e.rect[1] < 300), "fresh press opens the page");
+});

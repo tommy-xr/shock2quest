@@ -77,6 +77,54 @@ pub fn filter_pointer_hands(
     }
 }
 
+/// Drawing, tracking recovery, or emptying a hand cannot turn an already-held
+/// trigger/squeeze into a UI press. This masks only the UI copy of the input.
+pub struct PointerGate {
+    blocked: [[bool; 2]; 2],
+}
+
+impl Default for PointerGate {
+    fn default() -> Self {
+        Self {
+            blocked: [[true; 2]; 2],
+        }
+    }
+}
+
+impl PointerGate {
+    pub fn filter(
+        &mut self,
+        input: &mut crate::input_context::InputContext,
+        device_hand: Option<usize>,
+        carrying: [bool; 2],
+    ) {
+        use cgmath::InnerSpace;
+        let tracked = std::array::from_fn::<_, 2, _>(|i| {
+            input.pose_tracking.is_none_or(|p| p.head && p.hands[i])
+        });
+        for (i, hand) in [&mut input.left_hand, &mut input.right_hand]
+            .into_iter()
+            .enumerate()
+        {
+            let eligible = device_hand != Some(i)
+                && !carrying[i]
+                && tracked[i]
+                && hand.rotation.magnitude2() > 0.0001;
+            for (button, value) in [&mut hand.trigger_value, &mut hand.squeeze_value]
+                .into_iter()
+                .enumerate()
+            {
+                self.blocked[i][button] = !eligible
+                    || (self.blocked[i][button] && *value > crate::ui::VR_TRIGGER_THRESHOLD);
+                if self.blocked[i][button] {
+                    *value = 0.0;
+                }
+            }
+        }
+        filter_pointer_hands(input, device_hand, carrying);
+    }
+}
+
 /// Retail controls retain their authored art and dimensions. The four-button
 /// strip follows #1705 (RES, ?/MAP, LOG, MFD); ACCESS fills the spare recess
 /// between the two balance wells and the strip.
@@ -199,6 +247,30 @@ mod tests {
             let edge = scaled_grip_point(anchor + vec3(0.2, 0.0, 0.0), anchor, 1.0, scale);
             assert!((edge.x - anchor.x - 0.2 * scale).abs() < 0.0001);
         }
+    }
+
+    #[test]
+    fn screen_entry_and_recovery_wait_for_physical_release() {
+        let mut gate = PointerGate::default();
+        let mut raw = crate::input_context::InputContext::default();
+        raw.right_hand.rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        raw.right_hand.trigger_value = 1.0;
+        let sample =
+            |gate: &mut PointerGate, raw: &crate::input_context::InputContext, carrying| {
+                let mut input = raw.clone();
+                gate.filter(&mut input, Some(0), [false, carrying]);
+                input.right_hand.trigger_value
+            };
+        assert_eq!(sample(&mut gate, &raw, false), 0.0);
+        assert_eq!(sample(&mut gate, &raw, false), 0.0);
+        raw.right_hand.trigger_value = 0.0;
+        assert_eq!(sample(&mut gate, &raw, false), 0.0);
+        raw.right_hand.trigger_value = 1.0;
+        assert_eq!(sample(&mut gate, &raw, false), 1.0);
+        assert_eq!(sample(&mut gate, &raw, true), 0.0);
+        assert_eq!(sample(&mut gate, &raw, false), 0.0);
+        // Masking screen input never edits the original gun/world input.
+        assert_eq!(raw.right_hand.trigger_value, 1.0);
     }
 
     #[test]
