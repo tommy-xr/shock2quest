@@ -54,6 +54,22 @@ pub(super) fn tuning(hand: usize) -> Tuning {
     }
 }
 
+/// The authored left pinch reaches farther across alternate edges. Keep this
+/// fit correction separate from position so the frame still meets the fingers.
+pub(super) fn margin(hand: usize) -> f32 {
+    use crate::dev_params::*;
+    super::grip_margin()
+        + if matches!(tuning(hand).edge, Edge::Bottom) {
+            0.0
+        } else {
+            get(if hand == 0 {
+                VR_MFD_LEFT_GRIP_CLEARANCE
+            } else {
+                VR_MFD_RIGHT_GRIP_CLEARANCE
+            }) / crate::METERS_PER_WORLD_UNIT
+        }
+}
+
 /// Move the selected edge to the authored pinch point. Rotation adjustments
 /// pivot around that contact, and translations are in this controller's axes.
 pub(super) fn place(

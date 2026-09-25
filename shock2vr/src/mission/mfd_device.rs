@@ -48,7 +48,7 @@ pub fn panel(
         contact,
         rotation,
         &grip::tuning(hand),
-        grip_margin(),
+        grip::margin(hand),
     ))
 }
 
@@ -592,6 +592,7 @@ pub fn body(
             face,
             hand.map(|i| grip::tuning(i).edge)
                 .unwrap_or(grip::Edge::Bottom),
+            hand.map(grip::margin).unwrap_or_else(grip_margin),
         );
     }
     let name = match crate::dev_params::get(crate::dev_params::VR_MFD_BODY).round() as u8 {
@@ -654,16 +655,19 @@ pub fn body(
 }
 
 /// Original stepped outline with a solid eight-millimetre backing.
-fn stepped_frame(face: cgmath::Matrix4<f32>, edge: grip::Edge) -> Vec<engine::scene::SceneObject> {
+fn stepped_frame(
+    face: cgmath::Matrix4<f32>,
+    edge: grip::Edge,
+    margin: f32,
+) -> Vec<engine::scene::SceneObject> {
     use cgmath::{Deg, Matrix4};
     use engine::scene::{SceneObject, SceneObjectDebugTag, color_material, cube};
     let display = face_size();
     let pixel = display.x / SIZE.x;
     let depth = 0.008 / crate::METERS_PER_WORLD_UNIT;
-    let margin = grip_margin();
     let root = face
         * Matrix4::from_angle_z(Deg(180.0))
-        * Matrix4::from_translation(vec3(0.0, margin * 0.5, 0.0));
+        * Matrix4::from_translation(vec3(0.0, grip_margin() * 0.5, 0.0));
     let extension = match edge {
         grip::Edge::Bottom => (0.0, -display.y * 0.5 - margin * 0.5, display.x, margin),
         grip::Edge::Top => (

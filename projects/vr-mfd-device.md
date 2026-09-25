@@ -60,7 +60,9 @@ keeps the authored card pinch clear of the screen and footer.
 edge selection and six-axis placement. Bottom, left, top and right grips pivot
 the device around the authored hand contact. Translation is controller-local;
 pitch/yaw/roll also pivot around the contact. On the stepped frame the grip
-bezel moves to the selected edge. These are live developer presets for testing
+bezel moves to the selected edge. Alternate left grips add 2 cm of adjustable
+clearance for the longer fingertip reach; right grips default to no extra
+clearance. These are live developer presets for testing
 portrait/landscape holds; automatic edge acquisition is not implemented.
 Finger curls still use the card pinch. See DEVELOPMENT.md for the HTTP keys.
 

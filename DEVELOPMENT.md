@@ -958,3 +958,8 @@ HTTP keys are `vr_mfd_left_grip_edge`, `vr_mfd_left_grip_x`,
 for the other hand. Offsets and angles default to zero; both edges default to
 bottom. Reset those values to restore the initial fit. These controls adjust
 placement; finger curls still use the authored card pinch pose.
+
+`vr_mfd_left_grip_clearance` / `vr_mfd_right_grip_clearance` add bezel clearance
+for side/top grips (defaults 0.02 m left, 0 m right). This accommodates the
+left pinch's fingertip reach without changing the bottom grip. The physical
+frame extends with this clearance rather than separating from the fingers.
