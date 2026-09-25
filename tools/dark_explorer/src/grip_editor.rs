@@ -284,6 +284,11 @@ impl GripEditor {
             .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()));
         let default_path = if model
             .as_ref()
+            .is_some_and(|m| shock2vr::tricorder::is_model(m))
+        {
+            default_library_path().with_file_name("vr-tricorder-grips.json")
+        } else if model
+            .as_ref()
             .is_some_and(|m| shock2vr::vr_weapon_grip::supports_model(m))
         {
             default_library_path().with_file_name("vr-weapon-grips.json")
@@ -568,6 +573,12 @@ impl GripEditor {
                 switch = Some(("vr-grips.json", "mug"));
             }
             if ui
+                .add_enabled(can_switch, egui::Button::new("Tricorder"))
+                .clicked()
+            {
+                switch = Some(("vr-tricorder-grips.json", "tricorder"));
+            }
+            if ui
                 .add_enabled(can_switch, egui::Button::new("Weapons"))
                 .clicked()
             {
@@ -666,9 +677,15 @@ impl GripEditor {
         let mut request_fit = false;
         let doc = self.document.as_mut().unwrap();
         ui.heading(format!("{} — grip override", self.model));
+        if shock2vr::tricorder::is_model(&self.model) {
+            self.support_mode = false;
+            ui.label("Phone grip: support the back and curl fingers around an edge. The green rear lens emits along -Z. Save, then restart the game to load both hand poses.");
+        }
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.support_mode, false, "Primary grip");
-            ui.selectable_value(&mut self.support_mode, true, "Support grip");
+            if !shock2vr::tricorder::is_model(&self.model) {
+                ui.selectable_value(&mut self.support_mode, true, "Support grip");
+            }
         });
         ui.horizontal(|ui| {
             ui.label("Primary hand");
@@ -1075,6 +1092,33 @@ mod tests {
         std::fs::write(&path, include_bytes!("../../../assets/vr-grips.json")).unwrap();
         let doc = GripDocument::load(path).unwrap();
         (dir, doc)
+    }
+
+    #[test]
+    fn tricorder_hand_adjustment_saves_without_changing_the_other_hand() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vr-tricorder-grips.json");
+        std::fs::write(
+            &path,
+            include_bytes!("../../../assets/vr-tricorder-grips.json"),
+        )
+        .unwrap();
+        let mut doc = GripDocument::load(path.clone()).unwrap();
+        let right = doc.library.lookup("tricorder", "right").unwrap().clone();
+        let left = doc
+            .library
+            .entries
+            .iter_mut()
+            .find(|e| e.hand == "left")
+            .unwrap();
+        left.grip.offset.x += 0.025;
+        left.grip.curls[0] = 0.42;
+        let adjusted = left.grip.clone();
+        doc.save().unwrap();
+        let saved = GripDocument::load(path).unwrap();
+        // This is the same lookup API used when the runtime draws the device.
+        assert_eq!(saved.library.lookup("tricorder", "left"), Some(&adjusted));
+        assert_eq!(saved.library.lookup("tricorder", "right"), Some(&right));
     }
 
     #[test]

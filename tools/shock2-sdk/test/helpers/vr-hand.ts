@@ -258,3 +258,33 @@ export async function equipRightHand(
     await game.step({ frames: 10 });
   }
 }
+
+/** Aim the device's rear lens, accounting for the authored grip and live tuning.
+ * Keep the head fixed: turning it would also move an item held in the other hand. */
+export async function aimMfdAt(
+  game: GameServer, target: Vec3, standOff = .45, squeeze = 1, trigger = 0,
+  { hand = "left" }: { hand?: Hand; lookAtTarget?: boolean } = {},
+): Promise<void> {
+  const reference: Vec3 = [0, .4, -.7];
+  await game.input.set(`${hand}_hand.position`, reference);
+  await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
+  await game.input.set(`${hand}_hand.trigger`, 0);
+  await game.input.set(`${hand}_hand.squeeze`, squeeze);
+  await game.step({ frames: 3 });
+  const mount = (await game.ui.state()).scanner_pose;
+  assert.ok(mount, "draw the device before aiming its lens");
+  const localOffset = sub(mount.origin, reference);
+  const { player } = await game.info();
+  const toward = normalize(sub(target, add(player.position, [0, player.camera_offset[1], 0])));
+  const inversePawn = quatConjugate(player.rotation);
+  const direction = quatRotate(inversePawn, toward);
+  const origin = quatRotate(inversePawn, sub(sub(target, scale(toward, standOff)), player.position));
+  const rotation = quatMultiply(quatFromTo([0, 0, -1], direction), quatConjugate(mount.rotation));
+  await game.input.set(`${hand}_hand.rotation`, rotation);
+  await game.input.set(`${hand}_hand.position`, sub(origin, quatRotate(rotation, localOffset)));
+  await game.input.set(`${hand}_hand.trigger`, trigger);
+  await game.step({ frames: 3 });
+  const actual = (await game.ui.state()).scanner_pose!;
+  assert.ok(Math.hypot(...sub(actual.origin, origin)) < .001, "scanner follows this frame's device pose");
+  assert.ok(dot(quatRotate(actual.rotation, [0, 0, -1]), direction) > .9999);
+}

@@ -673,6 +673,8 @@ pub struct DebugUiState {
     /// while the interface is up in VR. Lets a client aim a controller at a
     /// canvas rect without re-deriving the panel's placement.
     pub panel_pose: Option<DebugUiPanelPose>,
+    /// Physical tricorder rear lens, in pawn space; forward is local -Z.
+    pub scanner_pose: Option<DebugScannerPose>,
     /// The HUD status-message lines showing right now, oldest first (the
     /// channel `TrapMessage` and friends write to). Empty when none are up.
     pub messages: Vec<String>,
@@ -710,6 +712,12 @@ pub struct DebugUiPointer {
 
 /// The world panel a VR presentation hangs the shared canvas on, in pawn space
 /// (the same space `/v1/control/input` hand positions are given in).
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugScannerPose {
+    pub origin: [f32; 3],
+    pub rotation: [f32; 4],
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugUiPanelPose {
     /// Panel center.
@@ -1045,6 +1053,7 @@ pub trait DebuggableScene {
             utilities: Vec::new(),
             pointer: None,
             panel_pose: None,
+            scanner_pose: None,
             messages: Vec::new(),
             banner: None,
             security_alarm: None,

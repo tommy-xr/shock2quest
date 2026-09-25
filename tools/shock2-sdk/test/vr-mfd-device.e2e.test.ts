@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
-import { aimVrHandAt, aimVrHandAtCanvas, drawPersonalCard, equipRightHand } from "./helpers/vr-hand.js";
+import { aimMfdAt, aimVrHandAt, aimVrHandAtCanvas, drawPersonalCard, equipRightHand, add, sub, scale, quatRotate } from "./helpers/vr-hand.js";
 
 import { ammoOf, fireOnce } from "./helpers/weapon.js";
 
@@ -23,17 +23,27 @@ for (const hand of ["left", "right"] as const) {
     const aim = await game.player.aimAt(reader.id, { hitbox: "center", visibility: "required" });
     assert.ok(aim.target_confirmed);
     await drawPersonalCard(game, hand);
-    await aimVrHandAt(game, aim.world_point, .55, 1, 0, { hand });
+    // A nonzero per-hand adjustment must move the mesh and the ray together.
+    await game.devParams.set(`vr_mfd_${hand}_grip_roll`, 17);
+    await game.devParams.set(`vr_mfd_${hand}_grip_x`, .012);
+    await aimMfdAt(game, aim.world_point, .55, 1, 0, { hand });
     await game.step({ frames: 12 });
+    const scanner = (await game.ui.state()).scanner_pose!;
+    const player = (await game.info()).player;
+    const [lens] = await game.scene.fromSource("mfd_scanner_lens");
+    assert.ok(lens, "the device has a visible rear emitter");
+    const normal = quatRotate(player.rotation, quatRotate(scanner.rotation, [0, 0, -1]));
+    const surface = add(lens.position, scale(normal, lens.scale[2] / 2));
+    const origin = add(player.position, quatRotate(player.rotation, scanner.origin));
+    assert.ok(Math.hypot(...sub(surface, origin)) < .0001, "ray starts at the rendered lens face after grip tuning");
     assert.equal((await game.ui.state()).active_panel, null, "aiming cannot open a shop");
     assert.equal((await game.scene.fromSource("mfd_hologram")).length, 0);
     const before = (await game.info()).player.stats?.nanites;
     await game.input.set(`${hand}_hand.trigger`, 1);
     await game.step({ frames: 12 });
     assert.equal((await game.ui.state()).active_panel?.template_id, 262);
-    const miniature = await game.scene.fromSource("mfd_hologram");
-    assert.ok(miniature.length > 0, "scanning creates a mesh preview");
-    assert.ok(miniature.every(o => (Math.abs(o.transparency! - .45) < .001 || Math.abs(o.transparency! - .80) < .001) && !o.depth_write));
+    assert.equal((await game.scene.fromSource("mfd_hologram")).length, 0,
+      "the replicator menu must not be obscured by a hologram");
     const count = (await game.info()).player.hand_feedback!.body_gear!.personal_card.scans;
 
   await game.step({ frames: 30 });
@@ -73,6 +83,28 @@ for (const hand of ["left", "right"] as const) {
     await game.input.set(`${free}_hand.trigger`, 0);
     await game.step({ frames: 2 });
     assert.equal((await game.ui.state()).active_panel, null, "MFD replaces the compact map");
+    const query = (await game.ui.state()).utilities.find(e => e.label === "inspect")!;
+    assert.ok(query);
+    const [qx, qy, qw, qh] = query.rect;
+    await aimVrHandAtCanvas(game, (await game.ui.state()).panel_pose!, [qx + qw/2, qy + qh/2], { hand: free });
+    await game.step({ frames: 2 });
+    await game.input.set(`${free}_hand.trigger`, 1);
+    await game.step({ frames: 3 });
+    await game.input.set(`${free}_hand.trigger`, 0);
+    await aimMfdAt(game, aim.world_point, .55, 1, 0, { hand });
+    await game.input.set(`${hand}_hand.trigger`, 1);
+    await game.step({ frames: 5 });
+    assert.equal((await game.ui.state()).active_panel, null, "query bypasses the purchase menu");
+    const miniature = await game.scene.fromSource("mfd_hologram");
+    assert.ok(miniature.length > 0, "query shows the scanned replicator model");
+    assert.ok(miniature.every(o => !o.depth_write && (Math.abs(o.transparency! - .45) < .001 || Math.abs(o.transparency! - .80) < .001)));
+    await game.input.set(`${hand}_hand.trigger`, 0);
+    await game.step({ frames: 3 });
+    await game.input.set(`${hand}_hand.trigger`, 1);
+    await game.step({ frames: 5 });
+    assert.equal((await game.ui.state()).active_panel?.template_id, 262);
+    assert.equal((await game.scene.fromSource("mfd_hologram")).length, 0, "returning to purchases hides the query hologram");
+
     await game.input.set(`${hand}_hand.squeeze`, 0);
     await game.step({ frames: 3 });
     assert.equal((await game.ui.state()).panel_pose, null);
@@ -122,8 +154,9 @@ for (const [held, focus] of [[false, false], [true, false], [true, true]]) {
       if (!held) await game.input.set("right_hand.squeeze", 0);
       await game.step({ frames: 10 });
       await drawPersonalCard(game, "left");
+      if (!held) await game.step({ frames: 90 }); // let the dropped bottle land before aiming
       const target = await game.entities.detail(chemical.entity_id);
-      await aimVrHandAt(game, target.position, .25, 1, 0, { hand: "left" });
+      await aimMfdAt(game, target.position, .25, 1, 0, { hand: "left" });
       await game.step({ frames: 3 });
       if (!focus) await game.input.set("left_hand.trigger", 1);
       await game.step({ frames: focus ? 35 : 5 });
@@ -157,7 +190,7 @@ test("scanned world weapons offer state-specific repair and modify boards", {
   await game.input.set("right_hand.position", [.6, .7, -.8]);
   await drawPersonalCard(game, "left");
   async function scan() {
-    await aimVrHandAt(game, aim.world_point, 1.1, 1, 0, { hand: "left", lookAtTarget: false });
+    await aimMfdAt(game, aim.world_point, 1.1, 1, 0, { hand: "left", lookAtTarget: false });
     await game.step({ frames: 2 });
     await game.input.set("left_hand.trigger", 1);
     await game.step({ frames: 3 });
@@ -225,7 +258,7 @@ test("MFD screen ignores a gun hand while its trigger and face button still work
   await game.step({ frames: 5 });
   assert.notEqual((await game.info()).player.wielded_gun_setting, mode);
   assert.equal((await game.info()).player.right_hand_entity_id, gun.id);
-  await aimVrHandAt(game, (await game.entities.detail(gun.id)).position, .3, 1, 0, { hand: "left", lookAtTarget: false });
+  await aimMfdAt(game, (await game.entities.detail(gun.id)).position, .3, 1, 0, { hand: "left", lookAtTarget: false });
   await game.input.set("left_hand.trigger", 1);
   await game.step({ frames: 3 });
   assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.last_scan, gun.id,
@@ -358,7 +391,7 @@ test("focus scan opens a held weapon without trigger and does not repeat", {
   await game.step({ frames: 120 });
   await equipRightHand(game, true, gun.id, "EquipPistol");
   await drawPersonalCard(game, "left");
-  await aimVrHandAt(game, (await game.entities.detail(gun.id)).position, .3, 1, 0,
+  await aimMfdAt(game, (await game.entities.detail(gun.id)).position, .3, 1, 0,
     { hand: "left", lookAtTarget: false });
   await game.step({ frames: 12 });
   const card = async () => (await game.info()).player.hand_feedback!.body_gear!.personal_card;

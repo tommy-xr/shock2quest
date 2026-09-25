@@ -215,6 +215,8 @@ pub trait PlayerInteraction {
         false
     }
 
+    fn set_body_tool_device(&mut self, _device: bool) {}
+
     fn personal_card_grip(&self, _hand: usize) -> Option<crate::vr_grip::ResolvedGrip> {
         None
     }
@@ -267,6 +269,7 @@ pub struct VrInteraction {
     support_pressed: [bool; 2],
     support_blocked: [bool; 2],
     body_tool_hands: [bool; 2],
+    body_tool_device: bool,
     visual_hands: [Option<GripPose>; 2],
     step_dt: f32,
 }
@@ -371,6 +374,7 @@ impl VrInteraction {
             support_pressed: [true; 2],
             support_blocked: [false; 2],
             body_tool_hands: [false; 2],
+            body_tool_device: false,
             visual_hands: [None, None],
             step_dt: 0.0,
         }
@@ -714,10 +718,21 @@ impl PlayerInteraction for VrInteraction {
         })
     }
 
+    fn set_body_tool_device(&mut self, device: bool) {
+        self.body_tool_device = device;
+    }
+
     fn personal_card_grip(&self, hand: usize) -> Option<crate::vr_grip::ResolvedGrip> {
         self.grip_library
             .as_ref()?
-            .lookup("scipass", if hand == 0 { "left" } else { "right" })
+            .lookup(
+                if self.body_tool_device {
+                    "tricorder"
+                } else {
+                    "scipass"
+                },
+                if hand == 0 { "left" } else { "right" },
+            )
             .cloned()
     }
 
@@ -781,6 +796,19 @@ impl PlayerInteraction for VrInteraction {
                 // overrides remain ahead of shipped weapon defaults.
                 library.entries.extend(weapons.entries);
             }
+            let tricorder = assets
+                .get_opt(&TEXT_IMPORTER, "vr-tricorder-grips.json")
+                .and_then(|text| serde_json::from_str::<crate::vr_grip::GripLibrary>(&text).ok())
+                .filter(|lib| lib.version == 1)
+                .unwrap_or_else(|| {
+                    serde_json::from_str(include_str!("../../assets/vr-tricorder-grips.json"))
+                        .expect("shipped tricorder grips")
+                });
+            self.grip_library
+                .as_mut()
+                .unwrap()
+                .entries
+                .extend(tricorder.entries);
             self.grip_hints = assets
                 .get_opt(&TEXT_IMPORTER, "astra-vr-grip-hints.json")
                 .and_then(|text| serde_json::from_str(&text).ok())
