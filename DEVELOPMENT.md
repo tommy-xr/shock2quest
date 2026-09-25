@@ -978,3 +978,17 @@ The bright green lens on the back marks the scan origin. Its ray points outward
 from the back, follows the complete device/grip transform, and has a short guide
 when no object is focused. Query pages alone show the hologram; replicator,
 loot, weapon, research and other interactive panels hide it.
+
+The ss2ex tricorder preview renders the real idle MFD canvas over the frame,
+including query chrome, instructions, resource wells and utility buttons.
+**Uniform item scale** scales the body, screen and scanner lens together while
+leaving the glove unchanged; each hand saves its own scale. The preview is
+read-only and uses zero balances.
+
+On the belt, the screen tilts toward the player and shows live balances. Its rear
+lens passively queries named objects as the player moves: a target shows its
+query icon/name/description, and moving away restores the idle screen. This
+preview never activates readers, opens action panels, consumes chemicals or
+claims the UI pointer. Drawing removes the belt screen and enables the normal
+handheld interaction. The stowed device uses `vr_mfd_width`; per-hand scale
+applies once that hand draws it.

@@ -16,10 +16,30 @@ pub fn panel(
     hand: usize,
 ) -> Option<WorldPanel> {
     let grip = grip?;
-    let display = face_size() * grip.item_scale;
-    let anchor = vec3(grip.anchor[0], grip.anchor[1], grip.anchor[2]);
-    let scale = display.x / crate::tricorder::width();
-    let center = scaled_grip_point(vec3(0.0, 0.0, 0.0), anchor, grip.item_scale, scale);
+    let (base, contact) = authored_panel(position, rotation, grip, face_size());
+    Some(grip::place(
+        base,
+        contact,
+        rotation,
+        &grip::tuning(hand),
+        grip::margin(hand),
+    ))
+}
+
+fn authored_panel(
+    position: Vector3<f32>,
+    rotation: Quaternion<f32>,
+    grip: &crate::vr_grip::ResolvedGrip,
+    size: Vector2<f32>,
+) -> (WorldPanel, Vector3<f32>) {
+    let display = size * grip.item_scale;
+    let anchor = Vector3::from(grip.anchor);
+    let center = scaled_grip_point(
+        vec3(0.0, 0.0, 0.0),
+        anchor,
+        grip.item_scale,
+        display.x / crate::tricorder::width(),
+    );
     let base = WorldPanel {
         center: position
             + rotation.rotate_vector(grip.offset + grip.rotation.rotate_vector(center)),
@@ -29,13 +49,17 @@ pub fn panel(
     let contact = position
         + rotation
             .rotate_vector(grip.offset + grip.rotation.rotate_vector(anchor * grip.item_scale));
-    Some(grip::place(
-        base,
-        contact,
-        rotation,
-        &grip::tuning(hand),
-        grip::margin(hand),
-    ))
+    (base, contact)
+}
+
+/// Fixed to the body yaw, tilted up for a glance down; never tracks head pitch.
+pub(super) fn stowed_panel(center: Vector3<f32>, body_rotation: Quaternion<f32>) -> WorldPanel {
+    use cgmath::{Deg, Rotation3};
+    WorldPanel {
+        center,
+        rotation: body_rotation * Quaternion::from_angle_x(Deg(-55.0)),
+        size: face_size(),
+    }
 }
 
 fn scaled_grip_point(
@@ -325,6 +349,40 @@ pub fn compose(native: UiCanvas, screen: Option<Rect>, target: Option<&str>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_scale_matches_editor_body_screen_and_lens_in_both_hands() {
+        use cgmath::{Deg, Rotation3};
+        let library: crate::vr_grip::GripLibrary =
+            serde_json::from_str(include_str!("../../../assets/vr-tricorder-grips.json")).unwrap();
+        let position = vec3(0.2, 0.4, -0.7);
+        let hand_rotation = Quaternion::from_angle_y(Deg(37.0));
+        let size = vec2(
+            crate::tricorder::width(),
+            crate::tricorder::width() * SIZE.y / SIZE.x,
+        );
+        for hand in ["left", "right"] {
+            for scale in [0.5, 1.0, 1.5] {
+                let mut grip = library.lookup("tricorder", hand).unwrap().clone();
+                grip.item_scale = scale;
+                let (panel, _) = authored_panel(position, hand_rotation, &grip, size);
+                assert_eq!(panel.size, size * scale);
+                for point in [
+                    vec3(0.0, 0.0, 0.0),
+                    vec3(size.x / 2.0, size.y / 2.0, 0.0),
+                    crate::tricorder::lens(size.x),
+                ] {
+                    let runtime = panel.center + panel.rotation * (point * panel.size.x / size.x);
+                    let editor =
+                        position + hand_rotation * (grip.offset + grip.rotation * (point * scale));
+                    assert!(
+                        (runtime - editor).magnitude() < 0.00001,
+                        "{hand} scale {scale}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn landscape_modes_preserve_the_body_and_exclude_the_gap() {
         use cgmath::InnerSpace;

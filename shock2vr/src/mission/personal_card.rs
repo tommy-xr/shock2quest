@@ -30,6 +30,7 @@ pub(crate) fn is_reader(world: &World, entity: EntityId) -> bool {
 
 pub(super) struct PersonalCard {
     pub center: Option<Vector3<f32>>,
+    pub device_mode: bool,
     pub hand: Option<usize>,
     belt_yaw: f32,
     rest_pose: crate::vr_belt::BeltCardPose,
@@ -51,6 +52,7 @@ impl Default for PersonalCard {
     fn default() -> Self {
         Self {
             center: None,
+            device_mode: false,
             hand: None,
             belt_yaw: 0.0,
             rest_pose: Default::default(),
@@ -111,7 +113,15 @@ impl PersonalCard {
                 crate::dev_params::get(crate::dev_params::VR_BELT_DROP),
                 crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) - 0.30,
             ) + (Matrix4::from_angle_y(cgmath::Rad(-body.yaw))
-                * (Vector3::from(self.rest_pose.position_m) / crate::METERS_PER_WORLD_UNIT)
+                * ((Vector3::from(self.rest_pose.position_m)
+                    // The wider tilted screen must clear the belt and pouch.
+                    // Offset the grab center with the mesh so drawing still matches.
+                    + if self.device_mode {
+                        vec3(-0.04, 0.06, -0.10)
+                    } else {
+                        vec3(0.0, 0.0, 0.0)
+                    })
+                    / crate::METERS_PER_WORLD_UNIT)
                     .extend(0.0))
             .truncate()
         });
@@ -208,6 +218,23 @@ impl PersonalCard {
         self.last_scan = target;
         self.scans += 1;
         target
+    }
+
+    pub fn stowed_device_panel(
+        &self,
+        pawn: Vector3<f32>,
+        rotation: Quaternion<f32>,
+    ) -> Option<crate::ui::WorldPanel> {
+        use cgmath::Rotation3;
+        if self.hand.is_some() {
+            return None;
+        }
+        self.center.map(|center| {
+            super::mfd_device::stowed_panel(
+                pawn + rotation.rotate_vector(center),
+                rotation * Quaternion::from_angle_y(cgmath::Rad(-self.belt_yaw)),
+            )
+        })
     }
 
     pub fn transform(&self, pawn: Vector3<f32>, rotation: Quaternion<f32>) -> Option<Matrix4<f32>> {

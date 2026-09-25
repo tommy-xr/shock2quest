@@ -2908,6 +2908,7 @@ pub struct MissionCore {
     ammo_pouch: super::ammo_pouch::AmmoPouch,
     personal_card: super::personal_card::PersonalCard,
     device_panel: Option<crate::ui::WorldPanel>,
+    stowed_device_ui: crate::mission::flat_ui_host::FlatUiHost,
     device_scan_pose: Option<(Vector3<f32>, Quaternion<f32>)>,
     device_pointer_gate: super::mfd_device::PointerGate,
     device_map_wide: bool,
@@ -3849,6 +3850,7 @@ impl MissionCore {
             ammo_pouch: Default::default(),
             personal_card: Default::default(),
             device_panel: None,
+            stowed_device_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             device_scan_pose: None,
             device_pointer_gate: Default::default(),
             device_map_wide: false,
@@ -5399,6 +5401,7 @@ impl MissionCore {
         self.personal_card
             .advance_downloads(time.elapsed.as_secs_f32());
         self.personal_card.load_pose(asset_cache);
+        self.personal_card.device_mode = device_enabled;
         self.personal_card.update(
             &body_input,
             self.holsters.body_pose,
@@ -5889,6 +5892,12 @@ impl MissionCore {
             // its controller ray and requires the card itself within contact reach.
             self.device_beam = None;
             self.flat_ui.scan_label = None;
+            let stowed_panel = device_enabled
+                .then(|| {
+                    self.personal_card
+                        .stowed_device_panel(player_pos, player_rot)
+                })
+                .flatten();
             let scan_pose = if self.flat_ui.device {
                 self.device_scan_pose.map(|(origin, rotation)| {
                     (
@@ -5896,9 +5905,19 @@ impl MissionCore {
                         player_rot * rotation,
                     )
                 })
+            } else if let Some(panel) = stowed_panel {
+                Some(super::mfd_device::scanner_pose(asset_cache, panel))
             } else {
                 self.personal_card.held_pose
             };
+            if stowed_panel.is_some() {
+                self.device_scan_pose = scan_pose.map(|(origin, rotation)| {
+                    (
+                        player_rot.conjugate().rotate_vector(origin - player_pos),
+                        player_rot.conjugate() * rotation,
+                    )
+                });
+            }
             let hit = scan_pose.and_then(|(origin, rotation)| {
                 use cgmath::{SquareMatrix, Transform};
                 use collision::{Continuous, Ray3};
@@ -5965,6 +5984,30 @@ impl MissionCore {
                 let distance = (point - origin).magnitude();
                 (distance <= reach).then_some((entity, origin, point, distance))
             });
+            // This host only previews query information; it has no pointer or actions.
+            self.stowed_device_ui.device = stowed_panel.is_some();
+            let preview_target =
+                stowed_panel
+                    .and(hit.map(|(entity, ..)| entity))
+                    .filter(|entity| {
+                        crate::hud::resolve_item_name(asset_cache, &self.world, *entity).is_some()
+                    });
+            if self.stowed_device_ui.utilities.query_entity() != preview_target {
+                self.stowed_device_ui.utilities = Default::default();
+                if let Some(entity) = preview_target {
+                    self.stowed_device_ui.utilities.inspect_entity(entity);
+                }
+            }
+            if stowed_panel.is_some() {
+                self.stowed_device_ui.utilities.refresh(
+                    &self.world,
+                    asset_cache,
+                    &self.entity_info,
+                );
+                self.stowed_device_ui.set_readouts(Some(
+                    crate::hud::readouts::UseModeReadouts::from_world(&self.world, None),
+                ));
+            }
             let device_trigger = self.personal_card.hand.is_some_and(|i| {
                 [&input_context.left_hand, &input_context.right_hand][i].trigger_value > 0.5
             });
@@ -6014,7 +6057,9 @@ impl MissionCore {
             } else {
                 None
             };
-            let scan = if self.flat_ui.device && requested.is_some() {
+            let scan = if stowed_panel.is_some() {
+                None // Belt previews must not activate readers or consume items.
+            } else if self.flat_ui.device && requested.is_some() {
                 requested.map(|entity| {
                     self.personal_card.scans += 1;
                     self.personal_card.last_scan = Some(entity);
@@ -14640,14 +14685,33 @@ impl MissionCore {
                 || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE)
             {
                 if self.personal_card.hand.is_none() {
-                    if let Some(transform) =
-                        self.personal_card.transform(player.pos, player.rotation)
+                    if let Some(panel) = self
+                        .personal_card
+                        .stowed_device_panel(player.pos, player.rotation)
                     {
                         scene.extend(super::mfd_device::body(
                             asset_cache,
-                            transform * Matrix4::from_angle_x(cgmath::Deg(90.0)),
+                            super::mfd_device::body_frame(panel),
                             None,
                         ));
+                        let mut screen = self
+                            .stowed_device_ui
+                            .render_world_space(asset_cache, &panel);
+                        for object in &mut screen {
+                            object.set_debug_tag(Some(std::rc::Rc::new(
+                                engine::scene::SceneObjectDebugTag {
+                                    source: Some("mfd_stowed_ui".into()),
+                                    model: Some("tricorder".into()),
+                                    entity_id: self
+                                        .stowed_device_ui
+                                        .utilities
+                                        .query_entity()
+                                        .map(|e| e.inner()),
+                                    name: None,
+                                },
+                            )));
+                        }
+                        scene.extend(screen);
                     }
                 }
             } else {

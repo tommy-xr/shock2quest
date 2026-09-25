@@ -447,3 +447,39 @@ for (const hand of ["left", "right"] as const) {
     assert.ok((await game.ui.state()).utilities.some(e => e.rect[1] < 300));
   });
 }
+
+test("belt display previews a lens target without activating it, then transfers to the hand", {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
+    debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await game.input.set("head.look", [0, 0]);
+  await game.step({ frames: 30 });
+  const [gun] = await game.entities.byTemplate(-17);
+  assert.ok(gun);
+  const before = await game.info();
+  const [lens] = await game.scene.fromSource("mfd_scanner_lens");
+  assert.ok(lens);
+  assert.ok((await game.scene.fromSource("mfd_stowed_ui")).length > 0);
+  const scanner = (await game.ui.state()).scanner_pose!;
+  assert.ok(scanner, "stowed lens exposes its actual pose");
+  const direction = quatRotate(before.player.rotation, quatRotate(scanner.rotation, [0, 0, -1]));
+  const offset = quatRotate(before.player.rotation, scanner.origin);
+  const pawn = sub(sub(gun.position, scale(direction, .6)), offset);
+  await game.player.teleport({ x: pawn[0], y: pawn[1], z: pawn[2] });
+  await game.step({ frames: 1 });
+  const preview = await game.scene.fromSource("mfd_stowed_ui");
+  assert.ok(preview.some(o => o.entity_id === gun.id), JSON.stringify({ message: "belt lens must preview its target", target: gun, pawn, direction, offset, scanner, after: (await game.ui.state()).scanner_pose, player: (await game.info()).player.position, targets: [...new Set(preview.map(o => o.entity_id))] }));
+  assert.equal((await game.ui.state()).active_panel, null, "passive query cannot open weapon actions");
+  assert.equal((await game.ui.state()).panel_pose, null, "stowed screen never owns the interaction pointer");
+  assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.scans,
+    before.player.hand_feedback!.body_gear!.personal_card.scans, "passive query does not issue a scan action");
+  await game.player.teleport({ x: pawn[0] + 5, y: pawn[1], z: pawn[2] });
+  await game.step({ frames: 1 });
+  assert.ok((await game.scene.fromSource("mfd_stowed_ui")).every(o => o.entity_id !== gun.id), "moving away clears the old preview");
+  await drawPersonalCard(game, "left");
+  assert.equal((await game.scene.fromSource("mfd_stowed_ui")).length, 0, "drawing removes the belt screen");
+  await game.input.set("left_hand.squeeze", 0);
+  await game.step({ frames: 3 });
+  assert.ok((await game.scene.fromSource("mfd_stowed_ui")).length > 0, "returning restores the passive belt screen");
+});
