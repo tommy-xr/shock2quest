@@ -991,7 +991,7 @@ impl FlatUiHost {
         let pointer = pointer.map(|pointer| CanvasPointer {
             canvas_pos: pointer_to_canvas(
                 if self.device {
-                    super::mfd_device::SIZE
+                    super::mfd_device::layout(self.device_screen_source()).size
                 } else {
                     CANVAS_SIZE
                 },
@@ -1777,7 +1777,7 @@ impl FlatUiHost {
                 element.rect = [rect.x, rect.y, rect.w, rect.h];
                 let screen = crate::ui::canvas_rect_to_screen(
                     rect,
-                    super::mfd_device::SIZE,
+                    super::mfd_device::layout(self.device_screen_source()).size,
                     self.screen_size,
                     ScaleMode::PreserveAspect,
                 );
@@ -2157,7 +2157,7 @@ mod tests {
         let rect = host.panel_rect().unwrap();
         assert!((rect.w / rect.h - 636.0 / 296.0).abs() < 0.001);
         let mapped = super::super::mfd_device::from_native(rect, Some(rect)).unwrap();
-        assert!((mapped.w - super::super::mfd_device::SCREEN.w).abs() < 0.001);
+        assert!((mapped.h - super::super::mfd_device::SCREEN.h).abs() < 0.001);
         assert!(mapped.y >= super::super::mfd_device::SCREEN.y);
         assert!(
             mapped.y + mapped.h

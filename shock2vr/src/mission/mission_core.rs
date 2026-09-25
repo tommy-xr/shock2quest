@@ -2909,6 +2909,7 @@ pub struct MissionCore {
     personal_card: super::personal_card::PersonalCard,
     device_panel: Option<crate::ui::WorldPanel>,
     device_pointer_gate: super::mfd_device::PointerGate,
+    device_map_wide: bool,
     device_inspect_only: bool,
     device_scanner: super::mfd_device::Scanner,
     device_beam: Option<(Vector3<f32>, Vector3<f32>)>,
@@ -3849,6 +3850,7 @@ impl MissionCore {
             personal_card: Default::default(),
             device_panel: None,
             device_pointer_gate: Default::default(),
+            device_map_wide: false,
             device_inspect_only: false,
             device_scanner: Default::default(),
             device_beam: None,
@@ -5155,6 +5157,14 @@ impl MissionCore {
             ));
         }
         if let Some(panel) = self.device_panel {
+            let wide = crate::dev_params::get_bool(crate::dev_params::VR_MFD_MAP_WIDE);
+            if wide != self.device_map_wide {
+                self.device_pointer_gate = Default::default();
+                self.flat_ui.guard_held_press();
+                self.device_map_wide = wide;
+            }
+            let layout = super::mfd_device::layout(self.flat_ui.device_screen_source());
+            let panel = layout.surface_panel(panel);
             let mut pointer_input = input_context.clone();
             // Only empty hands can operate the device. In particular, aiming a
             // gun across the screen must neither hover a widget nor safe the gun.
@@ -5164,14 +5174,17 @@ impl MissionCore {
                 device_hand,
                 [left.is_some(), right.is_some()],
             );
-            self.vr_use_mode_pointer = Some(crate::ui::vr_pointer_pass(
-                &pointer_input,
-                super::mfd_device::SIZE,
-                &panel,
-                crate::ui::PointerEngagement::TriggerOrGrab {
-                    carrying: [left.is_some(), right.is_some()],
-                },
-            ));
+            self.vr_use_mode_pointer = Some(
+                crate::ui::vr_pointer_pass(
+                    &pointer_input,
+                    layout.size,
+                    &panel,
+                    crate::ui::PointerEngagement::TriggerOrGrab {
+                        carrying: [left.is_some(), right.is_some()],
+                    },
+                )
+                .remap_hits(|p| layout.contains_surface(p).then_some(p)),
+            );
         }
         if self.vr_trigger_swallow && !self.use_mode {
             let held = |hand: &crate::input_context::Hand| {
@@ -14914,6 +14927,11 @@ impl MissionCore {
                 super::mfd_device::body(asset_cache, super::mfd_device::body_frame(panel));
             if let Some(model) = self
                 .device_hologram
+                .filter(|_| {
+                    self.flat_ui
+                        .device_screen_source()
+                        .is_none_or(|r| r.w <= super::mfd_device::SCREEN.w)
+                })
                 .and_then(|entity| self.id_to_model.get(&entity))
             {
                 let seconds = self
@@ -14923,11 +14941,13 @@ impl MissionCore {
                     .unwrap_or_default();
                 objects.extend(super::mfd_device::hologram(model, panel, seconds));
             }
+            let layout = super::mfd_device::layout(self.flat_ui.device_screen_source());
+            let panel = layout.surface_panel(panel);
             objects.extend(self.flat_ui.render_world_space(asset_cache, &panel));
             if let Some(pass) = &self.vr_use_mode_pointer {
                 objects.extend(crate::ui::pointer_beams(
                     pass,
-                    super::mfd_device::SIZE,
+                    layout.size,
                     &panel,
                     objects.len(),
                 ));
@@ -17548,6 +17568,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             panel_pose: self.vr_use_mode_pointer.is_some().then(|| {
                 let panel = self
                     .device_panel
+                    .map(|p| {
+                        super::mfd_device::layout(self.flat_ui.device_screen_source())
+                            .surface_panel(p)
+                    })
                     .unwrap_or_else(|| self.vr_use_mode_anchor.panel());
                 crate::game_scene::DebugUiPanelPose {
                     center: [panel.center.x, panel.center.y, panel.center.z],
@@ -17559,7 +17583,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     ],
                     size: [panel.size.x, panel.size.y],
                     canvas: if self.flat_ui.device {
-                        [super::mfd_device::SIZE.x, super::mfd_device::SIZE.y]
+                        {
+                            let size =
+                                super::mfd_device::layout(self.flat_ui.device_screen_source()).size;
+                            [size.x, size.y]
+                        }
                     } else {
                         [640.0, 480.0]
                     },

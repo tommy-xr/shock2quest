@@ -929,3 +929,9 @@ original geometry with a private dark blank texture, preserving the world
 items' materials. The enlarged body preserves the card's authored grip point in either hand; only an empty
 opposite hand can click it or pull out loot. A held gun keeps firing and its
 face-button actions.
+
+`vr_mfd_map_wide` compares the two landscape map presentations: off (default)
+rotates the map within the screen so the device can be turned sideways; on
+opens a wider panel immediately above the body. The footer remains usable in
+both modes. Changing the mode while holding a UI trigger requires releasing it
+before another click.

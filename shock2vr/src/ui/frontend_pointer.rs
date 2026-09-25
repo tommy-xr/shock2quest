@@ -142,6 +142,16 @@ pub struct FrontendPointerPass {
 }
 
 impl FrontendPointerPass {
+    /// Keep one arbitration result while mapping its surface coordinates.
+    pub fn remap_hits(&self, map: impl Fn(Vector2<f32>) -> Option<Vector2<f32>>) -> Self {
+        let mut out = self.clone();
+        for ray in &mut out.rays {
+            ray.canvas_hit = ray.canvas_hit.and_then(&map);
+        }
+        out.active = out.active.filter(|i| out.rays[*i].canvas_hit.is_some());
+        out
+    }
+
     /// Where the menu is being pointed, in canvas pixels.
     pub fn point(&self) -> Option<Vector2<f32>> {
         self.active.and_then(|index| self.rays[index].canvas_hit)

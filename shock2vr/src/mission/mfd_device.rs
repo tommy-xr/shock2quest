@@ -140,20 +140,87 @@ fn footer_tiles() -> [(Rect, Vector2<f32>); 7] {
     ]
 }
 
+/// The body keeps its physical pose and scale when the optional map expands.
+/// Only the interaction/render canvas gains space above it.
+#[derive(Clone, Copy)]
+pub struct Layout {
+    pub size: Vector2<f32>,
+    pub body_offset: Vector2<f32>,
+    pub screen: Option<CanvasViewport>,
+}
+
+impl Layout {
+    fn new(screen: Option<Rect>, wide: bool) -> Self {
+        let mut layout = Self {
+            size: SIZE,
+            body_offset: vec2(0.0, 0.0),
+            screen: None,
+        };
+        if let Some(src) = screen {
+            if src.w > SCREEN.w && wide {
+                let width = 436.0;
+                let height = width * src.h / src.w;
+                layout.body_offset = vec2((width - SIZE.x) * 0.5, height + 8.0);
+                layout.size = vec2(width, layout.body_offset.y + SIZE.y);
+                layout.screen = Some(CanvasViewport::fit(src, Rect::new(0.0, 0.0, width, height)));
+            } else if src.w > SCREEN.w {
+                // Turn the entire map, including its close button and text.
+                // The user turns the instrument sideways to read it.
+                layout.screen = Some(CanvasViewport::fit_rotated(
+                    src,
+                    Rect::new(8.0, 8.0, 188.0, 296.0),
+                    1,
+                ));
+            } else {
+                layout.screen = Some(CanvasViewport::fit(
+                    src,
+                    Rect::new(SCREEN.x, SCREEN.y, src.w.min(SCREEN.w), src.h.min(SCREEN.h)),
+                ));
+            }
+        }
+        layout
+    }
+
+    pub fn surface_panel(self, body: WorldPanel) -> WorldPanel {
+        let scale = body.size.x / SIZE.x;
+        let shift = self.size * 0.5 - self.body_offset - SIZE * 0.5;
+        WorldPanel {
+            center: body.center
+                + body
+                    .rotation
+                    .rotate_vector(vec3(shift.x, -shift.y, 0.0) * scale),
+            rotation: body.rotation,
+            size: self.size * scale,
+        }
+    }
+
+    pub fn contains_surface(self, point: Vector2<f32>) -> bool {
+        Rect::new(self.body_offset.x, self.body_offset.y, SIZE.x, SIZE.y).contains(point)
+            || self.screen.is_some_and(|v| v.dst.contains(point))
+    }
+}
+
+pub fn layout(screen: Option<Rect>) -> Layout {
+    Layout::new(
+        screen,
+        crate::dev_params::get_bool(crate::dev_params::VR_MFD_MAP_WIDE),
+    )
+}
+
 /// Source windows own both rendering and input: a ray maps continuously back
 /// into the original host's controls rather than synthesizing fixed clicks.
 pub fn viewports(screen: Option<Rect>) -> Vec<CanvasViewport> {
-    let mut windows = Vec::new();
-    if let Some(src) = screen {
-        windows.push(CanvasViewport::fit(
-            src,
-            Rect::new(SCREEN.x, SCREEN.y, src.w.min(SCREEN.w), src.h.min(SCREEN.h)),
-        ));
-    }
+    let layout = layout(screen);
+    let mut windows: Vec<_> = layout.screen.into_iter().collect();
     windows.extend(footer_tiles().map(|(src, dst)| CanvasViewport {
         turns: 0,
         src,
-        dst: Rect::new(dst.x, dst.y, src.w, src.h),
+        dst: Rect::new(
+            dst.x + layout.body_offset.x,
+            dst.y + layout.body_offset.y,
+            src.w,
+            src.h,
+        ),
     }));
     windows
 }
@@ -233,6 +300,19 @@ pub fn compose(native: UiCanvas, screen: Option<Rect>, target: Option<&str>) -> 
         Rect::new(260.0, 0.0, -260.0, 64.0),
         vec2(260.0, 64.0),
     );
+    let layout = layout(screen);
+    if layout.body_offset != vec2(0.0, 0.0) {
+        let mut expanded = UiCanvas::new(layout.size);
+        expanded.project(
+            canvas,
+            vec![CanvasViewport {
+                src: Rect::new(0.0, 0.0, SIZE.x, SIZE.y),
+                dst: Rect::new(layout.body_offset.x, layout.body_offset.y, SIZE.x, SIZE.y),
+                turns: 0,
+            }],
+        );
+        canvas = expanded;
+    }
     canvas.project(native, viewports(screen));
     canvas
 }
@@ -240,6 +320,43 @@ pub fn compose(native: UiCanvas, screen: Option<Rect>, target: Option<&str>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn landscape_modes_preserve_the_body_and_exclude_the_gap() {
+        use cgmath::InnerSpace;
+        let source = Some(Rect::new(2.0, 124.0, 636.0, 296.0));
+        let body = WorldPanel {
+            center: vec3(1.0, 2.0, 3.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            size: vec2(0.14, 0.14 * SIZE.y / SIZE.x),
+        };
+        for wide in [false, true] {
+            let layout = Layout::new(source, wide);
+            let surface = layout.surface_panel(body);
+            for point in [vec2(8.0, 8.0), vec2(136.0, 341.0)] {
+                let original = crate::ui::canvas_to_panel_world(SIZE, &body, point);
+                let expanded = crate::ui::canvas_to_panel_world(
+                    layout.size,
+                    &surface,
+                    point + layout.body_offset,
+                );
+                assert!((original - expanded).magnitude() < 0.00001);
+            }
+            let map = layout.screen.unwrap();
+            assert_eq!(map.turns, if wide { 0 } else { 1 });
+            assert!(layout.contains_surface(map.dst.center()));
+            assert!(
+                layout.contains_surface(layout.body_offset + vec2(2.0, 2.0)),
+                "bezel still owns input"
+            );
+            if wide {
+                assert!(map.dst.y + map.dst.h < layout.body_offset.y);
+                assert!(!layout.contains_surface(vec2(1.0, layout.size.y - 1.0)));
+            } else {
+                assert_eq!(layout.size, SIZE);
+            }
+        }
+    }
+
     #[test]
     fn resizing_the_device_keeps_the_authored_grip_contact_fixed() {
         let anchor = vec3(0.1, -0.02, 0.18);
@@ -325,7 +442,16 @@ mod tests {
         ] {
             let window = viewports(Some(src))[0];
             assert!(window.dst.w <= SCREEN.w && window.dst.h <= SCREEN.h);
-            assert!((window.dst.w / window.dst.h - src.w / src.h).abs() < 0.001);
+            assert!(
+                (window.dst.w / window.dst.h
+                    - if window.turns % 2 == 0 {
+                        src.w / src.h
+                    } else {
+                        src.h / src.w
+                    })
+                .abs()
+                    < 0.001
+            );
             for p in [src.center(), vec2(src.x + 1.0, src.y + 1.0)] {
                 let mapped = point_from_native(p, Some(src)).unwrap();
                 let round_trip = to_native(mapped, Some(src)).unwrap();

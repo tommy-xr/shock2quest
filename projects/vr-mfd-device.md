@@ -30,7 +30,8 @@ flag is supplied.
 2. Point that hand at an object within two metres. A cyan beam/hit marker and
    the idle screen's target name identify the object that will receive the scan.
 3. Pull the holding hand's trigger once. A held trigger cannot repeat scans.
-   The free hand points at the screen: trigger clicks, squeeze pulls loot out.
+   An empty other hand points at the screen: trigger clicks, squeeze pulls loot out.
+   An occupied hand retains its weapon trigger and contextual face buttons.
 4. Release the holding squeeze anywhere to return the instrument and close
    its UI. It cannot be dropped, duplicated, inventoried or sold.
 
@@ -47,22 +48,25 @@ character sheet, and RES the research overview.
 
 ## Composition and reuse
 
-The body is a simple solid slab with a stepped-corner bezel. Its main screen is
-188 native pixels wide (16 cm in this first fit), preserving the original
-MFD proportions. Its 268×376 canvas reserves space to the right for the
-original 73×194 hack/repair/modify plug. The bottom uses AMMOFULL art with
-balance wells and the original utility button art. Scan hints and the target name
-appear on the idle screen; there is no separate status footer.
-This is deliberately placeholder geometry; the inherited card hand pose needs
-proper device-specific authoring before shipping.
+The body reuses a retail mesh with a private dark material: `scipass.bin`
+(default), `upgrade.bin`, or `magci.bin`. The developer parameter
+`vr_mfd_body` selects 0, 1, or 2 respectively. The full 268×376 device face
+is 14 cm wide by default (`vr_mfd_width`); a 3.5 cm lower grip margin
+(`vr_mfd_grip_margin`) keeps the authored card pinch clear of the footer.
+The mesh preserves its aspect ratio and thickness. Both hands use the existing
+card grip anchor; changing size retains that contact point.
 
-`mfd_device` translates the complete original left MFD into its screen slot;
-the character sheet translates from its original right MFD slot instead.
-Text measurement and alignment still happen once in the shared canvas.
-The same tile translation is inverted for input and used by debug introspection.
-The free-hand ray uses existing pointer arbitration and existing trigger/grab
-swallowing. Device geometry renders in world space, with ordinary depth, without
-the cyber interface's dimming or system-overlay depth clear.
+The native 188-pixel main screen reserves room for the original HRM plug.
+Only the AMMOFULL housing is mirrored, placing the balance wells and raised
+end on the right with HRM above it. Native footer controls and their original
+hit-testing are projected onto the device, rather than maintaining a second
+button-action table.
+
+Shared canvas viewports fit, crop, and optionally rotate complete panels.
+Layout, text measurement and alignment happen once; both renderers and pointer
+input use the same resolved rectangles and inverse transform. This supports
+left panels, the right character sheet, query pages and the wide map without
+panel-specific element positioning. Device geometry uses ordinary world depth.
 
 Scans resolve one physics hit for target feedback and dispatch. Known UI scripts
 receive their ordinary frob; unrelated world props are only inspected. Weapon
@@ -85,7 +89,7 @@ code retains requirements, costs and outcomes.
   consumption, and a stack loses only one unit. Unneeded chemicals are retained.
 - Flashlight, device-specific glove grip poses, direct fingertip touch,
   haptic tuning and production discoverability remain follow-up work.
-- The first fit is larger than a modern phone. Evaluate legibility and comfort
+- The adjustable first fit is larger than a modern phone. Evaluate legibility and comfort
   seated/standing before reducing it or deciding whether the HRM plug should
   become a physical fold-out. Headless screenshots cannot establish reach,
   stereo comfort or finger registration. No Quest was attached for this spike.
@@ -95,9 +99,12 @@ code retains requirements, costs and outcomes.
 Death, disabled player controls, or the cyber interface suppress the device.
 Mission transitions create fresh transient state. Draw and tracking recovery
 start trigger-disarmed; a release must be observed before a new scan. The
-holding ray is excluded from UI arbitration, and a free hand beginning a grab
+holding ray and occupied hands are excluded from UI arbitration. An empty hand beginning a grab
 on the panel cannot also grab the world. Returning the device clears its panel
-and utilities. The experiment runs with the world live.
+and utilities. Entering pointer control also requires releasing trigger/grab;
+a press held while drawing, changing map presentation, or recovering tracking
+cannot click. Drawing or opening a device panel closes any old world loot quad.
+Live creatures cannot open loot. The experiment runs with the world live.
 
 ## Verification
 
@@ -130,7 +137,7 @@ holographic grid. Both renderers and hit tests consume the same resolved layout.
 
 A committed scan retains a translucent copy of the target model above the
 screen until another scan or holstering. The model's bounding sphere is fitted
-to an 8.5 cm diameter and rotates at 35 degrees per simulation second. This is
+proportionally to the display (about 5.2 cm at the default width) and rotates at 35 degrees per simulation second. This is
 render-only geometry, with per-object opacity and lighting overrides: it has no
 collider or inventory identity and does not alter the target's material. A faint
 unlit green copy preserves its silhouette against dark backgrounds. Targets
@@ -161,16 +168,17 @@ only been inspected in headless VR captures, not stereo on a headset.
 ## Button gallery and map
 
 The gallery uses collected logs, a research project, player stats and an access
-card rather than empty placeholders. The MAP button now opens from the device,
-and the complete wide automap fits proportionally inside the main screen.
-The same fitted rectangle controls both rendering and close-button input in
-flat preview and VR. At handheld size this is an overview; it has no zoom or
-pan controls yet. Selecting MFD replaces the map, and MAP toggles it closed.
+card rather than empty placeholders. MAP has two presentations selected by
+`vr_mfd_map_wide`: false rotates the complete map within the main screen so
+the user turns the device sideways; true opens a wider panel above the body.
+Both preserve map proportions, footer controls, and close-button input. The
+physical body stays fixed in either mode. The gap beside the wide panel does
+not claim pointer hits. Selecting MFD replaces the map, and MAP toggles it closed.
+Zoom and pan remain follow-up work.
 
 The belt-draw recording drives the real squeeze/release path with simulated
-controller poses. It shows the current placeholder belt shell and glove fit,
+controller poses. It shows the authored card grip and retail model body,
 not a headset recording or a finished grip animation.
 
-The idle scan screen uses the retail `MEDIA.PCX` blank green panel and frame.
-Instructions and target names fit inside its content area, preserving the
-same chrome as the other MFD pages in both presentations.
+The idle screen uses retail `iface/query.pcx`, with target name in its title
+and scan instructions in its description. There is no extra floating hint.

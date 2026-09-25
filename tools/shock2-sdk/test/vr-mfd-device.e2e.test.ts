@@ -277,3 +277,61 @@ test("a trigger held before drawing cannot click the device until released", {
   await game.step({ frames: 3 });
   assert.ok((await game.ui.state()).utilities.some(e => e.rect[1] < 300), "fresh press opens the page");
 });
+
+for (const hand of ["left", "right"] as const) {
+  test(`landscape map ${hand}: sideways and wide retain working close and footer controls`, {
+    skip: !enabled, timeout: 180_000,
+  }, async () => {
+    await using game = await GameServer.launch({ mission: "medsci1.mis", port: 0,
+      debugFlags: ["--vr", "--experimental", "mfd_device"] });
+    await game.step({ frames: 30 });
+    await drawPersonalCard(game, hand);
+    await game.input.set(`${hand}_hand.position`, [hand === "left" ? -.25 : .25, .4, -.7]);
+    await game.step({ frames: 3 });
+    const free = hand === "left" ? "right" : "left";
+    async function aim(label: string, pressed = 0) {
+      const ui = await game.ui.state();
+      const target = [...ui.utilities, ...(ui.active_panel?.elements ?? [])].find(e => e.label === label);
+      assert.ok(target, `missing ${label}`);
+      const [x,y,w,h] = target.rect;
+      await aimVrHandAtCanvas(game, ui.panel_pose!, [x+w/2,y+h/2], { hand: free, trigger: pressed });
+      await game.step({ frames: 2 });
+    }
+    async function click(label: string) {
+      await aim(label);
+      await game.input.set(`${free}_hand.trigger`, 1);
+      await game.step({ frames: 3 });
+      await game.input.set(`${free}_hand.trigger`, 0);
+      await game.step({ frames: 3 });
+    }
+    await click("map");
+    let ui = await game.ui.state();
+    let frame = ui.active_panel!.elements.find(e => e.texture?.toLowerCase().endsWith("mapback.pcx"))!;
+    assert.ok(frame.rect[3] > frame.rect[2], "default map is rotated into portrait screen bounds");
+    // Hold on the bezel while changing geometry, then move to the new close
+    // button. A parameter change must not manufacture a fresh UI press.
+    await aimVrHandAtCanvas(game, ui.panel_pose!, [2,2], { hand: free, trigger: 1 });
+    await game.step({ frames: 2 });
+    await game.devParams.set("vr_mfd_map_wide", 1);
+    await game.step({ frames: 3 });
+    await aim("close", 1);
+    assert.ok((await game.ui.state()).active_panel, "held trigger cannot click after mode change");
+    await game.input.set(`${free}_hand.trigger`, 0);
+    await game.step({ frames: 2 });
+    ui = await game.ui.state();
+    frame = ui.active_panel!.elements.find(e => e.texture?.toLowerCase().endsWith("mapback.pcx"))!;
+    assert.ok(frame.rect[2] > frame.rect[3], "wide mode presents an upright landscape panel");
+    assert.ok(ui.utilities.find(e => e.label === "map")!.rect[1] > frame.rect[1] + frame.rect[3]);
+    await click("close");
+    assert.equal((await game.ui.state()).active_panel, null);
+    await click("map");
+    await click("character_stats");
+    assert.equal((await game.ui.state()).active_panel, null, "footer still replaces the wide map");
+    assert.deepEqual((await game.ui.state()).panel_pose!.canvas, [268,376]);
+    await game.devParams.set("vr_mfd_map_wide", 0);
+    await game.step({ frames: 2 });
+    await click("map");
+    await click("close");
+    assert.equal((await game.ui.state()).active_panel, null, "rotated close button maps back to the host");
+  });
+}
