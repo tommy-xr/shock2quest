@@ -2,7 +2,7 @@
 //! native panels; glyph layout and widget geometry remain owned by the shared UI.
 use crate::ui::canvas_viewport::{CanvasViewport, target_to_canvas};
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign, WorldPanel};
-use cgmath::{InnerSpace, Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
+use cgmath::{Deg, InnerSpace, Quaternion, Rotation, Rotation3, Vector2, Vector3, vec2, vec3};
 
 mod grip;
 
@@ -53,11 +53,15 @@ fn authored_panel(
 }
 
 /// Upright at the belt: +Z screen faces the player, -Z lens faces outward.
-/// Follow body yaw only, so a glance down never tips the magnetic mount.
-pub(super) fn stowed_panel(center: Vector3<f32>, body_rotation: Quaternion<f32>) -> WorldPanel {
+/// Follow body yaw plus the buckle angle; a glance down never tips the mount.
+pub(super) fn stowed_panel(
+    center: Vector3<f32>,
+    body_rotation: Quaternion<f32>,
+    mount_yaw: f32,
+) -> WorldPanel {
     WorldPanel {
         center,
-        rotation: body_rotation,
+        rotation: body_rotation * Quaternion::from_angle_y(Deg(mount_yaw)),
         size: face_size(),
     }
 }
@@ -355,11 +359,18 @@ mod tests {
         let center = vec3(0.2, 1.0, -0.4);
         for yaw in [-150.0, 0.0, 90.0] {
             let rotation = Quaternion::from_angle_y(Deg(yaw));
-            let panel = stowed_panel(center, rotation);
+            let panel = stowed_panel(center, rotation, 13.0);
             assert_eq!(panel.center, center);
             assert!((panel.rotation * Vector3::unit_y() - Vector3::unit_y()).magnitude() < 0.00001);
             assert!(
-                (panel.rotation * -Vector3::unit_z() - rotation * -Vector3::unit_z()).magnitude()
+                (panel.rotation * -Vector3::unit_z()
+                    - rotation
+                        * vec3(
+                            -13.0_f32.to_radians().sin(),
+                            0.0,
+                            -13.0_f32.to_radians().cos()
+                        ))
+                .magnitude()
                     < 0.00001
             );
         }

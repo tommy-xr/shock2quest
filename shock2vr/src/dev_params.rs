@@ -412,6 +412,8 @@ dev_params! {
     VR_MFD_DEVICE = Tricorder::bool("vr_mfd_device", "MFD device prototype", false),
     /// Positive raises the stowed device and its grab point; zero keeps the centered mount.
     VR_MFD_BELT_Y = Tricorder::float("vr_mfd_belt_y", "Belt vertical offset (m)", 0.0, -0.15, 0.20, 0.005),
+    /// Matches the buckle face normal in astra-vr-belt.glb (approximately 13 degrees).
+    VR_MFD_BELT_YAW = Tricorder::float("vr_mfd_belt_yaw", "Belt yaw (deg)", 13.0, -45.0, 45.0, 1.0),
     VR_MFD_FOCUS_SCAN = Tricorder::bool("vr_mfd_focus_scan", "MFD scan automatically on focus", true),
     VR_MFD_MAP_WIDE = Tricorder::bool("vr_mfd_map_wide", "MFD map: wider panel above", false),
     VR_MFD_BODY = Tricorder::float("vr_mfd_body", "MFD body: 0 card, 1 upgrade, 2 magazine, 3 frame", 3.0, 0.0, 3.0, 1.0),

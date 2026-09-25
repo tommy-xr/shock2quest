@@ -1002,3 +1002,8 @@ point move together, while the held hand poses stay unchanged. Tricorder device,
 scan, map, body and hologram settings live in this top-level category; per-hand
 placement controls are under its **Hand grips** subcategory. Existing HTTP keys
 are unchanged.
+
+**Belt yaw (deg)** (`vr_mfd_belt_yaw`, default +13°, range ±45°) matches the
+angled buckle face in `astra-vr-belt.glb`. Adjust it live under **Tricorder**;
+the display, rear scanner and magnetic standoff rotate together. It affects
+only the stowed mount, leaving the saved left/right hand grips unchanged.

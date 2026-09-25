@@ -2,7 +2,7 @@
 //! balances and permissions remain in QuestInfo. Reuses the body inventory frame.
 use super::body_inventory::BodyPose;
 use crate::{input_context::InputContext, vr_support::GripPose};
-use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, vec3};
+use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Rotation3, Vector3, vec3};
 use shipyard::{EntityId, Get, View, World};
 use std::{cell::OnceCell, rc::Rc};
 
@@ -117,7 +117,8 @@ impl PersonalCard {
                     // A small magnetic standoff at the original belt mount.
                     // Keep the grab center on the rendered device.
                     + if self.device_mode {
-                        vec3(0.0, crate::dev_params::get(crate::dev_params::VR_MFD_BELT_Y), -0.015)
+                        Quaternion::from_angle_y(cgmath::Deg(crate::dev_params::get(crate::dev_params::VR_MFD_BELT_YAW)))
+                            .rotate_vector(vec3(0.0, crate::dev_params::get(crate::dev_params::VR_MFD_BELT_Y), -0.015))
                     } else {
                         vec3(0.0, 0.0, 0.0)
                     })
@@ -225,7 +226,6 @@ impl PersonalCard {
         pawn: Vector3<f32>,
         rotation: Quaternion<f32>,
     ) -> Option<crate::ui::WorldPanel> {
-        use cgmath::Rotation3;
         if self.hand.is_some() {
             return None;
         }
@@ -233,6 +233,7 @@ impl PersonalCard {
             super::mfd_device::stowed_panel(
                 pawn + rotation.rotate_vector(center),
                 rotation * Quaternion::from_angle_y(cgmath::Rad(-self.belt_yaw)),
+                crate::dev_params::get(crate::dev_params::VR_MFD_BELT_YAW),
             )
         })
     }
