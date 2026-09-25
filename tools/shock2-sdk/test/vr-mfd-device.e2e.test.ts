@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
-import { aimVrHandAt, aimVrHandAtCanvas, drawPersonalCard } from "./helpers/vr-hand.js";
+import { aimVrHandAt, aimVrHandAtCanvas, drawPersonalCard, equipRightHand } from "./helpers/vr-hand.js";
+
+import { ammoOf, fireOnce } from "./helpers/weapon.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 for (const hand of ["left", "right"] as const) {
@@ -60,7 +62,7 @@ for (const hand of ["left", "right"] as const) {
     await game.step({ frames: 2 });
     const map = (await game.ui.state()).active_panel;
     assert.ok(map?.elements.some(e => e.texture?.toLowerCase().endsWith("mapback.pcx")), "MAP opens from the handheld host");
-    const mapFrame = map.elements.find(e => e.texture?.toLowerCase().endsWith("mapback.pcx"))!;
+    const mapFrame = map!.elements.find(e => e.texture?.toLowerCase().endsWith("mapback.pcx"))!;
     assert.ok(mapFrame.rect[0] >= 8 && mapFrame.rect[0] + mapFrame.rect[2] <= 196.1, "the complete map fits the main screen");
     await aimVrHandAtCanvas(game, (await game.ui.state()).panel_pose!, [136, 341], { hand: free });
     await game.step({ frames: 2 });
@@ -181,4 +183,38 @@ test("scanned world weapons offer state-specific repair and modify boards", {
   assert.ok(!(await game.ui.state()).active_panel?.elements.some(e => e.label === "modify"));
   await click("repair");
   assert.ok(await art("iface/repair.pcx"), "the same broken gun opens its Repair board");
+});
+
+
+test("MFD screen ignores a gun hand while its trigger and face button still work", {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
+    debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await game.step({ frames: 30 });
+  const [gun] = await game.entities.byTemplate(-17);
+  assert.ok(gun);
+  await game.player.teleport({ x: gun.position[0], y: .9, z: 0 });
+  await game.step({ frames: 120 });
+  await equipRightHand(game, true, gun.id, "EquipPistol");
+  await drawPersonalCard(game, "left");
+  await game.input.set("left_hand.position", [-.25, .4, -.7]);
+  await game.input.set("left_hand.rotation", [0, 0, 0, 1]);
+  await game.step({ frames: 3 });
+  const ui = await game.ui.state();
+  assert.ok(ui.panel_pose);
+  // Aim the gun directly at MFD: it must not act as a UI pointer or click it.
+  await aimVrHandAtCanvas(game, ui.panel_pose, [136, 341], { hand: "right", squeeze: 1 });
+  await game.step({ frames: 3 });
+  const ammo = ammoOf(await game.entities.detail(gun.id));
+  assert.ok(ammo > 0);
+  await fireOnce(game);
+  assert.equal(ammoOf(await game.entities.detail(gun.id)), ammo - 1);
+  assert.ok(!(await game.ui.state()).utilities.some(e => e.label === "character_close"));
+  assert.equal((await game.ui.state()).pointer?.canvas ?? null, null);
+  const mode = (await game.info()).player.wielded_gun_setting;
+  await game.input.trigger("RightHandUpperButton");
+  await game.step({ frames: 5 });
+  assert.notEqual((await game.info()).player.wielded_gun_setting, mode);
+  assert.equal((await game.info()).player.right_hand_entity_id, gun.id);
 });

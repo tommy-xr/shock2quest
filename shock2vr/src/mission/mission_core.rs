@@ -5148,17 +5148,14 @@ impl MissionCore {
         }
         if let Some(panel) = self.device_panel {
             let mut pointer_input = input_context.clone();
-            // The holding hand cannot point through its own screen. Use the
-            // shared arbitration pass with that ray disabled, including press.
-            let holding = if device_hand == Some(0) {
-                &mut pointer_input.left_hand
-            } else {
-                &mut pointer_input.right_hand
-            };
-            holding.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
-            holding.trigger_value = 0.0;
-            holding.squeeze_value = 0.0;
+            // Only empty hands can operate the device. In particular, aiming a
+            // gun across the screen must neither hover a widget nor safe the gun.
             let (left, right) = self.interaction.held_entities();
+            super::mfd_device::filter_pointer_hands(
+                &mut pointer_input,
+                device_hand,
+                [left.is_some(), right.is_some()],
+            );
             self.vr_use_mode_pointer = Some(crate::ui::vr_pointer_pass(
                 &pointer_input,
                 super::mfd_device::SIZE,
@@ -5251,7 +5248,7 @@ impl MissionCore {
             input_context.left_hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
             input_context.right_hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
         ];
-        if self.flat_ui.utilities.is_inspecting() {
+        if self.flat_ui.utilities.is_inspecting() && !self.flat_ui.device {
             // Selection owns both triggers even off-panel. Upgrade an ongoing
             // pull to safe and retain that decision until physical release,
             // so cancelling inspection cannot consume a held hypo mid-pull.
@@ -5260,7 +5257,11 @@ impl MissionCore {
         let mut trigger_safe = latch_trigger_safe(
             &mut self.vr_trigger_safe_latch,
             pressed,
-            trigger_safe_mask(self.use_mode || self.flat_ui.device, on_panel, holds_weapon),
+            if self.flat_ui.device {
+                on_panel
+            } else {
+                trigger_safe_mask(self.use_mode, on_panel, holds_weapon)
+            },
         );
         for safe in trigger_safe.iter_mut() {
             *safe |= self.vr_trigger_swallow;

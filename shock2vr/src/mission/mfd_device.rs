@@ -17,6 +17,25 @@ pub fn panel(position: Vector3<f32>, rotation: Quaternion<f32>) -> WorldPanel {
     }
 }
 
+/// The device hand and any hand carrying an item keep their world controls.
+/// Disable their entire UI ray, not just clicking, so hover and ownership agree.
+pub fn filter_pointer_hands(
+    input: &mut crate::input_context::InputContext,
+    device_hand: Option<usize>,
+    carrying: [bool; 2],
+) {
+    for (index, hand) in [&mut input.left_hand, &mut input.right_hand]
+        .into_iter()
+        .enumerate()
+    {
+        if device_hand == Some(index) || carrying[index] {
+            hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+            hand.trigger_value = 0.0;
+            hand.squeeze_value = 0.0;
+        }
+    }
+}
+
 pub fn source(character: bool) -> Rect {
     Rect::new(
         if character { 450.0 } else { 2.0 },
@@ -208,6 +227,31 @@ pub fn compose(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_the_empty_non_device_hand_has_a_screen_ray() {
+        for device_hand in 0..2 {
+            for carrying in [[false, false], [true, false], [false, true], [true, true]] {
+                let mut input = crate::input_context::InputContext::default();
+                let tracked = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+                for hand in [&mut input.left_hand, &mut input.right_hand] {
+                    hand.rotation = tracked;
+                    hand.trigger_value = 1.0;
+                    hand.squeeze_value = 1.0;
+                }
+                filter_pointer_hands(&mut input, Some(device_hand), carrying);
+                for (i, hand) in [&input.left_hand, &input.right_hand]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let eligible = i != device_hand && !carrying[i];
+                    assert_eq!(hand.rotation == tracked, eligible);
+                    assert_eq!(hand.trigger_value > 0.0, eligible);
+                    assert_eq!(hand.squeeze_value > 0.0, eligible);
+                }
+            }
+        }
+    }
+
     #[test]
     fn main_and_sidecar_keep_their_native_hit_coordinates() {
         assert_eq!(to_native(vec2(24.0, 218.0), false), Some(vec2(18.0, 334.0)));
