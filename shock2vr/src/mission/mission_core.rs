@@ -5094,7 +5094,12 @@ impl MissionCore {
         if let Some(i) = device_hand {
             let hand = [&input_context.left_hand, &input_context.right_hand][i];
             if hand.rotation.magnitude2() > 0.0001 {
-                self.device_panel = Some(super::mfd_device::panel(hand.position, hand.rotation));
+                self.device_panel = super::mfd_device::panel(
+                    asset_cache,
+                    hand.position,
+                    hand.rotation,
+                    self.personal_card.grip.as_ref(),
+                );
             }
         }
 
@@ -14549,7 +14554,10 @@ impl MissionCore {
                     if let Some(transform) =
                         self.personal_card.transform(player.pos, player.rotation)
                     {
-                        scene.push(super::mfd_device::belt_shell(transform));
+                        scene.extend(super::mfd_device::body(
+                            asset_cache,
+                            transform * Matrix4::from_angle_x(cgmath::Deg(90.0)),
+                        ));
                     }
                 }
             } else {
@@ -14899,10 +14907,8 @@ impl MissionCore {
         if let Some(panel) = self.device_panel.filter(|_| self.flat_ui.device) {
             let pawn_to_world =
                 Matrix4::from_translation(player.pos) * Matrix4::from(player.rotation);
-            let mut objects = vec![
-                super::mfd_device::shell(panel),
-                super::mfd_device::footer_shell(panel),
-            ];
+            let mut objects =
+                super::mfd_device::body(asset_cache, super::mfd_device::body_frame(panel));
             if let Some(model) = self
                 .device_hologram
                 .and_then(|entity| self.id_to_model.get(&entity))

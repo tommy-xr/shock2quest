@@ -7,15 +7,55 @@ use cgmath::{Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
 pub const SIZE: Vector2<f32> = Vector2::new(268.0, 376.0);
 pub const SCREEN: Rect = Rect::new(8.0, 8.0, 252.0, 296.0);
 
-pub fn panel(position: Vector3<f32>, rotation: Quaternion<f32>) -> WorldPanel {
-    // A 16 cm-wide main body; the HRM plug extends to its right. The screen
-    // faces controller-local +Z, above the grip, like a handheld instrument.
-    let scale = 0.16 / 188.0 / crate::METERS_PER_WORLD_UNIT;
-    WorldPanel {
-        center: position + rotation.rotate_vector(vec3(32.0 * scale, 153.0 * scale, 0.04)),
-        rotation,
-        size: SIZE * scale,
-    }
+pub fn panel(
+    assets: &mut engine::assets::asset_cache::AssetCache,
+    position: Vector3<f32>,
+    rotation: Quaternion<f32>,
+    grip: Option<&crate::vr_grip::ResolvedGrip>,
+) -> Option<WorldPanel> {
+    use cgmath::{Deg, EuclideanSpace, InnerSpace, Rotation3};
+    let grip = grip?;
+    let card = assets
+        .get_opt::<_, dark::model::Model, _>(&dark::importers::MODELS_IMPORTER, "scipass.bin")?;
+    let bounds = card.bounding_box()?;
+    let extent = bounds.max - bounds.min;
+    let display = face_size();
+    let scale = (display.x / extent.x).max((display.y + grip_margin()) / extent.z) * 1.045;
+    let mut front = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
+    front.z -= grip_margin() * 0.5 / scale;
+    front.y = bounds.min.y - 0.0015 / crate::METERS_PER_WORLD_UNIT / scale;
+    let anchor = vec3(grip.anchor[0], grip.anchor[1], grip.anchor[2]);
+    // Scaling around the authored pinch point keeps it attached to the glove.
+    // Center-scaling the large display puts the fingers through its middle.
+    let front = scaled_grip_point(front, anchor, grip.item_scale, scale);
+    Some(WorldPanel {
+        center: position + rotation.rotate_vector(grip.offset + grip.rotation.rotate_vector(front)),
+        rotation: (rotation
+            * grip.rotation
+            * Quaternion::from_angle_x(Deg(90.0))
+            * Quaternion::from_angle_z(Deg(180.0)))
+        .normalize(),
+        size: display,
+    })
+}
+
+fn scaled_grip_point(
+    point: Vector3<f32>,
+    anchor: Vector3<f32>,
+    authored: f32,
+    scale: f32,
+) -> Vector3<f32> {
+    anchor * authored + (point - anchor) * scale
+}
+
+fn grip_margin() -> f32 {
+    crate::dev_params::get(crate::dev_params::VR_MFD_GRIP_MARGIN) / crate::METERS_PER_WORLD_UNIT
+}
+
+fn face_size() -> Vector2<f32> {
+    SIZE * (crate::dev_params::get(crate::dev_params::VR_MFD_WIDTH)
+        / SIZE.x
+        / crate::METERS_PER_WORLD_UNIT)
 }
 
 /// The device hand and any hand carrying an item keep their world controls.
@@ -152,6 +192,16 @@ pub fn compose(native: UiCanvas, screen: Option<Rect>, target: Option<&str>) -> 
 mod tests {
     use super::*;
     #[test]
+    fn resizing_the_device_keeps_the_authored_grip_contact_fixed() {
+        let anchor = vec3(0.1, -0.02, 0.18);
+        for scale in [0.3, 0.7, 1.2] {
+            assert_eq!(scaled_grip_point(anchor, anchor, 1.0, scale), anchor);
+            let edge = scaled_grip_point(anchor + vec3(0.2, 0.0, 0.0), anchor, 1.0, scale);
+            assert!((edge.x - anchor.x - 0.2 * scale).abs() < 0.0001);
+        }
+    }
+
+    #[test]
     fn only_the_empty_non_device_hand_has_a_screen_ray() {
         for device_hand in 0..2 {
             for carrying in [[false, false], [true, false], [false, true], [true, true]] {
@@ -276,52 +326,85 @@ pub fn beam(start: Vector3<f32>, end: Vector3<f32>) -> engine::scene::SceneObjec
     )
 }
 
-pub fn shell(panel: WorldPanel) -> engine::scene::SceneObject {
-    use cgmath::Matrix4;
-    use engine::scene::{SceneObject, color_material, cube};
-    let mut object = SceneObject::new(
-        color_material::create(vec3(0.035, 0.05, 0.06)),
-        Box::new(cube::create()),
-    );
-    object.set_transform(
-        panel.transform()
-            * Matrix4::from_translation(vec3(-32.0 / SIZE.x, 0.0, -0.014))
-            * Matrix4::from_nonuniform_scale(204.0 / SIZE.x, 1.0, 0.025),
-    );
-    object
+/// Reuse the real model geometry, but give this copy a private blank material.
+/// All candidates have a broad XZ face; preserve their aspect and thickness.
+pub fn body(
+    assets: &mut engine::assets::asset_cache::AssetCache,
+    face: cgmath::Matrix4<f32>,
+) -> Vec<engine::scene::SceneObject> {
+    use cgmath::{Deg, EuclideanSpace, Matrix4};
+    use engine::{
+        scene::{SceneObjectDebugTag, basic_material},
+        texture::TextureTrait,
+    };
+    use std::{cell::RefCell, rc::Rc};
+    let name = match crate::dev_params::get(crate::dev_params::VR_MFD_BODY).round() as u8 {
+        1 => "upgrade.bin",
+        2 => "magci.bin",
+        _ => "scipass.bin",
+    };
+    let Some(model) =
+        assets.get_opt::<_, dark::model::Model, _>(&dark::importers::MODELS_IMPORTER, name)
+    else {
+        return vec![];
+    };
+    let Some(bounds) = model.bounding_box() else {
+        return vec![];
+    };
+    let size = bounds.max - bounds.min;
+    let display = face_size();
+    // Cover the complete canvas with a small rim. Never stretch the asset.
+    let scale = (display.x / size.x.max(0.001))
+        .max((display.y + grip_margin()) / size.z.max(0.001))
+        * 1.045;
+    let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
+    let transform =
+        face * Matrix4::from_translation(vec3(
+            0.0,
+            0.0,
+            -size.y * scale * 0.5 - 0.0015 / crate::METERS_PER_WORLD_UNIT,
+        )) * Matrix4::from_angle_x(Deg(-90.0))
+            * Matrix4::from_scale(scale)
+            * Matrix4::from_translation(-center);
+    thread_local! {
+        static BLANK: Rc<engine::texture::Texture> = Rc::new(engine::texture::init_from_memory(
+            engine::texture_format::RawTextureData {
+                bytes: vec![26, 30, 33, 255], width: 1, height: 1,
+                format: engine::texture_format::PixelFormat::RGBA,
+            }));
+    }
+    let material = BLANK.with(|texture| {
+        Rc::new(RefCell::new(basic_material::create_with_fixed_ambient(
+            texture.clone() as Rc<dyn TextureTrait>,
+            0.8,
+            0.0,
+        )))
+    });
+    model
+        .clone_scene_objects()
+        .into_iter()
+        .map(|mut object| {
+            object.material = material.clone();
+            object.set_transform(transform);
+            object.set_debug_tag(Some(Rc::new(SceneObjectDebugTag {
+                entity_id: None,
+                name: None,
+                model: Some(name.into()),
+                source: Some("mfd_body".into()),
+            })));
+            object
+        })
+        .collect()
 }
 
-pub fn footer_shell(panel: WorldPanel) -> engine::scene::SceneObject {
-    use cgmath::Matrix4;
-    use engine::scene::{SceneObject, color_material, cube};
-    let mut object = SceneObject::new(
-        color_material::create(vec3(0.035, 0.05, 0.06)),
-        Box::new(cube::create()),
-    );
-    object.set_transform(
-        panel.transform()
-            * Matrix4::from_translation(vec3(0.0, -152.0 / SIZE.y, -0.014))
-            * Matrix4::from_nonuniform_scale(1.0, 72.0 / SIZE.y, 0.025),
-    );
-    object
-}
-
-/// Resting instrument uses the card's authored belt frame and retrieval anchor.
-pub fn belt_shell(transform: cgmath::Matrix4<f32>) -> engine::scene::SceneObject {
-    use engine::scene::{SceneObject, color_material, cube};
-    let mut object = SceneObject::new(
-        color_material::create(vec3(0.035, 0.05, 0.06)),
-        Box::new(cube::create()),
-    );
-    object.set_transform(
-        transform
-            * cgmath::Matrix4::from_nonuniform_scale(
-                0.014 / crate::METERS_PER_WORLD_UNIT,
-                0.28 / crate::METERS_PER_WORLD_UNIT,
-                0.16 / crate::METERS_PER_WORLD_UNIT,
-            ),
-    );
-    object
+pub fn body_frame(panel: WorldPanel) -> cgmath::Matrix4<f32> {
+    // The UI is upside-down relative to the authored card, so its top-edge
+    // pinch becomes the bottom edge when held upright to read. Undo that turn
+    // for the physical backing to retain the original grip/model relationship.
+    cgmath::Matrix4::from_translation(panel.center)
+        * cgmath::Matrix4::from(panel.rotation)
+        * cgmath::Matrix4::from_translation(vec3(0.0, -grip_margin() * 0.5, 0.0))
+        * cgmath::Matrix4::from_angle_z(cgmath::Deg(180.0))
 }
 
 #[cfg(test)]
@@ -357,7 +440,7 @@ pub fn hologram(
     if !diameter.is_finite() || diameter <= 0.0001 {
         return vec![];
     }
-    let size = 0.085 / crate::METERS_PER_WORLD_UNIT;
+    let size = face_size().x * (188.0 / SIZE.x) * 0.53;
     let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
     // Compare a projection from the display glass with the original top-edge
     // placement. This changes only the physical miniature, never canvas layout.

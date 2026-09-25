@@ -920,3 +920,12 @@ below the original panel, with the HRM plug alongside when applicable.
 `--experimental mfd_device_preview` presents the same compact canvas in flat
 mode for layout checks. See [the spike notes](projects/vr-mfd-device.md) for
 scope, controls, verification and the remaining headset/asset work.
+
+The experimental body's live developer parameters are `vr_mfd_body`
+(0 = `scipass.bin`, 1 = `upgrade.bin`, 2 = `magci.bin`) and
+`vr_mfd_width` (full face width in metres, default 0.14).
+`vr_mfd_grip_margin` reserves a lower bezel beneath the controls (default 0.035 m). All three use their
+original geometry with a private dark blank texture, preserving the world
+items' materials. The enlarged body preserves the card's authored grip point in either hand; only an empty
+opposite hand can click it or pull out loot. A held gun keeps firing and its
+face-button actions.
