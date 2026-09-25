@@ -177,6 +177,22 @@ mod tests {
     }
 
     #[test]
+    fn scanning_a_live_creature_cannot_open_its_loot() {
+        let mut world = shipyard::World::new();
+        let creature = world.add_entity((
+            dark::properties::PropScripts {
+                scripts: vec!["CreatureContainer".into()],
+                inherits: false,
+            },
+            dark::properties::PropHitPoints { hit_points: 10 },
+            dark::properties::Links::empty(),
+        ));
+        assert!(!opens_panel(&world, creature));
+        world.add_component(creature, dark::properties::PropHitPoints { hit_points: 0 });
+        assert!(opens_panel(&world, creature));
+    }
+
+    #[test]
     fn arbitrary_panels_and_footer_points_round_trip() {
         for src in [
             Rect::new(2.0, 124.0, 252.0, 296.0),
@@ -208,9 +224,10 @@ mod tests {
 /// Only existing reader/panel scripts receive Frob; all other objects are queried.
 pub fn opens_panel(world: &shipyard::World, entity: shipyard::EntityId) -> bool {
     super::personal_card::is_reader(world, entity)
+        || (crate::scripts::script_util::entity_has_script(world, entity, "CreatureContainer")
+            && crate::scripts::gui::creature_is_lootable(world, entity))
         || [
             "ContainerScript",
-            "CreatureContainer",
             "KeyPad",
             "KeyPadUnhackable",
             "HackableCrate",

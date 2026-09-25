@@ -5874,6 +5874,10 @@ impl MissionCore {
                     None,
                 )?;
                 let entity = hit.maybe_entity_id?;
+                let (left, right) = self.interaction.held_entities();
+                if self.flat_ui.device && [left, right].contains(&Some(entity)) {
+                    return None;
+                }
                 let distance = (hit.hit_point - vec3_to_point3(origin)).magnitude();
                 (distance <= 2.0 / crate::METERS_PER_WORLD_UNIT).then_some((
                     entity,
@@ -9825,6 +9829,14 @@ impl MissionCore {
                     match game_options.presentation_mode {
                         crate::PresentationMode::Flat => self.flat_ui.open(entity),
                         crate::PresentationMode::Vr if self.flat_ui.device => {
+                            // Hand frobs and scans share one panel owner, even
+                            // if an old world quad was opened earlier this frame.
+                            self.gui.close_panel(
+                                &mut self.world,
+                                &mut self.physics,
+                                &mut self.script_world,
+                                &mut self.id_to_physics,
+                            );
                             self.flat_ui.open(entity)
                         }
                         crate::PresentationMode::Vr => {

@@ -217,4 +217,41 @@ test("MFD screen ignores a gun hand while its trigger and face button still work
   await game.step({ frames: 5 });
   assert.notEqual((await game.info()).player.wielded_gun_setting, mode);
   assert.equal((await game.info()).player.right_hand_entity_id, gun.id);
+  await aimVrHandAt(game, (await game.entities.detail(gun.id)).position, .3, 1, 0, { hand: "left", lookAtTarget: false });
+  await game.input.set("left_hand.trigger", 1);
+  await game.step({ frames: 3 });
+  assert.notEqual((await game.info()).player.hand_feedback!.body_gear!.personal_card.last_scan, gun.id,
+    "the object in the other hand is not a scan target");
+});
+
+
+test("drawing the device replaces a world quad and hand frobs stay on its screen", {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "earth.mis", port: 0,
+    debugFlags: ["--vr", "--experimental", "mfd_device"] });
+  await game.step({ frames: 30 });
+  const [crate] = await game.entities.byTemplate(307);
+  assert.ok(crate);
+  await game.player.teleport({ x: crate.position[0] - 1.2, y: 21.404, z: crate.position[2] });
+  await game.step({ frames: 60 });
+  const aim = await game.player.aimAt(crate.id, { hitbox: "center", visibility: "required" });
+  assert.ok(aim.target_confirmed);
+  const uiBodies = async () => (await game.physics.bodies()).bodies.filter(b => b.collision_groups.includes("ui")).length;
+  async function frob() {
+    await aimVrHandAt(game, aim.world_point, .3, 0, 0, { hand: "right" });
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.trigger", 0);
+    await game.step({ frames: 8 });
+  }
+  await frob();
+  assert.ok(await uiBodies() > 0, "ordinary hand frob opens a world quad");
+  await drawPersonalCard(game, "left");
+  await game.input.set("left_hand.position", [-.4, .1, -.4]);
+  await game.step({ frames: 3 });
+  assert.equal(await uiBodies(), 0, "drawing removes the existing quad");
+  await frob();
+  assert.equal((await game.ui.state()).active_panel?.entity_id, crate.id);
+  assert.equal(await uiBodies(), 0, "hand frob routes to the device with no duplicate quad");
 });
