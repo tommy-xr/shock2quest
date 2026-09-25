@@ -4,6 +4,8 @@ use crate::ui::canvas_viewport::{CanvasViewport, target_to_canvas};
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign, WorldPanel};
 use cgmath::{Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
 
+mod grip;
+
 pub const SIZE: Vector2<f32> = Vector2::new(268.0, 376.0);
 pub const SCREEN: Rect = Rect::new(8.0, 8.0, 252.0, 296.0);
 
@@ -12,6 +14,7 @@ pub fn panel(
     position: Vector3<f32>,
     rotation: Quaternion<f32>,
     grip: Option<&crate::vr_grip::ResolvedGrip>,
+    hand: usize,
 ) -> Option<WorldPanel> {
     use cgmath::{Deg, EuclideanSpace, InnerSpace, Rotation3};
     let grip = grip?;
@@ -28,7 +31,7 @@ pub fn panel(
     // Scaling around the authored pinch point keeps it attached to the glove.
     // Center-scaling the large display puts the fingers through its middle.
     let front = scaled_grip_point(front, anchor, grip.item_scale, scale);
-    Some(WorldPanel {
+    let base = WorldPanel {
         center: position + rotation.rotate_vector(grip.offset + grip.rotation.rotate_vector(front)),
         rotation: (rotation
             * grip.rotation
@@ -36,7 +39,17 @@ pub fn panel(
             * Quaternion::from_angle_z(Deg(180.0)))
         .normalize(),
         size: display,
-    })
+    };
+    let contact = position
+        + rotation
+            .rotate_vector(grip.offset + grip.rotation.rotate_vector(anchor * grip.item_scale));
+    Some(grip::place(
+        base,
+        contact,
+        rotation,
+        &grip::tuning(hand),
+        grip_margin(),
+    ))
 }
 
 fn scaled_grip_point(
@@ -566,6 +579,7 @@ pub fn beam(start: Vector3<f32>, end: Vector3<f32>) -> engine::scene::SceneObjec
 pub fn body(
     assets: &mut engine::assets::asset_cache::AssetCache,
     face: cgmath::Matrix4<f32>,
+    hand: Option<usize>,
 ) -> Vec<engine::scene::SceneObject> {
     use cgmath::{Deg, EuclideanSpace, Matrix4};
     use engine::{
@@ -574,7 +588,11 @@ pub fn body(
     };
     use std::{cell::RefCell, rc::Rc};
     if crate::dev_params::get(crate::dev_params::VR_MFD_BODY).round() as u8 == 3 {
-        return stepped_frame(face);
+        return stepped_frame(
+            face,
+            hand.map(|i| grip::tuning(i).edge)
+                .unwrap_or(grip::Edge::Bottom),
+        );
     }
     let name = match crate::dev_params::get(crate::dev_params::VR_MFD_BODY).round() as u8 {
         1 => "upgrade.bin",
@@ -636,7 +654,7 @@ pub fn body(
 }
 
 /// Original stepped outline with a solid eight-millimetre backing.
-fn stepped_frame(face: cgmath::Matrix4<f32>) -> Vec<engine::scene::SceneObject> {
+fn stepped_frame(face: cgmath::Matrix4<f32>, edge: grip::Edge) -> Vec<engine::scene::SceneObject> {
     use cgmath::{Deg, Matrix4};
     use engine::scene::{SceneObject, SceneObjectDebugTag, color_material, cube};
     let display = face_size();
@@ -646,19 +664,26 @@ fn stepped_frame(face: cgmath::Matrix4<f32>) -> Vec<engine::scene::SceneObject> 
     let root = face
         * Matrix4::from_angle_z(Deg(180.0))
         * Matrix4::from_translation(vec3(0.0, margin * 0.5, 0.0));
-    [
-        (
+    let extension = match edge {
+        grip::Edge::Bottom => (0.0, -display.y * 0.5 - margin * 0.5, display.x, margin),
+        grip::Edge::Top => (
             -32.0 * pixel,
-            -margin * 0.5,
+            display.y * 0.5 + margin * 0.5,
             204.0 * pixel,
-            display.y + margin,
+            margin,
         ),
-        (
-            0.0,
-            -152.0 * pixel - margin * 0.5,
-            display.x,
-            72.0 * pixel + margin,
+        grip::Edge::Left => (-display.x * 0.5 - margin * 0.5, 0.0, margin, display.y),
+        grip::Edge::Right => (
+            70.0 * pixel + margin * 0.5,
+            36.0 * pixel,
+            margin,
+            304.0 * pixel,
         ),
+    };
+    [
+        (-32.0 * pixel, 0.0, 204.0 * pixel, display.y),
+        (0.0, -152.0 * pixel, display.x, 72.0 * pixel),
+        extension,
     ]
     .into_iter()
     .map(|(x, y, width, height)| {

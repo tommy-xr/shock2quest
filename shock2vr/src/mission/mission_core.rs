@@ -5104,6 +5104,7 @@ impl MissionCore {
                     hand.position,
                     hand.rotation,
                     self.personal_card.grip.as_ref(),
+                    i,
                 );
             }
         }
@@ -14626,6 +14627,7 @@ impl MissionCore {
                         scene.extend(super::mfd_device::body(
                             asset_cache,
                             transform * Matrix4::from_angle_x(cgmath::Deg(90.0)),
+                            None,
                         ));
                     }
                 }
@@ -14976,8 +14978,11 @@ impl MissionCore {
         if let Some(panel) = self.device_panel.filter(|_| self.flat_ui.device) {
             let pawn_to_world =
                 Matrix4::from_translation(player.pos) * Matrix4::from(player.rotation);
-            let mut objects =
-                super::mfd_device::body(asset_cache, super::mfd_device::body_frame(panel));
+            let mut objects = super::mfd_device::body(
+                asset_cache,
+                super::mfd_device::body_frame(panel),
+                self.personal_card.hand,
+            );
             if let Some(model) = self
                 .device_hologram
                 .filter(|_| {

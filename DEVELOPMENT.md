@@ -913,8 +913,8 @@ below still operate on the items actually held in each hand.
 Enable **Developer → Body inventory → MFD device prototype** (`vr_mfd_device`,
 session-only, default off), or launch with the flag below.
 `cargo dbgr --mission earth.mis --vr --experimental mfd_device` replaces the
-belt card with a handheld MFD prototype. Draw with squeeze, aim and pull its
-trigger to scan; use the free hand's pointer to click or squeeze loot out of the
+belt card with a handheld MFD prototype. Draw with squeeze and focus on a target
+to scan; use an empty other hand's pointer to click or squeeze loot out of the
 screen. Release to return it. Nanites/modules and LOG / KEY / MFD / RES / ? sit
 below the original panel, with the HRM plug alongside when applicable.
 `--experimental mfd_device_preview` presents the same compact canvas in flat
@@ -922,11 +922,13 @@ mode for layout checks. See [the spike notes](projects/vr-mfd-device.md) for
 scope, controls, verification and the remaining headset/asset work.
 
 The experimental body's live developer parameters are `vr_mfd_body`
-(0 = `scipass.bin`, 1 = `upgrade.bin`, 2 = `magci.bin`) and
+(3 = original stepped frame, the default; 0 = `scipass.bin`,
+1 = `upgrade.bin`, 2 = `magci.bin`) and
 `vr_mfd_width` (full face width in metres, default 0.14).
-`vr_mfd_grip_margin` reserves a lower bezel beneath the controls (default 0.035 m). All three use their
-original geometry with a private dark blank texture, preserving the world
-items' materials. The enlarged body preserves the card's authored grip point in either hand; only an empty
+The stepped frame has an 8 mm solid backing. `vr_mfd_grip_margin` reserves a
+bezel on the selected grip edge (default 0.035 m). The three retail model
+comparisons use their original geometry with a private dark blank texture,
+preserving the world items' materials. The enlarged body preserves the card's authored grip point in either hand; only an empty
 opposite hand can click it or pull out loot. A held gun keeps firing and its
 face-button actions.
 
@@ -941,3 +943,18 @@ including objects held in the other hand. `vr_mfd_focus_scan` defaults true;
 disable it to compare holding-hand trigger scanning. A stable target scans
 once; look away and reacquire to scan it again. Only empty hands operate the
 screen, so a held weapon keeps its trigger and face-button behavior.
+
+**Developer → Hands & gloves → Tricorder grips** adjusts this device independently
+of the access-card fit. Each hand has an edge selector (0 bottom, 1 left,
+2 top, 3 right), XYZ translation in controller-local metres, and pitch/yaw/roll
+in degrees. Left/right edges seat the device sideways; top/bottom seat it in
+portrait. Rotations pivot about the authored pinch contact. The stepped frame's
+grip bezel follows the selected edge, and its screen, pointer and hologram share
+the resulting pose. These are live developer choices, not automatic regrabbing.
+
+HTTP keys are `vr_mfd_left_grip_edge`, `vr_mfd_left_grip_x`,
+`vr_mfd_left_grip_y`, `vr_mfd_left_grip_z`, `vr_mfd_left_grip_pitch`,
+`vr_mfd_left_grip_yaw`, and `vr_mfd_left_grip_roll`; replace `left` with `right`
+for the other hand. Offsets and angles default to zero; both edges default to
+bottom. Reset those values to restore the initial fit. These controls adjust
+placement; finger curls still use the authored card pinch pose.

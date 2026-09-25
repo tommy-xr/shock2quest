@@ -50,13 +50,19 @@ character sheet, and RES the research overview.
 
 ## Composition and reuse
 
-The body reuses a retail mesh with a private dark material: `scipass.bin`
-(default), `upgrade.bin`, or `magci.bin`. The developer parameter
-`vr_mfd_body` selects 0, 1, or 2 respectively. The full 268×376 device face
-is 14 cm wide by default (`vr_mfd_width`); a 3.5 cm lower grip margin
-(`vr_mfd_grip_margin`) keeps the authored card pinch clear of the footer.
-The mesh preserves its aspect ratio and thickness. Both hands use the existing
-card grip anchor; changing size retains that contact point.
+The default body is the original stepped frame with an 8 mm solid backing.
+`vr_mfd_body=3` selects it; 0, 1, and 2 retain the dark `scipass.bin`,
+`upgrade.bin`, and `magci.bin` comparisons. The full 268×376 face is 14 cm
+wide by default (`vr_mfd_width`). A 3.5 cm grip bezel (`vr_mfd_grip_margin`)
+keeps the authored card pinch clear of the screen and footer.
+
+**Developer → Hands & gloves → Tricorder grips** provides independent left/right
+edge selection and six-axis placement. Bottom, left, top and right grips pivot
+the device around the authored hand contact. Translation is controller-local;
+pitch/yaw/roll also pivot around the contact. On the stepped frame the grip
+bezel moves to the selected edge. These are live developer presets for testing
+portrait/landscape holds; automatic edge acquisition is not implemented.
+Finger curls still use the card pinch. See DEVELOPMENT.md for the HTTP keys.
 
 The native 188-pixel main screen reserves room for the original HRM plug.
 Only the AMMOFULL housing is mirrored, placing the balance wells and raised
@@ -123,7 +129,8 @@ SHOCK2_E2E=1 node --test dist/test/vr-mfd-device.e2e.test.js
 It covers both hands, explicit scan/no auto-purchase, focus dwell and one-shot
 scanning, world/held chemical consumption, held-weapon targeting, occupied-hand
 firing, empty-hand utility selection, world-quad replacement, return/redraw,
-and both landscape map modes. The existing personal-card
+both landscape map modes, and working screen input for all eight hand/edge
+combinations after live position/angle adjustments. The existing personal-card
 scenarios cover the flag-off baseline. Rust tests cover tile/input geometry,
 trigger recovery, shared panel behavior and card ownership. PR media records
 additional exercised interactions; claims about unexercised paths remain
@@ -183,7 +190,7 @@ not claim pointer hits. Selecting MFD replaces the map, and MAP toggles it close
 Zoom and pan remain follow-up work.
 
 The belt-draw recording drives the real squeeze/release path with simulated
-controller poses. It shows the authored card grip and retail model body,
+controller poses. It shows the authored card grip and the selected device body,
 not a headset recording or a finished grip animation.
 
 The idle screen uses retail `iface/query.pcx`, with target name in its title

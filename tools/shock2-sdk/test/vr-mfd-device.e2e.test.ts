@@ -370,3 +370,47 @@ test("focus scan opens a held weapon without trigger and does not repeat", {
   assert.equal((await card()).scans, scans, "steady focus scans only once");
   assert.ok((await game.ui.state()).active_panel, "focus opens the weapon panel");
 });
+
+for (const hand of ["left", "right"] as const) {
+  test(`tricorder ${hand}: all four grip edges retain native screen input`, {
+    skip: !enabled, timeout: 180_000,
+  }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_interactions", port: 0,
+      debugFlags: ["--vr", "--experimental", "mfd_device"] });
+    await game.devParams.set("vr_mfd_focus_scan", 0);
+    await game.step({ frames: 30 });
+    await drawPersonalCard(game, hand);
+    await game.input.set(`${hand}_hand.position`, [hand === "left" ? -.25 : .25, .4, -.7]);
+    await game.step({ frames: 3 });
+    const free = hand === "left" ? "right" : "left";
+    async function clickMfd() {
+      const ui = await game.ui.state();
+      const button = ui.utilities.find(e => e.label === "character_stats")!;
+      assert.ok(button);
+      const [x,y,w,h] = button.rect;
+      await aimVrHandAtCanvas(game, ui.panel_pose!, [x+w/2,y+h/2], { hand: free });
+      await game.step({ frames: 2 });
+      await game.input.set(`${free}_hand.trigger`, 1);
+      await game.step({ frames: 3 });
+      await game.input.set(`${free}_hand.trigger`, 0);
+      await game.step({ frames: 2 });
+    }
+    for (let edge = 0; edge < 4; edge++) {
+      await game.devParams.set(`vr_mfd_${hand}_grip_edge`, edge);
+      await game.step({ frames: 3 });
+      await clickMfd();
+      assert.ok((await game.ui.state()).utilities.some(e => e.rect[1] < 300), `edge ${edge}: opens stats`);
+      await clickMfd();
+      assert.ok((await game.ui.state()).utilities.every(e => e.rect[1] >= 300), `edge ${edge}: closes stats`);
+    }
+    const before = (await game.ui.state()).panel_pose!;
+    await game.devParams.set(`vr_mfd_${hand}_grip_x`, .02);
+    await game.devParams.set(`vr_mfd_${hand}_grip_pitch`, 15);
+    await game.step({ frames: 3 });
+    const after = (await game.ui.state()).panel_pose!;
+    assert.notDeepEqual(after.center, before.center, "live position adjustment moves device");
+    assert.notDeepEqual(after.rotation, before.rotation, "live angle adjustment rotates device");
+    await clickMfd();
+    assert.ok((await game.ui.state()).utilities.some(e => e.rect[1] < 300));
+  });
+}
