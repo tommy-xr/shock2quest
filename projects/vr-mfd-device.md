@@ -60,7 +60,8 @@ keeps the authored card pinch clear of the screen and footer.
 edge selection and six-axis placement. Bottom, left, top and right grips pivot
 the device around the authored hand contact. Translation is controller-local;
 pitch/yaw/roll also pivot around the contact. On the stepped frame the grip
-bezel moves to the selected edge. Alternate left grips add 2 cm of adjustable
+bezel moves to the selected edge. The right grip sits outside the full HRM
+sidecar width, so the cuff cannot cover its controls. Alternate left grips add 2 cm of adjustable
 clearance for the longer fingertip reach; right grips default to no extra
 clearance. These are live developer presets for testing
 portrait/landscape holds; automatic edge acquisition is not implemented.

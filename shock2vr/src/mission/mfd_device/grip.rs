@@ -92,7 +92,10 @@ pub(super) fn place(
             vec3(-32.0 * pixel, base.size.y * 0.5 + clearance, local.z),
             180.0,
         ),
-        Edge::Right => (vec3(70.0 * pixel + clearance, 36.0 * pixel, local.z), -90.0),
+        Edge::Right => (
+            vec3(base.size.x * 0.5 + clearance, 36.0 * pixel, local.z),
+            -90.0,
+        ),
     };
     let rotation = (hand_rotation
         * tuning.rotation
@@ -134,7 +137,7 @@ mod tests {
                     Edge::Bottom => local,
                     Edge::Left => vec3(-1.74, 0.0, 0.05),
                     Edge::Top => vec3(-0.32, 2.28, 0.05),
-                    Edge::Right => vec3(1.1, 0.36, 0.05),
+                    Edge::Right => vec3(1.74, 0.36, 0.05),
                 };
                 let actual = placed.center + placed.rotation.rotate_vector(anchor);
                 assert!(

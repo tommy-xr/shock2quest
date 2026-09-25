@@ -678,9 +678,9 @@ fn stepped_frame(
         ),
         grip::Edge::Left => (-display.x * 0.5 - margin * 0.5, 0.0, margin, display.y),
         grip::Edge::Right => (
-            70.0 * pixel + margin * 0.5,
+            102.0 * pixel + margin * 0.5,
             36.0 * pixel,
-            margin,
+            64.0 * pixel + margin,
             304.0 * pixel,
         ),
     };
