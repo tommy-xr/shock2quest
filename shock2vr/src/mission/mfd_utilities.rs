@@ -96,6 +96,10 @@ impl MfdUtilities {
     pub(crate) fn take_map_request(&mut self) -> bool {
         std::mem::take(&mut self.map_requested)
     }
+    pub(crate) fn query_entity(&self) -> Option<EntityId> {
+        self.selected
+    }
+
     pub(crate) fn is_inspecting(&self) -> bool {
         self.inspecting
     }

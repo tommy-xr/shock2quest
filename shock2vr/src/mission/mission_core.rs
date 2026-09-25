@@ -2913,7 +2913,6 @@ pub struct MissionCore {
     device_inspect_only: bool,
     device_scanner: super::mfd_device::Scanner,
     device_beam: Option<(Vector3<f32>, Vector3<f32>)>,
-    device_hologram: Option<EntityId>,
     body_hand_contacts: [Option<Vector3<f32>>; 2],
     download_release_disarmed: [bool; 2],
 
@@ -3854,7 +3853,6 @@ impl MissionCore {
             device_inspect_only: false,
             device_scanner: Default::default(),
             device_beam: None,
-            device_hologram: None,
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
@@ -5082,7 +5080,6 @@ impl MissionCore {
             self.device_scanner.trigger(false, false);
         }
         if self.flat_ui.device != device_active {
-            self.device_hologram = None;
             self.flat_ui.close();
             self.flat_ui.utilities = Default::default();
             self.flat_ui.guard_held_press();
@@ -6009,7 +6006,6 @@ impl MissionCore {
             if let Some(entity) = scan {
                 let denied = crate::scripts::script_util::is_entity_locked(&self.world, entity);
                 if self.flat_ui.device {
-                    self.device_hologram = Some(entity);
                     self.flat_ui.close();
                     self.flat_ui.utilities = Default::default();
                     let inspect_only = self.device_inspect_only;
@@ -14986,12 +14982,10 @@ impl MissionCore {
                 self.personal_card.hand,
             );
             if let Some(model) = self
-                .device_hologram
-                .filter(|_| {
-                    self.flat_ui
-                        .device_screen_source()
-                        .is_none_or(|r| r.w <= super::mfd_device::SCREEN.w)
-                })
+                .flat_ui
+                .utilities
+                .query_entity()
+                .filter(|_| self.flat_ui.active_panel().is_none())
                 .and_then(|entity| self.id_to_model.get(&entity))
             {
                 let seconds = self
