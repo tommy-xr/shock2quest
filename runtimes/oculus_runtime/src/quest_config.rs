@@ -26,7 +26,7 @@ pub fn configured_mission() -> String {
     }
 }
 
-fn parse_mission(raw: &str) -> Option<String> {
+pub fn parse_mission(raw: &str) -> Option<String> {
     let mission = raw.trim();
     let valid_characters = mission
         .bytes()

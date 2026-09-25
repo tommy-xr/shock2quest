@@ -113,6 +113,7 @@ See [DEVELOPMENT.md](DEVELOPMENT.md)
 
 The project includes convenient cargo aliases:
 - `cargo dr` - Run desktop runtime (shorthand for `cargo run -p desktop_runtime --`)
+- `cargo dvr` - Open the Quest device dashboard ([commands](tools/dark_vr_tool/README.md))
 - `cargo dq` - Run dark_query CLI tool (shorthand for `cargo run -p dark_query --`)
 - `cargo dv` - Run dark_viewer tool (shorthand for `cargo run -p dark_viewer --`)
 - `cargo dbgr` - Run the HTTP-controlled debug runtime (used for automation/testing; see `tools/shock2-sdk` for the TypeScript SDK that drives it)
