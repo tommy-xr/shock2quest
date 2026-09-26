@@ -463,9 +463,9 @@ fn main() {
                         .string_to_path("/user/hand/right/input/thumbstick")
                         .unwrap(),
                 ),
-                // The RIGHT thumbstick click is deliberately unbound: jump
-                // moved to the lower face buttons, where it is reachable
-                // whatever the hands hold.
+                // The RIGHT thumbstick click is not jump (that moved to the
+                // lower face buttons); it toggles input recording below,
+                // gated by the `input_recording` dev option.
                 xr::Binding::new(
                     &crouch_action,
                     xr_instance
@@ -941,8 +941,8 @@ fn main() {
         );
         // Right stick click records input for desktop replay, but only while
         // its dev option is on (see `dev_params::INPUT_RECORDING`).
-        let record_state = record_action.state(&session, xr::Path::NULL).unwrap();
-        if shock2vr::dev_params::get(shock2vr::dev_params::INPUT_RECORDING) > 0.5 {
+        if shock2vr::dev_params::get_bool(shock2vr::dev_params::INPUT_RECORDING) {
+            let record_state = record_action.state(&session, xr::Path::NULL).unwrap();
             action_state.sync_discrete_button(
                 shock2vr::input::InputAction::ToggleInputRecording,
                 record_state.is_active,

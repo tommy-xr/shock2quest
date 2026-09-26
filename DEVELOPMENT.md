@@ -299,7 +299,7 @@ include `inspect`, `query_title`, `query_line_up`, `query_line_down`,
 Record real VR play (organic hand motion) to replay on desktop at any
 resolution:
 
-1. Pause menu > Developer: turn on **Rec input R-stick** (`input_recording`).
+1. Pause menu > Developer > Camera & view: turn on **Rec input R-stick** (`input_recording`).
 2. Click the right thumbstick to start; a message confirms. Play, then click
    again to stop. Pause first is refused: the pause menu is not saved.
 3. `adb pull /sdcard/shock2quest/recordings/` - each recording is a
