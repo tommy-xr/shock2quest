@@ -81,7 +81,7 @@ const SHOTS = [
     },
   },
   {
-    // Weapon + melee in motion: two pistol shots, then the wrench finishes it.
+    // Weapon + melee in motion: pistol held, one wrench swing.
     name: "medsci1-melee",
     mission: "medsci1.mis",
     player: [16, 1, 17],
@@ -91,7 +91,6 @@ const SHOTS = [
     spawnMonster: -397,
     loadout: { right: "Pistol", left: "Wrench" },
     hands: { right: AIM_RIGHT, left: READY_LEFT },
-    stats: { skills: { standard_weapons: 1 } },
     melee: true,
   },
   {
@@ -298,10 +297,10 @@ async function trackSubject(game, point, t, hands) {
 }
 
 /**
- * Pistol, then wrench, against the spawned hybrid: two shots that wound it,
- * then a wrench strike through its torso once it closes in. Damage comes only
- * from trigger and tracked-hand input; each beat is asserted, so a take where
- * the fight goes differently fails instead of writing a misleading clip.
+ * Pistol held, one wrench swing through the spawned hybrid's torso once it
+ * is in reach. Damage comes only from tracked-hand input, and the hit is
+ * asserted, so a take where the swing misses fails instead of writing a
+ * misleading clip.
  */
 async function recordMelee(game, shot, subjectId, held) {
   // A missing property is a broken setup, not a bad take: throw, don't assert.
@@ -311,42 +310,23 @@ async function recordMelee(game, shot, subjectId, held) {
     return Number(found.value);
   };
   const hp = () => property(subjectId, "HitPoints");
-  const ammo = () => property(held.right, "Ammo");
-  const initialHp = await hp();
-  const initialAmmo = await ammo();
   const sink = await frameSink(game, shot.name);
   let t = 0;
   let point;
-  // Track the subject for `seconds`; `still` keeps the last aim instead.
-  const hold = async (seconds, hands, { trigger = () => {}, still = false } = {}) => {
+  // Track the subject for `seconds`.
+  const hold = async (seconds, hands) => {
     for (const end = t + seconds; t < end; t += 1 / 60) {
-      if (!still) point = await aimPoints(game, subjectId);
+      point = await aimPoints(game, subjectId);
       await trackSubject(game, point, t, hands);
-      await trigger();
       await sink.step();
     }
   };
   try {
-    // Two pistol shots, the wrench held ready.
-    const pulls = [0.3, 0.8];
-    const start = t;
-    await hold(1.3, shot.hands, {
-      trigger: () =>
-        game.input.set(
-          "right_hand.trigger",
-          pulls.some((at) => t - start >= at && t - start < at + 0.12) ? 1 : 0,
-        ),
-    });
-    const afterGunHp = await hp();
-    const afterAmmo = await ammo();
-    assert.equal(afterAmmo, initialAmmo - 2, "the pistol must fire two rounds");
-    assert.ok(
-      afterGunHp < initialHp && afterGunHp > 0,
-      `the pistol must wound, not kill (${initialHp} -> ${afterGunHp})`,
-    );
+    // Both weapons up while it comes on.
+    await hold(0.6, shot.hands);
 
-    // Step in to wrench range: a wounded hybrid can hold at its own pipe's
-    // reach, beyond the wrench's.
+    // Step in to wrench range: the hybrid can hold at its own pipe's reach,
+    // beyond the wrench's.
     const reach = async () => {
       const [monster, { player }] = [await game.entities.detail(subjectId), await game.info()];
       return Math.hypot(
@@ -360,7 +340,6 @@ async function recordMelee(game, shot, subjectId, held) {
     }
     await game.input.set("right_hand.thumbstick", [0, 0]);
     const beforeSwingHp = await hp();
-    assert.ok(beforeSwingHp > 0, "it must still be alive for the wrench");
 
     // Overhead wrench swing: raise it over the shoulder, then chop down through
     // the torso. The wrench runs up the fist's +Y, its head ~0.75 out; pitching
@@ -404,19 +383,21 @@ async function recordMelee(game, shot, subjectId, held) {
       await setHandWorldPose(game, player, "left", hand, rotation);
       await sink.step();
     }
-    const afterMeleeHp = await hp();
-    assert.equal(afterMeleeHp, 0, `the wrench must finish it (${beforeSwingHp} -> ${afterMeleeHp})`);
+    const afterSwingHp = await hp();
+    assert.ok(
+      afterSwingHp < beforeSwingHp,
+      `the wrench must connect (${beforeSwingHp} -> ${afterSwingHp})`,
+    );
 
-    // Recover: lower both hands, eyes where it stood as it drops.
-    await hold(1, { right: REST_RIGHT, left: REST_LEFT }, { still: true });
+    // Recover: the wrench back to ready beside the pistol.
+    await hold(0.8, shot.hands);
     const { player } = await game.info();
     assert.equal(player.life_state, "alive");
     assert.equal(player.right_hand_entity_id, held.right, "the pistol must still be held");
     assert.equal(player.wielded_entity_id, held.left, "the wrench must still be held");
     return {
       ...sink.finish(),
-      hp: [initialHp, afterGunHp, afterMeleeHp],
-      ammo: [initialAmmo, afterAmmo],
+      hp: [beforeSwingHp, afterSwingHp],
     };
   } finally {
     await sink.dispose();
