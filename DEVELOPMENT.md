@@ -194,6 +194,16 @@ lean including roll. The maximum roll remains 7 degrees. Like other developer
 parameters, the value resets when the app restarts. The debug API can set it via
 `POST /v1/dev-params` with `{"key":"flat_lean_distance","value":2.0}`.
 
+### Roomscale VR spike
+
+Enable **Pause → Developer → Camera & view → Roomscale spike** to test physical
+horizontal walking through the player controller. It defaults off. The debug API
+equivalent is `POST /v1/dev-params` with `{"key":"vr_roomscale","value":1}`.
+Run `cargo dbgr --mission debug_ladder --vr` and inject incremental head and hand
+positions with zero stick input. Strict correction discards blocked travel and
+retains the resulting tracking offset on retreat. Independent leaning and head
+collision are follow-up work; see [the roomscale project](projects/vr-roomscale.md).
+
 ### Debug & developer keys
 
 Player-facing controls are listed in [README.md](README.md#controls). The keys
