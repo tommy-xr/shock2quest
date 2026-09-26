@@ -413,6 +413,7 @@ async fn start_http_server(
         )
         .route("/v1/save", axum::routing::post(save_game))
         .route("/v1/load", axum::routing::post(load_game))
+        .route("/v1/replay", axum::routing::post(replay_recording))
         .route("/v1/ui", get(get_ui_state))
         .route("/v1/quests", get(get_quest_bits))
         .route("/v1/quests/:name", axum::routing::post(set_quest_bit))
@@ -493,6 +494,9 @@ async fn start_http_server(
     );
     info!(
         "  POST /v1/load             - Load a named save (restores mission/player/quests) {{file}}"
+    );
+    info!(
+        "  POST /v1/replay           - Load a recording's start save; later steps play its frames {{path}}"
     );
     info!(
         "  GET  /v1/ui               - Flat-mode UI state (mode: shooter/use, MFD panel, inventory strip)"
@@ -685,6 +689,9 @@ fn run_game_blocking(
     //   command-receive time (which is before this iteration's render/swap and
     //   would read a stale/blank back buffer -> intermittent black screenshots).
     let mut pending_step_reply: Option<oneshot::Sender<Result<StepResult, StepError>>> = None;
+    // Frames of a loaded recording, consumed one per stepped frame.
+    let mut replay: std::collections::VecDeque<shock2vr::input::recording::RecordedFrame> =
+        std::collections::VecDeque::new();
     let mut frames_advanced_this_step = 0u32;
     let mut pending_screenshots: Vec<(ScreenshotSpec, oneshot::Sender<ScreenshotResult>)> =
         Vec::new();
@@ -785,6 +792,21 @@ fn run_game_blocking(
                     shutdown_requested = true;
                     tracing::info!("Shutdown requested via API");
                 }
+                RuntimeCommand::Replay {
+                    save,
+                    frames,
+                    reply,
+                } => {
+                    let loaded = match &save {
+                        Some(path) => game.load_game_at(path).map_err(|e| e.to_string()),
+                        None => Ok(game.scene_name().to_string()),
+                    };
+                    if loaded.is_ok() {
+                        tracing::info!("Replaying {} recorded frames", frames.len());
+                        replay = frames.into();
+                    }
+                    let _ = reply.send(loaded);
+                }
                 other => {
                     process_command(
                         other,
@@ -840,10 +862,25 @@ fn run_game_blocking(
             // motion. With a fixed step, `{frames:N}` == N/FPS seconds of sim time
             // and `{duration:T}` runs exactly T/dt frames. Free-running (not
             // stepping) still uses real wall-clock dt.
+            // A replay frame supplies the input, actions and dt its runtime
+            // really had; the input then stays put for paused updates.
+            let replay_frame = if step_requested {
+                replay.pop_front()
+            } else {
+                None
+            };
+            let step_dt = match &replay_frame {
+                Some(frame) => {
+                    current_input = frame.input.clone();
+                    action_state = frame.actions();
+                    frame.dt
+                }
+                None => FIXED_STEP_DT,
+            };
             let game_time = if step_requested {
                 Time {
-                    elapsed: Duration::from_secs_f32(FIXED_STEP_DT),
-                    total: Duration::from_secs_f32(accumulated_time + FIXED_STEP_DT),
+                    elapsed: Duration::from_secs_f32(step_dt),
+                    total: Duration::from_secs_f32(accumulated_time + step_dt),
                 }
             } else {
                 game_time.clone()
@@ -1124,9 +1161,12 @@ fn process_command(
             }
         }
         // Step and Screenshot are intercepted in the game loop (deferred replies),
-        // so they never reach process_command.
-        RuntimeCommand::Step(..) | RuntimeCommand::Screenshot(..) => {
-            unreachable!("Step/Screenshot are handled in the game loop")
+        // and Replay there because it owns the replay queue, so they never
+        // reach process_command.
+        RuntimeCommand::Step(..)
+        | RuntimeCommand::Screenshot(..)
+        | RuntimeCommand::Replay { .. } => {
+            unreachable!("Step/Screenshot/Replay are handled in the game loop")
         }
         RuntimeCommand::RayCast(request, reply) => {
             let result = if let Some(debug_scene) = game.debug_scene() {
@@ -3219,6 +3259,52 @@ async fn save_game(
 /// HTTP handler for loading a named save, restoring the active mission, player
 /// position/rotation, quest bits, and held items. Works cross-launch (a fresh
 /// runtime started on any mission can load a frontier save and resume).
+#[derive(serde::Deserialize)]
+struct ReplayRequest {
+    /// Path to a `rec-*.jsonl` recording (`ToggleInputRecording`).
+    path: String,
+}
+
+#[derive(serde::Serialize)]
+struct ReplayResponse {
+    /// Recorded frames queued; step this many to play the whole recording.
+    frames: usize,
+    /// Active scene after loading the recording's start save.
+    scene: String,
+}
+
+/// HTTP handler: load a recording's start save and queue its frames.
+async fn replay_recording(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<ReplayRequest>,
+) -> Result<Json<ReplayResponse>, (StatusCode, String)> {
+    let path = std::path::PathBuf::from(&request.path);
+    let (header, frames) = shock2vr::input::recording::read_recording(&path)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("{}: {e}", request.path)))?;
+    let save = header.save.map(|save| {
+        path.parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(save)
+    });
+    let count = frames.len();
+    let (reply, result) = oneshot::channel();
+    command_tx
+        .send(RuntimeCommand::Replay {
+            save,
+            frames,
+            reply,
+        })
+        .map_err(|_| game_loop_unavailable())?;
+    match result.await {
+        Ok(Ok(scene)) => Ok(Json(ReplayResponse {
+            frames: count,
+            scene,
+        })),
+        Ok(Err(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+        Err(_) => Err(game_loop_unavailable()),
+    }
+}
+
 async fn load_game(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
     LenientJson(request): LenientJson<SaveLoadRequest>,
