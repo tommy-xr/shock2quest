@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import { earthWorldUse } from "./helpers/earth-world-use.js";
+import { aimVrHandAt } from "./helpers/vr-hand.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
@@ -76,6 +77,42 @@ test(
       sounds.filter((sample) => sample === "linebeep" || sample === "pickup"),
       ["linebeep", "pickup"],
       "the HUD beep must precede exactly one distinct item cue",
+    );
+  },
+);
+
+test(
+  "vr: a world grab uses the same pickup message and sound order",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "earth.mis", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    const [clip] = await game.entities.byTemplate(249);
+    assert.ok(clip, "Earth standard clip must be present");
+    const [x, y, z] = clip.position;
+    await game.player.teleport({ x: x + 1.2, y: y - 0.8, z: z + 1.2 });
+    await game.step({ frames: 30 });
+    const aim = await game.player.aimAt(clip.id, { hitbox: "center", visibility: "required" });
+    assert.equal(aim.target_confirmed, true, "the production hand must see the clip");
+    const before = await game.audio.recent();
+    const since = before.sounds.at(-1)?.sequence ?? 0;
+
+    await aimVrHandAt(game, aim.world_point, 0.35, 1);
+    await game.step({ frames: 5 });
+
+    assert.equal((await game.info()).player.right_hand_entity_id, clip.id);
+    assert.ok(
+      (await game.ui.state()).messages.some((message) =>
+        message.toLowerCase().includes("standard bullets picked up."),
+      ),
+      "the VR world-grab path should post the same localized pickup line",
+    );
+    const sounds = (await game.audio.recent()).sounds
+      .filter((sound) => sound.sequence > since)
+      .map((sound) => sound.sample.toLowerCase());
+    assert.deepEqual(
+      sounds.filter((sample) => sample === "linebeep" || sample === "pickup"),
+      ["linebeep", "pickup"],
     );
   },
 );
