@@ -13782,9 +13782,11 @@ mod tests {
     #[test]
     fn surface_material_table_follows_triangle_order() {
         let geometry = vec![
-            geometry_with(0, 2), // metal
-            geometry_with(1, 1), // fabric
-            geometry_with(2, 3), // no material
+            geometry_with(247, 1), // water entry: rendered, never solid
+            geometry_with(0, 2),   // metal
+            geometry_with(248, 2), // water exit: must not shift the fabric's index
+            geometry_with(1, 1),   // fabric
+            geometry_with(2, 3),   // no material
         ];
         let textures = vec![
             texture_with(Some("metal")),
@@ -13793,12 +13795,20 @@ mod tests {
         ];
 
         let LevelTriangles {
+            vertices,
+            indices,
             per_triangle_material: per_triangle,
             material_names: names,
-            ..
         } = level_triangles(&geometry, &textures);
 
-        assert_eq!(per_triangle.len(), 6, "one entry per triangle");
+        assert_eq!(
+            vertices.len(),
+            18,
+            "water contributes no collision vertices"
+        );
+        assert_eq!(indices.len(), 6, "only solid triangles remain");
+        assert_eq!(indices[2], [6, 7, 8], "fabric follows the metal triangles");
+        assert_eq!(per_triangle.len(), indices.len(), "one entry per triangle");
         assert_eq!(names, vec!["metal".to_owned(), "fabric".to_owned()]);
         assert_eq!(per_triangle[0], 0);
         assert_eq!(per_triangle[1], 0);
