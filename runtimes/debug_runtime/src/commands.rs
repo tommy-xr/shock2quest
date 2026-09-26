@@ -60,7 +60,8 @@ pub enum RuntimeCommand {
         header: shock2vr::input::recording::RecordingHeader,
         save: std::path::PathBuf,
         frames: Vec<shock2vr::input::recording::RecordedFrame>,
-        reply: oneshot::Sender<Result<String, String>>,
+        /// Ok: the scene; Err: an HTTP status and message.
+        reply: oneshot::Sender<Result<String, (u16, String)>>,
     },
 
     /// Load a previously-saved game, restoring mission/player/quests/items.

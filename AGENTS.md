@@ -462,6 +462,8 @@ For debugging visual/rendering changes without a full interactive session:
    # Replay a recorded session (ToggleInputRecording, `<data>/recordings/rec-*.jsonl`):
    # loads its start save; the next N stepped frames play the recorded input,
    # dt and clock. Launch with the recording's --vr/--experimental flags.
+   # Input/action patches sent mid-replay are overwritten by the next frame, and
+   # a replay stops at a level transition (its loading frames are skipped).
    curl -X POST http://127.0.0.1:8080/v1/replay -d '{"path": "/path/to/rec-123.jsonl"}'
 
    # IMPORTANT: Always shut down when done to avoid interfering with user's session

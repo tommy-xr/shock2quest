@@ -248,7 +248,8 @@ async function renderRecording(path, name) {
     for (const frame of frames) {
       await game.step({ frames: 1 });
       clock += frame.dt;
-      if (clock >= captured / 15) {
+      // A long frame spans several capture ticks: repeat the image for each.
+      while (clock >= captured / 15) {
         const file = resolve(dir, `${String(captured).padStart(4, "0")}.png`);
         await game.screenshot(file, Number(values["gif-width"]));
         captured++;
