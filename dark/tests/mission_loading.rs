@@ -332,7 +332,7 @@ fn command1_tram_physical_attachments_parse() {
         .iter()
         .find(|(source, _, _)| *source == 152)
         .expect("Tram Front attachment should parse");
-    assert_eq!(front.2, cgmath::vec3(4.0, -0.2, -0.075));
+    assert_eq!(front.2, Some(cgmath::vec3(4.0, -0.2, -0.075)));
     assert!(
         !info.unparsed_links.contains_key("L$PhysAttac")
             && !info.unparsed_link_data.contains_key("LD$PhysAtta"),

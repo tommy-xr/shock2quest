@@ -401,14 +401,14 @@ fn read_all_data_links<R1: io::Read + io::Seek>(
                 flavor: link_info.flavor,
             };
 
-            let default_size = link
-                .defaults_missing_records()
-                .then_some(record_size)
-                .flatten();
-            if let Some(data) = link_record(&link_data, default_size, link_info.id) {
-                let len = data.len() as u32;
-                let component_link = link.convert(data, len, to_link);
-
+            let component_link = if let Some(data) = link_data.get(&link_info.id) {
+                Some(link.convert(data.clone(), data.len() as u32, to_link))
+            } else if record_size.is_some() && link.defaults_missing_records() {
+                link.default_link(to_link)
+            } else {
+                None
+            };
+            if let Some(component_link) = component_link {
                 ent_to_links
                     .entry(link_info.src)
                     .or_insert_with(|| TemplateLinks { to_links: vec![] });
@@ -469,27 +469,6 @@ pub fn read_link_data<T: io::Read + io::Seek>(
     }
 
     (data, record_size)
-}
-
-/// The data record for one link of a link-with-data flavor. LD$ chunks are
-/// sparse: the gamesys authors 9 LD$Corpse records for 71 L$Corpse links, so a
-/// link with no record of its own takes a zero-filled default and survives,
-/// rather than being dropped along with the link.
-///
-/// `default_size` carries that record shape, and is `None` both for a flavor
-/// that has not opted in (see `LinkDefinitionWithData::defaults_missing_records`
-/// - zeroes are not "unspecified" for every reader) and when the LD$ chunk is
-/// absent or malformed, leaving no shape to default to. Either way the link is
-/// dropped, as it was before defaulting existed.
-fn link_record(
-    link_data: &HashMap<i32, Vec<u8>>,
-    default_size: Option<usize>,
-    link_id: i32,
-) -> Option<Vec<u8>> {
-    match link_data.get(&link_id) {
-        Some(data) => Some(data.clone()),
-        None => default_size.map(|size| vec![0u8; size]),
-    }
 }
 
 fn read_all_links<R: io::Read + io::Seek>(
@@ -628,29 +607,79 @@ fn read_unparsed_link_data_chunk<R: io::Read + io::Seek>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
-    /// LD$ chunks are sparse - the shipped gamesys has 71 L$Corpse links but
-    /// only 9 LD$Corpse records. A link with no record of its own must survive
-    /// with a zero-filled default record, not be dropped.
-    #[test]
-    fn a_link_without_a_data_record_takes_the_zeroed_default() {
-        let mut authored = HashMap::new();
-        authored.insert(7, vec![1u8, 0, 0, 0]);
-
-        assert_eq!(link_record(&authored, Some(4), 7), Some(vec![1, 0, 0, 0]));
-        assert_eq!(link_record(&authored, Some(4), 8), Some(vec![0, 0, 0, 0]));
+    // A minimal chunk file with two links but only one authored data record.
+    fn sparse_links(
+        link_name: &str,
+        data_name: &str,
+        size: usize,
+    ) -> Vec<crate::properties::ToTemplateLink> {
+        let mut links = Vec::new();
+        for id in [7i32, 8] {
+            for value in [id, 100, 200 + id] {
+                links.extend_from_slice(&value.to_le_bytes());
+            }
+            links.extend_from_slice(&1u16.to_le_bytes());
+        }
+        let mut data = (size as u32).to_le_bytes().to_vec();
+        data.extend_from_slice(&7i32.to_le_bytes());
+        data.resize(8 + size, 0);
+        let mut file = vec![0u8; 272];
+        file[..4].copy_from_slice(&272u32.to_le_bytes());
+        file.extend_from_slice(&2u32.to_le_bytes());
+        file.resize(316, 0);
+        for (index, (name, payload)) in [(link_name, links), (data_name, data)]
+            .into_iter()
+            .enumerate()
+        {
+            let entry = 276 + index * 20;
+            file[entry..entry + name.len()].copy_from_slice(name.as_bytes());
+            let offset = file.len() as u32;
+            file[entry + 12..entry + 16].copy_from_slice(&offset.to_le_bytes());
+            file[entry + 16..entry + 20].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+            file.resize(file.len() + 24, 0);
+            file.extend(payload);
+        }
+        let mut reader = Cursor::new(file);
+        let toc = crate::ss2_chunk_file_reader::read_table_of_contents(&mut reader);
+        let (_, _, definitions) = crate::properties::get::<Cursor<Vec<u8>>>();
+        let mut parsed = HashMap::new();
+        read_all_data_links(&toc, &mut parsed, &definitions, &mut reader);
+        parsed.remove(&100).unwrap().to_links
     }
 
-    /// A flavor that has not opted in (`default_size` None) keeps the old
-    /// behavior: its authored records still parse, the rest stay dropped. A
-    /// zeroed record is not "unspecified" for every reader - a zeroed
-    /// `LD$PhysAtta` offset welds the child to its parent's origin.
     #[test]
-    fn a_flavor_that_did_not_opt_in_still_drops_its_unauthored_links() {
-        let mut authored = HashMap::new();
-        authored.insert(7, vec![1u8, 0, 0, 0]);
+    fn sparse_flavors_preserve_both_authored_and_absent_records() {
+        for (link, data, size) in [
+            ("L$Corpse", "LD$Corpse", 4),
+            ("L$PhysAttac", "LD$PhysAtta", 12),
+            ("L$ParticleA", "LD$Particle", 16),
+            ("L$TPath", "LD$TPath", 16),
+        ] {
+            let parsed = sparse_links(link, data, size);
+            assert_eq!(parsed.len(), 2, "{link} lost its absent record");
+            assert_eq!(parsed[0].to_template_id, 207);
+            assert_eq!(parsed[1].to_template_id, 208);
+        }
+    }
 
-        assert_eq!(link_record(&authored, None, 7), Some(vec![1, 0, 0, 0]));
-        assert_eq!(link_record(&authored, None, 8), None);
+    #[test]
+    fn missing_physical_offset_differs_from_authored_zero() {
+        let links = sparse_links("L$PhysAttac", "LD$PhysAtta", 12);
+        assert_eq!(links.len(), 2);
+        let crate::properties::Link::PhysAttach(authored) = links[0].link else {
+            panic!("physical link")
+        };
+        let crate::properties::Link::PhysAttach(absent) = links[1].link else {
+            panic!("physical link")
+        };
+        assert_eq!(authored.offset, Some(cgmath::vec3(0.0, 0.0, 0.0)));
+        assert_eq!(absent.offset, None);
+    }
+
+    #[test]
+    fn required_data_flavors_still_drop_missing_records() {
+        assert_eq!(sparse_links("L$Contains", "LD$Contains", 4).len(), 1);
     }
 }

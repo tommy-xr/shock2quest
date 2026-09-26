@@ -3,16 +3,10 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 
-// LD$ link-data chunks are sparse, and a link with no record of its own only
-// takes a zero-filled default where its reader parses zeroes as "unspecified"
-// (`LinkDefinitionWithData::defaults_missing_records`).
-//
-// earth.mis is the counter-example that makes that opt-in necessary: its
-// LD$PhysAtta chunk declares a 12-byte record and holds NONE, for six
-// L$PhysAttach links. A zeroed PhysAttach offset does not mean "no offset
-// authored" - it means "sit exactly on the parent's origin", so defaulting
-// those records welds the intro tram's whole collision shell (roof, sides,
-// front, back) onto the tramcar's origin within a couple of seconds.
+// Sparse LD$ flavors use typed defaults. Missing physical offsets derive the
+// authored child-parent displacement; an explicit zero still means the parent
+// origin. earth.mis carries six PhysAttach links and no data records, so both
+// resting placement and movement must preserve the collision shell's pose.
 //
 // Opt-in (this file only):
 //   tsc && SHOCK2_E2E=1 node --test dist/test/link-data-defaults.e2e.test.js
@@ -55,5 +49,60 @@ test(
         `${panel.name} moved off its authored placement to the tramcar origin`,
       );
     }
+  },
+);
+
+test(
+  "earth tram panels follow their parent while preserving authored offsets",
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "earth.mis" });
+    await game.step({ frames: 30 });
+    const assertFollow = async () => {
+      const { entities } = await game.entities.list({ filter: "Large Tram" });
+      const car = entities.find((e) => e.name === "Large Tramcar");
+      const panels = entities.filter((e) => e.name !== "Large Tramcar");
+      assert.ok(car);
+      assert.equal(panels.length, 6);
+      await game.entities.sendMessage(car.id, { type: "TurnOn" });
+      await game.step({ frames: 120 });
+      const movedCar = await game.entities.detail(car.id);
+      const travel = movedCar.position.map((v, i) => v - car.position[i]);
+      // The authored earth tram path is only 0.3 world units long.
+      assert.ok(Math.hypot(...travel) > 0.2, `tram must move: ${travel}`);
+      for (const panel of panels) {
+        const moved = await game.entities.detail(panel.id);
+        const relativeError = moved.position.map(
+          (v, i) => v - panel.position[i] - travel[i],
+        );
+        assert.ok(
+          Math.hypot(...relativeError) < 0.02,
+          `${panel.name} must follow tram without snapping: error=${relativeError}`,
+        );
+      }
+    };
+    const save = `sparse_attachments_${Date.now()}`;
+    assert.equal((await game.save(save)).success, true);
+    await assertFollow();
+    assert.equal((await game.load(save)).success, true);
+    await assertFollow();
+  },
+);
+
+test(
+  "shodan sparse TPath retains the authored 1234 to 1307 edge",
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "shodan.mis" });
+    const [source] = await game.entities.byTemplate(1234);
+    const [target] = await game.entities.byTemplate(1307);
+    assert.ok(source);
+    assert.ok(target);
+    const detail = await game.entities.detail(source.id);
+    assert.ok(
+      detail.outgoing_links.some((link) =>
+        link.link_type.startsWith("TPath") && link.target_id === target.id),
+      `sparse path must remain connected: ${JSON.stringify(detail.outgoing_links)}`,
+    );
   },
 );

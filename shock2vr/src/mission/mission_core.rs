@@ -3616,7 +3616,16 @@ impl MissionCore {
                             continue;
                         };
                         if let dark::properties::Link::PhysAttach(options) = &link.link {
-                            physical_attachments.push((id, parent.0, options.offset));
+                            let offset = options.offset.or_else(|| {
+                                let child = v_transform.get(id).ok()?;
+                                let parent = v_transform.get(parent.0).ok()?;
+                                // Rapier attachments use world-axis offsets, including
+                                // for rotated parents. Preserve absent authored offsets.
+                                Some(child.0.w.truncate() - parent.0.w.truncate())
+                            });
+                            if let Some(offset) = offset {
+                                physical_attachments.push((id, parent.0, offset));
+                            }
                             continue;
                         }
                         if !matches!(link.link, dark::properties::Link::ParticleAttachement(_)) {

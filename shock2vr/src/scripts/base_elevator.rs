@@ -59,9 +59,11 @@ impl BaseElevator {
         let (_, next_position, next_data) = &self.path[target_index as usize];
         self.desired_position = next_position.position;
 
-        // If we have path data available, use it to set the speed
+        // Zero is the sparse-record default; nonpositive speeds keep the current speed.
         if let Some(path_data) = next_data {
-            self.speed = path_data.speed
+            if path_data.speed > 0.0 {
+                self.speed = path_data.speed;
+            }
         }
 
         info!(
@@ -336,6 +338,26 @@ mod tests {
             "elevator never stopped: at {:?}, target {:?}",
             elevator.current_position, elevator.desired_position
         );
+    }
+
+    #[test]
+    fn missing_or_nonpositive_path_speed_keeps_the_previous_speed() {
+        for speed in [0.0, -1.0] {
+            let (world, entity_id) = two_stop_world(0.0, 5.0, speed);
+            let physics = PhysicsWorld::new();
+            let mut elevator = BaseElevator::new();
+            elevator.initialize(entity_id, &world);
+            elevator.speed = 3.0;
+            elevator.handle_message(
+                entity_id,
+                &world,
+                &physics,
+                &MessagePayload::TurnOn { from: entity_id },
+            );
+            assert_eq!(elevator.speed, 3.0);
+            run_until_stopped(&mut elevator, entity_id, &world, &physics, 200);
+            assert_eq!(elevator.current_position, vec3(5.0, 0.0, 0.0));
+        }
     }
 
     /// The command1 tram (speed 12): 193.100 wu at 0.2 wu/frame is 965.5 steps,
