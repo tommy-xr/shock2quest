@@ -940,6 +940,10 @@ pub enum Effect {
     RaiseSecurityAlarm {
         seconds: f32,
     },
+    /// Remote Electron Tampering reduces the shared alarm deadline.
+    ReduceSecurityAlarm {
+        seconds: f32,
+    },
     /// Stand station security down: clear every outstanding alarm and reset
     /// the alerted ecologies. `from` is the object that did it.
     ClearSecurityAlarm {

@@ -502,6 +502,26 @@ fn cast_instant_power(
     effective_psi: i32,
 ) -> Effect {
     match power.template_id {
+        psi::CODEBREAKER_TEMPLATE_ID => {
+            // Retail psihelp.str Psi7: data is seconds base + seconds per PSI,
+            // not keypad range. The internal Codebreaker name is historical.
+            let seconds = power.power.data[0] + power.power.data[1] * effective_psi as f32;
+            if !crate::security_alarm::status(world).active()
+                || !seconds.is_finite()
+                || seconds <= 0.0
+            {
+                return Effect::NoEffect;
+            }
+            let mut effects = vec![
+                Effect::ReduceSecurityAlarm { seconds },
+                Effect::SpendPsiPoints {
+                    amount: power.power.psi_cost,
+                },
+                play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
+            ];
+            effects.extend(amp_cast_flashes(world, amp_entity));
+            Effect::Multiple(effects)
+        }
         // Cerebro-stimulated Regeneration and its Advanced (tier 5) version:
         // both restore the caster's health from the same authored data.
         id if is_self_heal_power(id) => cast_self_heal(world, amp_entity, power, effective_psi),
@@ -820,6 +840,9 @@ fn instant_cast_is_futile(
     power: &PsiPowerInfo,
     effective_psi: i32,
 ) -> bool {
+    if power.template_id == psi::CODEBREAKER_TEMPLATE_ID {
+        return !crate::security_alarm::status(world).active();
+    }
     if power.template_id == psi::SOMA_DRAIN_TEMPLATE_ID {
         return drain_target(world, physics, amp_entity, power).is_none();
     }

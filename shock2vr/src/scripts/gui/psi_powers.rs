@@ -268,7 +268,10 @@ impl Default for PsiTrainerState {
 fn purchasable_power(power: &crate::psi::PsiPowerInfo) -> bool {
     use crate::psi::*;
     match power.power.activation_type {
-        ACTIVATION_TYPE_INSTANT => power.template_id == PSI_HEAL_TEMPLATE_ID,
+        ACTIVATION_TYPE_INSTANT => matches!(
+            power.template_id,
+            PSI_HEAL_TEMPLATE_ID | CODEBREAKER_TEMPLATE_ID
+        ),
         ACTIVATION_TYPE_SUSTAINED => {
             power.duration.is_some()
                 && matches!(
