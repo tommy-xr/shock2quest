@@ -148,19 +148,41 @@ fn recordings_list_newest_first_and_pull_with_their_save() {
     fs::create_dir_all(&dir).unwrap();
     for (name, frames) in [("rec-100", 2), ("rec-200", 3)] {
         let header = format!(r#"{{"version":1,"scene":"medsci1.mis","save":"{name}.sav"}}"#);
-        fs::write(dir.join(format!("{name}.jsonl")), format!("{header}\n{}", "{}\n".repeat(frames))).unwrap();
+        fs::write(
+            dir.join(format!("{name}.jsonl")),
+            format!("{header}\n{}", "{}\n".repeat(frames)),
+        )
+        .unwrap();
         fs::write(dir.join(format!("{name}.sav")), name).unwrap();
     }
     let listing = String::from_utf8(h.run(&["recordings"]).stdout).unwrap();
-    let names: Vec<_> = listing.lines().map(|l| l.split_whitespace().next().unwrap()).collect();
+    let names: Vec<_> = listing
+        .lines()
+        .map(|l| l.split_whitespace().next().unwrap())
+        .collect();
     assert_eq!(names, ["rec-200", "rec-100"]);
-    assert!(listing.lines().next().unwrap().contains("3 frames  medsci1.mis"));
+    assert!(
+        listing
+            .lines()
+            .next()
+            .unwrap()
+            .contains("3 frames  medsci1.mis")
+    );
 
     let out = h.dir.path().join("pulled");
     h.run(&["pull-recording", "--out", out.to_str().unwrap()]);
     assert!(out.join("rec-200.jsonl").is_file());
-    assert_eq!(fs::read_to_string(out.join("rec-200.sav")).unwrap(), "rec-200");
+    assert_eq!(
+        fs::read_to_string(out.join("rec-200.sav")).unwrap(),
+        "rec-200"
+    );
     h.run(&["pull-recording", "rec-100", "--out", out.to_str().unwrap()]);
     assert!(out.join("rec-100.sav").is_file());
-    assert!(!h.command(&["pull-recording", "rec-300"]).output().unwrap().status.success());
+    assert!(
+        !h.command(&["pull-recording", "rec-300"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
 }

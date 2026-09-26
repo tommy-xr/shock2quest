@@ -268,11 +268,11 @@ impl Device {
     fn recordings(&self) -> Result<Vec<Recording>> {
         // One round trip: each recording's line count, name and header line.
         let dir = quote(RECORDINGS);
-        parse_recordings(&self.shell(&format!(
+        Ok(parse_recordings(&self.shell(&format!(
             "for f in {dir}/rec-*.jsonl; do [ -e \"$f\" ] || continue; \
              printf '%s\\t%s\\t' \"$(wc -l < \"$f\")\" \"$(basename \"$f\" .jsonl)\"; \
              head -n 1 \"$f\"; echo; done"
-        ))?)
+        ))?))
     }
     fn pull_recording(&self, name: Option<&str>, out: &std::path::Path) -> Result<()> {
         let recordings = self.recordings()?;
@@ -297,7 +297,7 @@ impl Device {
         println!(
             "{}\nRender: cd tools/shock2-sdk && node scripts/hero-shots.mjs --replay {} --name <clip>",
             path.display(),
-            path.display()
+            quote(&path.to_string_lossy())
         );
         Ok(())
     }
@@ -375,34 +375,47 @@ struct Recording {
 }
 
 /// Parse `recordings`' listing (`<lines>\t<name>\t<header json>` per file),
-/// newest first. Names embed their start time in ms, so they sort by it; a
-/// header that names a save outside the directory is rejected.
-fn parse_recordings(listing: &str) -> Result<Vec<Recording>> {
+/// newest first. Names embed their start time in ms, so they sort by it.
+/// Unreadable entries (a recording whose header is not flushed yet, a save
+/// named outside the directory) are skipped with a warning.
+fn parse_recordings(listing: &str) -> Vec<Recording> {
     let mut recordings = Vec::new();
     for line in listing.lines().filter(|line| !line.trim().is_empty()) {
-        let mut fields = line.splitn(3, '\t');
-        let (Some(lines), Some(name), Some(header)) = (fields.next(), fields.next(), fields.next())
-        else {
-            bail!("unexpected recording listing: {line}")
-        };
-        let header: serde_json::Value = serde_json::from_str(header)
-            .with_context(|| format!("{name}: unreadable header"))?;
-        let save = header["save"].as_str().unwrap_or_default();
-        ensure!(
-            !save.is_empty() && !save.contains('/') && !save.starts_with('.'),
-            "{name}: bad save name {save:?}"
-        );
-        recordings.push(Recording {
-            name: name.into(),
-            scene: header["scene"].as_str().unwrap_or("?").into(),
-            save: save.into(),
-            // The header is the first line.
-            frames: lines.trim().parse::<usize>().unwrap_or(0).saturating_sub(1),
-        });
+        match parse_recording(line) {
+            Ok(recording) => recordings.push(recording),
+            Err(error) => eprintln!("skipping recording: {error:#}"),
+        }
     }
-    let started = |r: &Recording| r.name.trim_start_matches("rec-").parse::<u128>().unwrap_or(0);
+    let started = |r: &Recording| {
+        r.name
+            .trim_start_matches("rec-")
+            .parse::<u128>()
+            .unwrap_or(0)
+    };
     recordings.sort_by_key(|r| std::cmp::Reverse(started(r)));
-    Ok(recordings)
+    recordings
+}
+
+fn parse_recording(line: &str) -> Result<Recording> {
+    let mut fields = line.splitn(3, '\t');
+    let (Some(lines), Some(name), Some(header)) = (fields.next(), fields.next(), fields.next())
+    else {
+        bail!("unexpected listing line: {line}")
+    };
+    let header: serde_json::Value =
+        serde_json::from_str(header).with_context(|| format!("{name}: unreadable header"))?;
+    let save = header["save"].as_str().unwrap_or_default();
+    ensure!(
+        !save.is_empty() && !save.contains('/') && !save.starts_with('.'),
+        "{name}: bad save name {save:?}"
+    );
+    Ok(Recording {
+        name: name.into(),
+        scene: header["scene"].as_str().unwrap_or("?").into(),
+        save: save.into(),
+        // The header is the first line.
+        frames: lines.trim().parse::<usize>().unwrap_or(0).saturating_sub(1),
+    })
 }
 
 fn validate_setting(value: &str, mission: bool) -> Result<Option<String>> {
@@ -471,20 +484,24 @@ mod tests {
     }
     #[test]
     fn recordings_sort_newest_first_and_reject_escaping_saves() {
-        let header = |save: &str| format!(r#"{{"version":1,"scene":"medsci1.mis","save":"{save}"}}"#);
+        let header =
+            |save: &str| format!(r#"{{"version":1,"scene":"medsci1.mis","save":"{save}"}}"#);
         let listing = format!(
             "3\trec-9\t{}\n\n11\trec-10\t{}\n",
             header("rec-9.sav"),
             header("rec-10.sav")
         );
-        let recordings = parse_recordings(&listing).unwrap();
+        let recordings = parse_recordings(&listing);
         assert_eq!(recordings[0].name, "rec-10");
         assert_eq!(recordings[0].frames, 10);
         assert_eq!(recordings[1].save, "rec-9.sav");
         assert_eq!(recordings[1].scene, "medsci1.mis");
         for save in ["../x.sav", "/etc/passwd", ""] {
-            assert!(parse_recordings(&format!("2\trec-1\t{}", header(save))).is_err());
+            assert!(parse_recording(&format!("2\trec-1\t{}", header(save))).is_err());
         }
+        // An unflushed recording (no header yet) is skipped, not fatal.
+        let listing = format!("0\trec-11\t\n{listing}");
+        assert_eq!(parse_recordings(&listing).len(), 2);
     }
     #[test]
     fn shell_paths_are_literal() {
