@@ -97,7 +97,7 @@ fn format_inline_localized_text(text: &str) -> String {
         .join(" ")
 }
 
-fn localized_log_title(
+pub(crate) fn localized_log_title(
     asset_cache: &mut AssetCache,
     world: &World,
     entity_id: EntityId,

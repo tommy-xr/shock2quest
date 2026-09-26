@@ -645,7 +645,7 @@ pub(crate) fn handle_hack_msg(
     security_computer: bool,
     outcomes: HackOutcomeEffects,
 ) -> (HackState, Effect) {
-    handle_hrm_msg(
+    let (next, effect) = handle_hrm_msg(
         entity_id,
         world,
         state,
@@ -653,7 +653,31 @@ pub(crate) fn handle_hack_msg(
         diff,
         HrmContext::Hack { security_computer },
         outcomes,
-    )
+    );
+    let result_key = match next.phase {
+        HackPhase::Won if state.phase != HackPhase::Won => {
+            Some(("HackResult1", "Hacking succeeded!"))
+        }
+        HackPhase::Lost if state.phase != HackPhase::Lost => {
+            Some(("HackResult2", "Hacking failed!"))
+        }
+        HackPhase::Unwinnable if state.phase != HackPhase::Unwinnable => Some((
+            "HackResult0",
+            "You could not break the security on this attempt.",
+        )),
+        _ => None,
+    };
+    let effect = if let Some((key, fallback)) = result_key {
+        Effect::combine(vec![
+            effect,
+            Effect::ShowMessage {
+                text: super::PanelText::hrm(world, key, fallback, &[]),
+            },
+        ])
+    } else {
+        effect
+    };
+    (next, effect)
 }
 
 pub(crate) fn handle_hrm_msg(
