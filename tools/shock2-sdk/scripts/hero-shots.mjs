@@ -1,12 +1,13 @@
 // Reproducible README/website hero stills. Built SDK; run from tools/shock2-sdk:
 //   npm run build && node scripts/hero-shots.mjs [--only hydro1] [--out <dir>]
+//   node scripts/hero-shots.mjs --replay <rec-*.jsonl> --name climb   # a recorded session as a GIF
 // Each shot boots its mission fresh in VR presentation (no screen-space HUD),
 // stands the player at `player` with a loadout in hand, aimed at the nearest
 // entity matching `subject` - a first-person VR view - and, for shots with a
 // `clip`, records it as a GIF. AI wanders, so framing is only coarsely
 // reproducible.
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -102,11 +103,18 @@ const { values } = parseArgs({
     "max-width": { type: "string", default: "1280" },
     fov: { type: "string", default: "85" },
     "gif-width": { type: "string", default: "480" },
+    replay: { type: "string" },
+    name: { type: "string", default: "replay" },
   },
 });
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const out = values.out ? resolve(values.out) : resolve(repoRoot, "screenshots/hero");
 await mkdir(out, { recursive: true });
+
+if (values.replay) {
+  await renderRecording(resolve(values.replay), values.name);
+  process.exit(0);
+}
 
 const shots = values.only ? SHOTS.filter((s) => s.name === values.only) : SHOTS;
 if (shots.length === 0) throw new Error(`no shot named '${values.only}'`);
@@ -204,14 +212,52 @@ async function recordClip(game, shot, subjectId) {
         await game.screenshot(resolve(dir, `${name}.png`), Number(values["gif-width"]));
       }
     }
-    const gif = resolve(out, `${shot.name}.gif`);
-    execFileSync("ffmpeg", [
-      "-y", "-loglevel", "error", "-framerate", "15", "-i", resolve(dir, "%04d.png"),
-      "-vf", "split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
-      gif,
-    ]);
-    console.log(`${shot.name}: ${gif}`);
+    writeGif(dir, shot.name);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** Assemble `dir/0000.png...` (15 fps) into `<out>/<name>.gif`. */
+function writeGif(dir, name) {
+  const gif = resolve(out, `${name}.gif`);
+  execFileSync("ffmpeg", [
+    "-y", "-loglevel", "error", "-framerate", "15", "-i", resolve(dir, "%04d.png"),
+    "-vf", "split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
+    gif,
+  ]);
+  console.log(`${name}: ${gif}`);
+}
+
+/**
+ * Replay a recording from its start save in the player's own view, capturing
+ * at 15 fps of recorded time (the headset's frame rate need not divide it).
+ */
+async function renderRecording(path, name) {
+  const [header, ...frames] = (await readFile(path, "utf8")).trim().split("\n").map(JSON.parse);
+  const debugFlags = ["--window-size", "1920x1080"];
+  if (header.presentation === "Vr") debugFlags.push("--vr");
+  if (header.experimental.length) debugFlags.push("--experimental", header.experimental.join(","));
+  const game = await GameServer.launch({ mission: header.scene, debugFlags, repoRoot });
+  const dir = await mkdtemp(resolve(tmpdir(), `hero-${name}-`));
+  try {
+    await game.replay(path);
+    await game.devParams.set("fov_override_deg", Number(values.fov));
+    let clock = 0;
+    let captured = 0;
+    for (const frame of frames) {
+      await game.step({ frames: 1 });
+      clock += frame.dt;
+      // A long frame spans several capture ticks: repeat the image for each.
+      while (clock >= captured / 15) {
+        const file = resolve(dir, `${String(captured).padStart(4, "0")}.png`);
+        await game.screenshot(file, Number(values["gif-width"]));
+        captured++;
+      }
+    }
+    writeGif(dir, name);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await game.shutdown();
   }
 }
