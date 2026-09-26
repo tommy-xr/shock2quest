@@ -1247,7 +1247,12 @@ impl Game {
     /// (no loading-screen deferral), so the returned scene name already reflects
     /// the restored mission. A missing save leaves the active game unchanged.
     pub fn load_game(&mut self, file: String) -> io::Result<String> {
-        let path = save_file_path(&file);
+        self.load_game_at(&save_file_path(&file))
+    }
+
+    /// Load a save by path - e.g. a recording's start save, which lives beside
+    /// the recording rather than among the named saves.
+    pub fn load_game_at(&mut self, path: &Path) -> io::Result<String> {
         self.load_from_file(path.to_string_lossy().into_owned())?;
         Ok(self.scene_name().to_string())
     }

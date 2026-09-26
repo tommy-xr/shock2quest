@@ -934,6 +934,16 @@ export class Game {
   }
 
   /**
+   * Load a recording (`ToggleInputRecording`, `rec-*.jsonl`) and its start
+   * save; the next `frames` stepped frames then play the recorded input, dt
+   * and clock instead of control input. The runtime must match the recording's
+   * presentation (`--vr`) and experimental flags.
+   */
+  async replay(path: string): Promise<{ frames: number; scene: string }> {
+    return this.client.post("/v1/replay", { path });
+  }
+
+  /**
    * Capture the current frame. Saved at the runtime's declared 800x600 by
    * default (even on a HiDPI framebuffer); pass `maxWidth` for more detail.
    */

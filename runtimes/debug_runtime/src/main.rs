@@ -413,6 +413,7 @@ async fn start_http_server(
         )
         .route("/v1/save", axum::routing::post(save_game))
         .route("/v1/load", axum::routing::post(load_game))
+        .route("/v1/replay", axum::routing::post(replay_recording))
         .route("/v1/ui", get(get_ui_state))
         .route("/v1/quests", get(get_quest_bits))
         .route("/v1/quests/:name", axum::routing::post(set_quest_bit))
@@ -493,6 +494,9 @@ async fn start_http_server(
     );
     info!(
         "  POST /v1/load             - Load a named save (restores mission/player/quests) {{file}}"
+    );
+    info!(
+        "  POST /v1/replay           - Load a recording's start save; later steps play its frames {{path}}"
     );
     info!(
         "  GET  /v1/ui               - Flat-mode UI state (mode: shooter/use, MFD panel, inventory strip)"
@@ -601,6 +605,9 @@ fn run_game_blocking(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .collect();
+    // A replay must run with the settings it was recorded under.
+    let mut sorted_experimental: Vec<String> = experimental_features.iter().cloned().collect();
+    sorted_experimental.sort();
 
     let (mission, spawn_location) = parse_mission(&args.mission);
     info!("Mission parsed: {} with spawn location", mission);
@@ -685,7 +692,11 @@ fn run_game_blocking(
     //   command-receive time (which is before this iteration's render/swap and
     //   would read a stale/blank back buffer -> intermittent black screenshots).
     let mut pending_step_reply: Option<oneshot::Sender<Result<StepResult, StepError>>> = None;
+    // Frames of a loaded recording, consumed one per stepped frame.
+    let mut replay: std::collections::VecDeque<shock2vr::input::recording::RecordedFrame> =
+        std::collections::VecDeque::new();
     let mut frames_advanced_this_step = 0u32;
+    let mut time_advanced_this_step = 0.0f32;
     let mut pending_screenshots: Vec<(ScreenshotSpec, oneshot::Sender<ScreenshotResult>)> =
         Vec::new();
 
@@ -774,6 +785,7 @@ fn run_game_blocking(
                     step_requested = true;
                     is_paused = false;
                     frames_advanced_this_step = 0;
+                    time_advanced_this_step = 0.0;
                     // Reply is sent once stepping actually completes (below).
                     pending_step_reply = Some(reply);
                 }
@@ -784,6 +796,46 @@ fn run_game_blocking(
                 RuntimeCommand::Shutdown => {
                     shutdown_requested = true;
                     tracing::info!("Shutdown requested via API");
+                }
+                RuntimeCommand::Replay {
+                    header,
+                    save,
+                    frames,
+                    reply,
+                } => {
+                    replay.clear();
+                    let loaded = if pending_step_reply.is_some() {
+                        Err((409, "a step is in progress".to_owned()))
+                    } else if header.presentation != presentation_mode
+                        || header.experimental != sorted_experimental
+                    {
+                        Err((
+                            409,
+                            format!(
+                                "recorded as {:?} with experimental {:?}; this runtime is {:?} with {:?}",
+                                header.presentation,
+                                header.experimental,
+                                presentation_mode,
+                                sorted_experimental
+                            ),
+                        ))
+                    } else {
+                        game.load_game_at(&save).map_err(|e| (500, e.to_string()))
+                    };
+                    if loaded.is_ok() {
+                        shock2vr::dev_params::set(
+                            shock2vr::dev_params::GLOVE_FORWARD_CM,
+                            header.glove_forward_cm,
+                        );
+                        // Continue on the recording's clock, so paused updates
+                        // and later steps agree with the replayed frames.
+                        if let Some(first) = frames.first() {
+                            accumulated_time = (first.total - first.dt as f64) as f32;
+                        }
+                        tracing::info!("Replaying {} recorded frames", frames.len());
+                        replay = frames.into();
+                    }
+                    let _ = reply.send(loaded);
                 }
                 other => {
                     process_command(
@@ -840,7 +892,22 @@ fn run_game_blocking(
             // motion. With a fixed step, `{frames:N}` == N/FPS seconds of sim time
             // and `{duration:T}` runs exactly T/dt frames. Free-running (not
             // stepping) still uses real wall-clock dt.
-            let game_time = if step_requested {
+            //
+            // A replay frame supplies the input, actions and time its runtime
+            // really had; the input then stays put for paused updates.
+            let replay_frame = if step_requested {
+                replay.pop_front()
+            } else {
+                None
+            };
+            let game_time = if let Some(frame) = &replay_frame {
+                current_input = frame.input.clone();
+                action_state = frame.actions();
+                Time {
+                    elapsed: Duration::from_secs_f32(frame.dt),
+                    total: Duration::from_secs_f64(frame.total),
+                }
+            } else if step_requested {
                 Time {
                     elapsed: Duration::from_secs_f32(FIXED_STEP_DT),
                     total: Duration::from_secs_f32(accumulated_time + FIXED_STEP_DT),
@@ -852,6 +919,27 @@ fn run_game_blocking(
                 "game.update",
                 game.update(&game_time, &current_input, &mut action_state)
             );
+            if replay_frame.is_some() {
+                // The recorded frames after a transition were spent on the
+                // loading screen, which this runtime skips: stop rather than
+                // play them into the destination level.
+                if !replay.is_empty() && game.has_pending_transition() {
+                    tracing::warn!(
+                        "replay stopped at a level transition ({} frames left)",
+                        replay.len()
+                    );
+                    replay.clear();
+                }
+                // Out of frames: keep the last poses and grips, drop the sticks,
+                // triggers and actions so nothing keeps walking or firing.
+                if replay.is_empty() {
+                    for hand in [&mut current_input.left_hand, &mut current_input.right_hand] {
+                        hand.thumbstick = cgmath::Vector2::new(0.0, 0.0);
+                        hand.trigger_value = 0.0;
+                    }
+                    action_state = InputActionState::new();
+                }
+            }
             // An in-game transition (a frobbed bulkhead button, a trigger
             // volume) starts here; land it now for the same reason a warp does.
             if !args.defer_transitions {
@@ -867,7 +955,8 @@ fn run_game_blocking(
                 // Increment frame counter and accumulated time
                 frame_counter += 1;
                 frames_advanced_this_step += 1;
-                accumulated_time += game_time.elapsed.as_secs_f32();
+                time_advanced_this_step += game_time.elapsed.as_secs_f32();
+                accumulated_time = game_time.total.as_secs_f32();
 
                 // Check if we should continue stepping or pause
                 let should_continue = if let Some(target_time) = target_step_time {
@@ -916,7 +1005,7 @@ fn run_game_blocking(
                     if let Some(reply) = pending_step_reply.take() {
                         let _ = reply.send(Ok(StepResult {
                             frames_advanced: frames_advanced_this_step,
-                            time_advanced: frames_advanced_this_step as f32 * FIXED_STEP_DT,
+                            time_advanced: time_advanced_this_step,
                             new_frame_index: frame_counter,
                             new_total_time: accumulated_time,
                         }));
@@ -1124,9 +1213,12 @@ fn process_command(
             }
         }
         // Step and Screenshot are intercepted in the game loop (deferred replies),
-        // so they never reach process_command.
-        RuntimeCommand::Step(..) | RuntimeCommand::Screenshot(..) => {
-            unreachable!("Step/Screenshot are handled in the game loop")
+        // and Replay there because it owns the replay queue, so they never
+        // reach process_command.
+        RuntimeCommand::Step(..)
+        | RuntimeCommand::Screenshot(..)
+        | RuntimeCommand::Replay { .. } => {
+            unreachable!("Step/Screenshot/Replay are handled in the game loop")
         }
         RuntimeCommand::RayCast(request, reply) => {
             let result = if let Some(debug_scene) = game.debug_scene() {
@@ -3213,6 +3305,65 @@ async fn save_game(
                 )),
             ))
         }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ReplayRequest {
+    /// Path to a `rec-*.jsonl` recording (`ToggleInputRecording`).
+    path: String,
+}
+
+#[derive(serde::Serialize)]
+struct ReplayResponse {
+    /// Recorded frames queued; step this many to play the whole recording.
+    frames: usize,
+    /// Active scene after loading the recording's start save.
+    scene: String,
+}
+
+/// HTTP handler: load a recording's start save and queue its frames.
+async fn replay_recording(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<ReplayRequest>,
+) -> Result<Json<ReplayResponse>, (StatusCode, String)> {
+    let path = std::path::PathBuf::from(&request.path);
+    let (header, frames) = shock2vr::input::recording::read_recording(&path)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("{}: {e}", request.path)))?;
+    // `Duration::from_secs_*` panics on these, which would kill the game loop.
+    if let Some(bad) = frames
+        .iter()
+        .position(|f| !(f.dt.is_finite() && f.dt >= 0.0 && f.total.is_finite() && f.total >= 0.0))
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("frame {bad} has an invalid dt/total"),
+        ));
+    }
+    let save = path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join(&header.save);
+    let count = frames.len();
+    let (reply, result) = oneshot::channel();
+    command_tx
+        .send(RuntimeCommand::Replay {
+            header,
+            save,
+            frames,
+            reply,
+        })
+        .map_err(|_| game_loop_unavailable())?;
+    match result.await {
+        Ok(Ok(scene)) => Ok(Json(ReplayResponse {
+            frames: count,
+            scene,
+        })),
+        Ok(Err((status, e))) => Err((
+            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            e,
+        )),
+        Err(_) => Err(game_loop_unavailable()),
     }
 }
 
