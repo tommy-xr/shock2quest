@@ -305,7 +305,7 @@ resolution:
 3. `adb pull /sdcard/shock2quest/recordings/` - each recording is a
    `rec-<ms>.jsonl` plus the `rec-<ms>.sav` it starts from.
 4. `cd tools/shock2-sdk && npm run build && node scripts/hero-shots.mjs --replay <rec.jsonl> --name <gif>`
-   renders it first-person to `screenshots/hero/<gif>.gif`
+   renders it first-person to `screenshots/hero/<gif>.{gif,mp4}`
    (or `POST /v1/replay` on the debug runtime for custom capture).
 
 Replay is approximate (a save omits transient state; some systems are

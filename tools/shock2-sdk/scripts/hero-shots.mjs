@@ -4,16 +4,21 @@
 // Each shot boots its mission fresh in VR presentation (no screen-space HUD),
 // stands the player at `player` with a loadout in hand, aimed at the nearest
 // entity matching `subject` - a first-person VR view - and, for shots with a
-// `clip`, records it as a GIF. AI wanders, so framing is only coarsely
+// `clip` or `melee`, records it as a GIF and MP4. Each output gets a
+// `<name>.json` provenance file. AI wanders, so framing is only coarsely
 // reproducible.
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
   aimHandsAt,
+  quatConjugate,
+  quatMultiply,
+  quatRotate,
   attachSupportHand,
   faceTarget,
   GameServer,
@@ -26,6 +31,8 @@ const AIM_RIGHT = [0.1, -0.18, -0.55];
 const AIM_LEFT = [-0.1, -0.2, -0.52];
 const REST_LEFT = [-0.18, -0.35, -0.4];
 const REST_RIGHT = [0.18, -0.4, -0.35];
+// A melee weapon held up and ready, in frame.
+const READY_LEFT = [-0.16, -0.24, -0.45];
 
 const SHOTS = [
   {
@@ -74,6 +81,20 @@ const SHOTS = [
     },
   },
   {
+    // Weapon + melee in motion: two pistol shots, then the wrench finishes it.
+    name: "medsci1-melee",
+    mission: "medsci1.mis",
+    player: [16, 1, 17],
+    heading: [-1, 0, 0],
+    // A pipe hybrid, spawned in front of the player by SpawnDebugMonster: the
+    // mission's own wander in and out of this quiet room.
+    spawnMonster: -397,
+    loadout: { right: "Pistol", left: "Wrench" },
+    hands: { right: AIM_RIGHT, left: READY_LEFT },
+    stats: { skills: { standard_weapons: 1 } },
+    melee: true,
+  },
+  {
     // Single weapon.
     name: "rec1",
     mission: "rec1.mis",
@@ -103,6 +124,7 @@ const { values } = parseArgs({
     "max-width": { type: "string", default: "1280" },
     fov: { type: "string", default: "85" },
     "gif-width": { type: "string", default: "480" },
+    "video-width": { type: "string", default: "960" },
     replay: { type: "string" },
     name: { type: "string", default: "replay" },
   },
@@ -120,6 +142,19 @@ const shots = values.only ? SHOTS.filter((s) => s.name === values.only) : SHOTS;
 if (shots.length === 0) throw new Error(`no shot named '${values.only}'`);
 
 for (const shot of shots) {
+  // AI timing jitters between runs, so a take can fail its checks: retry it.
+  for (let take = 1; ; take++) {
+    try {
+      await captureShot(shot);
+      break;
+    } catch (error) {
+      if (!(error instanceof assert.AssertionError) || take === 3) throw error;
+      console.log(`${shot.name}: take ${take} failed (${error.message}); retrying`);
+    }
+  }
+}
+
+async function captureShot(shot) {
   const game = await GameServer.launch({
     mission: shot.mission,
     debugFlags: ["--vr", "--window-size", "1920x1080"],
@@ -127,11 +162,14 @@ for (const shot of shots) {
   });
   try {
     if (shot.stats) await game.player.setStats(shot.stats);
-    const { entities } = await game.entities.list({ filter: shot.subject, limit: 50 });
-    const dist = (e) => Math.hypot(...e.position.map((v, i) => v - shot.player[i]));
-    const subject = entities.sort((a, b) => dist(a) - dist(b))[0];
-    if (!subject) throw new Error(`${shot.name}: no '${shot.subject}' in ${shot.mission}`);
-    const heading = subject.position.map((v, i) => v - shot.player[i]);
+    let subject;
+    if (shot.subject) {
+      const { entities } = await game.entities.list({ filter: shot.subject, limit: 50 });
+      const dist = (e) => Math.hypot(...e.position.map((v, i) => v - shot.player[i]));
+      subject = entities.sort((a, b) => dist(a) - dist(b))[0];
+      if (!subject) throw new Error(`${shot.name}: no '${shot.subject}' in ${shot.mission}`);
+    }
+    const heading = shot.heading ?? subject.position.map((v, i) => v - shot.player[i]);
 
     // Square up at the spawn point, out of the subject's sight, along the
     // shot's heading (settling takes seconds - long enough to draw an attack).
@@ -140,6 +178,7 @@ for (const shot of shots) {
     const [x, y, z] = shot.player;
     await game.player.teleport({ x, y, z });
     await game.step({ frames: 5 });
+    if (shot.spawnMonster) subject = await spawnMonster(game, shot.spawnMonster);
     // Aim where the subject is now; it may have moved while we squared up.
     const target = (await aimPoints(game, subject.id))("torso");
     await aimHandsAt(game, target, shot.hands);
@@ -162,7 +201,18 @@ for (const shot of shots) {
     const path = resolve(out, `${shot.name}.png`);
     const result = await game.screenshot(path, Number(values["max-width"]));
     console.log(`${shot.name}: ${result.full_path} ${result.resolution.join("x")}`);
-    if (shot.clip) await recordClip(game, shot, subject.id);
+    const provenance = {
+      mission: shot.mission,
+      player: shot.player,
+      subject: shot.subject ?? `template ${shot.spawnMonster}`,
+      loadout: shot.loadout,
+      stats: shot.stats,
+      fovDeg: Number(values.fov),
+      still: { file: `${shot.name}.png`, resolution: result.resolution },
+    };
+    if (shot.clip) provenance.clip = await recordClip(game, shot, subject.id);
+    if (shot.melee) provenance.melee = await recordMelee(game, shot, subject.id, held);
+    await writeProvenance(shot.name, provenance);
   } finally {
     await game.shutdown();
   }
@@ -185,48 +235,240 @@ async function aimPoints(game, id) {
 async function recordClip(game, shot, subjectId) {
   const { clip } = shot;
   const frames = Math.round(clip.seconds * 60);
-  const dir = await mkdtemp(resolve(tmpdir(), `hero-${shot.name}-`));
+  const sink = await frameSink(game, shot.name);
   try {
     for (let frame = 0; frame < frames; frame++) {
       const t = frame / 60;
-      // Track the subject: eyes on its head (a charging creature's torso would
-      // pitch the view into the floor), hands on its torso, both drifting.
-      const drift = sway(1, t, 0.04);
-      const point = await aimPoints(game, subjectId);
-      const look = point("head").map((v, i) => v + drift[i]);
-      const body = point("torso").map((v, i) => v + drift[i]);
       const hands = Object.fromEntries(
-        Object.entries(clip.hands).map(([hand, keys]) => {
-          const tremor = sway(hand === "right" ? 2 : 3, t, 0.008, 0.6);
-          return [hand, sampleTrack(keys, t).map((v, i) => v + tremor[i])];
-        }),
+        Object.entries(clip.hands).map(([hand, keys]) => [hand, sampleTrack(keys, t)]),
       );
-      await aimHandsAt(game, look, hands, body);
+      await trackSubject(game, await aimPoints(game, subjectId), t, hands);
       for (const [hand, pulls] of Object.entries(clip.trigger ?? {})) {
         const pulled = pulls.some((at) => t >= at && t < at + 0.12);
         await game.input.set(`${hand}_hand.trigger`, pulled ? 1 : 0);
       }
-      await game.step({ frames: 1 });
-      if (frame % 4 === 0) {
-        const name = String(frame / 4).padStart(4, "0");
-        await game.screenshot(resolve(dir, `${name}.png`), Number(values["gif-width"]));
-      }
+      await sink.step();
     }
-    writeGif(dir, shot.name);
+    return sink.finish();
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await sink.dispose();
   }
 }
 
-/** Assemble `dir/0000.png...` (15 fps) into `<out>/<name>.gif`. */
-function writeGif(dir, name) {
-  const gif = resolve(out, `${name}.gif`);
+/** Spawn `template` in front of the player (SpawnDebugMonster) and return it. */
+async function spawnMonster(game, template) {
+  const before = new Set((await game.entities.byTemplate(template)).map((e) => e.id));
+  await game.input.trigger("SpawnDebugMonster");
+  await game.step({ frames: 1 });
+  const spawned = (await game.entities.byTemplate(template)).find((e) => !before.has(e.id));
+  if (!spawned) throw new Error(`SpawnDebugMonster did not spawn template ${template}`);
+  return spawned;
+}
+
+/**
+ * Aim at `point` (from `aimPoints`) for time `t`: eyes on its head (a charging
+ * creature's torso would pitch the view into the floor), `hands` - offsets
+ * from the eye - on its torso, all with seeded drift and tremor. View pitch is
+ * capped so a creature in the face or falling at the feet doesn't swing it.
+ */
+async function trackSubject(game, point, t, hands) {
+  const drift = sway(1, t, 0.04);
+  const { player } = await game.info();
+  const eye = player.position.map((v, i) => v + (i === 1 ? player.camera_offset[1] : 0));
+  const head = point("head").map((v, i) => v + drift[i]);
+  const flat = Math.hypot(head[0] - eye[0], head[2] - eye[2]);
+  const maxRise = flat * Math.tan((25 * Math.PI) / 180);
+  const look = [head[0], eye[1] + Math.max(-maxRise, Math.min(maxRise, head[1] - eye[1])), head[2]];
+  const body = point("torso").map((v, i) => v + drift[i]);
+  const trembling = Object.fromEntries(
+    Object.entries(hands).map(([hand, offset]) => {
+      const tremor = sway(hand === "right" ? 2 : 3, t, 0.008, 0.6);
+      return [hand, offset.map((v, i) => v + tremor[i])];
+    }),
+  );
+  await aimHandsAt(game, look, trembling, body);
+}
+
+/**
+ * Pistol, then wrench, against the spawned hybrid: two shots that wound it,
+ * then a wrench strike through its torso once it closes in. Damage comes only
+ * from trigger and tracked-hand input; each beat is asserted, so a take where
+ * the fight goes differently fails instead of writing a misleading clip.
+ */
+async function recordMelee(game, shot, subjectId, held) {
+  const property = async (id, name) =>
+    Number((await game.entities.detail(id)).properties.find((p) => p.name === name)?.value);
+  const hp = () => property(subjectId, "HitPoints");
+  const ammo = () => property(held.right, "Ammo");
+  const initialHp = await hp();
+  const initialAmmo = await ammo();
+  const sink = await frameSink(game, shot.name);
+  let t = 0;
+  let point;
+  // Track the subject for `seconds`; `still` keeps the last aim instead.
+  const hold = async (seconds, hands, { trigger = () => {}, still = false } = {}) => {
+    for (const end = t + seconds; t < end; t += 1 / 60) {
+      if (!still) point = await aimPoints(game, subjectId);
+      await trackSubject(game, point, t, hands);
+      await trigger();
+      await sink.step();
+    }
+  };
+  try {
+    // Two pistol shots, the wrench held ready.
+    const pulls = [0.3, 0.8];
+    const start = t;
+    await hold(1.3, shot.hands, {
+      trigger: () =>
+        game.input.set(
+          "right_hand.trigger",
+          pulls.some((at) => t - start >= at && t - start < at + 0.12) ? 1 : 0,
+        ),
+    });
+    const afterGunHp = await hp();
+    const afterAmmo = await ammo();
+    assert.equal(afterAmmo, initialAmmo - 2, "the pistol must fire two rounds");
+    assert.ok(
+      afterGunHp < initialHp && afterGunHp > 0,
+      `the pistol must wound, not kill (${initialHp} -> ${afterGunHp})`,
+    );
+
+    // Step in to wrench range: a wounded hybrid can hold at its own pipe's
+    // reach, beyond the wrench's.
+    const reach = async () => {
+      const [monster, { player }] = [await game.entities.detail(subjectId), await game.info()];
+      return Math.hypot(
+        monster.position[0] - player.position[0],
+        monster.position[2] - player.position[2],
+      );
+    };
+    for (let frame = 0; frame < 240 && (await reach()) > 1.5; frame++) {
+      await game.input.set("right_hand.thumbstick", [0, 0.6]);
+      await hold(1 / 60, shot.hands);
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+
+    // Overhead wrench swing: raise it over the shoulder, then chop down through
+    // the torso. The wrench runs up the fist's +Y, its head ~0.75 out; pitching
+    // the fist about its X axis from +30deg (tilted back) to -80deg (pointing
+    // forward, slightly down) sweeps the head forward and down, in view.
+    const windUp = 18;
+    const chop = 16;
+    const followThrough = 12;
+    const total = windUp + chop + followThrough;
+    for (let frame = 0; frame < total; frame++, t += 1 / 60) {
+      point = await aimPoints(game, subjectId);
+      await trackSubject(game, point, t, { right: shot.hands.right });
+      const { player } = await game.info();
+      const eye = player.position.map((v, i) => v + (i === 1 ? player.camera_offset[1] : 0));
+      const torso = point("torso");
+      const toward = torso.map((v, i) => v - eye[i]);
+      const yaw = Math.atan2(-toward[0], -toward[2]);
+      const yawQuat = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
+      // Swing so the head ends at the torso's horizontal distance.
+      const lunge = -Math.min(0.75, Math.max(0.35, Math.hypot(toward[0], toward[2]) - 0.74));
+      const struck = [-0.05, -0.22, lunge];
+      const pitch = sampleTrack(
+        [
+          { t: 0, value: 0 },
+          { t: windUp, value: 30 },
+          { t: windUp + chop, value: -80 },
+          { t: total - 1, value: -70 },
+        ],
+        frame,
+      );
+      const pivot = sampleTrack(
+        [
+          { t: 0, value: READY_LEFT },
+          { t: windUp, value: [-0.2, -0.12, -0.35] },
+          { t: windUp + chop, value: struck },
+          { t: total - 1, value: struck },
+        ],
+        frame,
+      );
+      const radians = (pitch * Math.PI) / 180;
+      const rotation = quatMultiply(yawQuat, [Math.sin(radians / 2), 0, 0, Math.cos(radians / 2)]);
+      const hand = eye.map((v, i) => v + quatRotate(yawQuat, pivot)[i]);
+      const inversePawn = quatConjugate(player.rotation);
+      await game.input.set(
+        "left_hand.position",
+        quatRotate(inversePawn, hand.map((v, i) => v - player.position[i])),
+      );
+      await game.input.set("left_hand.rotation", quatMultiply(inversePawn, rotation));
+      await sink.step();
+    }
+    const afterMeleeHp = await hp();
+    assert.equal(afterMeleeHp, 0, `the wrench must finish it (${afterGunHp} -> ${afterMeleeHp})`);
+
+    // Recover: lower both hands, eyes where it stood as it drops.
+    await hold(1, { right: REST_RIGHT, left: REST_LEFT }, { still: true });
+    const { player } = await game.info();
+    assert.equal(player.life_state, "alive");
+    assert.equal(player.right_hand_entity_id, held.right, "the pistol must still be held");
+    assert.equal(player.wielded_entity_id, held.left, "the wrench must still be held");
+    return {
+      ...sink.finish(),
+      hp: [initialHp, afterGunHp, afterMeleeHp],
+      ammo: [initialAmmo, afterAmmo],
+    };
+  } finally {
+    await sink.dispose();
+  }
+}
+
+/**
+ * Collects a clip one 60 Hz frame at a time, capturing every 4th (15 fps);
+ * `finish` writes `<out>/<name>.gif` and `.mp4`.
+ */
+async function frameSink(game, name) {
+  const dir = await mkdtemp(resolve(tmpdir(), `hero-${name}-`));
+  let frame = 0;
+  let captured = 0;
+  return {
+    async step() {
+      await game.step({ frames: 1 });
+      if (frame++ % 4 === 0) await this.capture();
+    },
+    async capture() {
+      const file = resolve(dir, `${String(captured++).padStart(4, "0")}.png`);
+      await game.screenshot(file, Number(values["video-width"]));
+    },
+    finish: () => writeMedia(dir, name, captured),
+    dispose: () => rm(dir, { recursive: true, force: true }),
+  };
+}
+
+/** Assemble `dir/0000.png...` (15 fps) into `<out>/<name>.gif` and `.mp4`. */
+function writeMedia(dir, name, frames) {
+  const input = ["-y", "-loglevel", "error", "-framerate", "15", "-i", resolve(dir, "%04d.png")];
+  const gifWidth = Number(values["gif-width"]);
   execFileSync("ffmpeg", [
-    "-y", "-loglevel", "error", "-framerate", "15", "-i", resolve(dir, "%04d.png"),
-    "-vf", "split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
-    gif,
+    ...input,
+    "-vf",
+    `scale=${gifWidth}:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4`,
+    resolve(out, `${name}.gif`),
   ]);
-  console.log(`${name}: ${gif}`);
+  // H.264 needs even dimensions.
+  execFileSync("ffmpeg", [
+    ...input,
+    "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+    resolve(out, `${name}.mp4`),
+  ]);
+  console.log(`${name}: ${resolve(out, name)}.{gif,mp4}`);
+  return { files: [`${name}.gif`, `${name}.mp4`], frames, fps: 15 };
+}
+
+/** Write `<out>/<name>.json`: what was captured, from which revision. */
+async function writeProvenance(name, details) {
+  const git = (...args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
+  const provenance = {
+    revision: git("rev-parse", "HEAD"),
+    dirty: git("status", "--porcelain", "--untracked-files=no") !== "",
+    capturedAt: new Date().toISOString(),
+    ...details,
+  };
+  await writeFile(resolve(out, `${name}.json`), `${JSON.stringify(provenance, null, 2)}\n`);
 }
 
 /**
@@ -239,7 +481,7 @@ async function renderRecording(path, name) {
   if (header.presentation === "Vr") debugFlags.push("--vr");
   if (header.experimental.length) debugFlags.push("--experimental", header.experimental.join(","));
   const game = await GameServer.launch({ mission: header.scene, debugFlags, repoRoot });
-  const dir = await mkdtemp(resolve(tmpdir(), `hero-${name}-`));
+  const sink = await frameSink(game, name);
   try {
     await game.replay(path);
     await game.devParams.set("fov_override_deg", Number(values.fov));
@@ -249,15 +491,16 @@ async function renderRecording(path, name) {
       await game.step({ frames: 1 });
       clock += frame.dt;
       // A long frame spans several capture ticks: repeat the image for each.
-      while (clock >= captured / 15) {
-        const file = resolve(dir, `${String(captured).padStart(4, "0")}.png`);
-        await game.screenshot(file, Number(values["gif-width"]));
-        captured++;
-      }
+      for (; clock >= captured / 15; captured++) await sink.capture();
     }
-    writeGif(dir, name);
+    await writeProvenance(name, {
+      recording: basename(path),
+      mission: header.scene,
+      fovDeg: Number(values.fov),
+      clip: sink.finish(),
+    });
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await sink.dispose();
     await game.shutdown();
   }
 }
