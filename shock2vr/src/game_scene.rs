@@ -1073,11 +1073,14 @@ pub trait DebuggableScene {
     /// the player's backpack, exactly as [`give_item`](Self::give_item) does for
     /// an item already in the world - so only genuine pickup items can be
     /// provisioned. Takes the asset cache because instantiation loads the
-    /// item's model/textures. Default: unsupported.
+    /// item's model/textures. `hand` also grabs it into that hand on the next
+    /// update (the shoulder-recall path), for staging VR captures. Default:
+    /// unsupported.
     fn spawn_item_for_player(
         &mut self,
         _asset_cache: &mut AssetCache,
         _template: &DebugItemTemplate,
+        _hand: Option<crate::Handedness>,
     ) -> Result<DebugSpawnedItem, String> {
         Err("scene does not support spawning items".to_string())
     }

@@ -96,6 +96,7 @@ pub enum RuntimeCommand {
     /// Provision a fresh item from a template into the player's inventory.
     SpawnItem {
         template: shock2vr::game_scene::DebugItemTemplate,
+        hand: Option<shock2vr::Handedness>,
         reply: oneshot::Sender<Result<shock2vr::game_scene::DebugSpawnedItem, String>>,
     },
 

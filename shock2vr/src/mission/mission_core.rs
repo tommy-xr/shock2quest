@@ -2765,6 +2765,8 @@ pub struct MissionCore {
     interaction: Box<dyn PlayerInteraction>,
     pub visibility_engine: Box<dyn VisibilityEngine>,
     pub pending_entity_triggers: Vec<String>,
+    /// Debug-provisioned items to grab into a hand on the next update.
+    debug_hand_grabs: Vec<(EntityId, crate::Handedness)>,
     pub path_database: Option<dark::mission::PathDatabase>,
     pub pathfinding_service: Option<Arc<PathfindingService>>,
     pub path_visualization: PathVisualizationSystem,
@@ -3813,6 +3815,7 @@ impl MissionCore {
             rag_doll_manager: RagDollManager::new(),
             visibility_engine: abstract_mission.visibility_engine,
             pending_entity_triggers: Vec::new(),
+            debug_hand_grabs: Vec::new(),
             obj_map: abstract_mission.obj_map,
             path_database: abstract_mission.path_database.clone(),
             pathfinding_service,
@@ -4360,6 +4363,13 @@ impl MissionCore {
         effects.extend(self.klaxon.update(&self.world));
 
         effects.extend(command_effects);
+        effects.extend(self.debug_hand_grabs.drain(..).map(|(entity_id, hand)| {
+            Effect::GrabEntity {
+                entity_id,
+                hand,
+                current_parent_id: None,
+            }
+        }));
 
         let player = {
             let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
@@ -17979,6 +17989,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         &mut self,
         asset_cache: &mut AssetCache,
         template: &crate::game_scene::DebugItemTemplate,
+        hand: Option<crate::Handedness>,
     ) -> Result<crate::game_scene::DebugSpawnedItem, String> {
         use crate::game_scene::{DebugItemTemplate, DebugSpawnedItem};
 
@@ -18016,6 +18027,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         let entity_id = self
             .spawn_into_backpack(asset_cache, template_id)
             .map_err(|e| format!("template {} is not a pickup item ({})", template_id, e))?;
+        if let Some(hand) = hand {
+            self.debug_hand_grabs.push((entity_id, hand));
+        }
 
         let name = self
             .world

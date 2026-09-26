@@ -1279,12 +1279,13 @@ impl Game {
     pub fn debug_spawn_item(
         &mut self,
         template: &game_scene::DebugItemTemplate,
+        hand: Option<Handedness>,
     ) -> Result<game_scene::DebugSpawnedItem, String> {
         let asset_cache = &mut self.asset_cache;
         self.active_game_scene
             .as_debuggable_mut()
             .ok_or_else(|| "no debuggable scene available".to_string())?
-            .spawn_item_for_player(asset_cache, template)
+            .spawn_item_for_player(asset_cache, template, hand)
     }
 
     /// Resolve the high-detail (`PMNM`) mesh setting from the experimental flags,
