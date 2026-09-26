@@ -2,9 +2,11 @@
 //!
 //! The page the original shows as a training tour ends - "Your stint aboard the
 //! UNN Gallo is finished... You've gained +2 Strength." - on its own authored
-//! screen: the `DEBRIEF.PCX` backdrop, its `DEBRIEFR.BIN` widget rect for the
-//! Continue button, and that button's label from `DEBRIEF.STR`. The body text
-//! is the `res/strings/CHARGEN.STR` page the completed tour's reward names.
+//! screen: `DEBRIEF.PCX`, its `DEBRIEFR.BIN` Continue rect and `DEBRIEF.STR`
+//! label, plus the service banner and tour illustration. Retail's
+//! `shkdebrf.cpp` supplies the text/art placements; `CHARGEN.STR` supplies
+//! the page, mission-heading format and illustration key, and `USEMSG.STR`
+//! supplies the posting. Both text faces retain their authored palette.
 //!
 //! Structurally a sibling of [`crate::scenes::GameOverScene`]: a pointer-driven
 //! `GameScene` built on one shared [`UiCanvas`], so flat and VR present the same
@@ -13,7 +15,7 @@
 //! trigger asked for - when Continue is clicked.
 
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
-use dark::importers::FONT_IMPORTER;
+use dark::importers::STRINGS_IMPORTER;
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
@@ -31,7 +33,8 @@ use crate::{
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
-        FrontendMenu, FrontendMenuItem, HAlign, Rect, ScaleMode, UiCanvas, VAlign, hit_menu_item,
+        FrontendMenu, FrontendMenuItem, HAlign, MFD_FONT, Rect, ScaleMode, TITLE_FONT, UiCanvas,
+        VAlign, hit_menu_item, resolve_font,
     },
 };
 
@@ -45,19 +48,23 @@ const LAYOUT_FILE: &str = "DEBRIEFR.BIN";
 const LABELS_FILE: &str = "DEBRIEF.STR";
 /// Same display font the other frontend screens label their buttons with.
 const MENU_FONT: &str = "metafont.fon";
-/// The small in-game font, for the page body - drawn at its authored size
-/// (`text_native`, the fidelity-correct default), so the page reads as the same
-/// kind of text the rest of the interface draws.
-const BODY_FONT: &str = "mainfont.fon";
-/// Row pitch, matching the load screen's list rows.
-const BODY_LINE_H: f32 = 19.0;
+/// Retail's gShockFontBlue (BLUEAA.FON) and gShockFont (MAINAA.FON).
+/// These shared aliases preserve the fontpal.pcx colors in both presentations.
+const BODY_FONT: &str = TITLE_FONT;
+const MISSION_FONT: &str = MFD_FONT;
 /// The 4:3 art is letterboxed (not stretched) on non-4:3 windows.
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
-/// The backdrop's central text panel, inset off its border. Read off
-/// `DEBRIEF.PCX` (the panel's frame spans x 212..558, y 83..395); the layout
-/// file describes only the button, so this rect is not in it.
-const TEXT_RECT: Rect = Rect::new(224.0, 96.0, 322.0, 288.0);
+/// Retail src/shock/shkdebrf.cpp hardcodes these placements on the 640x480
+/// canvas; DEBRIEFR.BIN only supplies Continue. Text starts at each rect's
+/// top-left, with native glyph-height row pitch (BLUEAA 20px, MAINAA 12px).
+const TEXT_RECT: Rect = Rect::new(216.0, 92.0, 336.0, 294.0);
+const MISSION_RECT: Rect = Rect::new(6.0, 6.0, 200.0, 75.0);
+/// Retail blits CGTITLE at (212,4) inside a 353x80 region, without stretching:
+/// the three shipped images are 347x79. Likewise D001..D006 are 204x156.
+const LOGO_RECT: Rect = Rect::new(212.0, 4.0, 347.0, 79.0);
+const ART_RECT: Rect = Rect::new(4.0, 320.0, 204.0, 156.0);
+const SERVICE_TEXTURES: [&str; 3] = ["CGTITLE1.PCX", "CGTITLE2.PCX", "CGTITLE3.PCX"];
 
 /// The one thing this screen does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +94,8 @@ pub struct DebriefScene {
     scene_name: String,
     /// The page being shown, verbatim (authored line breaks intact).
     text: String,
+    /// Mission1..Mission27 also selects the posting, service banner and art.
+    mission: Option<u8>,
     /// What Continue does: the transition (behind any departure cutscenes) the
     /// tour trigger asked for.
     then: GlobalEffect,
@@ -97,11 +106,16 @@ pub struct DebriefScene {
 }
 
 impl DebriefScene {
-    pub fn new(text: String, then: GlobalEffect) -> Self {
+    pub fn new(text_key: &str, text: String, then: GlobalEffect) -> Self {
         Self {
             world: super::ui_scene_world(),
             scene_name: "debrief".to_owned(),
             text,
+            mission: text_key
+                .to_ascii_lowercase()
+                .strip_prefix("mission")
+                .and_then(|number| number.parse::<u8>().ok())
+                .filter(|number| (1..=27).contains(number)),
             then,
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
             truncation_warned: false,
@@ -128,41 +142,55 @@ impl DebriefScene {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
 
-        let lines: Vec<String> = {
-            let font = asset_cache.get(&FONT_IMPORTER, BODY_FONT);
-            wrap_page(&**font, &self.text, font.base_height(), TEXT_RECT.w)
-        };
-        for (index, line) in lines.iter().enumerate() {
-            let y = TEXT_RECT.y + index as f32 * BODY_LINE_H;
-            // The shipped pages wrap to at most 10 rows in a 15-row panel, so
-            // this is a guard, not a design: a page that would spill over the
-            // backdrop art stops at the panel and says so, rather than quietly
-            // drawing its last line (the grant) off the screen.
-            if y + BODY_LINE_H > TEXT_RECT.y + TEXT_RECT.h {
-                if !self.truncation_warned {
-                    self.truncation_warned = true;
-                    warn!(
-                        "Debrief page is {} rows too tall for the panel - truncated",
-                        lines.len() - index
+        let mut heading = String::new();
+        if let Some(mission) = self.mission {
+            canvas.image(LOGO_RECT, SERVICE_TEXTURES[usize::from((mission - 1) / 9)]);
+            if let Some(strings) = asset_cache.get_opt(&STRINGS_IMPORTER, "chargen.str") {
+                if let Some(picture) =
+                    crate::player_stats::debrief_text(&strings, &format!("missionpic{mission}"))
+                {
+                    canvas.image(ART_RECT, &format!("{picture}.pcx"));
+                }
+                if let Some(postings) = asset_cache.get_opt(&STRINGS_IMPORTER, "usemsg.str") {
+                    if let (Some(format), Some(posting)) = (
+                        strings.get("missiontitle"),
+                        crate::player_stats::debrief_text(&postings, &format!("post{mission}")),
+                    ) {
+                        // Retail uses the complete PostN, including its gain line.
+                        heading = format.replace("%s", &posting);
+                    }
+                }
+            }
+        }
+
+        for (text, font_name, rect) in [
+            (self.text.as_str(), BODY_FONT, TEXT_RECT),
+            (heading.as_str(), MISSION_FONT, MISSION_RECT),
+        ] {
+            let font = resolve_font(asset_cache, font_name);
+            let line_height = font.base_height();
+            let lines = wrap_page(&**font, text, line_height, rect.w);
+            for (index, line) in lines.iter().enumerate() {
+                let y = rect.y + index as f32 * line_height;
+                // All 27 retail pages fit at native size. Warn for oversized
+                // replacement strings instead of painting over the frame.
+                if y + line_height > rect.y + rect.h {
+                    if !self.truncation_warned {
+                        self.truncation_warned = true;
+                        warn!("Debrief text exceeds its retail rect - truncated");
+                    }
+                    break;
+                }
+                if !line.is_empty() {
+                    canvas.text_native_fit(
+                        Rect::new(rect.x, y, rect.w, line_height),
+                        line,
+                        font_name,
+                        HAlign::Left,
+                        VAlign::Top,
                     );
                 }
-                break;
             }
-            // A blank line is a paragraph gap: it spaces the block, it draws
-            // nothing.
-            if line.is_empty() {
-                continue;
-            }
-            // `_fit` rather than plain `text_native`: the wrap already keeps
-            // rows inside the column, so this only catches a single word wider
-            // than the panel, which would otherwise run across the backdrop art.
-            canvas.text_native_fit(
-                Rect::new(TEXT_RECT.x, y, TEXT_RECT.w, BODY_LINE_H),
-                line,
-                BODY_FONT,
-                HAlign::Left,
-                VAlign::Middle,
-            );
         }
 
         let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
@@ -298,26 +326,38 @@ fn wrap_page(font: &dyn engine::Font, text: &str, font_size: f32, max_width: f32
     lines
 }
 
-/// Greedy word wrap with real glyph widths. A single word wider than the column
-/// gets its own line rather than being dropped.
+/// Retail gr_font_string_wrap: retain authored spaces within a row, replace
+/// the last fitting space with a line break, and swallow one following space.
+/// The general engine wrapper normalizes whitespace and splits long words;
+/// that changes the line breaks of CHARGEN.STR's double-spaced sentences.
 fn wrap_text(font: &dyn engine::Font, text: &str, font_size: f32, max_width: f32) -> Vec<String> {
     let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        let candidate = if current.is_empty() {
-            word.to_owned()
-        } else {
-            format!("{current} {word}")
-        };
-        if measure_text_width(font, &candidate, font_size) <= max_width || current.is_empty() {
-            current = candidate;
-        } else {
-            lines.push(std::mem::take(&mut current));
-            current = word.to_owned();
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        let mut last_space = None;
+        let mut split = None;
+        for end in remaining
+            .char_indices()
+            .filter_map(|(i, c)| (c == ' ').then_some(i))
+            .chain(std::iter::once(remaining.len()))
+        {
+            if measure_text_width(font, &remaining[..end], font_size) > max_width {
+                split = last_space.or_else(|| (end < remaining.len()).then_some(end));
+                break;
+            }
+            last_space = Some(end);
         }
-    }
-    if !current.is_empty() {
-        lines.push(current);
+        match split {
+            Some(index) => {
+                lines.push(remaining[..index].to_owned());
+                remaining = &remaining[index + 1..];
+                remaining = remaining.strip_prefix(' ').unwrap_or(remaining);
+            }
+            None => {
+                lines.push(remaining.to_owned());
+                break;
+            }
+        }
     }
     lines
 }
@@ -378,6 +418,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn retail_wrap_preserves_sentence_spacing_and_consumes_wrap_spaces() {
+        // CHARGEN uses double spaces between sentences. Collapsing them moves
+        // the next word onto the preceding row, unlike gr_font_string_wrap.
+        assert_eq!(
+            wrap_page(&FixedFont, "aa  bb cc", 10.0, 40.0),
+            ["aa  bb", "cc"]
+        );
+        assert_eq!(wrap_page(&FixedFont, "aa  bb", 10.0, 20.0), ["aa ", "bb"]);
+        assert_eq!(
+            wrap_page(&FixedFont, "aaaa  bb", 10.0, 20.0),
+            ["aaaa", "bb"]
+        );
+    }
+
     /// Continue is the only widget, and it sits where `DEBRIEFR.BIN` puts it.
     #[test]
     fn continue_is_hit_at_the_authored_rect() {
@@ -395,6 +450,7 @@ mod tests {
     #[test]
     fn continuing_dispatches_the_follow_on_effect() {
         let mut scene = DebriefScene::new(
+            "Mission1",
             "page".to_string(),
             GlobalEffect::new_game_transition("station.mis".to_string()),
         );
@@ -423,7 +479,7 @@ mod tests {
 
     #[test]
     fn world_supports_transition_save_data() {
-        let scene = DebriefScene::new("page".to_string(), GlobalEffect::Quit);
+        let scene = DebriefScene::new("Mission1", "page".to_string(), GlobalEffect::Quit);
         let _ = crate::save_load::to_save_data(scene.world());
     }
 }

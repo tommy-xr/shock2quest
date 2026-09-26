@@ -2299,7 +2299,8 @@ impl Game {
             GlobalEffect::ShowDebrief { text_key, then } => {
                 let follow_on = *then;
                 let page = self.debrief_page(&text_key).map(|text| {
-                    Box::new(DebriefScene::new(text, follow_on.clone())) as Box<dyn GameScene>
+                    Box::new(DebriefScene::new(&text_key, text, follow_on.clone()))
+                        as Box<dyn GameScene>
                 });
                 if page.is_none() {
                     // A missing or blank page must not strand the player on the
