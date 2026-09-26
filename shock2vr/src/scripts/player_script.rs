@@ -25,15 +25,25 @@ impl Script for PlayerScript {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
+            MessagePayload::Hazard { toxin, amount } => Effect::ApplyHazard {
+                entity_id,
+                toxin: *toxin,
+                amount: *amount,
+            },
             MessagePayload::Damage { amount, .. } => {
                 // A dead player takes no further hits (death handling itself
                 // is not implemented yet - see #561 follow-ups).
                 if is_dead(world, entity_id) {
                     return Effect::NoEffect;
                 }
+                let factor = if *amount > 0.0 {
+                    crate::psi::screen_damage_factor(world)
+                } else {
+                    1.0
+                };
                 Effect::AdjustHitPoints {
                     entity_id,
-                    delta: -(amount.round() as i32),
+                    delta: -((*amount * factor).round() as i32),
                 }
             }
             _ => Effect::NoEffect,

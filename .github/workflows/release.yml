@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (MAJOR.MINOR.PATCH, e.g. 0.0.1)'
+        required: true
+        type: string
+      publish:
+        description: 'Publish a GitHub release (unchecked: build and verify only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    # Only reviewed code on main may access the signing secrets.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stamp release version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python3 .github/scripts/prepare-release.py "$RELEASE_VERSION"
+      - name: Check signing configuration
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE" && test -n "$PASSWORD" || {
+            echo 'Configure ANDROID_RELEASE_KEYSTORE_BASE64 and ANDROID_RELEASE_KEYSTORE_PASSWORD first.'
+            exit 1
+          }
+      - uses: ./.github/actions/setup-android
+      - name: Build signed APK
+        working-directory: runtimes/oculus_runtime
+        env:
+          SHOCK2QUEST_RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          SHOCK2QUEST_GIT_SHA: ${{ github.sha }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          CARGO_APK_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          umask 077
+          export CARGO_APK_RELEASE_KEYSTORE="$RUNNER_TEMP/release.keystore"
+          trap 'rm -f "$CARGO_APK_RELEASE_KEYSTORE"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$CARGO_APK_RELEASE_KEYSTORE"
+          cargo metadata --locked --format-version 1 > /dev/null
+          cargo apk build --release
+      - name: Verify and package APK
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        run: |
+          mapfile -t apks < <(find target/release/apk -name shock2quest.apk -type f)
+          test "${#apks[@]}" -eq 1
+          mkdir -p dist
+          apk="dist/shock2quest-$RELEASE_VERSION.apk"
+          cp "${apks[0]}" "$apk"
+          build_tools="$ANDROID_HOME/build-tools/33.0.0"
+          "$build_tools/apksigner" verify --verbose --print-certs "$apk"
+          "$build_tools/zipalign" -c 4 "$apk"
+          "$build_tools/aapt" dump badging "$apk" > "$RUNNER_TEMP/apk-badging"
+          grep -F "package: name='com.tommybuilds.shock2quest' versionCode='$VERSION_CODE' versionName='$RELEASE_VERSION'" "$RUNNER_TEMP/apk-badging"
+          grep -Fx "native-code: 'arm64-v8a'" "$RUNNER_TEMP/apk-badging"
+          if grep -q '^application-debuggable' "$RUNNER_TEMP/apk-badging"; then
+            echo 'Release APK must not be debuggable'; exit 1
+          fi
+          cp INSTALL.md dist/INSTALL.md
+          (cd dist && sha256sum "shock2quest-$RELEASE_VERSION.apk" INSTALL.md > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: apk
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_VERSION: ${{ needs.apk.outputs.version }}
+      RELEASE_TAG: ${{ needs.apk.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject existing or older releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.apk.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.apk.outputs.version }}
+        run: |
+          tags=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")
+          test -z "$tags" || { echo "Tag already exists: $RELEASE_TAG"; exit 1; }
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases" > "$RUNNER_TEMP/releases.json"
+          python3 .github/scripts/prepare-release.py "$RELEASE_VERSION" --published-releases "$RUNNER_TEMP/releases.json"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-apk
+          path: dist
+      - name: Check complete release payload
+        working-directory: dist
+        run: |
+          test -s "shock2quest-$RELEASE_VERSION.apk"
+          test -s INSTALL.md
+          test -s SHA256SUMS
+          test "$(find . -type f | wc -l)" -eq 3
+          sha256sum --check SHA256SUMS
+      - name: Publish release
+        run: |
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF
+          Signed Quest APK for Shock2Quest $RELEASE_VERSION (early development build).
+
+          Download **shock2quest-$RELEASE_VERSION.apk** and follow **INSTALL.md** below.
+          Requires your own System Shock 2: 25th Anniversary Remaster game files.
+          SHA256SUMS contains download checksums.
+
+          Built from commit $GITHUB_SHA.
+          EOF
+          gh release create "$RELEASE_TAG" \
+            --target "$GITHUB_SHA" --title "Shock2Quest $RELEASE_VERSION" --draft \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            "dist/shock2quest-$RELEASE_VERSION.apk" dist/INSTALL.md dist/SHA256SUMS
+          gh release edit "$RELEASE_TAG" --draft=false --latest

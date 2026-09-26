@@ -13,22 +13,19 @@
 //! on entry - so reload, ammo cycling, and the VR clip-insert gesture can all
 //! be exercised without provisioning anything first.
 
-use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, vec3};
-use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    scene::{SceneObject, color_material, cube},
-};
-use rapier3d::prelude::{ColliderBuilder, Isometry, SharedShape};
+use cgmath::{Deg, Point3, Quaternion, Rotation3, vec3};
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use shipyard::EntityId;
 
 use crate::{
     GameOptions,
-    game_scene::{DebugPlayerStatsRequest, DebugSkillLevelsRequest, DebuggableScene, GameScene},
+    game_scene::GameScene,
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
-    scenes::debug_common::{DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, spawn_at},
+    scenes::debug_common::{
+        DebugBox, DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, boxes_to_geometry,
+        max_player_stats, spawn_at,
+    },
     scripts::Effect,
-    scripts::gui::{PSI_TIER_CAP, SKILL_CAP, STAT_CAP},
 };
 
 /// Distance (world units) from the player to the test wall, straight ahead (-X,
@@ -71,6 +68,11 @@ const BENCH_AMMO: &[(i32, &str)] = &[
     (-1264, "Large Worm Beaker"),
 ];
 
+/// The maintenance tool, in its own slot down the middle of the bench: worn
+/// guns are restored by releasing it onto them (VR) or using it from the
+/// inventory (flat).
+const BENCH_TOOL: i32 = -2949;
+
 /// The bench sits beside the firing lane on the player's left (+Z with the -X
 /// forward), long axis along X: guns on the outer row, ammo on the inner row.
 const BENCH_HEIGHT: f32 = 1.1;
@@ -84,19 +86,6 @@ const AMMO_SPACING: f32 = 0.6;
 /// Height of the retaining lip above the bench top.
 const BENCH_LIP_HEIGHT: f32 = 0.5;
 const BENCH_LIP_THICKNESS: f32 = 0.08;
-
-fn cube_object(
-    color: cgmath::Vector3<f32>,
-    translation: cgmath::Vector3<f32>,
-    scale: cgmath::Vector3<f32>,
-) -> SceneObject {
-    let mut object = SceneObject::new(color_material::create(color), Box::new(cube::create()));
-    object.set_transform(
-        Matrix4::from_translation(translation)
-            * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z),
-    );
-    object
-}
 
 pub fn create_debug_weapons_scene(
     global_context: &GlobalContext,
@@ -122,11 +111,7 @@ pub fn create_debug_weapons_scene(
     // and a flat table sheds them onto the floor within seconds.
     let lip_color = vec3(0.36, 0.31, 0.24);
     let lip_top = BENCH_HEIGHT + BENCH_LIP_HEIGHT / 2.0;
-    let boxes: &[(
-        cgmath::Vector3<f32>,
-        cgmath::Vector3<f32>,
-        cgmath::Vector3<f32>,
-    )] = &[
+    let boxes: &[DebugBox] = &[
         // floor
         (
             vec3(0.18, 0.18, 0.22),
@@ -189,22 +174,7 @@ pub fn create_debug_weapons_scene(
         ),
     ];
 
-    let scene_objects = boxes
-        .iter()
-        .map(|(color, translation, scale)| cube_object(*color, *translation, *scale))
-        .collect::<Vec<_>>();
-    let collider = ColliderBuilder::compound(
-        boxes
-            .iter()
-            .map(|(_, translation, scale)| {
-                (
-                    Isometry::translation(translation.x, translation.y, translation.z),
-                    SharedShape::cuboid(scale.x / 2.0, scale.y / 2.0, scale.z / 2.0),
-                )
-            })
-            .collect(),
-    )
-    .build();
+    let (scene_objects, collider) = boxes_to_geometry(boxes);
 
     // Spawn at the floor with identity yaw: the default view forward is -X, so
     // the wall sits dead ahead and the bench is a quarter-turn to the left.
@@ -256,32 +226,7 @@ impl DebugSceneHooks for ArsenalHooks {
         }
         self.populated = true;
 
-        // "Full stats": max the character sheet through the same provisioning
-        // path as `POST /v1/player/stats`, so nothing (skill gates, psi tiers)
-        // stands between the tester and any weapon on the bench.
-        let request = DebugPlayerStatsRequest {
-            strength: Some(STAT_CAP),
-            endurance: Some(STAT_CAP),
-            agility: Some(STAT_CAP),
-            psionic_ability: Some(STAT_CAP),
-            cyber_affinity: Some(STAT_CAP),
-            skills: DebugSkillLevelsRequest {
-                standard_weapons: Some(SKILL_CAP),
-                energy_weapons: Some(SKILL_CAP),
-                heavy_weapons: Some(SKILL_CAP),
-                exotic_weapons: Some(SKILL_CAP),
-                hack: Some(SKILL_CAP),
-                repair: Some(SKILL_CAP),
-                modify: Some(SKILL_CAP),
-                maintenance: Some(SKILL_CAP),
-                research: Some(SKILL_CAP),
-            },
-            psi_tier: Some(PSI_TIER_CAP),
-            cyber_modules: None,
-        };
-        if let Err(err) = core.set_player_stats(&request) {
-            tracing::warn!("[debug_weapons] failed to max player stats: {err}");
-        }
+        max_player_stats(core, "debug_weapons");
 
         // Guns on the outer row, ammo on the inner row. Drop heights are
         // load-bearing: a big gun's collider extends below its origin, and a
@@ -297,6 +242,11 @@ impl DebugSceneHooks for ArsenalHooks {
                 Point3::new(x, BENCH_HEIGHT + 0.4, BENCH_Z + 0.5),
             ));
         }
+        // The middle strip of the bench is clear between the two rows.
+        effects.push(spawn_at(
+            BENCH_TOOL,
+            Point3::new(BENCH_NEAR_X, BENCH_HEIGHT + 0.15, BENCH_Z),
+        ));
         for (index, (template_id, _)) in BENCH_AMMO.iter().enumerate() {
             let x = BENCH_NEAR_X - index as f32 * AMMO_SPACING;
             // Zigzag so a bouncing neighbor can't billiard the whole row.

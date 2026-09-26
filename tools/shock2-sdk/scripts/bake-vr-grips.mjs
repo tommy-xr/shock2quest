@@ -1,0 +1,61 @@
+// Run after npm run build, with Node 22+. This intentionally runs the expensive
+// search headlessly; gameplay only reads the prepared resource it writes.
+import assert from 'node:assert/strict';
+import { readFile, writeFile, rename, rm } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { GameServer } from '../dist/src/index.js';
+import {preserveAuthoredGrips} from './prepared-grips.mjs';
+import { aimVrHandAt } from '../dist/test/helpers/vr-hand.js';
+
+const weapons = process.argv.includes('--weapons');
+const source = fileURLToPath(new URL(weapons ? '../../../assets/vr-weapon-grips.json' : '../../../assets/vr-grips.json', import.meta.url));
+const output = process.argv.slice(2).find(arg => arg !== '--weapons') ?? source;
+const readSource = () => readFile(source, 'utf8').catch(error => { if (error.code === 'ENOENT' && weapons) return null; throw error; });
+const sourceBytes = await readSource();
+const readOutput = () => readFile(output, 'utf8').catch(error => {
+  if (error.code === 'ENOENT') return null;
+  throw error;
+});
+const outputBytes = await readOutput();
+const previous = JSON.parse(outputBytes ?? sourceBytes ?? '{"version":1,"solver_revision":2,"entries":[]}');
+const entries = [];
+let solverRevision;
+const game = await GameServer.launch({mission: 'debug_interactions', debugFlags: ['--vr', '--experimental', 'astra-bake-vr-grips']});
+try {
+  for (const hand of ['left', 'right']) {
+    if (hand === 'right') await game.input.trigger('DebugReloadLevel');
+    await game.step({frames:90});
+    for (const template of (weapons ? [-17, -19, -26, -27, -928, -18, -22, -23, -21, -25, -29, -24, -28, -2291] : [-1221, -1255, -4286, -52, -57, -54, -53, -2949, -1488, -74, -157, -101, -103, -104, -969, -106, -762, -1334, -1660, -48, -1264, -3864, -73])) {
+      const item = (await game.entities.list()).entities.find(e => e.template_id === template);
+      assert.ok(item, `Missing fixture ${template}`);
+      await game.player.teleport({x:item.position[0],y:1,z:0});
+      await aimVrHandAt(game,item.position,0.2,0,0,{hand});
+      await game.step({frames:2});
+      await game.input.set(`${hand}_hand.squeeze`,1);
+      await game.step({frames:3});
+      const result = (await game.info()).player.hand_grips.find(g => g.hand === hand);
+      assert.ok(result?.grip && result.source === 'bake', `${hand}: failed to bake ${item.name}`);
+      assert.ok(weapons || result.grip.contacts.filter(Boolean).length >= 3, `${hand}: fewer than three supported fingers on ${item.name}`);
+      assert.ok(Number.isFinite(result.grip.score), `${hand}: invalid geometry on ${item.name}`);
+      const {model,surface_hash,kinematics_hash,hints_hash,grip} = result;
+      solverRevision=result.solver_revision;
+      entries.push({model,hand,surface_hash,kinematics_hash,hints_hash,grip});
+      console.log(`${model} ${hand}: ${result.solve_ms.toFixed(0)}ms; curls ${grip.curls.map(v => v.toFixed(2)).join(', ')}`);
+      await game.input.set(`${hand}_hand.squeeze`,0);
+      await game.step({frames:3});
+    }
+  }
+} finally {
+  await game.shutdown();
+}
+const library = preserveAuthoredGrips(previous, {version:1,solver_revision:solverRevision,entries});
+assert.equal(await readSource(), sourceBytes, 'Source grips changed during baking; no output written');
+assert.equal(await readOutput(), outputBytes, 'Output grips changed during baking; no output written');
+const temporary = `${output}.${process.pid}.tmp`;
+try {
+  await writeFile(temporary,JSON.stringify(library,null,2)+'\n', {flag:'wx'});
+  await rename(temporary,output);
+} finally {
+  await rm(temporary,{force:true});
+}
+console.log(`Wrote ${entries.length} prepared grips to ${output}`);

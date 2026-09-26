@@ -1,28 +1,41 @@
 use std::collections::HashMap;
 
-use cgmath::{EuclideanSpace, InnerSpace, vec3};
-use dark::properties::{CollisionType, PropCollisionType};
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use cgmath::{Vector3, vec3};
+use shipyard::{EntityId, Get, View, World};
 
-use crate::{
-    PresentationMode,
-    mission::{GlobalPresentationMode, stim_response::contact_stim_damage},
-    physics::PhysicsWorld,
-    util::get_position_from_transform,
-};
+use crate::{mission::stim_response::contact_stim_damage_with_bonus, physics::PhysicsWorld};
 
 use super::{
     Effect, Message, MessagePayload, Script,
-    script_util::{entity_class_template_id, play_impact_sound},
+    impact_sound::{ImpactSoundGuard, impact_sound_effect},
+    script_util::entity_class_template_id,
 };
 
-// Script to handle collision type
-pub struct MeleeWeapon {}
-
-impl MeleeWeapon {
-    pub fn new() -> MeleeWeapon {
-        MeleeWeapon {}
-    }
+/// Shared scale for a held player melee attack. Apply before the damage
+/// handler rounds to whole HP; thrown props and enemy attacks never call this.
+pub(super) fn player_melee_damage_scale(world: &World) -> f32 {
+    let lethal = world
+        .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
+        .is_ok_and(|quests| {
+            quests
+                .player_stats()
+                .has_os_trait(crate::scripts::gui::TRAIT_LETHAL_WEAPON)
+        });
+    // Let temporary Strength (Might or an implant) increase both flat and VR
+    // damage. Keep the port's existing authored damage at the trained level;
+    // the retail manual specifies that STR raises melee damage but not its
+    // numerical curve, so this modest per-level scale is port tuning.
+    let trained_strength = world
+        .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
+        .map(|quests| quests.player_stats().strength)
+        .unwrap_or(1);
+    let effective_strength = crate::implants::effective_stats(world)
+        .map(|stats| stats.strength)
+        .unwrap_or(trained_strength);
+    let strength_scale = 1.0 + 0.1 * (effective_strength - trained_strength) as f32;
+    strength_scale
+        * crate::scripts::berserk::melee_damage_multiplier(world)
+        * if lethal { 1.35 } else { 1.0 }
 }
 
 /// Contact damage for the player's authored melee weapons (`PropLimbModel`).
@@ -49,14 +62,16 @@ pub struct HeldMeleeWeapon {
     /// Remaining seconds before this weapon may thud against the same contact
     /// partner again. Independent of the damage cooldowns above: a wall makes
     /// a noise whether or not the contact is billable.
-    sound_cooldowns: HashMap<EntityId, f32>,
+    sound_guard: ImpactSoundGuard,
+    charge: super::melee_charge::MeleeCharge,
 }
 
 impl HeldMeleeWeapon {
     pub fn new() -> Self {
         Self {
             free_swing_cooldowns: HashMap::new(),
-            sound_cooldowns: HashMap::new(),
+            sound_guard: ImpactSoundGuard::default(),
+            charge: Default::default(),
         }
     }
 }
@@ -67,29 +82,6 @@ impl HeldMeleeWeapon {
 /// swing, short enough not to eat a genuine second swing.
 const FREE_SWING_COOLDOWN_SECONDS: f32 = 0.4;
 
-/// How long one contact partner stays silent after this weapon thuds against
-/// it. Rapier reports a fresh contact edge every time the solver separates and
-/// re-touches, so a weapon chattering against a wall would otherwise
-/// machine-gun impact sounds. Shorter than [`FREE_SWING_COOLDOWN_SECONDS`] on
-/// purpose: two deliberate taps in quick succession should both be audible
-/// even though only the first one is billed.
-///
-/// Note the key is an *entity*, and a mission's entire static geometry is one
-/// collider owning one entity - so this is one thud per 0.15 s for the whole
-/// level, plus one per prop. That is the right granularity for an impact
-/// sound, and deliberately coarser than "per surface" would be.
-const IMPACT_SOUND_COOLDOWN_SECONDS: f32 = 0.15;
-
-/// Approach speed below which a contact makes no sound at all, in world units
-/// per second. Only something that arrived *at* the surface clangs: a weapon
-/// resting against one, or dragged along one, is silent.
-///
-/// Measured in `debug_melee` (see its module docs): a held weapon at rest
-/// reads ~0.005 and a brisk controller sweep peaks at ~1.6. This sits well
-/// clear of rest while staying far below the free-swing *damage* threshold
-/// (`MELEE_FREE_SWING_SPEED`), so a light tap that does no damage still clinks.
-const IMPACT_SOUND_MIN_SPEED: f32 = 0.1;
-
 /// The swing/graze gate: minimum closing speed for a contact to damage.
 fn free_swing_speed_threshold() -> f32 {
     crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED)
@@ -99,19 +91,19 @@ impl Script for HeldMeleeWeapon {
     /// Expire the per-victim cooldowns (free-swing damage, impact sound).
     fn update(
         &mut self,
-        _entity_id: EntityId,
-        _world: &World,
+        entity_id: EntityId,
+        world: &World,
         _physics: &PhysicsWorld,
         time: &crate::time::Time,
     ) -> Effect {
         let elapsed = time.elapsed.as_secs_f32();
-        for cooldowns in [&mut self.free_swing_cooldowns, &mut self.sound_cooldowns] {
-            cooldowns.retain(|_, remaining| {
-                *remaining -= elapsed;
-                *remaining > 0.0
-            });
-        }
-        Effect::NoEffect
+        self.free_swing_cooldowns.retain(|_, remaining| {
+            *remaining -= elapsed;
+            *remaining > 0.0
+        });
+        self.sound_guard.tick(elapsed);
+        self.charge
+            .tick(entity_id, elapsed, self.is_held(world, entity_id))
     }
 
     fn handle_message(
@@ -121,32 +113,83 @@ impl Script for HeldMeleeWeapon {
         physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
-        if !is_vr(world) {
+        if !crate::mission::presentation_is_vr(world) {
             return Effect::NoEffect;
         }
 
         match msg {
+            MessagePayload::Drop => self.charge.cancel(entity_id),
+            MessagePayload::TriggerPull
+                if self.is_held(world, entity_id) && super::melee_charge::owned(world) =>
+            {
+                self.charge.begin(entity_id)
+            }
+            MessagePayload::TriggerRelease if self.is_held(world, entity_id) => self
+                .charge
+                .release(entity_id, true)
+                .unwrap_or(Effect::NoEffect),
             MessagePayload::Collided { with, contact } => {
+                // A creature is struck through its hitboxes: the contact
+                // arrives from the limb proxy, and the *creature* is what owns
+                // the receptrons, the material and the velocity.
+                //
+                // The capsule contact of that same swing is dropped so the
+                // blow is attributed to the limb rather than to the cylinder
+                // around it - whichever of the two the frame dispatched first.
+                // (It is not what stops double billing: the cooldown, keyed on
+                // the creature, already does that.) Only when a limb contact
+                // is actually on offer: a creature with no live proxies - an
+                // authored corpse carries `PropCreature` but is never animated
+                // - keeps being hit, and heard, on its capsule.
+                let owner = crate::util::resolve_proxy_entity(world, *with);
+                let is_capsule_contact = owner == *with;
+                let is_held = self.is_held(world, entity_id);
+                if is_capsule_contact
+                    && is_held
+                    && crate::creature::has_live_hit_boxes(world, owner)
+                {
+                    return Effect::NoEffect;
+                }
+
                 // Damage and sound are separate questions. Damage stays gated
                 // by the swing threshold and the victim's authored receptrons;
                 // *hitting something* is audible regardless - a wrench on a
                 // bulkhead or a bench does nothing but must still clang.
-                let damage = self
-                    .may_damage(entity_id, *with, physics, *contact)
-                    .then(|| authored_contact_damage(world, entity_id, *with))
-                    .flatten();
+
+                // A held weapon rides the player, so the player's own motion
+                // is not part of the swing. A loose one on the floor does not
+                // ride anything, and nothing may be subtracted from it.
+                let player_velocity = if is_held {
+                    physics.player_velocity()
+                } else {
+                    vec3(0.0, 0.0, 0.0)
+                };
+                // Released weapons use the same capped throw damage as other props.
+                let damage = (is_held
+                    && !self.charge.charging()
+                    && self.may_damage(entity_id, owner, physics, *contact, player_velocity))
+                .then(|| authored_contact_damage(world, entity_id, owner, self.charge.bonus()))
+                .flatten();
 
                 let mut effects = Vec::new();
                 if let Some(amount) = damage {
+                    effects.push(self.charge.landed(entity_id));
+                    // In VR a qualifying strike is the attack gesture; merely
+                    // repositioning a tracked hand must not break stealth.
+                    effects.push(crate::psi_invisibility::attack_effect(world, entity_id));
+                    // Addressed to the hitbox, not the creature: forwarding it
+                    // is what stamps the struck joint onto the blow.
                     effects.push(contact_damage_effect(*with, amount, *contact));
                 }
                 // A blow that lands is always audible, as it always was. The
                 // operator is a bitwise `|`, not `||`, so the guard still runs
                 // (and arms the cooldown) even when damage forces the sound.
-                if self.may_play_impact_sound(entity_id, *with, physics, *contact)
+                if self
+                    .sound_guard
+                    .should_play(entity_id, owner, physics, *contact)
                     | damage.is_some()
                 {
-                    let sound = impact_sound_effect(entity_id, *with, world);
+                    let sound = impact_sound_effect(entity_id, owner, world);
                     if !matches!(sound, Effect::NoEffect) {
                         effects.push(sound);
                     }
@@ -164,6 +207,16 @@ impl Script for HeldMeleeWeapon {
 }
 
 impl HeldMeleeWeapon {
+    /// Whether this weapon is in the player's hand. Only a held weapon reaches
+    /// a creature's hitboxes, so only a held weapon has a limb contact to
+    /// prefer over its capsule; a wrench lying on the floor keeps clattering
+    /// when a creature walks into it.
+    fn is_held(&self, world: &World, entity_id: EntityId) -> bool {
+        world
+            .borrow::<View<crate::runtime_props::RuntimePropVrGripOffset>>()
+            .is_ok_and(|grips| grips.get(entity_id).is_ok())
+    }
+
     /// Whether this contact opens a hit: the weapon was actually moving at
     /// contact, and this victim has not just been billed. The short cooldown
     /// is what makes a swing a *swing* - without it a weapon left leaning on
@@ -174,94 +227,55 @@ impl HeldMeleeWeapon {
         with: EntityId,
         physics: &PhysicsWorld,
         contact: Option<crate::physics::CollisionContact>,
+        player_velocity: Vector3<f32>,
     ) -> bool {
         if self.free_swing_cooldowns.contains_key(&with) {
             return false;
         }
-        if closing_speed(entity_id, with, physics, contact) < free_swing_speed_threshold() {
+        if closing_speed(entity_id, with, physics, contact, player_velocity)
+            < free_swing_speed_threshold()
+        {
             return false;
         }
         self.free_swing_cooldowns
             .insert(with, FREE_SWING_COOLDOWN_SECONDS);
         true
     }
-
-    /// Whether this contact should be heard. Contacts repeat while a weapon
-    /// rests on or scrapes along a surface, and the damage path's own dedupe
-    /// does not cover the (much more common) contacts that deal no damage - so
-    /// the sound carries its own guard: the weapon must have been closing on
-    /// what it hit, and that partner then stays quiet for a moment.
-    ///
-    /// The speed is taken *along the contact normal*, not as a raw magnitude.
-    /// A held weapon carries the player's whole locomotion velocity, so a
-    /// wrench brushing a corridor wall while walking reads fast by magnitude
-    /// while barely closing on the wall at all - and would otherwise clang
-    /// every 0.15 s for the length of the corridor. `abs` because the normal's
-    /// orientation depends on which collider Rapier listed first.
-    ///
-    /// The damage rule above now measures the same way, via [`closing_speed`],
-    /// which additionally subtracts the victim's own motion. The two stay
-    /// separate functions because they answer different questions at different
-    /// thresholds - audible is a much lower bar than damaging, and a contact
-    /// that is too gentle to bill should still clink.
-    fn may_play_impact_sound(
-        &mut self,
-        entity_id: EntityId,
-        with: EntityId,
-        physics: &PhysicsWorld,
-        contact: Option<crate::physics::CollisionContact>,
-    ) -> bool {
-        if self.sound_cooldowns.contains_key(&with) {
-            return false;
-        }
-        let velocity = physics
-            .get_velocity(entity_id)
-            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
-        let speed = match contact {
-            Some(contact) => velocity.dot(contact.normal).abs(),
-            None => velocity.magnitude(),
-        };
-        if speed < IMPACT_SOUND_MIN_SPEED {
-            return false;
-        }
-        self.sound_cooldowns
-            .insert(with, IMPACT_SOUND_COOLDOWN_SECONDS);
-        true
-    }
-}
-
-fn is_vr(world: &World) -> bool {
-    world
-        .borrow::<UniqueView<GlobalPresentationMode>>()
-        .map(|mode| mode.0 == PresentationMode::Vr)
-        .unwrap_or(false)
 }
 
 /// How fast the two bodies were closing on each other, at the point where they
 /// touched, along the surface they touched on.
 ///
-/// Three things this is not, each of which was wrong in a way that showed:
+/// Four things this is not, each of which was wrong in a way that showed:
 ///
 /// - **Not the weapon's centre-of-mass velocity.** A weapon swung about the
 ///   wrist moves its *head* fast while its centre barely moves, so a wrist
 ///   flick under-read badly. `velocity_at_point` carries the `omega x r` term.
-/// - **Not the weapon's velocity alone.** A held weapon rides the player, so
+/// - **Not the weapon's world velocity.** A held weapon rides the player, so
 ///   walking into a creature read as a full-speed swing and billed a free hit.
-///   Subtracting the victim's velocity also makes a creature that charges onto
-///   a held blade impale itself, which is the same rule read the other way and
-///   is worth having.
+/// - **Not the weapon body's own velocity.** It lags the hand and then catches
+///   up in one step, which is speed the player never produced; the driven hand
+///   target is what the player actually did.
 /// - **Not a raw magnitude.** Sliding a weapon *along* a surface is fast but
-///   closes on nothing.
+///   closes on nothing. Subtracting the victim's motion also makes a creature
+///   that charges onto a held blade impale itself.
 ///
-/// `abs` because the normal's orientation depends on which collider Rapier
-/// listed first. With no contact geometry there is no surface to project onto,
-/// so the relative speed is taken whole.
+/// The exception is a contact that already knows: see `closing_speed` on
+/// [`crate::physics::CollisionContact`]. The arithmetic itself lives in
+/// [`crate::physics::relative_swing_speed`].
 fn closing_speed(
     weapon: EntityId,
     victim: EntityId,
     physics: &PhysicsWorld,
     contact: Option<crate::physics::CollisionContact>,
+    player_velocity: Vector3<f32>,
 ) -> f32 {
+    // A blow the swing sweep found carries the speed it measured. It has to:
+    // the sweep stops the weapon on the limb, so by the time this runs the
+    // weapon is standing still and every live-velocity reading is zero.
+    if let Some(speed) = contact.and_then(|contact| contact.closing_speed) {
+        return speed;
+    }
     let Some(contact) = contact else {
         let weapon_velocity = physics
             .get_velocity(weapon)
@@ -269,14 +283,37 @@ fn closing_speed(
         let victim_velocity = physics
             .get_velocity(victim)
             .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
-        return (weapon_velocity - victim_velocity).magnitude();
+        return crate::physics::relative_swing_speed(
+            weapon_velocity,
+            player_velocity,
+            victim_velocity,
+            None,
+        );
     };
     let at = |entity| {
         physics
             .velocity_at_point(entity, contact.point)
             .unwrap_or_else(|| vec3(0.0, 0.0, 0.0))
     };
-    (at(weapon) - at(victim)).dot(contact.normal).abs()
+    let speed_of = |weapon_velocity| {
+        crate::physics::relative_swing_speed(
+            weapon_velocity,
+            player_velocity,
+            at(victim),
+            Some(contact.normal),
+        )
+    };
+    // A held weapon is billed on the SLOWER of two readings - what the hand
+    // did, and what the weapon did - because each alone is wrong in one
+    // direction. The weapon body reports its own catch-up after an obstruction
+    // lets go (measured at 34 u/s against a hand doing 10); the hand keeps
+    // reading a swing while the weapon is pinned against the body it already
+    // struck, which bills leaning on a creature as a second blow. A loose
+    // weapon has no hand and answers for itself.
+    match physics.held_melee_target_velocity_at_point(weapon, contact.point) {
+        Some(hand) => speed_of(hand).min(speed_of(at(weapon))),
+        None => speed_of(at(weapon)),
+    }
 }
 
 /// Damage the weapon's own authored `Contact` stims deal to this victim,
@@ -285,12 +322,22 @@ fn closing_speed(
 /// Wrench (-928) authors WeaponBash at 6/9, so a VR swing now costs what the
 /// gamesys says it costs instead of a flat placeholder.
 ///
-/// `None` means "this contact does no authored damage" (a wall, a victim with
-/// no receptron for the stim): the caller emits nothing at all, so a swing at
-/// scenery is silent rather than a free 1-point tap.
-fn authored_contact_damage(world: &World, weapon: EntityId, victim: EntityId) -> Option<f32> {
+/// `None` means "this contact does no authored damage" (a wall, or a victim
+/// with no receptron for the stim). Callers still play the impact sound.
+pub(super) fn authored_contact_damage(
+    world: &World,
+    weapon: EntityId,
+    victim: EntityId,
+    bonus: f32,
+) -> Option<f32> {
     let template_id = entity_class_template_id(world, weapon)?;
-    let damage = contact_stim_damage(world, template_id, victim);
+    let damage = contact_stim_damage_with_bonus(
+        world,
+        template_id,
+        victim,
+        player_melee_damage_scale(world),
+        bonus,
+    );
     (damage > 0.0).then_some(damage)
 }
 
@@ -314,63 +361,11 @@ fn contact_damage_effect(
     }
 }
 
-/// Impact sound for a contact: the weapon's collision schema (weapontype class
-/// tag + hit material - wrench on metal clangs, on a creature thuds), unless
-/// its collision type opts out. Needs no damage value: unmaterialed surfaces
-/// (world geometry, a bench) fall back to the default material tag.
-fn impact_sound_effect(entity_id: EntityId, with: EntityId, world: &World) -> Effect {
-    let no_sound = world
-        .borrow::<View<PropCollisionType>>()
-        .ok()
-        .and_then(|v| v.get(entity_id).ok().map(|c| c.collision_type))
-        .is_some_and(|flags| flags.contains(CollisionType::NO_COLLISION_SOUND));
-    if no_sound {
-        return Effect::NoEffect;
-    }
-    let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
-    play_impact_sound(world, entity_id, with, position.to_vec())
-}
-
-fn melee_impact(
-    entity_id: EntityId,
-    with: EntityId,
-    world: &World,
-    amount: f32,
-    contact: Option<crate::physics::CollisionContact>,
-) -> Effect {
-    Effect::Multiple(vec![
-        contact_damage_effect(with, amount, contact),
-        impact_sound_effect(entity_id, with, world),
-    ])
-}
-
-impl Script for MeleeWeapon {
-    fn handle_message(
-        &mut self,
-        entity_id: EntityId,
-        world: &World,
-        _physics: &PhysicsWorld,
-        msg: &MessagePayload,
-    ) -> Effect {
-        // The legacy literal `wrench` script can still back a VR physical
-        // weapon, but contact is never a flat damage source. Flat player melee
-        // resolves once from WeaponScript at the authored swing event.
-        if !is_vr(world) {
-            return Effect::NoEffect;
-        }
-
-        match msg {
-            // Legacy literal `wrench` script (Maintenance Tool -2949).
-            MessagePayload::Collided { with, contact } => {
-                melee_impact(entity_id, *with, world, 1.0, *contact)
-            }
-            _ => Effect::NoEffect,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::PresentationMode;
+    use crate::mission::GlobalPresentationMode;
+    use dark::properties::{CollisionType, PropCollisionType};
     use std::collections::HashMap;
 
     use dark::properties::{
@@ -412,11 +407,51 @@ mod tests {
         physics.set_velocity(entity, velocity);
     }
 
+    /// The player standing still: whatever the weapon is doing is the swing.
+    const STILL_PLAYER: cgmath::Vector3<f32> = cgmath::Vector3::new(0.0, 0.0, 0.0);
+
     fn head_on_contact(point: cgmath::Vector3<f32>) -> Option<crate::physics::CollisionContact> {
         Some(crate::physics::CollisionContact {
             point,
             normal: vec3(1.0, 0.0, 0.0),
+            closing_speed: None,
         })
+    }
+
+    /// A blow found by the swing sweep carries the speed the sweep measured.
+    /// It has to: the sweep stops the weapon on the limb, so by the time the
+    /// blow is read every live velocity is zero and the swing gate would
+    /// reject its own hit.
+    ///
+    /// Negative-first: without the carried speed this reads 0.
+    #[test]
+    fn a_swept_blow_uses_the_speed_the_sweep_measured() {
+        let mut physics = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(1).unwrap();
+        let victim = EntityId::from_inner(2).unwrap();
+        let swept = Some(crate::physics::CollisionContact {
+            point: vec3(0.0, 0.0, 0.0),
+            normal: vec3(1.0, 0.0, 0.0),
+            closing_speed: Some(7.5),
+        });
+
+        assert_eq!(
+            closing_speed(weapon, victim, &physics, swept, STILL_PLAYER),
+            7.5
+        );
+        // Neither body exists in this world, so an ordinary contact - which
+        // reads the live bodies - has nothing to report.
+        let _ = &mut physics;
+        assert_eq!(
+            closing_speed(
+                weapon,
+                victim,
+                &physics,
+                head_on_contact(vec3(0.0, 0.0, 0.0)),
+                STILL_PLAYER
+            ),
+            0.0
+        );
     }
 
     /// The bug this rule exists to fix: a held weapon rides the player, so
@@ -454,11 +489,83 @@ mod tests {
             victim,
             &physics,
             head_on_contact(vec3(0.5, 0.0, 0.0)),
+            STILL_PLAYER,
         );
 
         assert!(
             speed < gate,
             "walking pace must fall below the swing gate {gate}, read {speed}"
+        );
+    }
+
+    /// Walking a held weapon into something is not a swing. The weapon rides
+    /// the player, so its world velocity is the player's - measured at 10
+    /// units/s, five times the gate.
+    ///
+    /// Negative-first: without the player's motion divided out this reads the
+    /// full 10.
+    #[test]
+    fn walking_a_weapon_into_a_still_victim_is_not_a_swing() {
+        let gate = crate::dev_params::spec(crate::dev_params::MELEE_FREE_SWING_SPEED).default;
+        let mut physics = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(1).unwrap();
+        let victim = EntityId::from_inner(2).unwrap();
+        let walking = vec3(10.0, 0.0, 0.0);
+        moving_body(&mut physics, weapon, vec3(0.0, 0.0, 0.0), walking);
+        moving_body(
+            &mut physics,
+            victim,
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+        );
+
+        let speed = closing_speed(
+            weapon,
+            victim,
+            &physics,
+            head_on_contact(vec3(0.5, 0.0, 0.0)),
+            walking,
+        );
+
+        assert!(
+            speed < gate,
+            "a carried weapon must fall below the swing gate {gate}, read {speed}"
+        );
+    }
+
+    /// The other half: a real swing thrown while walking still bills, because
+    /// only the player's share comes out.
+    #[test]
+    fn swinging_while_walking_is_still_a_swing() {
+        let gate = crate::dev_params::spec(crate::dev_params::MELEE_FREE_SWING_SPEED).default;
+        let mut physics = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(1).unwrap();
+        let victim = EntityId::from_inner(2).unwrap();
+        let walking = vec3(10.0, 0.0, 0.0);
+        moving_body(
+            &mut physics,
+            weapon,
+            vec3(0.0, 0.0, 0.0),
+            walking + vec3(4.0, 0.0, 0.0),
+        );
+        moving_body(
+            &mut physics,
+            victim,
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+        );
+
+        let speed = closing_speed(
+            weapon,
+            victim,
+            &physics,
+            head_on_contact(vec3(0.5, 0.0, 0.0)),
+            walking,
+        );
+
+        assert!(
+            speed > gate,
+            "a swing thrown while walking must clear the gate {gate}, read {speed}"
         );
     }
 
@@ -488,11 +595,42 @@ mod tests {
             victim,
             &physics,
             head_on_contact(vec3(0.5, 0.0, 0.0)),
+            STILL_PLAYER,
         );
 
         assert!(
             speed > 2.5,
             "a charging victim must register as an impact, read {speed}"
+        );
+    }
+
+    /// Backing away from a creature that chases at the same speed: the weapon
+    /// and the victim keep station, so nothing is closing and nothing may be
+    /// billed - however fast both are travelling through the world.
+    ///
+    /// Negative-first: subtracting the player's motion from a world-frame
+    /// victim reads the full chase speed here.
+    #[test]
+    fn retreating_from_a_creature_that_keeps_pace_is_not_a_blow() {
+        let gate = crate::dev_params::spec(crate::dev_params::MELEE_FREE_SWING_SPEED).default;
+        let mut physics = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(1).unwrap();
+        let victim = EntityId::from_inner(2).unwrap();
+        let retreat = vec3(-10.0, 0.0, 0.0);
+        moving_body(&mut physics, weapon, vec3(0.0, 0.0, 0.0), retreat);
+        moving_body(&mut physics, victim, vec3(1.0, 0.0, 0.0), retreat);
+
+        let speed = closing_speed(
+            weapon,
+            victim,
+            &physics,
+            head_on_contact(vec3(0.5, 0.0, 0.0)),
+            retreat,
+        );
+
+        assert!(
+            speed < gate,
+            "two bodies keeping station must fall below the swing gate {gate}, read {speed}"
         );
     }
 
@@ -523,6 +661,7 @@ mod tests {
             victim,
             &physics,
             head_on_contact(vec3(0.5, 0.0, 0.0)),
+            STILL_PLAYER,
         );
 
         assert!(
@@ -546,6 +685,7 @@ mod tests {
             vec![(WEAPON_BASH, WEAPON_BASH_INTENSITY)],
         )])));
         let weapon = world.add_entity((
+            crate::runtime_props::RuntimePropVrGripOffset(vec3(0.0, 0.0, 0.0)),
             PropCollisionType {
                 collision_type: CollisionType::NO_COLLISION_SOUND,
             },
@@ -594,6 +734,15 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn loose_melee_weapon_does_not_bypass_the_throw_damage_cap() {
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        world.remove::<crate::runtime_props::RuntimePropVrGripOffset>(weapon);
+        let mut script = HeldMeleeWeapon::new();
+        let effect = collide(&mut script, &world, weapon, target);
+        assert_eq!(damage_count(&effect), 0);
+    }
+
     /// The regression behind the damage fix: a landed VR swing must cost the
     /// weapon's *authored* WeaponBash intensity, not a flat placeholder.
     #[test]
@@ -617,6 +766,68 @@ mod tests {
         assert!(
             (amount - WEAPON_BASH_INTENSITY).abs() < f32::EPSILON,
             "got {amount}"
+        );
+    }
+
+    #[test]
+    fn smasher_vr_blocks_windup_then_bonuses_only_one_landed_strike() {
+        let (world, weapon, target) = test_world(PresentationMode::Vr);
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(11);
+        world.add_unique(quests);
+        let mut script = HeldMeleeWeapon::new();
+        let physics = swinging(weapon);
+        script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerPull);
+        script.update(
+            weapon,
+            &world,
+            &physics,
+            &crate::time::Time {
+                elapsed: std::time::Duration::from_millis(400),
+                total: std::time::Duration::from_millis(400),
+            },
+        );
+        assert_eq!(
+            damage_count(&collide(&mut script, &world, weapon, target)),
+            0
+        );
+        script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerRelease);
+        let effect = collide(&mut script, &world, weapon, target);
+        let Effect::Multiple(effects) = effect else {
+            panic!("charged strike missing");
+        };
+        assert!(effects.iter().any(|e| matches!(e, Effect::Send { msg } if matches!(msg.payload,
+            MessagePayload::Damage { amount, .. } if (amount - (WEAPON_BASH_INTENSITY + 6.0)).abs() < 0.00001))));
+        assert_eq!(script.charge.bonus(), 0.0);
+        assert_eq!(
+            damage_count(&collide(&mut script, &world, weapon, target)),
+            0
+        );
+    }
+
+    #[test]
+    fn lethal_weapon_scales_held_vr_melee_but_not_loose_props() {
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().add_os_trait(9);
+        world.add_unique(quests);
+        let Effect::Multiple(effects) =
+            collide(&mut HeldMeleeWeapon::new(), &world, weapon, target)
+        else {
+            panic!("expected a landed swing");
+        };
+        assert!(effects.iter().any(|effect| matches!(effect,
+            Effect::Send { msg } if matches!(msg.payload,
+                MessagePayload::Damage { amount, .. } if (amount - WEAPON_BASH_INTENSITY * 1.35).abs() < 0.00001))));
+        world.remove::<crate::runtime_props::RuntimePropVrGripOffset>(weapon);
+        assert_eq!(
+            damage_count(&collide(
+                &mut HeldMeleeWeapon::new(),
+                &world,
+                weapon,
+                target
+            )),
+            0
         );
     }
 
@@ -717,6 +928,7 @@ mod tests {
                 contact: Some(crate::physics::CollisionContact {
                     point: vec3(2.0, 3.0, 4.0),
                     normal: vec3(1.0, 0.0, 0.0),
+                    closing_speed: None,
                 }),
             },
         )
@@ -943,25 +1155,5 @@ mod tests {
             collide(&mut script, &world, weapon, target),
             Effect::NoEffect
         ));
-    }
-
-    #[test]
-    fn legacy_melee_collision_is_inert_outside_vr() {
-        let (world, weapon, target) = test_world(PresentationMode::Flat);
-
-        let effect = MeleeWeapon::new().handle_message(
-            weapon,
-            &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::Collided {
-                with: target,
-                contact: Some(crate::physics::CollisionContact {
-                    point: vec3(2.0, 3.0, 4.0),
-                    normal: vec3(1.0, 0.0, 0.0),
-                }),
-            },
-        );
-
-        assert!(matches!(effect, Effect::NoEffect));
     }
 }

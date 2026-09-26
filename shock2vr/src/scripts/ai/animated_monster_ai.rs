@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashSet};
 
-use cgmath::{Deg, EuclideanSpace, MetricSpace, Quaternion, Rotation3, vec3, vec4};
+use cgmath::{Deg, EuclideanSpace, InnerSpace, MetricSpace, Quaternion, Rotation3, vec3, vec4};
 use dark::{
     SCALE_FACTOR,
     motion::{MotionFlags, MotionQueryItem},
@@ -8,11 +8,12 @@ use dark::{
         AIAlertLevel, Link, PropAIAlertCap, PropAIAwareDelay, PropAISignalResponse, PropPosition,
     },
 };
-use rand;
+use rand::Rng;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
     mission::{GlobalPathfinding, GlobalTemplateIdMap, PlayerInfo},
+    pathfinding::MovementHold,
     physics::{InternalCollisionGroups, PhysicsWorld},
     scripts::script_util,
     time::Time,
@@ -24,7 +25,7 @@ use super::{
     ai_util::*,
     alertness::{self, AlertnessState, AlertnessTimings},
     behavior::*,
-    steering::{Steering, SteeringOutput},
+    steering::{STALL_SECONDS, Steering, SteeringOutput},
 };
 // Default timing constants for monsters (in seconds)
 const DEFAULT_ESCALATE_SECONDS: f32 = 1.5;
@@ -48,6 +49,27 @@ const DOOR_POLL_INTERVAL: f32 = 0.3;
 /// enough that the door has left its closed position, so TurnOn (and its
 /// sound) isn't re-sent while it swings.
 const DOOR_INTERACT_COOLDOWN: f32 = 2.0;
+/// A door is passable once its leaf has travelled at least this far. A leaf
+/// that slides sideways never gains height, so height clearance alone would
+/// hold an AI at it forever.
+const DOOR_OPEN_FRACTION: f32 = 0.95;
+/// Ceiling on the door wait, so a leaf that stops halfway (halted, jammed,
+/// or frobbed shut again) can never park an AI in a doorway. It is also
+/// deliberately SHORTER than the path-follower's stall window: a held body
+/// makes no progress toward its waypoint, so a longer hold would read as a
+/// wedge, blacklist the crossing the AI just opened, and route it back away
+/// from the door. Longer than the slowest shipped leaf's travel (~1.6 s).
+const DOOR_WAIT_TIMEOUT: f32 = 2.5;
+/// How long a door has to keep the AI waiting before that reads as
+/// impatience. A shipped sliding leaf clears in about half a second, and an
+/// AI is not thwarted by a door that opens for it - gesturing at every one
+/// would also park a body in the doorway (the gesture has no root motion)
+/// long enough to dam the creatures queued behind it.
+const FRUSTRATION_DOOR_WAIT_SECONDS: f32 = 1.75;
+/// Rate limit on the frustration gesture, jittered per play so a knot of
+/// AIs blocked on the same thing doesn't gesture in unison.
+const FRUSTRATION_COOLDOWN_MIN: f32 = 20.0;
+const FRUSTRATION_COOLDOWN_MAX: f32 = 45.0;
 /// After giving up at a locked door, wait this long before re-frustrating -
 /// bounds the "thwarted" gesture for an AI whose alert cap keeps it in a
 /// pursuing state even after the give-up's alertness drop.
@@ -107,22 +129,164 @@ fn should_orient_on_target(
 }
 
 /// Forward-speed multiplier for a given heading error: 1.0 facing the
-/// travel direction, ramping down to a third by 60 degrees of error and
-/// flooring there. The floor is never zero - steering chains (collision
-/// avoidance vs path following) can hold a large transient error, and a
-/// zero scale deadlocks the AI in place.
-fn locomotion_scale_for_heading_error(delta: Deg<f32>) -> f32 {
-    const TURN_SLOW_ANGLE: f32 = 60.0;
-    const MIN_MOVING_SCALE: f32 = 0.33;
-    let error = delta.0.abs();
-    if error >= TURN_SLOW_ANGLE {
-        MIN_MOVING_SCALE
+/// travel direction, ramping down to a third by 60 degrees of error, then
+/// to a standstill by 90.
+///
+/// Past a right angle the body turns in PLACE. Walking a reversal at a
+/// third speed is a second-long arc that carries the body sideways into
+/// whatever happens to be beside it - a railing, a door frame, the AI it
+/// is trying to get around - which is exactly where patrol reversals wedge.
+/// Turning is unaffected by the scale, so a stopped body still pivots and
+/// walks off again the moment its error is back under 90.
+/// Whether a door's leaf has travelled far enough for a creature of
+/// `actor_height` to walk under (or past) it: either the leaf has finished
+/// its travel, or it has risen clear of the creature's head. A closed leaf
+/// starts at floor level, so its rise IS the height of the gap beneath it.
+pub(crate) fn door_is_passable(fraction: f32, rise: f32, actor_height: f32) -> bool {
+    fraction >= DOOR_OPEN_FRACTION || rise >= actor_height
+}
+
+/// Whether to show frustration now: only while actually blocked, only once
+/// the rate limit has expired, never inside melee reach of the believed
+/// target (an AI in a position to swing is fighting, not thwarted), and
+/// never over a performance the level authored.
+/// Whether a door has kept the AI waiting long enough to read as impatience
+/// rather than as a door simply opening for it.
+pub(crate) fn door_wait_is_thwarting(door_wait_seconds: Option<f32>) -> bool {
+    door_wait_seconds.is_some_and(|seconds| seconds >= FRUSTRATION_DOOR_WAIT_SECONDS)
+}
+
+/// The limits every gesture path shares, whatever it is frustrated at: the
+/// rate limit, no gesturing over a scripted performance, and none in the
+/// player's face (a creature in reach of its target attacks, it does not
+/// mime). The locked-door give-up goes through this too - two paths playing
+/// the one performance must not take turns past the limit either claims.
+pub(crate) fn frustration_gesture_allowed(
+    cooldown_remaining: f32,
+    target_distance: Option<f32>,
+    scripted: ScriptedState,
+) -> bool {
+    cooldown_remaining <= 0.0
+        && scripted != ScriptedState::Running
+        && !matches!(target_distance, Some(d) if d <= MELEE_ATTACK_RANGE)
+}
+
+/// How long the pivot waits, after its clip has ended, for the applier to name
+/// the fade the following clip starts on. The report arrives as soon as the AI
+/// queues anything at all - normally the very next frame - so this only bounds
+/// a creature that queues nothing (its behavior ended with the pivot), which
+/// would otherwise hold its heading forever.
+const TURN_CLIP_HANDOFF_TIMEOUT: f32 = 0.5;
+
+/// The longest a creature may stand still to perform a pivot. The stock turn
+/// clips run 2.4-5.6 s; one long enough to read as a wedge (the reachability
+/// harness calls holding one spot for 6 s stuck, and it is right to) is worse
+/// than steering the turn, so it is simply not picked.
+const TURN_CLIP_MAX_SECONDS: f32 = 4.0;
+
+/// How long a pivot is barred for. Two pivots back to back would hold the
+/// creature still for longer than either of them, so a pivot has to walk (or
+/// at least steer) it off before the next one - and a stall arms the same
+/// window, which has to outlast the path follower's own recovery.
+const TURN_CLIP_COOLDOWN: f32 = 3.0;
+
+/// A pivot being played as the creature's own authored turn clip. The clip's
+/// POSE does the visible turning, so the script holds its heading while the
+/// clip runs and only then takes the authored facing change.
+/// Every state carries the request token the applier echoes, so a report about
+/// a pivot this AI has already abandoned is recognised and dropped instead of
+/// committing a turn nothing is performing.
+enum TurnClip {
+    /// Asked for; waiting for the applier to say which clip it picked.
+    Requested { token: u64 },
+    /// Playing: the pose is doing the turning, so the entity holds still.
+    Playing { token: u64, turn: Deg<f32> },
+    /// The clip has ended; waiting for the applier to report the fade the
+    /// clip that follows it starts on.
+    HandingOver {
+        token: u64,
+        turn: Deg<f32>,
+        /// How long this has been waiting, purely to bound it: a creature can
+        /// legitimately queue nothing after its pivot.
+        waited: f32,
+    },
+    /// Handing over: the entity takes the clip's authored facing change across
+    /// the very fade the animation player is running, so the facing the pose
+    /// gives up and the facing the entity takes cancel out frame for frame.
+    /// The fraction is not integrated here - it is the pose's own cross-fade
+    /// weight, reported every frame by the applier (`TurnClipBlend`), because
+    /// the script and the animation player tick at different points in the
+    /// frame and a clock of its own would run a frame ahead of the pose.
+    Settling {
+        token: u64,
+        turn: Deg<f32>,
+        /// The heading the clip ended on - the anchor the reported fraction of
+        /// `turn` is added to, so rounding cannot accumulate across the fade.
+        base: Deg<f32>,
+        /// How much of the pose the following clip owns, as last reported.
+        alpha: f32,
+    },
+}
+
+/// The "thwarted" performance. The motion database files the tag under
+/// `discover`, so the bare tag resolves to nothing at all - the query has to
+/// name the branch as well as the leaf.
+fn frustration_gesture(entity_id: EntityId) -> Effect {
+    Effect::PlayAnimationBySchema {
+        entity_id,
+        motion_queries: vec![vec![
+            MotionQueryItem::new("discover"),
+            MotionQueryItem::new("thwarted"),
+        ]],
+        selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
+    }
+}
+
+/// How long path-following has been making no progress, as published by the
+/// steering strategy - and already frozen for the frames this AI published a
+/// hold for. Zero for an AI that isn't following a route.
+fn path_stall_seconds(world: &World, entity_id: EntityId) -> f32 {
+    world
+        .borrow::<UniqueView<GlobalPathfinding>>()
+        .ok()
+        .and_then(|g| g.0.clone())
+        .and_then(|service| service.ai_steering(entity_id.inner()))
+        .map(|steering| steering.stall_seconds)
+        .unwrap_or(0.0)
+}
+
+/// Why this AI is standing still this frame, if it is. A door wait outranks a
+/// pivot: the AI can be doing both, and the door is what it is waiting on.
+fn hold_reason(door_wait_seconds: Option<f32>, pivoting: bool) -> MovementHold {
+    if door_wait_seconds.is_some() {
+        MovementHold::DoorWait
+    } else if pivoting {
+        MovementHold::Pivot
     } else {
-        1.0 - (error / TURN_SLOW_ANGLE) * (1.0 - MIN_MOVING_SCALE)
+        MovementHold::None
+    }
+}
+
+pub(crate) fn locomotion_scale_for_heading_error(delta: Deg<f32>) -> f32 {
+    const TURN_SLOW_ANGLE: f32 = 60.0;
+    const TURN_IN_PLACE_ANGLE: f32 = 90.0;
+    const TURN_SLOW_SCALE: f32 = 0.33;
+    let error = delta.0.abs();
+    if error >= TURN_IN_PLACE_ANGLE {
+        0.0
+    } else if error >= TURN_SLOW_ANGLE {
+        let past_slow = (error - TURN_SLOW_ANGLE) / (TURN_IN_PLACE_ANGLE - TURN_SLOW_ANGLE);
+        TURN_SLOW_SCALE * (1.0 - past_slow)
+    } else {
+        1.0 - (error / TURN_SLOW_ANGLE) * (1.0 - TURN_SLOW_SCALE)
     }
 }
 
 pub struct AnimatedMonsterAI {
+    /// Last locally acquired scent identity, never a global player-route cursor.
+    scent_cursor: Option<u64>,
+    scent_goal: bool,
+    scent_poll_seconds: f32,
     last_hit_sensor: Option<EntityId>,
     current_behavior: Box<RefCell<dyn Behavior>>,
     current_heading: Deg<f32>,
@@ -158,9 +322,21 @@ pub struct AnimatedMonsterAI {
     published_awareness: Option<(cgmath::Vector3<f32>, bool)>,
     /// Throttle between door interactions (open / locked-door give-up)
     door_cooldown: f32,
+    /// The door this AI is standing off from, and how long it has waited, while
+    /// the leaf travels clear (see `update_door_wait`)
+    door_wait: Option<(EntityId, f32)>,
+    /// Seconds left before this AI may show frustration again
+    frustration_cooldown: f32,
+    combat_frustration: CombatFrustration,
     /// Pinned alertness (DebugForceChase): treated as permanent sight of the
     /// player - no decay, live target position - until cleared
     alertness_pinned: bool,
+    /// The authored turn clip playing for the current pivot, if any
+    turn_clip: Option<TurnClip>,
+    /// Seconds left before this AI may perform another pivot
+    turn_cooldown: f32,
+    /// Monotonic identity for pivot requests - see `TurnClip`
+    turn_token: u64,
 }
 
 impl AnimatedMonsterAI {
@@ -176,6 +352,9 @@ impl AnimatedMonsterAI {
             current_heading: Deg(0.0),
             animation_seq: 0,
             locomotion_seq: 0,
+            scent_cursor: None,
+            scent_goal: false,
+            scent_poll_seconds: 0.0,
             last_hit_sensor: None,
             played_ai_watch_obj: HashSet::new(),
             alertness: AlertnessState::default(),
@@ -184,6 +363,12 @@ impl AnimatedMonsterAI {
             last_known_player_pos: None,
             published_awareness: None,
             door_cooldown: 0.0,
+            door_wait: None,
+            frustration_cooldown: 0.0,
+            combat_frustration: CombatFrustration::default(),
+            turn_clip: None,
+            turn_cooldown: 0.0,
+            turn_token: 0,
         }
     }
 
@@ -200,6 +385,9 @@ impl AnimatedMonsterAI {
             current_heading: Deg(0.0),
             animation_seq: 0,
             locomotion_seq: 0,
+            scent_cursor: None,
+            scent_goal: false,
+            scent_poll_seconds: 0.0,
             last_hit_sensor: None,
             played_ai_watch_obj: HashSet::new(),
             alertness: AlertnessState::default(),
@@ -208,6 +396,12 @@ impl AnimatedMonsterAI {
             last_known_player_pos: None,
             published_awareness: None,
             door_cooldown: 0.0,
+            door_wait: None,
+            frustration_cooldown: 0.0,
+            combat_frustration: CombatFrustration::default(),
+            turn_clip: None,
+            turn_cooldown: 0.0,
+            turn_token: 0,
         }
     }
 
@@ -278,9 +472,95 @@ impl AnimatedMonsterAI {
                 // an attack on arrival via the same shared helper). Without
                 // the range check, a far-away High AI stood still swinging.
                 physics
-                    .and_then(|physics| attack_behavior_for_distance(world, physics, entity_id))
+                    .and_then(|physics| self.available_attack(world, physics, entity_id))
                     .unwrap_or_else(|| Box::new(RefCell::new(ChaseBehavior::new())))
             }
+        }
+    }
+
+    fn available_attack(
+        &self,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity: EntityId,
+    ) -> Option<Box<RefCell<dyn Behavior>>> {
+        attack_behavior_with_modes(
+            world,
+            physics,
+            entity,
+            self.combat_frustration.allows(CombatMode::Melee),
+            self.combat_frustration.allows(CombatMode::Ranged),
+        )
+    }
+
+    fn update_combat_frustration(
+        &mut self,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity: EntityId,
+        visible: bool,
+        dt: f32,
+    ) -> Effect {
+        self.combat_frustration.tick(dt);
+        if self.current_behavior.borrow().is_combat_frustration() {
+            if self.combat_frustration.gesture_remaining > 0.0 {
+                return Effect::NoEffect;
+            }
+            self.current_behavior = self.behavior_for_alertness(world, Some(physics), entity);
+        } else {
+            // Turning in place is not pursuit progress. Let the stall timer
+            // span pivots; replacing their clip reports cancellation normally.
+            let eligible = self.door_wait.is_none()
+                // Scanning an empty sound location is successful searching,
+                // not failed combat. Do not replace it with a stall gesture.
+                && self.current_behavior.borrow().name() != "Search"
+                && self.current_behavior.borrow().scripted_state() == ScriptedState::NotScripted
+                && matches!(
+                    self.alertness.current_level,
+                    AIAlertLevel::Moderate | AIAlertLevel::High
+                )
+                && !is_self_destructing(world, entity);
+            if !eligible {
+                self.combat_frustration
+                    .observe(None, vec3(0.0, 0.0, 0.0), 0.0);
+                return Effect::NoEffect;
+            }
+            let melee = melee_weapon_template(world, entity).is_some();
+            let ranged = has_ranged_weapon(world, entity);
+            let distance = chase_target_distance(world, entity).unwrap_or(f32::MAX);
+            let mode = if melee && distance < MELEE_ATTACK_RANGE {
+                Some(CombatMode::Melee)
+            } else if ranged {
+                Some(CombatMode::Ranged)
+            } else if melee {
+                Some(CombatMode::Melee)
+            } else {
+                None
+            };
+            let lost_at_goal =
+                !visible && self.published_awareness.is_some() && distance < MELEE_ATTACK_RANGE;
+            let no_attack = self.available_attack(world, physics, entity).is_none();
+            let failed = if lost_at_goal || no_attack {
+                mode
+            } else {
+                None
+            };
+            let positions = world.borrow::<View<PropPosition>>().unwrap();
+            let Ok(position) = positions.get(entity) else {
+                return Effect::NoEffect;
+            };
+            if !self
+                .combat_frustration
+                .observe(failed, position.position, dt)
+            {
+                return Effect::NoEffect;
+            }
+            self.current_behavior = Box::new(RefCell::new(FrustrationBehavior));
+        }
+        Effect::PlayAnimationBySchema {
+            entity_id: entity,
+            motion_queries: self.current_behavior.borrow().animation_queries(),
+            selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
         }
     }
 
@@ -312,12 +592,20 @@ impl AnimatedMonsterAI {
         steering_output: SteeringOutput,
         time: &Time,
         entity_id: EntityId,
+        hold_position: bool,
+        // An authored turn clip owns the heading for the length of the pivot
+        // (see `update_turn_clip`): the script neither slews it nor moves the
+        // body, and re-asserting the held heading every frame keeps the clip's
+        // own root rotation from turning the entity on top of its pose.
+        heading_held: bool,
     ) -> Effect {
         let turn_velocity = self.current_behavior.borrow().turn_speed().0;
         let delta =
             clamp_to_minimal_delta_angle(steering_output.desired_heading - self.current_heading);
 
-        let turn_amount = if delta.0 < 0.0 {
+        let turn_amount = if heading_held {
+            0.0
+        } else if delta.0 < 0.0 {
             (-turn_velocity * time.elapsed.as_secs_f32()).max(delta.0)
         } else {
             (turn_velocity * time.elapsed.as_secs_f32()).min(delta.0)
@@ -328,8 +616,14 @@ impl AnimatedMonsterAI {
         // Couple forward speed to heading error so the body doesn't arc at
         // full stride while the heading catches up (the cause of orbiting a
         // close target): full speed facing the travel direction, ramping to
-        // a third by 60 degrees of error.
-        let scale = locomotion_scale_for_heading_error(delta);
+        // a third by 60 degrees of error and to a standstill by 90.
+        // Holding for a door still turns (so the AI keeps facing the way
+        // through) - only the stride is cut.
+        let scale = if hold_position || heading_held {
+            0.0
+        } else {
+            locomotion_scale_for_heading_error(delta)
+        };
 
         Effect::Multiple(vec![
             Effect::SetRotation {
@@ -350,11 +644,16 @@ impl AnimatedMonsterAI {
         entity_id: EntityId,
     ) -> Effect {
         let (position, forward) = get_position_and_forward(world, entity_id);
-
-        let down_amount = 2.0 / SCALE_FACTOR;
-        let down_vector = vec3(0.0, -down_amount, 0.0);
+        let position = position + crate::creature::sense_offset(world, entity_id);
 
         let distance = 8.0 / SCALE_FACTOR;
+        // Dip so the probe meets flat floor two thirds of the way out, whatever
+        // the creature's height: a fixed dip that suits a human's chest puts a
+        // spider's probe into the floor within a stride.
+        let down_amount = crate::creature::sense_height(world, entity_id)
+            .map(|height| height * 1.5 / distance)
+            .unwrap_or(2.0 / SCALE_FACTOR);
+        let down_vector = vec3(0.0, -down_amount, 0.0);
 
         let _direction = forward + down_vector;
 
@@ -438,9 +737,76 @@ impl AnimatedMonsterAI {
         }
     }
 
-    /// Force alertness to `level` (clamped by the alert cap), reset the
-    /// visibility timers, and swap in the canonical behavior for the
-    /// resulting level. Callers must check the AI is alive first.
+    /// Only acquire scent after reaching a known destination. In particular,
+    /// a nearby player trail must not cancel a thrown-object distraction on
+    /// the way to its sound. Idle creatures never hunt from scent alone.
+    fn follow_local_scent(
+        &mut self,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+        visible: bool,
+        delta: f32,
+    ) -> Effect {
+        self.scent_poll_seconds = (self.scent_poll_seconds - delta).max(0.0);
+        if visible || delta <= 0.0 || self.scent_poll_seconds > 0.0 || self.config.is_none() {
+            return Effect::NoEffect;
+        }
+        let goal = {
+            let behavior = self.current_behavior.borrow();
+            if !matches!(behavior.name(), "Chase" | "Search") {
+                return Effect::NoEffect;
+            }
+            behavior.investigation_goal().or(self.last_known_player_pos)
+        };
+        let arrived = if self.scent_goal {
+            self.current_behavior.borrow().holds_position()
+        } else {
+            goal.is_some_and(|goal| SearchBehavior::at_goal(world, entity_id, goal))
+        };
+        if !arrived {
+            return Effect::NoEffect;
+        }
+        self.scent_poll_seconds = 0.5;
+        let (position, _) = get_position_and_forward(world, entity_id);
+        let scent = world
+            .borrow::<UniqueView<crate::mission::player_trail::PlayerTrail>>()
+            .ok()
+            .and_then(|trail| {
+                trail
+                    .discover(position.to_vec(), self.scent_cursor, |goal| {
+                        let direction = goal - position.to_vec();
+                        let distance = direction.magnitude();
+                        distance < 0.01
+                            || physics
+                                .ray_cast2_as_actor(
+                                    position,
+                                    direction / distance,
+                                    distance,
+                                    InternalCollisionGroups::ALL_COLLIDABLE,
+                                    Some(entity_id),
+                                    true,
+                                )
+                                .is_none()
+                    })
+                    .map(|point| (point.id, point.position))
+            });
+        let Some((id, goal)) = scent else {
+            return Effect::NoEffect;
+        };
+        self.scent_cursor = Some(id);
+        self.scent_goal = true;
+        self.last_known_player_pos = Some(goal);
+        self.alertness.hidden_time = 0.0;
+        self.current_behavior = Box::new(RefCell::new(SearchBehavior::for_scent(goal)));
+        let selection_strategy = self.next_selection(true);
+        Effect::PlayAnimationBySchema {
+            entity_id,
+            motion_queries: self.current_behavior.borrow().animation_queries(),
+            selection_strategy,
+        }
+    }
+
     /// React to a stimulus that locates the player at `origin` - a hit taken,
     /// or a noise heard. Refreshes the last-known position (so a searching or
     /// chasing AI turns toward the fresh cue) and escalates toward Moderate
@@ -468,6 +834,11 @@ impl AnimatedMonsterAI {
         // Refresh even when already alerted - the cue reveals where the
         // player is now, redirecting a stale chase or a search.
         self.last_known_player_pos = Some(origin);
+        self.scent_goal = false;
+        // Fresh contact renews memory even when already alerted. Otherwise
+        // repeated heard footsteps update the goal while the unseen timer
+        // still expires underneath the pursuit.
+        self.alertness.hidden_time = 0.0;
 
         let cap = config.alert_cap.clone();
         // Only force when the clamped target actually raises the level (so a
@@ -566,7 +937,10 @@ impl AnimatedMonsterAI {
         // survives a frame.
         if crate::scripts::script_util::has_death_links(world, entity_id) {
             self.handoff_emitted = true;
-            return Effect::SlayEntity { entity_id };
+            return Effect::combine(vec![
+                Effect::GenerateLoot { entity_id },
+                Effect::SlayEntity { entity_id },
+            ]);
         }
 
         let death_sound_effect = if let Some(voice_index) =
@@ -603,7 +977,13 @@ impl AnimatedMonsterAI {
             selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
         };
 
-        Effect::combine(vec![death_sound_effect, death_animation])
+        Effect::combine(vec![
+            // Before the crumple, so the corpse is already stocked by the
+            // time anything can search it.
+            Effect::GenerateLoot { entity_id },
+            death_sound_effect,
+            death_animation,
+        ])
     }
 
     /// Publish the current behavior name for debug introspection. Update
@@ -623,6 +1003,239 @@ impl AnimatedMonsterAI {
         } else {
             Effect::NoEffect
         }
+    }
+
+    /// Hold position while a door this AI just opened travels clear, rather
+    /// than walking into a leaf still crossing the doorway. Returns whether
+    /// the AI is holding this frame.
+    fn update_door_wait(&mut self, world: &World, entity_id: EntityId, time: &Time) -> Option<f32> {
+        let (door_ent, waited) = self.door_wait?;
+        // Only a pursuing behavior opens doors, so only a pursuing behavior
+        // waits at one; anything else (a scripted performance takes over, the
+        // AI calms down) walks away from the doorway rather than holding.
+        if !matches!(self.current_behavior.borrow().name(), "Chase" | "Search") {
+            self.door_wait = None;
+            return None;
+        }
+        let waited = waited + time.elapsed.as_secs_f32();
+        // No progress to read (not a door any more, or one that cannot move)
+        // means there is nothing to wait for.
+        let progress = script_util::door_open_progress(world, door_ent);
+        let clear = match progress {
+            None => true,
+            Some((fraction, rise)) => {
+                door_is_passable(fraction, rise, creature_height(world, entity_id))
+            }
+        };
+        if clear || waited >= DOOR_WAIT_TIMEOUT {
+            tracing::debug!(
+                "ai {:?} resumes past door {:?} after {:.2}s (clear: {}, progress: {:?})",
+                entity_id,
+                door_ent,
+                waited,
+                clear,
+                progress
+            );
+            self.door_wait = None;
+            return None;
+        }
+        self.door_wait = Some((door_ent, waited));
+        Some(waited)
+    }
+
+    /// A pivot costs seconds of standing still, so it belongs to a creature
+    /// that is getting somewhere: one scrambling out of a wedge only makes the
+    /// wedge longer by standing through a turn clip. A stall therefore arms the
+    /// pivot cooldown, whose window outlasts the path follower's own recovery -
+    /// the re-path that asks for the sidestep, and so reads as a pivot, lands
+    /// after the stall clock has already been reset.
+    ///
+    /// `following_a_route` gates the reading, not just the arming: the follower
+    /// publishes its stall clock only while it steers, and the last value it
+    /// published outlives it.
+    fn bar_pivot_while_stalled(&mut self, stall_seconds: f32, following_a_route: bool) {
+        if following_a_route && stall_seconds >= STALL_SECONDS {
+            self.turn_cooldown = self.turn_cooldown.max(TURN_CLIP_COOLDOWN);
+        }
+    }
+
+    /// Pivot with the creature's own authored turn clip rather than sliding
+    /// the heading around under a walk cycle. Returns the effect to emit and
+    /// whether the pivot owns the heading this frame.
+    ///
+    /// The clip's pose does the visible turning, so the script holds still
+    /// while it plays and takes the authored facing change afterwards, spread
+    /// over the blend that swings the pose back to neutral.
+    fn update_turn_clip(
+        &mut self,
+        entity_id: EntityId,
+        desired_heading: Deg<f32>,
+        time: &Time,
+        may_start: bool,
+    ) -> (Effect, bool) {
+        let elapsed = time.elapsed.as_secs_f32();
+        let delta = clamp_to_minimal_delta_angle(desired_heading - self.current_heading);
+
+        match &mut self.turn_clip {
+            None => {
+                self.turn_cooldown = (self.turn_cooldown - elapsed).max(0.0);
+                // Only once the heading error has already stopped the body: a
+                // pivot the creature can walk through needs no clip, and the
+                // shortest stock turn clip is a quarter-circle anyway.
+                let stopped = locomotion_scale_for_heading_error(delta) <= 0.0;
+                if !(may_start && stopped && self.turn_cooldown <= 0.0) {
+                    return (Effect::NoEffect, false);
+                }
+                self.turn_token += 1;
+                let token = self.turn_token;
+                tracing::debug!("ai {:?} pivots {:?} (turn {})", entity_id, delta, token);
+                self.turn_clip = Some(TurnClip::Requested { token });
+                (
+                    Effect::PlayTurnClip {
+                        entity_id,
+                        token,
+                        delta,
+                        max_seconds: TURN_CLIP_MAX_SECONDS,
+                    },
+                    true,
+                )
+            }
+            // Both wait on the applier, which answers every request (with the
+            // clip it started, or a cancellation) and reports the clip's own
+            // completion - so neither needs a clock of its own.
+            Some(TurnClip::Requested { .. }) | Some(TurnClip::Playing { .. }) => {
+                (Effect::NoEffect, true)
+            }
+            Some(TurnClip::HandingOver { waited, .. }) => {
+                *waited += elapsed;
+                if *waited < TURN_CLIP_HANDOFF_TIMEOUT {
+                    return (Effect::NoEffect, true);
+                }
+                // Nothing followed the clip, so nothing has given the turn
+                // up: the player holds the turn clip's final frame, and its
+                // pose is still facing the creature where the turn ended.
+                // Taking the facing change now would turn it twice.
+                self.cancel_turn_clip(entity_id, "nothing followed its clip");
+                (Effect::NoEffect, true)
+            }
+            Some(TurnClip::Settling {
+                turn, base, alpha, ..
+            }) => {
+                // The pose gave up `alpha` of the turn it was holding, so the
+                // entity takes exactly `alpha` of it back.
+                let heading = Deg(base.0 + turn.0 * *alpha);
+                if *alpha >= 1.0 {
+                    self.finish_pivot(entity_id, heading);
+                } else {
+                    self.current_heading = heading;
+                }
+                (Effect::NoEffect, true)
+            }
+        }
+    }
+
+    /// End the pivot on `heading`, and space the next one out.
+    fn finish_pivot(&mut self, entity_id: EntityId, heading: Deg<f32>) {
+        self.current_heading = heading;
+        tracing::debug!("ai {:?} finished its pivot facing {:?}", entity_id, heading);
+        self.turn_clip = None;
+        self.turn_cooldown = TURN_CLIP_COOLDOWN;
+    }
+
+    /// Drop a pivot in flight without taking its authored facing change.
+    ///
+    /// Whatever ended the turn clip took the pose that was turning the body
+    /// with it, so committing the turn now would swing the creature through it
+    /// with nothing to show for it.
+    ///
+    /// Only the applier knows whether the pivot's clip is still the one
+    /// playing, so this is driven by its report, never guessed at here: a
+    /// creature that takes a hit, waits at a door or changes behavior is NOT
+    /// thereby done pivoting - if nothing displaced the clip, its pose is
+    /// still turning the body and the turn is still owed. A pivot already
+    /// settling is not dropped at all - its pose has already given the turn up
+    /// (see the `TurnClipCancelled` handler), so it finishes instead.
+    fn cancel_turn_clip(&mut self, entity_id: EntityId, reason: &str) {
+        if matches!(
+            self.turn_clip,
+            Some(TurnClip::Requested { .. })
+                | Some(TurnClip::Playing { .. })
+                | Some(TurnClip::HandingOver { .. })
+        ) {
+            tracing::debug!("ai {:?} drops its pivot: {}", entity_id, reason);
+            self.turn_clip = None;
+            self.turn_cooldown = TURN_CLIP_COOLDOWN;
+        }
+    }
+
+    /// The token of the pivot in flight, if any - a report echoing anything
+    /// else belongs to a pivot already abandoned.
+    fn turn_clip_token(&self) -> Option<u64> {
+        match &self.turn_clip {
+            Some(TurnClip::Requested { token })
+            | Some(TurnClip::Playing { token, .. })
+            | Some(TurnClip::HandingOver { token, .. })
+            | Some(TurnClip::Settling { token, .. }) => Some(*token),
+            None => None,
+        }
+    }
+
+    /// Jittered rate limit, so a knot of AIs blocked on the same thing does
+    /// not gesture in unison.
+    fn next_frustration_cooldown(&self) -> f32 {
+        rand::thread_rng().gen_range(FRUSTRATION_COOLDOWN_MIN..FRUSTRATION_COOLDOWN_MAX)
+    }
+
+    /// Show impatience at a door still opening. Only at a door: the gesture
+    /// fits inside a hold the AI is already taking, whereas playing it on a
+    /// stall would add seconds of standing still to a creature that is trying
+    /// to get out of a wedge. The gesture is an animation only - it plays over
+    /// the wait without extending it.
+    fn update_frustration(
+        &mut self,
+        world: &World,
+        entity_id: EntityId,
+        door_wait_seconds: Option<f32>,
+        started_a_clip: bool,
+        time: &Time,
+    ) -> Effect {
+        // The rate limit ticks whether or not a gesture is due, so a
+        // suppressed frame doesn't stretch it.
+        self.frustration_cooldown =
+            (self.frustration_cooldown - time.elapsed.as_secs_f32()).max(0.0);
+        if started_a_clip || !door_wait_is_thwarting(door_wait_seconds) {
+            return Effect::NoEffect;
+        }
+        let gesture = self.try_frustration_gesture(world, entity_id);
+        if !matches!(gesture, Effect::NoEffect) {
+            tracing::debug!(
+                "ai {:?} shows impatience at a door (waited {:?}s)",
+                entity_id,
+                door_wait_seconds
+            );
+        }
+        gesture
+    }
+
+    /// The thwarted performance, if the shared limits allow it right now -
+    /// arming the rate limit when it does. Every gesture path goes through
+    /// here; `update_frustration` adds the suppression for a clip started
+    /// earlier in the same frame.
+    fn try_frustration_gesture(&mut self, world: &World, entity_id: EntityId) -> Effect {
+        // The gesture PLAYS (it does not queue), so it would drop a pivot
+        // mid-turn and leave the AI held on a clip that is no longer running.
+        if self.turn_clip.is_some() {
+            return Effect::NoEffect;
+        }
+        if !frustration_gesture_allowed(
+            self.frustration_cooldown,
+            chase_target_distance(world, entity_id),
+            self.current_behavior.borrow().scripted_state(),
+        ) {
+            return Effect::NoEffect;
+        }
+        self.frustration_cooldown = self.next_frustration_cooldown();
+        frustration_gesture(entity_id)
     }
 
     /// While pursuing, open the (unlocked) door gating the AI's route so it
@@ -707,23 +1320,40 @@ impl AnimatedMonsterAI {
                 // pursuing level.
                 self.door_cooldown = DOOR_GIVEUP_COOLDOWN;
                 self.last_known_player_pos = None;
-                // State-only downgrade: the thwarted gesture replaces the
-                // queue this frame (a second Play here would blend from an
-                // unseen frame-0 pose and waste a clip load); the completion
-                // handler starts the Low behavior's clip after the gesture.
-                let downgrade =
-                    self.force_alertness_state(AIAlertLevel::Low, world, physics, entity_id);
-                let thwarted = Effect::PlayAnimationBySchema {
-                    entity_id,
-                    motion_queries: vec![vec![MotionQueryItem::new("thwarted")]],
-                    selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
+                // Giving up on the door also gives up waiting for it - the
+                // wander this drops to has no business standing at it.
+                self.door_wait = None;
+                // Asked for before the downgrade, so the limits are read
+                // against the behavior that was actually thwarted.
+                let gesture = self.try_frustration_gesture(world, entity_id);
+                let downgrade = if matches!(gesture, Effect::NoEffect) {
+                    // Nothing to carry the change: start the wander's own
+                    // clip, as every other behavior change does.
+                    self.force_alertness(AIAlertLevel::Low, world, physics, entity_id)
+                } else {
+                    // State-only downgrade: the thwarted gesture replaces the
+                    // queue this frame (a second Play here would blend from an
+                    // unseen frame-0 pose and waste a clip load); the
+                    // completion handler starts the Low behavior's clip after
+                    // the gesture.
+                    self.force_alertness_state(AIAlertLevel::Low, world, physics, entity_id)
                 };
-                return Effect::combine(vec![downgrade, thwarted]);
+                return Effect::combine(vec![downgrade, gesture]);
             }
             // Unlocked: open it and keep chasing through. The longer cooldown
             // avoids re-sending TurnOn (and replaying the open sound) while
             // the door is still swinging.
             self.door_cooldown = DOOR_INTERACT_COOLDOWN;
+            // Stand off until the leaf has travelled clear (#1255): the AI
+            // used to keep walking into a leaf still crossing the doorway.
+            // Re-sending TurnOn to a leaf that has not left its closed half
+            // is idempotent, but restarting the clock here is not: the wait
+            // would never age out and a jammed door could hold the AI for
+            // good. Only a DIFFERENT door starts a fresh wait.
+            if !matches!(self.door_wait, Some((waiting_on, _)) if waiting_on == door_ent) {
+                tracing::debug!("ai {:?} waits for door {:?} to clear", entity_id, door_ent);
+                self.door_wait = Some((door_ent, 0.0));
+            }
             return Effect::Send {
                 msg: Message {
                     to: door_ent,
@@ -736,6 +1366,65 @@ impl AnimatedMonsterAI {
 }
 
 impl Script for AnimatedMonsterAI {
+    fn script_state_key(&self) -> Option<&'static str> {
+        Some("shock2vr.animated_combat")
+    }
+    fn save_state(&self) -> Result<crate::scripts::ScriptState, crate::scripts::ScriptStateError> {
+        crate::scripts::ScriptState::encode(
+            2,
+            &(
+                &self.combat_frustration,
+                self.scent_cursor,
+                self.scent_goal,
+                if self.scent_goal {
+                    self.current_behavior
+                        .borrow()
+                        .investigation_goal()
+                        .or(self.last_known_player_pos)
+                } else {
+                    None
+                },
+            ),
+            "shock2vr.animated_combat",
+        )
+    }
+    fn restore_state(
+        &mut self,
+        saved: &crate::scripts::ScriptState,
+        _: &crate::scripts::ScriptRestoreContext<'_>,
+    ) -> Result<(), crate::scripts::ScriptStateError> {
+        (
+            self.combat_frustration,
+            self.scent_cursor,
+            self.scent_goal,
+            self.last_known_player_pos,
+        ) = saved.decode(2, "shock2vr.animated_combat")?;
+        Ok(())
+    }
+    fn initialize_after_hydration(
+        &mut self,
+        entity: EntityId,
+        world: &World,
+        _hydrated: bool,
+    ) -> Effect {
+        let initialized = self.initialize(entity, world);
+        if !self.is_dead && self.config.is_some() {
+            if let Some(goal) = self.last_known_player_pos {
+                self.current_behavior = Box::new(RefCell::new(SearchBehavior::for_scent(goal)));
+                let selection_strategy = self.next_selection(true);
+                return Effect::combine(vec![
+                    alertness::sync_alertness_effect(entity, &self.alertness),
+                    Effect::QueueAnimationBySchema {
+                        entity_id: entity,
+                        motion_queries: self.current_behavior.borrow().animation_queries(),
+                        selection_strategy,
+                    },
+                ]);
+            }
+        }
+        initialized
+    }
+
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
         self.current_heading = current_yaw(entity_id, world);
 
@@ -865,6 +1554,7 @@ impl Script for AnimatedMonsterAI {
         if is_visible {
             if let Ok(player) = world.borrow::<shipyard::UniqueView<PlayerInfo>>() {
                 self.last_known_player_pos = Some(player.pos);
+                self.scent_goal = false;
             }
         }
 
@@ -873,6 +1563,7 @@ impl Script for AnimatedMonsterAI {
         // the player's true location. Published only on change, and CLEARED
         // when the script forgets (search consumed it / fully calmed) so a
         // stale component can't hijack the true-position fallback forever.
+        let scent_effect = self.follow_local_scent(world, physics, entity_id, is_visible, delta);
         let desired_awareness = self.last_known_player_pos.map(|pos| (pos, is_visible));
         let awareness_effect = if desired_awareness != self.published_awareness {
             self.published_awareness = desired_awareness;
@@ -936,11 +1627,15 @@ impl Script for AnimatedMonsterAI {
                         // it. This must be checked BEFORE the decay-from-
                         // tracking branch, or a High-origin search is stomped
                         // one decay later.
-                        self.last_known_player_pos.take().map(
-                            |goal| -> Box<RefCell<dyn Behavior>> {
-                                Box::new(RefCell::new(SearchBehavior::new(goal)))
-                            },
-                        )
+                        if self.scent_goal {
+                            None
+                        } else {
+                            self.last_known_player_pos.take().map(
+                                |goal| -> Box<RefCell<dyn Behavior>> {
+                                    Box::new(RefCell::new(SearchBehavior::new(goal)))
+                                },
+                            )
+                        }
                     } else if decayed
                         && matches!(old_level, AIAlertLevel::Moderate | AIAlertLevel::High)
                     {
@@ -1020,7 +1715,22 @@ impl Script for AnimatedMonsterAI {
             }
         }
 
-        // Temporary steering behavior
+        // Both deliberate standstills are decided BEFORE the steer that
+        // reads them: a hold published afterwards would leave the frame it
+        // covers counted as a frame of no progress. The hold suspends the
+        // follower's progress accounting only - the behavior still steers
+        // through it, so heading, whiskers, crowd repel and the route itself
+        // stay live while the creature stands.
+        let door_wait_seconds = self.update_door_wait(world, entity_id, time);
+        // The pivot in flight, as of last frame: one started this frame is
+        // published on the next, and one ending is held a frame longer. Both
+        // edges cost a single 16 ms frame either way.
+        let pivoting = self.turn_clip.is_some();
+        super::ai_util::publish_movement_hold(
+            world,
+            entity_id,
+            hold_reason(door_wait_seconds, pivoting),
+        );
         let (steering_output, steering_effects) = self
             .current_behavior
             .borrow_mut()
@@ -1034,18 +1744,38 @@ impl Script for AnimatedMonsterAI {
         // sighting survives long enough to escalate (see
         // `should_orient_on_target`). The behavior's own steering effects
         // still apply - only the heading is overridden.
-        let steering_output = if should_orient_on_target(
-            self.config.is_some(),
-            self.alertness.current_level,
-            is_visible,
-            self.current_behavior.borrow().scripted_state(),
-        ) {
+        let steering_output = if !pivoting
+            && should_orient_on_target(
+                self.config.is_some(),
+                self.alertness.current_level,
+                is_visible,
+                self.current_behavior.borrow().scripted_state(),
+            ) {
             orient_toward_player(world, entity_id).unwrap_or(steering_output)
         } else {
             steering_output
         };
 
-        let rotation_effect = self.apply_steering_output(steering_output, time, entity_id);
+        // A pivot big enough to stop the body is played as an authored turn
+        // clip - never over a scripted performance, and never while standing
+        // off from a door.
+        let may_turn = self.current_behavior.borrow().is_locomotion()
+            && self.current_behavior.borrow().scripted_state() != ScriptedState::Running
+            && door_wait_seconds.is_none();
+        // `is_locomotion` is exactly the set of behaviors that steer with the
+        // path follower, so under `may_turn` the stall clock this reads was
+        // published by the steer above.
+        let stall_seconds = path_stall_seconds(world, entity_id);
+        self.bar_pivot_while_stalled(stall_seconds, may_turn);
+        let (turn_clip_effect, heading_held) =
+            self.update_turn_clip(entity_id, steering_output.desired_heading, time, may_turn);
+        let rotation_effect = self.apply_steering_output(
+            steering_output,
+            time,
+            entity_id,
+            door_wait_seconds.is_some() || self.current_behavior.borrow().holds_position(),
+            heading_held,
+        );
 
         // A finished scripted sequence (its final queued effects were drained
         // by the steer above - scripted_state only reports Finished once they
@@ -1066,6 +1796,21 @@ impl Script for AnimatedMonsterAI {
         } else {
             Effect::NoEffect
         };
+
+        // Emitted last of the animation effects, so it is checked against
+        // every clip this frame may already have started: the gesture PLAYS
+        // (it does not queue), so firing it on the same frame as a behavior's
+        // own clip would drop that clip for a frame. Suppressing rather than
+        // reordering also leaves the rate limit unarmed, so the gesture
+        // simply comes on a later frame.
+        // A pivot is a clip too, for its whole length - not just the frame it
+        // was asked for: gesturing over it would preempt the turn.
+        let started_a_clip = !matches!(behavior_change_effect, Effect::NoEffect)
+            || !matches!(handback_effect, Effect::NoEffect)
+            || !matches!(turn_clip_effect, Effect::NoEffect)
+            || self.turn_clip.is_some();
+        let frustration_effect =
+            self.update_frustration(world, entity_id, door_wait_seconds, started_a_clip, time);
 
         let sensor_effect = self.try_tickle_sensor(world, physics, entity_id);
 
@@ -1089,6 +1834,13 @@ impl Script for AnimatedMonsterAI {
             &FovDebugConfig::monster(),
         );
 
+        let combat_effect = self.update_combat_frustration(
+            world,
+            physics,
+            entity_id,
+            is_visible,
+            time.elapsed.as_secs_f32(),
+        );
         let behavior_publish_effect = self.publish_behavior(entity_id);
 
         // Open a door blocking the pursuit (or give up at a locked one)
@@ -1097,6 +1849,7 @@ impl Script for AnimatedMonsterAI {
         Effect::combine(vec![
             alertness_effect,
             awareness_effect,
+            scent_effect,
             behavior_change_effect,
             steering_effects,
             rotation_effect,
@@ -1106,6 +1859,9 @@ impl Script for AnimatedMonsterAI {
             fov_debug_effect,
             behavior_publish_effect,
             door_effect,
+            frustration_effect,
+            turn_clip_effect,
+            combat_effect,
         ])
     }
 
@@ -1264,6 +2020,10 @@ impl Script for AnimatedMonsterAI {
                     Effect::NoEffect
                 }
             }
+            MessagePayload::RefreshAIProperties => {
+                self.config = Self::build_config(world, entity_id);
+                Effect::NoEffect
+            }
             MessagePayload::SetAlertness { level, pin } => {
                 // Dead AIs stay dead - a corpse keeps a live script, and the
                 // broadcast (DebugAlertAll) reaches every creature
@@ -1279,7 +2039,98 @@ impl Script for AnimatedMonsterAI {
                 // cancels scripted sequences
                 self.force_alertness(*level, world, physics, entity_id)
             }
+            MessagePayload::TurnClipStarted { token, turn } => {
+                if let Some(TurnClip::Requested { token: pending }) = self.turn_clip {
+                    if pending == *token {
+                        self.turn_clip = Some(TurnClip::Playing {
+                            token: *token,
+                            turn: *turn,
+                        });
+                    }
+                }
+                Effect::NoEffect
+            }
+            MessagePayload::TurnClipCompleted { token } => {
+                if let Some(TurnClip::Playing {
+                    token: pending,
+                    turn,
+                }) = self.turn_clip
+                {
+                    if pending == *token {
+                        // The clip's pose still holds the full turn; the fade
+                        // into whatever comes next is what gives it up, and
+                        // the applier reports that fade as `TurnClipHandoff`.
+                        self.turn_clip = Some(TurnClip::HandingOver {
+                            token: *token,
+                            turn,
+                            waited: 0.0,
+                        });
+                    }
+                }
+                Effect::NoEffect
+            }
+            MessagePayload::TurnClipCancelled { token } => {
+                if self.turn_clip_token() == Some(*token) {
+                    if let Some(TurnClip::Settling { turn, base, .. }) = self.turn_clip {
+                        // The clip that displaced the fade takes the turn
+                        // clip's pose with it: the player cross-fades from the
+                        // FOLLOW-UP clip's own pose, not the blended one on
+                        // screen, so the `turn * (1 - alpha)` the pose was
+                        // still holding is gone this frame. Taking the rest of
+                        // the turn now is what keeps the visible facing
+                        // continuous - dropping it would snap the creature
+                        // back by the remainder.
+                        self.finish_pivot(entity_id, Deg(base.0 + turn.0));
+                    } else {
+                        self.cancel_turn_clip(entity_id, "no clip is performing it");
+                    }
+                }
+                Effect::NoEffect
+            }
+            MessagePayload::TurnClipHandoff { token, fades } => {
+                if let Some(TurnClip::HandingOver {
+                    token: pending,
+                    turn,
+                    ..
+                }) = self.turn_clip
+                {
+                    if pending == *token {
+                        if *fades {
+                            // The applier reports the fade's weight from here
+                            // on; the heading starts on the one the clip ended
+                            // on and rides those reports.
+                            self.turn_clip = Some(TurnClip::Settling {
+                                token: *token,
+                                turn,
+                                base: self.current_heading,
+                                alpha: 0.0,
+                            });
+                        } else {
+                            // Nothing to spread it over: the pose drops the
+                            // turn in one frame, so the entity takes it in the
+                            // same one and the visible facing still matches.
+                            self.finish_pivot(entity_id, Deg(self.current_heading.0 + turn.0));
+                        }
+                    }
+                }
+                Effect::NoEffect
+            }
+            MessagePayload::TurnClipBlend { token, alpha } => {
+                if let Some(TurnClip::Settling {
+                    token: pending,
+                    alpha: current,
+                    ..
+                }) = &mut self.turn_clip
+                {
+                    if *pending == *token {
+                        *current = *alpha;
+                    }
+                }
+                Effect::NoEffect
+            }
             MessagePayload::AnimationCompleted => {
+                // A pivot's own completion arrives as `TurnClipCompleted`
+                // instead - only the applier can tell whose clip finished.
                 if self.is_dead {
                     // The crumple->ragdoll handoff is timed from update()
                     // (CRUMPLE_HANDOFF_SECONDS), not completion-driven - a
@@ -1327,7 +2178,24 @@ impl Script for AnimatedMonsterAI {
                         NextBehavior::NoOpinion => (),
                         NextBehavior::Stay => (),
                         NextBehavior::Next(behavior) => {
-                            self.current_behavior = behavior;
+                            self.current_behavior = if behavior
+                                .borrow()
+                                .combat_mode()
+                                .is_some_and(|mode| !self.combat_frustration.allows(mode))
+                            {
+                                self.available_attack(world, physics, entity_id)
+                                    .unwrap_or_else(|| Box::new(RefCell::new(ChaseBehavior::new())))
+                            } else {
+                                behavior
+                            };
+                            if self
+                                .current_behavior
+                                .borrow()
+                                .investigation_goal()
+                                .is_none()
+                            {
+                                self.scent_goal = false;
+                            }
                         }
                     };
 
@@ -1434,17 +2302,21 @@ impl Script for AnimatedMonsterAI {
                 // the death is processed - don't let it fire or connect.
                 let can_act = !(self.is_dead || is_killed(entity_id, world));
 
-                let acted = if motion_flags.contains(MotionFlags::FIRE) && can_act {
+                let fired = if motion_flags.contains(MotionFlags::FIRE) && can_act {
                     fire_ranged_projectile(world, physics, entity_id)
-                } else if motion_flags.contains(MotionFlags::MELEE_CONTACT_START) && can_act {
-                    // The swing reached its authored contact frame - resolve
-                    // the hit through the attacker's melee weapon archetype.
-                    super::ai_util::melee_contact_attack(world, entity_id, physics)
                 } else {
                     Effect::NoEffect
                 };
+                let connected =
+                    if motion_flags.contains(MotionFlags::MELEE_CONTACT_START) && can_act {
+                        // The swing reached its authored contact frame - resolve
+                        // the hit through the attacker's melee weapon archetype.
+                        super::ai_util::melee_contact_attack(world, entity_id, physics)
+                    } else {
+                        Effect::NoEffect
+                    };
 
-                Effect::combine(vec![acted, footstep])
+                Effect::combine(vec![fired, connected, footstep])
             }
             _ => Effect::NoEffect,
         }
@@ -1542,6 +2414,254 @@ mod tests {
         Effect::flatten(vec![monster.update(entity_id, world, &physics, &time)])
     }
 
+    #[test]
+    fn scent_arrival_closes_the_gap_to_the_next_local_sample() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let physics = PhysicsWorld::new();
+        let time = Time {
+            elapsed: std::time::Duration::from_secs_f32(0.1),
+            ..Time::default()
+        };
+        let mut normal = SearchBehavior::new(vec3(1.0, 0.0, 0.0));
+        let mut scent = SearchBehavior::for_scent(vec3(1.0, 0.0, 0.0));
+        normal.steer(Deg(0.0), &world, &physics, entity, &time);
+        let (steering, _) = scent
+            .steer(Deg(0.0), &world, &physics, entity, &time)
+            .unwrap();
+        let expected = crate::scripts::ai::steering::Steering::turn_to_point(
+            cgmath::Point3::new(0.0, 0.0, 0.0),
+            cgmath::Point3::new(1.0, 0.0, 0.0),
+        );
+        assert_eq!(
+            steering.desired_heading, expected.desired_heading,
+            "no-nav search must face its fixed goal, not retain its previous heading"
+        );
+        assert!(normal.holds_position());
+        assert!(
+            !scent.holds_position(),
+            "scent must approach closer before scanning"
+        );
+    }
+
+    #[test]
+    fn completed_scent_search_is_not_resurrected_by_loading() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        monster.scent_cursor = Some(7);
+        monster.scent_goal = true;
+        monster.last_known_player_pos = Some(vec3(0.0, 0.0, 0.0));
+        monster.current_behavior =
+            Box::new(RefCell::new(SearchBehavior::for_scent(vec3(0.0, 0.0, 0.0))));
+        monster.current_behavior.borrow_mut().steer(
+            Deg(0.0),
+            &world,
+            &physics,
+            entity,
+            &Time {
+                elapsed: std::time::Duration::from_secs(7),
+                ..Time::default()
+            },
+        );
+        monster.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::AnimationCompleted,
+        );
+        assert!(!monster.scent_goal);
+        assert_ne!(monster.current_behavior.borrow().name(), "Search");
+        let saved = monster.save_state().unwrap();
+        let mut restored = AnimatedMonsterAI::new();
+        restored
+            .restore_state(
+                &saved,
+                &crate::scripts::ScriptRestoreContext::new(&std::collections::HashMap::new()),
+            )
+            .unwrap();
+        restored.initialize_after_hydration(entity, &world, true);
+        assert_ne!(restored.current_behavior.borrow().name(), "Search");
+        assert_eq!(restored.last_known_player_pos, None);
+    }
+
+    #[test]
+    fn loading_a_brief_sighting_does_not_start_a_scent_search() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        monster.last_known_player_pos = Some(vec3(5.0, 0.0, 0.0));
+        let saved = monster.save_state().unwrap();
+        let mut restored = AnimatedMonsterAI::new();
+        restored
+            .restore_state(
+                &saved,
+                &crate::scripts::ScriptRestoreContext::new(&std::collections::HashMap::new()),
+            )
+            .unwrap();
+        restored.initialize_after_hydration(entity, &world, true);
+        assert_eq!(restored.current_behavior.borrow().name(), "Idle");
+        assert_eq!(restored.last_known_player_pos, None);
+    }
+
+    #[test]
+    fn scent_requires_search_contact_and_never_reveals_remote_player() {
+        let (mut world, entity) = world_with_monster_and_player(Deg(180.0));
+        let mut trail = crate::mission::player_trail::PlayerTrail::default();
+        trail.update(0.5, Some(vec3(2.0, 0.0, 0.0)));
+        trail.update(0.5, Some(vec3(30.0, 0.0, 0.0)));
+        world.add_unique(trail);
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        monster.follow_local_scent(&world, &physics, entity, false, 0.5);
+        assert_eq!(monster.scent_cursor, None, "idle does not hunt by scent");
+        monster.current_behavior = Box::new(RefCell::new(SearchBehavior::new(vec3(8.0, 0.0, 0.0))));
+        monster.follow_local_scent(&world, &physics, entity, false, 0.5);
+        assert_eq!(
+            monster.scent_cursor, None,
+            "a sound distraction keeps priority until arrival"
+        );
+        monster.current_behavior = Box::new(RefCell::new(SearchBehavior::new(vec3(0.0, 0.0, 0.0))));
+        monster.follow_local_scent(&world, &physics, entity, true, 0.5);
+        assert_eq!(monster.scent_cursor, None, "sight takes precedence");
+        monster.follow_local_scent(&world, &physics, entity, false, 0.0);
+        assert_eq!(
+            monster.scent_cursor, None,
+            "paused frames do not acquire scent"
+        );
+        monster.follow_local_scent(&world, &physics, entity, false, 0.5);
+        assert_eq!(monster.last_known_player_pos, Some(vec3(2.0, 0.0, 0.0)));
+        assert_eq!(monster.scent_cursor, Some(1));
+        assert_eq!(monster.current_behavior.borrow().name(), "Search");
+        assert!(monster.scent_goal);
+        let saved = monster.save_state().unwrap();
+        let mut restored = AnimatedMonsterAI::new();
+        restored
+            .restore_state(
+                &saved,
+                &crate::scripts::ScriptRestoreContext::new(&std::collections::HashMap::new()),
+            )
+            .unwrap();
+        restored.initialize_after_hydration(entity, &world, true);
+        assert_eq!(restored.save_state().unwrap(), saved);
+        assert_eq!(restored.current_behavior.borrow().name(), "Search");
+        assert_eq!(restored.scent_cursor, Some(1));
+    }
+
+    #[test]
+    fn scent_cannot_be_acquired_through_solid_cover() {
+        let (mut world, entity) = world_with_monster_and_player(Deg(180.0));
+        let mut trail = crate::mission::player_trail::PlayerTrail::default();
+        trail.update(0.5, Some(vec3(2.0, 0.0, 0.0)));
+        world.add_unique(trail);
+        let mut physics = PhysicsWorld::new();
+        let wall = world.add_entity(());
+        physics.add_collider(
+            wall,
+            rapier3d::prelude::ColliderBuilder::cuboid(0.1, 3.0, 3.0)
+                .translation(rapier3d::na::Vector3::new(1.0, 0.0, 0.0))
+                .build(),
+        );
+        let player = world.add_entity(());
+        let mut handle = physics.create_player(vec3(50.0, 50.0, 50.0), player);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut handle);
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        monster.current_behavior = Box::new(RefCell::new(SearchBehavior::new(vec3(0.0, 0.0, 0.0))));
+        monster.follow_local_scent(&world, &physics, entity, false, 0.5);
+        assert_eq!(monster.scent_cursor, None);
+    }
+
+    #[test]
+    fn invisible_players_can_still_be_heard() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        world.add_unique(crate::psi::ActivePsiPowers(vec![
+            crate::psi::ActivePsiPower {
+                template_id: crate::psi::INVISO_TEMPLATE_ID,
+                name: "Inviso".into(),
+                remaining_secs: 20.0,
+            },
+        ]));
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        let origin = vec3(1.0, 0.0, 5.0);
+        monster.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::HeardNoise { origin },
+        );
+        assert_eq!(monster.last_known_player_pos, Some(origin));
+        assert_ne!(monster.alertness.current_level, AIAlertLevel::Lowest);
+    }
+
+    #[test]
+    fn repeated_heard_cues_renew_memory_without_a_level_change() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let physics = PhysicsWorld::new();
+        for level in [AIAlertLevel::Moderate, AIAlertLevel::High] {
+            let mut monster = AnimatedMonsterAI::new();
+            monster.initialize(entity, &world);
+            monster.alertness.current_level = level;
+            monster.current_behavior = Box::new(RefCell::new(ChaseBehavior::new()));
+            let config = monster.config.as_ref().unwrap().clone();
+            let timeout = if level == AIAlertLevel::High {
+                config.timings.from_high
+            } else {
+                config.timings.from_moderate
+            };
+            for step in 0..3 {
+                monster.alertness.hidden_time = timeout - 0.1;
+                let origin = vec3(step as f32, 0.0, 5.0);
+                monster.handle_message(
+                    entity,
+                    &world,
+                    &physics,
+                    &MessagePayload::HeardNoise { origin },
+                );
+                assert_eq!(monster.alertness.hidden_time, 0.0);
+                assert_eq!(monster.last_known_player_pos, Some(origin));
+                assert!(
+                    alertness::process_alertness_update(
+                        &mut monster.alertness,
+                        false,
+                        0.2,
+                        &config.timings,
+                        &config.alert_cap
+                    )
+                    .is_none()
+                );
+                assert_eq!(monster.alertness.current_level, level);
+            }
+            assert!(
+                alertness::process_alertness_update(
+                    &mut monster.alertness,
+                    false,
+                    timeout,
+                    &config.timings,
+                    &config.alert_cap
+                )
+                .is_some(),
+                "silence must still let memory decay"
+            );
+        }
+    }
+
+    #[test]
+    fn investigating_an_empty_sound_location_is_not_failed_combat() {
+        let world = World::new();
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.alertness.current_level = AIAlertLevel::Moderate;
+        monster.current_behavior = Box::new(RefCell::new(SearchBehavior::new(vec3(0.0, 0.0, 0.0))));
+        for _ in 0..10 {
+            monster.update_combat_frustration(&world, &physics, EntityId::dead(), false, 1.0);
+            assert_eq!(monster.current_behavior.borrow().name(), "Search");
+        }
+    }
+
     /// #791: a calm creature that can see the player must turn to look at it.
     /// Its idle/wander/patrol steering has its own agenda, so without this the
     /// sighting is dropped before alertness can escalate and the creature ends
@@ -1610,6 +2730,17 @@ mod tests {
     /// Flag `entity_id` as a patroller and (when `with_route`) lay down a
     /// two-point `AIPatrol` loop 10 units down +X for it to walk.
     fn make_patroller(world: &mut World, entity_id: EntityId, with_route: bool) {
+        make_patroller_with_points(world, entity_id, with_route, [10.0, 20.0]);
+    }
+
+    /// As `make_patroller`, with the two route points at chosen distances
+    /// down +X - close ones stand the AI on its own goal.
+    fn make_patroller_with_points(
+        world: &mut World,
+        entity_id: EntityId,
+        with_route: bool,
+        xs: [f32; 2],
+    ) {
         world.add_component(entity_id, dark::properties::PropAIPatrol(true));
         if !with_route {
             return;
@@ -1622,8 +2753,8 @@ mod tests {
                 dark::properties::Links::empty(),
             ))
         };
-        let first = point(10.0);
-        let second = point(20.0);
+        let first = point(xs[0]);
+        let second = point(xs[1]);
         let mut v_links = world
             .borrow::<shipyard::ViewMut<dark::properties::Links>>()
             .unwrap();
@@ -1640,11 +2771,830 @@ mod tests {
         }
     }
 
+    /// A monster mid-pivot, its heading `heading` and its behavior asking
+    /// for `desired`.
+    fn pivoting_monster(heading: Deg<f32>) -> (World, EntityId, AnimatedMonsterAI) {
+        let (world, entity_id) = world_with_monster_and_player(heading);
+        let mut monster = AnimatedMonsterAI::new();
+        monster.current_heading = heading;
+        (world, entity_id, monster)
+    }
+
+    fn tick() -> Time {
+        Time {
+            elapsed: std::time::Duration::from_millis(100),
+            total: std::time::Duration::from_millis(100),
+        }
+    }
+
+    /// One frame of the pivot: the effect it emits and whether the clip owns
+    /// the heading.
+    fn turn_frame(
+        monster: &mut AnimatedMonsterAI,
+        entity_id: EntityId,
+        desired: Deg<f32>,
+    ) -> (Option<Deg<f32>>, bool) {
+        let (effect, held) = monster.update_turn_clip(entity_id, desired, &tick(), true);
+        let requested = match effect {
+            Effect::PlayTurnClip { delta, .. } => Some(delta),
+            _ => None,
+        };
+        (requested, held)
+    }
+
+    fn tell(
+        monster: &mut AnimatedMonsterAI,
+        world: &World,
+        entity_id: EntityId,
+        msg: MessagePayload,
+    ) {
+        monster.handle_message(entity_id, world, &PhysicsWorld::new(), &msg);
+    }
+
+    /// The token of the pivot in flight - what the applier echoes back.
+    fn pending_token(monster: &AnimatedMonsterAI) -> u64 {
+        monster
+            .turn_clip_token()
+            .expect("a pivot must be in flight to be reported on")
+    }
+
+    /// Report the clip the applier picked for a pivot in flight.
+    fn report_clip(
+        monster: &mut AnimatedMonsterAI,
+        world: &World,
+        entity_id: EntityId,
+        turn: Deg<f32>,
+    ) {
+        let token = pending_token(monster);
+        tell(
+            monster,
+            world,
+            entity_id,
+            MessagePayload::TurnClipStarted { token, turn },
+        );
+    }
+
+    fn complete_clip(monster: &mut AnimatedMonsterAI, world: &World, entity_id: EntityId) {
+        let token = pending_token(monster);
+        tell(
+            monster,
+            world,
+            entity_id,
+            MessagePayload::TurnClipCompleted { token },
+        );
+    }
+
+    /// The applier reporting the clip that follows the pivot, and whether it
+    /// cross-fades in (so the yaw rides the reported weights) or hard-cuts.
+    fn hand_off(monster: &mut AnimatedMonsterAI, world: &World, entity_id: EntityId, fades: bool) {
+        let token = pending_token(monster);
+        tell(
+            monster,
+            world,
+            entity_id,
+            MessagePayload::TurnClipHandoff { token, fades },
+        );
+    }
+
+    /// Ask for a pivot, have the applier answer with a clip authored to end on
+    /// `turn`, and play `seconds` of it. Returns the pivot's token.
+    fn start_pivot(
+        monster: &mut AnimatedMonsterAI,
+        world: &World,
+        entity_id: EntityId,
+        turn: Deg<f32>,
+        seconds: f32,
+    ) -> u64 {
+        turn_frame(monster, entity_id, Deg(90.0));
+        report_clip(monster, world, entity_id, turn);
+        let token = pending_token(monster);
+        play_out(monster, entity_id, seconds);
+        token
+    }
+
+    /// Hold the pivot for `seconds` of 100ms frames, as the clip plays.
+    fn play_out(monster: &mut AnimatedMonsterAI, entity_id: EntityId, seconds: f32) {
+        for _ in 0..((seconds / 0.1).ceil() as usize) {
+            turn_frame(monster, entity_id, Deg(90.0));
+        }
+    }
+
+    /// One frame of the fade the pivot hands over across, as the applier
+    /// reports it: the pose's own weight, then the script's update.
+    fn settle_frame(
+        monster: &mut AnimatedMonsterAI,
+        world: &World,
+        entity_id: EntityId,
+        alpha: f32,
+    ) {
+        let token = pending_token(monster);
+        tell(
+            monster,
+            world,
+            entity_id,
+            MessagePayload::TurnClipBlend { token, alpha },
+        );
+        turn_frame(monster, entity_id, Deg(90.0));
+    }
+
+    /// A clip that runs for `frames` 100ms frames and fades in over
+    /// `blend_ms`.
+    fn test_clip(frames: u32, blend_ms: u64) -> std::rc::Rc<dark::motion::AnimationClip> {
+        let time_per_frame = std::time::Duration::from_millis(100);
+        std::rc::Rc::new(dark::motion::AnimationClip {
+            num_frames: frames,
+            time_per_frame,
+            duration: time_per_frame * frames,
+            blend_length: std::time::Duration::from_millis(blend_ms),
+            end_rotation: Deg(0.0),
+            sliding_velocity: vec3(0.0, 0.0, 0.0),
+            translation: vec3(0.0, 0.0, 0.0),
+            joint_to_frame: std::collections::HashMap::new(),
+            root_transforms: Vec::new(),
+            root_positions: Vec::new(),
+            motion_flags: Vec::new(),
+            name: None,
+        })
+    }
+
+    /// `mission_core`'s frame in miniature, driving the REAL animation player,
+    /// the REAL applier-side tracker and the REAL script in the order the
+    /// mission loop runs them: animations advance first, then the reports they
+    /// produced are delivered, then the script updates, then its effects are
+    /// applied. That order is the whole point - the script's own clock ticks
+    /// after the player's, so anything the script integrates itself runs a
+    /// frame ahead of the pose it is supposed to match.
+    struct PivotHarness {
+        world: World,
+        entity_id: EntityId,
+        monster: AnimatedMonsterAI,
+        player: dark::motion::AnimationPlayer,
+        tracker: crate::mission::turn_clip::TurnClipTracker,
+        /// Reports produced since the script last read its messages.
+        pending: Vec<MessagePayload>,
+    }
+
+    /// The mission loop's fixed timestep.
+    const HARNESS_DT: f32 = 1.0 / 60.0;
+
+    impl PivotHarness {
+        fn new(heading: Deg<f32>) -> PivotHarness {
+            let (world, entity_id, monster) = pivoting_monster(heading);
+            PivotHarness {
+                world,
+                entity_id,
+                monster,
+                player: dark::motion::AnimationPlayer::empty(),
+                tracker: crate::mission::turn_clip::TurnClipTracker::new(),
+                pending: Vec::new(),
+            }
+        }
+
+        /// The applier starting a clip on this entity: what `PlayAnimation`
+        /// and `PlayTurnClip` both come down to.
+        fn apply_clip(
+            &mut self,
+            clip: std::rc::Rc<dark::motion::AnimationClip>,
+            pivot: Option<(u64, Deg<f32>)>,
+        ) {
+            self.player = dark::motion::AnimationPlayer::queue_animation(&self.player, clip);
+            let fades = self.player.blend_alpha_now() < 1.0;
+            if let Some(payload) =
+                self.tracker
+                    .on_animation_applied(self.entity_id, Some(fades), pivot.is_some())
+            {
+                self.pending.push(payload);
+            }
+            if let Some((token, turn)) = pivot {
+                self.pending.push(
+                    self.tracker
+                        .on_turn_resolved(self.entity_id, token, Some(turn)),
+                );
+            }
+        }
+
+        /// One mission frame. Returns the pose weight the renderer would use
+        /// for the clip that follows the pivot.
+        fn frame(&mut self) -> f32 {
+            let dt = std::time::Duration::from_secs_f32(HARNESS_DT);
+            let (next, _, events, _) = dark::motion::AnimationPlayer::update(&self.player, dt);
+            self.player = next;
+            if let Some(payload) = self.tracker.on_blend_tick(self.entity_id, &self.player) {
+                self.pending.push(payload);
+            }
+            for event in events {
+                if matches!(event, dark::motion::AnimationEvent::Completed) {
+                    if let Some(payload) = self.tracker.on_clip_completed(self.entity_id) {
+                        self.pending.push(payload);
+                    }
+                }
+            }
+
+            for payload in std::mem::take(&mut self.pending) {
+                tell(&mut self.monster, &self.world, self.entity_id, payload);
+            }
+            let time = Time {
+                elapsed: dt,
+                total: dt,
+            };
+            self.monster
+                .update_turn_clip(self.entity_id, Deg(90.0), &time, true);
+
+            self.player.blend_alpha_now()
+        }
+
+        /// Ask for a pivot and let the applier answer it with a clip authored
+        /// to end on `turn`.
+        fn start_pivot(&mut self, turn: Deg<f32>, clip_frames: u32) {
+            let (effect, _) = self.monster.update_turn_clip(
+                self.entity_id,
+                Deg(90.0),
+                &Time {
+                    elapsed: std::time::Duration::from_secs_f32(HARNESS_DT),
+                    total: std::time::Duration::from_secs_f32(HARNESS_DT),
+                },
+                true,
+            );
+            let token = match effect {
+                Effect::PlayTurnClip { token, .. } => token,
+                other => panic!("expected a pivot request, got {other:?}"),
+            };
+            self.apply_clip(test_clip(clip_frames, 0), Some((token, turn)));
+        }
+
+        /// Run frames until the pivot's clip has ended and the script is
+        /// waiting for whatever follows it.
+        fn play_clip_out(&mut self) {
+            for _ in 0..600 {
+                self.frame();
+                if matches!(self.monster.turn_clip, Some(TurnClip::HandingOver { .. })) {
+                    return;
+                }
+            }
+            panic!("the turn clip never ended");
+        }
+    }
+
+    fn locomotion_scale(effects: &[Effect]) -> Option<f32> {
+        effects.iter().find_map(|effect| match effect {
+            Effect::SetAIProperty {
+                update: crate::scripts::AIPropertyUpdate::LocomotionScale { scale },
+                ..
+            } => Some(*scale),
+            _ => None,
+        })
+    }
+
+    /// The pivot the AI asks for is the heading change it actually needs; the
+    /// applier is what turns that into one of the creature's authored clips.
+    #[test]
+    fn a_stalled_creature_steers_its_turn_instead_of_performing_it() {
+        let (_world, entity_id, mut monster) = pivoting_monster(Deg(0.0));
+        let reversal = Deg(180.0);
+
+        // Getting somewhere: the reversal is performed.
+        monster.bar_pivot_while_stalled(0.0, true);
+        assert!(
+            turn_frame(&mut monster, entity_id, reversal).0.is_some(),
+            "a creature making progress performs its pivot"
+        );
+
+        // The route stops making progress. Standing still through a turn clip
+        // while wedged only lengthens the wedge.
+        let (_world, entity_id, mut monster) = pivoting_monster(Deg(0.0));
+        monster.bar_pivot_while_stalled(STALL_SECONDS, true);
+        assert!(
+            turn_frame(&mut monster, entity_id, reversal).0.is_none(),
+            "a stalled creature steers the turn instead"
+        );
+
+        // The stall clock resets the moment the follower recovers, but the
+        // sidestep heading its re-path produces arrives a beat later - and the
+        // recovery it has to outlast is itself most of a second.
+        assert!(
+            TURN_CLIP_COOLDOWN > crate::scripts::ai::steering::STALL_RECOVERY_SECONDS,
+            "the bar must outlast the follower's recovery"
+        );
+        for _ in 0..(TURN_CLIP_COOLDOWN / 0.1).ceil() as u32 - 1 {
+            monster.bar_pivot_while_stalled(0.0, true);
+            assert!(
+                turn_frame(&mut monster, entity_id, reversal).0.is_none(),
+                "still barred before the window is out"
+            );
+        }
+        monster.bar_pivot_while_stalled(0.0, true);
+        assert!(
+            turn_frame(&mut monster, entity_id, reversal).0.is_some(),
+            "moving again for the whole window restores pivoting"
+        );
+    }
+
+    #[test]
+    fn a_stall_a_route_follower_did_not_publish_bars_nothing() {
+        // The follower publishes its stall clock only while it steers, so the
+        // last value it published outlives it - a melee or idle AI would
+        // otherwise re-arm the bar off a frozen reading for the rest of its
+        // life.
+        let (_world, entity_id, mut monster) = pivoting_monster(Deg(0.0));
+        monster.bar_pivot_while_stalled(STALL_SECONDS, false);
+        assert!(
+            turn_frame(&mut monster, entity_id, Deg(180.0)).0.is_some(),
+            "a stall nobody is publishing must not bar a pivot"
+        );
+    }
+
+    #[test]
+    fn a_reversal_asks_for_an_authored_turn_clip() {
+        let (_world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        let (requested, held) = turn_frame(&mut monster, entity_id, Deg(90.0));
+        assert_eq!(requested, Some(Deg(180.0)));
+        assert!(
+            held,
+            "the clip owns the heading from the moment it is asked for"
+        );
+    }
+
+    /// A pivot the creature can walk through is steered, not performed: the
+    /// shortest stock turn clip is a quarter circle.
+    #[test]
+    fn a_shallow_pivot_is_steered_as_before() {
+        let (_world, entity_id, mut monster) = pivoting_monster(Deg(0.0));
+        assert_eq!(
+            turn_frame(&mut monster, entity_id, Deg(40.0)),
+            (None, false)
+        );
+    }
+
+    /// The clip's pose does the visible turning, so the entity must hold
+    /// still underneath it - rotating as well would turn the creature twice.
+    #[test]
+    fn the_body_holds_its_heading_and_stride_while_the_clip_plays() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        turn_frame(&mut monster, entity_id, Deg(90.0));
+        report_clip(&mut monster, &world, entity_id, Deg(-168.0));
+
+        for _ in 0..10 {
+            let (requested, held) = turn_frame(&mut monster, entity_id, Deg(90.0));
+            assert_eq!(requested, None, "one pivot plays one clip");
+            assert!(held);
+            assert_eq!(monster.current_heading, Deg(-90.0));
+            let effects = Effect::flatten(vec![monster.apply_steering_output(
+                Steering::from_current(Deg(90.0)),
+                &tick(),
+                entity_id,
+                false,
+                held,
+            )]);
+            assert_eq!(
+                locomotion_scale(&effects),
+                Some(0.0),
+                "a pivot is performed at a standstill"
+            );
+            assert_eq!(commanded_heading(&effects), Some(Deg(-90.0)));
+        }
+    }
+
+    /// ...and once the clip is done, the entity takes the authored facing
+    /// change over the blend that swings the pose back to neutral.
+    #[test]
+    fn the_authored_turn_lands_on_the_entity_once_the_clip_ends() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 4.8);
+        complete_clip(&mut monster, &world, entity_id);
+        hand_off(&mut monster, &world, entity_id, true);
+
+        // The settle rides the fade the applier reports, half of it and then
+        // all of it.
+        settle_frame(&mut monster, &world, entity_id, 0.5);
+        assert!(
+            (monster.current_heading.0 - (-90.0 - 168.0 * 0.5)).abs() < 1e-3,
+            "half the fade is half the turn, heading is {:?}",
+            monster.current_heading
+        );
+        settle_frame(&mut monster, &world, entity_id, 1.0);
+        assert!(
+            (monster.current_heading.0 - (-90.0 - 168.0)).abs() < 1e-3,
+            "expected the authored turn to land, heading is {:?}",
+            monster.current_heading
+        );
+        assert!(
+            monster.turn_clip.is_none(),
+            "the pivot is over once the turn has landed"
+        );
+    }
+
+    /// A pivot has a budget: it must be over, handover included, before a held
+    /// spot reads as a wedge. The clip's own runtime is bounded when it is
+    /// picked (`TURN_CLIP_MAX_SECONDS`), and the applier answers every request
+    /// and reports every completion or preemption, so the only part of a pivot
+    /// left on a clock is the wait for the following clip's fade.
+    #[test]
+    fn a_pivot_cannot_hold_long_enough_to_look_stuck() {
+        // The reachability harness treats holding one spot for 6s as wedged.
+        // The stock clips author blends of at most half a second, which is
+        // the longest fade a handover can be spread over.
+        const LONGEST_STOCK_BLEND: f32 = 0.5;
+        assert!(TURN_CLIP_MAX_SECONDS + TURN_CLIP_HANDOFF_TIMEOUT + LONGEST_STOCK_BLEND < 6.0);
+    }
+
+    /// Two pivots back to back hold the creature still for longer than either
+    /// of them - which is exactly what a wedge looks like.
+    #[test]
+    fn a_second_pivot_waits_for_the_cooldown() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        start_pivot(&mut monster, &world, entity_id, Deg(-100.0), 2.4);
+        complete_clip(&mut monster, &world, entity_id);
+        hand_off(&mut monster, &world, entity_id, true);
+        settle_frame(&mut monster, &world, entity_id, 1.0);
+        assert!(monster.turn_clip.is_none(), "the first pivot must be over");
+        // Still facing a long way from where it wants to be, but it has to
+        // steer out of the pivot before performing another.
+        assert_eq!(
+            turn_frame(&mut monster, entity_id, Deg(90.0)),
+            (None, false)
+        );
+    }
+
+    /// The behavior's own clip is re-queued the moment the turn clip ends,
+    /// and a run cycle is a third of a second long - so its completion lands
+    /// inside the blend. Restarting the blend on it left the AI turning on
+    /// the spot forever, never taking another step.
+    #[test]
+    fn a_later_clip_completing_does_not_restart_the_blend() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        let token = start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 4.8);
+        complete_clip(&mut monster, &world, entity_id);
+        hand_off(&mut monster, &world, entity_id, true);
+        settle_frame(&mut monster, &world, entity_id, 1.0);
+        // Everything the behavior's own re-queued clip reports next: its plain
+        // completion, and the pivot's reports replayed.
+        for _ in 0..2 {
+            tell(
+                &mut monster,
+                &world,
+                entity_id,
+                MessagePayload::AnimationCompleted,
+            );
+            tell(
+                &mut monster,
+                &world,
+                entity_id,
+                MessagePayload::TurnClipCompleted { token },
+            );
+            tell(
+                &mut monster,
+                &world,
+                entity_id,
+                MessagePayload::TurnClipHandoff { token, fades: true },
+            );
+            for _ in 0..3 {
+                turn_frame(&mut monster, entity_id, Deg(90.0));
+            }
+        }
+        assert!(
+            monster.turn_clip.is_none(),
+            "the pivot must end, not restart with every clip that completes"
+        );
+        assert!(
+            (monster.current_heading.0 - (-90.0 - 168.0)).abs() < 1e-3,
+            "and it must apply the authored turn exactly once"
+        );
+    }
+
+    /// The applier reports on the pivot it was asked for by token. A report
+    /// from an EARLIER pivot - one this AI has already abandoned and asked
+    /// again after - must not settle the one in flight.
+    #[test]
+    fn a_completion_carrying_a_stale_token_is_ignored() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        turn_frame(&mut monster, entity_id, Deg(90.0));
+        report_clip(&mut monster, &world, entity_id, Deg(-168.0));
+        let stale = pending_token(&monster) - 1;
+
+        tell(
+            &mut monster,
+            &world,
+            entity_id,
+            MessagePayload::TurnClipCompleted { token: stale },
+        );
+        assert!(
+            matches!(monster.turn_clip, Some(TurnClip::Playing { .. })),
+            "a completion from another pivot must not end this one"
+        );
+        tell(
+            &mut monster,
+            &world,
+            entity_id,
+            MessagePayload::TurnClipHandoff {
+                token: stale,
+                fades: true,
+            },
+        );
+        for _ in 0..8 {
+            turn_frame(&mut monster, entity_id, Deg(90.0));
+        }
+        assert_eq!(
+            monster.current_heading,
+            Deg(-90.0),
+            "and must not hand the turn over either"
+        );
+    }
+
+    /// Anything that preempts the clip takes the pose that was turning the
+    /// body with it, so the pending turn is dropped rather than committed.
+    #[test]
+    fn a_preempting_clip_drops_the_pending_turn() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        let token = start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 2.0);
+
+        tell(
+            &mut monster,
+            &world,
+            entity_id,
+            MessagePayload::TurnClipCancelled { token },
+        );
+        assert!(monster.turn_clip.is_none(), "the pivot is abandoned");
+
+        // Nothing may resurrect it afterwards - not the preempting clip's own
+        // completion, nor a handover report still in flight.
+        tell(
+            &mut monster,
+            &world,
+            entity_id,
+            MessagePayload::AnimationCompleted,
+        );
+        tell(
+            &mut monster,
+            &world,
+            entity_id,
+            MessagePayload::TurnClipHandoff { token, fades: true },
+        );
+        for _ in 0..8 {
+            turn_frame(&mut monster, entity_id, Deg(90.0));
+        }
+        assert_eq!(
+            monster.current_heading,
+            Deg(-90.0),
+            "a turn whose pose stopped playing must not land on the entity"
+        );
+    }
+
+    /// ...but a hit is NOT a preemption: the turn clip plays on, its pose is
+    /// still turning the body, and the turn is still owed. Only the applier
+    /// knows when a wound clip has actually displaced it.
+    #[test]
+    fn taking_a_hit_does_not_abandon_a_turn_that_is_still_playing() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 2.0);
+        tell(
+            &mut monster,
+            &world,
+            entity_id,
+            MessagePayload::Damage {
+                amount: 1.0,
+                impact: None,
+            },
+        );
+        assert!(
+            matches!(monster.turn_clip, Some(TurnClip::Playing { .. })),
+            "the clip is still the one playing"
+        );
+        complete_clip(&mut monster, &world, entity_id);
+        hand_off(&mut monster, &world, entity_id, false);
+        assert!(
+            (monster.current_heading.0 - (-90.0 - 168.0)).abs() < 1e-3,
+            "and the turn its pose performed still lands"
+        );
+    }
+
+    /// The yaw hands over on the fade the animation player is REALLY running -
+    /// which `queue_animation` takes from the INCOMING clip, and a locomotion
+    /// clip authors no blend at all. Over a zero fade the pose drops the turn
+    /// in one frame, so the entity must take it in the same one.
+    #[test]
+    fn a_zero_blend_follow_up_hands_the_turn_over_at_once() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 2.4);
+        complete_clip(&mut monster, &world, entity_id);
+        hand_off(&mut monster, &world, entity_id, false);
+
+        assert!(monster.turn_clip.is_none(), "there is no fade to wait for");
+        assert!(
+            (monster.current_heading.0 - (-90.0 - 168.0)).abs() < 1e-3,
+            "the whole turn lands with the pose that gave it up, heading is {:?}",
+            monster.current_heading
+        );
+    }
+
+    /// ...and over a fade that does run, the yaw tracks the player's own
+    /// cross-fade weight frame for frame - not a linear ramp, which would
+    /// lead the pose by up to a fifth of the turn mid-fade.
+    #[test]
+    fn the_yaw_follows_the_players_blend_curve() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 2.4);
+        complete_clip(&mut monster, &world, entity_id);
+        hand_off(&mut monster, &world, entity_id, true);
+
+        for step in 1..=4 {
+            let alpha = dark::motion::blend_alpha(step as f32 / 4.0);
+            settle_frame(&mut monster, &world, entity_id, alpha);
+            let expected = -90.0 - 168.0 * alpha;
+            assert!(
+                (monster.current_heading.0 - expected).abs() < 1e-3,
+                "expected {expected}, got {:?}",
+                monster.current_heading
+            );
+        }
+        assert!(monster.turn_clip.is_none(), "the handover is complete");
+    }
+
+    /// The load-bearing one: a REAL animation player, the REAL applier-side
+    /// tracker and the REAL script, run in the mission loop's own order over a
+    /// follow-up clip that actually fades.
+    ///
+    /// The script's update runs AFTER the animation player's, so a script that
+    /// integrates the fade itself takes one dt on the frame the clip completes
+    /// and another on the frame the handover report arrives - two dt of yaw
+    /// against one dt of pose, and the gap never closes for the rest of the
+    /// fade. The yaw is read off the player instead, so it cannot lead it by
+    /// even one frame.
+    #[test]
+    fn the_yaw_never_leads_the_pose_across_a_real_fade() {
+        const TURN: f32 = -168.0;
+        const BLEND_MS: u64 = 500;
+        let mut harness = PivotHarness::new(Deg(-90.0));
+        harness.start_pivot(Deg(TURN), 3);
+        harness.play_clip_out();
+
+        // The behavior queues its next clip on the frame the pivot's ended,
+        // exactly as the AI's completion handler does.
+        harness.apply_clip(test_clip(30, BLEND_MS), None);
+
+        let mut fade_frames = 0;
+        for _ in 0..120 {
+            let pose = harness.frame();
+            fade_frames += 1;
+            let taken = (harness.monster.current_heading.0 - -90.0) / TURN;
+            assert!(
+                (taken - pose).abs() < 1e-4,
+                "frame {fade_frames}: the pose is {pose} through the fade but the entity has taken {taken} of the turn",
+            );
+            // ...and that shared number is the fade the player is really
+            // running: `blend_alpha` of the elapsed fraction, no lead.
+            let elapsed = fade_frames as f32 * HARNESS_DT;
+            let expected = dark::motion::blend_alpha(elapsed / (BLEND_MS as f32 / 1000.0));
+            assert!(
+                (taken - expected).abs() < 1e-4,
+                "frame {fade_frames}: expected {expected} of the turn, entity has taken {taken}",
+            );
+            if harness.monster.turn_clip.is_none() {
+                break;
+            }
+        }
+
+        assert!(
+            harness.monster.turn_clip.is_none(),
+            "the handover must finish with the fade"
+        );
+        assert!(
+            (harness.monster.current_heading.0 - (-90.0 + TURN)).abs() < 1e-3,
+            "and land the whole authored turn, heading is {:?}",
+            harness.monster.current_heading
+        );
+        // A 500ms fade at 60Hz: the settle lasts the fade, not a frame more.
+        assert_eq!(fade_frames, 30);
+    }
+
+    /// A wound reaction (or any other clip) landing mid-settle replaces the
+    /// fade the yaw was riding - and takes the turn clip's pose with it, since
+    /// the player fades from the follow-up clip's own pose rather than the
+    /// blended one. The remaining turn has nothing holding it any more, so it
+    /// lands in that frame instead of easing on across a curve nobody is
+    /// drawing. The applier keeps ownership of the pivot through the settle
+    /// precisely so it can say when that happened.
+    #[test]
+    fn a_clip_displacing_the_settle_takes_the_rest_of_the_turn_at_once() {
+        let mut harness = PivotHarness::new(Deg(-90.0));
+        harness.start_pivot(Deg(-168.0), 3);
+        harness.play_clip_out();
+        harness.apply_clip(test_clip(30, 500), None);
+
+        for _ in 0..10 {
+            harness.frame();
+        }
+        let partway = harness.monster.current_heading;
+        assert!(
+            matches!(harness.monster.turn_clip, Some(TurnClip::Settling { .. })),
+            "the settle must be running to be displaced"
+        );
+        assert!(
+            (partway.0 - (-90.0 - 168.0)).abs() > 10.0,
+            "and must be nowhere near finished, at {partway:?}"
+        );
+
+        // The wound clip: it is what the player fades now, not the pivot's.
+        harness.apply_clip(test_clip(10, 300), None);
+        harness.frame();
+        assert!(
+            harness.monster.turn_clip.is_none(),
+            "a displaced settle ends there and then"
+        );
+        assert!(
+            (harness.monster.current_heading.0 - (-90.0 - 168.0)).abs() < 1e-3,
+            "the whole turn lands with the pose that was holding it, heading is {:?}",
+            harness.monster.current_heading
+        );
+
+        let landed = harness.monster.current_heading;
+        for _ in 0..40 {
+            harness.frame();
+        }
+        assert_eq!(
+            harness.monster.current_heading, landed,
+            "and nothing moves it afterwards"
+        );
+    }
+
+    /// A creature whose schema has no turn clip for the pivot is told so; it
+    /// must fall back to steering instead of standing there.
+    #[test]
+    fn a_pivot_with_no_clip_falls_back_to_steering() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        assert!(turn_frame(&mut monster, entity_id, Deg(90.0)).0.is_some());
+        let token = pending_token(&monster);
+        tell(
+            &mut monster,
+            &world,
+            entity_id,
+            MessagePayload::TurnClipCancelled { token },
+        );
+        assert_eq!(
+            turn_frame(&mut monster, entity_id, Deg(90.0)),
+            (None, false),
+            "an unplayed pivot must give the heading back to steering, and stop asking"
+        );
+    }
+
+    /// A pivot that is never followed by another clip has no fade to hand
+    /// over across - it must not hold its heading for ever.
+    #[test]
+    fn a_pivot_nothing_follows_still_ends() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 2.4);
+        complete_clip(&mut monster, &world, entity_id);
+
+        play_out(&mut monster, entity_id, TURN_CLIP_HANDOFF_TIMEOUT + 0.1);
+        assert!(monster.turn_clip.is_none(), "the pivot must not hang");
+        assert_eq!(
+            monster.current_heading,
+            Deg(-90.0),
+            "and must not take a turn its pose is still holding"
+        );
+    }
+
     /// #807: a creature flagged to patrol must walk its authored route from
     /// spawn. Behavior is otherwise only chosen on an alertness LEVEL CHANGE,
     /// so a patroller that is never alerted stood on its spawn point for the
     /// whole mission - patrol only ever started after an alert had come and
     /// gone.
+    /// A pivot used to skip the behavior update entirely, purely to keep the
+    /// standstill out of the stall clock - which also stopped the route, the
+    /// whiskers and the crowd repel for the length of the clip. The hold now
+    /// pauses the accounting alone, so the behavior is steered right through
+    /// the pivot: this patroller keeps working its route while it turns.
+    #[test]
+    fn a_pivot_no_longer_freezes_the_behavior() {
+        let (mut world, entity_id) = world_with_monster_and_player(Deg(180.0));
+        // Standing on its own patrol point, so every steered frame arrives
+        // and advances the route - an observable heartbeat of the steer.
+        make_patroller_with_points(&mut world, entity_id, true, [0.0, 0.5]);
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+        assert_eq!(monster.current_behavior.borrow().name(), "Patrol");
+        step(&mut monster, &world, entity_id);
+
+        monster.turn_clip = Some(TurnClip::Playing {
+            token: 1,
+            turn: Deg(90.0),
+        });
+        let effects = step(&mut monster, &world, entity_id);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::SetAICurrentPatrol { .. })),
+            "a pivoting AI is still steered by its behavior",
+        );
+    }
+
+    #[test]
+    fn a_door_wait_outranks_a_pivot_as_the_hold_reason() {
+        assert_eq!(hold_reason(None, false), MovementHold::None);
+        assert_eq!(hold_reason(None, true), MovementHold::Pivot);
+        // Both at once: the door is what the AI is actually waiting on.
+        assert_eq!(hold_reason(Some(0.2), true), MovementHold::DoorWait);
+    }
+
     #[test]
     fn patroller_starts_its_route_without_ever_being_alerted() {
         let (mut world, entity_id) = world_with_monster_and_player(Deg(180.0));
@@ -1959,16 +3909,216 @@ mod tests {
         assert_eq!(at_30, locomotion_scale_for_heading_error(Deg(-30.0)));
         // A third of full speed by 60 degrees
         assert_eq!(locomotion_scale_for_heading_error(Deg(60.0)), 0.33);
-        assert_eq!(locomotion_scale_for_heading_error(Deg(89.0)), 0.33);
+    }
+
+    /// A hybrid is ~6.5 ft tall; the door leaf it walks under has to have
+    /// risen at least that far before the gap is worth entering.
+    const TEST_ACTOR_HEIGHT: f32 = 6.5 / SCALE_FACTOR;
+
+    #[test]
+    fn a_barely_open_door_is_not_passable() {
+        // The leaf has just left its closed pose: the doorway is still solid
+        // at head height, so the AI must wait rather than walk into it.
+        assert!(!door_is_passable(
+            0.05,
+            0.2 / SCALE_FACTOR,
+            TEST_ACTOR_HEIGHT
+        ));
+        assert!(!door_is_passable(
+            0.5,
+            3.0 / SCALE_FACTOR,
+            TEST_ACTOR_HEIGHT
+        ));
     }
 
     #[test]
-    fn locomotion_scale_floors_at_a_third_never_zero() {
-        // A zero scale can deadlock an AI whose steering chain holds a large
-        // transient error - the floor must stay positive even at 180 degrees
-        assert_eq!(locomotion_scale_for_heading_error(Deg(90.0)), 0.33);
-        assert_eq!(locomotion_scale_for_heading_error(Deg(180.0)), 0.33);
-        assert_eq!(locomotion_scale_for_heading_error(Deg(-135.0)), 0.33);
+    fn a_leaf_risen_clear_of_the_head_is_passable() {
+        assert!(door_is_passable(0.6, 7.0 / SCALE_FACTOR, TEST_ACTOR_HEIGHT));
+    }
+
+    #[test]
+    fn a_short_creature_clears_a_leaf_a_hybrid_still_waits_for() {
+        let rise = 4.0 / SCALE_FACTOR;
+        assert!(door_is_passable(0.5, rise, 3.0 / SCALE_FACTOR));
+        assert!(!door_is_passable(0.5, rise, TEST_ACTOR_HEIGHT));
+    }
+
+    #[test]
+    fn a_fully_travelled_leaf_is_passable_without_gaining_height() {
+        // A door that slides sideways never rises, so height clearance alone
+        // would hold an AI at it forever.
+        assert!(door_is_passable(1.0, 0.0, TEST_ACTOR_HEIGHT));
+    }
+
+    /// A door wait long enough to read as impatience.
+    const LONG_WAIT: Option<f32> = Some(FRUSTRATION_DOOR_WAIT_SECONDS + 1.0);
+
+    #[test]
+    fn frustration_needs_a_block() {
+        assert!(!door_wait_is_thwarting(None));
+        assert!(door_wait_is_thwarting(LONG_WAIT));
+    }
+
+    #[test]
+    fn a_door_that_opens_promptly_draws_no_gesture() {
+        // Every shipped sliding leaf clears in about half a second; an AI
+        // that gestured at each one would dam the doorway behind it.
+        assert!(!door_wait_is_thwarting(Some(0.5)));
+    }
+
+    /// Publish `seconds` of no-progress stall for `entity_id` on the channel
+    /// the path follower writes and `path_stall_seconds` reads. Without this
+    /// the world has no pathfinding service at all, so a "stalled" AI reads
+    /// zero seconds and every stall assertion is vacuous.
+    fn publish_stall(world: &mut World, entity_id: EntityId, seconds: f32) {
+        let service = std::sync::Arc::new(crate::pathfinding::PathfindingService::new(
+            std::sync::Arc::new(crate::pathfinding::tests::three_cell_db(
+                dark::mission::path_database::PathCellFlags::empty(),
+            )),
+        ));
+        service.record_ai_steering(
+            entity_id.inner(),
+            crate::pathfinding::AiSteeringDebug {
+                next_waypoint: 1,
+                path_len: 3,
+                target: Some(vec3(0.0, 0.0, 5.0)),
+                stall_seconds: seconds,
+            },
+        );
+        world.add_unique(GlobalPathfinding(Some(service)));
+    }
+
+    /// USER DECISION (2026-09-05): impatience is a door gesture only. On a
+    /// stall the creature is trying to get out of a wedge, and a clip with no
+    /// root motion only makes the standstill longer.
+    #[test]
+    fn a_sustained_stall_draws_no_gesture() {
+        let (mut world, entity_id) = world_with_monster_and_player(Deg(0.0));
+        // A real wedge, banked well past any threshold a stall gesture ever
+        // used - and no door holding this AI.
+        publish_stall(&mut world, entity_id, 10.0);
+        assert!(
+            path_stall_seconds(&world, entity_id) >= 10.0,
+            "the stall the gesture would have read is actually on the wire",
+        );
+        let mut stalled = AnimatedMonsterAI::new();
+        assert!(matches!(
+            stalled.update_frustration(&world, entity_id, None, false, &tick()),
+            Effect::NoEffect
+        ));
+        // The same stalled AI, kept waiting at a door as well: this is the one
+        // block that still draws the performance, so the case above is a
+        // decision, not a gesture path that has stopped working.
+        let mut waiting = AnimatedMonsterAI::new();
+        assert!(matches!(
+            waiting.update_frustration(&world, entity_id, LONG_WAIT, false, &tick()),
+            Effect::PlayAnimationBySchema { .. }
+        ));
+    }
+
+    #[test]
+    fn the_door_wait_can_never_outlast_the_path_follower_patience() {
+        // Belt and braces beside the hold: a wait that could outlast the
+        // stall window would be relying on the hold alone to keep the
+        // crossing the AI just opened off the blocked list.
+        assert!(DOOR_WAIT_TIMEOUT < crate::scripts::ai::steering::STALL_SECONDS);
+    }
+
+    #[test]
+    fn impatience_is_reached_before_the_wait_times_out() {
+        // A threshold above the ceiling would be a gesture that never plays.
+        assert!(FRUSTRATION_DOOR_WAIT_SECONDS < DOOR_WAIT_TIMEOUT);
+    }
+
+    #[test]
+    fn frustration_is_rate_limited() {
+        assert!(!frustration_gesture_allowed(
+            3.0,
+            None,
+            ScriptedState::NotScripted
+        ));
+    }
+
+    #[test]
+    fn frustration_is_silent_within_reach_of_the_target() {
+        let inside = Some(MELEE_ATTACK_RANGE * 0.5);
+        let outside = Some(MELEE_ATTACK_RANGE * 2.0);
+        assert!(!frustration_gesture_allowed(
+            0.0,
+            inside,
+            ScriptedState::NotScripted
+        ));
+        assert!(frustration_gesture_allowed(
+            0.0,
+            outside,
+            ScriptedState::NotScripted
+        ));
+    }
+
+    #[test]
+    fn frustration_never_interrupts_an_authored_performance() {
+        assert!(!frustration_gesture_allowed(
+            0.0,
+            None,
+            ScriptedState::Running
+        ));
+    }
+
+    /// The gate the locked-door give-up now goes through (it used to emit the
+    /// performance whatever either path had already spent): the rate limit it
+    /// arms refuses the next gesture, and a pivot in flight refuses it too -
+    /// the gesture PLAYS, so firing it over a turn clip would leave the AI
+    /// held on a clip nothing is running.
+    #[test]
+    fn the_locked_door_give_up_respects_the_shared_limit() {
+        let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
+        let mut monster = AnimatedMonsterAI::new();
+        assert!(matches!(
+            monster.try_frustration_gesture(&world, entity_id),
+            Effect::PlayAnimationBySchema { .. }
+        ));
+        assert!(monster.frustration_cooldown > 0.0, "the limit is armed");
+        assert!(matches!(
+            monster.try_frustration_gesture(&world, entity_id),
+            Effect::NoEffect
+        ));
+
+        let mut pivoting = AnimatedMonsterAI::new();
+        pivoting.turn_clip = Some(TurnClip::Playing {
+            token: 1,
+            turn: Deg(90.0),
+        });
+        assert!(
+            matches!(
+                pivoting.try_frustration_gesture(&world, entity_id),
+                Effect::NoEffect
+            ),
+            "an unspent limit still yields to a turn in flight",
+        );
+        assert_eq!(
+            pivoting.frustration_cooldown, 0.0,
+            "a gesture that never played must not arm the limit",
+        );
+    }
+
+    #[test]
+    fn locomotion_scale_stops_the_body_past_a_right_angle() {
+        // A reversal pivots in place instead of arcing sideways into
+        // whatever is beside the body
+        assert_eq!(locomotion_scale_for_heading_error(Deg(90.0)), 0.0);
+        assert_eq!(locomotion_scale_for_heading_error(Deg(180.0)), 0.0);
+        assert_eq!(locomotion_scale_for_heading_error(Deg(-135.0)), 0.0);
+    }
+
+    #[test]
+    fn locomotion_scale_eases_to_the_standstill_between_60_and_90() {
+        // No cliff at 60: the third-speed walk fades out over the next 30
+        // degrees rather than dropping to a stop in one frame
+        let at_75 = locomotion_scale_for_heading_error(Deg(75.0));
+        assert!((at_75 - 0.165).abs() < 1e-4, "got {at_75}");
+        let at_89 = locomotion_scale_for_heading_error(Deg(89.0));
+        assert!(at_89 > 0.0 && at_89 < 0.02, "got {at_89}");
+        assert_eq!(at_75, locomotion_scale_for_heading_error(Deg(-75.0)));
     }
 
     /// Every environmental-sound query in `effect`, as its (tag, value) pairs.
@@ -2002,6 +4152,112 @@ mod tests {
                 motion_flags: flags,
             },
         )
+    }
+
+    /// Exercise the real handler with both weapon links and a live victim:
+    /// the union must retain the projectile, contact damage, and foot plant.
+    #[test]
+    fn combined_attack_flags_preserve_both_attacks_and_death_guard() {
+        use dark::properties::{
+            AIProjectileOptions, AITargetMethod, Link, Links, PropCreature, PropLocalPlayer,
+            ReceptronEffect, ReceptronOptions, ToLink,
+        };
+        let (mut world, entity) =
+            world_with_creature_and_player(Deg(0.0), "creaturetype oncegrunt");
+        let player = world.add_entity((
+            PropLocalPlayer {},
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: -20,
+                    to_entity_id: None,
+                    link: Link::Receptron(ReceptronOptions {
+                        order: 0,
+                        effect: ReceptronEffect::Damage {
+                            multiplier: 1.0,
+                            use_intensity: true,
+                        },
+                    }),
+                }],
+            },
+        ));
+        world.add_unique(crate::mission::stim_response::GlobalContactStims(
+            std::collections::HashMap::from([(-10, vec![(-20, 5.0)])]),
+        ));
+        {
+            let mut info = world
+                .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+                .unwrap();
+            info.entity_id = player;
+            info.pos = vec3(0.0, 0.0, 1.0);
+        }
+        world.add_component(
+            entity,
+            (
+                PropCreature(0),
+                Links {
+                    to_links: vec![
+                        ToLink {
+                            to_template_id: -10,
+                            to_entity_id: None,
+                            link: Link::Weapon,
+                        },
+                        ToLink {
+                            to_template_id: -30,
+                            to_entity_id: None,
+                            link: Link::AIProjectile(AIProjectileOptions {
+                                targeting_method: AITargetMethod::StraightLine,
+                                delay: 0.0,
+                                should_lead_target: false,
+                                ammo: 0,
+                                accuracy: 0,
+                                select_time: 0.0,
+                                joint: 0,
+                                vhot: 0,
+                            }),
+                        },
+                    ],
+                },
+            ),
+        );
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity, &world);
+        for dead in [false, true] {
+            monster.is_dead = dead;
+            let effect = monster.handle_message(
+                entity,
+                &world,
+                &physics,
+                &MessagePayload::AnimationFlagTriggered {
+                    motion_flags: MotionFlags::FIRE
+                        | MotionFlags::MELEE_CONTACT_START
+                        | MotionFlags::LEFT_FOOT_STEP,
+                },
+            );
+            let effects = Effect::flatten(vec![effect.clone()]);
+            assert_eq!(
+                effects
+                    .iter()
+                    .filter(|e| matches!(
+                        e,
+                        Effect::CreateEntity {
+                            template_id: -30,
+                            ..
+                        }
+                    ))
+                    .count(),
+                usize::from(!dead),
+                "one projectile while alive, none after death"
+            );
+            assert_eq!(effects.iter().filter(|e| matches!(e, Effect::Send { msg }
+                if msg.to == player && matches!(msg.payload, MessagePayload::Damage { amount: 5.0, .. }))).count(),
+                usize::from(!dead), "one melee hit while alive, none after death");
+            assert_eq!(
+                sound_queries(&effect).len(),
+                1,
+                "the foot plant survives both guards"
+            );
+        }
     }
 
     /// The shipped locomotion clips are per-half-step and author exactly one
@@ -2067,5 +4323,66 @@ mod tests {
         let effect = effect_of_animation_flags(MotionFlags::INTERRUPTIBLE);
 
         assert!(sound_queries(&effect).is_empty());
+    }
+    #[test]
+    fn combat_lockouts_survive_hydration_without_replaying_the_gesture() {
+        let (world, entity) = world_with_monster_and_player(Deg(0.0));
+        let mut monster = AnimatedMonsterAI::new();
+        assert!(monster.combat_frustration.observe(
+            Some(CombatMode::Ranged),
+            vec3(0.0, 0.0, 0.0),
+            2.0
+        ));
+        monster.combat_frustration.tick(3.0);
+        let saved = monster.save_state().unwrap();
+        let mut restored = AnimatedMonsterAI::new();
+        restored
+            .restore_state(
+                &saved,
+                &crate::scripts::ScriptRestoreContext::new(&std::collections::HashMap::new()),
+            )
+            .unwrap();
+        restored.initialize_after_hydration(entity, &world, true);
+        assert_eq!(saved, restored.save_state().unwrap());
+        assert!(!restored.combat_frustration.allows(CombatMode::Ranged));
+        assert!(restored.combat_frustration.allows(CombatMode::Melee));
+        assert!(!restored.current_behavior.borrow().is_combat_frustration());
+        restored.combat_frustration.tick(7.0);
+        assert!(restored.combat_frustration.allows(CombatMode::Ranged));
+    }
+    #[test]
+    fn turning_in_place_does_not_hide_stalled_combat() {
+        let (mut world, entity) = world_with_monster_and_player(Deg(0.0));
+        world.add_component(
+            entity,
+            dark::properties::Links {
+                to_links: vec![dark::properties::ToLink {
+                    to_template_id: -1,
+                    to_entity_id: None,
+                    link: dark::properties::Link::Weapon,
+                }],
+            },
+        );
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.alertness.current_level = AIAlertLevel::High;
+        monster.turn_clip = Some(TurnClip::Requested { token: 1 });
+        for _ in 0..21 {
+            monster.update_combat_frustration(&world, &physics, entity, true, 0.1);
+        }
+        assert!(monster.current_behavior.borrow().is_combat_frustration());
+        assert!(!monster.combat_frustration.allows(CombatMode::Melee));
+        assert!(monster.combat_frustration.allows(CombatMode::Ranged));
+        monster.turn_clip = None;
+        tell(
+            &mut monster,
+            &world,
+            entity,
+            MessagePayload::AnimationCompleted,
+        );
+        assert!(monster.current_behavior.borrow().is_combat_frustration());
+        monster.update_combat_frustration(&world, &physics, entity, true, 2.1);
+        assert!(!monster.current_behavior.borrow().is_combat_frustration());
+        assert!(!monster.combat_frustration.allows(CombatMode::Melee));
     }
 }

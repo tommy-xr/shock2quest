@@ -1,3 +1,4 @@
+use super::flat_ui_host::PlacementStatus;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::Path,
@@ -14,6 +15,9 @@ use cgmath::{
     Vector2, Vector3, num_traits::ToPrimitive, vec2, vec3,
 };
 
+use collision::Aabb3;
+
+use super::turn_clip::TurnClipTracker;
 use crate::SpawnLocation;
 use crate::game_scene::DebuggableScene;
 use crate::mission::CullingInfo;
@@ -43,7 +47,7 @@ use dark::{
         PropModelName, PropMotionActorTags, PropObjState, PropParticleGroup,
         PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
         PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts, PropSymName,
-        PropTeleported, PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState,
+        PropTeleported, PropTemplateId, PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState,
         PropTweqModelConfig, PropertyDefinition, RenderType, TeleportSource, ToLink, TripFlags,
         TweqAnimationState, WrappedEntityId,
     },
@@ -89,7 +93,8 @@ use crate::{
     runtime_props::{
         RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDeathPose,
         RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
-        RuntimePropLaunchedProjectile, RuntimePropReloading, RuntimePropSelectedAmmo,
+        RuntimePropLaunchedProjectile, RuntimePropMetaProperties, RuntimePropReloading,
+        RuntimePropSelectedAmmo, RuntimePropShotCooldown, RuntimePropShotModifiers,
         RuntimePropTransform, RuntimePropVhots, RuntimePropVrGripOffset,
     },
     save_load::HeldItemSaveData,
@@ -104,7 +109,6 @@ use crate::{
     systems::{
         run_attachment_update, run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs,
     },
-    teleport::{TeleportSystem, TeleportUI, TeleportVisualStyle},
     time::Time,
     util::{debug_entity, get_email_sound_file, get_entity_position, has_refs, vec3_to_point3},
     virtual_hand::VirtualHandEffect,
@@ -121,6 +125,44 @@ pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 /// floor-lying crumple pose doesn't start deeply interpenetrating the level
 /// trimesh (see `spawn_ragdoll`).
 const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
+/// How far above the water a treading swimmer's body center may sit (1 ft):
+/// well over one frame of swim-up, so surfacing settles instead of bobbing.
+const WATER_SURFACE_BAND: f32 = 1.0 / SCALE_FACTOR;
+
+/// Where `Effect::RainItems` puts its spawns, relative to the player's body
+/// ORIGIN (the capsule centre, three feet off the floor - not the feet).
+/// Written in SS2 feet over `SCALE_FACTOR`, like the spawn handlers beside it,
+/// because the profile these clear is authored in feet: the standing capsule's
+/// crown is 3 ft above the origin and its radius is 1.2 ft.
+///
+/// So the ring drops items from just over head height, at arm's length: high
+/// enough to fall visibly and to miss the player, low enough to stay under a
+/// corridor ceiling (at 6.25 ft the rain landed on top of the ceiling geometry
+/// instead of reaching the player).
+const RAIN_RADIUS: f32 = 2.0 / SCALE_FACTOR;
+const RAIN_HEIGHT: f32 = 3.5 / SCALE_FACTOR;
+
+/// How far each rain rotates the next one's ring. The golden angle, so
+/// consecutive rains interleave instead of stacking: two presses in a row
+/// (easy, since the overlay stays up) would otherwise drop every item onto
+/// the slot an earlier one is still occupying, and the solver flings the
+/// coincident bodies apart on resume rather than letting them fall.
+const RAIN_PHASE_STEP: f32 = 2.399_963_2;
+
+/// Minimum arc between neighbouring slots, so the ring grows with the cheat
+/// rather than packing its items tighter. At the fixed 2 ft radius the
+/// eight-item weapon spread put neighbours ~1.5 ft apart - shorter than the
+/// Assault Rifle it spawns, so they started the frame interpenetrating.
+const RAIN_MIN_SPACING: f32 = 2.5 / SCALE_FACTOR;
+
+/// How far short of a wall a slot is pulled. The ring is placed around the
+/// player without regard for the room, so a player standing closer to a wall
+/// than the radius would otherwise drop items straight through it.
+const RAIN_WALL_MARGIN: f32 = 0.5 / SCALE_FACTOR;
+
+/// Extra lift per slot, so items pulled to the same place by neighbouring
+/// walls still fall as a stack rather than starting inside one another.
+const RAIN_SLOT_LIFT: f32 = 0.35 / SCALE_FACTOR;
 
 /// Resolve optional media-reader portrait/icon art before it becomes a shared
 /// UI image. STR tables author extension-less PCX-era names, while replacement
@@ -158,14 +200,9 @@ fn resolve_optional_log_art_texture(
 const LOAD_EVENT_PUMP_ENTITY_INTERVAL: usize = 32;
 
 /// Index of a hand in the per-hand `[left, right]` arrays this module keeps
-/// (the VR grab swallow, the on-panel arbitration). One conversion, so the two
-/// sides of a latch can never disagree about which slot a hand owns.
-fn hand_slot(hand: crate::vr_config::Handedness) -> usize {
-    match hand {
-        crate::vr_config::Handedness::Left => 0,
-        crate::vr_config::Handedness::Right => 1,
-    }
-}
+/// (the VR grab swallow, the on-panel arbitration). The crate-wide conversion,
+/// so a per-hand array built here reads correctly wherever it is consumed.
+use crate::vr_config::hand_slot;
 
 /// Advance the VR grab swallow one frame, per hand (see
 /// [`MissionCore::vr_squeeze_swallow`]).
@@ -285,7 +322,7 @@ fn strip_deposit_entities(
         .collect()
 }
 
-/// Rewrite a release that [`strip_deposit_entities`] claimed, from the world
+/// Rewrite a release claimed by the inventory strip or shoulder backpack, from the world
 /// drop `VirtualHand` emitted into the backpack deposit the player meant.
 ///
 /// Each claimed item's `DropItem` - the world drop itself, which restores its
@@ -297,11 +334,10 @@ fn strip_deposit_entities(
 /// frame and at the same point the drop they replace would have been - the
 /// `Drop` therefore still reaches this frame's `script_world.update`.
 ///
-/// `collect` is the keycard exception (see the caller): those are Frobbed
-/// rather than stored, so the credential is recorded instead of an inert card
-/// being banked.
+/// `collect` routes downloads through their collecting Frob instead of storing
+/// inert pickup objects in the backpack.
 ///
-/// `store` pairs each stored item with the strip cell its release was over,
+/// `store` pairs each stored item with its targeted or reserved inventory cell,
 /// when one resolved - the deposit becomes a [`VirtualHandEffect::StoreItemAtCell`]
 /// there, falling back to the first-free [`VirtualHandEffect::StoreItem`]
 /// only when no cell resolved.
@@ -311,7 +347,7 @@ fn strip_deposit_entities(
 /// that ray reaches straight through it - so a container standing behind the
 /// interface would otherwise take the item as well and the deposit would land
 /// twice. Everything else the hand emitted this frame is untouched.
-fn rewrite_strip_release(
+fn rewrite_inventory_release(
     effects: &mut Vec<VirtualHandEffect>,
     store: &[(EntityId, Option<(usize, usize)>)],
     collect: &[EntityId],
@@ -325,7 +361,7 @@ fn rewrite_strip_release(
     let mut rewritten = Vec::with_capacity(effects.len());
     for effect in effects.drain(..) {
         match effect {
-            VirtualHandEffect::DropItem { entity_id } if claimed(&entity_id) => {
+            VirtualHandEffect::DropItem { entity_id, .. } if claimed(&entity_id) => {
                 rewritten.push(VirtualHandEffect::OutMessage {
                     message: Message {
                         to: entity_id,
@@ -362,24 +398,44 @@ fn rewrite_strip_release(
     *effects = rewritten;
 }
 
-/// Whether the player's backpack can actually take a deposit right now.
+/// UI feedback for a backpack deposit the capacity check refused: retail's
+/// MISC.STR `InvFull` ("No room in inventory.") message. The port has no
+/// player-facing text facility yet (see the `SoftUseless`/`SoftUpgrade`
+/// handling above, which hits the same gap), so the text goes to the game
+/// log; the audible half is the same `repfail` UI chime other refused player
+/// actions already reuse (a replicator purchase without enough nanites).
+fn backpack_full_feedback(entity_id: EntityId) -> Effect {
+    game_log!(
+        INFO,
+        "{:?} refused: no room in inventory (MISC.STR InvFull)",
+        entity_id
+    );
+    Effect::PlaySound {
+        handle: AudioHandle::new(),
+        source: None,
+        name: "repfail".to_owned(),
+        spatial: false,
+    }
+}
+
+/// Whether the player's backpack can actually take `dropped_entity_id` right
+/// now.
 ///
 /// This is exactly [`move_live_entity_into_container`]'s success condition for
 /// a live item: a container without `Links` has nowhere to record the new
-/// `Contains`, and the transfer silently does nothing. Claiming a release the
-/// backpack cannot accept would suppress the world drop for an item that then
-/// lands nowhere at all, so the claim is gated on it and an unusable backpack
-/// simply leaves the ordinary world drop alone.
-fn backpack_accepts_deposit(world: &World) -> bool {
+/// `Contains`, and a full grid with nothing to merge into leaves the item
+/// unplaced. Claiming a release the backpack cannot accept would suppress the
+/// world drop for an item that then lands nowhere at all, so the claim is
+/// gated on it and an unusable/full backpack simply leaves the ordinary world
+/// drop alone (the VR "held item can't stay mid-air" fallback).
+fn backpack_accepts_deposit(world: &World, dropped_entity_id: EntityId) -> bool {
     let Ok(inventory_entity) = world
         .borrow::<UniqueView<PlayerInfo>>()
         .map(|player| player.inventory_entity_id)
     else {
         return false;
     };
-    world
-        .borrow::<View<Links>>()
-        .is_ok_and(|links| links.get(inventory_entity).is_ok())
+    container_can_accept_item(world, inventory_entity, dropped_entity_id)
 }
 
 /// Head-relative authored-space placement for the wide VR backpack canvas.
@@ -387,13 +443,6 @@ fn backpack_accepts_deposit(world: &World) -> bool {
 /// The shared canvas keeps its authored pixels; the physical VR boundary
 /// scales the unusually wide 15-column strip so all of it fits at arm's reach.
 const VR_BACKPACK_WORLD_SCALE: f32 = 0.55;
-
-/// Head-relative authored-space placement for the narrow portrait reader.
-/// After Dark's scale conversion the panel center is 1.5 world units forward
-/// and 1.4 units above the player origin, keeping its 0.75 x 1.18 canvas fully
-/// framed and within ordinary controller reach.
-const VR_MEDIA_FORWARD: f32 = 3.75;
-const VR_MEDIA_UP: f32 = 3.5;
 
 /// The use-mode ("cyber interface") open/close sting: the shipped gamesys's
 /// own `UI_SCH` schema pair for opening/closing the game's main panel
@@ -414,6 +463,154 @@ fn presentation_world_panel_size(
         authored_size * VR_BACKPACK_WORLD_SCALE
     } else {
         authored_size
+    }
+}
+
+/// One corpse's worth of draws against a loot table: `picks` independent
+/// draws, each landing on the slot its rarity covers. A blank slot is the
+/// table's own "nothing" outcome and is never subject to the difficulty
+/// discard on top of it; every draw that picked a real item is.
+fn roll_loot_table(
+    table: &dark::properties::PropLootInfo,
+    discard_percent: i32,
+    rng: &mut impl Rng,
+) -> Vec<String> {
+    let total_rarity = table.total_rarity();
+    if total_rarity == 0 {
+        return Vec::new();
+    }
+    (0..table.picks)
+        .filter_map(|_| {
+            let slot = table.slot_for_roll(rng.gen_range(0..total_rarity))?;
+            if slot.item.is_empty() || rng.gen_range(0..100) < discard_percent {
+                return None;
+            }
+            Some(slot.item.clone())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod loot_table_tests {
+    use super::*;
+    use dark::properties::{LootSlot, PropLootInfo};
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    /// The shipped OG-Pipe table: two draws over five real items and a
+    /// 45-weight "nothing" slot.
+    fn og_pipe() -> PropLootInfo {
+        PropLootInfo {
+            picks: 2,
+            slots: [
+                ("5 Nanites", 20),
+                ("", 0),
+                ("Med Patch", 5),
+                ("Soda Can", 25),
+                ("", 45),
+                ("OG Organ", 5),
+            ]
+            .into_iter()
+            .map(|(item, rarity)| LootSlot {
+                item: item.to_owned(),
+                rarity,
+                value: 0.0,
+            })
+            .collect(),
+        }
+    }
+
+    /// Across many deaths every drawn name comes from the table, no death
+    /// exceeds its pick count, and the blank slot never becomes an item.
+    #[test]
+    fn draws_stay_within_the_table_and_its_pick_count() {
+        let table = og_pipe();
+        let mut rng = StdRng::seed_from_u64(7);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..500 {
+            let drops = roll_loot_table(&table, 0, &mut rng);
+            assert!(drops.len() <= table.picks as usize);
+            for drop in drops {
+                assert!(!drop.is_empty(), "the blank slot must not become an item");
+                assert!(
+                    table.slots.iter().any(|slot| slot.item == drop),
+                    "{drop:?} is not in the table"
+                );
+                seen.insert(drop);
+            }
+        }
+        // Every weighted item is reachable; the zero-weight slot is not.
+        assert_eq!(seen.len(), 4);
+    }
+
+    /// The difficulty discard thins real drops without touching the table:
+    /// Impossible's 75 keeps far less than Normal's 0, and a 100 keeps none.
+    #[test]
+    fn difficulty_discards_a_share_of_real_drops() {
+        let table = og_pipe();
+        let count = |discard| {
+            let mut rng = StdRng::seed_from_u64(11);
+            (0..500)
+                .map(|_| roll_loot_table(&table, discard, &mut rng).len())
+                .sum::<usize>()
+        };
+        let normal = count(0);
+        let impossible = count(75);
+        assert!(normal > 0);
+        assert!(
+            impossible * 3 < normal,
+            "75% discard kept {impossible} of {normal}"
+        );
+        assert_eq!(count(100), 0);
+    }
+
+    /// A zero discard threshold keeps every real draw - the boundary the
+    /// shipped Easy and Normal columns sit on.
+    #[test]
+    fn a_zero_discard_threshold_keeps_every_real_draw() {
+        let table = PropLootInfo {
+            picks: 1,
+            slots: vec![LootSlot {
+                item: "Med Patch".to_owned(),
+                rarity: 100,
+                value: 0.0,
+            }],
+        };
+        let mut rng = StdRng::seed_from_u64(3);
+        for _ in 0..500 {
+            assert_eq!(roll_loot_table(&table, 0, &mut rng), vec!["Med Patch"]);
+        }
+    }
+
+    /// A table nothing can be drawn from yields nothing rather than panicking
+    /// on an empty range.
+    #[test]
+    fn a_zero_weight_table_draws_nothing() {
+        let table = PropLootInfo {
+            picks: 3,
+            slots: vec![LootSlot {
+                item: "Med Patch".to_owned(),
+                rarity: 0,
+                value: 0.0,
+            }],
+        };
+        assert!(roll_loot_table(&table, 0, &mut StdRng::seed_from_u64(1)).is_empty());
+    }
+}
+
+/// Move a VR overlay built in the tracked pawn space (the cyber interface, the
+/// `show_position` readout) into world coordinates, and put it in the system-
+/// overlay group. The pawn transform is the same one the runtime builds its
+/// camera from, so the overlay stays where the head put it.
+fn rebase_pawn_overlay(
+    objects: &mut [SceneObject],
+    pawn_position: Vector3<f32>,
+    pawn_rotation: Quaternion<f32>,
+) {
+    let pawn_to_world = Matrix4::from_translation(pawn_position) * Matrix4::from(pawn_rotation);
+    for object in objects {
+        object.set_render_layer(RenderLayer::SystemOverlay);
+        object.set_transform(pawn_to_world * object.get_transform());
     }
 }
 
@@ -605,6 +802,7 @@ enum PsiKitUseOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ComestibleUseOutcome {
     NotUsed,
+    DecrementedStack,
     Consumed,
 }
 
@@ -696,28 +894,110 @@ fn move_live_entity_into_container_at_cell(
     dropped_entity_id: EntityId,
     target_cell: (usize, usize),
 ) -> bool {
+    let Some((slot, _)) =
+        container_deposit_slot(world, container_entity_id, dropped_entity_id, target_cell)
+    else {
+        return false;
+    };
+    move_live_entity_into_container_at_slot(
+        world,
+        container_entity_id,
+        dropped_entity_id,
+        Some(slot),
+    )
+}
+
+/// Resolve both the release and its preview. The flag identifies first-free
+/// fallback so the UI can distinguish placement here from automatic placement.
+fn container_deposit_slot(
+    world: &World,
+    container_entity_id: EntityId,
+    dropped_entity_id: EntityId,
+    target_cell: (usize, usize),
+) -> Option<(u32, bool)> {
     let grid = crate::inventory::grid_for(world, container_entity_id);
-    let occupied = crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    let mut occupied =
+        crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    occupied.remove_entity(dropped_entity_id);
     let dims = world
         .borrow::<View<dark::properties::PropInventoryDimensions>>()
         .ok()
-        .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
+        .and_then(|v| {
+            v.get(dropped_entity_id)
+                .ok()
+                .map(|d| (d.width as usize, d.height as usize))
+        })
         .unwrap_or((1, 1));
-    let fits = occupied.has_capacity(
-        target_cell.0,
-        target_cell.1,
-        dims.0 as usize,
-        dims.1 as usize,
-    );
-    let slot = fits.then(|| occupied.slot_at(target_cell.0, target_cell.1));
-    move_live_entity_into_container_at_slot(world, container_entity_id, dropped_entity_id, slot)
+    if let Some((x, y)) = occupied.placement_at(target_cell, dims) {
+        return Some((occupied.slot_at(x, y), false));
+    }
+    occupied
+        .first_free_slot(dims.0, dims.1)
+        .map(|slot| (slot, true))
 }
 
-/// The occupant of `target_cell` in `container_entity_id`'s grid, if that
-/// occupant shares `dropped_entity_id`'s template and both carry a
-/// `PropStackCount` - the "matching stackable" a targeted deposit merges
-/// into instead of claiming a cell of its own. `None` when the cell is empty,
-/// off the grid, or holds an item that cannot be merged with.
+/// Preview the same stack/placement/fallback order used by the release handler.
+fn container_deposit_preview(
+    world: &World,
+    container: EntityId,
+    item: EntityId,
+    target: (usize, usize),
+) -> (EntityId, (usize, usize), (usize, usize), PlacementStatus) {
+    let grid = crate::inventory::grid_for(world, container);
+    let inventory = crate::inventory::Inventory::from_container(world, container, grid);
+    let merge = matching_stack_at_cell(world, container, item, target);
+    let placement = container_deposit_slot(world, container, item, target);
+    let merge = merge.or_else(|| {
+        placement
+            .is_none()
+            .then(|| find_mergeable_stack_anywhere(world, container, item))
+            .flatten()
+    });
+    if let Some(merge) = merge {
+        if let Some(occupant) = inventory.all_items().find(|entry| entry.entity == merge) {
+            return (
+                item,
+                (occupant.x, occupant.y),
+                (occupant.width, occupant.height),
+                PlacementStatus::Merge,
+            );
+        }
+    }
+    if let Some((slot, fallback)) = placement {
+        let cell = inventory.cell_of(slot).unwrap();
+        let dims = world
+            .borrow::<View<dark::properties::PropInventoryDimensions>>()
+            .ok()
+            .and_then(|v| {
+                v.get(item)
+                    .ok()
+                    .map(|d| (d.width as usize, d.height as usize))
+            })
+            .unwrap_or((1, 1));
+        return (
+            item,
+            cell,
+            dims,
+            if fallback {
+                PlacementStatus::AutoPlace
+            } else {
+                PlacementStatus::Place
+            },
+        );
+    }
+    (
+        item,
+        (target.0.min(grid.0 - 1), target.1.min(grid.1 - 1)),
+        (1, 1),
+        PlacementStatus::NoRoom,
+    )
+}
+
+/// The occupant of `target_cell` in `container_entity_id`'s grid, if it
+/// combines with `dropped_entity_id` (see [`can_combine`]) - the "matching
+/// stackable" a targeted deposit merges into instead of claiming a cell of its
+/// own. `None` when the cell is empty, off the grid, or holds an item that
+/// cannot be merged with.
 fn matching_stack_at_cell(
     world: &World,
     container_entity_id: EntityId,
@@ -730,22 +1010,95 @@ fn matching_stack_at_cell(
     if occupant == dropped_entity_id {
         return None;
     }
-    let v_template = world
-        .borrow::<View<dark::properties::PropTemplateId>>()
-        .ok()?;
-    let v_stacks = world
-        .borrow::<View<dark::properties::PropStackCount>>()
-        .ok()?;
-    let dropped_template = v_template.get(dropped_entity_id).ok()?.template_id;
-    let occupant_template = v_template.get(occupant).ok()?.template_id;
-    if dropped_template != occupant_template {
-        return None;
+    can_combine(world, occupant, dropped_entity_id).then_some(occupant)
+}
+
+/// Whether two objects stack together: both carry a matching `P$CombineTy`
+/// label and both carry a `PropStackCount` to pool into.
+///
+/// The label - not the template - is the identity that pools, so sibling
+/// archetypes like Small and Large Prism (both `Prism`) merge, while Med Patch
+/// and Medical Kit, which share a parent archetype but not a label, stay
+/// separate.
+///
+/// Requiring a stack count on both is narrower than the original rule, which
+/// combines on the label alone and sums counts only when both objects have
+/// one. The stack count is what a merge pools into, so an object without one
+/// has nothing to merge. The shipped data's one label without a stack count is
+/// `AccessCard`, whose merge unions key region masks rather than summing - and
+/// key sources never reach a grid cell here anyway (`is_always_collected`).
+fn can_combine(world: &World, combinee: EntityId, new_entity_id: EntityId) -> bool {
+    let Ok(v_combine_types) = world.borrow::<View<dark::properties::PropCombineType>>() else {
+        return false;
+    };
+    let Ok(combinee_type) = v_combine_types.get(combinee) else {
+        return false;
+    };
+    let Ok(new_type) = v_combine_types.get(new_entity_id) else {
+        return false;
+    };
+    if combinee_type.0.is_empty() || combinee_type.0 != new_type.0 {
+        return false;
     }
-    v_stacks
-        .get(occupant)
+    let Ok(v_stacks) = world.borrow::<View<dark::properties::PropStackCount>>() else {
+        return false;
+    };
+    v_stacks.get(combinee).is_ok() && v_stacks.get(new_entity_id).is_ok()
+}
+
+/// Any occupant of `container_entity_id`'s grid that combines with
+/// `dropped_entity_id` (see [`can_combine`]) - the stack an ordinary deposit
+/// pools into, mirroring [`matching_stack_at_cell`] but searching the whole
+/// grid instead of one specific cell.
+fn find_mergeable_stack_anywhere(
+    world: &World,
+    container_entity_id: EntityId,
+    dropped_entity_id: EntityId,
+) -> Option<EntityId> {
+    let grid = crate::inventory::grid_for(world, container_entity_id);
+    let occupied = crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    occupied.all_items().find_map(|item| {
+        (item.entity != dropped_entity_id && can_combine(world, item.entity, dropped_entity_id))
+            .then_some(item.entity)
+    })
+}
+
+/// Whether `container_entity_id` can accept a deposit of `dropped_entity_id`
+/// right now, without mutating anything: the container exists (has `Links` to
+/// record the transfer) and either has a free cell for the item's authored
+/// footprint or holds a stack it can merge into instead. Mirrors
+/// [`move_live_entity_into_container`]/[`MissionCore::drop_entity_into_container`]'s
+/// success condition for a live item, so a release can be pre-checked before
+/// it is claimed as a store (see [`backpack_accepts_deposit`]).
+fn container_can_accept_item(
+    world: &World,
+    container_entity_id: EntityId,
+    dropped_entity_id: EntityId,
+) -> bool {
+    if !world
+        .borrow::<View<Links>>()
+        .is_ok_and(|links| links.get(container_entity_id).is_ok())
+    {
+        return false;
+    }
+    let grid = crate::inventory::grid_for(world, container_entity_id);
+    let mut occupied =
+        crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    // See `move_live_entity_into_container_at_slot`: a re-grab can still show
+    // the dropped entity occupying its own old cell here.
+    occupied.remove_entity(dropped_entity_id);
+    let dims = world
+        .borrow::<View<dark::properties::PropInventoryDimensions>>()
         .ok()
-        .and_then(|_| v_stacks.get(dropped_entity_id).ok())
-        .map(|_| occupant)
+        .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
+        .unwrap_or((1, 1));
+    if occupied
+        .first_free_slot(dims.0 as usize, dims.1 as usize)
+        .is_some()
+    {
+        return true;
+    }
+    find_mergeable_stack_anywhere(world, container_entity_id, dropped_entity_id).is_some()
 }
 
 /// Shared placement body for [`move_live_entity_into_container`] and
@@ -757,6 +1110,14 @@ fn move_live_entity_into_container_at_slot(
     dropped_entity_id: EntityId,
     requested_slot: Option<u32>,
 ) -> bool {
+    // A container must never contain itself. An attached GUI proxy can forward
+    // a held-item offer back to that same item's GuiScript, so reject the
+    // identity case before removing prior links or clearing HasRefs. This
+    // leaves the hand's preceding physical drop intact.
+    if container_entity_id == dropped_entity_id {
+        return false;
+    }
+
     let is_alive = world
         .borrow::<EntitiesView>()
         .is_ok_and(|entities| entities.is_alive(dropped_entity_id));
@@ -765,25 +1126,33 @@ fn move_live_entity_into_container_at_slot(
     }
 
     // Give the item a cell in the container's grid, so it stays where it
-    // was put instead of being repacked on every draw. Computed before
-    // the borrow below, and *after* the item's own links are irrelevant -
-    // it is not in the container yet, so it cannot occupy a cell here.
+    // was put instead of being repacked on every draw.
     let slot = match requested_slot {
         Some(slot) => slot,
         None => {
             let grid = crate::inventory::grid_for(world, container_entity_id);
-            let occupied =
+            let mut occupied =
                 crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+            // A re-grab (e.g. a flat wield-swap's double-click pull from the
+            // backpack) can still show the dropped entity's own OLD cell as
+            // occupied here - its `Contains` link is not removed until below.
+            // Uncount it so the capacity check reflects the cell it is about
+            // to vacate, not phantom occupancy by itself.
+            occupied.remove_entity(dropped_entity_id);
             let dims = world
                 .borrow::<View<dark::properties::PropInventoryDimensions>>()
                 .ok()
                 .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
                 .unwrap_or((1, 1));
-            // A full container still takes the item (the drop is already
-            // permitted by the caller); it just has no cell to remember.
-            occupied
-                .first_free_slot(dims.0 as usize, dims.1 as usize)
-                .unwrap_or(0)
+            // No free cell: retail rejects the transfer rather than stacking
+            // items invisibly on top of each other (#backpack-capacity). The
+            // caller is responsible for trying a merge into an existing stack
+            // first (see `find_mergeable_stack_anywhere`) - this is the true
+            // "nowhere left to put it" case.
+            match occupied.first_free_slot(dims.0 as usize, dims.1 as usize) {
+                Some(slot) => slot,
+                None => return false,
+            }
         }
     };
 
@@ -807,6 +1176,15 @@ fn move_live_entity_into_container_at_slot(
         }
     }
     if was_able_to_drop {
+        // A shoulder assignment can follow a held weapon back into the pack,
+        // but must not survive transfer into a world container in another level.
+        let in_backpack = world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .is_ok_and(|player| player.inventory_entity_id == container_entity_id);
+        if !in_backpack {
+            world.remove::<crate::runtime_props::RuntimePropShoulderWeapon>(dropped_entity_id);
+        }
+        world.remove::<crate::runtime_props::RuntimePropHolstered>(dropped_entity_id);
         world.add_component(dropped_entity_id, PropHasRefs(false));
     }
     was_able_to_drop
@@ -884,6 +1262,15 @@ fn apply_radiation_patch_use(
     entity_id: EntityId,
     amount: f32,
 ) -> RadiationPatchUseOutcome {
+    apply_hazard_patch_use(world, entity_id, amount, false)
+}
+
+fn apply_hazard_patch_use(
+    world: &World,
+    entity_id: EntityId,
+    amount: f32,
+    toxin: bool,
+) -> RadiationPatchUseOutcome {
     let is_alive = world
         .borrow::<EntitiesView>()
         .is_ok_and(|entities| entities.is_alive(entity_id));
@@ -900,7 +1287,13 @@ fn apply_radiation_patch_use(
 
     let cleared = world
         .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
-        .is_ok_and(|mut radiation| radiation.clear(amount));
+        .is_ok_and(|mut radiation| {
+            if toxin {
+                radiation.clear_toxin(amount)
+            } else {
+                radiation.clear(amount)
+            }
+        });
     if !cleared {
         return RadiationPatchUseOutcome::NotUsed;
     }
@@ -939,6 +1332,8 @@ fn restore_live_entity_world_refs(world: &mut World, entity_id: EntityId) -> boo
             drop_contains_links_to(links, entity_id);
         }
     }
+    world.remove::<crate::runtime_props::RuntimePropHolstered>(entity_id);
+    world.remove::<crate::runtime_props::RuntimePropShoulderWeapon>(entity_id);
     world.add_component(entity_id, PropHasRefs(true));
     true
 }
@@ -957,7 +1352,10 @@ mod released_item_world_refs_tests {
     #[test]
     fn hand_release_restores_refs_and_clears_residual_containment() {
         let mut world = World::new();
-        let item = world.add_entity(PropHasRefs(false));
+        let item = world.add_entity((
+            PropHasRefs(false),
+            crate::runtime_props::RuntimePropShoulderWeapon(1),
+        ));
         let container = world.add_entity(Links {
             to_links: vec![ToLink {
                 link: Link::Contains(4),
@@ -967,6 +1365,13 @@ mod released_item_world_refs_tests {
         });
 
         assert!(restore_live_entity_world_refs(&mut world, item));
+        assert!(
+            world
+                .borrow::<View<crate::runtime_props::RuntimePropShoulderWeapon>>()
+                .unwrap()
+                .get(item)
+                .is_err()
+        );
         assert!(
             world
                 .borrow::<View<PropHasRefs>>()
@@ -988,10 +1393,20 @@ mod released_item_world_refs_tests {
     #[test]
     fn ordinary_container_transfer_still_removes_world_refs() {
         let mut world = World::new();
-        let item = world.add_entity(PropHasRefs(true));
+        let item = world.add_entity((
+            PropHasRefs(true),
+            crate::runtime_props::RuntimePropShoulderWeapon(1),
+        ));
         let container = world.add_entity(Links::empty());
 
         assert!(move_live_entity_into_container(&mut world, container, item));
+        assert!(
+            world
+                .borrow::<View<crate::runtime_props::RuntimePropShoulderWeapon>>()
+                .unwrap()
+                .get(item)
+                .is_err()
+        );
         assert!(
             !world
                 .borrow::<View<PropHasRefs>>()
@@ -1010,6 +1425,36 @@ mod released_item_world_refs_tests {
         ));
     }
 
+    /// A held item may be offered through an attached GUI proxy that resolves
+    /// back to the item itself. The hand has already restored the physical
+    /// world drop before that offer is applied, so rejecting self-containment
+    /// must preserve those world refs and create no `Contains` cycle.
+    #[test]
+    fn self_container_transfer_is_rejected_after_world_drop() {
+        let mut world = World::new();
+        let item = world.add_entity((PropHasRefs(false), Links::empty()));
+
+        assert!(restore_live_entity_world_refs(&mut world, item));
+        assert!(!move_live_entity_into_container(&mut world, item, item));
+
+        assert!(
+            world
+                .borrow::<View<PropHasRefs>>()
+                .unwrap()
+                .get(item)
+                .unwrap()
+                .0,
+            "the preceding physical world drop must remain referenced"
+        );
+        assert!(
+            !contains(
+                world.borrow::<View<Links>>().unwrap().get(item).unwrap(),
+                item,
+            ),
+            "a rejected self-offer must not create a self-Contains link"
+        );
+    }
+
     #[test]
     fn late_release_effect_cannot_resurrect_a_consumed_item() {
         let mut world = World::new();
@@ -1023,7 +1468,7 @@ mod released_item_world_refs_tests {
 
 #[cfg(test)]
 mod cell_deposit_tests {
-    use dark::properties::{PropInventoryDimensions, PropStackCount, PropTemplateId};
+    use dark::properties::{PropCombineType, PropInventoryDimensions, PropStackCount};
 
     use super::*;
 
@@ -1065,14 +1510,14 @@ mod cell_deposit_tests {
             .expect("item should be linked into the container")
     }
 
-    /// A container holding one stackable occupant at cell (0,0), plus a
-    /// dropped entity carrying `dropped_template_id` - the shared setup for
+    /// A container holding one `Prism` stack at cell (0,0), plus a dropped
+    /// entity labelled `dropped_combine_type` - the shared setup for
     /// `matching_stack_at_cell`'s matching/non-matching cases.
-    fn stack_world(dropped_template_id: i32) -> (World, EntityId, EntityId, EntityId) {
+    fn stack_world(dropped_combine_type: &str) -> (World, EntityId, EntityId, EntityId) {
         let mut world = World::new();
         let occupant = world.add_entity((
             PropHasRefs(false),
-            PropTemplateId { template_id: 42 },
+            PropCombineType("Prism".to_owned()),
             PropStackCount(3),
         ));
         let container = world.add_entity(Links {
@@ -1084,9 +1529,7 @@ mod cell_deposit_tests {
         });
         let dropped = world.add_entity((
             PropHasRefs(false),
-            PropTemplateId {
-                template_id: dropped_template_id,
-            },
+            PropCombineType(dropped_combine_type.to_owned()),
             PropStackCount(2),
         ));
         (world, container, occupant, dropped)
@@ -1138,12 +1581,68 @@ mod cell_deposit_tests {
         );
     }
 
-    /// A target cell holding a same-template stack is a merge candidate, not
-    /// a claim - `MissionCore::drop_entity_into_container_at_cell` sums the
-    /// counts and destroys the dropped entity instead of placing it.
+    #[test]
+    fn preview_distinguishes_fallback_merge_and_full_inventory() {
+        let (mut world, container) = container_with_item_at(Some((2, 2)));
+        let item = world.add_entity((
+            PropHasRefs(false),
+            PropInventoryDimensions {
+                width: 1,
+                height: 3,
+            },
+        ));
+        let preview = container_deposit_preview(&world, container, item, (2, 2));
+        assert_eq!(preview.3, PlacementStatus::AutoPlace);
+        assert!(move_live_entity_into_container_at_cell(
+            &mut world,
+            container,
+            item,
+            (2, 2)
+        ));
+        assert_eq!(
+            contains_slot(&world, container, item),
+            (preview.1.1 * 4 + preview.1.0) as u32
+        );
+
+        let (world, container, _, item) = stack_world("Prism");
+        assert_eq!(
+            container_deposit_preview(&world, container, item, (0, 0)).3,
+            PlacementStatus::Merge
+        );
+
+        let (mut world, container) = container_with_item_at(None);
+        let occupying = world.add_entity((
+            PropHasRefs(false),
+            PropInventoryDimensions {
+                width: 4,
+                height: 4,
+            },
+        ));
+        assert!(move_live_entity_into_container_at_cell(
+            &mut world,
+            container,
+            occupying,
+            (0, 0)
+        ));
+        let item = world.add_entity(PropHasRefs(false));
+        assert_eq!(
+            container_deposit_preview(&world, container, item, (2, 2)).3,
+            PlacementStatus::NoRoom
+        );
+        assert!(!move_live_entity_into_container_at_cell(
+            &mut world,
+            container,
+            item,
+            (2, 2)
+        ));
+    }
+
+    /// A target cell holding a stack with the same combine label is a merge
+    /// candidate, not a claim - `MissionCore::drop_entity_into_container_at_cell`
+    /// sums the counts and destroys the dropped entity instead of placing it.
     #[test]
     fn a_matching_stack_at_the_cell_is_detected_as_a_merge_target() {
-        let (world, container, occupant, dropped) = stack_world(42);
+        let (world, container, occupant, dropped) = stack_world("Prism");
 
         assert_eq!(
             matching_stack_at_cell(&world, container, dropped, (0, 0)),
@@ -1151,12 +1650,13 @@ mod cell_deposit_tests {
         );
     }
 
-    /// A same-cell item with a different template is an ordinary occupant,
-    /// not a merge target - the deposit must fall back to first-free instead
-    /// of silently folding unrelated items together.
+    /// A same-cell item with a different combine label is an ordinary
+    /// occupant, not a merge target - the deposit must fall back to first-free
+    /// instead of silently folding unrelated items together. Med Patch and
+    /// Medical Kit are the shipped example: one parent archetype, two labels.
     #[test]
-    fn a_different_template_at_the_cell_is_not_a_merge_target() {
-        let (world, container, _occupant, dropped) = stack_world(43);
+    fn a_different_combine_type_at_the_cell_is_not_a_merge_target() {
+        let (world, container, _occupant, dropped) = stack_world("MedicalKit");
 
         assert_eq!(
             matching_stack_at_cell(&world, container, dropped, (0, 0)),
@@ -1164,10 +1664,9 @@ mod cell_deposit_tests {
         );
     }
 
-    /// A multi-cell item's target still respects capacity: a target cell that
-    /// cannot fit the item's authored footprint is not claimed, even empty.
+    /// A tall item stays in the pointed column when its origin must slide up.
     #[test]
-    fn a_target_cell_too_small_for_the_items_footprint_falls_back() {
+    fn a_tall_item_slides_up_to_fit_the_pointed_column() {
         let (mut world, container) = container_with_item_at(None);
         let item = world.add_entity((
             PropHasRefs(false),
@@ -1177,20 +1676,191 @@ mod cell_deposit_tests {
             },
         ));
 
-        // (0, 3) is the last row of a 4-tall grid - a 1x3 item cannot fit
-        // starting there.
+        // The last row cannot be the origin of a 1x3 item; use row 1.
         assert!(move_live_entity_into_container_at_cell(
             &mut world,
             container,
             item,
-            (0, 3),
+            (2, 3),
         ));
 
         assert_eq!(
             contains_slot(&world, container, item),
-            0,
-            "falls back to the first free cell, (0,0)"
+            6,
+            "slides up to (2,1), keeping the pointed column"
         );
+    }
+}
+
+#[cfg(test)]
+mod capacity_enforcement_tests {
+    use dark::properties::{PropCombineType, PropStackCount};
+
+    use super::*;
+
+    /// A container whose entire `CONTAINER_GRID` is occupied by distinct
+    /// (non-stackable) items - no free cell anywhere, and nothing a deposit
+    /// could merge into.
+    fn full_container() -> (World, EntityId) {
+        let mut world = World::new();
+        let (width, height) = crate::inventory::CONTAINER_GRID;
+        let to_links = (0..width * height)
+            .map(|slot| {
+                let occupant = world.add_entity((PropHasRefs(false),));
+                ToLink {
+                    link: Link::Contains(slot as u32),
+                    to_entity_id: Some(WrappedEntityId(occupant)),
+                    to_template_id: 0,
+                }
+            })
+            .collect();
+        let container = world.add_entity(Links { to_links });
+        (world, container)
+    }
+
+    /// The reported bug: a full backpack must refuse a first-free deposit
+    /// (retail's "no room in inventory") instead of silently absorbing it
+    /// with no cell to remember. Fails on main, where the fallback forces
+    /// slot 0 regardless of capacity.
+    #[test]
+    fn a_full_container_refuses_a_first_free_deposit() {
+        let (mut world, container) = full_container();
+        let item = world.add_entity(PropHasRefs(false));
+
+        assert!(
+            !move_live_entity_into_container(&mut world, container, item),
+            "a full container must refuse the deposit"
+        );
+        assert!(
+            world
+                .borrow::<View<Links>>()
+                .unwrap()
+                .get(container)
+                .unwrap()
+                .to_links
+                .iter()
+                .all(|link| link.to_entity_id.map(|w| w.0) != Some(item)),
+            "the refused item must not be linked into the container"
+        );
+    }
+
+    /// A full container still has nowhere for a stackable deposit to merge
+    /// into if nothing already inside shares its combine label - the "OR can
+    /// merge" half of the capacity check isn't a blanket pass.
+    #[test]
+    fn find_mergeable_stack_anywhere_is_none_without_a_matching_stack() {
+        let (mut world, container) = full_container();
+        let dropped = world.add_entity((
+            PropHasRefs(false),
+            PropCombineType("Prism".to_owned()),
+            PropStackCount(1),
+        ));
+
+        assert_eq!(
+            find_mergeable_stack_anywhere(&world, container, dropped),
+            None
+        );
+    }
+
+    /// A full container that DOES hold a matching stack (same combine label,
+    /// both stackable) offers it as a merge target anywhere in the grid, not
+    /// just at one specific cell - `matching_stack_at_cell`'s general-purpose
+    /// sibling, used by the ordinary (non-cell-targeted) deposit path.
+    ///
+    /// The two entities deliberately carry DIFFERENT templates: Small and
+    /// Large Prism are separate archetypes sharing the `Prism` label, and the
+    /// original pools them, so the label alone must carry the match.
+    #[test]
+    fn find_mergeable_stack_anywhere_finds_a_matching_stack() {
+        let (mut world, container) = full_container();
+        // Retarget one of the sixteen filler occupants to share the dropped
+        // item's combine label and carry a stack count, so it becomes the
+        // merge candidate.
+        let occupant = world
+            .borrow::<View<Links>>()
+            .unwrap()
+            .get(container)
+            .unwrap()
+            .to_links[3]
+            .to_entity_id
+            .unwrap()
+            .0;
+        world.add_component(occupant, PropCombineType("Prism".to_owned()));
+        world.add_component(occupant, PropStackCount(3));
+        let dropped = world.add_entity((
+            PropHasRefs(false),
+            PropCombineType("Prism".to_owned()),
+            PropStackCount(2),
+        ));
+
+        assert_eq!(
+            find_mergeable_stack_anywhere(&world, container, dropped),
+            Some(occupant)
+        );
+        assert_eq!(
+            matching_stack_at_cell(&world, container, dropped, (3, 0)),
+            Some(occupant)
+        );
+    }
+
+    /// A combine label with no stack count to pool into is not a merge
+    /// target: `AccessCard` is the shipped case, and its region-mask union is
+    /// not this path's business.
+    #[test]
+    fn a_labelled_item_without_a_stack_count_does_not_merge() {
+        let (mut world, container) = full_container();
+        let occupant = world
+            .borrow::<View<Links>>()
+            .unwrap()
+            .get(container)
+            .unwrap()
+            .to_links[0]
+            .to_entity_id
+            .unwrap()
+            .0;
+        world.add_component(occupant, PropCombineType("AccessCard".to_owned()));
+        let dropped =
+            world.add_entity((PropHasRefs(false), PropCombineType("AccessCard".to_owned())));
+
+        assert_eq!(
+            find_mergeable_stack_anywhere(&world, container, dropped),
+            None
+        );
+    }
+
+    /// The composed capacity check a release is gated on: a full container
+    /// with no mergeable stack cannot accept the deposit.
+    #[test]
+    fn container_can_accept_item_is_false_when_full_and_unmergeable() {
+        let (mut world, container) = full_container();
+        let dropped = world.add_entity((PropHasRefs(false),));
+
+        assert!(!container_can_accept_item(&world, container, dropped));
+    }
+
+    /// ...but a full container that holds a matching stack still accepts it,
+    /// via the merge fallback rather than a free cell.
+    #[test]
+    fn container_can_accept_item_is_true_when_full_but_mergeable() {
+        let (mut world, container) = full_container();
+        let occupant = world
+            .borrow::<View<Links>>()
+            .unwrap()
+            .get(container)
+            .unwrap()
+            .to_links[0]
+            .to_entity_id
+            .unwrap()
+            .0;
+        world.add_component(occupant, PropCombineType("MedPatch".to_owned()));
+        world.add_component(occupant, PropStackCount(1));
+        let dropped = world.add_entity((
+            PropHasRefs(false),
+            PropCombineType("MedPatch".to_owned()),
+            PropStackCount(1),
+        ));
+
+        assert!(container_can_accept_item(&world, container, dropped));
     }
 }
 
@@ -1211,6 +1881,13 @@ fn apply_comestible_use(
         return ComestibleUseOutcome::NotUsed;
     }
 
+    let stack_count = world
+        .borrow::<View<dark::properties::PropStackCount>>()
+        .ok()
+        .and_then(|counts| counts.get(entity_id).ok().map(|count| count.0));
+    if stack_count.is_some_and(|count| count <= 0) {
+        return ComestibleUseOutcome::NotUsed;
+    }
     let player = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
     let maximum = world
         .borrow::<View<dark::properties::PropMaxHitPoints>>()
@@ -1231,60 +1908,14 @@ fn apply_comestible_use(
         .hit_points
         .saturating_add(hit_points)
         .clamp(0, maximum.max(0));
-    ComestibleUseOutcome::Consumed
-}
-
-/// Raise only the live maximum HP pool. Buying Endurance is not healing: the
-/// original stat promises more maximum hit points, while Tank's separate O/S
-/// effect deliberately raises both current and maximum HP.
-fn increase_player_max_hit_points(world: &World, player: EntityId, amount: u32) -> bool {
-    let mut maximums = world
-        .borrow::<ViewMut<dark::properties::PropMaxHitPoints>>()
-        .unwrap();
-    if let Ok(maximum) = (&mut maximums).get(player) {
-        maximum.hit_points = maximum.hit_points.saturating_add(amount);
-        true
+    if stack_count.is_some_and(|count| count > 1) {
+        let mut counts = world
+            .borrow::<ViewMut<dark::properties::PropStackCount>>()
+            .unwrap();
+        (&mut counts).get(entity_id).unwrap().0 -= 1;
+        ComestibleUseOutcome::DecrementedStack
     } else {
-        false
-    }
-}
-
-#[cfg(test)]
-mod endurance_upgrade_tests {
-    use super::*;
-
-    #[test]
-    fn endurance_raises_maximum_hp_without_healing() {
-        let mut world = World::new();
-        let player = world.add_entity((
-            PropHitPoints { hit_points: 25 },
-            dark::properties::PropMaxHitPoints { hit_points: 30 },
-        ));
-
-        assert!(increase_player_max_hit_points(
-            &world,
-            player,
-            crate::scripts::gui::ENDURANCE_HP_PER_LEVEL,
-        ));
-        assert_eq!(
-            world
-                .borrow::<View<dark::properties::PropMaxHitPoints>>()
-                .unwrap()
-                .get(player)
-                .unwrap()
-                .hit_points,
-            35
-        );
-        assert_eq!(
-            world
-                .borrow::<View<PropHitPoints>>()
-                .unwrap()
-                .get(player)
-                .unwrap()
-                .hit_points,
-            25,
-            "an Endurance upgrade must not double as a heal"
-        );
+        ComestibleUseOutcome::Consumed
     }
 }
 
@@ -1301,6 +1932,307 @@ const MELEE_SWING_CLIP: &str = "leftswing";
 /// Tuned so a barrel blast (intensity 15) gives nearby props a solid toss.
 const BLAST_PUSH_SPEED_PER_INTENSITY: f32 = 0.5;
 
+const BLAST_OCCLUSION_GROUPS: physics::InternalCollisionGroups =
+    physics::InternalCollisionGroups::WORLD
+        .union(physics::InternalCollisionGroups::ENTITIES)
+        .union(physics::InternalCollisionGroups::SELECTABLE);
+
+/// Fraction of a victim's representative bounds points that can see the blast.
+///
+/// Rays use living-actor membership so interaction-only/model-bounds fixtures
+/// do not become blast-proof cover. The source and victim are filtered by ECS
+/// identity: an explosion can leave its own collider around for the fireball,
+/// while the target collider should terminate neither a center nor corner ray.
+fn blast_exposure(
+    physics: &PhysicsWorld,
+    source_entity: Option<EntityId>,
+    victim_entity: EntityId,
+    center: Vector3<f32>,
+    victim_position: Vector3<f32>,
+) -> f32 {
+    let mut sample_points = Vec::with_capacity(9);
+    if let Some(bounds) = physics.get_aabb2(victim_entity) {
+        let bounds_center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
+        // Stay just inside the bounds so grazing a wall at exactly the same
+        // plane as a sample is stable across Rapier contact tolerances.
+        let half_extent = (bounds.max - bounds.min) * 0.45;
+        sample_points.push(bounds_center);
+        for x in [-1.0, 1.0] {
+            for y in [-1.0, 1.0] {
+                for z in [-1.0, 1.0] {
+                    sample_points.push(
+                        bounds_center
+                            + vec3(half_extent.x * x, half_extent.y * y, half_extent.z * z),
+                    );
+                }
+            }
+        }
+    } else {
+        sample_points.push(victim_position);
+    }
+
+    occlusion_exposure(
+        physics,
+        source_entity,
+        victim_entity,
+        center,
+        &sample_points,
+    )
+}
+
+/// Shared actor-solid cover rays for blast and sound. Sources and recipients
+/// cannot occlude their own event; interaction-only bounds and sensors pass.
+fn occlusion_exposure(
+    physics: &PhysicsWorld,
+    source_entity: Option<EntityId>,
+    victim_entity: EntityId,
+    center: Vector3<f32>,
+    sample_points: &[Vector3<f32>],
+) -> f32 {
+    let start = Point3::from_vec(center);
+    let ray_can_hit_entity =
+        |entity_id| Some(entity_id) != source_entity && entity_id != victim_entity;
+    let visible_samples = sample_points
+        .iter()
+        .filter(|sample| {
+            let end = Point3::from_vec(**sample);
+            let ray = end - start;
+            let distance_squared = ray.magnitude2();
+            distance_squared <= 1.0e-12
+                || physics
+                    .ray_cast2_as_actor_with_entity_filter(
+                        start,
+                        ray / distance_squared.sqrt(),
+                        distance_squared.sqrt(),
+                        BLAST_OCCLUSION_GROUPS,
+                        source_entity,
+                        true,
+                        &ray_can_hit_entity,
+                    )
+                    .is_none()
+        })
+        .count();
+
+    visible_samples as f32 / sample_points.len() as f32
+}
+
+/// Acuity has already scaled `range`. Use only three acoustic cover rays,
+/// and retain quarter range through full cover so walls muffle rather than
+/// behave as an absolute sound barrier.
+fn noise_reaches_listener(
+    physics: &PhysicsWorld,
+    source: EntityId,
+    listener: EntityId,
+    origin: Vector3<f32>,
+    position: Vector3<f32>,
+    range: f32,
+) -> bool {
+    let distance = (position - origin).magnitude();
+    if distance >= range || range <= 0.0 {
+        return false;
+    }
+    // Sample center and both upper sides: low/narrow cover
+    // muffles sound without turning a railing into a sealed wall.
+    let (center, half) = physics
+        .get_aabb2(listener)
+        .map(|b| {
+            (
+                (b.min.to_vec() + b.max.to_vec()) * 0.5,
+                (b.max - b.min) * 0.4,
+            )
+        })
+        .unwrap_or((position, vec3(0.2, 0.4, 0.2)));
+    let side = vec3(center.z - origin.z, 0.0, origin.x - center.x);
+    let side = if side.magnitude2() > 1e-6 {
+        side.normalize() * half.x.max(half.z)
+    } else {
+        vec3(half.x, 0.0, 0.0)
+    };
+    let upper = center + vec3(0.0, half.y, 0.0);
+    let exposure = occlusion_exposure(
+        physics,
+        Some(source),
+        listener,
+        origin,
+        &[center, upper + side, upper - side],
+    );
+    distance < range * (0.25 + 0.75 * exposure)
+}
+
+#[cfg(test)]
+mod blast_occlusion_tests {
+    use super::*;
+
+    fn identity_rotation() -> Quaternion<f32> {
+        Quaternion::from_sv(1.0, vec3(0.0, 0.0, 0.0))
+    }
+
+    fn with_cover<T>(
+        cover_size: Option<Vector3<f32>>,
+        cover_blocks_actors: bool,
+        inspect: impl FnOnce(&PhysicsWorld, EntityId, EntityId) -> T,
+    ) -> T {
+        let mut world = World::new();
+        let source = world.add_entity(());
+        let victim = world.add_entity(());
+        let cover = world.add_entity(());
+        let player = world.add_entity(());
+
+        let mut physics = PhysicsWorld::new();
+        physics.add_kinematic(
+            victim,
+            vec3(0.0, 0.0, 4.0),
+            identity_rotation(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(2.0, 2.0, 2.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        if let Some(size) = cover_size {
+            let group = if cover_blocks_actors {
+                CollisionGroup::entity()
+            } else {
+                CollisionGroup::entity().non_solid_to_characters()
+            };
+            physics.add_kinematic(
+                cover,
+                vec3(0.0, 0.0, 2.0),
+                identity_rotation(),
+                vec3(0.0, 0.0, 0.0),
+                size,
+                group,
+                false,
+            );
+        }
+        // A source-owned collider at the ray origin must not consume every
+        // sample before it leaves the explosion effect.
+        physics.add_kinematic(
+            source,
+            vec3(0.0, 0.0, 0.0),
+            identity_rotation(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.5, 0.5, 0.5),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player_handle = physics.create_player(vec3(50.0, 50.0, 50.0), player);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        inspect(&physics, source, victim)
+    }
+
+    fn exposure_with_cover(cover_size: Option<Vector3<f32>>, cover_blocks_actors: bool) -> f32 {
+        with_cover(
+            cover_size,
+            cover_blocks_actors,
+            |physics, source, victim| {
+                blast_exposure(
+                    physics,
+                    Some(source),
+                    victim,
+                    vec3(0.0, 0.0, 0.0),
+                    vec3(0.0, 0.0, 4.0),
+                )
+            },
+        )
+    }
+
+    #[test]
+    fn hearing_acuity_and_cover_control_delivery() {
+        for cover in [
+            None,
+            Some(vec3(10.0, 10.0, 0.25)),
+            Some(vec3(0.5, 10.0, 0.25)),
+        ] {
+            with_cover(cover, true, |physics, source, victim| {
+                let outcomes: Vec<bool> = (0..=5)
+                    .map(|rating| {
+                        let range =
+                            8.0 * dark::properties::PropAIHearing { rating }.range_multiplier();
+                        noise_reaches_listener(
+                            physics,
+                            source,
+                            victim,
+                            Vector3::zero(),
+                            vec3(0.0, 0.0, 4.0),
+                            range,
+                        )
+                    })
+                    .collect();
+                let expected = match cover {
+                    None => vec![false, false, true, true, true, true],
+                    Some(size) if size.x > 1.0 => vec![false, false, false, false, false, true],
+                    _ => vec![false, false, false, true, true, true],
+                };
+                assert_eq!(outcomes, expected, "cover={cover:?}");
+            });
+        }
+        with_cover(
+            Some(vec3(10.0, 10.0, 0.25)),
+            false,
+            |physics, source, victim| {
+                assert!(noise_reaches_listener(
+                    physics,
+                    source,
+                    victim,
+                    Vector3::zero(),
+                    vec3(0.0, 0.0, 4.0),
+                    8.0
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn agility_and_crouching_change_which_footsteps_reach_a_listener() {
+        use crate::mission::player_footsteps::{PlayerFootstep, footstep_noise_radius};
+        with_cover(None, true, |physics, source, victim| {
+            for (agility, crouched, footstep, expected) in [
+                (1, false, PlayerFootstep::Step, true),
+                (6, false, PlayerFootstep::Step, false),
+                (1, true, PlayerFootstep::Step, false),
+                (6, false, PlayerFootstep::Landing, true),
+            ] {
+                assert_eq!(
+                    noise_reaches_listener(
+                        physics,
+                        source,
+                        victim,
+                        Vector3::zero(),
+                        vec3(0.0, 0.0, 4.0),
+                        footstep_noise_radius(footstep, agility, crouched)
+                    ),
+                    expected
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn uncovered_victim_feels_the_full_blast() {
+        assert_eq!(exposure_with_cover(None, true), 1.0);
+    }
+
+    #[test]
+    fn wall_fully_shields_a_victim_from_the_blast() {
+        assert_eq!(exposure_with_cover(Some(vec3(10.0, 10.0, 0.25)), true), 0.0);
+    }
+
+    #[test]
+    fn narrow_cover_reduces_instead_of_nullifying_the_blast() {
+        let exposure = exposure_with_cover(Some(vec3(0.5, 10.0, 0.25)), true);
+        assert_eq!(exposure, 8.0 / 9.0);
+    }
+
+    #[test]
+    fn interaction_only_geometry_does_not_shield_the_victim() {
+        assert_eq!(
+            exposure_with_cover(Some(vec3(10.0, 10.0, 0.25)), false),
+            1.0
+        );
+    }
+}
+
 /// Debug options accessible from scripts via UniqueView
 #[derive(Unique, Clone, Default)]
 pub struct DebugOptions {
@@ -1311,6 +2243,23 @@ pub struct DebugOptions {
 /// e.g. the held-entity viewmodel swap is flat-only.
 #[derive(Unique, Clone, Copy)]
 pub struct GlobalPresentationMode(pub crate::PresentationMode);
+
+/// Whether this session presents in VR, for the code that has a `World` but no
+/// `GameOptions` in hand (scripts, GUIs, collision-group resolution). A world
+/// without the unique - a bare test world - reads as flat.
+pub fn presentation_is_vr(world: &World) -> bool {
+    world
+        .borrow::<UniqueView<GlobalPresentationMode>>()
+        .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr)
+}
+
+/// Whether `--experimental physical_held_items` is on: a VR-held gun keeps a
+/// swept body, like a held melee weapon, so it stops at the level's geometry
+/// instead of passing through it. Accessible from the paths that establish
+/// held-item physics without `GameOptions` in hand (the restore path, the
+/// virtual-hand effects).
+#[derive(Unique, Clone, Copy)]
+pub struct GlobalPhysicalHeldItems(pub bool);
 
 /// Pathfinding service accessible from scripts (steering strategies) via
 /// UniqueView. None when the mission has no AIPATH data (e.g. debug scenes).
@@ -1342,6 +2291,7 @@ pub struct DebugLine {
 pub struct EntityMetadata {
     pub template_id: i32,
     pub obj_icon: Option<String>,
+    /// Localized catalog label, with the purchase template's stack quantity.
     pub obj_short_name: Option<String>,
     #[allow(dead_code)]
     pub obj_name: Option<String>,
@@ -1364,6 +2314,19 @@ pub struct GlobalTemplateClassTags(pub HashMap<i32, HashMap<String, String>>);
 #[derive(Unique, Clone)]
 pub struct GlobalTemplateObjIcons(pub HashMap<i32, String>);
 
+/// The `SHEAD1`/`SHEAD2` string tables - the short header for a gun's first /
+/// second fire setting ("NORM" / "BURST"). Loaded once here because the
+/// readouts that want them (the player state snapshot) have no asset cache.
+#[derive(Unique, Clone, Default)]
+pub struct GlobalGunSettingHeaders(pub [HashMap<String, String>; 2]);
+
+/// The `SETT1`/`SETT2` string tables - the description of a gun's first /
+/// second fire setting ("This is the normal single-shot firing mode."), shown
+/// on the weapon settings MFD. Loaded here beside the headers for the same
+/// reason: the panel has no asset cache at draw time.
+#[derive(Unique, Clone, Default)]
+pub struct GlobalGunSettingTexts(pub [HashMap<String, String>; 2]);
+
 /// The synthetic player-owned entity hosting the automap panel (`MapGui`).
 /// Created at mission init; `Effect::ToggleMap` opens/closes its panel in the
 /// flat host. See `projects/flat-ui-panels.md` §5.
@@ -1375,6 +2338,28 @@ pub struct MapPanelEntity(pub EntityId);
 /// so a persisted `(deck, log)` can be localized and replayed anywhere.
 #[derive(Unique, Clone, Copy)]
 pub struct MediaPanelEntity(pub EntityId);
+
+/// Nonserialized player-owned host for the weapon settings MFD. The panel
+/// presents the *wielded* gun rather than a world object, so one host serves
+/// every weapon and `Effect::OpenWeaponSettings` binds it to the panel slot.
+#[derive(Unique, Clone, Copy)]
+pub struct WeaponSettingsPanelEntity(pub EntityId);
+
+/// Which shortcut opened the current use-mode session, when one did.
+/// See [`MissionCore::use_mode_shortcut`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UseModeShortcut {
+    /// The VR audio-log reader (`Effect::ReadLastUnreadLog`).
+    LogReader,
+    /// The psi-amp hand's lower face button (`Effect::OpenPsiPowers`).
+    PsiPowers,
+}
+
+/// Nonserialized player-owned host for the psi power selection MFD. Like the
+/// weapon settings host it presents player state (the psi registry and the
+/// selection) rather than a world object, so one host serves every amp.
+#[derive(Unique, Clone, Copy)]
+pub struct PsiPowersPanelEntity(pub EntityId);
 
 /// The automap location (`PropMapLoc`) of the mapped room the player most
 /// recently entered - the player's *current* map location. The automap uses it
@@ -1430,6 +2415,259 @@ impl GlobalTemplateHierarchy {
     }
 }
 
+fn template_lineage_excluding(
+    hierarchy: &HashMap<i32, Vec<i32>>,
+    template_id: i32,
+    excluded: &HashSet<i32>,
+) -> Vec<i32> {
+    fn visit(
+        hierarchy: &HashMap<i32, Vec<i32>>,
+        parents: Option<&Vec<i32>>,
+        excluded: &HashSet<i32>,
+        visited: &mut HashSet<i32>,
+        out: &mut Vec<i32>,
+    ) {
+        let Some(parents) = parents else { return };
+        for parent in parents {
+            if !excluded.contains(parent) && visited.insert(*parent) {
+                out.push(*parent);
+            }
+        }
+        for parent in parents {
+            if !excluded.contains(parent) {
+                visit(hierarchy, hierarchy.get(parent), excluded, visited, out);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    visit(
+        hierarchy,
+        hierarchy.get(&template_id),
+        excluded,
+        &mut HashSet::new(),
+        &mut out,
+    );
+    out.dedup();
+    out.reverse();
+    out
+}
+
+/// Apply one runtime metaproperty relation change without rebuilding unrelated
+/// live state. Only component types contributed by the changed branch are
+/// removed and then recomposed from the remaining authored/dynamic ancestry.
+fn apply_meta_property_relation(
+    world: &mut World,
+    entity_info: &SystemShock2EntityInfo,
+    hierarchy: &HashMap<i32, Vec<i32>>,
+    entity_id: EntityId,
+    meta_template_id: i32,
+    add: bool,
+) -> bool {
+    let entity_template_id = world
+        .borrow::<View<PropTemplateId>>()
+        .ok()
+        .and_then(|templates| templates.get(entity_id).ok().map(|id| id.template_id));
+    let Some(entity_template_id) = entity_template_id else {
+        return false;
+    };
+
+    let mut state = world
+        .borrow::<View<RuntimePropMetaProperties>>()
+        .ok()
+        .and_then(|states| states.get(entity_id).ok().cloned())
+        .unwrap_or_default();
+    let statically_inherited = dark::ss2_entity_info::get_ancestors(hierarchy, &entity_template_id)
+        .contains(&meta_template_id);
+    let present = state.added.contains(&meta_template_id)
+        || (statically_inherited && !state.removed.contains(&meta_template_id));
+    // Adding an existing relation (or removing an absent one) is a no-op.
+    // Recomposition here would overwrite subsequent live property changes.
+    if add == present {
+        return true;
+    }
+    if add {
+        state.removed.retain(|id| *id != meta_template_id);
+        if !statically_inherited && !state.added.contains(&meta_template_id) {
+            state.added.push(meta_template_id);
+        }
+    } else {
+        state.added.retain(|id| *id != meta_template_id);
+        if !state.removed.contains(&meta_template_id) {
+            state.removed.push(meta_template_id);
+        }
+    }
+
+    let no_exclusions = HashSet::new();
+    let mut affected_templates =
+        template_lineage_excluding(hierarchy, meta_template_id, &no_exclusions);
+    affected_templates.push(meta_template_id);
+    let affected_properties = affected_templates
+        .iter()
+        .filter_map(|template| entity_info.entity_to_properties.get(template))
+        .flat_map(|properties| properties.iter().cloned())
+        .collect::<Vec<_>>();
+    let affected_types = affected_properties
+        .iter()
+        .map(|property| property.component_type_id())
+        .collect::<HashSet<_>>();
+
+    // Delete each affected component type once. The representative property
+    // knows its concrete Shipyard component despite this layer being erased.
+    let mut removed_types = HashSet::new();
+    for property in &affected_properties {
+        if removed_types.insert(property.component_type_id()) {
+            property.remove(world, entity_id);
+        }
+    }
+
+    let excluded = state.removed.iter().copied().collect::<HashSet<_>>();
+    let mut effective_templates =
+        template_lineage_excluding(hierarchy, entity_template_id, &excluded);
+    effective_templates.push(entity_template_id);
+    for added in &state.added {
+        for template in template_lineage_excluding(hierarchy, *added, &excluded) {
+            if !effective_templates.contains(&template) {
+                effective_templates.push(template);
+            }
+        }
+        if !effective_templates.contains(added) {
+            effective_templates.push(*added);
+        }
+    }
+
+    for template in effective_templates {
+        if let Some(properties) = entity_info.entity_to_properties.get(&template) {
+            for property in properties {
+                if affected_types.contains(&property.component_type_id()) {
+                    property.initialize(world, entity_id);
+                }
+            }
+        }
+    }
+    world.add_component(entity_id, state);
+    true
+}
+
+#[cfg(test)]
+mod meta_property_tests {
+    use super::*;
+    use dark::properties::{AIAlertLevel, PropAIAlertCap, Property};
+    use std::sync::Arc;
+
+    fn boxed_property<T: Property + 'static>(property: T) -> Arc<Box<dyn Property>> {
+        Arc::new(Box::new(property))
+    }
+
+    #[test]
+    fn removing_and_adding_meta_recomposes_only_its_component_types() {
+        const BASE: i32 = -10;
+        const DOCILE: i32 = -20;
+        const ENTITY_TEMPLATE: i32 = 30;
+        let ordinary_cap = PropAIAlertCap {
+            max_level: AIAlertLevel::High,
+            min_level: AIAlertLevel::Lowest,
+            min_relax: AIAlertLevel::Low,
+        };
+        let docile_cap = PropAIAlertCap {
+            max_level: AIAlertLevel::Lowest,
+            min_level: AIAlertLevel::Lowest,
+            min_relax: AIAlertLevel::Lowest,
+        };
+        // Dark stores direct parents derived-first; traversal reverses them to
+        // initialize base first and let Docile override its alert cap.
+        let hierarchy = HashMap::from([(ENTITY_TEMPLATE, vec![DOCILE, BASE])]);
+        let mut entity_info = SystemShock2EntityInfo::empty();
+        entity_info
+            .entity_to_properties
+            .insert(BASE, vec![boxed_property(ordinary_cap.clone())]);
+        entity_info
+            .entity_to_properties
+            .insert(DOCILE, vec![boxed_property(docile_cap.clone())]);
+
+        let mut world = World::new();
+        let entity = world.add_entity((
+            PropTemplateId {
+                template_id: ENTITY_TEMPLATE,
+            },
+            docile_cap,
+            PropHitPoints { hit_points: 73 },
+        ));
+
+        assert!(apply_meta_property_relation(
+            &mut world,
+            &entity_info,
+            &hierarchy,
+            entity,
+            DOCILE,
+            false,
+        ));
+        assert_eq!(
+            world
+                .borrow::<View<PropAIAlertCap>>()
+                .unwrap()
+                .get(entity)
+                .unwrap()
+                .max_level,
+            AIAlertLevel::High
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropHitPoints>>()
+                .unwrap()
+                .get(entity)
+                .unwrap()
+                .hit_points,
+            73,
+            "unrelated live state must not be rebuilt"
+        );
+
+        assert!(apply_meta_property_relation(
+            &mut world,
+            &entity_info,
+            &hierarchy,
+            entity,
+            DOCILE,
+            true,
+        ));
+        assert_eq!(
+            world
+                .borrow::<View<PropAIAlertCap>>()
+                .unwrap()
+                .get(entity)
+                .unwrap()
+                .max_level,
+            AIAlertLevel::Lowest
+        );
+        {
+            let states = world.borrow::<View<RuntimePropMetaProperties>>().unwrap();
+            let state = states.get(entity).unwrap();
+            assert!(state.added.is_empty());
+            assert!(state.removed.is_empty());
+        }
+        // Repeating Add must not undo an explicit live override made since
+        // the first Add (the relation itself has not changed).
+        world.add_component(entity, ordinary_cap);
+        assert!(apply_meta_property_relation(
+            &mut world,
+            &entity_info,
+            &hierarchy,
+            entity,
+            DOCILE,
+            true
+        ));
+        assert_eq!(
+            world
+                .borrow::<View<PropAIAlertCap>>()
+                .unwrap()
+                .get(entity)
+                .unwrap()
+                .max_level,
+            AIAlertLevel::High
+        );
+    }
+}
+
 impl EffectQueue {
     pub fn push(&mut self, effect: Effect) {
         self.effects.push(effect);
@@ -1463,16 +2701,26 @@ pub const PLAYER_MOVE_SPEED: f32 = 25.0;
 
 pub struct MissionCore {
     pub level_name: String,
+    /// What reflective materials see; `None` without a 25AE capture.
+    environment: Option<Rc<engine::texture::CubeTexture>>,
     pub gui: GuiManager,
     pub hit_boxes: HitBoxManager,
     pub rag_doll_manager: RagDollManager,
     pub debug_lines: Vec<DebugLine>,
+    psi_drain_trails: Vec<crate::psi_visuals::DrainTrail>,
+    psi_pull: Option<crate::psi_pull::Flight>,
+    healing_pulses: HashMap<EntityId, f32>,
     pub entity_info: Arc<SystemShock2EntityInfo>,
     pub physics: PhysicsWorld,
     pub script_world: ScriptWorld,
     pub scene_objects: Vec<SceneObject>,
     pub animated_lightmaps: Option<dark::mission::AnimatedLightmapController>,
     pub id_to_animation_player: HashMap<EntityId, AnimationPlayer>,
+    /// The turn clip in flight per entity (see `Effect::PlayTurnClip`). This
+    /// is what identifies a pivot's playback: the requester never has to guess
+    /// from elapsed time which completion is its own, nor how far the fade it
+    /// hands its yaw over across has got.
+    turn_clips: TurnClipTracker,
     /// Failed-animation suppression state per entity: the failing key, a
     /// countdown (frames), and whether a suppressed request is owed a
     /// completion when the window expires. A failed query reports
@@ -1489,7 +2737,9 @@ pub struct MissionCore {
     pub id_to_model: HashMap<EntityId, Model>,
     pub id_to_bitmap: HashMap<EntityId, Rc<BitmapAnimation>>,
     pub id_to_physics: HashMap<EntityId, RigidBodyHandle>,
-    pub id_to_particle_system: HashMap<EntityId, ParticleSystem>,
+    pub id_to_particle_system: HashMap<EntityId, crate::particle_effects::ParticleEffect>,
+    immolate_flames: Option<ParticleSystem>,
+    held_recovery_particles: Vec<ParticleSystem>,
     #[allow(dead_code)]
     pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub template_name_to_template_id: HashMap<String, EntityMetadata>,
@@ -1497,9 +2747,14 @@ pub struct MissionCore {
     /// `P$SymName`, indexed by lowercased name - the fallback an ecology spawn
     /// uses when the gamesys has no archetype under the authored name.
     mission_object_name_to_id: HashMap<String, i32>,
+    /// How many `Effect::RainItems` have landed, to phase each ring off the
+    /// last (see [`RAIN_PHASE_STEP`]). Cosmetic and cheat-only, so it is not
+    /// saved.
+    rains_landed: u32,
     pub obj_map: HashMap<i32, String>,
     pub world: World,
     pub player_handle: PlayerHandle,
+    backpack_width: usize,
     pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
     /// Host template -> the particle-group archetypes authored to ride it
     /// (reverse of the archetype `ParticleAttachement` links). Runtime entity
@@ -1509,12 +2764,15 @@ pub struct MissionCore {
     template_to_particle_attachees: HashMap<i32, Vec<i32>>,
     interaction: Box<dyn PlayerInteraction>,
     pub visibility_engine: Box<dyn VisibilityEngine>,
-    pub teleport_system: TeleportSystem,
     pub pending_entity_triggers: Vec<String>,
     pub path_database: Option<dark::mission::PathDatabase>,
     pub pathfinding_service: Option<Arc<PathfindingService>>,
     pub path_visualization: PathVisualizationSystem,
     pub pathfinding_test: crate::mission::pathfinding_test::PathfindingTest,
+    /// Station security alarm bookkeeping, persisted with this mission.
+    pub security_alarm: crate::security_alarm::SecurityAlarm,
+    klaxon: crate::security_alarm::Klaxon,
+    listener_sounds: crate::listener_sounds::ListenerSounds,
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
     /// the next animation deterministically (debug hitbox inspection).
     pub debug_pose_index: u32,
@@ -1533,21 +2791,57 @@ pub struct MissionCore {
     /// entity and its motion player (loops the player-melee idle; a swing is
     /// queued on attack and auto-returns to idle). `None` for guns / no weapon.
     flat_melee_anim: Option<(EntityId, AnimationPlayer)>,
+    thrown_items: crate::throwing::ThrownItems,
 
     /// "Use" (metagame) mode, toggled by `Effect::ToggleUseMode` (Tab on
-    /// flat; left-controller X in VR). One mode, two presentations: flat
+    /// flat; a free hand's lower face button in VR). One mode, two
+    /// presentations: flat
     /// shows the cursor + top-docked inventory strip on screen
     /// (`projects/flat-ui.md`); VR presents the same strip canvas on a
     /// head-anchored world panel - the "cyber interface" - with the world
     /// dimmed behind it and the wielded weapon safed. Unlike the pause menu,
     /// the world keeps simulating while it is up.
     pub use_mode: bool,
+    /// The gun an open weapon settings panel was opened for; the panel is
+    /// dismissed as soon as that gun stops being wielded.
+    weapon_settings_gun: Option<EntityId>,
 
-    /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the rim
-    /// vignette (both presentations), the VR comfort dim's strength, and the
-    /// flat FOV pull - see [`crate::ui::entry_ramp`]. Advanced every update
-    /// regardless of presentation or `use_mode` itself, so it keeps easing
-    /// out after the panel has already been put away.
+    /// Which shortcut - if any - brought up the current use-mode session,
+    /// rather than a deliberate `ToggleUseMode`. It makes a shortcut a true
+    /// inverse of itself: the press that dismisses its panel closes the whole
+    /// interface when that shortcut opened it, and only puts the panel away -
+    /// back to the inventory strip - when the player was already inside. One
+    /// field rather than one flag per shortcut, so a second shortcut taking the
+    /// slot cannot leave the first one's flag standing. Transient like
+    /// `use_mode` itself (not serialized: a load leaves the mode closed).
+    use_mode_shortcut: Option<UseModeShortcut>,
+
+    /// Whether the psi power selection MFD is the panel this mission docked.
+    /// Like `weapon_settings_gun` it means "our panel is docked", so it is also
+    /// dropped when the slot goes elsewhere - and it is what arms the stick
+    /// capture, so a stale flag would silently eat locomotion.
+    psi_powers_open: bool,
+
+    /// Transient amp-local preview and per-hand trigger release latches.
+    psi_carousel: Option<crate::psi_carousel::Carousel>,
+    psi_carousel_swallow: [bool; 2],
+
+    /// Whether the psi MFD's captured thumbstick is currently pushed past the
+    /// step threshold. Edge state for [`crate::scripts::gui::stick_nav`], so a
+    /// held stick steps once rather than every frame.
+    psi_nav_latched: bool,
+
+    /// A discrete [`Effect::Jump`] waiting for the next movement pass. One
+    /// frame of the held jump channel; see where it is consumed in `update`.
+    button_jump: bool,
+    /// The lower-button press behind `button_jump` is still held: the jump
+    /// channel stays down with it, so a held press keeps swimming up.
+    button_jump_held: bool,
+
+    /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the VR
+    /// comfort dim's strength - see [`crate::ui::entry_ramp`]. Advanced every
+    /// update regardless of presentation or `use_mode` itself, so it keeps
+    /// easing out after the panel has already been put away.
     use_mode_ramp: crate::ui::entry_ramp::EntryExitRamp,
 
     /// Where the VR cyber-interface panel hangs: placed once on entry from
@@ -1597,6 +2891,33 @@ pub struct MissionCore {
     /// never made. See [`latch_trigger_safe`].
     vr_trigger_safe_latch: [Option<bool>; 2],
 
+    /// Whether each hand (indexed by [`hand_slot`]) is currently inside the
+    /// other hand's weapon magazine zone. The physical reload fires on the
+    /// rising edge of this - see [`update_clip_insert_gesture`] - so a clip
+    /// resting against the gun inserts once rather than every frame.
+    ///
+    /// Not saved, like its neighbours above: a save taken with a clip already
+    /// touching the gun restores with the latch clear and inserts on the first
+    /// frame. That is the same insert the player was one frame away from
+    /// making, so it is left as the cheaper behaviour rather than persisted.
+    ///
+    /// [`update_clip_insert_gesture`]: MissionCore::update_clip_insert_gesture
+    vr_clip_insert_engaged: [bool; 2],
+    shoulder_backpack: super::shoulder_backpack::ShoulderBackpack,
+    holsters: super::holsters::Holsters,
+    ammo_pouch: super::ammo_pouch::AmmoPouch,
+    personal_card: super::personal_card::PersonalCard,
+    device_panel: Option<crate::ui::WorldPanel>,
+    stowed_device_ui: crate::mission::flat_ui_host::FlatUiHost,
+    device_scan_pose: Option<(Vector3<f32>, Quaternion<f32>)>,
+    device_pointer_gate: super::mfd_device::PointerGate,
+    device_map_wide: bool,
+    device_inspect_only: bool,
+    device_scanner: super::mfd_device::Scanner,
+    device_beam: Option<(Vector3<f32>, Vector3<f32>)>,
+    body_hand_contacts: [Option<Vector3<f32>>; 2],
+    download_release_disarmed: [bool; 2],
+
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
     /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
     /// `GuiManager` for the corresponding object-bound world panel.
@@ -1616,11 +2937,23 @@ pub struct MissionCore {
     /// no input context - so it is recorded here each update rather than
     /// threaded through the effect path.
     last_head_rotation: Quaternion<f32>,
+    /// The eye's offset within the pawn, as last reported by the input
+    /// context: eye height in flat, plus the roomscale offset in VR.
+    last_head_position: Vector3<f32>,
+
+    /// Where the `show_position` readout's VR panel hangs: placed on the first
+    /// visible frame, world-locked, lazily recentered - the same treatment
+    /// every other head-referenced panel gets, so the readout does not swim
+    /// with the head. Reset while the param is off, so turning it back on
+    /// re-places it where the player is now looking.
+    show_position_anchor: crate::ui::FrontendPanelAnchor,
 
     /// The fall to the floor that plays while the player is dying, or `None`
     /// while they are alive. Runtime-only, like [`PlayerLifeState`] itself: a
     /// dead game cannot be saved, so there is no death mid-fall to restore.
     death_camera: Option<DeathCamera>,
+    flat_lean: crate::flat_lean::FlatLean,
+    flat_eye: Option<death_camera::EyePose>,
 }
 
 pub struct GlobalContext {
@@ -1674,10 +3007,10 @@ fn restore_held_item_interaction(
 ) -> Vec<VirtualHandEffect> {
     let mut effects = Vec::new();
     if let Some(entity_id) = left_hand_entity {
-        effects.extend(interaction.grab(world, entity_id, vr_config::Handedness::Left));
+        effects.extend(interaction.restore_held(world, entity_id, vr_config::Handedness::Left));
     }
     if let Some(entity_id) = right_hand_entity {
-        effects.extend(interaction.grab(world, entity_id, vr_config::Handedness::Right));
+        effects.extend(interaction.restore_held(world, entity_id, vr_config::Handedness::Right));
     }
     effects
 }
@@ -1746,11 +3079,9 @@ impl MissionCore {
         // Create player
         let player_entity = world.add_entity((PropLocalPlayer {}, RuntimePropDoNotSerialize {}));
 
-        // Seed the player's psi pool and hit points from `The Player`
-        // template, where the gamesys authors the starting/maximum values
-        // (P$PsiState, P$HitPoints/P$MAX_HP). The HP pool is what psi
-        // burnout (and later, real damage handling) drains; nothing yet
-        // reacts to it reaching zero.
+        // Instantiate the player's pool components from The Player. Once the
+        // character sheet is installed below, authored difficulty/stat parameters
+        // derive the maxima. Save/transition restoration then replaces current pools.
         {
             use crate::scripts::script_util::hydrate_template_component;
             if let Some(psi_state) = hydrate_template_component::<dark::properties::PropPsiState>(
@@ -1775,8 +3106,12 @@ impl MissionCore {
 
         // Create a map of template name (ie 'HE Explosion' to the template id).
         // This is important for creating entities based on template name
+        let short_name_strings = asset_cache
+            .get_opt(&dark::importers::STRINGS_IMPORTER, "objshort.str")
+            .map(|strings| (*strings).clone())
+            .unwrap_or_default();
         let (template_name_to_template_id, unique_gamesys_template_names) =
-            create_template_name_map(game_entity_info);
+            create_template_name_map(game_entity_info, &short_name_strings);
         let mission_object_name_to_id = create_mission_object_name_map(&entity_info_rc);
 
         world.add_unique(GlobalEntityMetadata(template_name_to_template_id.clone()));
@@ -1786,14 +3121,30 @@ impl MissionCore {
             debug_ai: game_options.debug_ai,
         });
         world.add_unique(GlobalPresentationMode(game_options.presentation_mode));
+        world.add_unique(GlobalPhysicalHeldItems(
+            game_options
+                .experimental_features
+                .contains("physical_held_items"),
+        ));
         let template_class_tags = create_template_class_tag_map(&entity_info_rc);
         world.add_unique(GlobalTemplateClassTags(template_class_tags));
+        world.add_unique(
+            crate::mission::projectile_spray::GlobalProjectileSprays::from_entity_info(
+                &entity_info_rc,
+            ),
+        );
         world.add_unique(
             crate::mission::reload::GlobalProjectileClips::from_entity_info(&entity_info_rc),
         );
         world.add_unique(
             crate::mission::stim_response::GlobalContactStims::from_entity_info(&entity_info_rc),
         );
+        world.add_unique(crate::psi::PsychoReflectiveScreenFactor::from_entity_info(
+            &entity_info_rc,
+        ));
+        world.add_unique(crate::scripts::immolate::ImmolateAura::from_entity_info(
+            &entity_info_rc,
+        ));
         // Reuse the obj-icons already hydrated into the template metadata above
         // (keyed by template id) rather than rescanning every template.
         let template_obj_icons: HashMap<i32, String> = template_name_to_template_id
@@ -1812,11 +3163,31 @@ impl MissionCore {
         let (mut psi_powers, psi_selection) = crate::psi::build_psi_power_registry(&entity_info_rc);
         // Player-facing discipline names come from the psihelp string table;
         // a data install without it just keeps the gamesys symbolic names.
-        if let Some(psi_strings) =
-            asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, "psihelp.str")
-        {
-            crate::psi::apply_display_names(&mut psi_powers, &psi_strings);
-        }
+        // The whole table is kept: the selection MFD reads icon basenames
+        // (`psiicon<id>`) and per-discipline help out of it at draw time, where
+        // there is no asset cache.
+        let psi_strings = crate::psi::normalize_help_strings(
+            &asset_cache
+                .get_opt(&dark::importers::STRINGS_IMPORTER, "psihelp.str")
+                .map(|strings| (*strings).clone())
+                .unwrap_or_default(),
+        );
+        crate::psi::apply_display_names(&mut psi_powers, &psi_strings);
+        world.add_unique(crate::scripts::gui::GlobalPsiStrings(psi_strings));
+        let mut gun_setting_string_table = |file| {
+            asset_cache
+                .get_opt(&dark::importers::STRINGS_IMPORTER, file)
+                .map(|strings| (*strings).clone())
+                .unwrap_or_default()
+        };
+        world.add_unique(GlobalGunSettingHeaders([
+            gun_setting_string_table("shead1.str"),
+            gun_setting_string_table("shead2.str"),
+        ]));
+        world.add_unique(GlobalGunSettingTexts([
+            gun_setting_string_table("sett1.str"),
+            gun_setting_string_table("sett2.str"),
+        ]));
         // Debug scenes unlock every power (debug_psi exercises the whole
         // registry); real missions start with the player template's learned
         // bits plus the default OSA loadout (Cryokinesis).
@@ -1826,68 +3197,46 @@ impl MissionCore {
             THE_PLAYER_TEMPLATE_ID,
             mission.starts_with("debug_"),
         );
+        known_powers.0.extend(
+            quest_info
+                .player_stats()
+                .purchased_psi_powers
+                .iter()
+                .copied(),
+        );
 
-        // Apply the career (Marine/Navy/OSA) chosen at the station recruit deck.
-        // The choice is persisted as a quest bit, so it re-applies on every
-        // deployment; with no career selected the player template defaults
-        // (30 HP, 40/50 psi) stand. Absolute values keep re-application
-        // idempotent across level loads. These are the deliberate first-career
-        // and legacy-save defaults; ordinary transitions and current-format
-        // saves restore their exact persisted pools after mission construction.
+        // Career powers remain authored separately; HP/psi maxima are derived
+        // from the character sheet and campaign difficulty below.
         if let Some(career) = crate::career::Career::from_quest_info(&quest_info) {
-            let loadout = career.loadout();
-            world.run(
-                |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
-                 mut v_max_hp: ViewMut<dark::properties::PropMaxHitPoints>,
-                 mut v_psi: ViewMut<dark::properties::PropPsiState>| {
-                    if let Ok(hp) = (&mut v_hp).get(player_entity) {
-                        hp.hit_points = loadout.max_hit_points;
-                    }
-                    if let Ok(max_hp) = (&mut v_max_hp).get(player_entity) {
-                        max_hp.hit_points = loadout.max_hit_points as u32;
-                    }
-                    if let Ok(psi) = (&mut v_psi).get(player_entity) {
-                        psi.psi_points = loadout.max_psi_points;
-                        psi.max_psi_points = loadout.max_psi_points;
-                    }
-                },
-            );
-            if let Some(power) = loadout.extra_psi_power {
+            if let Some(power) = career.loadout().extra_psi_power {
                 known_powers.0.insert(power);
             }
-            info!("Applied {:?} career loadout to player", career);
         }
 
-        // O/S trait bonuses re-derive on every load, like the career loadout
-        // (the player entity is rebuilt each mission load; the traits
-        // themselves persist on the character sheet in QuestInfo). Applied
-        // after the career block so Tank adds on top of the career pool.
-        if quest_info
-            .player_stats()
-            .has_os_trait(crate::scripts::gui::TRAIT_TANK)
-        {
-            use crate::scripts::gui::TANK_HP_BONUS;
-            world.run(
-                |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
-                 mut v_max_hp: ViewMut<dark::properties::PropMaxHitPoints>| {
-                    if let Ok(hp) = (&mut v_hp).get(player_entity) {
-                        hp.hit_points += TANK_HP_BONUS;
-                    }
-                    if let Ok(max_hp) = (&mut v_max_hp).get(player_entity) {
-                        max_hp.hit_points += TANK_HP_BONUS as u32;
-                    }
-                },
-            );
-            info!("Applied Tank O/S trait: +{} max hit points", TANK_HP_BONUS);
-        }
-
+        let default_browsed_tier = psi_powers
+            .0
+            .get(psi_selection.index)
+            .map(|power| power.tier())
+            .unwrap_or(1);
         world.add_unique(psi_powers);
         world.add_unique(psi_selection);
+        world.add_unique(crate::psi::PsiPanelTier(default_browsed_tier));
         world.add_unique(known_powers);
         world.add_unique(crate::psi::ActivePsiPowers::default());
+        world.add_unique(crate::psi_radar::Radar::default());
+        world.add_unique(crate::psi_seekersense::Seekersense::default());
         world.add_unique(crate::scripts::healing_item::ActiveHealing::default());
         world.add_unique(crate::scripts::radiation::ActiveRadiation::default());
+        world.add_unique(crate::scripts::radiation::RadiationRooms::default());
+        world.add_unique(crate::scripts::radiation::HazardResistance(
+            game_entity_info
+                .hazard_params()
+                .map(|p| p.0)
+                .unwrap_or([1.0; 8]),
+        ));
         world.add_unique(DamageFlash::default());
+        world.add_unique(crate::hud::HudMessages::default());
+        world.add_unique(crate::hud::HudBanner::default());
 
         // ** Entity creation
 
@@ -1938,16 +3287,10 @@ impl MissionCore {
         );
         world.add_component(inventory, PlayerInventoryEntity {});
 
-        // The synthetic automap panel entity (projects/flat-ui-panels.md §5):
-        // carries `MapGui` (script `internal_map`) plus the level's page data.
-        // No world object opens the map - `Effect::ToggleMap` binds it to the
-        // flat host as an unbound (sticky) panel. Never serialized: rebuilt
-        // here on every load. Flat-only: in VR the panel cannot be opened
-        // (ToggleMap is flat-gated), and under `--experimental gui` its
-        // per-frame SetUI would otherwise materialize an undismissable world
-        // quad at the origin.
+        // Synthetic automap host for the shared flat/VR cyber canvas.
+        // Rebuilt on load and excluded from legacy free-floating GUI emission.
         world.add_unique(PlayerMapLocation::default());
-        if game_options.presentation_mode == crate::PresentationMode::Flat {
+        {
             let level_stem = mission.split('.').next().unwrap_or(&mission).to_uppercase();
             let (revealed_rects, explored_rects) =
                 dark::map::MapChunkData::load_from_mission(asset_cache, &level_stem)
@@ -2001,6 +3344,47 @@ impl MissionCore {
         ));
         world.add_unique(MediaPanelEntity(media_panel));
 
+        // The weapon settings MFD's host. Like the reader above it has no world
+        // object of its own: it presents whichever gun is wielded, so it is
+        // rebuilt per mission and never serialized.
+        let weapon_settings_panel = world.add_entity((
+            Links::empty(),
+            PropScripts {
+                scripts: vec!["internal_weapon_settings".to_owned()],
+                inherits: false,
+            },
+            dark::properties::PropTemplateId { template_id: -1 },
+            PropSymName("Weapon Settings".to_owned()),
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                cell: 0,
+            },
+            RuntimePropTransform(Matrix4::identity()),
+            RuntimePropDoNotSerialize,
+        ));
+        world.add_unique(WeaponSettingsPanelEntity(weapon_settings_panel));
+
+        // The psi power selection MFD's host, on the same terms: player state,
+        // no world object, rebuilt per mission and never serialized.
+        let psi_powers_panel = world.add_entity((
+            Links::empty(),
+            PropScripts {
+                scripts: vec!["internal_psi_powers".to_owned()],
+                inherits: false,
+            },
+            dark::properties::PropTemplateId { template_id: -1 },
+            PropSymName("Psi Powers".to_owned()),
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                cell: 0,
+            },
+            RuntimePropTransform(Matrix4::identity()),
+            RuntimePropDoNotSerialize,
+        ));
+        world.add_unique(PsiPowersPanelEntity(psi_powers_panel));
+
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
 
         // Give the player the links `The Player` archetype authors - chiefly
@@ -2016,7 +3400,12 @@ impl MissionCore {
         );
 
         // Start background music
-        initialize_background_music(&abstract_mission.song_params, asset_cache, audio_context);
+        initialize_background_music(
+            &abstract_mission.song_params.song,
+            asset_cache,
+            audio_context,
+            false,
+        );
 
         let mut entities_to_instantiate = HashSet::new();
 
@@ -2092,6 +3481,7 @@ impl MissionCore {
                 &mut script_world,
                 created_entity,
                 Matrix4::identity(),
+                None,
             );
         }
         engine::platform::service_events();
@@ -2128,6 +3518,33 @@ impl MissionCore {
             &template_to_entity_id,
         );
 
+        // Dark clones the PlayerFactory marker onto its new player. Earth
+        // authors Standard 1 / Energy 2 there for training. Keep this allowance
+        // on the nonserialized runtime player, not the persistent career sheet;
+        // reconstruct it even when a saved position overrides the spawn pose.
+        // MapDefault uses the last instantiated factory for its spawn, too.
+        let factory_weapon_skills = abstract_mission
+            .entity_info
+            .link_playerfactories
+            .iter()
+            .rev()
+            .find_map(|link| template_to_entity_id.get(&link.src))
+            .and_then(|factory| {
+                world
+                    .borrow::<View<dark::properties::PropBaseWeaponDesc>>()
+                    .ok()
+                    .and_then(|skills| skills.get(factory.0).ok().copied())
+            });
+        if let Some(skills) = factory_weapon_skills {
+            world.add_component(player_entity, skills);
+        }
+
+        if world
+            .borrow::<UniqueView<super::player_trail::PlayerTrail>>()
+            .is_err()
+        {
+            world.add_unique(super::player_trail::PlayerTrail::default());
+        }
         let player_handle = physics.create_player(start_pos, player_entity);
 
         world.add_unique(PlayerInfo {
@@ -2141,14 +3558,16 @@ impl MissionCore {
         world.add_unique(PlayerLifeState::Alive);
 
         world.add_unique(quest_info);
+        world.add_unique(crate::difficulty::GlobalDifficultyParams::from_gamesys(
+            game_entity_info,
+        ));
+        crate::difficulty::refresh_player_pools(&world, true);
+        world.add_unique(crate::haptics::HapticFeedback::default());
 
         // Current saves record the width that encoded their backpack link
         // ordinals. Pre-#948 saves omit it and used the former fixed width 15;
         // migrate both shapes before any restored interaction can add items.
-        let current_backpack_width = world
-            .borrow::<UniqueView<QuestInfo>>()
-            .map(|quests| crate::inventory::backpack_width(quests.player_stats()))
-            .unwrap_or(crate::inventory::BACKPACK_GRID.0);
+        let current_backpack_width = crate::inventory::grid_for(&world, inventory).0;
         let backpack_load_remap = held_item_save_data.remap_instantiated_backpack(
             &mut world,
             inventory,
@@ -2163,31 +3582,22 @@ impl MissionCore {
 
         // Preload the elevator floor labels (MISC.STR) + current mission so the
         // AssetCache-less ElevatorGui can label/gate floors at draw time.
+        world.add_unique(crate::hud::HudStrings::load(asset_cache));
+        // CHARGEN.STR, which EarthText resolves its title card against.
+        world.add_unique(crate::scripts::earth_text::CharGenStrings::load(
+            asset_cache,
+        ));
+        // USEMSG.STR, which TrapMessage resolves its P$UseMsg key against.
+        world.add_unique(crate::scripts::trap_message::UseMessageStrings::load(
+            asset_cache,
+        ));
         world.add_unique(crate::scripts::ElevatorContext::load(asset_cache, &mission));
         world.add_unique(crate::scripts::gui::TraitsContext::load(asset_cache));
-        world.add_unique(crate::scripts::gui::ComputerContext::load(asset_cache));
+        world.add_unique(crate::scripts::gui::PanelText::load(asset_cache));
 
         world.add_unique(EffectQueue {
             effects: Vec::new(),
         });
-
-        // Initialize teleport system based on game options
-        let teleport_system = if game_options.experimental_features.contains("teleport") {
-            let teleport_config = crate::teleport::TeleportConfig {
-                enabled: true,
-                button_mapping: crate::teleport::TeleportButton::Trigger,
-                trigger_threshold: 0.5,
-                max_distance: 20.0,
-                ..Default::default()
-            };
-            TeleportSystem::new(teleport_config)
-        } else {
-            let teleport_config = crate::teleport::TeleportConfig {
-                enabled: false,
-                ..Default::default()
-            };
-            TeleportSystem::new(teleport_config)
-        };
 
         // Mission-placed particle entities follow the object their concrete
         // ParticleAttachement link names (steam rides its machinery): bolt
@@ -2367,8 +3777,11 @@ impl MissionCore {
             controller.flush();
         }
 
+        let security_alarm =
+            crate::security_alarm::SecurityAlarm::restore(crate::security_alarm::status(&world));
         let mut mission_core = MissionCore {
             interaction,
+            environment: crate::environment_map::load(asset_cache, &mission),
             level_name: mission,
             entity_info: entity_info_rc.clone(),
             template_to_particle_riders,
@@ -2376,11 +3789,15 @@ impl MissionCore {
             script_world,
             id_to_model,
             id_to_animation_player,
+            turn_clips: TurnClipTracker::new(),
             failed_animation_queries: HashMap::new(),
             id_to_bitmap,
             id_to_particle_system: HashMap::new(),
+            immolate_flames: None,
+            held_recovery_particles: Vec::new(),
             template_name_to_template_id,
             mission_object_name_to_id,
+            rains_landed: 0,
             scene_objects: scene,
             animated_lightmaps,
             physics,
@@ -2388,24 +3805,39 @@ impl MissionCore {
             id_to_physics,
             template_to_entity_id,
             player_handle,
+            backpack_width: current_backpack_width,
             spatial_data: abstract_mission.spatial_data,
             debug_lines: Vec::new(),
+            psi_drain_trails: Vec::new(),
+            psi_pull: None,
+            healing_pulses: HashMap::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
             rag_doll_manager: RagDollManager::new(),
             visibility_engine: abstract_mission.visibility_engine,
-            teleport_system,
             pending_entity_triggers: Vec::new(),
             obj_map: abstract_mission.obj_map,
             path_database: abstract_mission.path_database.clone(),
             pathfinding_service,
             path_visualization: PathVisualizationSystem::new(),
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
+            security_alarm,
+            klaxon: Default::default(),
+            listener_sounds: Default::default(),
             debug_pose_index: 0,
             debug_weapon_index: 0,
             player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),
             flat_melee_anim: None,
+            thrown_items: Default::default(),
             use_mode: false,
+            weapon_settings_gun: None,
+            psi_carousel: None,
+            psi_carousel_swallow: [false; 2],
+            psi_powers_open: false,
+            psi_nav_latched: false,
+            button_jump: false,
+            button_jump_held: false,
+            use_mode_shortcut: None,
             use_mode_ramp: crate::ui::entry_ramp::EntryExitRamp::new(),
             vr_use_mode_anchor: crate::ui::FrontendPanelAnchor::new(),
             vr_use_mode_head: crate::ui::world_dim::UNTRACKED_HEAD,
@@ -2413,17 +3845,41 @@ impl MissionCore {
             vr_use_mode_pointer: None,
             vr_squeeze_swallow: [false; 2],
             vr_trigger_safe_latch: [None; 2],
+            vr_clip_insert_engaged: [false; 2],
+            shoulder_backpack: Default::default(),
+            body_hand_contacts: [None; 2],
+            download_release_disarmed: [false; 2],
+            holsters: Default::default(),
+            ammo_pouch: Default::default(),
+            personal_card: Default::default(),
+            device_panel: None,
+            stowed_device_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
+            device_scan_pose: None,
+            device_pointer_gate: Default::default(),
+            device_map_wide: false,
+            device_inspect_only: false,
+            device_scanner: Default::default(),
+            device_beam: None,
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
             screen_fade_texture,
             last_head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            last_head_position: vec3(0.0, 0.0, 0.0),
+            show_position_anchor: crate::ui::FrontendPanelAnchor::new(),
             death_camera: None,
+            flat_lean: Default::default(),
+            flat_eye: None,
         };
+        mission_core
+            .thrown_items
+            .restore(&mission_core.world, &mut mission_core.physics);
         for (index, entity_id) in backpack_load_remap.overflow.into_iter().enumerate() {
             mission_core.spill_backpack_overflow(entity_id, index);
         }
-        mission_core.process_virtual_hand_effects(asset_cache, held_restore_effects);
+        // Restoring held items on load only emits `HoldItem`, never a store
+        // that could be refused - nothing to forward here.
+        let _ = mission_core.process_virtual_hand_effects(asset_cache, held_restore_effects);
         // Re-run each restored held item's Hold script. Only a fresh world
         // grab dispatches Hold (see `restore_held_item_physics` for the same
         // restore gap), so without this a save/load or level transition loses
@@ -2459,6 +3915,12 @@ impl MissionCore {
             return Vec::new();
         }
 
+        if let Ok(mut status) = self
+            .world
+            .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+        {
+            *status = Default::default();
+        }
         let paid_respawn = active_resurrection_target(&self.world).and_then(|target| {
             crate::scripts::script_util::debit_player_nanites(
                 &self.world,
@@ -2492,6 +3954,19 @@ impl MissionCore {
             .borrow::<UniqueViewMut<PlayerLifeState>>()
             .unwrap() = next_state;
 
+        // Death ends every sustained psi power: a corpse must not keep burning
+        // (Immolate) or stay invisible (Inviso) through the death sequence and
+        // out the other side of a QBR reconstruction.
+        self.world
+            .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
+            .unwrap()
+            .0
+            .clear();
+
+        self.world.run(|mut quests: UniqueViewMut<QuestInfo>| {
+            quests.player_stats_mut().modifiers.clear();
+        });
+        self.refresh_implant_effects();
         self.death_camera = Some(self.begin_death_camera());
 
         vec![Effect::PlaySound {
@@ -2518,12 +3993,12 @@ impl MissionCore {
         // collider center), which is the space the runtimes' `head_offset`
         // lives in - see `crate::death_camera`.
         let eye_height = crate::player_eye_height_for(self.player_is_crouched());
-        let live_eye = death_camera::EyePose {
+        let live_eye = self.flat_eye.unwrap_or(death_camera::EyePose {
             position: cgmath::vec3(0.0, eye_height / SCALE_FACTOR, 0.0),
             // Where the player was actually looking: the body topples sideways
             // from their gaze, so whatever killed them stays in frame.
             rotation: self.last_head_rotation,
-        };
+        });
         let floor_y = -physics::player_center_above_floor(self.player_is_crouched());
         let seed = death_seed(position);
         let lateral =
@@ -2580,6 +4055,11 @@ impl MissionCore {
         if let Some(death_camera) = &mut self.death_camera {
             death_camera.advance(elapsed_seconds);
         }
+    }
+
+    /// Shared collision-resolved pose; absent in VR.
+    pub fn flat_eye_pose(&self) -> Option<death_camera::EyePose> {
+        self.flat_eye
     }
 
     /// This frame's death-camera contribution, for [`crate::Game::resolve_camera`].
@@ -2709,6 +4189,10 @@ impl MissionCore {
                 .unwrap_or(false)
         };
         self.last_head_rotation = input_context.head.rotation;
+        // Where the eye is within the pawn, so the damage readouts face the
+        // viewer rather than the pawn origin (they differ by the roomscale
+        // offset in VR, and by eye height in both).
+        self.last_head_position = input_context.head.position;
         let mut life_state_effects = Vec::new();
         if self.player_is_alive() && player_health_depleted {
             life_state_effects.append(&mut self.begin_player_death());
@@ -2716,16 +4200,36 @@ impl MissionCore {
         life_state_effects.append(&mut self.update_player_life_state(time.elapsed.as_secs_f32()));
         self.advance_death_camera(time.elapsed.as_secs_f32());
 
-        // A dead player's physical head can still look around in VR, but all
-        // actionable movement, hand, trigger, crouch, and pointer channels are
-        // neutral until reconstruction. Discrete quick-load remains available
-        // because it arrives separately in `command_effects`.
-        let suppressed_input = InputContext::default();
-        let input_context = if self.player_is_alive() && self.player_controls_enabled {
-            input_context
+        // A dead player's actionable channels are neutral until
+        // reconstruction. A scripted control lock is subtler: tracked poses
+        // keep updating, and an item already owned by a VR hand must keep its
+        // grip latch. Otherwise a zeroed squeeze is interpreted as an explicit
+        // DropItem (the eng2 Many ride used to strand the weapon at its
+        // entrance). Empty hands remain neutral and cannot acquire anything.
+        // Discrete quick-load remains available because it arrives separately
+        // in `command_effects`.
+        let suppressed_input = if !self.player_is_alive() {
+            Some(InputContext::default())
+        } else if !self.player_controls_enabled {
+            let (left_held, right_held) = self.interaction.held_entities();
+            Some(
+                input_context
+                    .with_player_controls_suppressed(left_held.is_some(), right_held.is_some()),
+            )
         } else {
-            &suppressed_input
+            None
         };
+        // The discrete jump is latched separately from the context, so it
+        // has to be dropped here too - otherwise a face button pressed as
+        // the player died would hop the corpse.
+        if suppressed_input.is_some() {
+            self.button_jump = false;
+            self.button_jump_held = false;
+        }
+        // The camera still follows the tracked head while controls are
+        // suppressed: a dead player can look around the fallen view.
+        let tracked_head_rotation = input_context.head.rotation;
+        let input_context = suppressed_input.as_ref().unwrap_or(input_context);
         // Refill the per-frame AI pathfind budget - only on advancing frames,
         // so paused zero-dt ticks (debug runtime introspection) can't grant
         // extra query slots between stepped frames
@@ -2841,8 +4345,23 @@ impl MissionCore {
             &self.world,
             time.elapsed.as_secs_f32(),
         ) {
-            effects.push(radiation);
+            effects.extend(Effect::flatten(vec![radiation]));
         }
+        // Runs before the sustained-power countdown below, which is the
+        // decrement the drain's per-second accounting predicts.
+        if let Some(drain) =
+            crate::scripts::berserk::tick_player_drain(&self.world, time.elapsed.as_secs_f32())
+        {
+            effects.push(drain);
+        }
+        // Run the station security alarm's deadline down; when it expires the
+        // alarm stands security down on its own.
+        effects.extend(self.security_alarm.update(&self.world, time));
+        // Both HUD paths (the flat overlay and the VR forearm) read the alarm
+        // from the world, so neither presentation owns it.
+        self.security_alarm.publish(&self.world);
+        effects.extend(self.klaxon.update(&self.world));
+
         effects.extend(command_effects);
 
         let player = {
@@ -2850,16 +4369,155 @@ impl MissionCore {
             player_info.clone()
         };
 
+        for amp in [player.left_hand_entity_id, player.right_hand_entity_id]
+            .into_iter()
+            .flatten()
+        {
+            if crate::wielded_weapon::is_psi_amp(&self.world, amp) {
+                crate::psi_amp_selection::initialize(&mut self.world, amp);
+            }
+        }
+        // The lightweight selector owns only its amp hand's stick and trigger.
+        // Swallow the confirming trigger until physical release, including the close frame.
+        let mut carousel_input = input_context.clone();
+        if self.use_mode || !self.player_is_alive() {
+            self.dismiss_amp_carousel();
+        }
+        if let Some(mut menu) = self.psi_carousel.take() {
+            let held = crate::wielded_weapon::weapon_in_hand(&self.world, menu.hand);
+            let tracked = input_context
+                .pose_tracking
+                .is_none_or(|t| t.head && t.hands[hand_slot(menu.hand)]);
+            if tracked
+                && (held == Some(menu.amp)
+                    || game_options.presentation_mode == crate::PresentationMode::Flat
+                        && self.interaction.is_holding(menu.amp))
+                && !self.use_mode
+            {
+                let input = if menu.hand == crate::Handedness::Left {
+                    &mut carousel_input.left_hand
+                } else {
+                    &mut carousel_input.right_hand
+                };
+                let pressed = input.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD;
+                let confirm = menu.trigger_armed && pressed;
+                menu.trigger_armed |= !pressed;
+                self.psi_carousel_swallow[hand_slot(menu.hand)] = pressed;
+                let (step, latched) =
+                    crate::scripts::gui::stick_nav(input.thumbstick, menu.stick_latched);
+                menu.stick_latched = latched;
+                input.thumbstick = cgmath::vec2(0.0, 0.0);
+                input.trigger_value = 0.0;
+                if let Some(step) = step {
+                    if let Effect::StepPsiSelection { axis, forward } = step.effect() {
+                        let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+                        let known = self
+                            .world
+                            .borrow::<UniqueView<PlayerPsiKnownPowers>>()
+                            .unwrap();
+                        menu.preview(
+                            crate::psi::step_selection(
+                                &powers.0, &known.0, menu.index, axis, forward,
+                            ),
+                            &powers.0,
+                            &known.0,
+                        );
+                    }
+                }
+                menu.update(time.elapsed.as_secs_f32());
+                if confirm {
+                    crate::psi_carousel::advance_input_epoch(&mut self.world, menu.amp);
+                    self.commit_amp_selection(menu.amp, menu.index);
+                } else {
+                    self.psi_carousel = Some(menu);
+                }
+            } else {
+                crate::psi_carousel::advance_input_epoch(&mut self.world, menu.amp);
+                self.psi_carousel_swallow[hand_slot(menu.hand)] = true;
+            }
+        }
+        for (i, hand) in [
+            &mut carousel_input.left_hand,
+            &mut carousel_input.right_hand,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if hand.trigger_value <= crate::ui::VR_TRIGGER_THRESHOLD {
+                // Consult raw input: the menu above deliberately zeroed its trigger.
+                let raw = if i == 0 {
+                    input_context.left_hand.trigger_value
+                } else {
+                    input_context.right_hand.trigger_value
+                };
+                if raw <= crate::ui::VR_TRIGGER_THRESHOLD {
+                    self.psi_carousel_swallow[i] = false;
+                }
+            }
+            if self.psi_carousel_swallow[i] {
+                hand.trigger_value = 0.0;
+            }
+        }
+        let input_context = &carousel_input;
+
         // Player movement logic
         let delta_time = time.elapsed.as_secs_f32();
 
-        // Update teleport system and add effects (only if experimental flag enabled)
-        if game_options.experimental_features.contains("teleport") {
-            let teleport_effects =
-                self.teleport_system
-                    .update(input_context, player.pos, player.rotation, delta_time);
-            effects.extend(teleport_effects);
+        // While the psi MFD is docked it captures ONE thumbstick (which one is
+        // `psi_navigation_hand`'s call) and withholds that stick's locomotion,
+        // so browsing powers cannot walk the player off. The other stick still
+        // drives normally. Edge-triggered (`stick_nav`), so a held stick steps
+        // once, and live: each step is the same `StepPsiSelection` the readout's
+        // arrows emit, so the panel and the amp always agree.
+        let captured_context;
+        let input_context = if self.psi_powers_open {
+            let hand = self.psi_navigation_hand(game_options.presentation_mode);
+            let stick = match hand {
+                crate::vr_config::Handedness::Left => input_context.left_hand.thumbstick,
+                crate::vr_config::Handedness::Right => input_context.right_hand.thumbstick,
+            };
+            let (step, latched) = crate::scripts::gui::stick_nav(stick, self.psi_nav_latched);
+            self.psi_nav_latched = latched;
+            if let Some(step) = step {
+                effects.push(step.effect());
+            }
+            let mut withheld = input_context.clone();
+            match hand {
+                crate::vr_config::Handedness::Left => {
+                    withheld.left_hand.thumbstick = cgmath::Vector2::new(0.0, 0.0)
+                }
+                crate::vr_config::Handedness::Right => {
+                    withheld.right_hand.thumbstick = cgmath::Vector2::new(0.0, 0.0)
+                }
+            }
+            captured_context = withheld;
+            &captured_context
+        } else {
+            self.psi_nav_latched = false;
+            input_context
+        };
+
+        // Resolve ordinary tracked crouch before interpreting a grab. A pose
+        // converted against last frame's stance otherwise jumps on the next
+        // frame. Hanging compression deliberately leaves tracking unchanged.
+        let mut tracked_input = input_context.clone();
+        if tracked_input.tracking.is_some() {
+            if !time.elapsed.is_zero()
+                && !self.player_is_gripping()
+                && !self.player_handle.is_hanging_crouched()
+            {
+                self.physics
+                    .set_player_crouch(tracked_input.crouch, &mut self.player_handle);
+            }
+            let stance = self.player_handle.tracking_is_crouched();
+            crate::vr_tracking::TrackingTransform::rebase_input(
+                &mut tracked_input,
+                crate::physics::player_center_above_floor(stance),
+                crate::physics::player_eye_cap_above_center(stance),
+            );
         }
+        let input_context = &tracked_input;
+
         let additional_rotation = cgmath::Quaternion::from_axis_angle(
             cgmath::vec3(0.0, 1.0, 0.0),
             cgmath::Rad(input_context.left_hand.thumbstick.x * delta_time * PLAYER_TURN_RATE),
@@ -2870,13 +4528,83 @@ impl MissionCore {
         let dir = new_rotation * input_context.head.rotation;
         let facing = dir.rotate_vector(cgmath::vec3(0.0, 0.0, -1.0));
         let move_thumbstick_value = input_context.right_hand.thumbstick;
+        // Retail shktrait.cpp applies a 1.15 translation scale and leaves
+        // turn speed unchanged. Apply only to stick movement: tracked hand
+        // climbing, jumps and the detached camera keep their own motion.
+        let move_speed = PLAYER_MOVE_SPEED
+            * self
+                .world
+                .borrow::<UniqueView<QuestInfo>>()
+                .map(|q| {
+                    if q.player_stats()
+                        .has_os_trait(crate::scripts::gui::TRAIT_SPEEDY)
+                    {
+                        1.15
+                    } else {
+                        1.0
+                    }
+                })
+                .unwrap_or(1.0);
         let forward = dir.rotate_vector(cgmath::vec3(
-            -delta_time * move_thumbstick_value.x * PLAYER_MOVE_SPEED / dark::SCALE_FACTOR,
+            -delta_time * move_thumbstick_value.x * move_speed / dark::SCALE_FACTOR,
             0.0,
-            -delta_time * move_thumbstick_value.y * PLAYER_MOVE_SPEED / dark::SCALE_FACTOR,
+            -delta_time * move_thumbstick_value.y * move_speed / dark::SCALE_FACTOR,
         ));
 
         let up_value = input_context.left_hand.thumbstick.y / dark::SCALE_FACTOR;
+
+        // VR climbs by hand: a gripping hand resolves to a body translation
+        // that replaces locomotion entirely for the frame (right-stick
+        // movement is ignored; left-stick turn above still applies). Flat has
+        // no hands and keeps its push-into-ladder climb.
+        //
+        // Composed against the pose the coming step will land on, not the one
+        // `PlayerInfo` carries: the movement is cast from the queued kinematic
+        // target, and composing against the superseded pose would apply each
+        // correction on top of a body that has already absorbed the last one.
+        // A scripted top-out owns the body outright, so the hands do nothing
+        // while one runs and cannot take a fresh hold part-way over the lip.
+        self.interaction.reserve_body_tool_hands([
+            self.personal_card.hand == Some(0),
+            self.personal_card.hand == Some(1),
+        ]);
+        let hand_climb = (!time.elapsed.is_zero() && !self.player_handle.is_topping_out())
+            .then(|| {
+                let pawn_pos = self
+                    .physics
+                    .get_player_next_translation(&self.player_handle);
+                self.interaction
+                    .update_hand_climb(&crate::interaction::ClimbContext {
+                        physics: &self.physics,
+                        world: &self.world,
+                        input: input_context,
+                        pawn_pos,
+                        pawn_rotation: new_rotation,
+                        // Measured from the STANDING capsule while balling up
+                        // on a hold: that swap raises the collider's feet
+                        // without the body moving, and a ledge must not stop
+                        // being a ledge just because the player tucked their
+                        // knees under it.
+                        feet_y: pawn_pos.y
+                            - crate::physics::player_center_above_floor(
+                                self.player_handle.is_crouched()
+                                    && !self.player_handle.is_hanging_crouched(),
+                            ),
+                        step_dt: self.physics.player_step_dt(),
+                    })
+            })
+            .unwrap_or_default();
+
+        // A frozen AI keeps its physical body and gravity, but cannot coast
+        // on the previous animation's horizontal root-motion velocity.
+        for entity in self.id_to_physics.keys() {
+            if self.script_world.stasis(*entity, &self.world).is_some() {
+                if let Some(velocity) = self.physics.get_velocity(*entity) {
+                    self.physics
+                        .set_velocity(*entity, vec3(0.0, velocity.y, 0.0));
+                }
+            }
+        }
 
         // Skip physics while time is frozen (the debug runtime's paused state
         // calls update with zero dt): the Rapier pipeline advances by a fixed
@@ -2887,6 +4615,8 @@ impl MissionCore {
         // player position is still read from the character body (not stepped)
         // so a teleport - which writes the body directly - is reflected in
         // PlayerInfo/introspection even before the next real step.
+        self.thrown_items
+            .prepare(&self.physics, time.elapsed.as_secs_f32());
         let (new_character_pos, collision_events) = if time.elapsed.is_zero() {
             (
                 self.physics.get_player_translation(&self.player_handle),
@@ -2896,17 +4626,114 @@ impl MissionCore {
             // Apply the crouch request before moving: swaps the capsule size
             // feet-planted; standing up is refused without headroom (the
             // actual state is read back via `player_is_crouched`).
-            self.physics
-                .set_player_crouch(input_context.crouch, &mut self.player_handle);
-            profile!(
-                "shock2.update.physics",
-                self.physics.update_with_facing_and_jump(
-                    forward + cgmath::vec3(0.0, up_value, 0.0),
-                    facing,
-                    input_context.jump,
+            //
+            // A hand on a ledge balls the body up regardless of the crouch
+            // input, so the knees clear the lip being pulled over - and it
+            // swaps the capsule around the body CENTER, since a hanging body's
+            // feet rest on nothing and the gripping hand rides that center.
+            //
+            // Only while they are actually hanging, though. A player still
+            // standing on the deck holding a waist-high ledge has their weight
+            // on their feet, and a center-anchored swap there would lift them
+            // off the floor going down and drive the standing capsule through
+            // it coming back up.
+            let hangs_from_a_ledge = !self.player_handle.is_grounded()
+                && self
+                    .interaction
+                    .hand_climb()
+                    .is_some_and(|climb| climb.holds_a_ledge());
+            let still_hanging =
+                self.player_handle.is_hanging_crouched() && !self.player_handle.is_grounded();
+            if hangs_from_a_ledge || still_hanging {
+                // Undone the same way it was made, so a body that is still in
+                // the air ends up back where it hung rather than 0.64 wu above
+                // it. Once their feet are on something the ordinary
+                // feet-planted path below is the correct one - and the only one
+                // that can stand them up at all, since a center-anchored
+                // expansion would put their feet through that floor.
+                self.physics.set_player_crouch_hanging(
+                    hangs_from_a_ledge || input_context.crouch,
                     &mut self.player_handle,
-                )
-            )
+                );
+            } else if hand_climb.translation.is_none() {
+                self.physics
+                    .set_player_crouch(input_context.crouch, &mut self.player_handle);
+            }
+            // Head over the lip: the hands have done all they can, so hand the
+            // body to the scripted top-out and let go of everything. A route
+            // the planner cannot find is simply not taken - the holds stay and
+            // the player keeps pulling.
+            let mut hand_climb = hand_climb;
+            if let Some(grip) = self.hand_vault_target(input_context.head.position) {
+                if self
+                    .physics
+                    .plan_hand_top_out(grip, &mut self.player_handle)
+                {
+                    self.interaction.release_climb_grips();
+                    hand_climb.translation = None;
+                }
+            }
+            // Letting go of the last hold throws the body with the momentum of
+            // the pull, so a hard haul-and-release sails on past the hold.
+            if let Some(launch) = hand_climb.launch {
+                self.physics.launch_player(launch, &mut self.player_handle);
+            }
+            // A discrete jump (a Quest hand's lower face button, an injected
+            // `Jump` action) rides the same held channel the runtimes drive,
+            // for exactly one frame - so the controller's edge detection sees
+            // one jump per press however the request arrived.
+            self.button_jump_held &= input_context.jump_button_held;
+            let jump = input_context.jump
+                || std::mem::take(&mut self.button_jump)
+                || self.button_jump_held;
+            let request = match hand_climb.translation {
+                Some(translation) => crate::physics::PlayerMoveRequest::HandClimb { translation },
+                None => crate::physics::PlayerMoveRequest::Walk {
+                    movement: forward + cgmath::vec3(0.0, up_value, 0.0),
+                    facing,
+                    jump_pressed: jump,
+                    // Push-to-climb is the FLAT climb input; VR's hands are
+                    // its own (see `vr_climb`).
+                    push_to_climb: game_options.presentation_mode == crate::PresentationMode::Flat,
+                    medium: self.player_medium(jump),
+                },
+            };
+            let held = self.interaction.held_entities();
+            let pending_pawn = self
+                .physics
+                .get_player_next_translation(&self.player_handle);
+            for (hand, entity) in [held.0, held.1].into_iter().enumerate() {
+                let Some(entity) = entity else { continue };
+                let context = self
+                    .interaction
+                    .held_grip_anchor(entity)
+                    .and_then(|anchor| {
+                        physics::HeldRecoveryContext::from_input(
+                            input_context,
+                            hand,
+                            pending_pawn,
+                            new_rotation,
+                            anchor,
+                            time.elapsed.as_secs_f32(),
+                        )
+                    });
+                self.physics.set_held_recovery_context(entity, context);
+            }
+            self.physics.rebase_held_targets(
+                &self.player_handle,
+                new_rotation,
+                input_context.tracking,
+            );
+            let moved = profile!(
+                "shock2.update.physics",
+                self.physics
+                    .update_player_movement(request, &mut self.player_handle)
+            );
+            if let Some(requested) = hand_climb.translation {
+                self.interaction
+                    .resolve_hand_climb(requested, self.player_handle.self_translation());
+            }
+            moved
         };
 
         if !time.elapsed.is_zero() {
@@ -2928,6 +4755,22 @@ impl MissionCore {
                     footstep,
                     new_character_pos,
                 ));
+                let agility = crate::implants::effective_stats(&self.world)
+                    .map(|stats| stats.agility)
+                    .unwrap_or(1);
+                effects.push(Effect::RaiseNoise {
+                    source: self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .unwrap()
+                        .entity_id,
+                    origin: new_character_pos,
+                    radius: crate::mission::player_footsteps::footstep_noise_radius(
+                        footstep,
+                        agility,
+                        self.player_handle.is_crouched(),
+                    ),
+                });
             }
 
             let player_id = self
@@ -3003,6 +4846,25 @@ impl MissionCore {
                     entity2_id,
                     contact,
                 } => {
+                    for (item, target) in [(entity1_id, entity2_id), (entity2_id, entity1_id)] {
+                        let contact = contact.map(|mut c| {
+                            if item == entity2_id {
+                                c.normal = -c.normal;
+                            }
+                            c
+                        });
+                        effects.push(self.thrown_items.impact_sound(
+                            &self.world,
+                            item,
+                            target,
+                            contact,
+                        ));
+                        if let Some(message) =
+                            self.thrown_items.impact(&self.world, item, target, contact)
+                        {
+                            self.script_world.dispatch(message);
+                        }
+                    }
                     self.script_world.dispatch(Message {
                         to: entity1_id,
                         payload: MessagePayload::Collided {
@@ -3017,12 +4879,15 @@ impl MissionCore {
                             contact: contact.map(|contact| physics::CollisionContact {
                                 point: contact.point,
                                 normal: -contact.normal,
+                                closing_speed: contact.closing_speed,
                             }),
                         },
                     });
                 }
             }
         }
+
+        self.thrown_items.publish(&self.world, &self.physics);
 
         // Update PropTeleported entities
         self.world.run(
@@ -3049,6 +4914,13 @@ impl MissionCore {
             },
         );
 
+        let expired = self.world.run(|mut quests: UniqueViewMut<QuestInfo>| {
+            quests.player_stats_mut().tick_modifiers(time.elapsed)
+        });
+        if expired {
+            self.refresh_implant_effects();
+        }
+
         // Tick the player's sustained psi powers down and expire them.
         self.world
             .run(|mut active: UniqueViewMut<crate::psi::ActivePsiPowers>| {
@@ -3064,6 +4936,38 @@ impl MissionCore {
                 });
             });
 
+        // Expire first: a queued pulse must not outlive its caster immunity.
+        if let Some(aura) =
+            crate::scripts::immolate::tick_immolate_aura(&self.world, time.elapsed.as_secs_f32())
+        {
+            effects.push(aura);
+        }
+        // Spell feedback follows the active power, including expiry/death/load.
+        let burning = self
+            .world
+            .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
+            .is_ok_and(|powers| powers.is_active(crate::psi::IMMOLATE_TEMPLATE_ID));
+        if burning {
+            let pos = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
+            let flames = self.immolate_flames.get_or_insert_with(|| {
+                ParticleSystem::new()
+                    .with_num_particles(48)
+                    .with_color(vec3(1.0, 0.24, 0.025))
+                    .with_alpha(0.8)
+                    .with_particle_size(0.35, 0.65)
+                    .with_lifetime(0.35, 0.7)
+                    .with_fade_time(0.35)
+                    .with_launch_time(std::time::Duration::from_secs_f32(0.012))
+                    .with_launch_bounding_box(vec3(-0.65, -1.0, -0.65), vec3(0.65, -0.5, 0.65))
+                    .with_velocity(vec3(-0.15, 1.3, -0.15), vec3(0.15, 2.3, 0.15))
+            });
+            flames.update(time.elapsed, Matrix4::from_translation(pos));
+        } else {
+            self.immolate_flames = None;
+        }
+
+        crate::psi_radar::update(&self.world, time.elapsed.as_secs_f32());
+        crate::psi_seekersense::update(&self.world, time.elapsed.as_secs_f32());
         effects.extend(update_research(&self.world, time.elapsed.as_secs_f32()));
 
         let (player_pos, player_rot) = {
@@ -3071,6 +4975,38 @@ impl MissionCore {
             (player_info.pos, player_info.rotation)
         };
 
+        effects.extend(self.update_psi_pull(time.elapsed));
+
+        self.healing_pulses.retain(|_, age| {
+            *age += time.elapsed.as_secs_f32();
+            *age < 1.0
+        });
+        self.psi_drain_trails
+            .retain_mut(|trail| trail.advance(time.elapsed));
+        self.held_recovery_particles.retain_mut(|particles| {
+            particles.update(time.elapsed, Matrix4::identity());
+            !particles.is_done()
+        });
+        // The weapon arrives immediately. A few faint motes explain the jump
+        // without animating a collidable gun through the intervening wall.
+        for recovery in self.physics.take_held_recoveries() {
+            for i in 0..6 {
+                let start = recovery.from + (recovery.to - recovery.from) * (i as f32 / 6.0);
+                let velocity = (recovery.to - start) / 0.18;
+                let mut particles = ParticleSystem::new()
+                    .with_one_shot(true)
+                    .with_num_particles(1)
+                    .with_color(vec3(0.2, 0.8, 1.0))
+                    .with_alpha(0.45)
+                    .with_particle_size(0.045, 0.045)
+                    .with_lifetime(0.18, 0.18)
+                    .with_fade_time(0.18)
+                    .with_launch_bounding_box(start, start)
+                    .with_velocity(velocity, velocity);
+                particles.update(std::time::Duration::ZERO, Matrix4::identity());
+                self.held_recovery_particles.push(particles);
+            }
+        }
         self.debug_lines.iter_mut().for_each(|p| {
             p.remaining_life_in_seconds -= time.elapsed.as_secs_f32();
         });
@@ -3090,11 +5026,8 @@ impl MissionCore {
 
         // Default VR has one object-bound world-panel slot. Keep its
         // transient proxy faithful to the original overlay lifecycle before
-        // either hand raycasts: destroyed hosts and walk-away panels close,
-        // while `--experimental gui` retains its legacy all-panels behavior.
-        if game_options.presentation_mode == crate::PresentationMode::Vr
-            && !game_options.experimental_features.contains("gui")
-        {
+        // either hand raycasts: destroyed hosts and walk-away panels close.
+        if game_options.presentation_mode == crate::PresentationMode::Vr {
             self.gui.maintain_active_panel(
                 &mut self.world,
                 &mut self.physics,
@@ -3104,15 +5037,83 @@ impl MissionCore {
         }
 
         // Entry/exit ramp: advanced every update regardless of presentation
-        // or `use_mode` itself, so the vignette/dim/FOV pull keeps easing out
-        // after the panel has already been put away (see `render`'s
-        // `is_settled_closed()` gate).
+        // or `use_mode` itself, so the dim keeps easing out after the panel
+        // has already been put away (see `render`'s `is_settled_closed()`
+        // gate).
         self.use_mode_ramp.update(time.elapsed.as_secs_f32());
+
+        // Landing can change the physical stance too. Use that same rig for
+        // rendered hands/UI and the runtime's post-update eyes this frame.
+        let mut rendered_input = input_context.clone();
+        let stance = self.player_handle.tracking_is_crouched();
+        crate::vr_tracking::TrackingTransform::rebase_input(
+            &mut rendered_input,
+            crate::physics::player_center_above_floor(stance),
+            crate::physics::player_eye_cap_above_center(stance),
+        );
+        let input_context = &rendered_input;
+        self.last_head_position = input_context.head.position;
 
         // VR cyber interface (use mode): follow the head for the anchor's
         // lazy recenter and the comfort dim, resolve this frame's pointer, and
         // clear the weapon-safe latch once every trigger is released.
         self.vr_use_mode_pointer = None;
+        self.device_panel = None;
+        self.device_scan_pose = None;
+        let device_enabled = game_options.experimental_features.contains("mfd_device")
+            || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE);
+        self.interaction.set_body_tool_device(device_enabled);
+        let device_hand = self.personal_card.hand.filter(|i| {
+            device_enabled
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled
+                && input_context
+                    .pose_tracking
+                    .is_none_or(|p| p.head && p.hands[*i])
+                && [&input_context.left_hand, &input_context.right_hand][*i].squeeze_value >= 0.5
+        });
+        let device_active = device_hand.is_some()
+            || (game_options.presentation_mode == crate::PresentationMode::Flat
+                && game_options
+                    .experimental_features
+                    .contains("mfd_device_preview"));
+        self.world
+            .add_unique(super::mfd_device::ScreenActive(false));
+        self.world
+            .borrow::<UniqueViewMut<super::mfd_device::ScreenActive>>()
+            .unwrap()
+            .0 = device_active;
+        if !device_active {
+            self.device_pointer_gate = Default::default();
+            self.device_scanner.trigger(false, false);
+        }
+        if self.flat_ui.device != device_active {
+            self.flat_ui.close();
+            self.flat_ui.utilities = Default::default();
+            self.flat_ui.guard_held_press();
+            self.flat_ui.device = device_active;
+            if device_active {
+                self.gui.close_panel(
+                    &mut self.world,
+                    &mut self.physics,
+                    &mut self.script_world,
+                    &mut self.id_to_physics,
+                );
+            }
+        }
+        if let Some(i) = device_hand {
+            let hand = [&input_context.left_hand, &input_context.right_hand][i];
+            if hand.rotation.magnitude2() > 0.0001 {
+                self.device_panel = super::mfd_device::panel(
+                    hand.position,
+                    hand.rotation,
+                    self.interaction.personal_card_grip(i).as_ref(),
+                    i,
+                );
+            }
+        }
+
         // The dim is drawn (see `render`) for the trailing exit-ramp window
         // too, after `use_mode` has already gone false - it must keep
         // following the live head there as well, or a head turn during the
@@ -3123,6 +5124,22 @@ impl MissionCore {
         {
             self.vr_use_mode_head = (input_context.head.position, input_context.head.rotation);
         }
+        // The `show_position` readout's panel. Advanced here (not in `render`)
+        // because the anchor needs the tracked head and a dt; while the readout
+        // is not being drawn the anchor is reset, so the next time it comes up
+        // it places in front of the player rather than wherever they last were.
+        if game_options.presentation_mode == crate::PresentationMode::Vr
+            && self.show_position_readout_visible(game_options.presentation_mode)
+        {
+            self.show_position_anchor.update(
+                input_context.head.position,
+                input_context.head.rotation,
+                time.elapsed,
+            );
+        } else {
+            self.show_position_anchor = crate::ui::FrontendPanelAnchor::new();
+        }
+
         if game_options.presentation_mode == crate::PresentationMode::Vr && self.use_mode {
             let panel = self.vr_use_mode_anchor.update(
                 input_context.head.position,
@@ -3131,14 +5148,52 @@ impl MissionCore {
             );
             // The VR ray plays the role of the mouse: one pass resolves where
             // each controller lands on the panel and which one owns it.
+            let (left_carrying, right_carrying) = self.interaction.held_entities();
+            let mut carrying = [false; 2];
+            carrying[hand_slot(crate::vr_config::Handedness::Left)] = left_carrying.is_some();
+            carrying[hand_slot(crate::vr_config::Handedness::Right)] = right_carrying.is_some();
             self.vr_use_mode_pointer = Some(crate::ui::vr_pointer_pass(
                 input_context,
                 crate::mission::flat_ui_host::CANVAS_SIZE,
                 &panel,
                 // A squeeze claims the panel here, unlike on a frontend screen:
-                // it is how a hand takes an item out of a slot.
-                crate::ui::PointerEngagement::TriggerOrGrab,
+                // it is how a hand takes an item out of a slot - but only from a
+                // hand that is not already using its squeeze to hold something.
+                crate::ui::PointerEngagement::TriggerOrGrab { carrying },
             ));
+        }
+        self.device_scan_pose = self
+            .device_panel
+            .map(|panel| super::mfd_device::scanner_pose(asset_cache, panel));
+        if let Some(panel) = self.device_panel {
+            let wide = crate::dev_params::get_bool(crate::dev_params::VR_MFD_MAP_WIDE);
+            if wide != self.device_map_wide {
+                self.device_pointer_gate = Default::default();
+                self.flat_ui.guard_held_press();
+                self.device_map_wide = wide;
+            }
+            let layout = super::mfd_device::layout(self.flat_ui.device_screen_source());
+            let panel = layout.surface_panel(panel);
+            let mut pointer_input = input_context.clone();
+            // Only empty hands can operate the device. In particular, aiming a
+            // gun across the screen must neither hover a widget nor safe the gun.
+            let (left, right) = self.interaction.held_entities();
+            self.device_pointer_gate.filter(
+                &mut pointer_input,
+                device_hand,
+                [left.is_some(), right.is_some()],
+            );
+            self.vr_use_mode_pointer = Some(
+                crate::ui::vr_pointer_pass(
+                    &pointer_input,
+                    layout.size,
+                    &panel,
+                    crate::ui::PointerEngagement::TriggerOrGrab {
+                        carrying: [left.is_some(), right.is_some()],
+                    },
+                )
+                .remap_hits(|p| layout.contains_surface(p).then_some(p)),
+            );
         }
         if self.vr_trigger_swallow && !self.use_mode {
             let held = |hand: &crate::input_context::Hand| {
@@ -3194,7 +5249,10 @@ impl MissionCore {
             &mut self.vr_squeeze_swallow,
             squeezing,
             hand_empty,
-            [self.use_mode && on_panel[0], self.use_mode && on_panel[1]],
+            [
+                (self.use_mode || self.flat_ui.device) && on_panel[0],
+                (self.use_mode || self.flat_ui.device) && on_panel[1],
+            ],
         );
 
         // VR weapon-safe: while the cyber interface is up (and until a trigger
@@ -3220,10 +5278,20 @@ impl MissionCore {
             input_context.left_hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
             input_context.right_hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
         ];
+        if self.flat_ui.utilities.is_inspecting() && !self.flat_ui.device {
+            // Selection owns both triggers even off-panel. Upgrade an ongoing
+            // pull to safe and retain that decision until physical release,
+            // so cancelling inspection cannot consume a held hypo mid-pull.
+            self.vr_trigger_safe_latch = [Some(true); 2];
+        }
         let mut trigger_safe = latch_trigger_safe(
             &mut self.vr_trigger_safe_latch,
             pressed,
-            trigger_safe_mask(self.use_mode, on_panel, holds_weapon),
+            if self.flat_ui.device {
+                on_panel
+            } else {
+                trigger_safe_mask(self.use_mode, on_panel, holds_weapon)
+            },
         );
         for safe in trigger_safe.iter_mut() {
             *safe |= self.vr_trigger_swallow;
@@ -3249,6 +5317,408 @@ impl MissionCore {
         });
         let hands_input = weapon_safe_input.as_ref().unwrap_or(input_context);
 
+        // VR body slots have no flat input surface. On a flat load, return
+        // their exact entities to the backpack, or visibly drop them if full.
+        if game_options.presentation_mode == crate::PresentationMode::Flat {
+            let stored = super::holsters::occupants(&self.world);
+            for entity in stored.into_iter().flatten() {
+                let inventory = self
+                    .world
+                    .borrow::<UniqueView<PlayerInfo>>()
+                    .unwrap()
+                    .inventory_entity_id;
+                if self.drop_entity_into_container(inventory, entity).is_none() {
+                    let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                    let position = player.pos
+                        + player
+                            .rotation
+                            .rotate_vector(input_context.head.position + vec3(0.0, 0.0, -0.5));
+                    let rotation = player.rotation;
+                    drop(player);
+                    self.set_entity_position_rotation(
+                        entity,
+                        position,
+                        rotation,
+                        vec3(1.0, 1.0, 1.0),
+                    );
+                    self.drop_held_item_into_world(entity);
+                }
+            }
+        }
+
+        let held = [left_hand_held, right_hand_held];
+        // Body contacts use a calibrated palm sphere, not the aim origin at
+        // the back of the glove. Keep the original input for weapon controls.
+        let mut body_input = hands_input.clone();
+        self.body_hand_contacts = self.interaction.body_palm_positions(hands_input);
+        for (i, hand) in [&mut body_input.left_hand, &mut body_input.right_hand]
+            .into_iter()
+            .enumerate()
+        {
+            if let Some(palm) = self.body_hand_contacts[i] {
+                hand.position = palm;
+            } else {
+                hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+            }
+        }
+        let mut shoulder_releases = self.shoulder_backpack.update(
+            &body_input,
+            held,
+            game_options.presentation_mode == crate::PresentationMode::Vr
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
+            time.elapsed.as_secs_f32(),
+        );
+        self.holsters.shoulder_priority = self.shoulder_backpack.near;
+        self.ammo_pouch.shoulder_priority = self.shoulder_backpack.near;
+        let pouch_weapons = std::array::from_fn(|i| {
+            held[1 - i].filter(|gun| self.magazine_capacity(*gun).is_some())
+        });
+        self.holsters.pouch_priority = pouch_weapons.map(|weapon| weapon.is_some());
+        self.holsters.freeze_heading = self.ammo_pouch.near.iter().any(|near| *near);
+        let holster_actions = self.holsters.update(
+            &body_input,
+            held,
+            [
+                crate::vr_config::Handedness::Left,
+                crate::vr_config::Handedness::Right,
+            ]
+            .map(|hand| self.interaction.hand_available_for_body_slot(hand)),
+            super::holsters::occupants(&self.world),
+            super::holsters::SLOT_COUNT,
+            held.map(|entity| {
+                entity.is_some_and(|entity| {
+                    crate::virtual_hand::is_wieldable_weapon(&self.world, entity)
+                })
+            }),
+            held.map(|entity| {
+                entity.is_some_and(|entity| super::holsters::accepts(&self.world, entity))
+            }),
+            game_options.presentation_mode == crate::PresentationMode::Vr
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
+            time.elapsed.as_secs_f32(),
+        );
+        self.personal_card
+            .advance_downloads(time.elapsed.as_secs_f32());
+        self.personal_card.load_pose(asset_cache);
+        self.personal_card.device_mode = device_enabled;
+        self.personal_card.update(
+            &body_input,
+            self.holsters.body_pose,
+            [crate::Handedness::Left, crate::Handedness::Right].map(|hand| {
+                let i = crate::vr_config::hand_slot(hand);
+                self.interaction.hand_available_for_body_slot(hand)
+                    && holster_actions[i].is_none()
+                    && !self.shoulder_backpack.near[i]
+            }),
+            game_options.presentation_mode == crate::PresentationMode::Vr
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
+        );
+        self.personal_card
+            .sample_hand(hands_input, player_pos, player_rot);
+        self.interaction
+            .reserve_body_tool_hands(self.personal_card.blocked);
+        let pouch_available = [crate::Handedness::Left, crate::Handedness::Right].map(|hand| {
+            self.interaction.hand_available_for_body_slot(hand)
+                && !self.personal_card.blocked[crate::vr_config::hand_slot(hand)]
+        });
+        let pouch_offers = std::array::from_fn(|i| {
+            pouch_available[i]
+                .then_some(pouch_weapons[i])
+                .flatten()
+                .and_then(|gun| super::reload::reserve_clip_for_pouch(&self.world, gun))
+        });
+        let pouch_actions = self.ammo_pouch.update(
+            &body_input,
+            self.holsters.body_pose,
+            held,
+            pouch_available,
+            pouch_weapons,
+            held.map(|item| {
+                item.is_some_and(|item| super::reload::is_ammo_clip(&self.world, item))
+            }),
+            pouch_offers,
+            game_options.presentation_mode == crate::PresentationMode::Vr
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
+        );
+        let shoulder_slots = self.shoulder_backpack.near_slot;
+        let inventory = self
+            .world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .unwrap()
+            .inventory_entity_id;
+        let needs_recall = self.shoulder_backpack.draws.iter().any(Option::is_some)
+            || (0..2).any(|i| self.shoulder_backpack.entered[i] && held[i].is_none());
+        let mut recalls = if needs_recall {
+            super::shoulder_backpack::weapons(&self.world, inventory)
+        } else {
+            [None; 2]
+        };
+        for i in 0..2 {
+            if self.shoulder_backpack.entered[i]
+                && (held[i].is_some()
+                    || (pouch_available[i]
+                        && shoulder_slots[i].is_some_and(|slot| recalls[slot].is_some())))
+            {
+                effects.push(Effect::HandHaptic {
+                    hand: if i == 0 {
+                        crate::Handedness::Left
+                    } else {
+                        crate::Handedness::Right
+                    },
+                    pulse: crate::haptics::SHOULDER_READY,
+                });
+            }
+        }
+        for i in 0..2 {
+            if !pouch_available[i] {
+                continue;
+            }
+            if let Some(slot) = self.shoulder_backpack.draws[i] {
+                if let Some(entity) = recalls[slot].take() {
+                    effects.push(Effect::GrabEntity {
+                        entity_id: entity,
+                        hand: if i == 0 {
+                            crate::Handedness::Left
+                        } else {
+                            crate::Handedness::Right
+                        },
+                        current_parent_id: Some(inventory),
+                    });
+                    self.vr_trigger_safe_latch[i] = Some(true);
+                    effects.push(Effect::ShowMessage {
+                        text: "Weapon drawn from backpack".to_owned(),
+                    });
+                } else {
+                    effects.push(Effect::ShowMessage {
+                        text: "No weapon stored at this shoulder".to_owned(),
+                    });
+                    effects.push(Effect::PlaySound {
+                        handle: AudioHandle::new(),
+                        name: "repfail".to_owned(),
+                        source: None,
+                        spatial: false,
+                    });
+                }
+            }
+        }
+        for i in 0..2 {
+            self.ammo_pouch.refused[i] &= self.shoulder_backpack.keep_grip(i);
+            shoulder_releases[i] |= matches!(
+                pouch_actions[i],
+                Some(super::ammo_pouch::Action::Return { .. })
+            );
+        }
+        let merge_returns = std::array::from_fn::<_, 2, _>(|i| {
+            if !matches!(
+                pouch_actions[i],
+                Some(super::ammo_pouch::Action::Return { .. })
+            ) {
+                return None;
+            }
+            let inventory = self
+                .world
+                .borrow::<UniqueView<PlayerInfo>>()
+                .unwrap()
+                .inventory_entity_id;
+            let item = held[i]?;
+            let target = find_mergeable_stack_anywhere(&self.world, inventory, item)?;
+            let grid = crate::inventory::grid_for(&self.world, inventory);
+            let contents =
+                crate::inventory::Inventory::from_container(&self.world, inventory, grid);
+            contents
+                .all_items()
+                .find(|item| item.entity == target)
+                .map(|item| (item.x, item.y))
+        });
+        let shoulder_collect = std::array::from_fn::<_, 2, _>(|i| {
+            shoulder_releases[i]
+                && held[i].is_some_and(|entity| {
+                    crate::scripts::script_util::is_always_collected(&self.world, entity)
+                        || crate::scripts::script_util::is_download_pickup(&self.world, entity)
+                })
+        });
+        let shoulder_cells = if (0..2).any(|i| {
+            shoulder_releases[i]
+                && held[i].is_some_and(|entity| backpack_accepts_deposit(&self.world, entity))
+        }) {
+            let inventory = self
+                .world
+                .borrow::<UniqueView<PlayerInfo>>()
+                .unwrap()
+                .inventory_entity_id;
+            super::shoulder_backpack::reserve_slots(
+                &self.world,
+                inventory,
+                std::array::from_fn(|i| {
+                    (shoulder_releases[i] && !shoulder_collect[i] && merge_returns[i].is_none())
+                        .then_some(held[i])
+                        .flatten()
+                }),
+            )
+        } else {
+            [None; 2]
+        };
+        let mut shoulder_input = hands_input.clone();
+        for (i, hand) in [
+            &mut shoulder_input.left_hand,
+            &mut shoulder_input.right_hand,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if !held[i].is_some_and(|entity| {
+                crate::scripts::script_util::is_download_pickup(&self.world, entity)
+            }) {
+                self.download_release_disarmed[i] = false;
+                continue;
+            }
+            let tracked = crate::vr_support::GripPose {
+                position: hand.position,
+                rotation: hand.rotation,
+            }
+            .is_tracked()
+                && input_context
+                    .pose_tracking
+                    .is_none_or(|p| p.head && p.hands[i])
+                && hand.squeeze_value.is_finite();
+            if !tracked {
+                self.download_release_disarmed[i] = true;
+            } else if hand.squeeze_value >= 0.5 {
+                self.download_release_disarmed[i] = false;
+            }
+            if self.download_release_disarmed[i] {
+                hand.squeeze_value = 1.0;
+            }
+        }
+
+        for i in 0..2 {
+            if shoulder_releases[i] {
+                let accepted = shoulder_collect[i]
+                    || shoulder_cells[i].is_some()
+                    || merge_returns[i].is_some();
+                if !accepted {
+                    self.shoulder_backpack.retain(i, held[i].unwrap());
+                    self.ammo_pouch.refused[i] = matches!(
+                        pouch_actions[i],
+                        Some(super::ammo_pouch::Action::Return { .. })
+                    );
+                }
+                effects.push(Effect::ShowMessage {
+                    text: if shoulder_collect[i] {
+                        "Collected".to_owned()
+                    } else if accepted {
+                        "Stored in backpack".to_owned()
+                    } else {
+                        "Backpack full — item kept in hand. Squeeze to re-grip.".to_owned()
+                    },
+                });
+                if !held[i].is_some_and(|entity| {
+                    crate::scripts::script_util::is_download_pickup(&self.world, entity)
+                }) {
+                    effects.push(Effect::PlaySound {
+                        handle: AudioHandle::new(),
+                        name: if accepted { "bset" } else { "repfail" }.to_owned(),
+                        source: held[i],
+                        spatial: false,
+                    });
+                }
+                tracing::info!(hand = i, entity = ?held[i], accepted, "shoulder backpack release");
+            }
+            if let Some(action) = holster_actions[i] {
+                use super::holsters::Action;
+                let refused = matches!(action, Action::Refuse { .. });
+                effects.push(Effect::ShowMessage {
+                    text: match action {
+                        Action::Store { .. } => "Weapon holstered",
+                        Action::Retrieve { .. } => "Weapon drawn",
+                        Action::Refuse { .. } => {
+                            "Holster accepts melee weapons and pistols, one per slot. Use a shoulder for larger weapons. Squeeze to re-grip."
+                        }
+                    }
+                    .to_owned(),
+                });
+                effects.push(Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    name: if refused { "repfail" } else { "bset" }.to_owned(),
+                    source: held[i],
+                    spatial: false,
+                });
+                if matches!(action, Action::Retrieve { .. }) {
+                    let hand = if i == 0 {
+                        &mut shoulder_input.left_hand
+                    } else {
+                        &mut shoulder_input.right_hand
+                    };
+                    hand.squeeze_value = 0.0;
+                    hand.trigger_value = 0.0;
+                    self.vr_trigger_safe_latch[i] = Some(true);
+                }
+            }
+            if self.ammo_pouch.blocks_grab[i]
+                || (pouch_available[i] && self.shoulder_backpack.blocks_grab[i])
+            {
+                let hand = if i == 0 {
+                    &mut shoulder_input.left_hand
+                } else {
+                    &mut shoulder_input.right_hand
+                };
+                hand.squeeze_value = 0.0;
+                hand.trigger_value = 0.0;
+            }
+            match pouch_actions[i] {
+                Some(super::ammo_pouch::Action::Withdraw { weapon }) => {
+                    effects.push(Effect::WithdrawPouchAmmo {
+                        weapon,
+                        hand: if i == 0 {
+                            crate::Handedness::Left
+                        } else {
+                            crate::Handedness::Right
+                        },
+                    });
+                }
+                Some(super::ammo_pouch::Action::Empty) => {
+                    effects.push(Effect::ShowMessage {
+                        text: "No reserve for the selected ammo type".to_owned(),
+                    });
+                    effects.push(Effect::PlaySound {
+                        handle: AudioHandle::new(),
+                        name: "repfail".to_owned(),
+                        source: None,
+                        spatial: false,
+                    });
+                }
+                _ => {}
+            }
+            if self.shoulder_backpack.keep_grip(i) || self.holsters.retained.keep_grip(i) {
+                match i {
+                    0 => shoulder_input.left_hand.squeeze_value = 1.0,
+                    _ => shoulder_input.right_hand.squeeze_value = 1.0,
+                }
+            }
+        }
+        for (i, hand) in [
+            &mut shoulder_input.left_hand,
+            &mut shoulder_input.right_hand,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if self.personal_card.blocked[i] {
+                hand.squeeze_value = 0.0;
+                hand.trigger_value = 0.0;
+                hand.a_value = 0.0;
+            }
+        }
+        let hands_input = &shoulder_input;
+
         // Opening a hand over the inventory strip puts the item in the
         // backpack instead of on the floor. Decided from the input the hands
         // are about to see, so the release this claims is exactly the release
@@ -3264,17 +5734,17 @@ impl MissionCore {
                 hands_input.right_hand.squeeze_value < crate::ui::VR_TRIGGER_THRESHOLD,
             ],
         );
-        // The always-collected exception, the same one `ContainerGui`'s own
-        // `Take` and squeeze make on the same predicate: a keycard's Frob is
-        // what records the credential, a pile's what credits the nanites, so
-        // banking any of them bodily would put an object in the pack that
-        // unlocks or buys nothing. Reachable only for one restored into a hand
-        // by an older save - acquiring one routes through Frob - which is
-        // exactly why `held_trigger_press_payload` keeps its own arm.
+        // Downloads and logs never occupy backpack cells. The later actual
+        // release pass also claims downloads outside the strip/shoulder zones.
         let (collect, store): (Vec<_>, Vec<_>) = strip_deposits.iter().partition(|entity_id| {
             crate::scripts::script_util::is_always_collected(&self.world, **entity_id)
         });
-        let collect: Vec<_> = collect.into_iter().copied().collect();
+        let mut collect: Vec<_> = collect.into_iter().copied().collect();
+        collect.extend(
+            (0..2)
+                .filter(|i| shoulder_collect[*i])
+                .filter_map(|i| held[i]),
+        );
         // The cell the depositing hand's ray was over, for a stored item -
         // whichever on-strip slot actually held it. `None` (a ray gone off
         // the strip between resolving `strip_cell` and here, or generally
@@ -3289,32 +5759,499 @@ impl MissionCore {
             })
         };
         // A stored item needs backpack room, so nothing is claimed unless the
-        // backpack can actually take it - a release is never suppressed into an
-        // item that lands nowhere. A collected one never enters the pack (its
-        // Frob awards and destroys it), so it is claimed either way.
-        let store: Vec<(EntityId, Option<(usize, usize)>)> =
-            if backpack_accepts_deposit(&self.world) {
-                store
-                    .into_iter()
-                    .map(|entity_id| (*entity_id, cell_for(*entity_id)))
-                    .collect()
-            } else {
-                Vec::new()
-            };
+        // backpack can actually take *that* item - a release is never
+        // suppressed into an item that lands nowhere. Checked per item (a
+        // full pack can still take a stackable that merges), so a two-hand
+        // release can claim one item and leave the other to its ordinary
+        // world drop. A collected one never enters the pack (its Frob awards
+        // and destroys it), so it is claimed either way.
+        let mut store: Vec<(EntityId, Option<(usize, usize)>)> = store
+            .into_iter()
+            .filter(|entity_id| backpack_accepts_deposit(&self.world, **entity_id))
+            .map(|entity_id| (*entity_id, cell_for(*entity_id)))
+            .collect();
+
+        store.extend((0..2).filter_map(|i| {
+            (shoulder_cells[i].is_some() || merge_returns[i].is_some())
+                .then_some((held[i]?, merge_returns[i].or(shoulder_cells[i])))
+        }));
+
+        let neutral_eye = death_camera::EyePose::flat(
+            crate::player_eye_height_for(self.player_handle.is_crouched()),
+            tracked_head_rotation,
+        );
+        self.flat_eye =
+            (game_options.presentation_mode == crate::PresentationMode::Flat).then(|| {
+                let (left, right) = self.interaction.held_entities();
+                let ignored = [left, right];
+                self.flat_lean.update(
+                    if self.use_mode {
+                        0.0
+                    } else {
+                        input_context.lean
+                    },
+                    time.elapsed.as_secs_f32(),
+                    neutral_eye,
+                    player_pos,
+                    player_rot,
+                    &self.physics,
+                    &ignored,
+                )
+            });
 
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
+        let reserved_releases: Vec<_> = store
+            .iter()
+            .map(|(entity, _)| *entity)
+            .chain(collect.iter().copied())
+            .chain(holster_actions.iter().filter_map(|action| match action {
+                Some(super::holsters::Action::Store { entity, .. }) => Some(*entity),
+                _ => None,
+            }))
+            .collect();
         let mut interaction_msgs = self.interaction.update(&InteractionContext {
             physics: &self.physics,
             world: &self.world,
             input: hands_input,
+            step_dt: time.elapsed.as_secs_f32(),
+            support_enabled: !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
             player_pos,
             player_rotation: player_rot,
-            head_rotation: input_context.head.rotation,
-            eye_height: crate::player_eye_height_for(self.player_handle.is_crouched()),
+            flat_eye: self.flat_eye.unwrap_or(neutral_eye),
+            reserved_releases: &reserved_releases,
         });
-        rewrite_strip_release(&mut interaction_msgs, &store, &collect);
-        self.process_virtual_hand_effects(asset_cache, interaction_msgs);
+        self.interaction.fit_held_items(
+            &self.world,
+            asset_cache,
+            &mut interaction_msgs,
+            game_options,
+        );
+        self.personal_card.grip = self
+            .personal_card
+            .hand
+            .and_then(|hand| self.interaction.personal_card_grip(hand));
+        // Claim actual hand releases, anywhere, before backpack/world ownership
+        // changes. The shared rewrite preserves Drop and removes competing offers.
+        let downloads: Vec<_> = interaction_msgs
+            .iter()
+            .filter_map(|effect| match effect {
+                VirtualHandEffect::DropItem { entity_id, .. }
+                    if game_options.presentation_mode == crate::PresentationMode::Vr
+                        && crate::scripts::script_util::is_download_pickup(
+                            &self.world,
+                            *entity_id,
+                        ) =>
+                {
+                    Some(*entity_id)
+                }
+                _ => None,
+            })
+            .collect();
+        collect.extend(downloads.iter().copied());
+        store.retain(|(entity, _)| !collect.contains(entity));
+        for entity in &downloads {
+            if let Some(slot) = held.iter().position(|held| *held == Some(*entity)) {
+                let source = [&input_context.left_hand, &input_context.right_hand][slot];
+                self.personal_card
+                    .download(crate::virtual_hand::hand_world_position(
+                        player_pos,
+                        player_rot,
+                        source.position,
+                    ));
+                effects.push(Effect::HandHaptic {
+                    hand: if slot == 0 {
+                        crate::Handedness::Left
+                    } else {
+                        crate::Handedness::Right
+                    },
+                    pulse: crate::haptics::HapticPulse {
+                        amplitude: 0.5,
+                        duration_ms: 70,
+                    },
+                });
+                effects.push(Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    source: None,
+                    name: "bset".to_owned(),
+                    spatial: false,
+                });
+            }
+        }
+        rewrite_inventory_release(&mut interaction_msgs, &store, &collect);
+        if game_options.presentation_mode == crate::PresentationMode::Vr {
+            let mut scan_required = false;
+            interaction_msgs.retain(|effect| {
+                let blocked = matches!(effect,
+                    VirtualHandEffect::OutMessage { message: Message { to, payload: MessagePayload::Frob } }
+                        if super::personal_card::is_reader(&self.world, *to));
+                scan_required |= blocked;
+                !blocked
+            });
+            if scan_required {
+                effects.push(Effect::ShowMessage {
+                    text: "Scan your personal access card".to_owned(),
+                });
+                effects.push(Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    source: None,
+                    name: "repfail".to_owned(),
+                    spatial: false,
+                });
+            }
+            // The device scans from its rear lens. The ordinary card retains
+            // its controller ray and requires the card itself within contact reach.
+            self.device_beam = None;
+            self.flat_ui.scan_label = None;
+            let stowed_panel = device_enabled
+                .then(|| {
+                    self.personal_card
+                        .stowed_device_panel(player_pos, player_rot)
+                })
+                .flatten();
+            let scan_pose = if self.flat_ui.device {
+                self.device_scan_pose.map(|(origin, rotation)| {
+                    (
+                        player_pos + player_rot.rotate_vector(origin),
+                        player_rot * rotation,
+                    )
+                })
+            } else if let Some(panel) = stowed_panel {
+                Some(super::mfd_device::scanner_pose(asset_cache, panel))
+            } else {
+                self.personal_card.held_pose
+            };
+            if stowed_panel.is_some() {
+                self.device_scan_pose = scan_pose.map(|(origin, rotation)| {
+                    (
+                        player_rot.conjugate().rotate_vector(origin - player_pos),
+                        player_rot.conjugate() * rotation,
+                    )
+                });
+            }
+            let hit = scan_pose.and_then(|(origin, rotation)| {
+                use cgmath::{SquareMatrix, Transform};
+                use collision::{Continuous, Ray3};
+                let forward = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+                let world_hit = crate::virtual_hand::interaction_ray_cast(
+                    &self.physics,
+                    &self.world,
+                    vec3_to_point3(origin),
+                    forward,
+                    None,
+                );
+                let reach = 2.0 / crate::METERS_PER_WORLD_UNIT;
+                let mut nearest = world_hit.as_ref().map_or(reach, |hit| {
+                    (hit.hit_point - vec3_to_point3(origin))
+                        .magnitude()
+                        .min(reach)
+                });
+                if self.flat_ui.device {
+                    self.device_beam = Some((
+                        origin,
+                        origin + forward * nearest.min(0.25 / crate::METERS_PER_WORLD_UNIT),
+                    ));
+                }
+                let (left, right) = self.interaction.held_entities();
+                let mut target = world_hit.and_then(|hit| {
+                    let entity = hit.maybe_entity_id?;
+                    // Held items use their visible bounds below.
+                    (!self.flat_ui.device || ![left, right].contains(&Some(entity)))
+                        .then_some((entity, hit.hit_point.to_vec()))
+                });
+                if self.flat_ui.device {
+                    // Held objects no longer participate in ordinary world rays.
+                    // Test the actual transformed model bounds for held items,
+                    // retaining nearer world geometry as an occluder.
+                    let transforms = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+                    for entity in [left, right].into_iter().flatten() {
+                        let Some(bounds) =
+                            self.id_to_model.get(&entity).and_then(|m| m.bounding_box())
+                        else {
+                            continue;
+                        };
+                        let Ok(transform) = transforms.get(entity).map(|t| t.0) else {
+                            continue;
+                        };
+                        let Some(inverse) = transform.invert() else {
+                            continue;
+                        };
+                        let ray = Ray3::new(
+                            inverse.transform_point(vec3_to_point3(origin)),
+                            inverse.transform_vector(forward),
+                        );
+                        let Some(local_hit) = bounds.intersection(&ray) else {
+                            continue;
+                        };
+                        let point = transform.transform_point(local_hit).to_vec();
+                        let distance = (point - origin).magnitude();
+                        if distance <= nearest {
+                            nearest = distance;
+                            target = Some((entity, point));
+                        }
+                    }
+                }
+                let (entity, point) = target?;
+                let distance = (point - origin).magnitude();
+                (distance <= reach).then_some((entity, origin, point, distance))
+            });
+            // This host only previews query information; it has no pointer or actions.
+            self.stowed_device_ui.device = stowed_panel.is_some();
+            let preview_target =
+                stowed_panel
+                    .and(hit.map(|(entity, ..)| entity))
+                    .filter(|entity| {
+                        crate::hud::resolve_item_name(asset_cache, &self.world, *entity).is_some()
+                    });
+            if self.stowed_device_ui.utilities.query_entity() != preview_target {
+                self.stowed_device_ui.utilities = Default::default();
+                if let Some(entity) = preview_target {
+                    self.stowed_device_ui.utilities.inspect_entity(entity);
+                }
+            }
+            if stowed_panel.is_some() {
+                self.stowed_device_ui.utilities.refresh(
+                    &self.world,
+                    asset_cache,
+                    &self.entity_info,
+                );
+                self.stowed_device_ui.set_readouts(Some(
+                    crate::hud::readouts::UseModeReadouts::from_world(&self.world, None),
+                ));
+            }
+            let device_trigger = self.personal_card.hand.is_some_and(|i| {
+                [&input_context.left_hand, &input_context.right_hand][i].trigger_value > 0.5
+            });
+            let trigger_edge = self.device_scanner.trigger(
+                self.flat_ui.device && self.device_panel.is_some(),
+                device_trigger,
+            );
+            if self.flat_ui.device
+                && let Some((entity, start, end, _)) = hit
+            {
+                self.device_beam = Some((start, end));
+                self.flat_ui.scan_label =
+                    crate::hud::resolve_item_name(asset_cache, &self.world, entity);
+            }
+            let near_reader = hit.and_then(|(entity, _, end, distance)| {
+                // Keep the card's original contact origin outside the experiment.
+                let distance = if self.flat_ui.device {
+                    distance
+                } else {
+                    (end - self
+                        .personal_card
+                        .transform(player_pos, player_rot)?
+                        .w
+                        .truncate())
+                    .magnitude()
+                };
+                (distance <= 0.20 / crate::METERS_PER_WORLD_UNIT
+                    && super::personal_card::is_reader(&self.world, entity)
+                    && (!self.flat_ui.device
+                        || self
+                            .world
+                            .borrow::<View<dark::properties::PropKeyDst>>()
+                            .is_ok_and(|v| v.get(entity).is_ok())))
+                .then_some(entity)
+            });
+            let focus_mode = crate::dev_params::get_bool(crate::dev_params::VR_MFD_FOCUS_SCAN);
+            let focused = self.device_scanner.focus(
+                (self.flat_ui.device && focus_mode)
+                    .then(|| hit.map(|(entity, ..)| entity))
+                    .flatten(),
+                time.elapsed.as_secs_f32(),
+            );
+            let requested = if focus_mode {
+                focused
+            } else if trigger_edge {
+                hit.map(|(entity, ..)| entity)
+            } else {
+                None
+            };
+            let scan = if stowed_panel.is_some() {
+                None // Belt previews must not activate readers or consume items.
+            } else if self.flat_ui.device && requested.is_some() {
+                requested.map(|entity| {
+                    self.personal_card.scans += 1;
+                    self.personal_card.last_scan = Some(entity);
+                    entity
+                })
+            } else {
+                self.personal_card
+                    .scan(near_reader, time.elapsed.as_secs_f32())
+            };
+            if let Some(entity) = scan {
+                let denied = crate::scripts::script_util::is_entity_locked(&self.world, entity);
+                if self.flat_ui.device {
+                    self.flat_ui.close();
+                    self.flat_ui.utilities = Default::default();
+                    let inspect_only = self.device_inspect_only;
+                    self.device_inspect_only = false;
+                    let has_script = |name| {
+                        crate::scripts::script_util::entity_has_script(&self.world, entity, name)
+                    };
+                    if !inspect_only && has_script("Chemical") {
+                        self.flat_ui.utilities.open_research(None);
+                        effects.push(Effect::UseResearchChemical { entity_id: entity });
+                    } else if !inspect_only && has_script("ResearchableScript") {
+                        let template = crate::scripts::script_util::entity_class_template_id(
+                            &self.world,
+                            entity,
+                        );
+                        self.flat_ui.utilities.open_research(template);
+                        if crate::scripts::script_util::player_carried_items(&self.world)
+                            .contains(&entity)
+                        {
+                            effects.push(Effect::BeginResearch { entity_id: entity });
+                        } else {
+                            effects.push(Effect::ShowMessage {
+                                text: "Hold the specimen to begin research".into(),
+                            });
+                        }
+                    } else if !inspect_only && super::mfd_device::opens_panel(&self.world, entity) {
+                        self.script_world.dispatch(Message {
+                            to: entity,
+                            payload: MessagePayload::Frob,
+                        });
+                    } else if !inspect_only
+                        && self
+                            .world
+                            .borrow::<View<dark::properties::PropBaseGunDesc>>()
+                            .is_ok_and(|v| v.get(entity).is_ok())
+                    {
+                        effects.push(Effect::OpenWeaponSettings {
+                            weapon: Some(entity),
+                        });
+                    } else {
+                        self.flat_ui.utilities.inspect_entity(entity);
+                    }
+                } else {
+                    self.script_world.dispatch(Message {
+                        to: entity,
+                        payload: MessagePayload::Frob,
+                    });
+                }
+                effects.push(Effect::ShowMessage {
+                    text: if self.flat_ui.device {
+                        "Scan complete"
+                    } else if denied {
+                        "Access denied"
+                    } else {
+                        "Access authorized"
+                    }
+                    .to_owned(),
+                });
+                effects.push(Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    source: None,
+                    name: if denied { "repfail" } else { "bset" }.to_owned(),
+                    spatial: false,
+                });
+                effects.push(Effect::HandHaptic {
+                    hand: if self.personal_card.hand == Some(0) {
+                        crate::Handedness::Left
+                    } else {
+                        crate::Handedness::Right
+                    },
+                    pulse: crate::haptics::HapticPulse {
+                        amplitude: if denied { 0.75 } else { 0.4 },
+                        duration_ms: if denied { 150 } else { 60 },
+                    },
+                });
+            }
+        }
+
+        // Holstering claims only this release, including its consumption offer.
+        for (i, action) in holster_actions.into_iter().enumerate() {
+            let Some(action) = action else {
+                continue;
+            };
+            match action {
+                super::holsters::Action::Store { entity, slot } => {
+                    interaction_msgs.retain(|effect| !matches!(effect, VirtualHandEffect::OutMessage { message }
+                        if matches!(message.payload, MessagePayload::ProvideForConsumption { entity: offered } if offered == entity)));
+                    for effect in &mut interaction_msgs {
+                        if matches!(effect, VirtualHandEffect::DropItem { entity_id, .. } if *entity_id == entity)
+                        {
+                            *effect = VirtualHandEffect::HolsterItem {
+                                entity_id: entity,
+                                slot,
+                            };
+                        }
+                    }
+                }
+                super::holsters::Action::Retrieve { entity, .. } => {
+                    effects.push(Effect::GrabEntity {
+                        entity_id: entity,
+                        hand: if i == 0 {
+                            crate::vr_config::Handedness::Left
+                        } else {
+                            crate::vr_config::Handedness::Right
+                        },
+                        current_parent_id: None,
+                    });
+                }
+                super::holsters::Action::Refuse { .. } => {}
+            }
+        }
+        effects.extend(self.process_virtual_hand_effects(asset_cache, interaction_msgs));
+        self.physics
+            .set_held_target_frame(player_pos, player_rot, hands_input.tracking);
+        // Remember only successful shoulder deposits, after the shared storage
+        // transition has committed real backpack ownership. Other items and
+        // refused deposits cannot overwrite a weapon shortcut.
+        if shoulder_releases.iter().any(|released| *released) {
+            let contents = crate::inventory::Inventory::from_container(
+                &self.world,
+                inventory,
+                crate::inventory::grid_for(&self.world, inventory),
+            );
+            let remembered: Vec<_> = (0..2)
+                .filter_map(|i| {
+                    let entity = held[i]?;
+                    let slot = shoulder_slots[i]?;
+                    (shoulder_releases[i]
+                        && crate::virtual_hand::is_wieldable_weapon(&self.world, entity)
+                        && contents.all_items().any(|item| item.entity == entity))
+                    .then_some((entity, slot))
+                })
+                .collect();
+            for (entity, slot) in remembered {
+                super::shoulder_backpack::remember(&mut self.world, entity, slot);
+            }
+        }
+
+        // Weight is an independent VR experiment. Configure the existing held
+        // drive after acquisition/fitting so all physics substeps share it.
+        let (left, right) = self.interaction.held_entities();
+        let strength = crate::weapon_recoil::handling_strength(&self.world);
+        for gun in [left, right].into_iter().flatten() {
+            let target = game_options
+                .experimental_features
+                .contains("physical_gun_weight")
+                .then(|| self.interaction.held_grip_anchor(gun))
+                .flatten()
+                .and_then(|anchor| {
+                    crate::weapon_recoil::gun_weight_target(
+                        &self.world,
+                        gun,
+                        anchor,
+                        strength,
+                        self.interaction.is_supported(gun),
+                    )
+                });
+            self.physics.set_held_gun_weight(gun, target);
+        }
+
+        // The physical VR reload: a clip carried into the other hand's weapon
+        // loads it. Runs after the hands have been updated so the held pair is
+        // this frame's.
+        if game_options.presentation_mode == crate::PresentationMode::Vr {
+            let cues = self.update_clip_insert_gesture(asset_cache);
+            effects.extend(cues);
+        }
 
         // Tag the wielded weapon with the flat camera/crosshair fire ray so its
         // firing scripts spawn projectiles along the crosshair (camera-origin
@@ -3334,33 +6271,79 @@ impl MissionCore {
         // Advance any in-progress reload (clears itself when complete).
         self.update_flat_reload_anim(time.elapsed);
 
+        // Advance the between-shots wait a fire setting imposes on a gun.
+        self.update_shot_cooldowns(time.elapsed);
+
         // Sync up the position of all the physics objects
         // The timing of this is important - things like the GUI rendering depend on an up-to-date position
         // from physics
         self.synchronize_physics_positions();
+        self.interaction.synchronize_held_visuals(&self.world);
 
         // Re-anchor attached entities (e.g. a muzzle flash) to their parent's
         // now-current transform, so they track a moving parent rather than their
         // spawn pose. Runs after physics sync so parents' transforms are current.
         self.update_attached_entities();
 
+        // The weapon settings MFD belongs to one gun: putting that gun away -
+        // dropping it, holstering it, cycling weapons - dismisses the panel.
+        // The flag means "our panel is docked", so it is also dropped when the
+        // slot went elsewhere (close button, Tab, another panel opening); that
+        // keeps it from outliving the panel it describes.
+        if let Some(opened_for) = self.weapon_settings_gun {
+            let panel = self
+                .world
+                .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
+                .map(|panel| panel.0)
+                .ok();
+            let ours_is_docked = panel.is_some() && self.flat_ui.active_panel() == panel;
+            let put_away = crate::scripts::gui::should_close_settings_panel(
+                opened_for,
+                crate::wielded_weapon::held_in_hand(&self.world, opened_for).then_some(opened_for),
+                self.entity_exists(opened_for),
+            );
+            if put_away && !self.flat_ui.device {
+                if ours_is_docked {
+                    self.flat_ui.close();
+                }
+                self.weapon_settings_gun = None;
+            } else if !ours_is_docked {
+                self.weapon_settings_gun = None;
+            }
+        }
+
+        // The psi MFD belongs to the wielded amp, so putting the amp away
+        // dismisses it - the same contract the settings MFD has with its gun.
+        // It is also dropped when the slot went elsewhere (close button, Tab,
+        // another panel opening), which is what disarms the stick capture.
+        if self.psi_powers_open {
+            let panel = self
+                .world
+                .borrow::<UniqueView<PsiPowersPanelEntity>>()
+                .map(|panel| panel.0)
+                .ok();
+            let ours_is_docked = panel.is_some() && self.flat_ui.active_panel() == panel;
+            if !ours_is_docked {
+                self.psi_powers_open = false;
+            } else if !self.wielding_psi_amp() {
+                self.flat_ui.close();
+                self.psi_powers_open = false;
+            }
+        }
+
         // Flat-mode MFD panel input: map the 2D pointer onto the active panel
         // and drive it through the same GUIHover contract the VR hand ray
         // uses. Dispatched before the script update so hovers/clicks are
         // processed this frame.
+        // Keep the last drawn readout snapshot until input is consumed. A
+        // pickup/drop this frame must not retarget a click on the previously drawn gun.
+        // Double-click windows are counted in simulation frames, so the debug
+        // runtime's zero-time administrative updates do not consume them.
+        if !time.elapsed.is_zero() {
+            self.flat_ui.advance_simulation_frame();
+        }
         let (ui_messages, ui_drag_actions) = match game_options.presentation_mode {
             crate::PresentationMode::Flat => {
-                // Expose the AMMOFULL ammo-cycle button for hit-testing exactly
-                // when the flat HUD draws it (the shared visibility predicate,
-                // so the clickable rect never diverges from the rendered
-                // button).
-                let ammo_button =
-                    if crate::hud::ammo_cycle_button_visible(&self.world, self.use_mode) {
-                        Some(crate::hud::AMMO_CYCLE_BUTTON)
-                    } else {
-                        None
-                    };
-                self.flat_ui.set_ammo_cycle_button(ammo_button);
                 self.flat_ui.update(&self.world, input_context.pointer)
             }
             // The cyber interface's pointer bridge: the controller ray's canvas
@@ -3372,21 +6355,180 @@ impl MissionCore {
             // bound in VR, and running its walk-away / bare-view logic against
             // a pointer that does not exist would be a trap for whatever opens
             // a host slot in VR next.
-            crate::PresentationMode::Vr if self.use_mode => {
+            crate::PresentationMode::Vr if self.use_mode || self.flat_ui.device => {
                 let pointer = self.vr_use_mode_pointer.as_ref().map(|pass| {
-                    crate::mission::flat_ui_host::vr_canvas_pointer(pass, input_context)
+                    let mut pointer =
+                        crate::mission::flat_ui_host::vr_canvas_pointer(pass, input_context);
+                    if self.flat_ui.device {
+                        pointer.canvas_pos = pointer.canvas_pos.and_then(|point| {
+                            super::mfd_device::to_native(point, self.flat_ui.device_screen_source())
+                        });
+                    }
+                    pointer
                 });
                 self.flat_ui.update_canvas(&self.world, pointer)
             }
             crate::PresentationMode::Vr => (Vec::new(), Vec::new()),
         };
         for msg in ui_messages {
+            if game_options.presentation_mode == crate::PresentationMode::Vr
+                && matches!(msg.payload, MessagePayload::Frob)
+                && super::personal_card::is_reader(&self.world, msg.to)
+            {
+                continue;
+            }
             self.script_world.dispatch(msg);
         }
+        self.device_inspect_only = self.flat_ui.device && self.flat_ui.utilities.is_inspecting();
         for action in ui_drag_actions {
-            let drag_effects = self.apply_flat_drag_action(action);
+            // Flattened: an action can answer with a composite (using a
+            // maintenance tool is a restore plus a consume plus a sound), and
+            // this list is applied one variant at a time.
+            let drag_effects = Effect::flatten(self.apply_flat_drag_action(action));
             effects.extend(drag_effects);
         }
+
+        // The inventory bar's mini-frame name line: what the canvas pointer is
+        // on, and failing that the world object the player is aiming at - the
+        // same pick the HUD brackets frame, resolved through the same
+        // `resolve_item_name`, so an object is never called two things at once.
+        // Unlike the brackets this readout is not gated on `P$HUDSelect`: a
+        // door gets no brackets but does get named here.
+        let shoulder_weapons = self
+            .flat_ui
+            .strip_entity()
+            .map(|inventory| super::shoulder_backpack::weapons(&self.world, inventory))
+            .unwrap_or([None; 2]);
+        self.flat_ui.set_shoulder_weapons(shoulder_weapons);
+        self.flat_ui
+            .utilities
+            .refresh(&self.world, asset_cache, &self.entity_info);
+        // Resolve physical ownership through the interaction boundary: flat's
+        // internal left slot represents the visibly right-handed viewmodel.
+        let held = self.interaction.held_entities();
+        let mut hand_items = [None; 2];
+        for entity in [held.0, held.1].into_iter().flatten() {
+            if let Some(hand) = self.interaction.holding_hand(entity) {
+                hand_items[crate::vr_config::hand_slot(hand)] = Some(entity);
+            }
+        }
+        // Storage indexes right then left; the paperdoll uses physical left/right.
+        let [right_holster, left_holster] = super::holsters::occupants(&self.world);
+        self.flat_ui.set_equipment_items(
+            &self.world,
+            asset_cache,
+            hand_items,
+            [left_holster, right_holster],
+        );
+        let placement_preview = self.vr_use_mode_pointer.as_ref().and_then(|pass| {
+            // Use the same per-hand rays as release detection, including a
+            // carrying hand when the other controller owns the UI cursor.
+            pass.active_ray()
+                .into_iter()
+                .chain(pass.rays.iter())
+                .find_map(|ray| {
+                    let item = hand_items[hand_slot(ray.handedness)]?;
+                    let point = ray.canvas_hit?;
+                    if !self.flat_ui.strip_contains(point) {
+                        return None;
+                    }
+                    let container = self.flat_ui.strip_entity()?;
+                    let cell = self
+                        .flat_ui
+                        .strip_cell_at(point, &self.world)
+                        .unwrap_or((usize::MAX, usize::MAX));
+                    Some(container_deposit_preview(
+                        &self.world,
+                        container,
+                        item,
+                        cell,
+                    ))
+                })
+        });
+        self.flat_ui
+            .set_placement_preview(&self.world, placement_preview);
+        self.refresh_readouts();
+        if !self.flat_ui.device
+            && self.weapon_settings_gun.is_some_and(|gun| {
+                crate::scripts::gui::should_close_settings_panel(
+                    gun,
+                    self.flat_ui.ammo_selection().0,
+                    self.entity_exists(gun),
+                )
+            })
+        {
+            let panel = self
+                .world
+                .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
+                .ok()
+                .map(|panel| panel.0);
+            if panel.is_some() && self.flat_ui.active_panel() == panel {
+                self.flat_ui.close();
+            }
+            self.weapon_settings_gun = None;
+        }
+        let name_strip = self.flat_ui.strip_entity().and_then(|_| {
+            self.flat_ui.pointed_equipment_name().or_else(|| {
+                self.flat_ui
+                    .pointed_item()
+                    .or_else(|| self.name_strip_world_pick(game_options))
+                    .and_then(|entity| {
+                        let name = crate::hud::resolve_item_name(asset_cache, &self.world, entity)?;
+                        Some(
+                            match shoulder_weapons
+                                .iter()
+                                .position(|item| *item == Some(entity))
+                            {
+                                Some(0) => format!("Left shoulder: {name}"),
+                                Some(1) => format!("Right shoulder: {name}"),
+                                _ => name,
+                            },
+                        )
+                    })
+            })
+        });
+        self.flat_ui.set_name_strip(name_strip);
+
+        // A deployed mine may be displaced by a collision or moving support.
+        // Move its sensor before script damage/overlap checks, so sensing and
+        // the eventual Corpse explosion remain at the visible mine.
+        let proximity_poses: Vec<_> = {
+            let scripts = self.world.borrow::<View<PropScripts>>().unwrap();
+            let positions = self.world.borrow::<View<PropPosition>>().unwrap();
+            (&scripts)
+                .iter()
+                .with_id()
+                .filter_map(|(id, scripts)| {
+                    if !scripts
+                        .scripts
+                        .iter()
+                        .any(|s| s.eq_ignore_ascii_case("ProxGrenadeTrigger"))
+                    {
+                        return None;
+                    }
+                    let owner = crate::scripts::proximity_grenade::linked_peer(&self.world, id)?;
+                    let pose = positions.get(owner).ok()?;
+                    let current = positions.get(id).ok()?;
+                    (pose.position != current.position || pose.rotation != current.rotation)
+                        .then_some((id, pose.clone()))
+                })
+                .collect()
+        };
+        for (id, pose) in proximity_poses {
+            self.physics
+                .sync_sensor_position_rotation(id, pose.position, pose.rotation);
+            self.world.add_component(id, pose);
+        }
+
+        // Deposit scent after movement, before AI senses the world.
+        self.world
+            .borrow::<UniqueViewMut<super::player_trail::PlayerTrail>>()
+            .unwrap()
+            .update(
+                time.elapsed.as_secs_f32(),
+                (self.player_handle.is_grounded() && !player_health_depleted)
+                    .then_some(self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos),
+            );
 
         // Update scripts
         let mut script_effects = profile!(
@@ -3446,6 +6588,8 @@ impl MissionCore {
         self.world.run(
             |prop_particle_group: View<PropParticleGroup>,
              prop_particle_launch_info: View<PropParticleLaunchInfo>,
+             templates: View<PropTemplateId>,
+             attachments: View<RuntimePropAttachment>,
              v_transient_fx: View<crate::runtime_props::RuntimePropTransientFx>,
              transform: View<RuntimePropTransform>| {
                 for (id, (pg, launch_info, transform)) in
@@ -3467,6 +6611,30 @@ impl MissionCore {
                     }
                     let particle_system =
                         self.id_to_particle_system.entry(id).or_insert_with(|| {
+                            let enhanced = templates.get(id).ok().and_then(|template| {
+                                let lookup = |name: &str| {
+                                    self.template_name_to_template_id
+                                        .get(name)
+                                        .map(|metadata| metadata.template_id)
+                                };
+                                crate::particle_effects::EnhancedEffect::for_template(
+                                    template.template_id,
+                                    lookup,
+                                )
+                                .or_else(|| {
+                                    let parent = attachments.get(id).ok()?.parent;
+                                    let parent_template = templates.get(parent).ok()?.template_id;
+                                    crate::particle_effects::EnhancedEffect::for_emp_attachment(
+                                        template.template_id,
+                                        parent_template,
+                                        lookup,
+                                    )
+                                })
+                            });
+                            if let Some(effect) = enhanced.and_then(|kind| kind.build(asset_cache))
+                            {
+                                return effect;
+                            }
                             let mut system = ParticleSystem::new()
                                 .with_lifetime(launch_info.min_time, launch_info.max_time)
                                 .with_velocity(
@@ -3503,7 +6671,10 @@ impl MissionCore {
                             // so the palette tint is left white.
                             const PRT_SCALED_BITMAP: u32 = 5;
                             if pg.render_type == PRT_SCALED_BITMAP && !pg.model_name.is_empty() {
-                                let bitmap_name = format!("{}.PCX", pg.model_name);
+                                // A bare name can resolve an object texture first:
+                                // blood.pcx is a blue particle glow in bitmap/,
+                                // but red splatter in obj/txt16/.
+                                let bitmap_name = format!("bitmap/{}.PCX", pg.model_name);
                                 if let Some(texture) = asset_cache.get_ext_opt(
                                     &TEXTURE_IMPORTER,
                                     &bitmap_name,
@@ -3523,7 +6694,7 @@ impl MissionCore {
                                     warn!("particle bitmap not found: {bitmap_name}");
                                 }
                             }
-                            system
+                            system.into()
                         });
                     particle_system.update(time.elapsed, transform.0);
                     // Only fire-and-forget effect entities (impact spangs) are
@@ -3562,11 +6733,38 @@ impl MissionCore {
                 .borrow::<ViewMut<RuntimePropTransform>>()
                 .unwrap();
             let mut v_prop_position = self.world.borrow::<ViewMut<PropPosition>>().unwrap();
+            let launched = self
+                .world
+                .borrow::<View<crate::runtime_props::RuntimePropLaunchedProjectile>>()
+                .unwrap();
+            let player_fired = self
+                .world
+                .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
+                .unwrap();
+            let mut velocities = self
+                .world
+                .borrow::<ViewMut<crate::runtime_props::RuntimePropProjectileVelocity>>()
+                .unwrap();
             let v_entities = self.world.borrow::<EntitiesView>().unwrap();
+            let v_glove_weapon = self
+                .world
+                .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+                .unwrap();
             for (entity_id, handle) in &self.id_to_physics {
-                let scale = v_scale
+                if launched.contains(*entity_id) || player_fired.contains(*entity_id) {
+                    if let Some(velocity) = self.physics.get_velocity(*entity_id) {
+                        v_entities.add_component(
+                            *entity_id,
+                            &mut velocities,
+                            crate::runtime_props::RuntimePropProjectileVelocity(velocity),
+                        );
+                    }
+                }
+                let scale = v_glove_weapon
                     .get(*entity_id)
-                    .map(|p| p.0)
+                    .ok()
+                    .map(|p| vec3(p.item_scale, p.item_scale, p.item_scale))
+                    .or_else(|| v_scale.get(*entity_id).ok().map(|p| p.0))
                     .unwrap_or(vec3(1.0, 1.0, 1.0));
                 let position = self.physics.get_position(*handle).unwrap();
                 let rotation = self.physics.get_rotation(*handle).unwrap();
@@ -3614,12 +6812,21 @@ impl MissionCore {
         motion_queries: Vec<Vec<MotionQueryItem>>,
         selection_strategy: MotionQuerySelectionStrategy,
         apply: fn(&AnimationPlayer, Rc<AnimationClip>) -> AnimationPlayer,
+        // Pivot in place: the request's token, the heading change to pick the
+        // nearest stand-schema clip for, and the seconds the creature can
+        // afford to stand still (see `Effect::PlayTurnClip`).
+        turn: Option<(u64, cgmath::Deg<f32>, f32)>,
     ) {
         let is_death_query = motion_queries
             .iter()
             .flatten()
             .any(|item| item.tag_name() == "crumple");
         let mut resolved_death_pose = None;
+        let mut turn_started = None;
+        // The blend the player ACTUALLY started for this clip, when one was
+        // applied. Read from the player rather than re-derived, so the pivot's
+        // yaw hands over on the transition that is really running.
+        let mut applied_fade = None;
         let maybe_player = self.id_to_animation_player.get_mut(&entity_id);
         if let Some(player) = maybe_player {
             let v_creature_type = self.world.borrow::<View<PropCreature>>().unwrap();
@@ -3642,11 +6849,42 @@ impl MissionCore {
 
                 let mut tried_queries = Vec::new();
                 let maybe_next_animation = motion_queries.into_iter().find_map(|items| {
+                    // The turn clips sit in the same schema as the idle stand
+                    // clip, told apart only by their authored facing change.
+                    let is_stand_query = items.iter().any(|item| item.tag_name() == "stand");
                     let mut query_items = items;
                     query_items.extend(actor_tags.iter().cloned());
                     let query = MotionQuery::new(actor_type, query_items)
                         .with_selection_strategy(selection_strategy.clone());
-                    let result = if is_death_query {
+                    let end_direction = |name: &String| {
+                        global_context
+                            .motiondb
+                            .get_motion_stuff(name.clone())
+                            .end_direction
+                    };
+                    let result = if let Some((_, delta, max_seconds)) = turn {
+                        let options = global_context.motiondb.query_all(query.clone());
+                        let clips = options
+                            .iter()
+                            .map(|name| {
+                                let stuff = global_context.motiondb.get_motion_stuff(name.clone());
+                                (stuff.end_direction, stuff.duration)
+                            })
+                            .collect::<Vec<_>>();
+                        dark::motion::nearest_turn_clip(delta, &clips, max_seconds)
+                            .map(|index| options[index].clone())
+                    } else if is_stand_query {
+                        // Standing still must not play a turn: the schema's
+                        // pivots would swing the creature's body with no
+                        // heading change behind it.
+                        let options = global_context
+                            .motiondb
+                            .query_all(query.clone())
+                            .into_iter()
+                            .filter(|name| !dark::motion::is_turn_clip(end_direction(name)))
+                            .collect::<Vec<_>>();
+                        select_motion_option(&options, &selection_strategy)
+                    } else if is_death_query {
                         let options = global_context
                             .motiondb
                             .query_all(query.clone())
@@ -3715,7 +6953,13 @@ impl MissionCore {
                             _ => clip,
                         };
                         self.failed_animation_queries.remove(&entity_id);
+                        if turn.is_some() {
+                            turn_started =
+                                Some(dark::motion::signed_end_direction(clip.end_rotation));
+                        }
                         *player = apply(player, clip);
+                        // 1.0 straight after the apply means no fade at all.
+                        applied_fade = Some(player.blend_alpha_now() < 1.0);
 
                         // The motion query is random, so its resolved clip name
                         // is the only durable identity of the corpse pose.
@@ -3751,6 +6995,11 @@ impl MissionCore {
                             );
                         }
                     }
+                } else if turn.is_some() {
+                    // A pivot with no clip the creature can afford is an
+                    // ordinary outcome, not a failed animation: the AI steers
+                    // the turn instead, and nothing waits on a completion.
+                    tracing::debug!("no turn clip for {:?}: {:?}", entity_id, tried_queries);
                 } else {
                     // Key on the query items only - the selection strategy
                     // carries a per-request counter that would defeat the
@@ -3777,6 +7026,39 @@ impl MissionCore {
 
         if let Some(death_pose) = resolved_death_pose {
             self.world.add_component(entity_id, death_pose);
+        }
+
+        // Report on the pivot whose clip this apply just displaced or
+        // followed, before recording the one it may have started.
+        if let Some(payload) =
+            self.turn_clips
+                .on_animation_applied(entity_id, applied_fade, turn.is_some())
+        {
+            self.script_world.dispatch(Message {
+                to: entity_id,
+                payload,
+            });
+        }
+
+        if let Some((token, _, _)) = turn {
+            let payload = self
+                .turn_clips
+                .on_turn_resolved(entity_id, token, turn_started);
+            self.script_world.dispatch(Message {
+                to: entity_id,
+                payload,
+            });
+        }
+    }
+
+    /// The entity's animation player is being replaced or taken away, so no
+    /// completion can ever arrive for a turn clip it was playing.
+    fn abandon_turn_clip(&mut self, entity_id: EntityId) {
+        if let Some(payload) = self.turn_clips.abandon(entity_id) {
+            self.script_world.dispatch(Message {
+                to: entity_id,
+                payload,
+            });
         }
     }
 
@@ -3842,12 +7124,27 @@ impl MissionCore {
         }
 
         for (id, player) in self.id_to_animation_player.iter_mut() {
+            if let Some(stasis) = self.script_world.stasis(*id, &self.world) {
+                if let Some(pose) = stasis.pose() {
+                    self.world
+                        .add_component(*id, RuntimePropJointTransforms(*pose));
+                }
+                continue;
+            }
             // self.id_to_animation_player.entry(*id).and_modify(|player| {
             //     *player = AnimationPlayer::update(player, time.elapsed);
             // });
             let (new_player, flags, events, velocity) =
                 AnimationPlayer::update(player, time.elapsed);
             *player = new_player;
+
+            // A pivot handing its yaw over rides the fade this player is
+            // running, so it is told the pose's own cross-fade weight every
+            // frame - read here, right after the player advanced, so the
+            // facing and the pose it belongs to are never a frame apart.
+            if let Some(payload) = self.turn_clips.on_blend_tick(*id, player) {
+                self.script_world.dispatch(Message { to: *id, payload });
+            }
 
             if let Some(model) = self.id_to_model.get(id) {
                 let joint_transforms = model.get_joint_transforms(player);
@@ -3904,7 +7201,18 @@ impl MissionCore {
                         .borrow::<View<RuntimePropLaunchedProjectile>>()
                         .unwrap()
                         .contains(*id);
-                if !holds_terminal_death_pose && !launched_with_no_root_motion {
+                // Object-model AI owns its velocity even though its jointed
+                // render model has an AnimationPlayer for the tweq pose.
+                let physics_driven_ai = self
+                    .world
+                    .borrow::<View<dark::properties::PropAI>>()
+                    .unwrap()
+                    .get(*id)
+                    .is_ok_and(|ai| {
+                        matches!(ai.0.to_ascii_lowercase().as_str(), "grub" | "swarmer")
+                    });
+                if !holds_terminal_death_pose && !launched_with_no_root_motion && !physics_driven_ai
+                {
                     self.physics.set_velocity(*id, scaled);
                 }
             }
@@ -3920,10 +7228,18 @@ impl MissionCore {
 
             for event in events {
                 match event {
-                    AnimationEvent::Completed => self.script_world.dispatch(Message {
-                        to: *id,
-                        payload: MessagePayload::AnimationCompleted,
-                    }),
+                    AnimationEvent::Completed => {
+                        // A pivot's clip reaching its end: from here the next
+                        // clip applied to this entity is its handoff, not a
+                        // preemption.
+                        if let Some(payload) = self.turn_clips.on_clip_completed(*id) {
+                            self.script_world.dispatch(Message { to: *id, payload });
+                        }
+                        self.script_world.dispatch(Message {
+                            to: *id,
+                            payload: MessagePayload::AnimationCompleted,
+                        })
+                    }
                     AnimationEvent::DirectionChanged(ang) => {
                         game_log!(DEBUG, "Animation direction changed: {:?}", ang);
                         // The events now arrive as small per-tick increments
@@ -4011,13 +7327,26 @@ impl MissionCore {
             }
 
             for (template_id, _corpse_options) in corpse_links {
+                // EMP impact hosts are disposable bursts, unlike gameplay
+                // corpses and persistent hazards that use the same link type.
+                let transient_fx = matches!(
+                    crate::particle_effects::EnhancedEffect::for_template(template_id, |name| {
+                        self.template_name_to_template_id
+                            .get(name)
+                            .map(|m| m.template_id)
+                    }),
+                    Some(crate::particle_effects::EnhancedEffect::EmpExplosion { .. })
+                );
                 self.create_entity_with_position(
                     asset_cache,
                     template_id,
                     vec3_to_point3(position),
                     rotation,
                     Matrix4::identity(),
-                    CreateEntityOptions::default(),
+                    CreateEntityOptions {
+                        transient_fx,
+                        ..Default::default()
+                    },
                 );
             }
         }
@@ -4028,12 +7357,20 @@ impl MissionCore {
     /// Apply a radius stim blast and its physical impulse.
     fn radius_blast(
         &mut self,
+        source_entity_id: EntityId,
         center: Vector3<f32>,
         radius: f32,
         intensity: f32,
         stim_template_id: i32,
     ) {
-        self.apply_radius_stimulus(center, radius, intensity, stim_template_id);
+        self.apply_radius_stimulus(
+            true,
+            Some(source_entity_id),
+            center,
+            radius,
+            intensity,
+            stim_template_id,
+        );
         self.physics.apply_radial_impulse(
             center,
             radius,
@@ -4044,9 +7381,11 @@ impl MissionCore {
     /// Apply a radius stimulus: every entity with hit points in range receives
     /// linear-falloff intensity, and authored receptrons decide damage or
     /// radiation status. Persistent environmental sources call this without
-    /// the explosion-only physical impulse.
+    /// the explosion-only physical impulse and without a source to exclude.
     fn apply_radius_stimulus(
         &mut self,
+        linear_falloff: bool,
+        source_entity_id: Option<EntityId>,
         center: Vector3<f32>,
         radius: f32,
         intensity: f32,
@@ -4062,11 +7401,26 @@ impl MissionCore {
             for (entity_id, (_hit_points, transform)) in
                 (&v_hit_points, &v_transform).iter().with_id()
             {
+                if Some(entity_id) == source_entity_id {
+                    continue;
+                }
                 let position = transform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
-                let distance = (crate::util::point3_to_vec3(position) - center).magnitude();
+                let position = crate::util::point3_to_vec3(position);
+                let distance = (position - center).magnitude();
                 if distance < radius {
-                    let falloff = 1.0 - distance / radius;
-                    in_range.push((entity_id, intensity * falloff));
+                    let falloff = if linear_falloff {
+                        1.0 - distance / radius
+                    } else {
+                        1.0
+                    };
+                    let exposure = blast_exposure(
+                        &self.physics,
+                        source_entity_id,
+                        entity_id,
+                        center,
+                        position,
+                    );
+                    in_range.push((entity_id, intensity * falloff * exposure));
                 }
             }
         }
@@ -4080,29 +7434,79 @@ impl MissionCore {
             let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             let distance = (player.pos - center).magnitude();
             if distance < radius && !in_range.iter().any(|(id, _)| *id == player.entity_id) {
-                in_range.push((player.entity_id, intensity * (1.0 - distance / radius)));
+                let exposure = blast_exposure(
+                    &self.physics,
+                    source_entity_id,
+                    player.entity_id,
+                    center,
+                    player.pos,
+                );
+                in_range.push((
+                    player.entity_id,
+                    intensity
+                        * if linear_falloff {
+                            1.0 - distance / radius
+                        } else {
+                            1.0
+                        }
+                        * exposure,
+                ));
             }
         }
 
         for (entity_id, felt_intensity) in in_range {
-            let receptrons =
+            let mut receptrons =
                 get_all_links_with_template(&self.world, entity_id, |link| match link {
                     Link::Receptron(options) => Some(options.clone()),
                     _ => None,
                 });
+            // Immolate's Amplify 0.0 on Incendiary is what keeps the burning
+            // player from cooking in their own aura.
+            receptrons.extend(crate::scripts::immolate::immolate_caster_receptrons(
+                &self.world,
+                entity_id,
+            ));
             let maybe_damage = crate::mission::stim_response::resolve_stim_damage(
                 &receptrons,
                 stim_template_id,
                 felt_intensity,
             );
-            crate::scripts::radiation::apply_player_stimulus(
-                &self.world,
-                entity_id,
+            if source_entity_id.is_none() {
+                crate::scripts::radiation::apply_player_stimulus(
+                    &self.world,
+                    entity_id,
+                    &receptrons,
+                    stim_template_id,
+                    felt_intensity,
+                );
+            }
+            for effect in crate::mission::stim_response::hazard_effects(
                 &receptrons,
                 stim_template_id,
                 felt_intensity,
-            );
-            // Explosions only ever deal damage: dispatch a Damage message only
+                entity_id,
+            ) {
+                if let Effect::ApplyHazard { toxin, amount, .. } = effect {
+                    if !toxin && source_entity_id.is_none() {
+                        continue;
+                    }
+                    self.script_world.dispatch(Message {
+                        to: entity_id,
+                        payload: MessagePayload::Hazard { toxin, amount },
+                    });
+                }
+            }
+            if let Some(duration_seconds) = crate::mission::stim_response::resolve_stim_freeze(
+                &receptrons,
+                stim_template_id,
+                felt_intensity,
+            ) {
+                self.script_world.dispatch(Message {
+                    to: entity_id,
+                    payload: MessagePayload::Freeze { duration_seconds },
+                });
+            }
+            // Dispatch a Damage message only
             // for a positive result. A zero amount (fully shielded) would still
             // read as "took damage" and aggro AI; a negative one (a heal
             // receptron) has no meaning through the damage path.
@@ -4122,14 +7526,10 @@ impl MissionCore {
         }
     }
 
-    /// Propagate a noise (Effect::RaiseNoise): every creature within `radius`
-    /// of `origin` hears it and gets a HeardNoise message, so it can alert and
-    /// investigate the source. A plain Euclidean radius - walls don't
-    /// attenuate it yet (a path-distance model is a follow-up). Deaf AIs
-    /// (hearing acuity 0, e.g. the `Deaf` metaproperty on medsci1's
-    /// card-slot-watching OG-Pipe, obj 596 - the corridor hybrids hear
-    /// normally) are filtered out here so no listener has to re-check.
-    fn raise_noise(&mut self, origin: Vector3<f32>, radius: f32) {
+    /// Player-caused sounds use authored hearing acuity and three cover rays.
+    /// Fully covered listeners get 25% range, partly covered ones interpolate
+    /// toward full range. This is cheap occlusion, not acoustic path tracing.
+    fn raise_noise(&mut self, source: EntityId, origin: Vector3<f32>, radius: f32) {
         let heard: Vec<EntityId> = {
             let v_creature = self
                 .world
@@ -4144,12 +7544,20 @@ impl MissionCore {
                 .iter()
                 .with_id()
                 .filter_map(|(entity_id, (_creature, transform))| {
-                    if v_hearing.get(entity_id).is_ok_and(|h| h.is_deaf()) {
-                        return None;
-                    }
+                    let multiplier = v_hearing
+                        .get(entity_id)
+                        .map(|h| h.range_multiplier())
+                        .unwrap_or(1.0);
                     let pos = transform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
-                    let distance = (crate::util::point3_to_vec3(pos) - origin).magnitude();
-                    (distance < radius).then_some(entity_id)
+                    noise_reaches_listener(
+                        &self.physics,
+                        source,
+                        entity_id,
+                        origin,
+                        pos.to_vec(),
+                        radius * multiplier,
+                    )
+                    .then_some(entity_id)
                 })
                 .collect()
         };
@@ -4324,16 +7732,60 @@ impl MissionCore {
         self.id_to_physics.remove(&entity_id);
     }
 
+    /// Increment `occupant`'s stack by `dropped_entity_id`'s count and destroy
+    /// the now-redundant dropped entity - the shared merge tail for both the
+    /// cell-targeted deposit and the ordinary first-free deposit's
+    /// full-container fallback.
+    fn merge_dropped_stack(&mut self, occupant: EntityId, dropped_entity_id: EntityId) {
+        let Some(dropped_count) = self
+            .world
+            .borrow::<View<dark::properties::PropStackCount>>()
+            .ok()
+            .and_then(|stacks| stacks.get(dropped_entity_id).ok().map(|stack| stack.0))
+        else {
+            return;
+        };
+        if let Ok(mut stacks) = self
+            .world
+            .borrow::<ViewMut<dark::properties::PropStackCount>>()
+        {
+            if let Ok(occupant_stack) = (&mut stacks).get(occupant) {
+                occupant_stack.0 += dropped_count;
+            }
+        }
+        self.destroy_entity(dropped_entity_id);
+    }
+
     /// Move `dropped_entity_id` into `container_entity_id` (e.g. the player's
     /// inventory): drop any prior `Contains` links to it, add a fresh one from
     /// the container, mark it referenced, and remove it from the physical world.
-    /// Returns false if the container entity has no `Links` (so nothing was
-    /// added). Shared by the `DropEntityInfo` effect and the debug give lever.
+    ///
+    /// A deposit that combines with something already inside pools into it
+    /// rather than claiming a cell of its own, so a second med hypo lands on
+    /// the first instead of beside it (see [`find_mergeable_stack_anywhere`]).
+    /// The merge is attempted before placement, as the original does.
+    ///
+    /// Returns the entity that ended up in the container: `dropped_entity_id`
+    /// itself when it claimed a cell, or the stack it merged into - a merge
+    /// destroys the dropped entity, so a caller that reports an id onwards
+    /// must use the survivor rather than the id it passed in.
+    ///
+    /// `None`, leaving the item's prior links untouched, if the container has
+    /// no `Links` (nowhere to record the transfer) or has no free cell for it
+    /// and nothing to merge it into - a full backpack refuses the deposit,
+    /// retail-style, rather than absorbing it invisibly. Shared by the
+    /// `DropEntityInfo` effect and the debug give lever.
     pub fn drop_entity_into_container(
         &mut self,
         container_entity_id: EntityId,
         dropped_entity_id: EntityId,
-    ) -> bool {
+    ) -> Option<EntityId> {
+        if let Some(occupant) =
+            find_mergeable_stack_anywhere(&self.world, container_entity_id, dropped_entity_id)
+        {
+            self.merge_dropped_stack(occupant, dropped_entity_id);
+            return Some(occupant);
+        }
         let moved = move_live_entity_into_container(
             &mut self.world,
             container_entity_id,
@@ -4341,10 +7793,149 @@ impl MissionCore {
         );
         if moved {
             self.make_un_physical(dropped_entity_id);
+            return Some(dropped_entity_id);
         }
-        moved
+        None
     }
 
+    /// Create `template_id` inside `container_entity_id`'s grid, in the cell
+    /// the ordinary deposit rules pick (an existing stack to merge into, else
+    /// the first cell the item's footprint fits). Returns the entity that
+    /// ended up in the container.
+    ///
+    /// The creation happens at the container's own position so the item is
+    /// never briefly visible anywhere else; the deposit removes it from the
+    /// world either way. A container with no room for it refuses the deposit,
+    /// and the fresh entity is destroyed rather than left lying in the world.
+    fn create_entity_in_container(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        template_id: i32,
+        container_entity_id: EntityId,
+    ) -> Option<EntityId> {
+        let position = self
+            .world
+            .borrow::<View<PropPosition>>()
+            .ok()
+            .and_then(|positions| positions.get(container_entity_id).ok().map(|p| p.position))
+            .unwrap_or_else(Vector3::zero);
+        let created = self.create_entity_with_position(
+            asset_cache,
+            template_id,
+            Point3::from_vec(position),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Matrix4::identity(),
+            CreateEntityOptions::default(),
+        );
+        let placed = self.drop_entity_into_container(container_entity_id, created.entity_id);
+        if placed.is_none() {
+            warn!(
+                "template {template_id} could not be placed in {container_entity_id:?} - no room"
+            );
+            self.destroy_entity(created.entity_id);
+        }
+        placed
+    }
+
+    /// Fill a corpse from its authored loot table (`P$LootInfo`).
+    ///
+    /// The table holds six slots, each with a relative rarity; a slot with a
+    /// blank item name is a real outcome, and means the draw yielded nothing.
+    /// It is drawn `picks` times, independently, so the same slot can come up
+    /// twice. Every draw that picked a real item is then subject to the
+    /// campaign difficulty's discard percentage (see
+    /// [`crate::difficulty::loot_discard_percent`]) - which is how a higher
+    /// difficulty thins out loot without editing a single table.
+    ///
+    /// On top of the table, `P$RGuarLoot` always drops, and `P$GuarLoot` drops
+    /// only for a player carrying the Cyber-Assimilation O/S upgrade.
+    ///
+    /// Items land in the dead entity's own container, which is what its
+    /// `creaturecontainer` loot panel shows. A creature that bursts instead of
+    /// leaving a body (a droid's explosion, an Overlord's gibs - see
+    /// [`has_death_links`]) has no container to fill, so its drops are placed
+    /// where it fell; authored droid tables carry real ammo, and deleting it
+    /// with the body would make those tables unreachable.
+    fn generate_loot(&mut self, asset_cache: &mut AssetCache, entity_id: EntityId) {
+        // The guaranteed drops are independent of the randomized table: the
+        // droid archetype carries `P$GuarLoot` with no `P$LootInfo` of its own.
+        let table = self
+            .world
+            .borrow::<View<dark::properties::PropLootInfo>>()
+            .ok()
+            .and_then(|tables| tables.get(entity_id).ok().cloned());
+        let discard_percent = crate::difficulty::loot_discard_percent(&self.world);
+        let mut drops = table
+            .map(|table| roll_loot_table(&table, discard_percent, &mut thread_rng()))
+            .unwrap_or_default();
+
+        let has_borg_trait = self
+            .world
+            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+            .map(|quests| {
+                quests
+                    .player_stats()
+                    .has_os_trait(crate::scripts::gui::TRAIT_CYBER_ASSIMILATION)
+            })
+            .unwrap_or(false);
+        if has_borg_trait {
+            if let Some(guaranteed) = self
+                .world
+                .borrow::<View<dark::properties::PropGuaranteedLoot>>()
+                .ok()
+                .and_then(|v| v.get(entity_id).ok().map(|loot| loot.0.clone()))
+            {
+                drops.push(guaranteed);
+            }
+        }
+        if let Some(guaranteed) = self
+            .world
+            .borrow::<View<dark::properties::PropReallyGuaranteedLoot>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|loot| loot.0.clone()))
+        {
+            drops.push(guaranteed);
+        }
+
+        let gibs = has_death_links(&self.world, entity_id);
+        let position = self
+            .world
+            .borrow::<View<PropPosition>>()
+            .ok()
+            .and_then(|positions| positions.get(entity_id).ok().map(|p| p.position))
+            .unwrap_or_else(Vector3::zero);
+        for name in drops {
+            let Some(template_id) = self
+                .template_name_to_template_id
+                .get(&name.to_ascii_lowercase())
+                .map(|metadata| metadata.template_id)
+            else {
+                warn!("loot table names unknown archetype {name:?}");
+                continue;
+            };
+            if gibs {
+                self.create_entity_with_position(
+                    asset_cache,
+                    template_id,
+                    Point3::from_vec(position),
+                    Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                    Matrix4::identity(),
+                    CreateEntityOptions::default(),
+                );
+            } else {
+                self.create_entity_in_container(asset_cache, template_id, entity_id);
+            }
+        }
+    }
+
+    /// Unlike [`Self::drop_entity_into_container`], placement is tried BEFORE
+    /// a grid-wide merge: an explicit cell target is the player's instruction
+    /// to put the item *there*, so a free target cell wins over pooling into a
+    /// matching stack elsewhere. (An occupied target cell holding a matching
+    /// stack still merges - that IS the pointed-at destination.) The original
+    /// draws the same line, combining on the untargeted deposit but not on the
+    /// slot-targeted cursor drop.
+    ///
     /// Like [`Self::drop_entity_into_container`], but targets `target_cell`
     /// (the cyber-interface strip deposit, released over the grid cell the
     /// player is pointing at) instead of always the first free cell.
@@ -4353,7 +7944,9 @@ impl MissionCore {
     /// entity is consumed rather than claiming a cell of its own - matching
     /// the retail "drop onto a like stack" behavior. Any other occupied cell,
     /// or a cell off the grid, falls back to the ordinary first-free
-    /// placement (no swap semantics for a VR release).
+    /// placement (no swap semantics for a VR release); a full grid with no
+    /// free cell anywhere still merges into a matching stack wherever it sits,
+    /// and only refuses (returning false, untouched) when neither exists.
     pub fn drop_entity_into_container_at_cell(
         &mut self,
         container_entity_id: EntityId,
@@ -4366,22 +7959,7 @@ impl MissionCore {
             dropped_entity_id,
             target_cell,
         ) {
-            let dropped_count = self
-                .world
-                .borrow::<View<dark::properties::PropStackCount>>()
-                .unwrap()
-                .get(dropped_entity_id)
-                .unwrap()
-                .0;
-            if let Ok(mut stacks) = self
-                .world
-                .borrow::<ViewMut<dark::properties::PropStackCount>>()
-            {
-                if let Ok(occupant_stack) = (&mut stacks).get(occupant) {
-                    occupant_stack.0 += dropped_count;
-                }
-            }
-            self.destroy_entity(dropped_entity_id);
+            self.merge_dropped_stack(occupant, dropped_entity_id);
             return true;
         }
 
@@ -4393,21 +7971,36 @@ impl MissionCore {
         );
         if moved {
             self.make_un_physical(dropped_entity_id);
+            return true;
         }
-        moved
+        if let Some(occupant) =
+            find_mergeable_stack_anywhere(&self.world, container_entity_id, dropped_entity_id)
+        {
+            self.merge_dropped_stack(occupant, dropped_entity_id);
+            return true;
+        }
+        false
     }
 
     /// Re-encode the backpack's stored cells after effective Strength changes.
     /// Items that cannot fit even after deterministic reflow are spilled into
     /// the world, matching retail's `ShockInvResize` -> `ShockInvAddObj` path.
-    fn resize_player_backpack(&mut self, old_width: usize, new_width: usize) {
-        if old_width == new_width {
-            return;
-        }
+    fn refresh_implant_effects(&mut self) {
+        self.resize_player_backpack();
+        crate::difficulty::refresh_player_pools(&self.world, false);
+    }
+
+    fn resize_player_backpack(&mut self) {
         let inventory_entity = match self.world.borrow::<UniqueView<PlayerInfo>>() {
             Ok(player) => player.inventory_entity_id,
             Err(_) => return,
         };
+        let old_width = self.backpack_width;
+        let new_width = crate::inventory::grid_for(&self.world, inventory_entity).0;
+        if old_width == new_width {
+            return;
+        }
+        self.backpack_width = new_width;
         let outcome = crate::inventory::remap_container_width(
             &mut self.world,
             inventory_entity,
@@ -4569,6 +8162,82 @@ impl MissionCore {
         true
     }
 
+    /// Fly the loose body toward the visible amp; catching remains an ordinary
+    /// hand interaction. Arrival or cancellation simply restores gravity.
+    fn update_psi_pull(&mut self, elapsed: std::time::Duration) -> Vec<Effect> {
+        if elapsed.is_zero() {
+            return vec![];
+        }
+        let Some(mut flight) = self.psi_pull.take() else {
+            return vec![];
+        };
+        flight.age += elapsed.as_secs_f32();
+        flight.trail_age += elapsed.as_secs_f32();
+        let item = flight.item;
+        let player = self
+            .world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .unwrap()
+            .clone();
+        let position = self
+            .id_to_physics
+            .get(&item)
+            .and_then(|h| self.physics.get_position(*h));
+        let destination = crate::psi_pull::amp_position(&self.world, flight.amp);
+        let valid = self.player_is_alive()
+            && self.interaction.is_holding(flight.amp)
+            && !self.interaction.is_holding(item)
+            && crate::psi_pull::pullable(&self.world, item)
+            && destination.is_some()
+            && flight.age < crate::psi_pull::FLIGHT_TIMEOUT;
+        let Some(position) = position.filter(|_| valid) else {
+            self.physics.set_gravity(item, flight.gravity);
+            self.physics.set_velocity(item, Vector3::zero());
+            return vec![];
+        };
+        let destination = destination.unwrap();
+        let delta = destination - position;
+        let distance = delta.magnitude();
+        let held = self.interaction.held_entities();
+        let blocked = distance > crate::psi_pull::RANGE * 1.5
+            || crate::psi_pull::route_blocked(
+                &self.physics,
+                position,
+                destination,
+                &[
+                    item,
+                    player.entity_id,
+                    held.0.unwrap_or(player.entity_id),
+                    held.1.unwrap_or(player.entity_id),
+                ],
+            );
+        if blocked {
+            self.physics.set_gravity(item, flight.gravity);
+            self.physics.set_velocity(item, Vector3::zero());
+            return vec![];
+        }
+        if distance <= crate::psi_pull::ARRIVAL_DISTANCE {
+            self.physics.set_gravity(item, flight.gravity);
+            self.physics.set_velocity(item, Vector3::zero());
+            return vec![];
+        }
+        self.physics.set_velocity(
+            item,
+            delta / distance * crate::psi_pull::FLIGHT_SPEED.min(distance * 10.0),
+        );
+        let visual = if flight.trail_age >= 0.1 {
+            flight.trail_age = 0.0;
+            vec![Effect::PsiDrainVisual {
+                from: position,
+                to: destination,
+            }]
+        } else {
+            vec![]
+        };
+        self.psi_pull = Some(flight);
+        visual
+    }
+
     pub fn make_physical(&mut self, entity_id: EntityId) {
         let current_entity = self.id_to_physics.get(&entity_id);
         if current_entity.is_some() {
@@ -4601,33 +8270,92 @@ impl MissionCore {
     ) -> Vec<Effect> {
         use crate::mission::flat_ui_host::FlatUiDragAction;
         match action {
+            FlatUiDragAction::ToggleMap => vec![Effect::ToggleMap],
             FlatUiDragAction::Throw(entity_id) => {
                 self.throw_entity_into_world(entity_id);
                 Vec::new()
             }
-            // The AMMOFULL cycle button: advance the wielded weapon's ammo type
-            // via the same effect as the CycleAmmo key/action.
-            FlatUiDragAction::CycleAmmo => vec![Effect::CycleAmmo],
-            // Double-click = equip/use, acting on the still-contained item -
-            // identical to the ContainerGui backpack click (shared weapon test,
-            // shared effects): a weapon (gun or melee) wields via `GrabEntity`
-            // (which also clears its Contains link and holsters any displaced
-            // weapon back to the grid), anything else gets a `Frob` (use).
-            FlatUiDragAction::Wield(entity_id) => {
-                if crate::virtual_hand::is_wieldable_weapon(&self.world, entity_id) {
-                    vec![Effect::GrabEntity {
-                        entity_id,
-                        hand: crate::vr_config::Handedness::Right,
-                        current_parent_id: None,
-                    }]
-                } else {
-                    vec![Effect::Send {
-                        msg: Message {
-                            payload: MessagePayload::Frob,
-                            to: entity_id,
-                        },
-                    }]
+            // The AMMOFULL readout's controls emit the same effects as their
+            // keyboard/action counterparts, so the button and the key are one
+            // behavior.
+            FlatUiDragAction::Readout(button, weapon) => {
+                use crate::hud::ammo_panel::ReadoutButton;
+                use crate::psi::PsiSelectionAxis;
+                let step = |axis, forward| vec![Effect::StepPsiSelection { axis, forward }];
+                if !matches!(button, ReadoutButton::Logs | ReadoutButton::SystemMenu)
+                    && weapon
+                        .and_then(|entity| {
+                            crate::wielded_weapon::resolve_weapon_target(&self.world, Some(entity))
+                        })
+                        .is_none()
+                {
+                    return Vec::new();
                 }
+                match button {
+                    // Selection is owned by FlatUiHost, before world actions.
+                    ReadoutButton::SelectLeftHand | ReadoutButton::SelectRightHand => Vec::new(),
+                    ReadoutButton::Logs => {
+                        if self.flat_ui.utilities.is_empty_logs() {
+                            self.flat_ui.utilities = Default::default();
+                            return Vec::new();
+                        }
+                        let has_logs = self
+                            .world
+                            .borrow::<UniqueView<QuestInfo>>()
+                            .is_ok_and(|quests| quests.logs_for_reader().next().is_some());
+                        if !has_logs {
+                            self.flat_ui.close();
+                            self.flat_ui.utilities.show_empty_logs();
+                            return Vec::new();
+                        }
+                        let panel = self
+                            .world
+                            .borrow::<UniqueView<MediaPanelEntity>>()
+                            .ok()
+                            .map(|panel| panel.0);
+                        if panel.is_some() && self.flat_ui.active_panel() == panel {
+                            // This button lives inside the interface: dismiss only
+                            // its reader, even if a controller shortcut opened it.
+                            self.flat_ui.close();
+                            Vec::new()
+                        } else {
+                            self.flat_ui.utilities = Default::default();
+                            vec![Effect::ReadLastUnreadLog]
+                        }
+                    }
+                    ReadoutButton::CycleAmmo => vec![Effect::CycleAmmo { weapon }],
+                    // The exception: SETTING opens the weapon settings MFD
+                    // (the original's own behavior for this button), where the
+                    // mode is *chosen* from a described list. The
+                    // `CycleGunSetting` action (F) still toggles directly.
+                    ReadoutButton::GunSetting => vec![Effect::OpenWeaponSettings { weapon }],
+                    ReadoutButton::Reload => vec![Effect::ReloadWeapon { weapon }],
+                    ReadoutButton::PsiTierPrev => step(PsiSelectionAxis::Tier, false),
+                    ReadoutButton::PsiTierNext => step(PsiSelectionAxis::Tier, true),
+                    ReadoutButton::PsiPowerPrev => step(PsiSelectionAxis::Power, false),
+                    ReadoutButton::PsiPowerNext => step(PsiSelectionAxis::Power, true),
+                    // The badge/name area opens the selection MFD, the way
+                    // SETTING opens the weapon settings one: the arrows step,
+                    // the readout itself offers the described grid.
+                    ReadoutButton::PsiSelect => vec![Effect::OpenPsiPowers],
+                    // The pause menu lives above the scene, so it is reached
+                    // through a global effect rather than opened from here.
+                    ReadoutButton::SystemMenu => {
+                        vec![Effect::GlobalEffect(GlobalEffect::OpenPauseMenu)]
+                    }
+                }
+            }
+            // Double-click = equip/use, acting on the still-contained item -
+            // literally the ContainerGui backpack click, through the one
+            // routine both share: a weapon (gun or melee) wields via
+            // `GrabEntity` (which also clears its Contains link and holsters
+            // any displaced weapon back to the grid), anything else is used
+            // where it stands.
+            FlatUiDragAction::Wield(entity_id) => {
+                vec![crate::scripts::maintenance::use_carried_item(
+                    &self.world,
+                    entity_id,
+                )]
             }
         }
     }
@@ -4635,6 +8363,8 @@ impl MissionCore {
     /// Remove every incoming `Contains` link to `entity_id` (take it out of
     /// whatever container holds it) without giving it world presence.
     fn detach_from_containers(&mut self, entity_id: EntityId) {
+        self.world
+            .remove::<crate::runtime_props::RuntimePropHolstered>(entity_id);
         let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
         for links in (&mut v_links).iter() {
             links.to_links.retain(|link| {
@@ -4687,6 +8417,8 @@ impl MissionCore {
             vec3(1.0, 1.0, 1.0),
         );
         self.physics.set_velocity(entity_id, forward * THROW_SPEED);
+        self.thrown_items
+            .track_existing_motion(&self.world, &self.physics, entity_id);
         // A thrown item is a normal referenced world object again.
         self.world.add_component(entity_id, PropHasRefs(true));
         self.script_world.dispatch(Message {
@@ -4741,7 +8473,15 @@ impl MissionCore {
         root_transform: Matrix4<f32>,
         additional_options: CreateEntityOptions,
     ) -> EntityCreationInfo {
-        self.create_entity_with_position_and_rider_depth(
+        let mut additional_options = additional_options;
+        additional_options.projectile_launch_origin = additional_options
+            .projectile_weapon
+            .and_then(|weapon| self.interaction.held_launch_origin(weapon))
+            .or(additional_options.projectile_launch_origin);
+        let firing_weapon = additional_options.projectile_weapon.filter(|_| {
+            additional_options.player_fired_projectile && !additional_options.transient_fx
+        });
+        let created = self.create_entity_with_position_and_rider_depth(
             asset_cache,
             template_id,
             position,
@@ -4750,7 +8490,14 @@ impl MissionCore {
             additional_options,
             0,
             None,
-        )
+        );
+        if let Some(weapon) = firing_weapon {
+            self.world.add_component(
+                weapon,
+                crate::runtime_props::RuntimePropLastFiredProjectile(template_id),
+            );
+        }
+        created
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4770,7 +8517,9 @@ impl MissionCore {
         // brought along by a spang must not host a second spang).
         exclude_template: Option<i32>,
     ) -> EntityCreationInfo {
+        let authored_velocity_frame = additional_options.authored_velocity_frame;
         let transient_fx = additional_options.transient_fx;
+        let has_spawn_clearance = additional_options.projectile_launch_origin.is_some();
         let created_entity = {
             entity_creator::create_entity_with_position(
                 template_id,
@@ -4798,7 +8547,19 @@ impl MissionCore {
             &mut self.script_world,
             created_entity,
             root_transform,
+            authored_velocity_frame,
         );
+
+        // Spawn clearance may move the projectile before physics is built.
+        // Apply that same translation to trails instantiated below.
+        let root_transform = if has_spawn_clearance {
+            let positions = self.world.borrow::<View<PropPosition>>().unwrap();
+            let actual = positions.get(info.entity_id).unwrap().position;
+            Matrix4::from_translation(actual - root_transform.transform_point(position).to_vec())
+                * root_transform
+        } else {
+            root_transform
+        };
 
         // Instantiate the particle groups authored to ride this archetype
         // (`ParticleAttachement` links from particle archetypes to this
@@ -4895,6 +8656,11 @@ impl MissionCore {
         info
     }
 
+    /// Launch speed (Dark units/s) above which a projectile is resolved by
+    /// raycast instead of simulated: a bullet crosses a room inside one frame,
+    /// so stepping it as a physics body tunnels it through walls.
+    const FAST_PROJECTILE_SPEED: f32 = 80.0;
+
     fn finish_instantiating_entity(
         id_to_model: &mut HashMap<EntityId, Model>,
         id_to_bitmap: &mut HashMap<EntityId, Rc<BitmapAnimation>>,
@@ -4905,6 +8671,7 @@ impl MissionCore {
         script_world: &mut ScriptWorld,
         created_entity: EntityCreationInfo,
         root_transform: Matrix4<f32>,
+        authored_velocity_frame: Option<Matrix4<f32>>,
     ) -> EntityCreationInfo {
         let ret = created_entity.clone();
 
@@ -4922,6 +8689,27 @@ impl MissionCore {
 
         let v_initial_velocity = world.borrow::<View<PropPhysInitialVelocity>>().unwrap();
         if let Some(rigid_body) = created_entity.rigid_body {
+            if crate::scripts::script_util::entity_has_script(
+                world,
+                created_entity.entity_id,
+                "ProxGrenade",
+            ) {
+                // Rapier has no rolling resistance: a spherical mine can roll
+                // forever after landing. Angular damping substitutes for that
+                // missing ground drag without damping its launch translation.
+                physics.set_body_damping(rigid_body, 0.0, 1.0);
+            }
+            if let Some(velocity_frame) = authored_velocity_frame {
+                // The parser already converts Dark velocity to world units:
+                // (-forward, up, right). The launch frame uses +Z forward.
+                let velocity = v_initial_velocity
+                    .get(created_entity.entity_id)
+                    .map(|v| velocity_frame.transform_vector(vec3(v.0.z, v.0.y, -v.0.x)))
+                    .unwrap_or_else(|_| vec3(0.0, 0.0, 0.0));
+                id_to_physics.insert(created_entity.entity_id, rigid_body);
+                physics.set_velocity(created_entity.entity_id, velocity);
+                return ret;
+            }
             let initial_velocity = v_initial_velocity
                 .get(created_entity.entity_id)
                 // Not sure why the coordinate system is different for projectile launch?
@@ -4929,9 +8717,16 @@ impl MissionCore {
                 //.map(|v| vec3(v.0.z.abs(), v.0.y.abs(), v.0.x.abs()))
                 .unwrap_or(vec3(0.0, 0.0, 0.0));
 
+            // The launch speed is the projectile's authored one scaled by the
+            // fire mode that fired it (the fusion cannon's DEATH lob leaves at
+            // 0.4x). The raycast/simulated split below stays on the AUTHORED
+            // speed: it says which kind of projectile this is, and the two
+            // paths do not deal the same damage, so letting a modifier move a
+            // shot across it would change far more than its speed.
+            let modifiers = RuntimePropShotModifiers::of(world, created_entity.entity_id);
             let mag = initial_velocity.magnitude();
-            let x_velocity = root_transform.transform_vector(vec3(0.0, 0.0, mag));
-            if initial_velocity.magnitude() > 80.0 {
+            let x_velocity = root_transform.transform_vector(vec3(0.0, 0.0, mag * modifiers.speed));
+            if mag > Self::FAST_PROJECTILE_SPEED {
                 // Use raycast strategy for fast moving objects
                 script_world.add_entity2(
                     created_entity.entity_id,
@@ -4945,7 +8740,41 @@ impl MissionCore {
             }
         };
 
+        // Saved world-space flight velocity takes precedence over launch-time
+        // defaults before the first physics step of a restored mission.
+        drop(v_initial_velocity);
+        if world
+            .borrow::<View<crate::runtime_props::RuntimePropLaunchedProjectile>>()
+            .unwrap()
+            .contains(created_entity.entity_id)
+            || world
+                .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
+                .unwrap()
+                .contains(created_entity.entity_id)
+        {
+            let restored = world
+                .borrow::<View<crate::runtime_props::RuntimePropProjectileVelocity>>()
+                .unwrap()
+                .get(created_entity.entity_id)
+                .ok()
+                .map(|v| v.0);
+            if let Some(velocity) =
+                restored.or_else(|| physics.get_velocity(created_entity.entity_id))
+            {
+                physics.set_velocity(created_entity.entity_id, velocity);
+                world.add_component(
+                    created_entity.entity_id,
+                    crate::runtime_props::RuntimePropProjectileVelocity(velocity),
+                );
+            }
+        }
         ret
+    }
+
+    fn entity_exists(&self, entity_id: EntityId) -> bool {
+        self.world
+            .borrow::<EntitiesView>()
+            .is_ok_and(|entities| entities.is_alive(entity_id))
     }
 
     /// Canonical destruction cleanup for one runtime entity. Keep interaction
@@ -4988,6 +8817,24 @@ impl MissionCore {
         let mut visited: HashSet<EntityId> = HashSet::from([entity_id]);
         let mut frontier = vec![entity_id];
         while let Some(parent) = frontier.pop() {
+            // Mine and sensor are one deployed object, including when a mine
+            // is removed by a non-damage path. Reuse the visited set so their
+            // reciprocal, save-remapped ScriptParams links cannot cycle.
+            if ["ProxGrenade", "ContactProxGrenade", "ProxGrenadeTrigger"]
+                .iter()
+                .any(|script| {
+                    crate::scripts::script_util::entity_has_script(&self.world, parent, script)
+                })
+            {
+                if let Some(peer) =
+                    crate::scripts::proximity_grenade::linked_peer(&self.world, parent)
+                {
+                    if visited.insert(peer) {
+                        to_remove.push(peer);
+                        frontier.push(peer);
+                    }
+                }
+            }
             let children: Vec<(EntityId, bool)> = match self.world.borrow::<(
                 View<crate::runtime_props::RuntimePropAttachment>,
                 View<PropTweqDeleteConfig>,
@@ -5038,6 +8885,7 @@ impl MissionCore {
         // Shipyard recycles entity ids, so stale per-entity animation state
         // must not outlive the entity (a recycled id would inherit it).
         self.id_to_animation_player.remove(&entity_id);
+        self.turn_clips.forget(entity_id);
         self.failed_animation_queries.remove(&entity_id);
         self.gui.on_entity_destroyed(
             entity_id,
@@ -5181,18 +9029,48 @@ impl MissionCore {
     ///
     /// Shared by `ToggleUseMode` and `CloseUseMode` so the two exits from use
     /// mode cannot drift apart.
+    /// Hand the interface host this frame's use-mode readouts (bio + ammo), or
+    /// `None` outside the mode. The host both DRAWS them on the shared canvas
+    /// and hit-tests their controls, in both presentations, so the VR ray
+    /// reaches the SETTING / RELOAD / cycle / psi controls exactly as the flat
+    /// cursor does.
+    ///
+    /// Called once per update for live values, and again from
+    /// [`enter_use_mode`](Self::enter_use_mode) /
+    /// [`leave_use_mode`](Self::leave_use_mode) - beside `set_strip`, for the
+    /// same reason it is there: who owns the readouts is part of the mode, and
+    /// the mode is entered and left from paths outside the update. Rendering
+    /// reads this and `use_mode` independently (the flat HUD skips what the
+    /// interface draws), so the two must never disagree on a frame.
+    fn refresh_readouts(&mut self) {
+        let (weapon, _) = self.flat_ui.ammo_selection();
+        self.flat_ui.set_readouts(
+            (self.use_mode || self.flat_ui.device)
+                .then(|| crate::hud::readouts::UseModeReadouts::from_world(&self.world, weapon)),
+        );
+    }
+
     fn leave_use_mode(&mut self) -> Effect {
         self.use_mode = false;
         self.flat_ui.take_cursor_item();
         self.flat_ui.set_strip(None);
+        self.refresh_readouts();
+        // The mode owns the whole canvas, panel slot included: leaving it with
+        // a panel still bound would keep the log reader alive and reported by
+        // `/v1/ui` with nothing presenting it. Inert on flat's Tab path (that
+        // branch dismisses an open panel first and never reaches here with one
+        // bound) and already what `CloseUseMode` does explicitly.
+        self.flat_ui.close();
+        self.use_mode_shortcut = None;
+        self.psi_powers_open = false;
         // VR weapon-safe exit: a trigger still held from inside the mode must
         // be released before the hands see it again, or leaving the cyber
         // interface would fire the wielded weapon on a stale press. Inert in
         // flat (the consumption site is VR-gated) and self-clearing once
         // nothing is pressed.
         self.vr_trigger_swallow = true;
-        // The panel disappears immediately; the ramp keeps easing the
-        // vignette/dim/FOV pull back to nothing on its own release timing
+        // The panel disappears immediately; the ramp keeps easing the dim
+        // back to nothing on its own release timing
         // (see `render`'s `use_mode_ramp.is_settled_closed()` gate).
         self.use_mode_ramp.close();
         Effect::PlaySound {
@@ -5207,7 +9085,129 @@ impl MissionCore {
     /// the player's `internal_inventory` entity (whose GuiScript already
     /// emits SetUI every frame). Shared by both presentations - the strip
     /// canvas is the mode; only where it is presented differs.
-    fn enter_use_mode(&mut self) -> Effect {
+    /// Place the VR cyber-interface panel from the pose of *this* entry, not
+    /// wherever the player stood last time - and let the anchor wait out an
+    /// untracked (zero-quaternion) head rather than locking in a garbage
+    /// placement (rules 3 and 7 of the vr-ui-design skill). Shared by every
+    /// way into the mode so no entry can forget it; inert in flat.
+    /// Whether the player is holding the psi amp - what the selection MFD
+    /// presents, and what keeps it up.
+    fn wielding_psi_amp(&self) -> bool {
+        crate::wielded_weapon::wielded_psi_amp(&self.world).is_some()
+    }
+
+    /// The hand whose thumbstick the psi MFD captures while it is docked.
+    ///
+    /// The rule is "the stick the player is not already using to hold or aim
+    /// the weapon", which lands on a different hand per presentation - the one
+    /// place this panel's input differs between the two, because the two put
+    /// locomotion on different sticks:
+    ///
+    /// - **VR**: the hand NOT holding the amp, so the amp hand keeps aiming.
+    /// - **Flat**: always the LEFT stick, which is the arrow-key turn axis. The
+    ///   right stick is `WASD`, and taking that would stop the player walking
+    ///   while a panel they drive with the mouse is open. (The amp is wielded
+    ///   in the left hand *slot* in flat, so the VR rule would pick exactly the
+    ///   wrong stick here.)
+    fn psi_navigation_hand(
+        &self,
+        presentation: crate::PresentationMode,
+    ) -> crate::vr_config::Handedness {
+        use crate::vr_config::Handedness;
+        if presentation == crate::PresentationMode::Flat {
+            return Handedness::Left;
+        }
+        let holds_amp = |hand| {
+            crate::hand_buttons::held_kind_in_hand(&self.world, hand)
+                == crate::hand_buttons::HeldKind::PsiAmp
+        };
+        if holds_amp(Handedness::Right) {
+            Handedness::Left
+        } else {
+            Handedness::Right
+        }
+    }
+
+    fn dismiss_amp_carousel(&mut self) {
+        if let Some(menu) = self.psi_carousel.take() {
+            crate::psi_carousel::advance_input_epoch(&mut self.world, menu.amp);
+            self.psi_carousel_swallow[hand_slot(menu.hand)] = true;
+        }
+    }
+
+    fn open_amp_carousel(&mut self, amp: EntityId, hand: crate::Handedness) {
+        if self.use_mode || !self.player_is_alive() {
+            return;
+        }
+        self.dismiss_amp_carousel();
+        // Flatscreen stores its weapon in the left slot but casts with the right trigger.
+        let hand = if crate::mission::presentation_is_vr(&self.world) {
+            hand
+        } else {
+            crate::Handedness::Right
+        };
+        self.psi_carousel = crate::psi_carousel::Carousel::new(&self.world, amp, hand);
+        if self.psi_carousel.is_some() {
+            crate::psi_carousel::advance_input_epoch(&mut self.world, amp);
+            self.script_world.dispatch(Message {
+                to: amp,
+                payload: MessagePayload::CancelPsiCharge,
+            });
+        }
+    }
+
+    fn commit_amp_selection(&mut self, amp: EntityId, index: usize) {
+        let template = {
+            let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+            let known = self
+                .world
+                .borrow::<UniqueView<PlayerPsiKnownPowers>>()
+                .unwrap();
+            powers
+                .0
+                .get(index)
+                .filter(|p| known.0.contains(&p.template_id))
+                .map(|p| p.template_id)
+        };
+        if let Some(template) = template {
+            let mut pair = crate::psi_amp_selection::selection(&self.world, amp).unwrap_or(
+                crate::psi_amp_selection::AmpSelection {
+                    current: template,
+                    alternate: None,
+                },
+            );
+            pair.select(template);
+            self.world.add_component(amp, pair);
+            self.world
+                .borrow::<UniqueViewMut<PsiPowerSelection>>()
+                .unwrap()
+                .index = index;
+            self.snap_psi_panel_tier(index);
+        }
+    }
+
+    /// Page the full MFD to the selected power's tier.
+    fn snap_psi_panel_tier(&mut self, index: usize) {
+        let tier = self
+            .world
+            .borrow::<UniqueView<GlobalPsiPowers>>()
+            .ok()
+            .and_then(|powers| powers.0.get(index).map(|power| power.tier()));
+        if let (Some(tier), Ok(mut browsed)) = (
+            tier,
+            self.world
+                .borrow::<UniqueViewMut<crate::psi::PsiPanelTier>>(),
+        ) {
+            browsed.0 = tier;
+        }
+    }
+
+    fn reset_vr_use_mode_placement(&mut self) {
+        self.vr_use_mode_anchor = crate::ui::FrontendPanelAnchor::new();
+        self.vr_use_mode_head = crate::ui::world_dim::UNTRACKED_HEAD;
+    }
+
+    fn enter_use_mode(&mut self, ramp: crate::ui::entry_ramp::RampParams) -> Effect {
         self.use_mode = true;
         let strip_entity = self
             .world
@@ -5215,13 +9215,16 @@ impl MissionCore {
             .ok()
             .map(|player| player.inventory_entity_id);
         self.flat_ui.set_strip(strip_entity);
+        self.refresh_readouts();
         // Entered "already pressed": the button that opened the mode may still
         // be down (in VR the interface can be opened with the trigger held), and
         // a held press must never read as a click on whatever the pointer first
         // crosses (rule 6 of the vr-ui-design skill).
         self.flat_ui.guard_held_press();
-        self.use_mode_ramp
-            .open(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT);
+        // `ramp` is how strong/long this particular entry feels: the
+        // deliberate inventory open and the Y-to-log-reader shortcut are the
+        // same mode reached with different intent.
+        self.use_mode_ramp.open(ramp);
         Effect::PlaySound {
             handle: AudioHandle::new(),
             source: None,
@@ -5249,7 +9252,211 @@ impl MissionCore {
         let mut player_grunted = false;
         let mut effects = VecDeque::from(effects);
         while let Some(effect) = effects.pop_front() {
+            let toxin_patch = matches!(&effect, Effect::UseToxinPatch { .. });
             match effect {
+                Effect::AddPlayerHazard { toxin, amount } => {
+                    if let Ok(mut status) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+                    {
+                        let level = if toxin {
+                            status.toxin_level()
+                        } else {
+                            status.level()
+                        };
+                        status.expose(toxin, level + amount);
+                    }
+                }
+                Effect::ApplyHazard {
+                    entity_id,
+                    toxin,
+                    amount,
+                } => {
+                    if entity_id != player_entity || !self.player_is_alive() {
+                        continue;
+                    }
+                    let amount =
+                        crate::scripts::radiation::protected_exposure(&self.world, toxin, amount);
+                    if let Ok(mut status) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+                    {
+                        status.expose(toxin, amount);
+                    }
+                }
+                Effect::RadiationRoom { entity_id, entered } => {
+                    let level = self
+                        .world
+                        .borrow::<View<dark::properties::PropRadiationLevel>>()
+                        .ok()
+                        .and_then(|v| v.get(entity_id).ok().map(|v| v.0))
+                        .unwrap_or(0.0);
+                    let absorb = self
+                        .world
+                        .borrow::<View<dark::properties::PropRadiationAbsorb>>()
+                        .ok()
+                        .and_then(|v| v.get(entity_id).ok().map(|v| v.0))
+                        .unwrap_or(0.05);
+                    if let Ok(mut rooms) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::scripts::radiation::RadiationRooms>>()
+                    {
+                        if entered && level.is_finite() && level > 0.0 {
+                            rooms.0.insert(entity_id, (level, absorb));
+                        } else {
+                            rooms.0.remove(&entity_id);
+                        }
+                    }
+                }
+                Effect::ClearHazard { toxin } => {
+                    if let Ok(mut status) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+                    {
+                        if toxin {
+                            status.clear_toxin(f32::MAX);
+                        } else {
+                            status.clear(f32::MAX);
+                        }
+                    }
+                }
+                Effect::ClearEnvironmentalRadiation => {
+                    if let Ok(mut status) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+                    {
+                        status.reset_ambient();
+                    }
+                    if let Ok(mut levels) = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropRadiationLevel>>()
+                    {
+                        for (entity, level) in (&mut levels).iter().with_id() {
+                            if entity != player_entity {
+                                level.0 = 0.0;
+                            }
+                        }
+                    }
+                    if let Ok(mut rooms) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::scripts::radiation::RadiationRooms>>()
+                    {
+                        rooms.0.clear();
+                    }
+                }
+                Effect::ModifyWeapon {
+                    entity_id,
+                    expected_level,
+                } => {
+                    crate::weapon_modification::apply(&mut self.world, entity_id, expected_level);
+                }
+                Effect::ToggleImplant { entity_id } => {
+                    match crate::implants::toggle_slot(&self.world, entity_id) {
+                        Ok(Some(slot)) => {
+                            self.world.add_component(
+                                entity_id,
+                                crate::runtime_props::RuntimePropImplantSlot(slot),
+                            );
+                        }
+                        Ok(None) => {
+                            self.world
+                                .remove::<crate::runtime_props::RuntimePropImplantSlot>(entity_id);
+                        }
+                        Err(text) => {
+                            effects.push_back(Effect::ShowMessage {
+                                text: text.to_owned(),
+                            });
+                            continue;
+                        }
+                    }
+                    self.refresh_implant_effects();
+                }
+                Effect::UnequipImplant { entity_id } => {
+                    if self
+                        .world
+                        .remove::<crate::runtime_props::RuntimePropImplantSlot>(entity_id)
+                        .0
+                        .is_some()
+                    {
+                        self.refresh_implant_effects();
+                    }
+                }
+                Effect::AdjustImplantEnergy {
+                    entity_id,
+                    amount,
+                    recharge,
+                } => {
+                    if crate::implants::kind(&self.world, entity_id).is_none() {
+                        continue;
+                    }
+                    let before = crate::implants::energy(&self.world, entity_id);
+                    let after = if recharge {
+                        before.max(amount)
+                    } else {
+                        (before + amount).max(0.0)
+                    };
+                    self.world
+                        .add_component(entity_id, dark::properties::PropEnergy(after));
+                    if (before > 0.0) != (after > 0.0) {
+                        self.refresh_implant_effects();
+                    }
+                }
+
+                Effect::ToggleHazardArmor { entity_id } => {
+                    if self.world.borrow::<View<PropObjState>>().is_ok_and(|v| {
+                        v.get(entity_id)
+                            .is_ok_and(|s| s.0 == dark::properties::ObjectState::Unresearched)
+                    }) {
+                        continue;
+                    }
+                    if !crate::scripts::script_util::player_carried_items(&self.world)
+                        .contains(&entity_id)
+                    {
+                        continue;
+                    }
+                    let armor = self
+                        .world
+                        .borrow::<View<dark::properties::PropArmor>>()
+                        .is_ok_and(|v| v.get(entity_id).is_ok());
+                    let implant = self
+                        .world
+                        .borrow::<View<dark::properties::PropImplantDesc>>()
+                        .is_ok_and(|v| v.get(entity_id).is_ok_and(|v| v.0 == 12));
+                    if !armor && !implant {
+                        continue;
+                    }
+                    let mut equipped = self
+                        .world
+                        .borrow::<ViewMut<crate::runtime_props::RuntimePropHazardEquipment>>()
+                        .unwrap();
+                    let was_equipped = equipped.get(entity_id).is_ok();
+                    let armors = self
+                        .world
+                        .borrow::<View<dark::properties::PropArmor>>()
+                        .unwrap();
+                    let to_remove: Vec<_> = (&equipped)
+                        .iter()
+                        .with_id()
+                        .filter_map(|(id, _)| (armors.get(id).is_ok() == armor).then_some(id))
+                        .collect();
+                    for id in to_remove {
+                        equipped.remove(id);
+                    }
+                    drop(armors);
+                    drop(equipped);
+                    if !was_equipped {
+                        self.world.add_component(
+                            entity_id,
+                            crate::runtime_props::RuntimePropHazardEquipment,
+                        );
+                    }
+                    game_log!(
+                        INFO,
+                        "Equipment {}",
+                        if was_equipped { "removed" } else { "equipped" }
+                    );
+                }
+
                 Effect::AcquireKeyCard { key_card } => {
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                     quests.add_key_card(key_card);
@@ -5276,6 +9483,26 @@ impl MissionCore {
                         // total so a mysterious death is attributable.
                         let hp = hit_points.hit_points;
                         drop(v_hit_points);
+                        if hp < previous && super::earth_horde::is_horde(&self.level_name) {
+                            let hostile = self
+                                .world
+                                .borrow::<View<dark::properties::PropEcoType>>()
+                                .is_ok_and(|tags| {
+                                    tags.get(entity_id).is_ok_and(|tag| {
+                                        tag.0 > 60_000
+                                            || (59_000..59_003).contains(&tag.0)
+                                            || tag.0 == 57_000
+                                            || (57_020..57_023).contains(&tag.0)
+                                    })
+                                });
+                            if entity_id == player_entity || hostile {
+                                self.world
+                                    .borrow::<UniqueViewMut<QuestInfo>>()
+                                    .unwrap()
+                                    .horde_battle
+                                    .record(entity_id == player_entity, previous, hp);
+                            }
+                        }
                         tracing::debug!(
                             "hp: {} {:+} -> {}",
                             debug_entity(&self.world, entity_id),
@@ -5361,6 +9588,22 @@ impl MissionCore {
                     }
                 }
 
+                Effect::AdjustWeaponCondition { entity_id, delta } => {
+                    let mut v_gun_state = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropGunState>>()
+                        .unwrap();
+
+                    if let Ok(gun_state) = (&mut v_gun_state).get(entity_id) {
+                        crate::scripts::effect::adjust_condition(gun_state, delta);
+                    }
+                }
+
+                Effect::BeginShotCooldown { entity_id, seconds } => {
+                    self.world
+                        .add_component(entity_id, RuntimePropShotCooldown { remaining: seconds });
+                }
+
                 Effect::RechargeAmmo {
                     entity_id,
                     capacity,
@@ -5376,39 +9619,263 @@ impl MissionCore {
                 }
 
                 Effect::RadiusBlast {
+                    source_entity_id,
                     center,
                     radius,
                     intensity,
                     stim_template_id,
                 } => {
-                    self.radius_blast(center, radius, intensity, stim_template_id);
+                    self.radius_blast(
+                        source_entity_id,
+                        center,
+                        radius,
+                        intensity,
+                        stim_template_id,
+                    );
                 }
 
                 Effect::RadiusStim {
+                    linear_falloff,
+                    source_entity_id,
                     center,
                     radius,
                     intensity,
                     stim_template_id,
                 } => {
-                    self.apply_radius_stimulus(center, radius, intensity, stim_template_id);
+                    self.apply_radius_stimulus(
+                        linear_falloff,
+                        source_entity_id,
+                        center,
+                        radius,
+                        intensity,
+                        stim_template_id,
+                    );
                 }
 
-                Effect::RaiseNoise { origin, radius } => {
-                    self.raise_noise(origin, radius);
+                Effect::RaiseNoise {
+                    source,
+                    origin,
+                    radius,
+                } => {
+                    self.raise_noise(source, origin, radius);
                 }
 
-                Effect::ReloadWeapon => {
+                Effect::ReloadWeapon { weapon } => {
                     // Whichever hand holds the gun - the input action is not
                     // hand-specific (see `crate::wielded_weapon`).
-                    if let Some(weapon) = crate::wielded_weapon::wielded_weapon(&self.world) {
+                    if let Some(weapon) =
+                        crate::wielded_weapon::resolve_weapon_target(&self.world, weapon)
+                    {
                         let cue = self.begin_reload(weapon);
                         effects.push_back(cue);
                     }
                 }
 
-                Effect::CycleAmmo => {
-                    if let Some(weapon) = crate::wielded_weapon::wielded_weapon(&self.world) {
-                        self.cycle_ammo(asset_cache, weapon);
+                Effect::CycleAmmo { weapon } => {
+                    if let Some(weapon) =
+                        crate::wielded_weapon::resolve_weapon_target(&self.world, weapon)
+                    {
+                        let cue = self.cycle_ammo(asset_cache, weapon);
+                        effects.push_back(cue);
+                    }
+                }
+
+                Effect::CycleGunSetting { hand } => {
+                    // The gun goes with the hand that pressed; the hand-agnostic
+                    // action means whichever hand holds one.
+                    if let Some(weapon) =
+                        crate::wielded_weapon::hand_weapon_target(&self.world, hand)
+                    {
+                        // An SS2 gun has exactly two modes, so the switch is a
+                        // toggle - and any other stored value lands on mode 0.
+                        let current =
+                            crate::scripts::script_util::current_gun_setting(&self.world, weapon);
+                        effects.push_back(Effect::SetGunSetting {
+                            entity_id: weapon,
+                            setting: i32::from(current == 0),
+                        });
+                    }
+                }
+
+                Effect::SetGunSetting { entity_id, setting } => {
+                    if let Some(cue) = self.set_gun_setting(entity_id, setting) {
+                        effects.push_back(cue);
+                    }
+                }
+
+                Effect::UnloadWeapon { entity_id } => {
+                    // Same ejection the VR eject button performs, cue included.
+                    if let Some(cue) = self.eject_magazine(asset_cache, entity_id) {
+                        effects.push_back(cue);
+                    }
+                }
+
+                Effect::OpenWeaponSettings { weapon } => {
+                    // The MFD presents the *wielded* gun, so it opens only with
+                    // one in hand and is remembered so it can be dismissed when
+                    // that gun is put away. Unbound: the host is synthetic, so
+                    // there is no world object to walk away from.
+                    //
+                    // The panel slot has to actually be presented, or this would
+                    // dock a panel nothing draws and nothing can dismiss. Flat
+                    // always presents it; VR presents it only inside the cyber
+                    // interface, which is also the only place a VR pointer could
+                    // ever press the button that emits this.
+                    let slot_is_presented = game_options.presentation_mode
+                        == crate::PresentationMode::Flat
+                        || self.use_mode
+                        || self.flat_ui.device;
+                    let target = if self.flat_ui.device {
+                        weapon
+                    } else {
+                        crate::wielded_weapon::resolve_weapon_target(&self.world, weapon)
+                    };
+                    if let Some(weapon) = target.filter(|_| slot_is_presented) {
+                        let panel = self
+                            .world
+                            .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
+                            .map(|panel| panel.0);
+                        if let Ok(panel) = panel {
+                            self.script_world.dispatch(Message {
+                                to: panel,
+                                payload: MessagePayload::PanelOpened,
+                            });
+                            self.flat_ui.open_unbound(panel);
+                            if self.flat_ui.device {
+                                crate::scripts::gui::WeaponSettingsTarget::select_scanned(
+                                    &self.world,
+                                    weapon,
+                                );
+                            } else {
+                                crate::scripts::gui::WeaponSettingsTarget::select(
+                                    &self.world,
+                                    weapon,
+                                );
+                            }
+                            self.weapon_settings_gun = Some(weapon);
+                        }
+                    }
+                }
+
+                // One frame of the held jump channel, consumed by the next
+                // movement pass - the effect is handled after this frame's,
+                // and the physics controller wants a rising edge, not a level.
+                Effect::Jump => {
+                    self.button_jump = true;
+                    self.button_jump_held = true;
+                }
+
+                Effect::PsiAmpButton {
+                    hand,
+                    amp,
+                    long_press,
+                    epoch,
+                } => {
+                    if self.use_mode
+                        || !self.player_is_alive()
+                        || crate::wielded_weapon::weapon_in_hand(&self.world, hand) != Some(amp)
+                        || crate::psi_carousel::input_epoch(&self.world, amp) != epoch
+                    {
+                        continue;
+                    }
+                    if self.psi_carousel.as_ref().is_some_and(|m| m.amp == amp) {
+                        let menu = self.psi_carousel.take().unwrap();
+                        crate::psi_carousel::advance_input_epoch(&mut self.world, amp);
+                        self.commit_amp_selection(amp, menu.index);
+                    } else if long_press {
+                        self.open_amp_carousel(amp, hand);
+                    } else if let Some(mut pair) =
+                        crate::psi_amp_selection::selection(&self.world, amp)
+                    {
+                        pair.swap();
+                        let index = self
+                            .world
+                            .borrow::<UniqueView<GlobalPsiPowers>>()
+                            .unwrap()
+                            .0
+                            .iter()
+                            .position(|p| p.template_id == pair.current);
+                        if let Some(index) = index {
+                            self.commit_amp_selection(amp, index);
+                        }
+                    }
+                }
+                Effect::HeldGunButton {
+                    hand,
+                    weapon,
+                    long_press,
+                } => {
+                    let held = self.interaction.held_entities();
+                    let in_hand = if hand == crate::Handedness::Left {
+                        held.0
+                    } else {
+                        held.1
+                    };
+                    if !self.use_mode && in_hand == Some(weapon) {
+                        if long_press {
+                            if let Some(cue) = self.drop_loaded_clip(asset_cache, weapon) {
+                                effects.push_back(cue);
+                            }
+                        } else {
+                            let current = crate::scripts::script_util::current_gun_setting(
+                                &self.world,
+                                weapon,
+                            );
+                            effects.push_front(Effect::SetGunSetting {
+                                entity_id: weapon,
+                                setting: i32::from(current == 0),
+                            });
+                        }
+                    }
+                }
+                Effect::EjectClip { hand } => {
+                    if let Some(weapon) =
+                        crate::wielded_weapon::hand_weapon_target(&self.world, hand)
+                    {
+                        if let Some(cue) = self.eject_magazine(asset_cache, weapon) {
+                            effects.push_back(cue);
+                        }
+                    }
+                }
+
+                Effect::HandButton { hand, button } => {
+                    // A face button means whatever the hand that pressed it is
+                    // holding says it means - except while the cyber interface
+                    // is up, which takes both buttons back on both hands so
+                    // the press that opened it can always close it.
+                    let mode = if self.use_mode {
+                        crate::hand_buttons::HandButtonMode::Interface
+                    } else {
+                        crate::hand_buttons::HandButtonMode::World
+                    };
+                    let held = crate::hand_buttons::held_kind_in_hand(&self.world, hand);
+                    let resolved =
+                        crate::hand_buttons::resolve_hand_button(mode, hand, held, button);
+                    match resolved {
+                        Some(crate::input::InputAction::ToggleUseMode) => {
+                            effects.push_front(Effect::ToggleUseMode)
+                        }
+                        Some(crate::input::InputAction::ReadLastUnreadLog) => {
+                            effects.push_front(Effect::ReadLastUnreadLog)
+                        }
+                        // The lower button, whatever the hand holds.
+                        Some(crate::input::InputAction::Jump) => effects.push_front(Effect::Jump),
+                        // The gun goes with the hand that pressed, so a
+                        // dual-wielding player switches the mode they meant.
+                        Some(crate::input::InputAction::CycleGunSetting) => {
+                            effects.push_front(Effect::CycleGunSetting { hand: Some(hand) })
+                        }
+                        Some(crate::input::InputAction::CycleAmmo) => {
+                            effects.extend(self.cycle_held_ammo(asset_cache, hand));
+                        }
+                        // The amp hand's upper button opens the selection MFD.
+                        // It names no hand - there is one psi selection
+                        // however many amps are held.
+                        Some(crate::input::InputAction::SelectPsiPower) => {
+                            effects.push_front(Effect::OpenPsiPowers)
+                        }
+                        None => {}
+                        Some(action) => warn!("unroutable hand button action: {action}"),
                     }
                 }
 
@@ -5425,7 +9892,9 @@ impl MissionCore {
                             } else if self.use_mode {
                                 effects.push_front(self.leave_use_mode());
                             } else {
-                                effects.push_front(self.enter_use_mode());
+                                effects.push_front(
+                                    self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT),
+                                );
                             }
                         }
                         crate::PresentationMode::Vr => {
@@ -5446,14 +9915,10 @@ impl MissionCore {
                                 // open, and a level transition replaces this
                                 // scene (taking the mission-owned mode state
                                 // with it).
-                                effects.push_front(self.enter_use_mode());
-                                // Place the panel from the pose of *this*
-                                // entry, not wherever the player stood last
-                                // time - and let the anchor wait out an
-                                // untracked (zero-quaternion) head rather than
-                                // locking in a garbage placement.
-                                self.vr_use_mode_anchor = crate::ui::FrontendPanelAnchor::new();
-                                self.vr_use_mode_head = crate::ui::world_dim::UNTRACKED_HEAD;
+                                effects.push_front(
+                                    self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT),
+                                );
+                                self.reset_vr_use_mode_placement();
                             }
                         }
                     }
@@ -5475,28 +9940,73 @@ impl MissionCore {
                         // suspends the scene from the next frame, so nothing
                         // would call `use_mode_ramp.update` again until it
                         // closes - a graceful release would otherwise hang
-                        // the vignette/dim/FOV pull at whatever strength they
-                        // were at for the whole pause.
+                        // the dim at whatever strength it was at for the whole
+                        // pause.
                         self.use_mode_ramp.snap_closed();
                     }
                 }
 
+                Effect::OpenResearchReports => {
+                    if !self.player_is_alive() {
+                        continue;
+                    }
+                    self.gui.close_panel(
+                        &mut self.world,
+                        &mut self.physics,
+                        &mut self.script_world,
+                        &mut self.id_to_physics,
+                    );
+                    if !self.use_mode {
+                        effects.push_front(
+                            self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT),
+                        );
+                        self.reset_vr_use_mode_placement();
+                    }
+                    self.flat_ui.close();
+                    self.flat_ui.utilities.open_research(None);
+                }
+                Effect::SuspendResearch => {
+                    if let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
+                        quests.research_mut().suspend();
+                    }
+                }
                 Effect::OpenPanel { entity } => {
+                    if self.flat_ui.utilities.has_left_panel() {
+                        self.flat_ui.utilities = Default::default();
+                    }
                     // Bind the presentation's single object-panel slot to the
                     // frobbed entity (the original's frob-script -> overlay
-                    // flow). Flat docks it in the MFD; default VR creates a
-                    // world quad beside the object. The explicit experimental
-                    // mode retains its historical all-panels presentation.
+                    // flow). Flat docks it in the MFD; VR creates a world
+                    // quad beside the object.
                     match game_options.presentation_mode {
                         crate::PresentationMode::Flat => self.flat_ui.open(entity),
-                        crate::PresentationMode::Vr => self.gui.open_panel(
-                            entity,
-                            game_options.experimental_features.contains("gui"),
-                            &mut self.world,
-                            &mut self.physics,
-                            &mut self.script_world,
-                            &mut self.id_to_physics,
-                        ),
+                        crate::PresentationMode::Vr if self.flat_ui.device => {
+                            // Hand frobs and scans share one panel owner, even
+                            // if an old world quad was opened earlier this frame.
+                            self.gui.close_panel(
+                                &mut self.world,
+                                &mut self.physics,
+                                &mut self.script_world,
+                                &mut self.id_to_physics,
+                            );
+                            self.flat_ui.open(entity)
+                        }
+                        crate::PresentationMode::Vr => {
+                            // The other half of "one UI at a time": a world
+                            // panel replaces an open log reader, exactly as the
+                            // reader replaces a world panel. Both used to share
+                            // `GuiManager`'s single slot, so this was free; now
+                            // the reader lives in the flat host and the
+                            // symmetry has to be written down.
+                            self.flat_ui.close();
+                            self.gui.open_panel(
+                                entity,
+                                &mut self.world,
+                                &mut self.physics,
+                                &mut self.script_world,
+                                &mut self.id_to_physics,
+                            )
+                        }
                     }
                     // Give the gui its per-open state (the reader's scroll
                     // reset) however the panel was reached.
@@ -5524,10 +10034,11 @@ impl MissionCore {
                         .get(entity_id)
                         .map(|skills| skills.0.research().max(1))
                         .unwrap_or(1);
+                    let skill = crate::scripts::script_util::player_skill_level(
+                        &self.world,
+                        crate::player_stats::Skill::Research,
+                    );
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
-                    let skill = quests
-                        .player_stats()
-                        .skill_level(crate::player_stats::Skill::Research);
                     let result = quests.research_mut().begin(template_id, required, skill);
                     drop(quests);
                     match result {
@@ -5547,7 +10058,20 @@ impl MissionCore {
                 }
 
                 Effect::UseResearchChemical { entity_id } => {
-                    if apply_research_chemical(&self.world, entity_id) {
+                    let scanned = self.flat_ui.device
+                        && self.personal_card.last_scan == Some(entity_id)
+                        && self
+                            .world
+                            .borrow::<View<PropPosition>>()
+                            .is_ok_and(|positions| {
+                                positions.get(entity_id).is_ok_and(|position| {
+                                    let player =
+                                        self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                                    (position.position - player.pos).magnitude()
+                                        <= 3.0 / crate::METERS_PER_WORLD_UNIT
+                                })
+                            });
+                    if apply_research_chemical(&self.world, entity_id, scanned) {
                         let stack = self
                             .world
                             .borrow::<View<dark::properties::PropStackCount>>()
@@ -5590,7 +10114,7 @@ impl MissionCore {
                     self.consume_log_pickup(entity_id);
                 }
 
-                Effect::ReadLastUnreadLog { head_rotation } => {
+                Effect::ReadLastUnreadLog => {
                     let panel_entity = self
                         .world
                         .borrow::<UniqueView<MediaPanelEntity>>()
@@ -5601,18 +10125,38 @@ impl MissionCore {
                         continue;
                     };
 
-                    // Y is also the production dismiss affordance in VR. The
-                    // next press re-enters this path, re-resolves and replays
-                    // the latest collected log even when it is already read.
-                    if game_options.presentation_mode == crate::PresentationMode::Vr
-                        && self.gui.active_panel() == Some(panel_entity)
-                    {
-                        self.gui.close_panel(
-                            &mut self.world,
-                            &mut self.physics,
-                            &mut self.script_world,
-                            &mut self.id_to_physics,
-                        );
+                    let is_vr = game_options.presentation_mode == crate::PresentationMode::Vr;
+
+                    // A free hand's UPPER face button is also the production
+                    // dismiss affordance in VR. The next press re-enters this
+                    // path, re-resolves and replays the latest collected log
+                    // even when it is already read. It is a true inverse of
+                    // itself: it puts back exactly what it brought up - the
+                    // whole interface when it opened it, just the reader
+                    // (leaving the inventory strip) when the player was
+                    // already inside.
+                    if is_vr && self.flat_ui.active_panel() == Some(panel_entity) {
+                        if self.use_mode_shortcut == Some(UseModeShortcut::LogReader) {
+                            effects.push_front(self.leave_use_mode());
+                        } else {
+                            self.flat_ui.close();
+                        }
+                        // The log's audio is deliberately left playing - the
+                        // reader is a transcript of a recording, not its
+                        // transport.
+                        continue;
+                    }
+
+                    // Edge policy: nothing new over the death sequence - the
+                    // same rule `ToggleUseMode` applies, that moment belongs to
+                    // the game-over flow. This sits *after* the dismiss branch
+                    // on purpose: a player who died with the reader up must
+                    // still be able to put it away. It also covers dying while
+                    // already inside the interface, where binding a fresh
+                    // reader would mark a log read and start its audio over the
+                    // death sequence. Flat is untouched: its reader is an MFD,
+                    // not a mode.
+                    if is_vr && !self.player_is_alive() {
                         continue;
                     }
 
@@ -5633,7 +10177,9 @@ impl MissionCore {
                         })
                         .unwrap_or_default();
                     if candidates.is_empty() {
-                        game_log!(INFO, "no collected audio log is available");
+                        effects.push_back(Effect::ShowMessage {
+                            text: "No collected audio logs.".into(),
+                        });
                         continue;
                     }
                     let resolved = candidates.into_iter().find(|(deck, log)| {
@@ -5661,47 +10207,38 @@ impl MissionCore {
                         payload: MessagePayload::PanelOpened,
                     });
 
-                    match game_options.presentation_mode {
-                        crate::PresentationMode::Flat => self.flat_ui.open_unbound(panel_entity),
-                        crate::PresentationMode::Vr => {
-                            let (player_position, player_rotation) = {
-                                let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-                                (player.pos, player.rotation * head_rotation)
-                            };
-                            let offset = player_rotation
-                                * vec3(
-                                    0.0,
-                                    VR_MEDIA_UP / SCALE_FACTOR,
-                                    -VR_MEDIA_FORWARD / SCALE_FACTOR,
-                                );
-                            let panel_position = player_position + offset;
-                            let panel_rotation =
-                                Quaternion::from_angle_y(cgmath::Deg(180.0)) * player_rotation;
-                            self.world.add_component(
-                                panel_entity,
-                                PropPosition {
-                                    position: panel_position,
-                                    rotation: panel_rotation,
-                                    cell: 0,
-                                },
+                    // One canvas, two presenters: the reader is bound into the
+                    // same host slot in both presentations, docked in the MFD
+                    // on screen and carried on the head-anchored cyber-
+                    // interface panel in VR. `open_unbound` because the reader
+                    // is player-owned and has no world object to walk away
+                    // from - it closes only explicitly.
+                    if is_vr {
+                        // The reader replaces whatever world quad was up - the
+                        // corpse the log was just looted from - rather than
+                        // hanging in front of it. It is the same "one UI at a
+                        // time" contract the world-quad reader had when it took
+                        // the `GuiManager` slot itself (a no-op when nothing is
+                        // open).
+                        self.gui.close_panel(
+                            &mut self.world,
+                            &mut self.physics,
+                            &mut self.script_world,
+                            &mut self.id_to_physics,
+                        );
+                        if !self.use_mode && !self.flat_ui.device {
+                            // Y is a shortcut into the interface, not a second
+                            // interface: enter the one mode, with a lighter
+                            // ramp than the deliberate open (see
+                            // `LOG_READER_ENTRY_EXIT`).
+                            effects.push_front(
+                                self.enter_use_mode(crate::ui::entry_ramp::LOG_READER_ENTRY_EXIT),
                             );
-                            self.world.add_component(
-                                panel_entity,
-                                RuntimePropTransform(
-                                    Matrix4::from_translation(panel_position)
-                                        * Matrix4::from(panel_rotation),
-                                ),
-                            );
-                            self.gui.open_panel(
-                                panel_entity,
-                                false,
-                                &mut self.world,
-                                &mut self.physics,
-                                &mut self.script_world,
-                                &mut self.id_to_physics,
-                            );
+                            self.reset_vr_use_mode_placement();
+                            self.use_mode_shortcut = Some(UseModeShortcut::LogReader);
                         }
                     }
+                    self.flat_ui.open_unbound(panel_entity);
 
                     // Only after a localized reader is bound to the active
                     // presentation do read state and audio advance together.
@@ -5717,9 +10254,11 @@ impl MissionCore {
                 }
 
                 Effect::ToggleMap => {
-                    // Flat-presentation only, like OpenPanel: the automap is a
-                    // flat MFD; VR panels are world quads (out of scope here).
-                    if game_options.presentation_mode == crate::PresentationMode::Flat {
+                    // VR uses this host while the cyber interface is active.
+                    if game_options.presentation_mode == crate::PresentationMode::Flat
+                        || self.use_mode
+                        || self.flat_ui.device
+                    {
                         if let Ok(map) = self.world.borrow::<UniqueView<MapPanelEntity>>() {
                             let entity = map.0;
                             drop(map);
@@ -5727,6 +10266,7 @@ impl MissionCore {
                                 self.flat_ui.close();
                             } else {
                                 // Unbound: no world object -> no walk-away close.
+                                self.flat_ui.utilities = Default::default();
                                 self.flat_ui.open_unbound(entity);
                             }
                         }
@@ -5747,7 +10287,25 @@ impl MissionCore {
                     }
                 }
 
-                Effect::CyclePsiPower => {
+                Effect::StepPsiSelection { axis, forward } => {
+                    if let Some(amp) = crate::psi_amp_selection::target(&self.world) {
+                        if let Some(power) =
+                            crate::psi_amp_selection::selected_power(&self.world, amp)
+                        {
+                            let index = self
+                                .world
+                                .borrow::<UniqueView<GlobalPsiPowers>>()
+                                .unwrap()
+                                .0
+                                .iter()
+                                .position(|p| p.template_id == power.template_id)
+                                .unwrap_or(0);
+                            self.world
+                                .borrow::<UniqueViewMut<PsiPowerSelection>>()
+                                .unwrap()
+                                .index = index;
+                        }
+                    }
                     let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
                     let known = self
                         .world
@@ -5757,28 +10315,195 @@ impl MissionCore {
                         .world
                         .borrow::<UniqueViewMut<PsiPowerSelection>>()
                         .unwrap();
-                    if !powers.0.is_empty() {
-                        // Advance to the next *trained* power, wrapping (at
-                        // most one lap - with a single trained power the lap
-                        // lands back on it, so the selection never moves onto
-                        // an untrained power).
-                        for step in 1..=powers.0.len() {
-                            let index = (selection.index + step) % powers.0.len();
-                            if known.0.contains(&powers.0[index].template_id) {
-                                selection.index = index;
-                                break;
-                            }
-                        }
-                        let power = &powers.0[selection.index];
+                    selection.index = crate::psi::step_selection(
+                        &powers.0,
+                        &known.0,
+                        selection.index,
+                        axis,
+                        forward,
+                    );
+                    let selected = selection.index;
+                    if let Some(power) = powers.0.get(selected) {
                         game_log!(
                             INFO,
                             "Selected psi power: {} (tier {})",
                             power.name,
-                            power.power.psi_cost
+                            power.tier()
                         );
+                    }
+                    drop(selection);
+                    drop(known);
+                    drop(powers);
+                    if let Some(amp) = crate::psi_amp_selection::target(&self.world) {
+                        self.commit_amp_selection(amp, selected);
+                    }
+                    self.snap_psi_panel_tier(selected);
+                }
+
+                Effect::SelectPsiPower { power_id } => {
+                    // Trained-only, exactly as a step is: an untrained
+                    // discipline is drawn on the grid but cannot be picked.
+                    let selected = {
+                        let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+                        let known = self
+                            .world
+                            .borrow::<UniqueView<PlayerPsiKnownPowers>>()
+                            .unwrap();
+                        crate::scripts::gui::power_index(&powers.0, power_id)
+                            .filter(|index| known.0.contains(&powers.0[*index].template_id))
+                    };
+                    if let Some(index) = selected {
+                        if let Some(amp) = crate::psi_amp_selection::target(&self.world) {
+                            self.commit_amp_selection(amp, index);
+                        }
+                        self.world
+                            .borrow::<UniqueViewMut<PsiPowerSelection>>()
+                            .unwrap()
+                            .index = index;
+                        self.snap_psi_panel_tier(index);
                     }
                 }
 
+                Effect::SetPsiBrowsedTier { tier } => {
+                    let clamped = tier.clamp(1, crate::scripts::gui::TIERS);
+                    if let Ok(mut browsed) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::psi::PsiPanelTier>>()
+                    {
+                        browsed.0 = clamped;
+                    }
+                }
+
+                Effect::OpenPsiPowers => {
+                    if !self.use_mode
+                        && game_options.presentation_mode == crate::PresentationMode::Vr
+                    {
+                        if let Some(menu) = self.psi_carousel.take() {
+                            crate::psi_carousel::advance_input_epoch(&mut self.world, menu.amp);
+                            self.commit_amp_selection(menu.amp, menu.index);
+                        } else if let Some(amp) = crate::psi_amp_selection::target(&self.world) {
+                            let hand = if game_options.presentation_mode
+                                == crate::PresentationMode::Vr
+                                && crate::wielded_weapon::weapon_in_hand(
+                                    &self.world,
+                                    crate::Handedness::Left,
+                                ) == Some(amp)
+                            {
+                                crate::Handedness::Left
+                            } else {
+                                crate::Handedness::Right
+                            };
+                            self.open_amp_carousel(amp, hand);
+                        }
+                        continue;
+                    }
+
+                    let panel = self
+                        .world
+                        .borrow::<UniqueView<PsiPowersPanelEntity>>()
+                        .map(|panel| panel.0);
+                    let Ok(panel) = panel else {
+                        continue;
+                    };
+                    let is_vr = game_options.presentation_mode == crate::PresentationMode::Vr;
+
+                    // In VR the amp hand's lower button is also the dismiss
+                    // affordance, so it is a true inverse of itself: it puts
+                    // back exactly what it brought up - the whole interface
+                    // when it opened it, just the panel (leaving the inventory
+                    // strip) when the player was already inside.
+                    if is_vr && self.flat_ui.active_panel() == Some(panel) {
+                        if self.use_mode_shortcut == Some(UseModeShortcut::PsiPowers) {
+                            effects.push_front(self.leave_use_mode());
+                        } else {
+                            self.flat_ui.close();
+                        }
+                        self.psi_powers_open = false;
+                        continue;
+                    }
+
+                    // Edge policy: nothing new over the death sequence, the
+                    // rule `ToggleUseMode` and the log reader both apply. After
+                    // the dismiss branch, so a player who died with the panel
+                    // up can still put it away.
+                    if is_vr && !self.player_is_alive() {
+                        continue;
+                    }
+
+                    // The panel presents the wielded amp's selection, and the
+                    // slot has to actually be presented - flat always presents
+                    // it, VR only inside the cyber interface.
+                    if !self.wielding_psi_amp() {
+                        continue;
+                    }
+
+                    // Open on the tier the selection is already in, so the
+                    // player lands looking at their own power.
+                    let selected = crate::psi_amp_selection::target(&self.world)
+                        .and_then(|amp| crate::psi_amp_selection::selected_power(&self.world, amp))
+                        .and_then(|p| {
+                            self.world
+                                .borrow::<UniqueView<GlobalPsiPowers>>()
+                                .unwrap()
+                                .0
+                                .iter()
+                                .position(|entry| entry.template_id == p.template_id)
+                        })
+                        .unwrap_or(0);
+                    self.snap_psi_panel_tier(selected);
+
+                    if is_vr {
+                        // One UI at a time: the panel replaces whatever world
+                        // quad was up rather than hanging in front of it.
+                        self.gui.close_panel(
+                            &mut self.world,
+                            &mut self.physics,
+                            &mut self.script_world,
+                            &mut self.id_to_physics,
+                        );
+                        if !self.use_mode {
+                            effects.push_front(
+                                self.enter_use_mode(crate::ui::entry_ramp::LOG_READER_ENTRY_EXIT),
+                            );
+                            self.reset_vr_use_mode_placement();
+                            self.use_mode_shortcut = Some(UseModeShortcut::PsiPowers);
+                        }
+                    }
+                    self.script_world.dispatch(Message {
+                        to: panel,
+                        payload: MessagePayload::PanelOpened,
+                    });
+                    self.flat_ui.open_unbound(panel);
+                    self.psi_powers_open = true;
+                }
+
+                Effect::PurchasePsiPower { template_id } => {
+                    // Revalidation includes the learned set, so two requests
+                    // in one effect batch can neither spend twice nor learn
+                    // a power after another purchase exhausted the balance.
+                    if let Some(cost) =
+                        crate::scripts::gui::psi_power_quote(&self.world, template_id)
+                    {
+                        let paid = {
+                            let mut quests =
+                                self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                            let stats = quests.player_stats_mut();
+                            if stats.spend_cyber_modules(cost) {
+                                stats.purchased_psi_powers.insert(template_id);
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if paid {
+                            self.world
+                                .borrow::<UniqueViewMut<PlayerPsiKnownPowers>>()
+                                .unwrap()
+                                .0
+                                .insert(template_id);
+                        }
+                    }
+                }
                 Effect::GrantPsiPower { template_id } => {
                     let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
                     let mut known = self
@@ -5793,6 +10518,47 @@ impl MissionCore {
                             .map(|p| p.name.as_str())
                             .unwrap_or("<unknown power>");
                         game_log!(INFO, "Psi power trained: {} ({})", name, template_id);
+                    }
+                }
+
+                Effect::SetMeleeCharge {
+                    entity_id,
+                    fraction,
+                    held_seconds,
+                } => {
+                    if presentation_is_vr(&self.world) {
+                        let previous = self
+                            .world
+                            .borrow::<View<crate::runtime_props::RuntimePropMeleeCharge>>()
+                            .unwrap()
+                            .get(entity_id)
+                            .ok()
+                            .map(|charge| charge.fraction);
+                        if let Some(pulse) = crate::haptics::melee_charge_pulse(previous, fraction)
+                        {
+                            for hand in [crate::Handedness::Left, crate::Handedness::Right] {
+                                if crate::wielded_weapon::held_by_hand(&self.world, hand)
+                                    == Some(entity_id)
+                                {
+                                    self.world
+                                        .borrow::<UniqueViewMut<crate::haptics::HapticFeedback>>()
+                                        .unwrap()
+                                        .request(hand, pulse);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(fraction) = fraction {
+                        self.world.add_component(
+                            entity_id,
+                            crate::runtime_props::RuntimePropMeleeCharge {
+                                fraction,
+                                held_seconds,
+                            },
+                        );
+                    } else {
+                        self.world
+                            .remove::<crate::runtime_props::RuntimePropMeleeCharge>(entity_id);
                     }
                 }
 
@@ -5856,9 +10622,8 @@ impl MissionCore {
                     // live world snapshot. A duplicate effect for an already
                     // destroyed object safely no-ops; full health still
                     // consumes, matching the retail script.
-                    if apply_comestible_use(&self.world, entity_id, hit_points)
-                        == ComestibleUseOutcome::NotUsed
-                    {
+                    let outcome = apply_comestible_use(&self.world, entity_id, hit_points);
+                    if outcome == ComestibleUseOutcome::NotUsed {
                         continue;
                     }
 
@@ -5869,7 +10634,9 @@ impl MissionCore {
                         vec![],
                         AudioHandle::new(),
                     );
-                    self.destroy_entity(entity_id);
+                    if outcome == ComestibleUseOutcome::Consumed {
+                        self.destroy_entity(entity_id);
+                    }
                     if !matches!(sound, Effect::NoEffect) {
                         effects.push_front(sound);
                     }
@@ -5909,10 +10676,15 @@ impl MissionCore {
                     }
                 }
 
-                Effect::UseRadiationPatch { entity_id, amount } => {
-                    let outcome = apply_radiation_patch_use(&self.world, entity_id, amount);
+                Effect::UseRadiationPatch { entity_id, amount }
+                | Effect::UseToxinPatch { entity_id, amount } => {
+                    let outcome = if toxin_patch {
+                        apply_hazard_patch_use(&self.world, entity_id, amount, true)
+                    } else {
+                        apply_radiation_patch_use(&self.world, entity_id, amount)
+                    };
                     if outcome == RadiationPatchUseOutcome::NotUsed {
-                        game_log!(INFO, "No current radiation to remove.");
+                        game_log!(INFO, "No contamination to remove.");
                         continue;
                     }
 
@@ -5974,6 +10746,35 @@ impl MissionCore {
                     self.destroy_entity(entity_id);
                 }
 
+                Effect::SetPsiSword { amp, enabled } => {
+                    if enabled {
+                        self.world
+                            .add_component(amp, (crate::psi_sword::BoundBlade,));
+                    } else {
+                        self.world.remove::<(crate::psi_sword::BoundBlade,)>(amp);
+                        self.world
+                            .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
+                            .unwrap()
+                            .0
+                            .retain(|p| p.template_id != crate::psi_sword::POWER);
+                    }
+                }
+                Effect::DeactivatePsiPower { template_id } => {
+                    self.world
+                        .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
+                        .unwrap()
+                        .0
+                        .retain(|p| p.template_id != template_id);
+                    if template_id == crate::psi::MIGHT_TEMPLATE_ID {
+                        self.world
+                            .borrow::<UniqueViewMut<QuestInfo>>()
+                            .unwrap()
+                            .player_stats_mut()
+                            .modifiers
+                            .retain(|m| m.source != crate::psi::MIGHT_MODIFIER_SOURCE);
+                        self.refresh_implant_effects();
+                    }
+                }
                 Effect::ActivatePsiPower {
                     template_id,
                     name,
@@ -5995,6 +10796,29 @@ impl MissionCore {
                             remaining_secs: duration_secs,
                         });
                         game_log!(INFO, "Psi power active: {} ({}s)", name, duration_secs);
+                    }
+                    drop(active);
+                    if template_id == crate::psi::MIGHT_TEMPLATE_ID {
+                        let delta = self
+                            .world
+                            .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
+                            .unwrap()
+                            .0
+                            .iter()
+                            .find(|power| power.template_id == template_id)
+                            .map(|power| power.power.data[0] as i32)
+                            .unwrap_or(0);
+                        self.world
+                            .borrow::<UniqueViewMut<QuestInfo>>()
+                            .unwrap()
+                            .player_stats_mut()
+                            .apply_modifier(crate::player_stats::TimedStatModifier {
+                                source: crate::psi::MIGHT_MODIFIER_SOURCE.to_owned(),
+                                stat: crate::player_stats::Stat::Strength,
+                                delta,
+                                remaining: std::time::Duration::from_secs_f32(duration_secs),
+                            });
+                        self.refresh_implant_effects();
                     }
                 }
 
@@ -6025,6 +10849,47 @@ impl MissionCore {
                     }
                 }
 
+                Effect::HealingPulse { amp } => {
+                    self.healing_pulses.insert(amp, 0.0);
+                }
+                Effect::PsiPull { amp, cost } => {
+                    if self.psi_pull.is_some()
+                        || cost < 0
+                        || crate::scripts::player_psi_points(&self.world) < cost
+                    {
+                        continue;
+                    }
+                    let Some(target) = crate::psi_pull::resolve(&self.world, &self.physics, amp)
+                    else {
+                        continue;
+                    };
+                    let Some(gravity) = self.physics.begin_psi_pull(target) else {
+                        continue;
+                    };
+                    self.thrown_items.cancel(target);
+                    update_player_psi_points(&self.world, |current| current.saturating_sub(cost));
+                    self.psi_pull = Some(crate::psi_pull::Flight {
+                        item: target,
+                        amp,
+                        gravity,
+                        age: 0.0,
+                        trail_age: 0.1,
+                    });
+                    effects.push_back(crate::scripts::script_util::play_environmental_sound(
+                        &self.world,
+                        amp,
+                        "shoot",
+                        vec![],
+                        engine::audio::AudioHandle::new(),
+                    ));
+                }
+
+                Effect::PsiDrainVisual { from, to } => {
+                    if self.psi_drain_trails.len() < 8 {
+                        self.psi_drain_trails
+                            .push(crate::psi_visuals::DrainTrail::new(from, to));
+                    }
+                }
                 Effect::DrawDebugLines { lines } => {
                     if game_options.debug_draw {
                         for line in lines {
@@ -6038,32 +10903,101 @@ impl MissionCore {
                     }
                 }
 
-                Effect::FlatMeleeSwing { entity_id } => {
-                    self.queue_flat_melee_swing(asset_cache, entity_id);
+                Effect::FlatMeleeSwing {
+                    entity_id,
+                    bonus_damage,
+                } => {
+                    effects.push_front(crate::psi_invisibility::attack_effect(
+                        &self.world,
+                        entity_id,
+                    ));
+                    self.queue_flat_melee_swing(asset_cache, entity_id, bonus_damage);
                 }
 
+                Effect::ArmProximityGrenade { entity_id } => {
+                    if crate::scripts::proximity_grenade::linked_peer(&self.world, entity_id)
+                        .is_none()
+                    {
+                        let pose = self
+                            .world
+                            .borrow::<View<PropPosition>>()
+                            .unwrap()
+                            .get(entity_id)
+                            .ok()
+                            .cloned();
+                        if let Some(pose) = pose {
+                            if let Some(trigger) = self.create_entity_by_template_name(
+                                asset_cache,
+                                "Prox Grenade Trigger",
+                                vec3_to_point3(pose.position),
+                                pose.rotation,
+                            ) {
+                                // Persist the deployed state in the authored property too:
+                                // physics reconstruction must not reapply launch velocity.
+                                self.world.add_component(
+                                    entity_id,
+                                    PropPhysInitialVelocity(vec3(0.0, 0.0, 0.0)),
+                                );
+                                let mut links = self.world.borrow::<ViewMut<Links>>().unwrap();
+                                for (from, to) in [
+                                    (entity_id, trigger.entity_id),
+                                    (trigger.entity_id, entity_id),
+                                ] {
+                                    if let Ok(from_links) = (&mut links).get(from) {
+                                        from_links.to_links.push(ToLink {
+                                            to_template_id: 0,
+                                            to_entity_id: Some(WrappedEntityId(to)),
+                                            link: Link::ScriptParams,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 Effect::CreateEntityByTemplateName {
                     source_entity_id,
                     template_name,
                     position,
                     orientation,
                     initial_velocity,
+                    options,
                 } => {
                     if let Some(created) = self.create_entity_by_template_name_with_options(
                         asset_cache,
                         &template_name,
                         position,
                         orientation,
-                        CreateEntityOptions {
-                            launch_projectile: true,
-                            ..CreateEntityOptions::default()
-                        },
+                        options,
                     ) {
+                        // Retail's launchProjectile composes two terms: the
+                        // emitted archetype's OWN authored initial velocity,
+                        // rotated into the launcher's frame, plus the caller's
+                        // velocity as an addition. Dropping the first term is
+                        // what flattened an emitted volley into a single
+                        // straight column - the goo pod's globs carry a
+                        // horizontal component that the spinning emitter aims
+                        // somewhere new on every emission.
+                        let archetype_velocity = self
+                            .world
+                            .borrow::<View<PropPhysInitialVelocity>>()
+                            .ok()
+                            .and_then(|velocities| {
+                                velocities.get(created.entity_id).ok().map(|velocity| {
+                                    // Same re-permutation as the GunFlash
+                                    // casing path: the parser's runtime vector
+                                    // back into a +Z-forward launch frame.
+                                    // PropPhysInitialVelocity is already in
+                                    // world units; only change its launch frame.
+                                    orientation * vec3(velocity.0.z, velocity.0.y, -velocity.0.x)
+                                })
+                            })
+                            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
                         self.physics
-                            .set_velocity(created.entity_id, initial_velocity);
+                            .set_velocity(created.entity_id, archetype_velocity + initial_velocity);
                     } else {
                         warn!(
-                            "Tweq emitter {:?} could not resolve authored template {:?}",
+                            "{:?} could not resolve authored template {:?}",
                             source_entity_id, template_name
                         );
                     }
@@ -6085,6 +11019,15 @@ impl MissionCore {
                         options,
                     );
                 }
+                Effect::CreateEntityInContainer {
+                    template_id,
+                    container_entity_id,
+                } => {
+                    self.create_entity_in_container(asset_cache, template_id, container_entity_id);
+                }
+                Effect::GenerateLoot { entity_id } => {
+                    self.generate_loot(asset_cache, entity_id);
+                }
                 Effect::SpawnEcologyEntity {
                     template_name,
                     spawn_point,
@@ -6103,7 +11046,12 @@ impl MissionCore {
                     parent_entity_id,
                     dropped_entity_id,
                 } => {
-                    self.drop_entity_into_container(parent_entity_id, dropped_entity_id);
+                    if self
+                        .drop_entity_into_container(parent_entity_id, dropped_entity_id)
+                        .is_none()
+                    {
+                        effects.push_front(backpack_full_feedback(dropped_entity_id));
+                    }
                 }
 
                 Effect::EquipCarriedWeapon { class_template_id } => {
@@ -6126,50 +11074,36 @@ impl MissionCore {
                     }
                 }
 
+                Effect::WithdrawPouchAmmo { weapon, hand } => {
+                    if game_options.presentation_mode == crate::PresentationMode::Vr
+                        && !self.use_mode
+                        && self.player_is_alive()
+                        && self.player_controls_enabled
+                    {
+                        effects.extend(self.withdraw_pouch_ammo(asset_cache, weapon, hand));
+                    }
+                }
                 Effect::GrabEntity {
                     entity_id,
                     hand,
                     current_parent_id: _,
                 } => {
-                    // A grab that displaces something (the flat wield swapping
-                    // the viewmodel out) holsters it back into the backpack
-                    // itself, via the `StoreItem` the controller returns. VR
-                    // grabs into an occupied hand no-op, so nothing is
-                    // displaced there.
-                    let grab_effects = self.interaction.grab(&self.world, entity_id, hand);
-                    self.process_virtual_hand_effects(asset_cache, grab_effects);
-
-                    if self.interaction.is_holding(entity_id) {
-                        // A grab routed through this effect (equip a carried
-                        // weapon, a backpack double-click) never emits
-                        // `HoldItem`, so establish the melee contact body here
-                        // too - otherwise a weapon equipped this way is held
-                        // without a collider and never reports contacts.
-                        if self.is_vr_melee_weapon(entity_id) {
-                            self.attach_held_melee_physics(entity_id);
-                        }
-
-                        // Let the scripts know we are now holding the item..
-                        self.script_world.dispatch(Message {
-                            payload: MessagePayload::Hold,
-                            to: entity_id,
-                        });
-
-                        let mut v_has_refs = self.world.borrow::<ViewMut<PropHasRefs>>().unwrap();
-                        if let Ok(has_refs) = (&mut v_has_refs).get(entity_id) {
-                            has_refs.0 = true;
-                        }
-
-                        let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
-
-                        for links in (&mut v_links).iter() {
-                            links.to_links.retain(|link| {
-                                let is_link_to_entity = matches!(link.link, Link::Contains(_))
-                                    && link.to_entity_id.is_some()
-                                    && link.to_entity_id.unwrap().0 == entity_id;
-
-                                !is_link_to_entity
-                            })
+                    effects.extend(self.grab_entity_into_hand(asset_cache, entity_id, hand));
+                }
+                Effect::SetObjectParameters {
+                    entity_id,
+                    parameters,
+                } => {
+                    if let (Some(model), Some(player)) = (
+                        self.id_to_model.get(&entity_id),
+                        self.id_to_animation_player.get_mut(&entity_id),
+                    ) {
+                        if let Some(rig) = model.object_articulation() {
+                            for (joint, transform) in rig.joint_transforms(&parameters) {
+                                *player = AnimationPlayer::set_additional_joint_transform(
+                                    player, joint, transform,
+                                );
+                            }
                         }
                     }
                 }
@@ -6198,6 +11132,7 @@ impl MissionCore {
                         motion_queries,
                         selection_strategy,
                         AnimationPlayer::queue_animation,
+                        None,
                     );
                 }
 
@@ -6213,6 +11148,24 @@ impl MissionCore {
                         motion_queries,
                         selection_strategy,
                         AnimationPlayer::play_animation,
+                        None,
+                    );
+                }
+
+                Effect::PlayTurnClip {
+                    entity_id,
+                    token,
+                    delta,
+                    max_seconds,
+                } => {
+                    self.apply_animation_by_schema(
+                        global_context,
+                        asset_cache,
+                        entity_id,
+                        vec![vec![MotionQueryItem::new("stand")]],
+                        MotionQuerySelectionStrategy::Random,
+                        AnimationPlayer::play_animation,
+                        Some((token, delta, max_seconds)),
                     );
                 }
 
@@ -6257,6 +11210,21 @@ impl MissionCore {
                         for entity_id in creature_ids {
                             if let Some(player) = self.id_to_animation_player.get_mut(&entity_id) {
                                 *player = AnimationPlayer::queue_animation(player, clip.clone());
+                                // This replaces whatever fade a pivot may have
+                                // been handing its yaw over across, so the
+                                // pivot has to hear about it like any other
+                                // displacing clip.
+                                let fades = player.blend_alpha_now() < 1.0;
+                                if let Some(payload) = self.turn_clips.on_animation_applied(
+                                    entity_id,
+                                    Some(fades),
+                                    false,
+                                ) {
+                                    self.script_world.dispatch(Message {
+                                        to: entity_id,
+                                        payload,
+                                    });
+                                }
                             }
                         }
                         self.debug_pose_index = self.debug_pose_index.wrapping_add(1);
@@ -6266,6 +11234,15 @@ impl MissionCore {
                     }
                 }
 
+                Effect::ContinueHorde => {
+                    effects.push_front(super::earth_horde::director_message(
+                        &self.world,
+                        MessagePayload::Frob,
+                    ));
+                }
+                Effect::StartHordeWave { wave } => {
+                    effects.push_front(super::earth_horde::wave_jump_message(&self.world, wave));
+                }
                 Effect::Send { msg } => {
                     println!("handling Effect::Send event: {:?}", msg);
                     self.script_world.dispatch(msg);
@@ -6277,23 +11254,30 @@ impl MissionCore {
                     world_offset,
                     world_size,
                     components,
+                    sidecar,
                 } => {
                     // The FlatUiHost's canvas slots: the flat MFD panel
-                    // (deliberately NOT behind `--experimental gui` - the flat
-                    // MFD is the #435 fix) and the use-mode inventory strip,
+                    // and the use-mode inventory strip,
                     // which BOTH presentations stash here - VR presents the
                     // same strip canvas on the cyber-interface world panel.
                     // The host only keeps components addressed to its bound
                     // slots, so this is inert outside those modes. VR's
                     // object-bound world panel still accepts only the panel
-                    // explicitly opened through `OpenPanel` (below); the
-                    // experimental mode retains its legacy all-panels
-                    // behavior.
-                    self.flat_ui
-                        .on_set_ui(&self.world, parent_entity, world_size, &components);
-                    let update_world_panel = game_options.experimental_features.contains("gui")
-                        || (game_options.presentation_mode == crate::PresentationMode::Vr
-                            && self.gui.active_panel() == Some(parent_entity));
+                    // explicitly opened through `OpenPanel` (below).
+                    self.flat_ui.on_set_ui(
+                        &self.world,
+                        parent_entity,
+                        world_size,
+                        sidecar,
+                        &components,
+                    );
+                    let is_map = self
+                        .world
+                        .borrow::<UniqueView<MapPanelEntity>>()
+                        .is_ok_and(|map| map.0 == parent_entity);
+                    let update_world_panel = !is_map
+                        && game_options.presentation_mode == crate::PresentationMode::Vr
+                        && self.gui.active_panel() == Some(parent_entity);
                     if update_world_panel {
                         // `internal_inventory` is a 15-column strip: keep its
                         // shared canvas/layout identical, but map that resolved
@@ -6375,6 +11359,9 @@ impl MissionCore {
                     entity_id,
                     model_name,
                 } => {
+                    // The model swap rebuilds the animation player, so any
+                    // turn clip it was playing is gone with it.
+                    self.abandon_turn_clip(entity_id);
                     // A VR-wielded first-person model loads as authored,
                     // baked hands included (see `VrHeldModel`); the
                     // separate importer is the seam where per-wield mesh
@@ -6423,7 +11410,34 @@ impl MissionCore {
                                 .unwrap_or(false);
                         // A missing model must never take down the frame (or a
                         // load): keep the current model and complain loudly.
-                        let (new_model, vr_held_source) = if vr_held {
+                        let glove_source =
+                            if vr_held && crate::vr_weapon_grip::supports_model(&model_name) {
+                                asset_cache
+                                    .get_opt(
+                                        &dark::importers::GLOVE_WEAPON_IMPORTER,
+                                        &format!("{model_name}.bin"),
+                                    )
+                                    .filter(|source| source.as_ref().is_some())
+                            } else {
+                                None
+                            };
+                        let glove_weapon = glove_source.is_some();
+                        let (new_model, vr_held_source) = if let Some(source) = glove_source {
+                            (
+                                Some(Model::transform(
+                                    &source.as_ref().as_ref().unwrap().model,
+                                    xform,
+                                )),
+                                if crate::vr_weapon_grip::is_melee(&model_name) {
+                                    asset_cache.get_opt(
+                                        &dark::importers::VR_HELD_MODELS_IMPORTER,
+                                        &format!("{model_name}.bin"),
+                                    )
+                                } else {
+                                    None
+                                },
+                            )
+                        } else if vr_held {
                             match asset_cache.get_opt(
                                 &dark::importers::VR_HELD_MODELS_IMPORTER,
                                 &format!("{model_name}.BIN"),
@@ -6449,7 +11463,45 @@ impl MissionCore {
                             continue;
                         };
 
-                        let vhots = new_model.vhots();
+                        self.world
+                            .remove::<crate::runtime_props::RuntimePropGloveWeapon>(entity_id);
+                        if glove_weapon {
+                            self.world.add_component(
+                                entity_id,
+                                crate::runtime_props::RuntimePropGloveWeapon { item_scale: 1.0 },
+                            );
+                        }
+                        let mut vhots = new_model.vhots();
+                        let mut muzzle =
+                            crate::weapon_muzzle::load_fallback(asset_cache, &model_name);
+                        // Which hand a VR wield renders for. The `_h` models
+                        // are all authored right-handed, so a left-hand wield
+                        // draws the mirror image. A model applied while
+                        // nothing holds it (a restore before the grab) has no
+                        // hand yet; the right-handed default matches what the
+                        // rig is authored as, and the grab's own ChangeModel
+                        // re-derives this.
+                        let hand = self
+                            .interaction
+                            .holding_hand(entity_id)
+                            .unwrap_or(crate::vr_config::Handedness::Right);
+                        // A gun in the LEFT hand: reflect across the gun,
+                        // muzzle vhots included, so the baked hand is a left
+                        // hand and the shot still leaves the reflected barrel.
+                        // Melee rigs mirror in their own frame below. The
+                        // model's authored bounding box is left as-is: a held
+                        // gun is unphysical, and nothing frames it by that box.
+                        if vr_held && !is_melee_weapon(&self.world, entity_id) {
+                            let mirror = hand.gun_mirror();
+                            new_model.apply_local_transform(mirror);
+                            for vhot in vhots.iter_mut() {
+                                vhot.point = mirror.transform_point(vhot.point);
+                            }
+                            if let Some(muzzle) = muzzle.as_mut() {
+                                muzzle.point = mirror.transform_point(muzzle.point);
+                                muzzle.axis = mirror.transform_vector(muzzle.axis);
+                            }
+                        }
                         // An articulated VR-wielded first-person model (hand +
                         // arm + gun as skeleton sub-objects) renders unposed
                         // without a player, so give it the empty bind pose (it
@@ -6477,12 +11529,7 @@ impl MissionCore {
                             // cancelled for the same reason as flat: the
                             // entity transform is re-anchored (there to the
                             // camera, here to the tracked hand) every frame.
-                            let is_melee = self
-                                .world
-                                .borrow::<View<PropLimbModel>>()
-                                .ok()
-                                .is_some_and(|v| v.get(entity_id).is_ok());
-                            if is_melee {
+                            if is_melee_weapon(&self.world, entity_id) {
                                 let player = asset_cache
                                     .get_opt(
                                         &ANIMATION_CLIP_IMPORTER,
@@ -6510,30 +11557,25 @@ impl MissionCore {
                                     )
                                 });
                                 if let Some(arm) = arm {
-                                    // Which arm to draw. The `_h` rigs are all
-                                    // authored as a right arm, so a left-hand
-                                    // wield renders the mirror image - and the
-                                    // contact offset below is mirrored with
-                                    // it, keeping the collider on the rendered
-                                    // head. A model applied while nothing
-                                    // holds it (a restore before the grab) has
-                                    // no hand yet; the right-handed default
-                                    // matches what the rig is authored as, and
-                                    // the grab's own ChangeModel re-derives
-                                    // this.
-                                    let hand = self
-                                        .interaction
-                                        .holding_hand(entity_id)
-                                        .unwrap_or(crate::vr_config::Handedness::Right);
-                                    let correction =
-                                        crate::vr_config::melee_wield_pose_correction(arm, hand);
+                                    // Which arm to draw: the left hand renders
+                                    // the mirror image, and the contact offset
+                                    // below is mirrored with it, keeping the
+                                    // collider on the rendered head.
+                                    let correction = if glove_weapon {
+                                        crate::vr_config::melee_wield_pose_correction_scaled(
+                                            arm, 1.0, hand,
+                                        )
+                                    } else {
+                                        crate::vr_config::melee_wield_pose_correction(arm, hand)
+                                    };
+                                    let contact = if glove_weapon {
+                                        crate::vr_config::melee_contact_offset_scaled(arm, 1.0)
+                                    } else {
+                                        crate::vr_config::melee_contact_offset(arm)
+                                    };
                                     new_model.apply_local_transform(correction);
-                                    self.world.add_component(
-                                        entity_id,
-                                        RuntimePropVrGripOffset(
-                                            crate::vr_config::melee_contact_offset(arm),
-                                        ),
-                                    );
+                                    self.world
+                                        .add_component(entity_id, RuntimePropVrGripOffset(contact));
                                     if self.interaction.is_holding(entity_id) {
                                         match vr_held_source.as_ref().and_then(|source| {
                                             source.posed_weapon_bounds(&player, correction)
@@ -6583,7 +11625,7 @@ impl MissionCore {
                                                         "wield '{model_name}': baked arm unmeasured"
                                                     ),
                                                 }
-                                                self.physics.fit_held_melee_cuboid(
+                                                self.physics.fit_held_item_cuboid(
                                                     entity_id,
                                                     bounds.size,
                                                     bounds.center,
@@ -6608,39 +11650,87 @@ impl MissionCore {
                         } else if was_vr_held && !new_model.is_animated() {
                             self.id_to_animation_player.remove(&entity_id);
                         }
+
+                        // A physically held gun (`physical_held_items`) is
+                        // swept against the level with a cuboid fitted to the
+                        // *rendered* view model, exactly as a melee weapon is.
+                        // Without this it would keep the loose-prop box, which
+                        // is the size of the WORLD model and centred on the
+                        // grip rather than on the barrel - so the weapon would
+                        // stop at the wrong distance from a wall, in both
+                        // directions. Guns author no grip correction (their
+                        // offset moves the entity, not the mesh), so model
+                        // space is the body's own frame and the fit needs no
+                        // transform. Melee took its own fit above, with the
+                        // posed arm's correction.
+                        let is_physical_gun = vr_held
+                            && !glove_weapon
+                            && self.interaction.is_holding(entity_id)
+                            && self
+                                .held_item_collision_group(entity_id)
+                                .is_some_and(|group| group.is_inert());
+                        if is_physical_gun {
+                            // The same player the model is rendered with, so
+                            // the fit measures the pose the player sees.
+                            let player = self
+                                .id_to_animation_player
+                                .get(&entity_id)
+                                .cloned()
+                                .unwrap_or_else(AnimationPlayer::empty);
+                            if let Some(bounds) = vr_held_source.as_ref().and_then(|source| {
+                                source.posed_weapon_bounds(&player, hand.gun_mirror())
+                            }) {
+                                let cm = crate::METERS_PER_WORLD_UNIT * 100.0;
+                                tracing::info!(
+                                    "wield '{model_name}': rendered weapon {:.0}x{:.0}x{:.0} cm, center ({:.3}, {:.3}, {:.3})",
+                                    bounds.size.x * cm,
+                                    bounds.size.y * cm,
+                                    bounds.size.z * cm,
+                                    bounds.center.x,
+                                    bounds.center.y,
+                                    bounds.center.z,
+                                );
+                                self.physics.fit_held_item_cuboid(
+                                    entity_id,
+                                    bounds.size,
+                                    bounds.center,
+                                );
+                            }
+                        }
+                        self.world
+                            .remove::<crate::runtime_props::RuntimePropObjectArticulation>(
+                                entity_id,
+                            );
+                        if let Some(rig) = new_model.object_articulation() {
+                            self.world.add_component(
+                                entity_id,
+                                crate::runtime_props::RuntimePropObjectArticulation(rig.clone()),
+                            );
+                        }
                         self.id_to_model.insert(entity_id, new_model);
                         self.world
                             .add_component(entity_id, PropModelName(model_name));
 
                         self.world.add_component(entity_id, RuntimePropVhots(vhots));
+                        self.world
+                            .remove::<crate::weapon_muzzle::MuzzleFallback>(entity_id);
+                        if let Some(muzzle) = muzzle {
+                            self.world.add_component(entity_id, muzzle);
+                        }
                     }
                 }
                 Effect::ClearModel { entity_id } => {
+                    self.abandon_turn_clip(entity_id);
                     self.id_to_model.remove(&entity_id);
                     self.id_to_animation_player.remove(&entity_id);
-                    self.world
-                        .remove::<(PropModelName, RuntimePropVhots)>(entity_id);
+                    self.world.remove::<(
+                        PropModelName,
+                        RuntimePropVhots,
+                        crate::runtime_props::RuntimePropObjectArticulation,
+                        crate::weapon_muzzle::MuzzleFallback,
+                        crate::runtime_props::RuntimePropGloveWeapon,
+                    )>(entity_id);
                     self.world.remove::<RuntimePropVrGripOffset>(entity_id);
-                }
-                Effect::SetVhotsFromModel {
-                    entity_id,
-                    model_name,
-                } => {
-                    if let Some(model) = self.id_to_model.get(&entity_id) {
-                        let xform = model.get_transform();
-                        // Same hazard as ChangeModel above: a missing donor
-                        // model must not panic the frame.
-                        let Some(donor_model) =
-                            asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"))
-                        else {
-                            tracing::error!(
-                                "SetVhotsFromModel: model '{model_name}.BIN' could not be loaded for entity {entity_id:?} - keeping current vhots"
-                            );
-                            continue;
-                        };
-                        let vhots = Model::transform(donor_model.as_ref(), xform).vhots();
-                        self.world.add_component(entity_id, RuntimePropVhots(vhots));
-                    }
                 }
                 Effect::PlayEmail { deck, email, force } => {
                     let email_file = get_email_sound_file(deck, email);
@@ -6650,33 +11740,33 @@ impl MissionCore {
                         quests.mark_email_as_played(&email_file);
                         let audio_clip =
                             asset_cache.get(&AUDIO_IMPORTER, &format!("{email_file}.wav"));
-                        let duration = audio_clip.total_duration();
                         let handle = AudioHandle::new();
-                        let preempted = engine::audio::play_audio(
+                        crate::audio_log::play_and_record(
                             audio_context,
                             handle.clone(),
                             Some(AudioChannel::new("email".to_owned())),
                             audio_clip,
+                            crate::audio_log::PlayOptions::ListenerRelative(
+                                AudioPlaybackSettings::default(),
+                            ),
+                            // Observability: record the email so the headless
+                            // e2e can assert it played (and only once).
+                            crate::audio_log::PlayRecord {
+                                sample: &email_file,
+                                volume_millibels: None,
+                                pan_millibels: None,
+                                tags: vec![("kind".to_string(), "email".to_string())],
+                                source_entity: None,
+                            },
                         );
-                        // Observability: record the email so the headless e2e
-                        // can assert it played (and only once). Anything this
-                        // play cut short (the email channel is single-slot) is
-                        // marked stopped first, so `still_playing` stays honest.
-                        crate::audio_log::record_stops(&preempted);
-                        crate::audio_log::record(crate::audio_log::SoundRecord {
-                            sample: &email_file,
-                            volume_millibels: None,
-                            gain: 1.0,
-                            pan_millibels: None,
-                            pan_applied: false,
-                            tags: vec![("kind".to_string(), "email".to_string())],
-                            position: [0.0, 0.0, 0.0],
-                            duration,
-                            source_entity: None,
-                            handle: Some(handle.id()),
-                        });
                     }
                     drop(quests);
+                }
+                Effect::HandHaptic { hand, pulse } => {
+                    self.world
+                        .borrow::<UniqueViewMut<crate::haptics::HapticFeedback>>()
+                        .unwrap()
+                        .request(hand, pulse);
                 }
                 Effect::PlaySound {
                     handle,
@@ -6684,70 +11774,34 @@ impl MissionCore {
                     source,
                     spatial,
                 } => {
-                    println!("Trying to play sound: {}", &name);
-                    let (resolved, has_schema) = resolve_schema(global_context, &name);
-                    let maybe_audio_clip = asset_cache
-                        .get_opt(&AUDIO_IMPORTER, &format!("{}.wav", resolved.sample_name));
-
-                    if let Some(audio_clip) = maybe_audio_clip {
-                        info!("Playing clip: {} handle: {:?}", name, &handle);
-                        let duration = audio_clip.total_duration();
-                        let handle_id = handle.id();
-                        let gain = resolved.linear_gain();
-                        // Spatial emitters (TrapSound narrations anchored at
-                        // their authored station) play at the source entity,
-                        // like the original engine's object sounds. Everything
-                        // else - UI feedback, audio logs, cutscene narration -
-                        // stays non-spatial at the ears even when it carries a
-                        // `source` for attribution.
-                        let maybe_position = if spatial {
-                            source.and_then(|id| get_entity_position(&self.world, id))
-                        } else {
-                            None
-                        };
-                        let preempted = if let Some(position) = maybe_position {
-                            engine::audio::play_spatial_audio_with_gain(
-                                audio_context,
-                                position,
-                                source,
-                                handle,
-                                None,
-                                audio_clip,
-                                gain,
-                            )
-                        } else {
-                            engine::audio::play_audio_with_settings(
-                                audio_context,
-                                handle,
-                                None,
-                                audio_clip,
-                                AudioPlaybackSettings::listener_relative(
-                                    gain,
-                                    resolved.channel_gains(),
-                                ),
-                            )
-                        };
-                        // Observability: record scripted one-shot sounds (audio
-                        // logs, keypad beeps, ...) so headless tooling can assert
-                        // a schema actually resolved and played.
-                        let position = maybe_position.unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
-                        crate::audio_log::record_stops(&preempted);
-                        crate::audio_log::record(crate::audio_log::SoundRecord {
-                            sample: &resolved.sample_name,
-                            volume_millibels: has_schema.then_some(resolved.volume_millibels),
-                            gain,
-                            pan_millibels: has_schema.then_some(resolved.pan_millibels),
-                            pan_applied: has_schema && maybe_position.is_none(),
-                            tags: vec![("kind".to_string(), "sound".to_string())],
-                            position: [position.x, position.y, position.z],
-                            duration,
-                            source_entity: source.map(|id| source_entity(&self.world, id)),
-                            handle: Some(handle_id),
-                        });
-                    } else {
-                        warn!("Unable to load clip: {}", name)
+                    if !spatial
+                        && let Some(previous) = self.listener_sounds.replace(&name, handle.clone())
+                    {
+                        stop_sound(audio_context, previous);
                     }
+                    play_schema_sound(
+                        &self.world,
+                        global_context,
+                        asset_cache,
+                        audio_context,
+                        handle,
+                        &name,
+                        source,
+                        spatial,
+                        false,
+                    );
                 }
+                Effect::PlayLoopingSound { handle, name } => play_schema_sound(
+                    &self.world,
+                    global_context,
+                    asset_cache,
+                    audio_context,
+                    handle,
+                    &name,
+                    None,
+                    false,
+                    true,
+                ),
                 Effect::PlaySpeech {
                     entity_id,
                     voice_index,
@@ -6764,53 +11818,43 @@ impl MissionCore {
                         if let Some(audio_clip) = asset_cache.get_opt(&AUDIO_IMPORTER, &audio_path)
                         {
                             let handle = AudioHandle::new();
-                            let duration = audio_clip.total_duration();
-                            let handle_id = handle.id();
                             let gain = resolved.linear_gain();
                             let maybe_position = get_entity_position(&self.world, entity_id);
-                            let preempted = if let Some(position) = maybe_position {
-                                engine::audio::play_spatial_audio_with_gain(
-                                    audio_context,
+                            let play_options = if let Some(position) = maybe_position {
+                                crate::audio_log::PlayOptions::Spatial {
                                     position,
-                                    Some(entity_id),
-                                    handle,
-                                    None,
-                                    audio_clip,
+                                    source: Some(entity_id),
                                     gain,
-                                )
+                                }
                             } else {
-                                engine::audio::play_audio_with_settings(
-                                    audio_context,
-                                    handle,
-                                    None,
-                                    audio_clip,
+                                crate::audio_log::PlayOptions::ListenerRelative(
                                     AudioPlaybackSettings::listener_relative(
                                         gain,
                                         resolved.channel_gains(),
                                     ),
                                 )
                             };
-                            crate::audio_log::record_stops(&preempted);
                             // Observability: speech is the loudest source of
                             // overlapping audio, so trace it like the rest.
-                            let position = maybe_position.unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
                             let mut sound_tags = vec![
                                 ("kind".to_string(), "speech".to_string()),
                                 ("concept".to_string(), concept.clone()),
                             ];
                             sound_tags.extend(tags.iter().cloned());
-                            crate::audio_log::record(crate::audio_log::SoundRecord {
-                                sample: &resolved.sample_name,
-                                volume_millibels: Some(resolved.volume_millibels),
-                                gain,
-                                pan_millibels: Some(resolved.pan_millibels),
-                                pan_applied: maybe_position.is_none(),
-                                tags: sound_tags,
-                                position: [position.x, position.y, position.z],
-                                duration,
-                                source_entity: Some(source_entity(&self.world, entity_id)),
-                                handle: Some(handle_id),
-                            });
+                            crate::audio_log::play_and_record(
+                                audio_context,
+                                handle,
+                                None,
+                                audio_clip,
+                                play_options,
+                                crate::audio_log::PlayRecord {
+                                    sample: &resolved.sample_name,
+                                    volume_millibels: Some(resolved.volume_millibels),
+                                    pan_millibels: Some(resolved.pan_millibels),
+                                    tags: sound_tags,
+                                    source_entity: Some(source_entity(&self.world, entity_id)),
+                                },
+                            );
                         } else {
                             warn!(
                                 "Unable to load speech clip '{}' for concept '{}'",
@@ -6821,6 +11865,79 @@ impl MissionCore {
                         warn!(
                             "Failed to resolve speech for voice {} concept '{}'",
                             voice_index, concept
+                        );
+                    }
+                }
+                Effect::KickHeldGun {
+                    entity_id,
+                    impulse,
+                    one_hand,
+                } => {
+                    let strength = crate::weapon_recoil::handling_strength(&self.world);
+                    // Exactly one of these applies: VR kicks the held rigid
+                    // body (a no-op unless the gun is a held-inert body), flat
+                    // kicks its viewmodel spring.
+                    self.physics.kick_held_gun(
+                        entity_id,
+                        impulse,
+                        one_hand,
+                        strength,
+                        self.interaction.is_supported(entity_id),
+                    );
+                    self.interaction.kick_viewmodel(
+                        entity_id,
+                        crate::weapon_recoil::flat_impulse(impulse, strength),
+                    );
+                }
+                Effect::PlayImpactSound {
+                    query,
+                    fallback,
+                    position,
+                    audio_handle,
+                    source,
+                } => {
+                    let played = play_environmental_sound(
+                        &global_context.gamesys,
+                        asset_cache,
+                        audio_context,
+                        query,
+                        audio_handle.clone(),
+                        position,
+                    ) || fallback.is_some_and(|fallback| {
+                        play_environmental_sound(
+                            &global_context.gamesys,
+                            asset_cache,
+                            audio_context,
+                            fallback,
+                            audio_handle,
+                            position,
+                        )
+                    });
+                    if played {
+                        self.raise_noise(source, position, 8.0);
+                    }
+                }
+                Effect::PlayEnvironmentalSoundWithFallback {
+                    query,
+                    fallback,
+                    position,
+                    audio_handle,
+                } => {
+                    if !play_environmental_sound(
+                        &global_context.gamesys,
+                        asset_cache,
+                        audio_context,
+                        query,
+                        audio_handle.clone(),
+                        position,
+                    ) {
+                        play_environmental_sound(
+                            &global_context.gamesys,
+                            asset_cache,
+                            audio_context,
+                            fallback,
+                            audio_handle,
+                            position,
                         );
                     }
                 }
@@ -6857,7 +11974,7 @@ impl MissionCore {
                                 env_sound_query,
                                 AudioHandle::new(),
                                 position,
-                            )
+                            );
                         }
 
                         // With the `ragdoll` experimental flag, replace the slain
@@ -6934,11 +12051,28 @@ impl MissionCore {
                             .set_collision_group(entity_id, CollisionGroup::corpse());
                     }
                 }
+                Effect::SetBackgroundMusic { song } => {
+                    initialize_background_music(
+                        song.as_deref().unwrap_or(""),
+                        asset_cache,
+                        audio_context,
+                        true,
+                    );
+                }
                 Effect::StopSound { handle } => {
-                    // Observability: mark the matching play as stopped so
-                    // `still_playing` in the audio log stops reporting it.
-                    crate::audio_log::record_stop(handle.id());
-                    engine::audio::stop_audio(audio_context, handle);
+                    stop_sound(audio_context, handle);
+                }
+                Effect::RaiseSecurityAlarm { seconds } => {
+                    for effect in self.security_alarm.add(&self.world, seconds) {
+                        effects.push_back(effect);
+                    }
+                    self.security_alarm.publish(&self.world);
+                }
+                Effect::ClearSecurityAlarm { from } => {
+                    for effect in self.security_alarm.disable(&self.world, Some(from)) {
+                        effects.push_back(effect);
+                    }
+                    self.security_alarm.publish(&self.world);
                 }
                 Effect::DestroyEntity { entity_id } => {
                     info!("!!!Destroying entity: {:?}", entity_id);
@@ -6960,7 +12094,7 @@ impl MissionCore {
                 } => {
                     self.physics
                         .set_player_translation(position, &mut self.player_handle);
-                    // Teleport locomotion, level load and quickload all land
+                    // Scripted teleports, level load and quickload all land
                     // here, and none of them ran a movement frame: forget the
                     // stride and the fall in progress so the arrival is silent
                     // rather than a burst of steps or a phantom thud.
@@ -6988,6 +12122,34 @@ impl MissionCore {
                             v_teleported.remove(entity_id);
                         },
                     );
+                }
+                Effect::SetLinearVelocity {
+                    entity_id,
+                    velocity,
+                } => {
+                    self.physics.set_velocity(entity_id, velocity);
+                    if self.physics.get_velocity(entity_id).is_some() {
+                        self.world.add_component(
+                            entity_id,
+                            crate::runtime_props::RuntimePropProjectileVelocity(velocity),
+                        );
+                    }
+                }
+                Effect::SetRenderType {
+                    entity_id,
+                    render_type,
+                } => {
+                    // An impact can delete the bolt (and its riders) earlier
+                    // in this effect batch, on the same frame RenderMe expires.
+                    let is_alive = self
+                        .world
+                        .borrow::<shipyard::EntitiesView>()
+                        .map(|entities| entities.is_alive(entity_id))
+                        .unwrap_or(false);
+                    if is_alive {
+                        self.world
+                            .add_component(entity_id, PropRenderType(render_type));
+                    }
                 }
                 Effect::SetRenderAlpha { entity_id, alpha } => {
                     self.world.add_component(
@@ -7092,6 +12254,49 @@ impl MissionCore {
                         door.base_location = base_location;
                     }
                 }
+                Effect::ShowMessage { text } => {
+                    let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+                    self.world
+                        .borrow::<UniqueViewMut<crate::hud::HudMessages>>()
+                        .unwrap()
+                        .push(text, now);
+                }
+
+                Effect::ShowBanner { text, duration } => {
+                    let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+                    self.world
+                        .borrow::<UniqueViewMut<crate::hud::HudBanner>>()
+                        .unwrap()
+                        .show(text, now, duration);
+                }
+
+                Effect::ShowWeaponSkillRequirement {
+                    entity_id,
+                    requirement,
+                } => {
+                    use crate::weapon_requirements::WeaponSkillNotice;
+                    let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+                    let repeated = self
+                        .world
+                        .borrow::<View<WeaponSkillNotice>>()
+                        .ok()
+                        .and_then(|notices| {
+                            notices.get(entity_id).ok().map(|notice| {
+                                notice.expires > now && notice.requirement == requirement
+                            })
+                        })
+                        .unwrap_or(false);
+                    if !repeated {
+                        self.world.add_component(
+                            entity_id,
+                            WeaponSkillNotice {
+                                requirement,
+                                expires: now + std::time::Duration::from_secs(3),
+                            },
+                        );
+                    }
+                }
+
                 Effect::SetQuestBit {
                     quest_bit_name,
                     quest_bit_value,
@@ -7109,11 +12314,9 @@ impl MissionCore {
 
                 Effect::GrantTourReward { career, year, tour } => {
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
-                    let old_width = crate::inventory::backpack_width(quests.player_stats());
                     let applied = quests
                         .player_stats_mut()
                         .apply_tour_reward(career, year, tour);
-                    let new_width = crate::inventory::backpack_width(quests.player_stats());
                     if applied {
                         info!(
                             "Applied training-tour reward ({:?} year {} tour {}): {:?}",
@@ -7125,7 +12328,8 @@ impl MissionCore {
                     }
                     drop(quests);
                     if applied {
-                        self.resize_player_backpack(old_width, new_width);
+                        self.resize_player_backpack();
+                        crate::difficulty::refresh_player_pools(&self.world, false);
                     }
                 }
 
@@ -7152,18 +12356,12 @@ impl MissionCore {
                         );
                         continue;
                     }
-                    let costs = self
-                        .world
-                        .borrow::<UniqueView<GlobalTrainerCosts>>()
-                        .unwrap()
-                        .0
-                        .clone();
+                    let costs = crate::difficulty::trainer_costs(&self.world);
                     if let Some(costs) = costs {
-                        let (purchased, old_width, new_width) = {
+                        let purchased = {
                             let mut quests =
                                 self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                             let stats = quests.player_stats_mut();
-                            let old_width = crate::inventory::backpack_width(stats);
                             match upgrade_quote(&costs, stats, target) {
                                 Some(cost) if stats.spend_cyber_modules(cost) => {
                                     apply_purchase(stats, target);
@@ -7171,33 +12369,27 @@ impl MissionCore {
                                         "Trainer purchase {:?} (-{} modules, balance {})",
                                         target, cost, stats.cyber_modules
                                     );
-                                    (true, old_width, crate::inventory::backpack_width(stats))
+                                    true
                                 }
                                 Some(cost) => {
                                     info!(
                                         "Trainer purchase {:?} refused: costs {}, balance {}",
                                         target, cost, stats.cyber_modules
                                     );
-                                    (false, old_width, old_width)
+                                    false
                                 }
                                 None => {
                                     info!(
                                         "Trainer purchase {:?} refused: maxed/locked/unavailable",
                                         target
                                     );
-                                    (false, old_width, old_width)
+                                    false
                                 }
                             }
                         };
                         if purchased {
-                            self.resize_player_backpack(old_width, new_width);
-                        }
-                        if purchased && endurance_target {
-                            increase_player_max_hit_points(
-                                &self.world,
-                                player_entity,
-                                crate::scripts::gui::ENDURANCE_HP_PER_LEVEL,
-                            );
+                            self.resize_player_backpack();
+                            crate::difficulty::refresh_player_pools(&self.world, false);
                         }
                     } else {
                         warn!("TrainerPurchase dropped: gamesys has no cost tables");
@@ -7205,6 +12397,8 @@ impl MissionCore {
                 }
 
                 Effect::ReplicatorPurchase {
+                    replicator,
+                    slot,
                     cost,
                     template_name,
                     position,
@@ -7215,7 +12409,12 @@ impl MissionCore {
                     let template_exists = self
                         .template_name_to_template_id
                         .contains_key(&template_name.to_ascii_lowercase());
-                    if cost <= 0 || !template_exists {
+                    let current_quote =
+                        crate::scripts::gui::replicator_quote(&self.world, replicator, slot);
+                    if current_quote != Some((template_name.clone(), cost))
+                        || cost <= 0
+                        || !template_exists
+                    {
                         info!(
                             "Replicator purchase refused: invalid request for {} at cost {}",
                             template_name, cost
@@ -7261,9 +12460,12 @@ impl MissionCore {
                 }
 
                 Effect::AcquireOsTrait { trait_id, machine } => {
+                    if crate::scripts::gui::trait_machine_locked(&self.world, machine) {
+                        continue;
+                    }
                     use crate::scripts::gui::{
-                        NATURALLY_ABLE_MODULES, TANK_HP_BONUS, TRAIT_NATURALLY_ABLE, TRAIT_TANK,
-                        live_effect_note, trait_name, used_bit_name,
+                        NATURALLY_ABLE_MODULES, TRAIT_NATURALLY_ABLE, live_effect_note, trait_name,
+                        used_bit_name,
                     };
                     // The machine's stable mission object id keys its used bit.
                     let machine_template_id = self
@@ -7277,19 +12479,18 @@ impl MissionCore {
                         warn!("O/S trait {} refused: machine has no template id", trait_id);
                         continue;
                     };
-                    let (acquired, old_width, new_width) = {
+                    let acquired = {
                         let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
-                        let old_width = crate::inventory::backpack_width(quests.player_stats());
                         let used = quests
                             .read_quest_bit_value(&used_bit_name(machine_id))
                             .bits()
                             != 0;
                         if used {
                             info!("O/S trait {} refused: machine already used", trait_id);
-                            (false, old_width, old_width)
+                            false
                         } else if !quests.player_stats_mut().add_os_trait(trait_id) {
                             info!("O/S trait {} refused: owned or slots full", trait_id);
-                            (false, old_width, old_width)
+                            false
                         } else {
                             quests.set_quest_bit_value(
                                 &used_bit_name(machine_id),
@@ -7300,42 +12501,13 @@ impl MissionCore {
                                     .player_stats_mut()
                                     .award_cyber_modules(NATURALLY_ABLE_MODULES);
                             }
-                            let new_width = crate::inventory::backpack_width(quests.player_stats());
-                            (true, old_width, new_width)
+                            true
                         }
                     };
 
                     if acquired {
-                        self.resize_player_backpack(old_width, new_width);
-                        if trait_id == TRAIT_TANK {
-                            // Tank (Trait8): the original raises the ceiling
-                            // AND current HP by the bonus. Loads first re-derive
-                            // the trait-adjusted default, so this live grant
-                            // cannot double-apply.
-                            let player_entity = self
-                                .world
-                                .borrow::<UniqueView<PlayerInfo>>()
-                                .unwrap()
-                                .entity_id;
-                            self.world.run(
-                                |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
-                                 mut v_max: ViewMut<dark::properties::PropMaxHitPoints>| {
-                                    let new_max = (&mut v_max)
-                                        .get(player_entity)
-                                        .map(|max| {
-                                            max.hit_points += TANK_HP_BONUS as u32;
-                                            max.hit_points
-                                        })
-                                        .ok();
-                                    if let Ok(hp) = (&mut v_hp).get(player_entity) {
-                                        hp.hit_points += TANK_HP_BONUS;
-                                        if let Some(new_max) = new_max {
-                                            hp.hit_points = hp.hit_points.min(new_max as i32);
-                                        }
-                                    }
-                                },
-                            );
-                        }
+                        self.resize_player_backpack();
+                        crate::difficulty::refresh_player_pools(&self.world, false);
                         info!(
                             "O/S trait acquired: {} ({}){}",
                             trait_id,
@@ -7407,6 +12579,50 @@ impl MissionCore {
                         }
                     }
                 }
+
+                Effect::SetMetaProperty {
+                    entity_id,
+                    name,
+                    add,
+                } => {
+                    let template_id = self
+                        .template_name_to_template_id
+                        .get(&name.to_ascii_lowercase())
+                        .map(|metadata| metadata.template_id);
+                    let hierarchy = self
+                        .world
+                        .borrow::<UniqueView<GlobalTemplateHierarchy>>()
+                        .ok()
+                        .map(|hierarchy| hierarchy.0.clone());
+                    let applied =
+                        template_id
+                            .zip(hierarchy)
+                            .is_some_and(|(template_id, hierarchy)| {
+                                apply_meta_property_relation(
+                                    &mut self.world,
+                                    &self.entity_info,
+                                    &hierarchy,
+                                    entity_id,
+                                    template_id,
+                                    add,
+                                )
+                            });
+                    if applied {
+                        effects.push_front(Effect::Send {
+                            msg: Message {
+                                to: entity_id,
+                                payload: MessagePayload::RefreshAIProperties,
+                            },
+                        });
+                    } else {
+                        warn!(
+                            "scripted metaproperty {} '{}' could not be applied to {:?}",
+                            if add { "Add" } else { "Remove" },
+                            name,
+                            entity_id
+                        );
+                    }
+                }
                 Effect::SetAICurrentPatrol { entity_id, target } => {
                     let is_alive = self
                         .world
@@ -7466,6 +12682,20 @@ impl MissionCore {
                         });
                     }
                 }
+                Effect::MaxPlayerStats => {
+                    // Reuse the debug provisioning path rather than writing the
+                    // sheet directly: it caps each field, raises one level at a
+                    // time exactly as a trainer purchase does, resizes the
+                    // backpack and refreshes the health/psi pools. Asking for
+                    // every cap is a raise-only request, so it cannot fail on a
+                    // character that is already stronger.
+                    let request = crate::game_scene::max_stats_request();
+                    if let Err(error) =
+                        crate::game_scene::DebuggableScene::set_player_stats(self, &request)
+                    {
+                        warn!("Max stats cheat could not provision the player: {error}");
+                    }
+                }
                 Effect::SetPositionRotation {
                     entity_id,
                     rotation,
@@ -7502,6 +12732,17 @@ impl MissionCore {
                     if let Some(rigid_body_handle) = self.id_to_physics.get(&entity_id) {
                         self.physics.set_rotation(*rigid_body_handle, rotation);
                     };
+                    // Also the authored property, which is where a rotate tweq
+                    // reads the pose it advances from. Without this the spin is
+                    // inert on anything with no rigid body to hold it - the
+                    // Tweq emitters are NoRender and physics-less, so their
+                    // facing never moved and every volley left in one
+                    // direction.
+                    if let Ok(mut positions) = self.world.borrow::<ViewMut<PropPosition>>() {
+                        if let Ok(position) = (&mut positions).get(entity_id) {
+                            position.rotation = rotation;
+                        }
+                    }
                 }
                 Effect::PositionInventory { position, rotation } => {
                     PlayerInventoryEntity::set_position_rotation(
@@ -7564,7 +12805,57 @@ impl MissionCore {
                         && !self.interaction.is_wielding()
                     {
                         let msgs = self.interaction.wield(info.entity_id);
-                        self.process_virtual_hand_effects(asset_cache, msgs);
+                        effects.extend(self.process_virtual_hand_effects(asset_cache, msgs));
+                    }
+                }
+                Effect::RainItems { template_ids } => {
+                    let (pos, rot) = {
+                        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                        (vec3_to_point3(player.pos), player.rotation)
+                    };
+                    // A ring above head height, one item per slot: spread out
+                    // so the spawns do not interpenetrate on the first step
+                    // (which would fling them apart), and high enough that
+                    // they visibly fall. Deterministic, not random - a capture
+                    // or an e2e assertion must be able to repeat the layout.
+                    let count = template_ids.len() as f32;
+                    // Grow the ring with the cheat instead of packing a longer
+                    // list into the same circle.
+                    let radius = RAIN_RADIUS.max(count * RAIN_MIN_SPACING / std::f32::consts::TAU);
+                    let phase = RAIN_PHASE_STEP * self.rains_landed as f32;
+                    self.rains_landed = self.rains_landed.wrapping_add(1);
+                    for (index, template_id) in template_ids.iter().enumerate() {
+                        let angle = phase + std::f32::consts::TAU * index as f32 / count;
+                        let direction = vec3(angle.cos(), 0.0, angle.sin());
+                        // Keep the slot on the player's side of the walls: the
+                        // ring knows nothing about the room, so in a duct or
+                        // against a wall the naive point is through it.
+                        let reach = match self.physics.ray_cast2(
+                            pos,
+                            direction,
+                            radius,
+                            crate::physics::InternalCollisionGroups::WORLD,
+                            None,
+                            true,
+                        ) {
+                            Some(hit) => {
+                                ((hit.hit_point - pos).magnitude() - RAIN_WALL_MARGIN).max(0.0)
+                            }
+                            None => radius,
+                        };
+                        let offset = vec3(
+                            direction.x * reach,
+                            RAIN_HEIGHT + index as f32 * RAIN_SLOT_LIFT,
+                            direction.z * reach,
+                        );
+                        self.create_entity_with_position(
+                            asset_cache,
+                            *template_id,
+                            pos + offset,
+                            rot,
+                            Matrix4::identity(),
+                            CreateEntityOptions::default(),
+                        );
                     }
                 }
                 Effect::DebugCycleWeapon { head_rotation } => {
@@ -7612,7 +12903,7 @@ impl MissionCore {
                     // previously held weapon into the backpack, so each cycle
                     // swaps the viewmodel. No-op in VR (wield returns nothing).
                     let msgs = self.interaction.wield(info.entity_id);
-                    self.process_virtual_hand_effects(asset_cache, msgs);
+                    effects.extend(self.process_virtual_hand_effects(asset_cache, msgs));
                 }
                 Effect::TurnOffTweqs { entity_id } => {
                     self.world.run_with_data(turn_off_tweqs, entity_id);
@@ -7646,9 +12937,15 @@ impl MissionCore {
     /// the static idle.
     fn update_flat_melee_anim(&mut self, dt: std::time::Duration) {
         let Some((entity, player)) = self.flat_melee_anim.take() else {
+            self.world
+                .borrow::<ViewMut<crate::runtime_props::RuntimePropFlatMeleeBonus>>()
+                .unwrap()
+                .clear();
             return;
         };
         if self.interaction.viewmodel_entity() != Some(entity) {
+            self.world
+                .remove::<crate::runtime_props::RuntimePropFlatMeleeBonus>(entity);
             return; // weapon changed; leave None -> static idle
         }
         let (next, flags, events, _disp) = AnimationPlayer::update(&player, dt);
@@ -7671,17 +12968,31 @@ impl MissionCore {
     /// Start a one-shot swing on the flat melee viewmodel (it plays once, then
     /// `update_flat_melee_anim` drops it back to the static idle). Driven by
     /// `Effect::FlatMeleeSwing` on a melee attack.
-    fn queue_flat_melee_swing(&mut self, asset_cache: &mut AssetCache, entity_id: EntityId) {
+    fn queue_flat_melee_swing(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        entity_id: EntityId,
+        bonus_damage: f32,
+    ) {
         // Do not let release/pull chatter restart the clip before its authored
         // hit frame (or manufacture extra hits). A new swing is accepted only
         // after the current one returns to idle.
         if self.flat_melee_anim.is_some() {
             return;
         }
+        let clip_name = if bonus_damage > 0.0 {
+            "highswing"
+        } else {
+            MELEE_SWING_CLIP
+        };
         if let Some(clip) =
-            asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{MELEE_SWING_CLIP}_.mc"))
+            asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{clip_name}_.mc"))
         {
             let player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip);
+            self.world.add_component(
+                entity_id,
+                crate::runtime_props::RuntimePropFlatMeleeBonus(bonus_damage),
+            );
             self.flat_melee_anim = Some((entity_id, player));
         }
     }
@@ -7693,7 +13004,7 @@ impl MissionCore {
     /// clip is swapped, then raises it back up; the peak angle and pitch speed
     /// come from the weapon's own data (`PropPlayerGun`'s reload pitch/rate, as
     /// 16-bit angle units where 65536 = 360 deg) and the hold from its reload
-    /// time (`PropBaseGunDesc.reload_time_ms`). No-op for non-guns (no
+    /// time (the selected fire setting's reload time). No-op for non-guns (no
     /// `PropBaseGunDesc`), while a reload is already in progress, or when no
     /// compatible reserve rounds are available.
     ///
@@ -7718,15 +13029,11 @@ impl MissionCore {
         }
 
         // Only guns reload; bail (and don't restart an in-progress reload).
-        let (clip, hold) = {
-            let v_desc = self
-                .world
-                .borrow::<View<dark::properties::PropBaseGunDesc>>();
-            match v_desc.as_ref().ok().and_then(|v| v.get(weapon).ok()) {
+        let (clip, hold) =
+            match crate::scripts::script_util::active_gun_setting(&self.world, weapon) {
                 Some(d) => (d.clip, d.reload_time_ms as f32 / 1000.0),
                 None => return Effect::NoEffect,
-            }
-        };
+            };
         if let Ok(v) = self.world.borrow::<View<RuntimePropReloading>>() {
             if v.get(weapon).is_ok_and(|r| !r.is_done()) {
                 return Effect::NoEffect;
@@ -7791,6 +13098,178 @@ impl MissionCore {
         )
     }
 
+    /// The physical VR reload (R3a): a clip carried in one hand into the
+    /// magazine zone of the weapon held in the other loads it instantly.
+    ///
+    /// **Proximity while held, not release.** The insert fires the moment the
+    /// clip ENTERS the zone, which is both what the motion reads like
+    /// physically (you push the magazine home, you do not let go of it inside
+    /// the gun) and what keeps this clear of the release gestures that already
+    /// exist: a clip opened over the cyber-interface strip must still deposit
+    /// there (#1138/#1158), and claiming releases near a weapon would swallow
+    /// exactly those.
+    ///
+    /// The motion IS the reload cost, so there is no authored `reload_time`
+    /// hold on this path - only the weapon's authored "reload" cue, which is
+    /// the sole feedback a VR player gets (the flat reload's viewmodel pitch is
+    /// never rendered for a hand-held gun).
+    ///
+    /// Returns the audible cues to apply.
+    fn update_clip_insert_gesture(&mut self, asset_cache: &mut AssetCache) -> Vec<Effect> {
+        let (left_held, right_held) = self.interaction.held_entities();
+        let held = [left_held, right_held];
+        let mut cues = Vec::new();
+        for slot in 0..2 {
+            // Per weapon, not per player: the zone belongs to whichever hand
+            // holds a gun, so dual wielding inserts into the gun the clip
+            // actually reached.
+            let pair = match (held[slot], held[1 - slot]) {
+                (Some(clip), Some(weapon)) => self
+                    .magazine_capacity(weapon)
+                    .map(|capacity| (clip, weapon, capacity)),
+                _ => None,
+            };
+            let engaged = pair
+                .and_then(|(clip, weapon, _)| {
+                    let clip_position = self.entity_world_position(clip)?;
+                    let magazine = self.magazine_anchor_world(weapon)?;
+                    Some(crate::mission::reload::clip_insert_zone_engaged(
+                        self.vr_clip_insert_engaged[slot],
+                        (clip_position - magazine).magnitude(),
+                    ))
+                })
+                .unwrap_or(false);
+            let entered = engaged && !self.vr_clip_insert_engaged[slot];
+            self.vr_clip_insert_engaged[slot] = engaged;
+            if let (true, Some((clip, weapon, capacity))) = (entered, pair) {
+                cues.extend(self.insert_held_clip(asset_cache, weapon, clip, capacity));
+            }
+        }
+        cues
+    }
+
+    /// How many rounds `weapon`'s magazine holds, or `None` when it is not a
+    /// gun that takes one.
+    fn magazine_capacity(&self, weapon: EntityId) -> Option<i32> {
+        crate::scripts::script_util::active_gun_setting(&self.world, weapon).map(|d| d.clip)
+    }
+
+    /// How many rounds `weapon`'s magazine currently holds (0 for anything
+    /// with no magazine at all).
+    fn magazine_rounds(&self, weapon: EntityId) -> i32 {
+        self.world
+            .borrow::<View<dark::properties::PropGunState>>()
+            .ok()
+            .and_then(|states| states.get(weapon).ok().map(|state| state.ammo))
+            .unwrap_or(0)
+    }
+
+    /// Where `weapon`'s magazine zone is centred in the world: its per-model
+    /// anchor (`vr_config`) carried by the live transform.
+    fn magazine_anchor_world(&self, weapon: EntityId) -> Option<Vector3<f32>> {
+        let anchor = crate::vr_config::magazine_anchor_from_entity(&self.world, weapon);
+        self.entity_point_world(weapon, anchor)
+    }
+
+    /// The world position of `entity`'s live transform.
+    fn entity_world_position(&self, entity: EntityId) -> Option<Vector3<f32>> {
+        self.entity_point_world(entity, vec3(0.0, 0.0, 0.0))
+    }
+
+    /// A point in `entity`'s local frame, carried by its live transform.
+    fn entity_point_world(&self, entity: EntityId, local: Vector3<f32>) -> Option<Vector3<f32>> {
+        use cgmath::Transform as _;
+        let transforms = self.world.borrow::<View<RuntimePropTransform>>().ok()?;
+        let transform = transforms.get(entity).ok()?;
+        Some(crate::util::point3_to_vec3(
+            transform.0.transform_point(Point3::from_vec(local)),
+        ))
+    }
+
+    /// Load a held `clip` into `weapon`, swapping the loaded ammo type if the
+    /// clip is a different one. Returns the gesture's audible cues.
+    ///
+    /// A clip of a type the weapon does not take earns the refusal cue and
+    /// changes nothing; an item that is not ammo at all passes through in
+    /// silence, since the zone is a volume around a gun the player carries
+    /// everything else past.
+    fn insert_held_clip(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        weapon: EntityId,
+        clip: EntityId,
+        capacity: i32,
+    ) -> Vec<Effect> {
+        if !crate::mission::reload::is_ammo_clip(&self.world, clip) {
+            return Vec::new();
+        }
+        let Some(index) = crate::mission::reload::clip_projectile_index(&self.world, weapon, clip)
+        else {
+            return vec![self.refuse_clip_handling(weapon)];
+        };
+        // Nothing below may run unless rounds could actually MOVE. Both halves
+        // of the swap - the eject and the selection change - are committed
+        // before the load, so a gun that cannot hold a round (`clip: 0`) or an
+        // empty clip entity would otherwise dump the magazine and switch the
+        // ammo type having loaded nothing at all.
+        if capacity <= 0 || crate::mission::reload::clip_rounds(&self.world, clip) <= 0 {
+            return vec![self.refuse_clip_handling(weapon)];
+        }
+
+        if index != crate::mission::reload::selected_ammo_index(&self.world, weapon) {
+            // A different ammo type: the loaded rounds go back to the backpack
+            // as what they already are, exactly as an ammo-cycle ejects them.
+            // The swap is earned by an empty magazine, never assumed - see
+            // `cycle_ammo`. Rounds that could not be returned stay loaded, and
+            // switching over them would convert them for free.
+            if !self.unload_magazine(asset_cache, weapon) {
+                return vec![self.refuse_clip_handling(weapon)];
+            }
+            self.world
+                .add_component(weapon, RuntimePropSelectedAmmo(index));
+        }
+
+        let outcome =
+            crate::mission::reload::load_from_held_clip(&self.world, weapon, clip, capacity);
+        if outcome.rounds_loaded == 0 {
+            // A magazine already at capacity: nothing moved, and a cue for a
+            // reload that did not happen would be a lie.
+            return Vec::new();
+        }
+        // A clip drained to nothing leaves the hand with it - the hand is
+        // released by `on_entity_destroyed`. A clip with rounds left over stays
+        // held, and the zone's exit radius keeps it from re-inserting in place.
+        for item in outcome.depleted_items {
+            self.interaction.on_entity_destroyed(item);
+            self.flat_ui.on_entity_destroyed(item);
+            self.remove_incoming_contains_links(item);
+            self.remove_entity(item);
+        }
+
+        vec![crate::scripts::script_util::play_environmental_sound(
+            &self.world,
+            weapon,
+            "reload",
+            vec![],
+            AudioHandle::new(),
+        )]
+    }
+
+    /// The clip-handling refusal cue: `repfail`, the game's own "that request
+    /// is not going to happen" chime (the replicator plays it for an
+    /// unaffordable purchase). Deliberately NOT the weapon's dry-fire schema -
+    /// most guns, the pistol included, author no `dryfire` event at all, so
+    /// the refusal would be silent on exactly the weapons a player reloads
+    /// most.
+    fn refuse_clip_handling(&self, weapon: EntityId) -> Effect {
+        Effect::PlaySound {
+            handle: AudioHandle::new(),
+            source: Some(weapon),
+            name: "repfail".to_owned(),
+            spatial: false,
+        }
+    }
+
     /// Cycle `weapon` to its next ammo type (next `Projectile` link). No-op when
     /// the weapon has fewer than two projectile links.
     ///
@@ -7799,29 +13278,29 @@ impl MissionCore {
     /// mid-magazine swap costs the player a reload rather than converting
     /// standard rounds into AP for free. The only magazine that still has to be
     /// fired off is one whose projectile has no clip archetype to return to
-    /// (`can_cycle_ammo`).
-    fn cycle_ammo(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) {
-        if !crate::scripts::script_util::can_cycle_ammo(&self.world, weapon) {
-            return;
-        }
-        if let Some((clip_template, rounds)) =
-            crate::mission::reload::unload_to_reserve(&self.world, weapon).spawn_clip
+    /// (`can_cycle_ammo`). Flatscreen then reloads from matching reserve and
+    /// returns its audible cue; a type with no reserve remains selected and empty.
+    #[must_use]
+    fn cycle_ammo(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) -> Effect {
+        // Do not eject the rounds that are still being loaded or restart the
+        // animation when B is pressed again before the gun is ready.
+        if self
+            .world
+            .borrow::<View<RuntimePropReloading>>()
+            .is_ok_and(|v| v.get(weapon).is_ok_and(|r| !r.is_done()))
         {
-            self.give_ejected_clip(asset_cache, weapon, clip_template, rounds);
+            return Effect::NoEffect;
+        }
+        if !crate::scripts::script_util::can_cycle_ammo(&self.world, weapon) {
+            return Effect::NoEffect;
         }
         // The switch is earned by an empty magazine, never assumed. Every way an
         // eject can fall short - the fresh clip refused by the backpack, a
         // borrow that did not come through - leaves rounds loaded, and switching
         // then would convert them to the next type for free, which is the exact
         // thing this ejection exists to prevent.
-        let still_loaded = self
-            .world
-            .borrow::<View<dark::properties::PropGunState>>()
-            .ok()
-            .and_then(|states| states.get(weapon).ok().map(|state| state.ammo > 0))
-            .unwrap_or(false);
-        if still_loaded {
-            return;
+        if !self.unload_magazine(asset_cache, weapon) {
+            return Effect::NoEffect;
         }
         let count =
             crate::scripts::script_util::ordered_projectile_links(&self.world, weapon).len();
@@ -7833,6 +13312,237 @@ impl MissionCore {
             .unwrap_or(0);
         self.world
             .add_component(weapon, RuntimePropSelectedAmmo((current + 1) % count));
+        // Commit the type before reloading: reserve matching and the reload cue
+        // must use the new projectile. VR still inserts its clip by hand.
+        if !presentation_is_vr(&self.world) {
+            self.begin_reload(weapon)
+        } else {
+            Effect::NoEffect
+        }
+    }
+
+    /// Switch `weapon` to fire setting `setting`, keeping the selected ammo
+    /// type across the switch by its `ProjectileOptions.order` (the shotgun's
+    /// pellets stay pellets when it goes to its double load). Returns the
+    /// mode-change sting, or `None` when the setting is not a real mode or the
+    /// gun has no second one.
+    ///
+    /// Unlike `cycle_ammo` just above, this does NOT require an empty magazine.
+    /// That rule exists so loaded rounds cannot be converted to a different
+    /// ammo TYPE for free - and a fire setting is not an ammo type: the pair of
+    /// projectiles sharing an `order` across the two modes also share one clip
+    /// archetype (Rifled Slug and Double Slug are both `-43`), so the loaded
+    /// rounds and the reserve they unload to are unchanged by the switch.
+    fn set_gun_setting(&mut self, weapon: EntityId, setting: i32) -> Option<Effect> {
+        use crate::scripts::script_util;
+        // An SS2 gun has two modes; the effect's raw index must name one.
+        if !(0..2).contains(&setting) {
+            return None;
+        }
+        if !script_util::can_cycle_gun_setting(&self.world, weapon) {
+            return None;
+        }
+        let current = script_util::ordered_projectile_links(&self.world, weapon);
+        let next = script_util::ordered_projectile_links_for_setting(&self.world, weapon, setting);
+        let selected = self
+            .world
+            .borrow::<View<RuntimePropSelectedAmmo>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|s| s.0))
+            .unwrap_or(0);
+        let remapped = script_util::remap_selected_ammo(&current, selected, &next);
+
+        let mut gun_state = {
+            let v_gun_state = self.world.borrow::<View<dark::properties::PropGunState>>();
+            v_gun_state
+                .as_ref()
+                .ok()
+                .and_then(|states| states.get(weapon).ok().cloned())?
+        };
+        gun_state.setting = setting;
+        self.world.add_component(weapon, gun_state);
+        self.world
+            .add_component(weapon, RuntimePropSelectedAmmo(remapped));
+
+        Some(Effect::PlaySound {
+            handle: AudioHandle::new(),
+            source: None,
+            name: "bset".to_owned(),
+            spatial: false,
+        })
+    }
+
+    /// Spawn the actual loaded rounds at the gun's magazine, retaining their type.
+    fn drop_loaded_clip(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        weapon: EntityId,
+    ) -> Option<Effect> {
+        let (template, rounds) = super::reload::world_clip_offer(&self.world, weapon)?;
+        let position = self.magazine_anchor_world(weapon)?;
+        let rotation = self
+            .world
+            .borrow::<View<PropPosition>>()
+            .ok()?
+            .get(weapon)
+            .ok()?
+            .rotation;
+        let clip = self
+            .create_entity_with_position(
+                asset_cache,
+                template,
+                vec3_to_point3(position),
+                rotation,
+                Matrix4::identity(),
+                CreateEntityOptions::default(),
+            )
+            .entity_id;
+        self.world
+            .add_component(clip, dark::properties::PropStackCount(rounds));
+        self.make_physical(clip);
+        super::reload::empty_magazine(&self.world, weapon);
+        Some(crate::scripts::script_util::play_environmental_sound(
+            &self.world,
+            weapon,
+            "reload",
+            vec![],
+            AudioHandle::new(),
+        ))
+    }
+
+    /// Swap actual clips, reserving the outgoing clip's space before changing hands.
+    fn cycle_held_ammo(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        hand: crate::Handedness,
+    ) -> Vec<Effect> {
+        let Some(held) = crate::wielded_weapon::held_by_hand(&self.world, hand) else {
+            return vec![];
+        };
+        if self.interaction.holding_hand(held) != Some(hand)
+            || !super::reload::is_ammo_clip(&self.world, held)
+        {
+            return vec![];
+        }
+        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+        let inventory = player.inventory_entity_id;
+        let other = if hand == crate::Handedness::Left {
+            player.right_hand_entity_id
+        } else {
+            player.left_hand_entity_id
+        };
+        drop(player);
+        let carried =
+            crate::scripts::script_util::get_all_links_with_data(&self.world, inventory, |link| {
+                matches!(link, Link::Contains(_)).then_some(())
+            })
+            .into_iter()
+            .map(|(entity, ())| entity);
+        let candidate = other
+            .into_iter()
+            .chain(carried)
+            .find_map(|gun| super::reload::next_carried_clip(&self.world, gun, held));
+        let candidate = candidate.or_else(|| {
+            super::reload::next_carried_clip_without_gun(&self.world, held, &self.entity_info)
+        });
+        let Some(next) = candidate else {
+            return vec![];
+        };
+        // Removing the incoming clip frees its slot even in a full backpack.
+        // Candidates come only from this inventory, so these are the complete
+        // containment links to restore if the outgoing shape cannot fit.
+        let original_links = self
+            .world
+            .borrow::<View<Links>>()
+            .unwrap()
+            .get(inventory)
+            .unwrap()
+            .clone();
+        self.detach_from_containers(next);
+        if !move_live_entity_into_container(&mut self.world, inventory, held) {
+            self.world.add_component(inventory, original_links);
+            return vec![backpack_full_feedback(held)];
+        }
+        self.interaction.on_entity_destroyed(held);
+        self.make_un_physical(held);
+        self.script_world.dispatch(Message {
+            to: held,
+            payload: MessagePayload::Drop,
+        });
+        let effects = self.grab_entity_into_hand(asset_cache, next, hand);
+        if self.interaction.holding_hand(next) != Some(hand) {
+            self.world.add_component(inventory, original_links);
+            let mut rollback = effects;
+            rollback.extend(self.grab_entity_into_hand(asset_cache, held, hand));
+            return rollback;
+        }
+        let (left, right) = self.interaction.held_entities();
+        {
+            let mut player = self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
+            player.left_hand_entity_id = left;
+            player.right_hand_entity_id = right;
+        }
+        let mut effects = effects;
+        effects.push(Effect::PlaySound {
+            handle: AudioHandle::new(),
+            source: None,
+            name: "bset".to_owned(),
+            spatial: false,
+        });
+        effects
+    }
+
+    /// Return `weapon`'s loaded rounds to the backpack as clips of the ammo
+    /// type they already are - the ammo cycle's ejection on its own, without
+    /// the type switch. Nothing is dropped into the world: a clip on the floor
+    /// is a chore to pick up in VR, and the rounds are as usable in the
+    /// backpack.
+    ///
+    /// Returns the cue to play. Silent when there was nothing to eject - an
+    /// empty magazine, or ammo with no clip archetype to return to (an energy
+    /// weapon's charge) - because a cue for an eject that did not happen would
+    /// be a lie. A refusal the player *earned* (the backpack could not take
+    /// the clip) is audible instead: silence there is indistinguishable from a
+    /// dead button.
+    fn eject_magazine(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) -> Option<Effect> {
+        if self.magazine_rounds(weapon) <= 0
+            || !crate::mission::reload::can_unload(&self.world, weapon)
+        {
+            return None;
+        }
+        if !self.unload_magazine(asset_cache, weapon) {
+            return Some(self.refuse_clip_handling(weapon));
+        }
+        // The gun's own clip-handling schema, as the physical clip insert
+        // plays on the way in.
+        Some(crate::scripts::script_util::play_environmental_sound(
+            &self.world,
+            weapon,
+            "reload",
+            vec![],
+            AudioHandle::new(),
+        ))
+    }
+
+    /// Move `weapon`'s loaded rounds to the backpack reserve, minting the clip
+    /// [`reload::unload_to_reserve`] asks for when no carried stack absorbs
+    /// them. The one implementation behind every ejection: the eject button,
+    /// the ammo cycle, and the clip insert that swaps ammo type.
+    ///
+    /// Returns whether the magazine is now EMPTY. `false` means the rounds are
+    /// still loaded - the backpack refused the fresh clip, or this ammo has no
+    /// clip archetype at all - so whatever the caller meant to do next is
+    /// unearned. Rounds exist in exactly one place at every instant.
+    fn unload_magazine(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) -> bool {
+        let outcome = crate::mission::reload::unload_to_reserve(&self.world, weapon);
+        match outcome.spawn_clip {
+            Some((clip_template, rounds)) => {
+                self.give_ejected_clip(asset_cache, weapon, clip_template, rounds)
+            }
+            // No clip to place: the rounds either merged into a carried stack
+            // or never moved, and only the magazine can say which.
+            None => outcome.rounds_unloaded > 0 || self.magazine_rounds(weapon) == 0,
+        }
     }
 
     /// Mint `rounds` rounds of `clip_template` into the backpack - the half of
@@ -7842,18 +13552,20 @@ impl MissionCore {
     /// The magazine is emptied only AFTER the fresh clip is genuinely carried,
     /// so the rounds exist in exactly one place at every instant: a refused
     /// clip simply leaves the weapon loaded and the swap unearned.
+    /// Returns whether the clip was carried - and so whether the magazine was
+    /// emptied.
     fn give_ejected_clip(
         &mut self,
         asset_cache: &mut AssetCache,
         weapon: EntityId,
         clip_template: i32,
         rounds: i32,
-    ) {
+    ) -> bool {
         let entity_id = match self.spawn_into_backpack(asset_cache, clip_template) {
             Ok(entity_id) => entity_id,
             Err(e) => {
                 game_log!(WARN, "Ejected clip could not be carried: {e}");
-                return;
+                return false;
             }
         };
         // The archetype carries its authored stack size; this clip holds
@@ -7861,6 +13573,7 @@ impl MissionCore {
         self.world
             .add_component(entity_id, dark::properties::PropStackCount(rounds));
         crate::mission::reload::empty_magazine(&self.world, weapon);
+        true
     }
 
     /// Instantiate `template_id` and route it through the ordinary pickup path
@@ -7870,7 +13583,7 @@ impl MissionCore {
     /// Spawned at the player's position: containment makes the item
     /// non-physical immediately, so the spawn point is never observed - it just
     /// has to be somewhere valid for instantiation.
-    fn spawn_into_backpack(
+    pub(crate) fn spawn_into_backpack(
         &mut self,
         asset_cache: &mut AssetCache,
         template_id: i32,
@@ -7887,34 +13600,61 @@ impl MissionCore {
             Matrix4::identity(),
             CreateEntityOptions::default(),
         );
+        // A pooled deposit destroys the fresh entity, so resolve the stack it
+        // will merge into BEFORE giving it away - reporting the spawned id
+        // would hand the caller one that no longer resolves.
+        let inventory_entity = {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            player.inventory_entity_id
+        };
+        let merge_target =
+            find_mergeable_stack_anywhere(&self.world, inventory_entity, info.entity_id);
         if let Err(e) = self.give_item(info.entity_id) {
             self.destroy_entity(info.entity_id);
             return Err(e);
         }
-        Ok(info.entity_id)
+        Ok(merge_target.unwrap_or(info.entity_id))
+    }
+
+    /// Advance any running between-shots cooldown by `dt` and clear it when the
+    /// gun is ready again.
+    fn update_shot_cooldowns(&self, dt: std::time::Duration) {
+        self.advance_timer_prop(dt, |cooldown: &mut RuntimePropShotCooldown, dt_s| {
+            cooldown.remaining -= dt_s;
+            cooldown.remaining <= 0.0
+        });
     }
 
     /// Advance any in-progress reload by `dt` and clear it when complete.
     fn update_flat_reload_anim(&self, dt: std::time::Duration) {
+        self.advance_timer_prop(dt, |reload: &mut RuntimePropReloading, dt_s| {
+            reload.elapsed += dt_s;
+            reload.is_done()
+        });
+    }
+
+    /// Advance every instance of a runtime timer component by `dt` and remove
+    /// the ones `advance` reports finished. Removal is a second pass: the
+    /// storage is still borrowed while the first one iterates it.
+    fn advance_timer_prop<
+        T: shipyard::Component<Tracking = shipyard::track::Untracked> + Send + Sync,
+    >(
+        &self,
+        dt: std::time::Duration,
+        mut advance: impl FnMut(&mut T, f32) -> bool,
+    ) {
         let dt_s = dt.as_secs_f32();
         let mut done = Vec::new();
         {
-            let mut v = self
-                .world
-                .borrow::<ViewMut<RuntimePropReloading>>()
-                .unwrap();
-            for (id, r) in (&mut v).iter().with_id() {
-                r.elapsed += dt_s;
-                if r.is_done() {
+            let mut v = self.world.borrow::<ViewMut<T>>().unwrap();
+            for (id, timer) in (&mut v).iter().with_id() {
+                if advance(timer, dt_s) {
                     done.push(id);
                 }
             }
         }
         if !done.is_empty() {
-            let mut v = self
-                .world
-                .borrow::<ViewMut<RuntimePropReloading>>()
-                .unwrap();
+            let mut v = self.world.borrow::<ViewMut<T>>().unwrap();
             for id in done {
                 v.remove(id);
             }
@@ -7922,12 +13662,54 @@ impl MissionCore {
     }
 
     /// Entities whose HUD overlay is still forced on by recent damage.
+    /// Entities whose HUD overlay is still forced on by recent damage.
     fn damage_flash_entities(&self) -> Vec<EntityId> {
         let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
         self.world
             .borrow::<UniqueViewMut<DamageFlash>>()
             .map(|mut flash| flash.active(now))
             .unwrap_or_default()
+    }
+
+    /// The world-space bounds that stand in for an entity: the union of its
+    /// hitboxes where it has them - the volume a creature's limbs occupy in
+    /// the pose it is in - otherwise its own collider.
+    ///
+    /// The HUD highlight frames this, and `/v1/entities/:id` reports it, from
+    /// this one function: what an agent reads is what the player sees framed.
+    ///
+    /// The proxies are stepped by physics before they are re-posed, so the
+    /// bounds trail the drawn pose by a frame - invisible at 60 Hz, and not
+    /// worth a second pose evaluation to remove.
+    pub(crate) fn selection_bounds(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
+        self.hit_boxes
+            .hit_box_bounds(&self.physics, entity_id)
+            .or_else(|| self.physics.get_aabb2(entity_id))
+    }
+
+    /// The world object the mini-frame names when the canvas pointer is on
+    /// nothing.
+    ///
+    /// Flat aims with one reticle. In VR each hand aims on its own and a hand
+    /// resting on the panel is a UI pointer, not an aim - so the readout takes
+    /// the pick of a hand that is *off* the panel, and names nothing while both
+    /// hands are on it.
+    fn name_strip_world_pick(&self, game_options: &GameOptions) -> Option<EntityId> {
+        use crate::vr_config::Handedness;
+        if game_options.presentation_mode != crate::PresentationMode::Vr {
+            return self.interaction.highlighted_entity(Handedness::Right);
+        }
+        let on_panel = |hand: Handedness| {
+            self.vr_use_mode_pointer.as_ref().is_some_and(|pass| {
+                pass.rays
+                    .iter()
+                    .any(|ray| ray.handedness == hand && ray.canvas_hit.is_some())
+            })
+        };
+        [Handedness::Left, Handedness::Right]
+            .into_iter()
+            .filter(|hand| !on_panel(*hand))
+            .find_map(|hand| self.interaction.highlighted_entity(hand))
     }
 
     pub fn render_per_eye(
@@ -7939,6 +13721,21 @@ impl MissionCore {
         options: &crate::GameOptions,
     ) -> Vec<SceneObject> {
         let mut ret = vec![];
+        if let Some(environment) = self
+            .environment
+            .as_ref()
+            .filter(|_| crate::dev_params::get_bool(crate::dev_params::ENV_MAP_PREVIEW))
+        {
+            // Per-eye objects draw after a depth clear, so the box only has
+            // to clear the near plane even at the wide corners of a VR view.
+            let eye = engine::scene::material::eye_position(&view);
+            let mut preview = SceneObject::new(
+                engine::scene::environment::create_preview(environment.clone()),
+                Box::new(engine::scene::cube::create()),
+            );
+            preview.set_transform(Matrix4::from_translation(eye) * Matrix4::from_scale(10.0));
+            ret.push(preview);
+        }
         // The interaction layer reports what the reticle / hand rays picked;
         // whether that pick may be *highlighted* is a separate, data-driven
         // question (`P$HUDSelect`), answered once here so the flat and VR
@@ -7970,10 +13767,15 @@ impl MissionCore {
             highlighted.retain(|e| is_hud_selectable(&self.world, *e));
         }
         for hit_entity in highlighted {
+            // What the highlight frames. Resolved once, so the brackets and
+            // the label can never frame different things.
+            let Some(bounds) = self.selection_bounds(hit_entity) else {
+                continue;
+            };
+
             ret.extend(draw_item_outline(
                 asset_cache,
-                &self.physics,
-                hit_entity,
+                bounds,
                 view,
                 projection,
                 screen_size,
@@ -7981,7 +13783,7 @@ impl MissionCore {
 
             ret.extend(draw_item_name(
                 asset_cache,
-                &self.physics,
+                bounds,
                 hit_entity,
                 &self.world,
                 view,
@@ -7992,7 +13794,7 @@ impl MissionCore {
 
             ret.extend(draw_health_bar(
                 asset_cache,
-                &self.physics,
+                bounds,
                 hit_entity,
                 &self.world,
                 view,
@@ -8046,6 +13848,7 @@ impl MissionCore {
             // last; the depth buffer is cleared before its first object so it
             // renders over geometry while still depth-testing within itself.
             if let Some(weapon) = self.interaction.viewmodel_entity() {
+                let invisibility = crate::psi_invisibility::transparency(&self.world);
                 let maybe_xform = {
                     let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
                     v_transform.get(weapon).map(|p| p.0).ok()
@@ -8069,12 +13872,39 @@ impl MissionCore {
                 let is_melee = limb_model.is_some();
                 let fp_model_name = gun_model.or(limb_model);
                 if let Some(xform) = maybe_xform {
+                    let sword_active = crate::psi_sword::active(&self.world, weapon);
+                    let swing_angle = if sword_active {
+                        self.flat_melee_anim
+                            .as_ref()
+                            .filter(|(e, _)| *e == weapon)
+                            .map(|(_, p)| {
+                                let state = p.snapshot();
+                                let frames = state
+                                    .queue
+                                    .first()
+                                    .map(|c| c.num_frames)
+                                    .unwrap_or(1)
+                                    .max(1);
+                                -65.0
+                                    * (std::f32::consts::PI * state.current_frame as f32
+                                        / frames as f32)
+                                        .sin()
+                            })
+                            .unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+                    // Move the amp and its additive blade as one rigid assembly.
+                    let swing = xform
+                        * Matrix4::from_angle_x(cgmath::Deg(swing_angle))
+                        * xform.invert().unwrap();
+                    let xform = swing * xform;
                     // The reload tilt is part of the entity transform itself:
                     // the flat controller folds the reload pitch into the gun's
                     // camera-pivot pitch (see `FlatPlayerController::update`),
                     // so the gun dips around the eye like the original instead
                     // of spinning in place around its own origin.
-                    let scene_objs = if let Some(name) = fp_model_name {
+                    let scene_objs = if let Some(name) = fp_model_name.as_ref() {
                         let model = asset_cache.get(&MODELS_IMPORTER, &format!("{name}.BIN"));
                         // FP meshes are articulated (hand + arm + weapon as
                         // skeleton sub-objects), so the unskinned `to_scene_objects`
@@ -8095,7 +13925,8 @@ impl MissionCore {
                             .filter(|(e, _)| *e == weapon)
                             .map(|(_, p)| p.clone());
                         let player = match (is_melee, swing_player) {
-                            (_, Some(p)) => p,
+                            (_, Some(p)) if !sword_active => p,
+                            (_, Some(_)) => AnimationPlayer::empty(),
                             (true, None) => asset_cache
                                 .get_opt(
                                     &ANIMATION_CLIP_IMPORTER,
@@ -8119,32 +13950,52 @@ impl MissionCore {
                     } else {
                         Vec::new()
                     };
-                    // The FP models are framed for the game's original, much
-                    // wider field of view (90 deg horizontal / ~74 vertical at
-                    // 4:3); under our narrower world projection the close-up
-                    // viewmodel fills the screen. Instead of a second render
-                    // pass with its own projection, scale the viewmodel toward
-                    // the view axis in camera space by
-                    // tan(world_fov/2) / tan(viewmodel_fov/2): every vertex
-                    // lands on exactly the pixel the wider-FOV projection would
-                    // put it on (depth is unchanged).
-                    const VIEWMODEL_FOV_Y_DEG: f32 = 73.74; // 90 deg horizontal at 4:3
-                    let tan_world = 1.0 / projection.y.y;
-                    let tan_vm = (VIEWMODEL_FOV_Y_DEG / 2.0).to_radians().tan();
-                    let s = tan_world / tan_vm;
-                    let squish =
-                        view.invert().unwrap() * Matrix4::from_nonuniform_scale(s, s, 1.0) * view;
+                    // Frame FP models at the original wider FOV, without
+                    // distorting their world positions/normals used for lighting.
+                    let viewmodel_projection =
+                        crate::flat_player_controller::viewmodel_projection(projection);
+                    let lighting = crate::object_lighting::ObjectLighting::for_scene(
+                        self.spatial_data.as_deref(),
+                        self.animated_lightmaps
+                            .as_ref()
+                            .map(|c| c.light_intensities()),
+                        self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos,
+                        self.environment.clone(),
+                    );
+                    let weapon_lights = lighting
+                        .as_ref()
+                        .map(|lighting| lighting.at_player_position(xform.w.truncate()));
+                    let weapon_tag = Rc::new(engine::scene::SceneObjectDebugTag {
+                        entity_id: Some(weapon.inner()),
+                        model: fp_model_name.clone(),
+                        source: Some("viewmodel".to_owned()),
+                        ..Default::default()
+                    });
                     for obj in scene_objs {
                         let mut o = obj.clone();
-                        o.set_transform(squish * xform);
+                        o.set_transform(xform);
+                        o.set_projection_override(Some(viewmodel_projection));
+                        o.set_lights(weapon_lights.clone());
+                        o.set_debug_tag(Some(weapon_tag.clone()));
+                        crate::psi_invisibility::apply(&mut o, invisibility);
                         ret.push(o);
                     }
 
-                    // Entities bolted to the viewmodel (muzzle flash etc.,
-                    // skipped in the world pass) draw here too so they share
-                    // the viewmodel-FOV scale - otherwise they keep their true
-                    // camera-space offset while the weapon is scaled toward
-                    // the view axis, and float away from the barrel.
+                    for mut blade in crate::psi_sword::render(&self.world, asset_cache, weapon) {
+                        blade.set_transform(swing * blade.transform);
+                        blade.set_projection_override(Some(viewmodel_projection));
+                        ret.push(blade);
+                    }
+
+                    if let Some(age) = self.healing_pulses.get(&weapon) {
+                        for mut pulse in crate::psi_heal_visual::render(&self.world, weapon, *age) {
+                            pulse.set_projection_override(Some(viewmodel_projection));
+                            ret.push(pulse);
+                        }
+                    }
+                    // Attachments share the viewmodel projection so a muzzle
+                    // flash stays at the barrel. Their emissive lighting remains
+                    // independent of the authored light on the weapon.
                     let attached: Vec<(EntityId, Matrix4<f32>)> = {
                         let v_attach = self.world.borrow::<View<RuntimePropAttachment>>().unwrap();
                         let v_transform =
@@ -8156,6 +14007,12 @@ impl MissionCore {
                             .filter_map(|(id, _)| v_transform.get(id).ok().map(|t| (id, t.0)))
                             .collect()
                     };
+                    let render_alpha = self
+                        .world
+                        .borrow::<View<dark::properties::PropRenderAlpha>>()
+                        .unwrap();
+                    let names = self.world.borrow::<View<PropSymName>>().unwrap();
+                    let models = self.world.borrow::<View<PropModelName>>().unwrap();
                     for (attached_id, attached_xform) in attached {
                         if let Some(model) = self.id_to_model.get(&attached_id) {
                             let objs = match self.id_to_animation_player.get(&attached_id) {
@@ -8164,7 +14021,21 @@ impl MissionCore {
                             };
                             for obj in objs {
                                 let mut o = obj.clone();
-                                o.set_transform(squish * attached_xform);
+                                o.set_transform(attached_xform);
+                                o.set_projection_override(Some(viewmodel_projection));
+                                crate::psi_invisibility::apply(&mut o, invisibility);
+                                o.set_debug_tag(Some(Rc::new(
+                                    engine::scene::SceneObjectDebugTag {
+                                        entity_id: Some(attached_id.inner()),
+                                        name: names.get(attached_id).ok().map(|n| n.0.clone()),
+                                        model: models.get(attached_id).ok().map(|m| m.0.clone()),
+                                        source: Some("viewmodel_attachment".to_owned()),
+                                    },
+                                )));
+                                if let Ok(alpha) = render_alpha.get(attached_id) {
+                                    o.set_depth_write(false);
+                                    o.set_transparency(Some(1.0 - alpha.0.clamp(0.0, 1.0)));
+                                }
                                 ret.push(o);
                             }
                         }
@@ -8174,17 +14045,37 @@ impl MissionCore {
 
             // Flat 2D HUD (screen size is available here; the VR forearm HUD is
             // built in `render`). Drawn after the viewmodel so it stays on top.
+            // Use mode replaces the crosshair with the cursor and hands the
+            // bottom readouts to the interface canvas, so the HUD draws neither.
+            let messages = self.hud_messages();
+            let banner = self.hud_banner();
             ret.extend(crate::hud::create_flat_hud(
                 asset_cache,
                 &self.world,
                 screen_size,
-                // The crosshair is a shooter-mode overlay; use mode replaces
-                // it with the cursor (the original's ShockOverlayMouseMode
-                // turns kOverlayCrosshair off while the cursor is up).
-                !self.use_mode,
-                // Use mode expands the compact readouts to BIOFULL/AMMOFULL.
                 self.use_mode,
+                &messages,
+                banner.as_ref(),
+                crate::hud::reticle::from_world(
+                    &self.world,
+                    self.interaction.viewmodel_entity(),
+                    self.interaction.flat_aim_bias(),
+                ),
+                crate::resolve_fov_deg(crate::DEFAULT_FOV_DEG),
             ));
+
+            // `show_position` readout (flat). VR presents the same canvas on a
+            // head-anchored panel in `render`.
+            if self.show_position_readout_visible(options.presentation_mode) {
+                let pos = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
+                ret.extend(
+                    crate::hud::build_debug_overlay_canvas(pos).render_screen_space(
+                        asset_cache,
+                        screen_size,
+                        crate::ui::ScaleMode::PreserveAspect,
+                    ),
+                );
+            }
 
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
             // the HUD. Also records the render-target size the pointer ->
@@ -8232,6 +14123,136 @@ impl MissionCore {
     /// screen this is a mode of play, so the player's own hands are still being
     /// rendered by the interaction controller, and a second static glove would
     /// stack on top of them (the defect issue #1018 fixed for the pause menu).
+    /// The status-message lines showing this frame, oldest first. Expired
+    /// lines are dropped here (the `DamageFlash` pattern), so they clear
+    /// whether or not the message block is being drawn.
+    fn hud_messages(&self) -> Vec<String> {
+        let now = self
+            .world
+            .borrow::<UniqueView<Time>>()
+            .map(|time| time.total)
+            .unwrap_or_default();
+        let mut messages = self
+            .world
+            .borrow::<UniqueViewMut<crate::hud::HudMessages>>()
+            .map(|mut messages| messages.active(now))
+            .unwrap_or_default();
+        // The flat status line and glove share the same weapon-bound notice,
+        // including expiry and immediate removal after training/equipping.
+        if let Some(requirement) =
+            crate::wielded_weapon::held_by_hand(&self.world, crate::vr_config::Handedness::Left)
+                .filter(|weapon| crate::runtime_props::is_flat_aimed(&self.world, *weapon))
+                .and_then(|weapon| {
+                    crate::weapon_requirements::active_weapon_skill_notice(&self.world, weapon)
+                })
+        {
+            messages.push(requirement.message());
+            if messages.len() > crate::hud::message_line::MAX_LINES {
+                messages.remove(0);
+            }
+        }
+        messages
+    }
+
+    /// The interstitial banner showing this frame, if any. Expired banners are
+    /// dropped here (the `hud_messages` pattern), so one clears itself whether
+    /// or not it is being drawn.
+    fn hud_banner(&self) -> Option<crate::hud::ActiveBanner> {
+        let now = self
+            .world
+            .borrow::<UniqueView<Time>>()
+            .map(|time| time.total)
+            .unwrap_or_default();
+        self.world
+            .borrow::<UniqueViewMut<crate::hud::HudBanner>>()
+            .ok()
+            .and_then(|mut banner| banner.active(now))
+    }
+
+    /// Hang a small HUD canvas on a head-anchored panel - the VR half of a
+    /// canvas flat draws into its 2D HUD.
+    ///
+    /// `size` is the canvas's own pixel size; `offset` turns the canvas->world
+    /// scale into where the canvas hangs relative to the head panel's centre,
+    /// in metres. The panel is sized off the frontend panel (which is
+    /// FRONTEND_PANEL_SIZE wide for a 640-pixel canvas), so a glyph subtends
+    /// the same angle it would on a frontend screen. Head-locked rather than
+    /// world-locked (a `FrontendPanelAnchor` placement) because these are read
+    /// at a glance and then gone, not inspected.
+    fn render_vr_head_canvas(
+        &self,
+        asset_cache: &mut AssetCache,
+        canvas: &crate::ui::UiCanvas,
+        size: Vector2<f32>,
+        offset: impl FnOnce(f32) -> Vector3<f32>,
+    ) -> Vec<SceneObject> {
+        let placement =
+            crate::ui::PanelPlacement::from_head(self.last_head_position, self.last_head_rotation);
+        let panel = placement.panel();
+        let scale = panel.size.x / crate::mission::flat_ui_host::CANVAS_SIZE.x;
+        let root = Matrix4::from_translation(panel.center + panel.rotation * offset(scale))
+            * Matrix4::from(panel.rotation)
+            * Matrix4::from_nonuniform_scale(size.x * scale, size.y * scale, 1.0);
+        canvas.render_world_space(asset_cache, root, None, None, 0.001)
+    }
+
+    /// The interstitial banner in VR.
+    ///
+    /// Where it hangs is not a decision made here: the head panel spans the
+    /// same 640x480 canvas the flat HUD does, so the plate is offset from the
+    /// panel's centre by exactly the distance the shared layout puts it below
+    /// the canvas's centre. Flat and VR therefore sit it at the same height.
+    fn render_vr_banner(
+        &self,
+        asset_cache: &mut AssetCache,
+        banner: &crate::hud::ActiveBanner,
+    ) -> Vec<SceneObject> {
+        let below_centre =
+            crate::hud::banner::flat_center().y - crate::mission::flat_ui_host::CANVAS_SIZE.y / 2.0;
+        self.render_vr_head_canvas(
+            asset_cache,
+            &crate::hud::banner::build_banner_canvas(&banner.text, banner.alpha),
+            crate::hud::banner::panel_size(&banner.text),
+            |scale| vec3(0.0, -below_centre * scale, 0.0),
+        )
+    }
+
+    /// The status-message block in VR. The original's placement is a line near
+    /// the top of a 640x480 screen, which has no world position - so the one
+    /// thing this presentation decides for itself is to lift the block above
+    /// the gaze, so it does not sit over what the player is aiming at;
+    /// everything on it is placed by the shared `message_line` layout.
+    fn render_vr_messages(
+        &self,
+        asset_cache: &mut AssetCache,
+        messages: &[String],
+    ) -> Vec<SceneObject> {
+        let size = crate::hud::message_line::PANEL_SIZE;
+        self.render_vr_head_canvas(
+            asset_cache,
+            &crate::hud::message_line::build_message_canvas(messages),
+            size,
+            |scale| vec3(0.0, size.y * scale * 0.5 + 0.2, 0.0),
+        )
+    }
+
+    /// Whether the shared `show_position` readout is visible during gameplay.
+    ///
+    /// The cyber interface is excluded here because its panel owns the view
+    /// while it is up. In VR it keeps owning it through the exit ramp - the
+    /// comfort dim is still drawn there - so the readout waits for the ramp to
+    /// settle; flat draws nothing from the ramp, so it comes straight back.
+    /// The pause menu and the death camera are *not* checked here -
+    /// `MissionCore` cannot see them; they are covered centrally by
+    /// `Game::render`'s `DEBUG_OVERLAY` drop, the same drop that removes the
+    /// player's hands.
+    fn show_position_readout_visible(&self, presentation_mode: crate::PresentationMode) -> bool {
+        let is_vr = presentation_mode == crate::PresentationMode::Vr;
+        crate::dev_params::get_bool(crate::dev_params::SHOW_POSITION)
+            && !self.use_mode
+            && (!is_vr || self.use_mode_ramp.is_settled_closed())
+    }
+
     fn render_vr_use_mode(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
         use crate::ui::world_dim;
         let panel = self.vr_use_mode_anchor.panel();
@@ -8363,6 +14384,24 @@ impl MissionCore {
 
         // Start with built in scene objects
         let mut scene = self.scene_objects.clone();
+        {
+            let blades = self
+                .world
+                .borrow::<View<crate::psi_sword::BoundBlade>>()
+                .unwrap();
+            for (amp, _) in blades.iter().with_id() {
+                if options.presentation_mode != crate::PresentationMode::Flat
+                    || self.interaction.viewmodel_entity() != Some(amp)
+                {
+                    let charge_transform =
+                        crate::melee_charge_visual::transform(&self.world, Some(amp));
+                    for mut blade in crate::psi_sword::render(&self.world, asset_cache, amp) {
+                        blade.set_transform(charge_transform * blade.get_transform());
+                        scene.push(blade);
+                    }
+                }
+            }
+        }
 
         let mut total_model_count = 0;
         let mut rendered_model_count = 0;
@@ -8394,10 +14433,82 @@ impl MissionCore {
                 HashSet::new()
             };
 
+        let invisibility = crate::psi_invisibility::transparency(&self.world);
+        let invisible_items: HashSet<EntityId> = if invisibility.is_some() {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            let held: HashSet<_> = [player.left_hand_entity_id, player.right_hand_entity_id]
+                .into_iter()
+                .flatten()
+                .collect();
+            let attachments = self.world.borrow::<View<RuntimePropAttachment>>().unwrap();
+            held.iter()
+                .copied()
+                .chain(
+                    attachments
+                        .iter()
+                        .with_id()
+                        .filter(|(_, a)| held.contains(&a.parent))
+                        .map(|(id, _)| id),
+                )
+                .collect()
+        } else {
+            HashSet::new()
+        };
+
+        let radar = self
+            .world
+            .borrow::<UniqueView<crate::psi_radar::Radar>>()
+            .unwrap();
+        let radar_contacts: HashMap<_, _> = radar
+            .contacts
+            .iter()
+            .map(|c| (c.entity_id, c.strength))
+            .collect();
+
+        let seekersense = self
+            .world
+            .borrow::<UniqueView<crate::psi_seekersense::Seekersense>>()
+            .unwrap();
+        let item_contacts: HashMap<_, _> = seekersense
+            .contacts
+            .iter()
+            .map(|c| (c.entity_id, c.strength))
+            .collect();
+        // Per-object lighting, when enabled. `None` when the dev toggle is off or the
+        // scene has no world rep, so the render loop pays no cell lookup and no
+        // light ranking at all.
+        let object_lights = crate::object_lighting::ObjectLighting::for_scene(
+            self.spatial_data.as_deref(),
+            self.animated_lightmaps
+                .as_ref()
+                .map(|c| c.light_intensities()),
+            self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos,
+            self.environment.clone(),
+        );
+
+        // A successfully loaded attached effect can replace its host's mesh.
+        // Keep the model and physics data intact; unavailable art leaves the
+        // old projectile mesh and all of its particle riders visible.
+        let replaced_particle_hosts: HashSet<EntityId> = {
+            let attachments = self.world.borrow::<View<RuntimePropAttachment>>().unwrap();
+            self.id_to_particle_system
+                .iter()
+                .filter_map(|(id, effect)| {
+                    effect
+                        .replaces_parent_model()
+                        .then(|| attachments.get(*id).ok().map(|a| a.parent))
+                        .flatten()
+                })
+                .collect()
+        };
+
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
             if flat_viewmodel_skip.contains(entity_id) {
+                continue;
+            }
+            if replaced_particle_hosts.contains(entity_id) {
                 continue;
             }
             if !has_refs(&self.world, *entity_id) {
@@ -8412,14 +14523,23 @@ impl MissionCore {
                 };
             }
 
-            if !self.visibility_engine.is_visible(*entity_id) {
+            let visible = self.visibility_engine.is_visible(*entity_id);
+            let echo = radar_contacts.get(&entity_id.inner()).copied();
+            let item_echo = item_contacts.get(&entity_id.inner()).copied();
+            if !visible && echo.is_none() && item_echo.is_none() {
                 continue;
             }
 
             rendered_model_count += 1;
 
             let scene_objs = {
-                if let Some(player) = self.id_to_animation_player.get(entity_id) {
+                if let Some(pose) = self
+                    .script_world
+                    .stasis(*entity_id, &self.world)
+                    .and_then(|s| s.pose())
+                {
+                    objs.to_posed_scene_objects(pose)
+                } else if let Some(player) = self.id_to_animation_player.get(entity_id) {
                     objs.to_animated_scene_objects(player)
                 } else {
                     objs.to_scene_objects().clone()
@@ -8443,10 +14563,42 @@ impl MissionCore {
             });
 
             if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
+                let held = self.interaction.is_holding(*entity_id);
+                let visual_xform = if held {
+                    crate::melee_charge_visual::transform(&self.world, Some(*entity_id)) * xform
+                } else {
+                    xform
+                };
+                // One light set per entity, resolved at its origin and shared by
+                // its sub-objects - the lights that reach the room it stands in.
+                let entity_lights = object_lights.as_ref().map(|lighting| {
+                    if held {
+                        lighting.at_player_position(xform.w.truncate())
+                    } else {
+                        lighting.at_position(xform.w.truncate())
+                    }
+                });
+
+                // Amp size is a live visual fit. Its hand-local seating offset
+                // scales alongside it in vr_config, including in the fit scene.
+                let visual_xform = if options.presentation_mode == crate::PresentationMode::Vr
+                    && held
+                    && v_model_name
+                        .get(*entity_id)
+                        .is_ok_and(|name| name.0.eq_ignore_ascii_case("amp_h"))
+                {
+                    visual_xform
+                        * Matrix4::from_scale(crate::dev_params::get(
+                            crate::dev_params::PSI_AMP_SCALE,
+                        ))
+                } else {
+                    visual_xform
+                };
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
-                    xformed_obj.set_transform(xform);
+                    xformed_obj.set_transform(visual_xform);
                     xformed_obj.set_debug_tag(Some(debug_tag.clone()));
+                    xformed_obj.set_lights(entity_lights.clone());
                     if options.debug_skeletons && is_animated_model {
                         xformed_obj.set_depth_write(false);
                         xformed_obj.set_skinned_transparency(Some(0.35));
@@ -8454,10 +14606,35 @@ impl MissionCore {
                         xformed_obj.set_depth_write(false);
                         xformed_obj.set_transparency(Some(1.0 - alpha));
                     } else {
-                        xformed_obj.set_depth_write(true);
+                        // The fresh clone already carries the material pass's
+                        // authored depth policy (e.g. a specular overlay must
+                        // not write depth). Only entity overrides disable it.
                         xformed_obj.set_skinned_transparency(None);
                     }
-                    scene.push(xformed_obj);
+                    if invisible_items.contains(entity_id) {
+                        crate::psi_invisibility::apply(&mut xformed_obj, invisibility);
+                    }
+                    if let Some(strength) = echo {
+                        scene.push(crate::psi_sense::silhouette(
+                            &xformed_obj,
+                            strength,
+                            *entity_id,
+                            vec3(0.1, 0.8, 1.0),
+                            "psi_radar",
+                        ));
+                    }
+                    if let Some(strength) = item_echo {
+                        scene.push(crate::psi_sense::silhouette(
+                            &xformed_obj,
+                            strength,
+                            *entity_id,
+                            vec3(1.0, 0.65, 0.08),
+                            "psi_seekersense",
+                        ));
+                    }
+                    if visible {
+                        scene.push(xformed_obj);
+                    }
                 }
 
                 if options.debug_skeletons {
@@ -8502,6 +14679,22 @@ impl MissionCore {
                 scene.push(scene_obj);
             }
         }
+        if options.render_particles {
+            for particles in &self.held_recovery_particles {
+                scene.extend(particles.render());
+            }
+        }
+        if let Some(flames) = &self.immolate_flames {
+            scene.extend(flames.render());
+        }
+        for (amp, age) in &self.healing_pulses {
+            if self.interaction.viewmodel_entity() != Some(*amp) {
+                scene.extend(crate::psi_heal_visual::render(&self.world, *amp, *age));
+            }
+        }
+        for trail in &self.psi_drain_trails {
+            scene.extend(trail.render());
+        }
         // Render particle systems
         if options.render_particles {
             for (particle_entity_id, particle_system) in &self.id_to_particle_system {
@@ -8525,7 +14718,233 @@ impl MissionCore {
         // + forearm HUD panels; flat draws nothing here (its weapon viewmodel is
         // drawn on top in `render_per_eye`). They are labelled `PLAYER_HANDS_SOURCE`
         // so `Game` can drop them while the pause menu is up (issue #1018).
-        scene.append(&mut self.interaction.render(asset_cache, &self.world));
+        scene.append(&mut self.interaction.render(
+            asset_cache,
+            &self.world,
+            self.use_mode,
+            object_lights.as_ref(),
+        ));
+
+        if options.presentation_mode == crate::PresentationMode::Vr {
+            if options.experimental_features.contains("mfd_device")
+                || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE)
+            {
+                if self.personal_card.hand.is_none() {
+                    if let Some(panel) = self
+                        .personal_card
+                        .stowed_device_panel(player.pos, player.rotation)
+                    {
+                        scene.extend(super::mfd_device::body(
+                            asset_cache,
+                            super::mfd_device::body_frame(panel),
+                            None,
+                        ));
+                        let mut screen = self
+                            .stowed_device_ui
+                            .render_world_space(asset_cache, &panel);
+                        for object in &mut screen {
+                            object.set_debug_tag(Some(std::rc::Rc::new(
+                                engine::scene::SceneObjectDebugTag {
+                                    source: Some("mfd_stowed_ui".into()),
+                                    model: Some("tricorder".into()),
+                                    entity_id: self
+                                        .stowed_device_ui
+                                        .utilities
+                                        .query_entity()
+                                        .map(|e| e.inner()),
+                                    name: None,
+                                },
+                            )));
+                        }
+                        scene.extend(screen);
+                    }
+                }
+            } else {
+                scene.extend(
+                    self.personal_card
+                        .render(asset_cache, player.pos, player.rotation),
+                );
+            }
+            scene.extend(
+                self.holsters
+                    .render(&self.world, player.pos, player.rotation),
+            );
+            if crate::dev_params::get_bool(crate::dev_params::VR_AMMO_POUCH_ZONES) {
+                scene.extend(self.ammo_pouch.render_zone(player.pos, player.rotation));
+            }
+            // The pieces are authored in metres, with independent attachment
+            // origins. Gameplay zones and visuals use the same body frame.
+            if let Some(body) = self.holsters.body_pose {
+                let root_rotation = self.holsters.world_rotation(player.rotation);
+                // The belt mesh already places its front 30 cm forward of its
+                // origin. Expose the actual belt distance, not that asset origin.
+                let belt_center = player.pos
+                    + player.rotation.rotate_vector(body.front(
+                        crate::dev_params::get(crate::dev_params::VR_BELT_DROP),
+                        crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) - 0.30,
+                    ));
+                let pouch_center = self.ammo_pouch.world_center(player.pos, player.rotation);
+                let mut parts = vec![("astra-vr-belt.glb", belt_center, Matrix4::from_scale(1.0))];
+                if let Some(center) = pouch_center {
+                    parts.push(("astra-vr-ammo-pouch.glb", center, Matrix4::from_scale(1.0)));
+                }
+                if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
+                    let occupants = super::holsters::occupants(&self.world);
+                    for (slot, center) in centers.into_iter().enumerate() {
+                        if slot < super::holsters::SLOT_COUNT || occupants[slot].is_some() {
+                            parts.push(("astra-vr-holster.glb", center, Matrix4::from_scale(1.0)));
+                        }
+                    }
+                }
+                for (name, center, local) in parts {
+                    if let Some(model) =
+                        asset_cache.get_opt(&dark::importers::GLB_MODELS_IMPORTER, name)
+                    {
+                        let mut objects = model.clone_scene_objects();
+                        let root = Matrix4::from_translation(center)
+                            * root_rotation
+                            * local
+                            * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT);
+                        for object in &mut objects {
+                            object.set_transform(root * object.get_transform());
+                        }
+                        crate::util::tag_render_source(
+                            &mut objects,
+                            crate::util::render_source::PLAYER_HANDS,
+                        );
+                        scene.extend(objects);
+                    }
+                }
+                if let Some(center) = pouch_center {
+                    let root = Matrix4::from_translation(center)
+                        * root_rotation
+                        * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT);
+                    let mut objects = super::body_gear_feedback::pouch(
+                        &self.body_pouch_readout(),
+                        root,
+                        asset_cache,
+                    );
+                    crate::util::tag_render_source(
+                        &mut objects,
+                        crate::util::render_source::PLAYER_HANDS,
+                    );
+                    scene.extend(objects);
+                }
+                if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
+                    for (slot, item) in super::holsters::occupants(&self.world)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let readout =
+                            super::body_gear_feedback::HolsterReadout::resolve(&self.world, item);
+                        let root = Matrix4::from_translation(centers[slot])
+                            * root_rotation
+                            * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT);
+                        let mut objects = super::body_gear_feedback::holster(&readout, root);
+                        crate::util::tag_render_source(
+                            &mut objects,
+                            crate::util::render_source::PLAYER_HANDS,
+                        );
+                        scene.extend(objects);
+                    }
+                }
+            }
+            if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
+                for (slot, entity) in super::holsters::occupants(&self.world)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let Some(model) = entity.and_then(|entity| self.id_to_model.get(&entity))
+                    else {
+                        continue;
+                    };
+                    let Some(bounds) = model.bounding_box() else {
+                        continue;
+                    };
+                    let extent = bounds.max - bounds.min;
+                    let longest = extent.x.max(extent.y).max(extent.z);
+                    if longest <= 0.0001 {
+                        continue;
+                    }
+                    let held_extent = entity
+                        .and_then(|id| {
+                            self.world
+                                .borrow::<View<crate::runtime_props::RuntimePropHolstered>>()
+                                .ok()
+                                .and_then(|slots| {
+                                    slots.get(id).ok().and_then(|slot| slot.held_extent)
+                                })
+                        })
+                        .unwrap_or(longest);
+                    let scale = held_extent.min(0.45 / crate::METERS_PER_WORLD_UNIT) / longest;
+                    let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
+                    // World meshes have different authored long axes. These
+                    // two corrections adapt the authored profiles from #1399.
+                    let name = entity
+                        .and_then(|id| {
+                            self.world
+                                .borrow::<View<PropModelName>>()
+                                .ok()
+                                .and_then(|names| {
+                                    names.get(id).ok().map(|name| name.0.to_ascii_lowercase())
+                                })
+                        })
+                        .unwrap_or_default();
+                    let orientation = match name.trim_end_matches(".bin") {
+                        "sg_w" => Matrix4::from_angle_x(cgmath::Deg(90.0)),
+                        "wrench_w" => Matrix4::from_angle_z(cgmath::Deg(-90.0)),
+                        _ => Matrix4::from_angle_x(cgmath::Deg(-90.0)),
+                    };
+                    let root = Matrix4::from_translation(centers[slot])
+                        * self.holsters.world_rotation(player.rotation)
+                        * orientation
+                        * Matrix4::from_scale(scale)
+                        * Matrix4::from_translation(-center);
+                    let mut objects = model.to_scene_objects().clone();
+                    for object in &mut objects {
+                        object.set_transform(root);
+                    }
+                    crate::util::tag_render_source(
+                        &mut objects,
+                        crate::util::render_source::PLAYER_HANDS,
+                    );
+                    scene.extend(objects);
+                }
+            }
+        }
+
+        if options.presentation_mode == crate::PresentationMode::Vr
+            && crate::dev_params::get_bool(crate::dev_params::VR_BACKPACK_ZONES)
+        {
+            scene.extend(self.shoulder_backpack.render(player.pos, player.rotation));
+        }
+
+        if options.presentation_mode == crate::PresentationMode::Vr
+            && crate::dev_params::get_bool(crate::dev_params::VR_GLOVE_SPHERES)
+        {
+            for (i, center) in self.body_hand_contacts.into_iter().enumerate() {
+                let Some(center) = center else {
+                    continue;
+                };
+                let touching = self.shoulder_backpack.near[i]
+                    || self.holsters.near[i].is_some()
+                    || self.ammo_pouch.near[i];
+                let mut objects = vec![dark::hit_box::draw_debug_wire_sphere(
+                    player.pos + player.rotation.rotate_vector(center),
+                    super::body_inventory::hand_radius(),
+                    if touching {
+                        vec3(0.1, 1.0, 0.2)
+                    } else {
+                        vec3(1.0, 0.65, 0.1)
+                    },
+                )];
+                crate::util::tag_render_source(
+                    &mut objects,
+                    crate::util::render_source::PLAYER_HANDS,
+                );
+                scene.extend(objects);
+            }
+        }
 
         // The old synthetic blue inventory cube remains a desktop diagnostic.
         // VR presents the authored INVBACK canvas through GuiManager instead.
@@ -8534,23 +14953,25 @@ impl MissionCore {
             scene.extend(inventory_objs);
         }
 
-        // Render teleport arc + landing indicator
-        if options.experimental_features.contains("teleport")
-            && self.teleport_system.get_config().enabled
-        {
-            let style = TeleportVisualStyle::default();
-            let mut teleport_visuals = TeleportUI::build_visuals(
-                self.teleport_system.get_left_hand_state(),
-                self.teleport_system.get_right_hand_state(),
-                &style,
-            );
-            scene.append(&mut teleport_visuals);
-        }
-
         // Render debug physics
-        if options.debug_physics {
+        if crate::dev_params::get_bool(crate::dev_params::DEBUG_PHYSICS) {
             let debug_render = &self.physics.debug_render();
             scene.append(&mut debug_render.clone());
+        }
+
+        // Draw the live damage proxies, using their actual physics transforms.
+        // Shared world pass: the same hitboxes appear in flat and VR.
+        if crate::dev_params::get_bool(crate::dev_params::SHOW_HITBOXES) {
+            let hitboxes = self
+                .world
+                .borrow::<View<crate::creature::RuntimePropHitBox>>()
+                .unwrap();
+            for (id, _) in hitboxes.iter().with_id() {
+                scene.extend(
+                    self.physics
+                        .debug_entity_collider_lines(id, vec3(0.2, 1.0, 0.3)),
+                );
+            }
         }
 
         // Held-melee contact volumes. Emitted in the shared world pass, so
@@ -8570,6 +14991,51 @@ impl MissionCore {
                     self.physics
                         .debug_entity_collider_lines(entity_id, vec3(1.0, 0.25, 0.25)),
                 );
+            }
+        }
+
+        // Clip-insert zones of held guns, in the same shared world pass. The
+        // zone belongs to the gun; it is engaged by whatever the OTHER hand
+        // holds, so its engaged state lives in that hand's slot. Rebuilding
+        // the line meshes every frame is the same cost the hurtbox overlay
+        // pays - a debug view, off by default.
+        if options.presentation_mode == crate::PresentationMode::Vr
+            && crate::dev_params::get_bool(crate::dev_params::CLIP_ZONE)
+        {
+            let (left, right) = self.interaction.held_entities();
+            for (slot, weapon) in [left, right].into_iter().enumerate() {
+                let Some(weapon) = weapon else {
+                    continue;
+                };
+                if self.magazine_capacity(weapon).is_none() {
+                    continue;
+                }
+                let Some(anchor) = self.magazine_anchor_world(weapon) else {
+                    continue;
+                };
+                let engaged = self.vr_clip_insert_engaged[1 - slot];
+                let enter_color = if engaged {
+                    vec3(1.0, 0.2, 0.2)
+                } else {
+                    vec3(0.2, 1.0, 0.3)
+                };
+                scene.push(dark::hit_box::draw_debug_wire_sphere(
+                    anchor,
+                    crate::mission::reload::CLIP_INSERT_ENTER_RADIUS,
+                    enter_color,
+                ));
+                scene.push(dark::hit_box::draw_debug_wire_sphere(
+                    anchor,
+                    crate::mission::reload::CLIP_INSERT_EXIT_RADIUS,
+                    vec3(0.35, 0.35, 0.2),
+                ));
+                if let Some(origin) = self.entity_world_position(weapon) {
+                    scene.push(dark::hit_box::draw_debug_wire_sphere(
+                        origin,
+                        0.04,
+                        vec3(0.2, 0.4, 1.0),
+                    ));
+                }
             }
         }
 
@@ -8632,13 +15098,51 @@ impl MissionCore {
             scene.push(debug);
         }
 
-        // Render world-space GUI. The explicit experiment preserves the old
-        // all-panels mode; default VR renders only the gameplay panel opened
-        // by frobbing its object.
-        if options.experimental_features.contains("gui") {
-            scene.extend(self.gui.render(asset_cache, &self.world));
-        } else if options.presentation_mode == crate::PresentationMode::Vr {
+        // VR renders only the gameplay panel opened by frobbing its object.
+        if options.presentation_mode == crate::PresentationMode::Vr {
             scene.extend(self.gui.render_active(asset_cache, &self.world));
+        }
+
+        if let Some(panel) = self.device_panel.filter(|_| self.flat_ui.device) {
+            let pawn_to_world =
+                Matrix4::from_translation(player.pos) * Matrix4::from(player.rotation);
+            let mut objects = super::mfd_device::body(
+                asset_cache,
+                super::mfd_device::body_frame(panel),
+                self.personal_card.hand,
+            );
+            if let Some(model) = self
+                .flat_ui
+                .utilities
+                .query_entity()
+                .filter(|_| self.flat_ui.active_panel().is_none())
+                .and_then(|entity| self.id_to_model.get(&entity))
+            {
+                let seconds = self
+                    .world
+                    .borrow::<UniqueView<Time>>()
+                    .map(|time| time.total.as_secs_f32())
+                    .unwrap_or_default();
+                objects.extend(super::mfd_device::hologram(model, panel, seconds));
+            }
+            let layout = super::mfd_device::layout(self.flat_ui.device_screen_source());
+            let panel = layout.surface_panel(panel);
+            objects.extend(self.flat_ui.render_world_space(asset_cache, &panel));
+            if let Some(pass) = &self.vr_use_mode_pointer {
+                objects.extend(crate::ui::pointer_beams(
+                    pass,
+                    layout.size,
+                    &panel,
+                    objects.len(),
+                ));
+            }
+            for object in &mut objects {
+                object.set_transform(pawn_to_world * object.get_transform());
+            }
+            scene.extend(objects);
+            if let Some((start, end)) = self.device_beam {
+                scene.push(super::mfd_device::beam(start, end));
+            }
         }
 
         // The VR cyber interface (use mode): the flat use-mode canvas on the
@@ -8654,17 +15158,84 @@ impl MissionCore {
         if options.presentation_mode == crate::PresentationMode::Vr
             && (self.use_mode || !self.use_mode_ramp.is_settled_closed())
         {
-            let pawn_to_world =
-                Matrix4::from_translation(player.pos) * Matrix4::from(player.rotation);
             let mut use_mode_objects = self.render_vr_use_mode(asset_cache);
-            for object in &mut use_mode_objects {
-                object.set_render_layer(RenderLayer::SystemOverlay);
-                object.set_transform(pawn_to_world * object.get_transform());
-            }
+            rebase_pawn_overlay(&mut use_mode_objects, player.pos, player.rotation);
             scene.extend(use_mode_objects);
         }
 
-        // Note: Hand spotlights for enhanced lighting are now handled in the runtime
+        if let Some(menu) = &self.psi_carousel {
+            let eye = player.pos + player.rotation * self.last_head_position;
+            scene.extend(menu.render(&self.world, asset_cache, eye));
+        }
+        // Status messages in VR: flat draws them into its 2D HUD above, so this
+        // is the VR half of the same shared canvas.
+        if options.presentation_mode == crate::PresentationMode::Vr {
+            let messages = self.hud_messages();
+            if !messages.is_empty() {
+                let mut objects = self.render_vr_messages(asset_cache, &messages);
+                crate::util::tag_render_source(
+                    &mut objects,
+                    crate::util::render_source::GAMEPLAY_HUD,
+                );
+                rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
+                scene.extend(objects);
+            }
+            if let Some(banner) = self.hud_banner() {
+                let mut objects = self.render_vr_banner(asset_cache, &banner);
+                crate::util::tag_render_source(
+                    &mut objects,
+                    crate::util::render_source::GAMEPLAY_HUD,
+                );
+                rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
+                scene.extend(objects);
+            }
+        }
+
+        // Floating damage readouts, in the shared world pass so flat and VR
+        // show the identical overlay - and so they depth-test against the
+        // world instead of floating over it like the per-eye HUD.
+        let sim_time = self
+            .world
+            .borrow::<UniqueView<Time>>()
+            .map(|time| time.total.as_secs_f64())
+            .unwrap_or(0.0);
+        let eye = player.pos
+            + player.rotation
+                * self
+                    .flat_eye
+                    .map_or(self.last_head_position, |eye| eye.position);
+        scene.extend(crate::damage_overlay::render(
+            asset_cache,
+            self.script_world.damage_popups(),
+            eye,
+            sim_time,
+        ));
+
+        // `show_position` readout (VR): the same canvas flat draws in screen
+        // space, on its own anchored panel - nearer than the system panels so
+        // it cannot be coplanar with them. Labelled `DEBUG_OVERLAY` so
+        // `Game::render`'s pause/death filter drops it exactly as the flat
+        // readout is dropped with the per-eye scene.
+        if let Some(placement) = self
+            .show_position_readout_visible(options.presentation_mode)
+            .then(|| self.show_position_anchor.placement())
+            .flatten()
+        {
+            let panel = crate::hud::readout_panel(placement);
+            let mut objects = crate::hud::build_debug_overlay_canvas(player.pos)
+                .render_world_space(
+                    asset_cache,
+                    panel.transform(),
+                    None,
+                    None,
+                    crate::ui::VR_COMPONENT_Z_STEP,
+                );
+            crate::util::tag_render_source(&mut objects, crate::util::render_source::DEBUG_OVERLAY);
+            rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
+            scene.extend(objects);
+        }
+
+        // Note: Hand spotlights are handled in the runtime
         // via get_hand_spotlights() method - they're added to the Scene's lighting system
 
         if options.debug_portals {
@@ -8689,7 +15260,7 @@ impl MissionCore {
         (scene, player.pos, player.rotation)
     }
 
-    /// Get hand spotlights for testing enhanced lighting system
+    /// Hand spotlights (`hand_spotlights` dev param).
     /// Returns a vector of SpotLight objects positioned at the player's hands
     pub fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
         self.interaction.hand_spotlights(options)
@@ -8704,26 +15275,68 @@ impl MissionCore {
         self.flat_ui.active_panel().is_some() || self.use_mode
     }
 
-    /// See [`crate::game_scene::GameScene::fov_pull_deg`]. VR must not react
-    /// to the cyber interface's ramp - OpenXR view FOVs are used as-is - so
-    /// this is gated on presentation even though the ramp itself runs in
-    /// both.
-    pub fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
-        if game_options.presentation_mode == crate::PresentationMode::Vr {
-            return 0.0;
-        }
-        self.use_mode_ramp.fov_pull_deg()
-    }
-
-    /// See [`crate::game_scene::GameScene::use_mode_vignette_intensity`].
-    pub fn use_mode_vignette_intensity(&self) -> f32 {
-        self.use_mode_ramp.vignette_intensity()
-    }
-
     /// Actual crouch state of the player collider (stand-up can be refused
     /// for lack of headroom, so this can lag the crouch input).
+    pub fn player_tracking_is_crouched(&self) -> bool {
+        self.player_handle.tracking_is_crouched()
+    }
+
     pub fn player_is_crouched(&self) -> bool {
         self.player_handle.is_crouched()
+    }
+
+    /// Water when the player's body center is in an authored water cell.
+    /// A swimmer holding jump whose center has just broken the surface treads
+    /// water there, instead of alternating a gravity frame with a swim frame.
+    fn player_medium(&self, jump: bool) -> crate::physics::PlayerMedium {
+        let center = self.physics.get_player_translation(&self.player_handle);
+        let in_water = |position: Vector3<f32>| {
+            self.spatial_data
+                .as_deref()
+                .and_then(|spatial| spatial.get_cell_from_position(position))
+                .is_some_and(|cell| cell.medium == dark::mission::CellMedium::Water)
+        };
+        if in_water(center) {
+            crate::physics::PlayerMedium::Water
+        } else if jump && in_water(center - cgmath::vec3(0.0, WATER_SURFACE_BAND, 0.0)) {
+            crate::physics::PlayerMedium::WaterSurface
+        } else {
+            crate::physics::PlayerMedium::Air
+        }
+    }
+
+    /// The actual held surface, after a deliberate upward or inward pull.
+    /// Preserve this target across ladder-to-deck transfer; head height at the
+    /// moment of grabbing does not disqualify the new hold.
+    fn hand_vault_target(&self, head_local: Vector3<f32>) -> Option<crate::physics::ClimbGrip> {
+        let anchor = self.interaction.hand_climb()?.anchor_grip()?;
+        let center = self
+            .physics
+            .get_player_next_translation(&self.player_handle);
+        let toward = anchor.grip.point - anchor.pawn_at_grab;
+        let horizontal = cgmath::vec3(toward.x, 0.0, toward.z);
+        let distance = horizontal.magnitude();
+        let traveled = center - anchor.pawn_at_grab;
+        let inward = if distance > 1e-4 {
+            traveled.dot(horizontal / distance)
+        } else {
+            0.0
+        };
+        crate::vr_climb::vault_ready(
+            center.y + head_local.y,
+            traveled.y.max(inward),
+            anchor.grip.point.y,
+            anchor.grip.kind,
+            crate::physics::is_walkable_normal(anchor.grip.normal.y),
+        )
+        .then_some(anchor.grip)
+    }
+
+    /// Whether either VR hand currently holds a climb hold.
+    pub fn player_is_gripping(&self) -> bool {
+        self.interaction
+            .hand_climb()
+            .is_some_and(|climb| climb.grips().next().is_some())
     }
 
     pub fn player_save_position(&self) -> Result<Vector3<f32>, PlayerSavePoseError> {
@@ -8762,14 +15375,139 @@ impl MissionCore {
             .set_player_crouch(true, &mut self.player_handle);
     }
 
+    fn body_pouch_readout(&self) -> super::body_gear_feedback::PouchReadout {
+        let (left, right) = self.interaction.held_entities();
+        super::body_gear_feedback::PouchReadout::resolve(
+            &self.world,
+            [left, right],
+            [crate::Handedness::Left, crate::Handedness::Right]
+                .map(|hand| self.interaction.hand_available_for_body_slot(hand)),
+            self.ammo_pouch.near,
+            self.ammo_pouch.refused.iter().any(|refused| *refused),
+            self.ammo_pouch.enabled,
+        )
+    }
+
+    fn grab_entity_into_hand(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        entity_id: EntityId,
+        hand: crate::Handedness,
+    ) -> Vec<Effect> {
+        // A grab that displaces something (the flat wield swapping
+        // the viewmodel out) holsters it back into the backpack
+        // itself, via the `StoreItem` the controller returns. VR
+        // grabs into an occupied hand no-op, so nothing is
+        // displaced there.
+        let grab_effects = self.interaction.grab(&self.world, entity_id, hand);
+        let deferred = self.process_virtual_hand_effects(asset_cache, grab_effects);
+
+        if self.interaction.is_holding(entity_id) {
+            // A grab routed through this effect (equip a carried
+            // weapon, a backpack double-click) never emits
+            // `HoldItem`, so establish the melee contact body here
+            // too - otherwise a weapon equipped this way is held
+            // without a collider and never reports contacts.
+            if let Some(group) = self.held_item_collision_group(entity_id) {
+                self.attach_held_item_physics(entity_id, group);
+            }
+
+            // Let the scripts know we are now holding the item..
+            self.script_world.dispatch(Message {
+                payload: MessagePayload::Hold,
+                to: entity_id,
+            });
+
+            let mut v_has_refs = self.world.borrow::<ViewMut<PropHasRefs>>().unwrap();
+            if let Ok(has_refs) = (&mut v_has_refs).get(entity_id) {
+                has_refs.0 = true;
+            }
+
+            drop(v_has_refs);
+            self.detach_from_containers(entity_id);
+        }
+        deferred
+    }
+
+    /// Re-resolve stock at commit time. A split is debited only after its new
+    /// clip is actually in the requested hand; a failed grab rolls it back.
+    fn withdraw_pouch_ammo(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        weapon: EntityId,
+        hand: crate::Handedness,
+    ) -> Vec<Effect> {
+        let i = crate::vr_config::hand_slot(hand);
+        let held = self.interaction.held_entities();
+        if !self.interaction.hand_available_for_body_slot(hand)
+            || [held.0, held.1][1 - i] != Some(weapon)
+        {
+            return vec![];
+        }
+        let Some(offer) = super::reload::reserve_clip_for_pouch(&self.world, weapon) else {
+            return vec![];
+        };
+        let split = offer.stock > offer.rounds;
+        let clip = if split {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            let position = vec3_to_point3(player.pos);
+            let rotation = player.rotation;
+            drop(player);
+            let item = self
+                .create_entity_with_position(
+                    asset_cache,
+                    offer.template,
+                    position,
+                    rotation,
+                    Matrix4::identity(),
+                    CreateEntityOptions::default(),
+                )
+                .entity_id;
+            self.world
+                .add_component(item, dark::properties::PropStackCount(offer.rounds));
+            self.make_un_physical(item);
+            item
+        } else {
+            offer.reserve
+        };
+        let mut effects = self.grab_entity_into_hand(asset_cache, clip, hand);
+        if self.interaction.holding_hand(clip) == Some(hand) {
+            if split {
+                self.world.add_component(
+                    offer.reserve,
+                    dark::properties::PropStackCount(offer.stock - offer.rounds),
+                );
+            }
+            effects.push(Effect::ShowMessage {
+                text: "Ammo drawn".to_owned(),
+            });
+            effects.push(Effect::PlaySound {
+                handle: AudioHandle::new(),
+                name: "bset".to_owned(),
+                source: None,
+                spatial: false,
+            });
+        } else if split {
+            self.destroy_entity(clip);
+        }
+        effects
+    }
+
     /// Apply the effects produced by an interaction controller (the VR hands or
     /// the flat first-person controller). Shared so both presentations go
     /// through one path.
+    /// Returns any follow-up `Effect`s the batch produced (currently just UI
+    /// feedback for a refused backpack deposit) - the caller either has an
+    /// in-flight `effects` deque to extend (inside `handle_effects`) or its
+    /// own returned `Vec<Effect>` for the frame (`update`), and either way
+    /// they still reach `handle_effects`'s `Effect::PlaySound` handler this
+    /// frame.
     fn process_virtual_hand_effects(
         &mut self,
         asset_cache: &mut AssetCache,
         msgs: Vec<VirtualHandEffect>,
-    ) {
+    ) -> Vec<Effect> {
+        let mut deferred = Vec::new();
         for msg in msgs {
             match msg {
                 VirtualHandEffect::OutMessage { message } => self.script_world.dispatch(message),
@@ -8789,7 +15527,22 @@ impl MissionCore {
                     rotation,
                     scale,
                 } => {
+                    if let Ok(mut weapons) = self
+                        .world
+                        .borrow::<ViewMut<crate::runtime_props::RuntimePropGloveWeapon>>()
+                    {
+                        if let Ok(weapon) = (&mut weapons).get(entity_id) {
+                            weapon.item_scale = scale.x;
+                        }
+                    }
                     self.set_entity_position_rotation(entity_id, position, rotation, scale);
+                }
+                VirtualHandEffect::FitHeldItem {
+                    entity_id,
+                    size,
+                    center,
+                } => {
+                    self.physics.fit_held_item_cuboid(entity_id, size, center);
                 }
                 VirtualHandEffect::SpawnEntity {
                     template_id,
@@ -8806,13 +15559,17 @@ impl MissionCore {
                     );
                 }
                 VirtualHandEffect::HoldItem { entity_id } => {
-                    if self.is_vr_melee_weapon(entity_id) {
-                        // Held guns/items stay unphysical, but a VR melee
-                        // weapon needs its authored collider to report genuine
-                        // contacts. A joint motor drives its dynamic body
-                        // toward the tracked hand while world contact can hold
-                        // the rendered weapon back.
-                        self.attach_held_melee_physics(entity_id);
+                    self.thrown_items.cancel(entity_id);
+                    self.thrown_items.publish(&self.world, &self.physics);
+                    self.world
+                        .remove::<crate::runtime_props::RuntimePropHolstered>(entity_id);
+                    // Most held items stay unphysical and pass through
+                    // everything. A VR melee weapon needs its collider to
+                    // report genuine contacts; with `physical_held_items` a
+                    // held gun keeps one too, purely so world geometry can
+                    // hold the rendered weapon back.
+                    if let Some(group) = self.held_item_collision_group(entity_id) {
+                        self.attach_held_item_physics(entity_id, group);
                     } else {
                         self.make_un_physical(entity_id);
                     }
@@ -8821,14 +15578,81 @@ impl MissionCore {
                         to: entity_id,
                     });
                 }
+                VirtualHandEffect::HolsterItem { entity_id, slot } => {
+                    // Drop can swap the calibrated viewmodel for a differently
+                    // sized world mesh. Preserve its apparent size across that swap.
+                    let scale = self
+                        .world
+                        .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+                        .ok()
+                        .and_then(|v| v.get(entity_id).ok().map(|p| p.item_scale))
+                        .unwrap_or(1.0);
+                    let model_name = self
+                        .world
+                        .borrow::<View<PropModelName>>()
+                        .ok()
+                        .and_then(|names| names.get(entity_id).ok().map(|name| name.0.clone()));
+                    // Authored header bounds can still include the removed arms.
+                    // Measure only the same visible triangles used by grip fitting.
+                    let weapon_extent = model_name
+                        .filter(|name| crate::vr_weapon_grip::supports_model(name))
+                        .and_then(|name| {
+                            asset_cache.get_opt(
+                                &dark::importers::GLOVE_WEAPON_IMPORTER,
+                                &format!("{name}.bin"),
+                            )
+                        })
+                        .and_then(|source| {
+                            let source = source.as_ref().as_ref()?;
+                            let mut points = source.triangles.iter().flatten();
+                            let first = *points.next()?;
+                            let (min, max) = points.fold((first, first), |(min, max), p| {
+                                (
+                                    Point3::new(min.x.min(p.x), min.y.min(p.y), min.z.min(p.z)),
+                                    Point3::new(max.x.max(p.x), max.y.max(p.y), max.z.max(p.z)),
+                                )
+                            });
+                            Some(max - min)
+                        });
+                    let held_extent = weapon_extent
+                        .or_else(|| {
+                            self.id_to_model
+                                .get(&entity_id)
+                                .and_then(|model| model.bounding_box())
+                                .map(|bounds| bounds.max - bounds.min)
+                        })
+                        .map(|extent| extent.x.max(extent.y).max(extent.z) * scale)
+                        .filter(|extent| extent.is_finite() && *extent > 0.0001);
+                    self.detach_from_containers(entity_id);
+                    self.make_un_physical(entity_id);
+                    self.world.add_component(
+                        entity_id,
+                        (
+                            crate::runtime_props::RuntimePropHolstered {
+                                slot: slot as u8,
+                                held_extent,
+                            },
+                            PropHasRefs(false),
+                        ),
+                    );
+                    self.script_world.dispatch(Message {
+                        to: entity_id,
+                        payload: MessagePayload::Drop,
+                    });
+                }
                 VirtualHandEffect::StoreItem { entity_id } => {
                     let inventory_entity = self
                         .world
                         .borrow::<UniqueView<PlayerInfo>>()
                         .map(|player| player.inventory_entity_id)
                         .ok();
-                    if let Some(inventory_entity) = inventory_entity {
-                        self.drop_entity_into_container(inventory_entity, entity_id);
+                    let stored = inventory_entity.is_some_and(|inventory_entity| {
+                        self.drop_entity_into_container(inventory_entity, entity_id)
+                            .is_some()
+                    });
+                    if !stored {
+                        deferred.push(backpack_full_feedback(entity_id));
+                        self.restore_refused_store_to_world(entity_id);
                     }
                 }
                 VirtualHandEffect::StoreItemAtCell { entity_id, cell } => {
@@ -8837,37 +15661,72 @@ impl MissionCore {
                         .borrow::<UniqueView<PlayerInfo>>()
                         .map(|player| player.inventory_entity_id)
                         .ok();
-                    if let Some(inventory_entity) = inventory_entity {
-                        self.drop_entity_into_container_at_cell(inventory_entity, entity_id, cell);
+                    let stored = inventory_entity.is_some_and(|inventory_entity| {
+                        self.drop_entity_into_container_at_cell(inventory_entity, entity_id, cell)
+                    });
+                    if !stored {
+                        deferred.push(backpack_full_feedback(entity_id));
+                        self.restore_refused_store_to_world(entity_id);
                     }
                 }
-                VirtualHandEffect::DropItem { entity_id } => {
-                    if !restore_live_entity_world_refs(&mut self.world, entity_id) {
-                        continue;
-                    }
-                    if self.is_vr_melee_weapon(entity_id) {
-                        // Recreate from authored physics so the released item
-                        // is an ordinary dynamic, harmless loose prop again.
-                        self.make_un_physical(entity_id);
-                    }
-                    // After the body is gone (so this writes the entity's
-                    // transform rather than pushing the outgoing kinematic
-                    // body around) and before the loose prop is rebuilt from
-                    // it.
-                    self.return_held_entity_to_the_hand(entity_id);
-                    self.make_physical(entity_id);
-
-                    self.script_world.dispatch(Message {
-                        payload: MessagePayload::Drop,
-                        to: entity_id,
-                    });
+                VirtualHandEffect::DropItem { entity_id, motion } => {
+                    self.drop_held_item_into_world(entity_id);
+                    self.thrown_items
+                        .launch(&self.world, &mut self.physics, entity_id, motion);
                 }
             }
         }
+        deferred
     }
 
-    fn is_vr_melee_weapon(&self, entity_id: EntityId) -> bool {
-        is_vr_melee_weapon(&self.world, entity_id)
+    /// Restore a HELD item's ordinary world presence (refs, physics body, and
+    /// the `Drop` script signal) - the shared tail for an explicit VR release
+    /// (`DropItem`) and a `StoreItem`/`StoreItemAtCell` deposit refused for
+    /// lack of backpack room. A held item (a wield swap's displaced weapon, a
+    /// grabbed item) has already had its world refs stripped and its physics
+    /// removed by the time it reaches a store attempt, so a plain refusal
+    /// would otherwise leave it with no container link, no physics, and no
+    /// hand - gone. A no-op if the entity was destroyed in between.
+    fn drop_held_item_into_world(&mut self, entity_id: EntityId) {
+        if !restore_live_entity_world_refs(&mut self.world, entity_id) {
+            return;
+        }
+        if self.held_item_collision_group(entity_id).is_some() {
+            // Recreate from authored physics so the released item is an
+            // ordinary dynamic loose prop again; the release may then seed a throw.
+            self.make_un_physical(entity_id);
+        }
+        // After the body is gone (so this writes the entity's transform
+        // rather than pushing the outgoing kinematic body around) and before
+        // the loose prop is rebuilt from it.
+        self.return_held_entity_to_the_hand(entity_id);
+        self.make_physical(entity_id);
+
+        self.script_world.dispatch(Message {
+            payload: MessagePayload::Drop,
+            to: entity_id,
+        });
+    }
+
+    /// A `StoreItem`/`StoreItemAtCell` deposit was refused (no room): if the
+    /// item still has an ordinary physics body it was never picked up out of
+    /// the world (the flat "loot goes straight to the backpack" path), and
+    /// `drop_entity_into_container`'s failure already left it untouched -
+    /// nothing to do. Otherwise it left the world when it was grabbed/held
+    /// (a wield-swap's displaced weapon, a VR hand's held item whose strip
+    /// release was claimed but then lost the room race), and must be
+    /// restored rather than vanish.
+    fn restore_refused_store_to_world(&mut self, entity_id: EntityId) {
+        if self.id_to_physics.contains_key(&entity_id) && !self.physics.is_held_item(entity_id) {
+            return;
+        }
+        self.drop_held_item_into_world(entity_id);
+    }
+
+    /// The collision group this entity is held with, or `None` when it is
+    /// held with no body (see [`held_item_collision_group`]).
+    fn held_item_collision_group(&self, entity_id: EntityId) -> Option<CollisionGroup> {
+        held_item_collision_group(&self.world, entity_id)
     }
 
     /// Undo a computed grip offset before a released item becomes a loose prop
@@ -8882,14 +15741,12 @@ impl MissionCore {
     fn return_held_entity_to_the_hand(&mut self, entity_id: EntityId) {
         use cgmath::Rotation;
 
-        let Some(grip) = self
+        let grip = self
             .world
             .borrow::<View<RuntimePropVrGripOffset>>()
             .ok()
             .and_then(|view| view.get(entity_id).ok().map(|grip| grip.0))
-        else {
-            return;
-        };
+            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
 
         let Some((position, rotation)) =
             self.world
@@ -8903,18 +15760,29 @@ impl MissionCore {
         else {
             return;
         };
+        // Pickups without a melee grip keep their position and restore unit
+        // held-item scale before rebuilding their loose-object physics.
         // The grip is hand-local and the entity carries the hand's rotation
         // (a computed grip contributes none of its own).
-        let hand = position - rotation.rotate_vector(grip);
+        let scale = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|p| p.item_scale))
+            .unwrap_or(1.0);
+        let hand = position - rotation.rotate_vector(grip * scale);
+        self.world
+            .remove::<crate::runtime_props::RuntimePropGloveWeapon>(entity_id);
         self.set_entity_position_rotation(entity_id, hand, rotation, vec3(1.0, 1.0, 1.0));
     }
 
-    /// Give a held melee weapon the contact body the VR damage window needs.
-    /// Idempotent: `make_physical` no-ops when the body already exists, so this
-    /// is safe on both a fresh grab and a restore.
-    fn attach_held_melee_physics(&mut self, entity_id: EntityId) {
+    /// Give a held item the swept body its wield needs - the contact volume a
+    /// melee weapon damages with, or the inert one that keeps a gun out of the
+    /// level's geometry. Idempotent: `make_physical` no-ops when the body
+    /// already exists, so this is safe on both a fresh grab and a restore.
+    fn attach_held_item_physics(&mut self, entity_id: EntityId, group: CollisionGroup) {
         self.make_physical(entity_id);
-        self.physics.set_held_melee(entity_id);
+        self.physics.set_held_item_physical(entity_id, group);
     }
 
     /// Queue an entity to be triggered after scripts are initialized
@@ -8971,6 +15839,7 @@ impl MissionCore {
 
 fn create_template_name_map(
     game_entity_info: &Gamesys,
+    short_name_strings: &HashMap<String, String>,
 ) -> (HashMap<String, EntityMetadata>, HashMap<String, i32>) {
     let mut gamesys_world = World::new();
     game_entity_info.entity_info.initialize_world_with_entities(
@@ -8979,6 +15848,13 @@ fn create_template_name_map(
         |_id| true,
     );
 
+    template_name_map_from_world(&gamesys_world, short_name_strings)
+}
+
+fn template_name_map_from_world(
+    gamesys_world: &World,
+    short_name_strings: &HashMap<String, String>,
+) -> (HashMap<String, EntityMetadata>, HashMap<String, i32>) {
     let mut name_to_template_id = HashMap::new();
     let mut template_ids_by_exact_name: HashMap<String, Vec<i32>> = HashMap::new();
 
@@ -8987,6 +15863,7 @@ fn create_template_name_map(
          v_obj_icon: View<dark::properties::PropObjIcon>,
          v_obj_short_name: View<dark::properties::PropObjShortName>,
          v_obj_name: View<dark::properties::PropObjName>,
+         v_stack_count: View<dark::properties::PropStackCount>,
          v_template_id: View<dark::properties::PropTemplateId>| {
             for (entity_id, (sym_name, template_id)) in
                 (&v_sym_name, &v_template_id).iter().with_id()
@@ -9000,7 +15877,22 @@ fn create_template_name_map(
                             .map(|p| format!("{}.pcx", p.0))
                             .ok(),
                         obj_name: v_obj_name.get(entity_id).map(|p| p.0.clone()).ok(),
-                        obj_short_name: v_obj_short_name.get(entity_id).map(|p| p.0.clone()).ok(),
+                        obj_short_name: v_obj_short_name.get(entity_id).ok().map(|p| {
+                            let name = dark::importers::resolve_localized_property_string(
+                                &p.0,
+                                short_name_strings,
+                            );
+                            // This world is hydrated through the full hierarchy:
+                            // Small Standard Clip's six overrides its parent's twelve.
+                            let quantity = v_stack_count.get(entity_id).ok().map(|p| p.0);
+                            if name.contains("%d") && quantity.is_none() {
+                                // Do not show a format token or promise an invented
+                                // quantity when an incomplete template lacks one.
+                                sym_name.0.clone()
+                            } else {
+                                crate::hud::format_stack_aware_item_name(&name, quantity)
+                            }
+                        }),
                     },
                 );
                 if template_id.template_id < 0 {
@@ -9091,11 +15983,11 @@ fn create_template_class_tag_map(
 ///
 /// Helper function to set up the music player for the level
 fn initialize_background_music(
-    song_params: &SongParams,
+    song_file_name: &str,
     asset_cache: &mut AssetCache,
     audio_context: &mut AudioContext<EntityId, String>,
+    repeat_theme: bool,
 ) {
-    let song_file_name = &song_params.song;
     info!("loading music for level: {}", song_file_name);
     if !song_file_name.is_empty() {
         let song = {
@@ -9103,7 +15995,8 @@ fn initialize_background_music(
                 .get(&SONG_IMPORTER, &format!("{song_file_name}.snc"))
                 .clone()
         };
-        let background_music_player = SongPlayer::new(&song, asset_cache);
+        let cue = repeat_theme.then(|| song.start_event()).flatten();
+        let background_music_player = SongPlayer::new(&song, asset_cache).with_default_cue(cue);
         audio_context.set_background_music(Box::new(background_music_player));
     } else {
         audio_context.stop_background_music();
@@ -9148,8 +16041,8 @@ fn create_room_entities(
             PropPhysDimensions {
                 radius0: 0.0,
                 radius1: 1.0,
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: (room.bounding_box.max - room.bounding_box.min),
@@ -9252,10 +16145,11 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
         .unwrap_or(1.0);
 
     let outcome = {
+        let skill = crate::scripts::script_util::player_skill_level(
+            world,
+            crate::player_stats::Skill::Research,
+        );
         let mut quests = world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
-        let skill = quests
-            .player_stats()
-            .skill_level(crate::player_stats::Skill::Research);
         quests.research_mut().advance(
             template_id,
             real_seconds,
@@ -9293,8 +16187,10 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
     effects
 }
 
-fn apply_research_chemical(world: &World, chemical_entity: EntityId) -> bool {
-    if !crate::scripts::script_util::player_carried_items(world).contains(&chemical_entity) {
+fn apply_research_chemical(world: &World, chemical_entity: EntityId, scanned: bool) -> bool {
+    if !scanned
+        && !crate::scripts::script_util::player_carried_items(world).contains(&chemical_entity)
+    {
         return false;
     }
     let chemical_name = world
@@ -9343,12 +16239,51 @@ fn drop_contains_links_to(links: &mut Links, target: EntityId) {
 /// (gamesys-wide: Wrench -928, PsiSword -2291, Crystal Shard -28, Electro
 /// Shock -24); the flat presentation swings by raycast and needs none of this.
 pub fn is_vr_melee_weapon(world: &World, entity_id: EntityId) -> bool {
+    presentation_is_vr(world) && is_melee_weapon(world, entity_id)
+}
+
+/// The marker itself, without the VR gate: what the player swings rather than
+/// fires. Callers that care about the presentation use `is_vr_melee_weapon`.
+pub fn is_melee_weapon(world: &World, entity_id: EntityId) -> bool {
     world
-        .borrow::<UniqueView<GlobalPresentationMode>>()
-        .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr)
-        && world
-            .borrow::<View<PropLimbModel>>()
-            .is_ok_and(|limb_models| limb_models.get(entity_id).is_ok())
+        .borrow::<View<PropLimbModel>>()
+        .is_ok_and(|limb_models| limb_models.get(entity_id).is_ok())
+}
+
+/// How this entity behaves physically while held in a VR hand, or `None` if it
+/// is held with no body at all (which is what every held item did before the
+/// melee weapons needed contacts).
+///
+/// Two cases, and the difference is what the body is *for*:
+/// - a melee weapon's body is its damage volume, so it must generate contacts;
+/// - a gun's body only has to stop the weapon travelling into the level, so it
+///   takes part in no collision at all (see [`CollisionGroup::held_inert`]).
+///   Opt-in, because a weapon the world can hold back is a change to how
+///   aiming and firing feel, not just to how the wield looks.
+///
+/// A gun additionally has to be one VR actually wields as a first-person `_h`
+/// model, which is the same condition `InternalSwitchHeldModelScript` swaps on.
+/// On a classic install VR deliberately keeps the *world* model, so no `_h`
+/// wield happens and there is nothing to fit a collider to - the gun would
+/// sweep the inherited loose-pickup box, sized and centred for a different
+/// mesh, and stop at the wrong distance from every wall. No fit, no body.
+pub fn held_item_collision_group(world: &World, entity_id: EntityId) -> Option<CollisionGroup> {
+    if is_vr_melee_weapon(world, entity_id) {
+        return Some(CollisionGroup::held_melee());
+    }
+
+    let is_vr = presentation_is_vr(world);
+    let physical_held_items = world
+        .borrow::<UniqueView<GlobalPhysicalHeldItems>>()
+        .is_ok_and(|enabled| enabled.0);
+    let is_gun = world
+        .borrow::<View<dark::properties::PropPlayerGun>>()
+        .is_ok_and(|guns| guns.get(entity_id).is_ok());
+    let wields_a_view_model = crate::is_25th_anniversary_install()
+        && crate::scripts::internal_switch_held_model::get_raw_view_model(world, entity_id)
+            .is_some_and(|model| crate::vr_config::is_vr_view_model(&model));
+
+    (is_vr && physical_held_items && is_gun && wields_a_view_model).then(CollisionGroup::held_inert)
 }
 
 /// Physics for an item restored into a hand by save/load or a level change.
@@ -9364,10 +16299,9 @@ fn restore_held_item_physics(
     physics: &mut PhysicsWorld,
     entity_id: EntityId,
 ) {
-    if is_vr_melee_weapon(world, entity_id) {
-        physics.set_held_melee(entity_id);
-    } else {
-        make_un_physical2(id_to_physics, physics, entity_id);
+    match held_item_collision_group(world, entity_id) {
+        Some(group) => physics.set_held_item_physical(entity_id, group),
+        None => make_un_physical2(id_to_physics, physics, entity_id),
     }
 }
 
@@ -9385,6 +16319,81 @@ pub fn make_un_physical2(
     id_to_physics.remove(&entity_id);
 }
 
+/// Resolve `name` (a schema, else a bare sample) and play it. `allow_loop`
+/// repeats a listener-relative play when the schema authors a seamless loop;
+/// spatial plays never loop.
+#[allow(clippy::too_many_arguments)]
+fn play_schema_sound(
+    world: &World,
+    global_context: &GlobalContext,
+    asset_cache: &mut AssetCache,
+    audio_context: &mut AudioContext<EntityId, String>,
+    handle: AudioHandle,
+    name: &str,
+    source: Option<EntityId>,
+    spatial: bool,
+    allow_loop: bool,
+) {
+    println!("Trying to play sound: {}", name);
+    let (resolved, has_schema) = resolve_schema(global_context, name);
+    let maybe_audio_clip =
+        asset_cache.get_opt(&AUDIO_IMPORTER, &format!("{}.wav", resolved.sample_name));
+
+    if let Some(audio_clip) = maybe_audio_clip {
+        info!("Playing clip: {} handle: {:?}", name, &handle);
+        let gain = resolved.linear_gain();
+        // Spatial emitters (TrapSound narrations anchored at
+        // their authored station) play at the source entity,
+        // like the original engine's object sounds. Everything
+        // else - UI feedback, audio logs, cutscene narration -
+        // stays non-spatial at the ears even when it carries a
+        // `source` for attribution.
+        let maybe_position = if spatial {
+            source.and_then(|id| get_entity_position(world, id))
+        } else {
+            None
+        };
+        let play_options = if let Some(position) = maybe_position {
+            crate::audio_log::PlayOptions::Spatial {
+                position,
+                source,
+                gain,
+            }
+        } else {
+            crate::audio_log::PlayOptions::ListenerRelative(AudioPlaybackSettings {
+                looping: allow_loop && resolved.looping,
+                ..AudioPlaybackSettings::listener_relative(gain, resolved.channel_gains())
+            })
+        };
+        // Observability: record scripted one-shot sounds (audio
+        // logs, keypad beeps, ...) so headless tooling can assert
+        // a schema actually resolved and played.
+        crate::audio_log::play_and_record(
+            audio_context,
+            handle,
+            None,
+            audio_clip,
+            play_options,
+            crate::audio_log::PlayRecord {
+                sample: &resolved.sample_name,
+                volume_millibels: has_schema.then_some(resolved.volume_millibels),
+                pan_millibels: has_schema.then_some(resolved.pan_millibels),
+                tags: vec![("kind".to_string(), "sound".to_string())],
+                source_entity: source.map(|id| source_entity(world, id)),
+            },
+        );
+    } else {
+        warn!("Unable to load clip: {}", name)
+    }
+}
+
+fn stop_sound(audio_context: &mut AudioContext<EntityId, String>, handle: AudioHandle) {
+    // Observability: mark the matching play as stopped so `still_playing` in
+    // the audio log stops reporting it.
+    crate::audio_log::record_stop(handle.id());
+    engine::audio::stop_audio(audio_context, handle);
+}
+
 fn resolve_schema(global_context: &GlobalContext, name: &str) -> (dark::ResolvedSoundSchema, bool) {
     let sound_schema = &global_context.gamesys.sound_schema;
     if let Some(resolved) = sound_schema.resolve(name) {
@@ -9400,6 +16409,7 @@ fn resolve_schema(global_context: &GlobalContext, name: &str) -> (dark::Resolved
                 sample_name: name.to_owned(),
                 volume_millibels: 0,
                 pan_millibels: 0,
+                looping: false,
             },
             false,
         )
@@ -9490,7 +16500,7 @@ fn play_environmental_sound(
     query: dark::EnvSoundQuery,
     audio_handle: AudioHandle,
     position: Vector3<f32>,
-) {
+) -> bool {
     if let Some(resolved) = gamesys.get_random_environmental_sound(&query) {
         let audio_clip = asset_cache.get(&AUDIO_IMPORTER, &format!("{}.wav", resolved.sample_name));
 
@@ -9500,31 +16510,28 @@ fn play_environmental_sound(
         );
         // Log the resolved play so headless tooling (debug runtime
         // /v1/audio/recent) can assert a schema actually played.
-        let duration = audio_clip.total_duration();
-        let handle_id = audio_handle.id();
         let gain = resolved.linear_gain();
-        let preempted = engine::audio::play_spatial_audio_with_gain(
+        crate::audio_log::play_and_record(
             audio_context,
-            position,
-            None,
             audio_handle,
             None,
             audio_clip,
-            gain,
+            crate::audio_log::PlayOptions::Spatial {
+                position,
+                source: None,
+                gain,
+            },
+            crate::audio_log::PlayRecord {
+                sample: &resolved.sample_name,
+                volume_millibels: Some(resolved.volume_millibels),
+                pan_millibels: Some(resolved.pan_millibels),
+                tags: query.tag_values(),
+                source_entity: None,
+            },
         );
-        crate::audio_log::record_stops(&preempted);
-        crate::audio_log::record(crate::audio_log::SoundRecord {
-            sample: &resolved.sample_name,
-            volume_millibels: Some(resolved.volume_millibels),
-            gain,
-            pan_millibels: Some(resolved.pan_millibels),
-            pan_applied: false,
-            tags: query.tag_values(),
-            position: [position.x, position.y, position.z],
-            duration,
-            source_entity: None,
-            handle: Some(handle_id),
-        });
+        true
+    } else {
+        false
     }
 }
 
@@ -9741,7 +16748,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         };
         use shipyard::*;
 
-        let snapshot = self.id_to_animation_player.get(&id)?.snapshot();
+        let player = self.id_to_animation_player.get(&id)?;
+        let blend_alpha = player.blend_alpha_now();
+        let snapshot = player.snapshot();
 
         let (transform, joint_transforms) = self.world.run(
             |v_transform: View<crate::runtime_props::RuntimePropTransform>,
@@ -9811,11 +16820,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 from_frame: blend.from_frame,
                 duration: blend.duration,
                 elapsed: blend.elapsed,
-                alpha: if blend.duration > f32::EPSILON {
-                    (blend.elapsed / blend.duration).clamp(0.0, 1.0)
-                } else {
-                    1.0
-                },
+                // The pose's actual cross-fade weight, not the linear
+                // progress through the fade - they differ by up to 0.2.
+                alpha: blend_alpha,
             }),
             position,
             rotation,
@@ -9855,7 +16862,6 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                                 crate::creature::HitBoxType::Body => "torso",
                                 crate::creature::HitBoxType::Limb => "limb",
                                 crate::creature::HitBoxType::Extremity => "extremity",
-                                crate::creature::HitBoxType::NoDamage => "no_damage",
                             }
                             .to_string(),
                             position: body.position,
@@ -9866,6 +16872,63 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
         // Looked up outside the main run: the closure below is at shipyard's
         // view-count limit.
+        // The shared firing frame, after held-body recoil and item scaling.
+        // Expose it to automation without recreating attachment math in tests.
+        let weapon_muzzle = self.world.run(
+            |guns: View<dark::properties::PropPlayerGun>,
+             transforms: View<RuntimePropTransform>| {
+                guns.get(id).ok()?;
+                let frame = crate::weapon_muzzle::resolve(&self.world, id)
+                    .shot_frame(transforms.get(id).ok()?.0);
+                Some(
+                    serde_json::json!({
+                        "position": [frame.w.x, frame.w.y, frame.w.z],
+                        "forward": [frame.z.x, frame.z.y, frame.z.z],
+                    })
+                    .to_string(),
+                )
+            },
+        );
+
+        // What the crosshair is advertising for this weapon, in radians: the
+        // half-width of the random error square and recoil's deflection. Lets a
+        // test compare the reticle against the shots it promises (the reticle
+        // is drawn from these same numbers).
+        let reticle = self
+            .interaction
+            .viewmodel_entity()
+            .filter(|w| *w == id)
+            .map(|_| {
+                let state = crate::hud::reticle::from_world(
+                    &self.world,
+                    Some(id),
+                    self.interaction.flat_aim_bias(),
+                );
+                serde_json::json!({
+                    "spread_radians": state.spread,
+                    "bias_radians": [state.bias.x, state.bias.y],
+                    "projectile_template": crate::hud::reticle::selected_projectile(&self.world, id),
+                })
+                .to_string()
+            });
+
+        // The flat crosshair fire ray this weapon actually shoots along -
+        // which recoil bends away from the camera forward. The only headless
+        // view of where a flat shot is going (`WeaponMuzzle` is the gun's own
+        // geometry, not the fire ray).
+        let flat_aim = self
+            .world
+            .run(|aims: View<crate::runtime_props::RuntimePropFlatAim>| {
+                let aim = aims.get(id).ok()?;
+                Some(
+                    serde_json::json!({
+                        "origin": [aim.origin.x, aim.origin.y, aim.origin.z],
+                        "forward": [aim.forward.x, aim.forward.y, aim.forward.z],
+                    })
+                    .to_string(),
+                )
+            });
+
         let hearing_rating = self
             .world
             .run(|v_hearing: View<dark::properties::PropAIHearing>| {
@@ -9905,6 +16968,21 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .ok()
                     .map(|state| state.0)
                     .or(v_ecology.get(id).ok().map(|_| 0))
+            },
+        );
+        // Working order (Broken guns refuse to fire; hacked / unresearched
+        // objects report here too). A gun that authors no state of its own is
+        // in working order, which is what the engine assumes of it - report
+        // that rather than nothing, so "is it broken?" always has an answer.
+        // Read outside the big `run` below, whose borrow list is already full.
+        let object_state = self.world.run(
+            |v_state: View<PropObjState>, v_gun: View<dark::properties::PropGunState>| {
+                v_state.get(id).ok().map(|state| state.0).or_else(|| {
+                    v_gun
+                        .get(id)
+                        .ok()
+                        .map(|_| dark::properties::ObjectState::Normal)
+                })
             },
         );
         let animated_light = self.world.run(|v: View<PropAnimLight>| {
@@ -9978,6 +17056,27 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         value: exp.to_string(),
                     });
                 }
+                if let Some(kind) = crate::implants::kind(&self.world, id) {
+                    properties.push(DebugPropertyInfo {
+                        name: "ImplantType".into(),
+                        value: kind.to_string(),
+                    });
+                    properties.push(DebugPropertyInfo {
+                        name: "Energy".into(),
+                        value: crate::implants::energy(&self.world, id).to_string(),
+                    });
+                    if let Ok(slot) = self
+                        .world
+                        .borrow::<View<crate::runtime_props::RuntimePropImplantSlot>>()
+                        .unwrap()
+                        .get(id)
+                    {
+                        properties.push(DebugPropertyInfo {
+                            name: "ImplantSlot".into(),
+                            value: slot.0.to_string(),
+                        });
+                    }
+                }
                 if let Some(stack) = stack_count {
                     properties.push(DebugPropertyInfo {
                         name: "StackCount".to_string(),
@@ -10033,11 +17132,87 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     });
                 }
 
-                // Add weapon ammo (current clip) when present
+                if let Ok(last) = self
+                    .world
+                    .borrow::<View<crate::runtime_props::RuntimePropLastFiredProjectile>>()
+                    .unwrap()
+                    .get(id)
+                {
+                    properties.push(DebugPropertyInfo {
+                        name: "LastFiredProjectile".to_string(),
+                        value: last.0.to_string(),
+                    });
+                }
+
+                // Add weapon ammo (current clip) and wear when present
+                if let Some(requirement) =
+                    crate::weapon_requirements::active_weapon_skill_notice(&self.world, id)
+                {
+                    properties.push(DebugPropertyInfo {
+                        name: "WeaponSkillNotice".to_string(),
+                        value: requirement.message(),
+                    });
+                }
                 if let Ok(gun_state) = v_gun_state.get(id) {
+                    properties.push(DebugPropertyInfo {
+                        name: "Modification".into(),
+                        value: gun_state.modification.to_string(),
+                    });
+                    if let Ok(desc) = self
+                        .world
+                        .borrow::<View<dark::properties::PropBaseGunDesc>>()
+                        .unwrap()
+                        .get(id)
+                    {
+                        properties.push(DebugPropertyInfo {
+                            name: "GunDescription".into(),
+                            value: serde_json::to_string(desc).unwrap(),
+                        });
+                    }
                     properties.push(DebugPropertyInfo {
                         name: "Ammo".to_string(),
                         value: gun_state.ammo.to_string(),
+                    });
+                    properties.push(DebugPropertyInfo {
+                        name: "Condition".to_string(),
+                        value: format!("{:.2}", gun_state.condition),
+                    });
+                }
+
+                if let Some(state) = object_state {
+                    properties.push(DebugPropertyInfo {
+                        name: "ObjectState".to_string(),
+                        value: format!("{state:?}"),
+                    });
+                }
+
+                if crate::wielded_weapon::is_psi_amp(&self.world, id) {
+                    if let Some(pair) = crate::psi_amp_selection::selection(&self.world, id) {
+                        properties.push(DebugPropertyInfo {
+                            name: "PsiAmpSelection".into(),
+                            value: serde_json::to_string(&pair).unwrap(),
+                        });
+                    }
+                }
+                if let Some(menu) = self.psi_carousel.as_ref().filter(|m| m.amp == id) {
+                    properties.push(DebugPropertyInfo { name: "PsiCarousel".into(), value: serde_json::json!({"preview_index": menu.index, "hand": format!("{:?}", menu.hand)}).to_string() });
+                }
+                if let Some(muzzle) = weapon_muzzle {
+                    properties.push(DebugPropertyInfo {
+                        name: "WeaponMuzzle".to_string(),
+                        value: muzzle,
+                    });
+                }
+                if let Some(aim) = flat_aim {
+                    properties.push(DebugPropertyInfo {
+                        name: "FlatAim".to_string(),
+                        value: aim,
+                    });
+                }
+                if let Some(reticle) = reticle {
+                    properties.push(DebugPropertyInfo {
+                        name: "Reticle".to_string(),
+                        value: reticle,
                     });
                 }
 
@@ -10078,6 +17253,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     });
                 }
 
+                if let Some(stasis) = self.script_world.stasis(id, &self.world) {
+                    properties.push(DebugPropertyInfo {
+                        name: "StasisRemaining".to_owned(),
+                        value: format!("{:.6}", stasis.remaining_seconds),
+                    });
+                }
+
                 let (outgoing_links, incoming_links) =
                     debug_entity_links(id, &v_links, &v_sym_name);
                 let contained_by = incoming_links
@@ -10085,6 +17267,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .find(|link| link.contains_ordinal.is_some())
                     .map(|link| link.target_id);
 
+                let selection_bounds = self.selection_bounds(id);
+                let magazine_anchor = self
+                    .magazine_capacity(id)
+                    .and_then(|_| self.magazine_anchor_world(id))
+                    .map(|anchor| [anchor.x, anchor.y, anchor.z]);
                 Some(DebugEntityDetail {
                     entity_id: id.inner() as i32,
                     name,
@@ -10101,9 +17288,141 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     incoming_links,
                     contained_by,
                     aim_points: aim_points.clone(),
+                    magazine_anchor,
+                    selection_bounds: selection_bounds.map(|bounds| {
+                        [
+                            [bounds.min.x, bounds.min.y, bounds.min.z],
+                            [bounds.max.x, bounds.max.y, bounds.max.z],
+                        ]
+                    }),
                 })
             },
         )
+    }
+
+    fn climb_grip(
+        &self,
+        point: Vector3<f32>,
+        radius: Option<f32>,
+        feet_y: Option<f32>,
+    ) -> Option<crate::game_scene::DebugClimbGrip> {
+        let feet_y = feet_y.unwrap_or_else(|| {
+            let center = self.physics.get_player_translation(&self.player_handle);
+            center.y - crate::physics::player_center_above_floor(self.player_handle.is_crouched())
+        });
+        let grip = self.physics.climbable_grip_at(
+            point,
+            radius.unwrap_or(crate::physics::CLIMB_GRIP_RADIUS),
+            feet_y,
+        )?;
+        let entity_name = grip.entity_id.and_then(|id| {
+            self.world.run(
+                |v_sym_name: shipyard::View<dark::properties::PropSymName>| {
+                    v_sym_name.get(id).ok().map(|s| s.0.clone())
+                },
+            )
+        });
+        Some(crate::game_scene::DebugClimbGrip {
+            kind: match grip.kind {
+                crate::physics::ClimbGripKind::Ladder => "ladder",
+                crate::physics::ClimbGripKind::Ledge => "ledge",
+            },
+            entity_id: grip.entity_id.map(|id| id.inner() as i32),
+            entity_name,
+            point: [grip.point.x, grip.point.y, grip.point.z],
+            normal: [grip.normal.x, grip.normal.y, grip.normal.z],
+        })
+    }
+
+    fn hand_feedback(&self) -> serde_json::Value {
+        let mut feedback = self.interaction.hand_feedback_diagnostics();
+        if let Some(object) = feedback.as_object_mut() {
+            object.insert("body_gear".to_owned(), serde_json::json!({
+                "personal_card": {
+                    "hand": self.personal_card.hand,
+                    "center": self.personal_card.center.map(|v| [v.x, v.y, v.z]),
+                    "scans": self.personal_card.scans,
+                    "last_scan": self.personal_card.last_scan.map(|e| e.inner() as i32),
+                },
+                "shoulder_weapons": self.world.borrow::<UniqueView<PlayerInfo>>().ok().map(|player| super::shoulder_backpack::weapons(&self.world, player.inventory_entity_id).map(|item| item.map(|id| id.inner() as i32))),
+                "pouch": self.body_pouch_readout(),
+                "holsters": super::holsters::occupants(&self.world).map(|item| super::body_gear_feedback::HolsterReadout::resolve(&self.world, item)),
+            }));
+        }
+        if let (Some(object), Ok(player)) = (
+            feedback.as_object_mut(),
+            self.world.borrow::<UniqueView<PlayerInfo>>(),
+        ) {
+            object.insert(
+                "ammo_pouch".to_owned(),
+                self.ammo_pouch.diagnostics(player.pos, player.rotation),
+            );
+            object.insert(
+                "holsters".to_owned(),
+                self.holsters
+                    .diagnostics(&self.world, player.pos, player.rotation),
+            );
+            object.insert(
+                "haptics".to_owned(),
+                serde_json::to_value(
+                    &*self
+                        .world
+                        .borrow::<UniqueView<crate::haptics::HapticFeedback>>()
+                        .unwrap(),
+                )
+                .unwrap(),
+            );
+            object.insert(
+                "glove_contacts".to_owned(),
+                serde_json::json!({
+                    "centers": self.body_hand_contacts.map(|c| c.map(|c| {
+                        let p = player.pos + player.rotation.rotate_vector(c);
+                        [p.x, p.y, p.z]
+                    })),
+                    "radius": super::body_inventory::hand_radius(),
+                }),
+            );
+            object.insert(
+                "shoulder_backpack".to_owned(),
+                self.shoulder_backpack
+                    .diagnostics(player.pos, player.rotation),
+            );
+        }
+        feedback
+    }
+
+    fn hand_grips(&self) -> serde_json::Value {
+        self.interaction.grip_diagnostics()
+    }
+
+    fn player_climb(&self) -> Option<crate::game_scene::DebugClimbState> {
+        let hand_name = |hand: crate::vr_config::Handedness| match hand {
+            crate::vr_config::Handedness::Left => "left",
+            crate::vr_config::Handedness::Right => "right",
+        };
+        let climb = self.interaction.hand_climb();
+        Some(crate::game_scene::DebugClimbState {
+            is_climbing: self.player_handle.is_climbing(),
+            vaulting: self.player_handle.is_topping_out(),
+            anchor_hand: climb.and_then(|climb| climb.anchor()).map(hand_name),
+            grips: climb
+                .into_iter()
+                .flat_map(|climb| climb.grips())
+                .map(|(hand, anchor)| crate::game_scene::DebugClimbHold {
+                    hand: hand_name(hand),
+                    kind: match anchor.grip.kind {
+                        crate::physics::ClimbGripKind::Ladder => "ladder",
+                        crate::physics::ClimbGripKind::Ledge => "ledge",
+                    },
+                    entity_id: anchor.grip.entity_id.map(|id| id.inner() as i32),
+                    point: [
+                        anchor.grip.point.x,
+                        anchor.grip.point.y,
+                        anchor.grip.point.z,
+                    ],
+                })
+                .collect(),
+        })
     }
 
     fn raycast(
@@ -10299,7 +17618,8 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             is_sensor: info.is_sensor,
             is_enabled: info.is_enabled,
             is_sleeping: info.is_sleeping,
-            contact_count: 0,
+            contact_count: info.active_contacts,
+            contacts: info.contact_body_ids,
         })
     }
 
@@ -10412,7 +17732,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 elements: self.flat_ui.strip_debug_elements(&self.world),
             }
         });
-        crate::game_scene::DebugUiState {
+        let mut state = crate::game_scene::DebugUiState {
             mode: if self.use_mode {
                 "use".to_string()
             } else {
@@ -10420,14 +17740,23 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             },
             active_panel,
             strip,
+            name_strip: self.flat_ui.name_strip_debug(),
             cursor: self.flat_ui.cursor_debug(),
-            ammo_cycle: self.flat_ui.ammo_cycle_debug(),
+            readout: self.flat_ui.readout_buttons_debug(),
+            readout_elements: self.flat_ui.readout_elements_debug(),
+            utilities: self.flat_ui.utility_elements_debug(),
             pointer: self.flat_ui.pointer_debug(),
             // The panel a client aims a controller at, reported straight off
             // the anchor that placed it - so a test cannot aim at a placement
             // the interface does not use.
             panel_pose: self.vr_use_mode_pointer.is_some().then(|| {
-                let panel = self.vr_use_mode_anchor.panel();
+                let panel = self
+                    .device_panel
+                    .map(|p| {
+                        super::mfd_device::layout(self.flat_ui.device_screen_source())
+                            .surface_panel(p)
+                    })
+                    .unwrap_or_else(|| self.vr_use_mode_anchor.panel());
                 crate::game_scene::DebugUiPanelPose {
                     center: [panel.center.x, panel.center.y, panel.center.z],
                     rotation: [
@@ -10437,13 +17766,62 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         panel.rotation.s,
                     ],
                     size: [panel.size.x, panel.size.y],
-                    canvas: [
-                        crate::mission::flat_ui_host::CANVAS_SIZE.x,
-                        crate::mission::flat_ui_host::CANVAS_SIZE.y,
-                    ],
+                    canvas: if self.flat_ui.device {
+                        {
+                            let size =
+                                super::mfd_device::layout(self.flat_ui.device_screen_source()).size;
+                            [size.x, size.y]
+                        }
+                    } else {
+                        [640.0, 480.0]
+                    },
                 }
             }),
+            scanner_pose: self.device_scan_pose.map(|(origin, rotation)| {
+                crate::game_scene::DebugScannerPose {
+                    origin: [origin.x, origin.y, origin.z],
+                    rotation: [rotation.v.x, rotation.v.y, rotation.v.z, rotation.s],
+                }
+            }),
+            messages: self.hud_messages(),
+            banner: self.hud_banner().map(|banner| banner.text),
+            security_alarm: {
+                let alarm = crate::security_alarm::status(&self.world);
+                alarm
+                    .hud_seconds()
+                    .map(|seconds| crate::game_scene::DebugSecurityAlarm {
+                        count: alarm.count,
+                        seconds_remaining: seconds,
+                    })
+            },
+        };
+        if self.flat_ui.device {
+            state.mode = "device".into();
+            if let Some(panel) = &mut state.active_panel {
+                panel.elements = self
+                    .flat_ui
+                    .device_debug_elements(std::mem::take(&mut panel.elements));
+            }
+            state.readout = self.flat_ui.device_debug_elements(state.readout);
+            state.readout_elements.clear();
+            state.utilities = self.flat_ui.device_debug_elements(state.utilities);
+            if let Some(pointer) = &mut state.pointer {
+                pointer.canvas = if let Some(pass) = &self.vr_use_mode_pointer {
+                    pass.point().map(|p| [p.x, p.y])
+                } else {
+                    pointer
+                        .canvas
+                        .and_then(|[x, y]| {
+                            super::mfd_device::point_from_native(
+                                cgmath::vec2(x, y),
+                                self.flat_ui.device_screen_source(),
+                            )
+                        })
+                        .map(|p| [p.x, p.y])
+                };
+            }
         }
+        state
     }
 
     fn quest_bits(&self) -> Vec<crate::game_scene::DebugQuestBit> {
@@ -10473,6 +17851,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     }
 
     fn set_quest_bit(&mut self, name: &str, value: &str) -> Result<(), String> {
+        if name.eq_ignore_ascii_case("difficulty") {
+            return Err("difficulty is fixed when the campaign starts".to_string());
+        }
         use dark::properties::QuestBitValue;
         let quest_value = match value.to_ascii_lowercase().as_str() {
             "unknown" => QuestBitValue::UNKNOWN,
@@ -10634,11 +18015,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             player.inventory_entity_id
         };
-        if self.drop_entity_into_container(inventory_entity, entity_id) {
-            Ok(())
-        } else {
-            Err("could not add item to inventory (no inventory container)".to_string())
-        }
+        self.drop_entity_into_container(inventory_entity, entity_id)
+            .map(|_| ())
+            .ok_or_else(|| "could not add item to inventory (no inventory container)".to_string())
     }
 
     fn spawn_item_for_player(
@@ -10695,6 +18074,32 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         })
     }
 
+    fn apply_stat_modifier(
+        &mut self,
+        request: &crate::game_scene::StatModifierRequest,
+    ) -> Result<crate::player_stats::PlayerStats, String> {
+        if request.source.trim().is_empty() {
+            return Err("modifier source must not be empty".into());
+        }
+        let duration = std::time::Duration::try_from_secs_f32(request.duration_secs)
+            .map_err(|_| "modifier duration must be finite and nonnegative".to_string())?;
+        let mut quests = self
+            .world
+            .borrow::<UniqueViewMut<QuestInfo>>()
+            .map_err(|_| "scene has no character sheet".to_string())?;
+        let stats = quests.player_stats_mut();
+        stats.apply_modifier(crate::player_stats::TimedStatModifier {
+            source: request.source.clone(),
+            stat: request.stat,
+            delta: request.delta,
+            remaining: duration,
+        });
+        let result = stats.clone();
+        drop(quests);
+        self.refresh_implant_effects();
+        Ok(result)
+    }
+
     fn set_player_stats(
         &mut self,
         request: &crate::game_scene::DebugPlayerStatsRequest,
@@ -10709,7 +18114,6 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .borrow::<UniqueViewMut<QuestInfo>>()
             .map_err(|_| "scene has no quest info".to_string())?;
         let stats = quests.player_stats_mut();
-        let old_backpack_width = crate::inventory::backpack_width(stats);
 
         let stat_targets = [
             (Stat::Strength, request.strength, "strength"),
@@ -10823,11 +18227,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         if let Some(target) = request.cyber_modules {
             stats.award_cyber_modules(target.saturating_sub(stats.cyber_modules));
         }
-
-        let new_backpack_width = crate::inventory::backpack_width(stats);
         let result = stats.clone();
         drop(quests);
-        self.resize_player_backpack(old_backpack_width, new_backpack_width);
+        self.resize_player_backpack();
+        crate::difficulty::refresh_player_pools(&self.world, false);
         info!("Debug provisioning set player stats: {:?}", result);
         Ok(result)
     }
@@ -10907,6 +18310,8 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 queries: stats.queries,
                 stressed_retries: stats.stressed_retries,
                 no_route: stats.no_route,
+                blocked_links: stats.blocked_links,
+                blocked_cells: stats.blocked_cells,
             }
         })
     }
@@ -10929,9 +18334,31 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     live_path_len: live.map(|l| l.path_len),
                     live_target: live.and_then(|l| l.target).map(Into::into),
                     live_stall_seconds: live.map(|l| l.stall_seconds),
+                    movement_hold: match service.movement_hold(entity) {
+                        crate::pathfinding::MovementHold::None => None,
+                        hold => Some(format!("{hold:?}")),
+                    },
                 }
             })
             .collect()
+    }
+
+    fn pathfinding_route(
+        &self,
+        from: [f32; 3],
+        to: [f32; 3],
+    ) -> Option<crate::game_scene::DebugPathRoute> {
+        use dark::mission::path_database::MovementBits;
+        let service = self.pathfinding_service.as_ref()?;
+        let from = cgmath::Vector3::new(from[0], from[1], from[2]);
+        let to = cgmath::Vector3::new(to[0], to[1], to[2]);
+        let route = service.find_path(from, to, MovementBits::WALK);
+        Some(crate::game_scene::DebugPathRoute {
+            from_cell: service.cell_from_position(from),
+            to_cell: service.cell_from_position(to),
+            reachable: route.is_some(),
+            waypoints: route.map(|w| w.len()).unwrap_or(0),
+        })
     }
 
     fn send_entity_message(
@@ -10953,11 +18380,35 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             return false;
         }
 
+        // Two of these are not script messages at all: they write a property
+        // the way the effect appliers do, so a test can put an object into a
+        // state that normally takes a long detour to reach.
+        match message {
+            DebugEntityMessage::SetGunCondition { condition } => {
+                let mut v_gun_state = self
+                    .world
+                    .borrow::<ViewMut<dark::properties::PropGunState>>()
+                    .unwrap();
+                let Ok(gun_state) = (&mut v_gun_state).get(id) else {
+                    tracing::warn!("send_entity_message: entity {:?} has no gun state", id);
+                    return false;
+                };
+                gun_state.condition = condition.clamp(0.0, 100.0);
+                return true;
+            }
+            DebugEntityMessage::SetObjectState { state } => {
+                self.world.add_component(id, PropObjState(state));
+                return true;
+            }
+            _ => {}
+        }
+
         let payload = match message {
             DebugEntityMessage::Damage {
                 amount,
                 direction,
                 point,
+                bone,
             } => MessagePayload::Damage {
                 amount,
                 // A directional debug blow mirrors what a projectile hit
@@ -10981,10 +18432,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     Some(crate::scripts::DamageImpact {
                         direction: d.normalize(),
                         point,
-                        bone: None,
+                        bone,
                     })
                 }),
             },
+            DebugEntityMessage::Hazard { toxin, amount } => {
+                MessagePayload::Hazard { toxin, amount }
+            }
             DebugEntityMessage::Frob => MessagePayload::Frob,
             DebugEntityMessage::Signal { name } => MessagePayload::Signal { name },
             DebugEntityMessage::SetAlertness { level } => {
@@ -10993,6 +18447,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             // Debug injections have no real sender; use the target itself.
             DebugEntityMessage::TurnOn => MessagePayload::TurnOn { from: id },
             DebugEntityMessage::TurnOff => MessagePayload::TurnOff { from: id },
+            // Handled above: these write state instead of dispatching.
+            DebugEntityMessage::SetGunCondition { .. }
+            | DebugEntityMessage::SetObjectState { .. } => {
+                tracing::error!("send_entity_message: {:?} reached the dispatch path", id);
+                return false;
+            }
         };
 
         self.script_world.dispatch(Message { to: id, payload });
@@ -11158,6 +18618,61 @@ mod saved_script_namespace_tests {
 mod held_item_restore_tests {
     use super::*;
 
+    #[test]
+    fn vr_restored_hands_survive_neutral_then_release_once_after_squeeze() {
+        let mut world = World::new();
+        let left = world.add_entity((PropModelName("test_item".into()),));
+        let right = world.add_entity((PropModelName("test_item".into()),));
+        let mut interaction = VrInteraction::new();
+        restore_held_item_interaction(&mut interaction, &world, Some(left), Some(right));
+        let physics = PhysicsWorld::new();
+        let mut input = InputContext::default();
+        for squeeze in [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0] {
+            input.left_hand.squeeze_value = squeeze;
+            input.right_hand.squeeze_value = squeeze;
+            let effects = interaction.update(&InteractionContext {
+                physics: &physics,
+                world: &world,
+                input: &input,
+                player_pos: vec3(0.0, 0.0, 0.0),
+                player_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                flat_eye: death_camera::EyePose::flat(1.04, Quaternion::new(1.0, 0.0, 0.0, 0.0)),
+                step_dt: 1.0 / 60.0,
+                support_enabled: false,
+                reserved_releases: &[],
+            });
+            assert_eq!(interaction.held_entities(), (Some(left), Some(right)));
+            assert!(
+                !effects
+                    .iter()
+                    .any(|e| matches!(e, VirtualHandEffect::DropItem { .. }))
+            );
+        }
+        input.left_hand.squeeze_value = 0.0;
+        input.right_hand.squeeze_value = 0.0;
+        for expected_drops in [2, 0] {
+            let effects = interaction.update(&InteractionContext {
+                physics: &physics,
+                world: &world,
+                input: &input,
+                player_pos: vec3(0.0, 0.0, 0.0),
+                player_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                flat_eye: death_camera::EyePose::flat(1.04, Quaternion::new(1.0, 0.0, 0.0, 0.0)),
+                step_dt: 1.0 / 60.0,
+                support_enabled: false,
+                reserved_releases: &[],
+            });
+            assert_eq!(
+                effects
+                    .iter()
+                    .filter(|e| matches!(e, VirtualHandEffect::DropItem { .. }))
+                    .count(),
+                expected_drops
+            );
+            assert_eq!(interaction.held_entities(), (None, None));
+        }
+    }
+
     /// #787: flat mode only has one wield slot, so restoring a VR save with
     /// two held items must retain the first grab's displacement effects. The
     /// load path applies this batch after the backpack is available.
@@ -11178,6 +18693,117 @@ mod held_item_restore_tests {
                 VirtualHandEffect::StoreItem { entity_id } if *entity_id == left
             )),
             "the displaced left-hand item must be returned to the backpack, got {effects:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod template_catalog_name_tests {
+    use super::*;
+    use crate::gui::{Gui, GuiComponent};
+    use crate::scripts::gui::{ReplicatorGui, ReplicatorState};
+    use dark::properties::{
+        ObjectState, PropObjIcon, PropObjShortName, PropObjState, PropReplicatorContents,
+        PropReplicatorHackedContents, PropStackCount, PropSymName, PropTemplateId,
+    };
+
+    #[test]
+    fn replicator_catalog_resolves_names_and_effective_quantities_in_both_inventories() {
+        // Template hydration applies inherited properties before the child's
+        // overrides. Standard Clip supplies twelve; Small Standard Clip six.
+        let mut templates = World::new();
+        let clip = templates.add_entity((
+            PropTemplateId { template_id: -1358 },
+            PropSymName("Small Standard Clip".to_owned()),
+            PropObjIcon("clip".to_owned()),
+            PropObjShortName("Standard_Clip: \"%d standard bullets\"".to_owned()),
+            PropStackCount(12),
+        ));
+        templates.add_component(clip, PropStackCount(6));
+        templates.add_entity((
+            PropTemplateId { template_id: -100 },
+            PropSymName("Chips".to_owned()),
+            PropObjIcon("chips".to_owned()),
+            PropObjShortName("Chips: \"Bag of chips\"".to_owned()),
+        ));
+        let strings = HashMap::from([
+            (
+                "standard_clip".to_owned(),
+                "%d translated bullets".to_owned(),
+            ),
+            ("chips".to_owned(), "Translated chips".to_owned()),
+        ]);
+        let (metadata, _) = template_name_map_from_world(&templates, &strings);
+        let mut world = World::new();
+        world.add_unique(GlobalEntityMetadata(metadata));
+        let names = |first: &str, second: &str| {
+            [
+                first.to_owned(),
+                second.to_owned(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ]
+        };
+        let replicator = world.add_entity((
+            PropReplicatorContents {
+                costs: [3, 40, 0, 0, 0, 0],
+                object_names: names("chips", "small standard clip"),
+            },
+            PropReplicatorHackedContents {
+                costs: [25, 2, 0, 0, 0, 0],
+                object_names: names("small standard clip", "chips"),
+            },
+        ));
+        for state in [ObjectState::Normal, ObjectState::Hacked] {
+            world.add_component(replicator, PropObjState(state));
+            let texts: Vec<_> = ReplicatorGui
+                .get_components(&None, replicator, &world, &ReplicatorState::default())
+                .into_iter()
+                .filter_map(|component| match component {
+                    GuiComponent::Text { text, .. } => Some(text),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                texts.iter().any(|text| text == "Translated chips"),
+                "{texts:?}"
+            );
+            // The name wraps inside its box.
+            assert!(
+                texts.join(" ").contains("6 translated bullets"),
+                "{texts:?}"
+            );
+            assert!(
+                texts
+                    .iter()
+                    .all(|text| !text.contains("%d") && !text.contains('"'))
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_names_use_authored_fallback_and_do_not_invent_missing_quantities() {
+        let mut templates = World::new();
+        templates.add_entity((
+            PropTemplateId { template_id: -1 },
+            PropSymName("Juice bottle".to_owned()),
+            PropObjShortName("Juice_bottle: \"Bottle of juice\"".to_owned()),
+        ));
+        templates.add_entity((
+            PropTemplateId { template_id: -2 },
+            PropSymName("Unknown clip".to_owned()),
+            PropObjShortName("Clip: \"%d bullets\"".to_owned()),
+        ));
+        let (metadata, _) = template_name_map_from_world(&templates, &HashMap::new());
+        assert_eq!(
+            metadata["juice bottle"].obj_short_name.as_deref(),
+            Some("Bottle of juice")
+        );
+        assert_eq!(
+            metadata["unknown clip"].obj_short_name.as_deref(),
+            Some("Unknown clip")
         );
     }
 }
@@ -11538,10 +19164,16 @@ mod strip_deposit_tests {
     fn a_claimed_release_becomes_a_backpack_store() {
         let (_world, item, other) = two_entities();
         let mut effects = vec![
-            VirtualHandEffect::DropItem { entity_id: item },
-            VirtualHandEffect::DropItem { entity_id: other },
+            VirtualHandEffect::DropItem {
+                entity_id: item,
+                motion: Default::default(),
+            },
+            VirtualHandEffect::DropItem {
+                entity_id: other,
+                motion: Default::default(),
+            },
         ];
-        rewrite_strip_release(&mut effects, &[(item, None)], &[]);
+        rewrite_inventory_release(&mut effects, &[(item, None)], &[]);
         assert!(
             matches!(
                 effects.as_slice(),
@@ -11554,7 +19186,7 @@ mod strip_deposit_tests {
                     },
                     VirtualHandEffect::StoreItem { entity_id },
                     VirtualHandEffect::DropItem {
-                        entity_id: untouched
+                        entity_id: untouched, ..
                     },
                 ] if *to == item && *entity_id == item && *untouched == other
             ),
@@ -11567,8 +19199,11 @@ mod strip_deposit_tests {
     #[test]
     fn a_claimed_release_with_a_resolved_cell_targets_it() {
         let (_world, item, _other) = two_entities();
-        let mut effects = vec![VirtualHandEffect::DropItem { entity_id: item }];
-        rewrite_strip_release(&mut effects, &[(item, Some((3, 1)))], &[]);
+        let mut effects = vec![VirtualHandEffect::DropItem {
+            entity_id: item,
+            motion: Default::default(),
+        }];
+        rewrite_inventory_release(&mut effects, &[(item, Some((3, 1)))], &[]);
         assert!(
             matches!(
                 effects.as_slice(),
@@ -11594,8 +19229,11 @@ mod strip_deposit_tests {
     #[test]
     fn a_claimed_key_source_is_frobbed_instead() {
         let (_world, card, _other) = two_entities();
-        let mut effects = vec![VirtualHandEffect::DropItem { entity_id: card }];
-        rewrite_strip_release(&mut effects, &[], &[card]);
+        let mut effects = vec![VirtualHandEffect::DropItem {
+            entity_id: card,
+            motion: Default::default(),
+        }];
+        rewrite_inventory_release(&mut effects, &[], &[card]);
         assert!(
             matches!(
                 effects.as_slice(),
@@ -11630,7 +19268,7 @@ mod strip_deposit_tests {
                 payload: MessagePayload::ProvideForConsumption { entity: item },
             },
         }];
-        rewrite_strip_release(&mut effects, &[(item, None)], &[]);
+        rewrite_inventory_release(&mut effects, &[(item, None)], &[]);
         assert!(effects.is_empty(), "got {effects:?}");
     }
 
@@ -11649,7 +19287,7 @@ mod strip_deposit_tests {
             },
             VirtualHandEffect::HoldItem { entity_id: item },
         ];
-        rewrite_strip_release(&mut effects, &[(item, None)], &[]);
+        rewrite_inventory_release(&mut effects, &[(item, None)], &[]);
         assert!(
             matches!(
                 effects.as_slice(),
@@ -11671,8 +19309,11 @@ mod strip_deposit_tests {
     #[test]
     fn an_unclaimed_frame_is_untouched() {
         let (_world, item, _other) = two_entities();
-        let mut effects = vec![VirtualHandEffect::DropItem { entity_id: item }];
-        rewrite_strip_release(&mut effects, &[], &[]);
+        let mut effects = vec![VirtualHandEffect::DropItem {
+            entity_id: item,
+            motion: Default::default(),
+        }];
+        rewrite_inventory_release(&mut effects, &[], &[]);
         assert!(
             matches!(effects.as_slice(), [VirtualHandEffect::DropItem { .. }]),
             "got {effects:?}"
@@ -11696,12 +19337,12 @@ mod strip_deposit_tests {
             inventory_entity_id,
         });
         assert!(
-            !backpack_accepts_deposit(&world),
+            !backpack_accepts_deposit(&world, entity_id),
             "a backpack with no Links cannot take a deposit"
         );
 
         world.add_component(inventory_entity_id, Links::empty());
-        assert!(backpack_accepts_deposit(&world));
+        assert!(backpack_accepts_deposit(&world, entity_id));
     }
 }
 
@@ -11957,6 +19598,28 @@ mod comestible_use_tests {
             .get(player)
             .unwrap()
             .hit_points
+    }
+
+    #[test]
+    fn diagnostic_module_stack_uses_one_and_caps_the_fifteen_hp_heal() {
+        let (mut world, player, module) = world_with_player(10, true);
+        world.add_component(module, dark::properties::PropStackCount(2));
+        apply_comestible_use(&world, module, 15);
+        assert_eq!(player_hit_points(&world, player), 25);
+        assert_eq!(
+            world
+                .borrow::<View<dark::properties::PropStackCount>>()
+                .unwrap()
+                .get(module)
+                .unwrap()
+                .0,
+            1
+        );
+        assert_eq!(
+            apply_comestible_use(&world, module, 15),
+            ComestibleUseOutcome::Consumed
+        );
+        assert_eq!(player_hit_points(&world, player), 30);
     }
 
     #[test]
@@ -12305,6 +19968,16 @@ fn wildcard_match(text: &str, pattern: &str) -> bool {
 }
 
 impl crate::game_scene::GameScene for MissionCore {
+    fn cancel_transient_input(&mut self) {
+        self.dismiss_amp_carousel();
+    }
+
+    fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
+        if let Some(handle) = self.klaxon.take() {
+            stop_sound(audio_context, handle);
+        }
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }
@@ -12398,5 +20071,95 @@ impl crate::game_scene::GameScene for MissionCore {
 
     fn wants_pointer(&self) -> bool {
         self.wants_pointer()
+    }
+}
+
+#[cfg(test)]
+mod held_item_physics_tests {
+    use super::*;
+    use dark::properties::{PropLimbModel, PropPlayerGun};
+
+    fn world_with(mode: crate::PresentationMode, physical_held_items: bool) -> World {
+        let world = World::new();
+        world.add_unique(GlobalPresentationMode(mode));
+        world.add_unique(GlobalPhysicalHeldItems(physical_held_items));
+        world
+    }
+
+    fn gun(world: &mut World) -> EntityId {
+        world.add_entity((PropPlayerGun {
+            flags: 0,
+            hand_model: "atek_h".to_owned(),
+            icon_file: String::new(),
+            model_offset: cgmath::Vector3::new(0.0, 0.0, 0.0),
+            fire_offset: cgmath::Vector3::new(0.0, 0.0, 0.0),
+            heading: 0,
+            reload_pitch: 0,
+            reload_rate: 0,
+            gun_type: 0,
+        },))
+    }
+
+    fn melee(world: &mut World) -> EntityId {
+        world.add_entity((PropLimbModel("wrench_h".to_owned()),))
+    }
+
+    /// The shipped behavior: a VR-held gun has no body at all, so it passes
+    /// through the level exactly as it always has.
+    #[test]
+    fn a_held_gun_is_unphysical_without_the_experimental_flag() {
+        let mut world = world_with(crate::PresentationMode::Vr, false);
+        let gun = gun(&mut world);
+
+        assert!(held_item_collision_group(&world, gun).is_none());
+    }
+
+    /// With the flag, it gets a body - and an *inert* one: the point is world
+    /// geometry holding the weapon back, not the weapon touching anything.
+    #[test]
+    fn a_held_gun_takes_an_inert_body_with_the_experimental_flag() {
+        let mut world = world_with(crate::PresentationMode::Vr, true);
+        let gun = gun(&mut world);
+
+        let group = held_item_collision_group(&world, gun);
+
+        // The swept body needs a collider fitted to the `_h` view model, which
+        // only a 25AE install wields - so on a classic install the correct
+        // answer is still "no body", and this asserts that rather than
+        // skipping.
+        assert_eq!(
+            group.is_some(),
+            crate::is_25th_anniversary_install(),
+            "a held gun is swept exactly when VR wields its view model"
+        );
+        if let Some(group) = group {
+            assert!(group.is_inert(), "a held gun must not generate contacts");
+        }
+    }
+
+    /// A melee weapon is unaffected by the flag in either direction: its body
+    /// is its damage volume and must keep reporting contacts.
+    #[test]
+    fn a_held_melee_weapon_keeps_its_contact_body_either_way() {
+        for physical_held_items in [false, true] {
+            let mut world = world_with(crate::PresentationMode::Vr, physical_held_items);
+            let wrench = melee(&mut world);
+
+            let group = held_item_collision_group(&world, wrench)
+                .expect("a held melee weapon always takes a contact body");
+            assert!(!group.is_inert());
+        }
+    }
+
+    /// Flat swings and flat shots are raycasts against the world; nothing in
+    /// the flat presentation wants a body in the player's hand.
+    #[test]
+    fn nothing_is_held_physically_in_the_flat_presentation() {
+        let mut world = world_with(crate::PresentationMode::Flat, true);
+        let gun = gun(&mut world);
+        let wrench = melee(&mut world);
+
+        assert!(held_item_collision_group(&world, gun).is_none());
+        assert!(held_item_collision_group(&world, wrench).is_none());
     }
 }

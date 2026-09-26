@@ -12,10 +12,11 @@ import { clickUiElement } from "./helpers/ui.js";
 // installs it on the character sheet and consumes the object. The sheet keeps
 // the higher version (a V3 supersedes a V2).
 //
-// command1 is the one mission that carries both placements of the same soft
-// class, so a single launch covers both entry points:
-//   - Hack Soft V2 (obj 131): world-placed, no incoming Contains -> world frob
-//   - Hack Soft V3 (obj 2095): inside "Female Corpse 1" (obj 2255) -> loot MFD
+// Use the authored Hack Soft V2 in Hydro1 (corpse 471 -> obj 1000), then take
+// Hack Soft V3 from Command1 corpse 2255 through its loot MFD. The old Command1
+// world fixture 131 is restricted to the obsolete playtest difficulty
+// (P$DiffPer=1) and is correctly absent on every retail difficulty.
+// Direct Frob covers the item script; the second pickup covers normal loot UI.
 //
 // Negative-first: on main `autoinstallsoft` maps to `UnimplementedScript`, so
 // the world frob logs "Unimplemented script" and leaves the soft in the world
@@ -24,15 +25,15 @@ import { clickUiElement } from "./helpers/ui.js";
 // container MFD do nothing".
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-const HACK_SOFT_V2 = 131; // world-placed
+const HACK_SOFT_V2 = 1000; // Hydro1 corpse 471 contains this authored item
 const CORPSE_WITH_HACK_SOFT_V3 = 2255; // Female Corpse 1 -> Contains -> obj 2095
 
 test(
-  "command1: softs auto-install on pickup instead of entering inventory",
+  "softs auto-install on use and loot, preserving versions across decks",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
-      mission: "command1.mis",
+      mission: "hydro1.mis",
     });
     await game.step({ frames: 5 });
 
@@ -53,7 +54,7 @@ test(
       "a fresh character has no software installed",
     );
 
-    // --- (i) world pickup: frobbing a world-placed soft installs it ---
+    // --- (i) direct use: the soft installs and is consumed ---
     const worldSoft = await byTemplate(HACK_SOFT_V2, "Hack Soft V2");
     assert.equal(worldSoft.name, "Hack Soft V2");
     await game.entities.sendMessage(worldSoft.id, { type: "Frob" });
@@ -80,6 +81,10 @@ test(
       { modify: 0, repair: 0 },
       "installing a hack soft must not touch the other software slots",
     );
+
+    await game.transitionLevel("command1.mis");
+    await game.step({ frames: 5 });
+    assert.equal((await software()).hack, 2, "installed version survives the deck transition");
 
     // --- (ii) container MFD: taking a soft installs it, superseding V2 ---
     const corpse = await byTemplate(CORPSE_WITH_HACK_SOFT_V3, "Female Corpse 1");

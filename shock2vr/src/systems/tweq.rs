@@ -5,12 +5,26 @@ use dark::{
     SCALE_FACTOR,
     properties::{
         PropPosition, PropTweqDeleteConfig, PropTweqDeleteState, PropTweqEmitterConfig,
-        PropTweqEmitterState, PropTweqRotateState, TweqAnimationState, TweqHalt,
+        PropTweqEmitterState, PropTweqRotateConfig, PropTweqRotateState, TweqAnimationState,
+        TweqHalt,
     },
 };
+
+/// The rotate tweq axis the port spins: the original's third axis is heading,
+/// which its up axis maps onto our Y.
+const HEADING_AXIS: usize = 2;
+
+/// Spin rate for a rotating object with no authored rotate config, preserving
+/// the rate the port used before the config was parsed.
+const DEFAULT_SPIN_DEGREES_PER_SECOND: f32 = 20.0;
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, UniqueViewMut, View, ViewMut};
 
-use crate::{mission::EffectQueue, scripts::Effect, time::Time, util::vec3_to_point3};
+use crate::{
+    mission::{EffectQueue, entity_creator::CreateEntityOptions},
+    scripts::Effect,
+    time::Time,
+    util::vec3_to_point3,
+};
 
 ///
 /// run_tweq
@@ -21,17 +35,31 @@ pub fn run_tweq(
     u_time: UniqueView<Time>,
     v_prop_position: View<PropPosition>,
     v_tweq_rotate_state: View<PropTweqRotateState>,
+    v_tweq_rotate_config: View<PropTweqRotateConfig>,
     mut v_tweq_emit_state: ViewMut<PropTweqEmitterState>,
     mut v_tweq_emit_config: ViewMut<PropTweqEmitterConfig>,
     mut v_tweq_delete_state: ViewMut<PropTweqDeleteState>,
     mut v_tweq_delete_config: ViewMut<PropTweqDeleteConfig>,
     mut effects: UniqueViewMut<EffectQueue>,
 ) {
-    for (id, tweq) in v_tweq_rotate_state.iter().with_id() {
+    for (id, (tweq, position)) in (&v_tweq_rotate_state, &v_prop_position).iter().with_id() {
         if tweq.animation_state.contains(TweqAnimationState::ON) {
+            // Authored degrees per second for the heading axis when the object
+            // carries a rotate config. The rate matters wherever the spin has
+            // a consequence beyond looks: a Tweq emitter's facing aims what it
+            // launches, so the wrong rate collapses an emitted volley's fan.
+            // Objects with no authored config keep the previous fixed rate.
+            let degrees_per_second = v_tweq_rotate_config
+                .get(id)
+                .map(|config| config.axes[HEADING_AXIS].rate)
+                .unwrap_or(DEFAULT_SPIN_DEGREES_PER_SECOND);
             effects.push(Effect::SetRotation {
                 entity_id: id,
-                rotation: Quaternion::from_angle_y(Deg(u_time.total.as_secs_f32() * 20.0)),
+                // Advance from the current pose; absolute world-time yaw erased
+                // authored pitch/roll (including a sideways ejected casing).
+                rotation: Quaternion::from_angle_y(Deg(
+                    u_time.elapsed.as_secs_f32() * degrees_per_second
+                )) * position.rotation,
             });
         }
     }
@@ -71,6 +99,10 @@ pub fn run_tweq(
                     position: vec3_to_point3(position.position),
                     orientation: position.rotation,
                     initial_velocity: authored_velocity / SCALE_FACTOR,
+                    options: CreateEntityOptions {
+                        launch_projectile: true,
+                        ..CreateEntityOptions::default()
+                    },
                 });
             }
 
@@ -203,6 +235,39 @@ mod tests {
             },
         ));
         (world, emitter)
+    }
+
+    #[test]
+    fn rotate_tweq_preserves_launch_tilt_and_uses_elapsed_time() {
+        let tilt = Quaternion::from_angle_x(Deg(90.0));
+        let (mut world, emitter) = world_with_ops4_emitter(vec3(0.0, 0.0, 0.0), tilt, false, 0);
+        world.add_component(
+            emitter,
+            PropTweqRotateState {
+                animation_state: TweqAnimationState::ON,
+                axis1_animation_state: TweqAnimationState::ON,
+                axis2_animation_state: TweqAnimationState::empty(),
+                axis3_animation_state: TweqAnimationState::empty(),
+            },
+        );
+        world.borrow::<UniqueViewMut<Time>>().unwrap().total = std::time::Duration::from_secs(1000);
+        world.run(run_tweq);
+        let effects = world
+            .borrow::<UniqueViewMut<EffectQueue>>()
+            .unwrap()
+            .flush();
+        let rotation = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::SetRotation {
+                    entity_id,
+                    rotation,
+                } if *entity_id == emitter => Some(*rotation),
+                _ => None,
+            })
+            .unwrap();
+        let expected = Quaternion::from_angle_y(Deg(0.501 * 20.0)) * tilt;
+        assert!((rotation - expected).magnitude2() < 1.0e-6);
     }
 
     #[test]

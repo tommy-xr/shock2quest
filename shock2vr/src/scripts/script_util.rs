@@ -8,8 +8,10 @@ use cgmath::{Transform, Vector3, point3};
 use dark::{
     EnvSoundQuery,
     properties::{
-        Link, Links, ProjectileOptions, PropClassTag, PropGunState, PropMaterial, PropSymName,
-        PropTemplateId, PropTweqModelConfig, ToLink,
+        GunSettingDesc, Link, Links, ProjectileOptions, PropBaseGunDesc, PropClassTag,
+        PropGunSettingHeader1, PropGunSettingHeader2, PropGunSettingText1, PropGunSettingText2,
+        PropGunState, PropMaterial, PropObjShortName, PropSymName, PropTemplateId,
+        PropTweqModelConfig, ToLink,
     },
     ss2_entity_info::SystemShock2EntityInfo,
 };
@@ -35,6 +37,66 @@ pub(crate) fn entity_class_template_id(world: &World, entity: EntityId) -> Optio
                 .ok()
                 .and_then(|templates| templates.get(entity).ok().map(|id| id.template_id))
         })
+}
+
+/// Resolve contact damage and freeze against the owning receiver. Damage goes
+/// through the struck hitbox so limb scaling and ragdoll metadata survive.
+/// Non-damage stims and immune receivers do not emit a zero-damage AI alert.
+pub(crate) fn projectile_contact_effects(
+    world: &World,
+    projectile: EntityId,
+    struck: EntityId,
+    impact: Option<super::DamageImpact>,
+) -> Effect {
+    let Some(template) = entity_class_template_id(world, projectile) else {
+        return Effect::NoEffect;
+    };
+    let receiver = resolve_proxy_entity(world, struck);
+    let amount = crate::mission::stim_response::contact_stim_damage_scaled(
+        world,
+        template,
+        receiver,
+        crate::runtime_props::RuntimePropShotModifiers::of(world, projectile).stim,
+    );
+    let damage = if amount > 0.0 {
+        Effect::Send {
+            msg: Message {
+                to: struck,
+                payload: MessagePayload::Damage { amount, impact },
+            },
+        }
+    } else {
+        Effect::NoEffect
+    };
+    let hazard = crate::mission::stim_response::contact_hazard_effects(
+        world,
+        template,
+        receiver,
+        crate::runtime_props::RuntimePropShotModifiers::of(world, projectile).stim,
+    );
+    let damage = if matches!(hazard, Effect::NoEffect) {
+        damage
+    } else {
+        Effect::combine(vec![damage, hazard])
+    };
+    if let Some(duration_seconds) = crate::mission::stim_response::contact_stim_freeze(
+        world,
+        template,
+        receiver,
+        crate::runtime_props::RuntimePropShotModifiers::of(world, projectile).stim,
+    ) {
+        Effect::combine(vec![
+            damage,
+            Effect::Send {
+                msg: Message {
+                    to: receiver,
+                    payload: MessagePayload::Freeze { duration_seconds },
+                },
+            },
+        ])
+    } else {
+        damage
+    }
 }
 
 /// Base gamesys templates for the three nanite pile sizes (Small/Medium/Big
@@ -112,19 +174,28 @@ pub(crate) fn is_cyber_module(world: &World, entity: EntityId) -> bool {
     entity_has_script(world, entity, EXP_COOKIE_SCRIPT)
 }
 
+/// Pickups that VR can hold before downloading into the personal card on release.
+/// Logs deliberately retain immediate collection; invalid/unused software is not
+/// claimed because its script cannot install or consume it.
+pub(crate) fn is_download_pickup(world: &World, entity: EntityId) -> bool {
+    crate::virtual_hand::is_key_source(world, entity)
+        || is_nanite_pickup(world, entity)
+        || is_cyber_module(world, entity)
+        || world
+            .borrow::<View<dark::properties::PropSoftType>>()
+            .is_ok_and(|soft| {
+                soft.get(entity).is_ok_and(|soft| {
+                    crate::player_stats::Software::from_soft_type(soft.0).is_some()
+                })
+            })
+}
+
 /// Whether `entity` belongs to a category the game *collects* rather than
 /// carries: keycards, nanite piles, cyber modules and audio/data logs.
 ///
-/// These four never become a physically-held prop and never occupy an inventory
-/// slot - their value goes straight into a player stat, the credential list or
-/// the PDA, and their scripts' side effects (SwitchLinks, quest bits, awards)
-/// only fire on Frob. So *every* acquisition gesture, on every path - world
-/// frob, world squeeze, a loot panel's take arm or squeeze, a click on the
-/// inventory strip - must route through Frob instead of a grab or a transfer.
-///
-/// The single predicate all of those sites consult, so the category cannot
-/// drift between them. Each arm delegates to the per-type predicate that owns
-/// that type's identity rather than re-deriving it here.
+/// Immediate acquisition routes use Frob instead of transferring these into a
+/// backpack cell. VR physical grips separately use `is_download_pickup` to
+/// defer collection until release.
 pub(crate) fn is_always_collected(world: &World, entity: EntityId) -> bool {
     crate::virtual_hand::is_key_source(world, entity)
         || is_nanite_pickup(world, entity)
@@ -187,27 +258,68 @@ pub fn set_entity_locked(world: &mut World, entity_id: EntityId, locked: bool) {
 /// from its authored state. `None` for entities that aren't translating doors.
 pub fn door_is_closed(world: &World, entity_id: EntityId) -> Option<bool> {
     use cgmath::InnerSpace;
-    let v_door = world
-        .borrow::<View<dark::properties::PropTranslatingDoor>>()
-        .unwrap();
-    let door = v_door.get(entity_id).ok()?;
     // A door with no travel can never leave its authored pose, and both
     // endpoints sit on top of each other - the distance test below is
     // degenerate there (equal distances always read as "closed"). Answer from
     // the authored state instead, so a permanently open doorway isn't
     // reported shut (#602).
-    if !door.has_travel() {
-        return Some(!door.is_permanently_open());
+    let no_travel_state = {
+        let v_door = world
+            .borrow::<View<dark::properties::PropTranslatingDoor>>()
+            .unwrap();
+        let door = v_door.get(entity_id).ok()?;
+        (!door.has_travel()).then(|| !door.is_permanently_open())
+    };
+    if let Some(closed) = no_travel_state {
+        return Some(closed);
     }
-    // StdDoor drives the live transform via SetPosition each frame.
+    let (from_closed, travel) = door_travel(world, entity_id)?;
+    let to_open = (from_closed - travel).magnitude2();
+    Some(from_closed.magnitude2() <= to_open)
+}
+
+/// Where a travelling door's leaf currently sits, as `(from_closed, travel)`:
+/// the offset of the live leaf from its closed pose, and the full closed ->
+/// open vector. `None` for entities that are not translating doors and for a
+/// door with no travel (both endpoints coincide, so neither vector says
+/// anything).
+///
+/// StdDoor drives the live transform via SetPosition each frame, so the
+/// transform - not the property - is where the leaf actually is.
+fn door_travel(world: &World, entity_id: EntityId) -> Option<(Vector3<f32>, Vector3<f32>)> {
+    let v_door = world
+        .borrow::<View<dark::properties::PropTranslatingDoor>>()
+        .unwrap();
+    let door = v_door.get(entity_id).ok()?;
+    if !door.has_travel() {
+        return None;
+    }
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let current = v_transform
         .get(entity_id)
         .ok()
         .map(|t| point3_to_vec3(t.0.transform_point(point3(0.0, 0.0, 0.0))))?;
-    let to_closed = (current - door.base_closed_location).magnitude2();
-    let to_open = (current - door.base_open_location).magnitude2();
-    Some(to_closed <= to_open)
+    Some((
+        current - door.base_closed_location,
+        door.base_open_location - door.base_closed_location,
+    ))
+}
+
+/// How far a translating door's leaf has travelled away from its closed
+/// pose: `(fraction, vertical_rise)`, where the fraction is 0 at closed and
+/// 1 at fully open and the rise is how much height the leaf has gained in
+/// world units. `None` for entities that are not translating doors, and for
+/// a door with no travel (its endpoints coincide, so there is no progress to
+/// measure and nothing to wait for).
+///
+/// The rise is what tells an approaching actor whether the gap under a
+/// raising leaf is tall enough to walk through yet; a leaf that slides
+/// sideways never gains any, so a caller must also accept a full fraction.
+pub fn door_open_progress(world: &World, entity_id: EntityId) -> Option<(f32, f32)> {
+    use cgmath::InnerSpace;
+    let (from_closed, travel) = door_travel(world, entity_id)?;
+    let fraction = (from_closed.dot(travel) / travel.magnitude2()).clamp(0.0, 1.0);
+    Some((fraction, from_closed.y))
 }
 
 /// Whether a cell-gating entity is an obstacle A* must not cross.
@@ -262,6 +374,33 @@ pub fn has_death_links(world: &World, entity_id: EntityId) -> bool {
     .is_empty()
 }
 
+/// `weapon`'s selected fire setting, 0 when it has no gun state. Ammo-type
+/// selection and the firing description both key off this, so they agree.
+pub fn current_gun_setting(world: &World, weapon: EntityId) -> i32 {
+    world
+        .borrow::<View<PropGunState>>()
+        .ok()
+        .and_then(|states| states.get(weapon).ok().map(|state| state.setting))
+        .unwrap_or(0)
+}
+
+/// The firing description for `weapon`'s currently selected fire setting, or
+/// `None` when it is not a gun. The setting comes from the weapon's live
+/// `PropGunState` (0 when it has none), and an index the archetype does not
+/// author falls back to setting 0.
+pub fn active_gun_setting(world: &World, weapon: EntityId) -> Option<GunSettingDesc> {
+    let setting = current_gun_setting(world, weapon);
+    world
+        .borrow::<View<PropBaseGunDesc>>()
+        .ok()
+        .and_then(|descs| {
+            descs
+                .get(weapon)
+                .ok()
+                .map(|desc| desc.setting(setting).clone())
+        })
+}
+
 /// A weapon's selectable `Projectile` links (its ammo types), filtered to the
 /// current gun setting and ordered by `ProjectileOptions.order`. This is the
 /// canonical ammo-type list - firing, ammo-type cycling, and the HUD all derive
@@ -269,18 +408,199 @@ pub fn has_death_links(world: &World, entity_id: EntityId) -> bool {
 /// otherwise it must match the weapon's current `PropGunState.setting`
 /// (defaulting to 0 when the weapon has no gun state).
 pub fn ordered_projectile_links(world: &World, weapon: EntityId) -> Vec<(i32, ProjectileOptions)> {
-    let setting = world
-        .borrow::<View<PropGunState>>()
-        .ok()
-        .and_then(|v| v.get(weapon).ok().map(|g| g.setting))
-        .unwrap_or(0);
-    let mut links = get_all_links_with_template(world, weapon, |link| match link {
-        Link::Projectile(data) => Some(*data),
-        _ => None,
-    });
+    ordered_projectile_links_for_setting(world, weapon, current_gun_setting(world, weapon))
+}
+
+/// [`ordered_projectile_links`] against an arbitrary fire setting - what the
+/// ammo list *would* be in that mode, which a mode switch needs before it
+/// commits to the new setting.
+pub fn ordered_projectile_links_for_setting(
+    world: &World,
+    weapon: EntityId,
+    setting: i32,
+) -> Vec<(i32, ProjectileOptions)> {
+    let mut links = all_projectile_links(world, weapon);
     links.retain(|(_, opts)| opts.setting < 0 || opts.setting == setting);
     links.sort_by_key(|(_, opts)| opts.order);
     links
+}
+
+fn all_projectile_links(world: &World, weapon: EntityId) -> Vec<(i32, ProjectileOptions)> {
+    get_all_links_with_template(world, weapon, |link| match link {
+        Link::Projectile(data) => Some(*data),
+        _ => None,
+    })
+}
+
+/// Whether a gun offers a second fire mode at all. Two independent signals in
+/// the shipped data, either of which is enough: the gun links ammo that belongs
+/// to setting 1 (the shotgun's double load, the laser's overcharge), or it
+/// NAMES the mode in its display strings (the pistol's BURST and the assault
+/// rifle's AUTO fire the same ammo, so links alone miss them). Guns with
+/// neither - the psi amp, turrets - have one mode.
+///
+/// The second setting's magazine is deliberately not a signal: a gun that never
+/// authored setting 1 still carries the editor's default record there, clip
+/// included, so `clip != 0` would give the psi amp a mode it does not have.
+fn has_second_fire_mode(second_header: Option<&str>, links: &[(i32, ProjectileOptions)]) -> bool {
+    second_header.is_some() || links.iter().any(|(_, opts)| opts.setting == 1)
+}
+
+/// Whether `weapon` can switch fire modes. See [`has_second_fire_mode`].
+pub fn can_cycle_gun_setting(world: &World, weapon: EntityId) -> bool {
+    let links = all_projectile_links(world, weapon);
+    let second_header = gun_setting_header(world, weapon, 1);
+    has_second_fire_mode(second_header.as_deref(), &links)
+}
+
+/// The player's effective skill. Authored factory skills are a mission-local
+/// floor (Earth's training guns), reconstructed on load without granting
+/// permanent career upgrades. Dark stores both in its player property; our
+/// split runtime/persistent sheet combines them here. Missing data means zero.
+pub(crate) fn player_skill_level(world: &World, skill: crate::player_stats::Skill) -> i32 {
+    let trained = crate::implants::effective_stats(world)
+        .map(|stats| stats.skill_level(skill))
+        .unwrap_or(0);
+    use crate::player_stats::Skill;
+    let index = match skill {
+        Skill::StandardWeapons => 0,
+        Skill::EnergyWeapons => 1,
+        Skill::HeavyWeapons => 2,
+        Skill::ExoticWeapons => 3,
+        _ => return trained,
+    };
+    let authored = world
+        .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
+        .ok()
+        .and_then(|player| {
+            world
+                .borrow::<View<dark::properties::PropBaseWeaponDesc>>()
+                .ok()
+                .and_then(|skills| {
+                    skills
+                        .get(player.entity_id)
+                        .ok()
+                        .map(|skills| skills.0[index])
+                })
+        })
+        .unwrap_or(0);
+    trained.max(authored)
+}
+
+/// A gun's condition (`PropGunState`, 0..100), or `None` for a weapon that
+/// tracks none - a melee weapon, the psi amp.
+pub(crate) fn gun_condition(world: &World, entity_id: EntityId) -> Option<f32> {
+    world
+        .borrow::<View<PropGunState>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|g| g.condition))
+}
+
+/// An object's short display name: its authored `P$ObjShortName` (an object
+/// string), falling back to the symbolic name every entity has. This is the
+/// terse name the original uses where a whole sentence will not fit - a panel's
+/// title bar, a status message - as opposed to the rollover's full name.
+pub fn object_short_name(world: &World, entity_id: EntityId) -> Option<String> {
+    let short = world
+        .borrow::<View<PropObjShortName>>()
+        .ok()
+        .and_then(|v| {
+            v.get(entity_id)
+                .ok()
+                .map(|n| crate::scripts::gui::localized_fallback(&n.0))
+        })
+        .filter(|name| !name.is_empty());
+    short.or_else(|| {
+        world
+            .borrow::<View<PropSymName>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|n| n.0.clone()))
+    })
+}
+
+/// The short header for `weapon`'s fire setting `setting` - "NORM" / "BURST" -
+/// or `None` when the gun names no such setting. Resolved from the gun's own
+/// `P$SHead1`/`P$SHead2` against the matching string table, which also covers
+/// the guns that author no header property of their own.
+pub fn gun_setting_header(world: &World, weapon: EntityId, setting: i32) -> Option<String> {
+    let raw = match setting {
+        0 => world
+            .borrow::<View<PropGunSettingHeader1>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|header| header.0.clone())),
+        1 => world
+            .borrow::<View<PropGunSettingHeader2>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|header| header.0.clone())),
+        _ => return None,
+    };
+    let tables = world
+        .borrow::<UniqueView<crate::mission::mission_core::GlobalGunSettingHeaders>>()
+        .ok()?;
+    resolve_setting_string(world, weapon, raw, tables.0.get(setting as usize)?)
+}
+
+/// Resolve one of a gun's fire-setting object strings against its string table.
+/// The gun's own property is only half the answer: a gun that authors no
+/// property of its own is still named by the table, keyed on its symbolic name.
+fn resolve_setting_string(
+    world: &World,
+    weapon: EntityId,
+    raw: Option<String>,
+    table: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let sym_name = world
+        .borrow::<View<PropSymName>>()
+        .ok()
+        .and_then(|v| v.get(weapon).ok().map(|name| name.0.clone()));
+    dark::importers::resolve_gun_setting_string(raw.as_deref(), sym_name.as_deref(), table)
+}
+
+/// The description text for `weapon`'s fire setting `setting` - "This is the
+/// normal single-shot firing mode." - or `None` when the gun names no such
+/// setting. Resolved from the gun's own `P$Sett1`/`P$Sett2` against the
+/// matching string table, exactly as [`gun_setting_header`] resolves the short
+/// header beside it.
+pub fn gun_setting_description(world: &World, weapon: EntityId, setting: i32) -> Option<String> {
+    let raw = match setting {
+        0 => world
+            .borrow::<View<PropGunSettingText1>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|text| text.0.clone())),
+        1 => world
+            .borrow::<View<PropGunSettingText2>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|text| text.0.clone())),
+        _ => return None,
+    };
+    let tables = world
+        .borrow::<UniqueView<crate::mission::mission_core::GlobalGunSettingTexts>>()
+        .ok()?;
+    resolve_setting_string(world, weapon, raw, tables.0.get(setting as usize)?)
+}
+
+/// The ammo index to select after a fire-mode switch. `order` is the ammo
+/// type's identity (the shotgun's pellets carry the same `order` in both
+/// modes), so the selection follows its order across the switch and falls back
+/// to the first entry when the new mode has no counterpart.
+///
+/// Every shipped gun happens to author the same order set in both modes, which
+/// makes this the identity mapping today - it is what keeps the switch honest
+/// if a mode ever offers a different set.
+pub fn remap_selected_ammo(
+    current: &[(i32, ProjectileOptions)],
+    selected: usize,
+    next: &[(i32, ProjectileOptions)],
+) -> usize {
+    if current.is_empty() {
+        return 0;
+    }
+    // Wrap the index the way every other reader of `RuntimePropSelectedAmmo`
+    // does, so the switch remaps the ammo the HUD and the shot agree is chosen.
+    let (_, opts) = &current[selected % current.len()];
+    next.iter()
+        .position(|(_, candidate)| candidate.order == opts.order)
+        .unwrap_or(0)
 }
 
 /// Whether `weapon` may select a different projectile type: it needs two or
@@ -486,6 +806,30 @@ pub fn player_carried_items(world: &World) -> Vec<EntityId> {
     collect_contained_items(world, player.inventory_entity_id, 2, &mut seen, &mut out);
 
     out
+}
+
+/// The player entity with its current and maximum hit points. `None` when the
+/// scene has no player or the player has no health pool (e.g. a bare debug
+/// scene).
+pub fn player_hit_points(world: &World) -> Option<(EntityId, i32, i32)> {
+    let player = world
+        .borrow::<UniqueView<crate::mission::PlayerInfo>>()
+        .ok()?
+        .entity_id;
+    let current = world
+        .borrow::<View<dark::properties::PropHitPoints>>()
+        .ok()?
+        .get(player)
+        .ok()?
+        .hit_points;
+    let maximum = world
+        .borrow::<View<dark::properties::PropMaxHitPoints>>()
+        .ok()?
+        .get(player)
+        .ok()?
+        .hit_points
+        .min(i32::MAX as u32) as i32;
+    Some((player, current, maximum))
 }
 
 /// The player's persistent nanite stat balance (0 if there is no player /
@@ -825,7 +1169,7 @@ pub const DEFAULT_IMPACT_MATERIAL: &str = "metal";
 /// "Material FleshTarget", authored via archetypes such as `MatFlesh`),
 /// falling back to the default for world hits / untagged entities. Hitbox
 /// proxies resolve to their parent creature.
-fn get_impact_material(world: &World, hit_entity_id: EntityId) -> String {
+pub(super) fn get_impact_material(world: &World, hit_entity_id: EntityId) -> String {
     let victim = resolve_proxy_entity(world, hit_entity_id);
     world
         .borrow::<View<PropMaterial>>()
@@ -886,18 +1230,101 @@ pub fn play_impact_sound(
     position: Vector3<f32>,
 ) -> Effect {
     let material = get_impact_material(world, hit_entity_id);
-    let maybe_query =
-        get_environmental_sound_query(world, entity_id, "collision", vec![("material", &material)]);
-
-    if let Some(query) = maybe_query {
-        Effect::PlayEnvironmentalSound {
-            audio_handle: AudioHandle::new(),
+    let query =
+        get_environmental_sound_query(world, entity_id, "collision", vec![("material", &material)])
+            .unwrap_or_else(|| {
+                // Ordinary props (including Mug) have Material but no ClassTag.
+                // Shock's shksound.cpp::set_second_tag sorts the two material
+                // values alphabetically and names the latter Material2. Retail
+                // glass + metal then resolves to hglamet*, without a fake weapon.
+                let own_material = get_impact_material(world, entity_id);
+                let (first, second) = if own_material < material {
+                    (&own_material, &material)
+                } else {
+                    (&material, &own_material)
+                };
+                dark::EnvSoundQuery::from_tag_values(vec![
+                    ("event", "collision"),
+                    ("material", first),
+                    ("material2", second),
+                ])
+            });
+    // Guns have no retail bump schema; retain the held-gun wrench fallback
+    // for released guns too, before adding the hearing cue.
+    let audio_handle = AudioHandle::new();
+    let fallback = world
+        .borrow::<View<dark::properties::PropPlayerGun>>()
+        .is_ok_and(|v| v.get(entity_id).is_ok())
+        .then(|| {
+            dark::EnvSoundQuery::from_tag_values(vec![
+                ("event", "collision"),
+                ("weapontype", "wrench"),
+                ("material", &material),
+            ])
+        });
+    // Creature footsteps/voices and enemy shots never become investigation
+    // cues. A dropped/thrown prop retains its player provenance while moving.
+    let player_caused = world
+        .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
+        .is_ok_and(|v| v.get(entity_id).is_ok())
+        || world
+            .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
+            .is_ok_and(|p| {
+                p.left_hand_entity_id == Some(entity_id)
+                    || p.right_hand_entity_id == Some(entity_id)
+            })
+        || world
+            .borrow::<shipyard::UniqueView<crate::throwing::SavedThrows>>()
+            .is_ok_and(|throws| throws.0.contains_key(&entity_id.inner()));
+    if player_caused {
+        Effect::PlayImpactSound {
+            audio_handle,
             query,
+            fallback,
+            position,
+            source: entity_id,
+        }
+    } else if let Some(fallback) = fallback {
+        Effect::PlayEnvironmentalSoundWithFallback {
+            audio_handle,
+            query,
+            fallback,
             position,
         }
     } else {
-        Effect::NoEffect
+        Effect::PlayEnvironmentalSound {
+            audio_handle,
+            query,
+            position,
+        }
     }
+}
+
+/// A station-wide Xerxes line, non-positional like retail's schema play.
+pub fn announce(source: EntityId, schema: &str) -> Effect {
+    Effect::PlaySound {
+        handle: AudioHandle::new(),
+        name: schema.to_owned(),
+        source: Some(source),
+        spatial: false,
+    }
+}
+
+/// The names of the non-spatial sounds an effect plays - what [`announce`]
+/// emits.
+#[cfg(test)]
+pub fn announced(effect: &Effect) -> Vec<String> {
+    Effect::flatten(vec![effect.clone()])
+        .into_iter()
+        .filter_map(|effect| match effect {
+            Effect::PlaySound {
+                name,
+                spatial: false,
+                ..
+            } => Some(name),
+            _ => None,
+        })
+        .collect()
 }
 
 pub fn send_to_all_switch_links(
@@ -998,8 +1425,9 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
 #[cfg(test)]
 mod tests {
     use super::{
-        debit_player_nanites, door_blocks_pathfinding, door_is_closed, is_always_collected,
-        is_nanite_pickup, plan_stack_payment, player_nanite_total, spend_player_nanites,
+        active_gun_setting, debit_player_nanites, door_blocks_pathfinding, door_is_closed,
+        door_open_progress, has_second_fire_mode, is_always_collected, is_nanite_pickup,
+        plan_stack_payment, player_nanite_total, remap_selected_ammo, spend_player_nanites,
         stat_nanite_balance,
     };
     use crate::mission::PlayerInfo;
@@ -1007,9 +1435,121 @@ mod tests {
     use crate::runtime_props::RuntimePropTransform;
     use cgmath::{Matrix4, Quaternion, Vector3, vec3};
     use dark::properties::{
-        Link, Links, PropObjIcon, PropStackCount, PropTranslatingDoor, ToLink, WrappedEntityId,
+        GunSettingDesc, Link, Links, ProjectileOptions, PropBaseGunDesc, PropGunState, PropObjIcon,
+        PropStackCount, PropTranslatingDoor, ToLink, WrappedEntityId,
     };
     use shipyard::{EntityId, Get, View, World};
+
+    fn gun_desc() -> PropBaseGunDesc {
+        let setting = |clip| GunSettingDesc {
+            clip,
+            ..GunSettingDesc::default()
+        };
+        PropBaseGunDesc {
+            settings: [setting(10), setting(20), setting(30)],
+        }
+    }
+
+    fn gun_state(setting: i32) -> PropGunState {
+        PropGunState {
+            ammo: 0,
+            condition: 100.0,
+            setting,
+            modification: 0,
+            silence_value: 0.0,
+        }
+    }
+
+    #[test]
+    fn active_gun_setting_follows_the_live_gun_state() {
+        let mut world = World::new();
+        let weapon = world.add_entity((gun_desc(), gun_state(1)));
+
+        assert_eq!(active_gun_setting(&world, weapon).unwrap().clip, 20);
+    }
+
+    #[test]
+    fn active_gun_setting_defaults_to_the_first_setting_without_a_gun_state() {
+        let mut world = World::new();
+        let weapon = world.add_entity(gun_desc());
+
+        assert_eq!(active_gun_setting(&world, weapon).unwrap().clip, 10);
+    }
+
+    #[test]
+    fn active_gun_setting_is_absent_for_a_non_gun() {
+        let mut world = World::new();
+        let not_a_gun = world.add_entity(gun_state(0));
+
+        assert!(active_gun_setting(&world, not_a_gun).is_none());
+    }
+
+    fn projectile(order: i32, setting: i32) -> ProjectileOptions {
+        ProjectileOptions { order, setting }
+    }
+
+    /// The shotgun: pellets and slugs in each mode, the same `order` in both.
+    fn shotgun_ammo() -> (Vec<(i32, ProjectileOptions)>, Vec<(i32, ProjectileOptions)>) {
+        (
+            vec![(-524, projectile(0, 0)), (-516, projectile(1, 0))],
+            vec![(-3423, projectile(0, 1)), (-3422, projectile(1, 1))],
+        )
+    }
+
+    /// The pistol: one ammo set shared by both modes, so only its BURST header
+    /// says the second mode exists.
+    #[test]
+    fn a_gun_that_names_its_second_mode_has_one() {
+        let shared_ammo = [
+            (-362, projectile(1, -1)),
+            (-492, projectile(2, -1)),
+            (-33, projectile(3, -1)),
+        ];
+
+        assert!(has_second_fire_mode(Some("BURST"), &shared_ammo));
+    }
+
+    /// The shotgun: setting-1 ammo, so the links alone settle it.
+    #[test]
+    fn a_gun_with_setting_specific_ammo_has_a_second_fire_mode() {
+        let (normal, double) = shotgun_ammo();
+        let links = [normal, double].concat();
+
+        assert!(has_second_fire_mode(None, &links));
+    }
+
+    /// The psi amp: no setting-1 ammo and no name for a second mode.
+    #[test]
+    fn a_gun_with_neither_has_no_second_fire_mode() {
+        assert!(!has_second_fire_mode(None, &[(-362, projectile(1, -1))]));
+        assert!(!has_second_fire_mode(None, &[]));
+    }
+
+    #[test]
+    fn a_switch_keeps_the_selected_ammo_order() {
+        let (normal, double) = shotgun_ammo();
+
+        // Slugs (order 1) stay slugs; pellets (order 0) stay pellets.
+        assert_eq!(remap_selected_ammo(&normal, 1, &double), 1);
+        assert_eq!(remap_selected_ammo(&normal, 0, &double), 0);
+        assert_eq!(remap_selected_ammo(&double, 1, &normal), 1);
+    }
+
+    #[test]
+    fn a_switch_falls_back_to_the_first_ammo_when_the_order_is_gone() {
+        let (normal, _) = shotgun_ammo();
+        let only_pellets = vec![(-3423, projectile(0, 1))];
+
+        assert_eq!(remap_selected_ammo(&normal, 1, &only_pellets), 0);
+    }
+
+    #[test]
+    fn a_switch_wraps_an_out_of_range_selection_like_every_other_reader() {
+        let (normal, double) = shotgun_ammo();
+
+        assert_eq!(remap_selected_ammo(&normal, 7, &double), 1, "7 % 2 = slugs");
+        assert_eq!(remap_selected_ammo(&[], 0, &double), 0, "no ammo at all");
+    }
 
     fn door_world(
         closed: Vector3<f32>,
@@ -1089,6 +1629,37 @@ mod tests {
 
         assert_eq!(door_is_closed(&closed_world, at_closed), Some(true));
         assert_eq!(door_is_closed(&open_world, at_open), Some(false));
+    }
+
+    #[test]
+    fn a_rising_leaf_reports_its_progress_and_the_gap_beneath_it() {
+        let closed = vec3(39.2, 0.5, -37.6);
+        let open = vec3(39.2, 4.1, -37.6);
+        let half = vec3(39.2, 2.3, -37.6);
+        let (world, door) = door_world(closed, open, 0, half);
+
+        let (fraction, rise) = door_open_progress(&world, door).unwrap();
+        assert!((fraction - 0.5).abs() < 1e-4, "fraction {fraction}");
+        assert!((rise - 1.8).abs() < 1e-4, "rise {rise}");
+    }
+
+    #[test]
+    fn a_sideways_leaf_reports_progress_but_no_gain_in_height() {
+        let closed = vec3(10.3, -0.4, 42.0);
+        let open = vec3(10.3, -0.4, 44.3);
+        let (world, door) = door_world(closed, open, 0, open);
+
+        let (fraction, rise) = door_open_progress(&world, door).unwrap();
+        assert!((fraction - 1.0).abs() < 1e-4, "fraction {fraction}");
+        assert_eq!(rise, 0.0);
+    }
+
+    #[test]
+    fn a_door_with_nowhere_to_go_has_no_progress_to_report() {
+        let at = vec3(18.0, -0.4, 41.8);
+        let (world, door) = door_world(at, at, 1, at);
+
+        assert_eq!(door_open_progress(&world, door), None);
     }
 
     #[test]
@@ -1335,5 +1906,98 @@ mod tests {
             inherits: true,
         });
         assert!(!is_always_collected(&world, disc));
+    }
+}
+
+#[cfg(test)]
+mod projectile_contact_tests {
+    use super::*;
+    use crate::{
+        mission::stim_response::GlobalContactStims,
+        runtime_props::{RuntimePropProxyEntity, RuntimePropShotModifiers},
+        scripts::DamageImpact,
+    };
+    use cgmath::vec3;
+    use dark::properties::{ReceptronEffect, ReceptronOptions};
+
+    #[test]
+    fn contact_damage_resolves_parent_receptrons_then_forwards_through_the_limb() {
+        let mut world = World::new();
+        world.add_unique(GlobalContactStims(HashMap::from([(-362, vec![(-3, 2.0)])])));
+        let victim = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: -3,
+                to_entity_id: None,
+                link: Link::Receptron(ReceptronOptions {
+                    order: 1,
+                    effect: ReceptronEffect::Damage {
+                        multiplier: 3.0,
+                        use_intensity: true,
+                    },
+                }),
+            }],
+        });
+        let limb = world.add_entity(RuntimePropProxyEntity(victim));
+        let projectile = world.add_entity((
+            PropTemplateId { template_id: -362 },
+            RuntimePropShotModifiers {
+                stim: 1.5,
+                ..Default::default()
+            },
+        ));
+        let impact = DamageImpact {
+            direction: vec3(1.0, 0.0, 0.0),
+            point: vec3(2.0, 3.0, 4.0),
+            bone: None,
+        };
+        let Effect::Send { msg } =
+            projectile_contact_effects(&world, projectile, limb, Some(impact))
+        else {
+            panic!("authored contact damage must reach the struck limb");
+        };
+        assert_eq!(msg.to, limb);
+        let MessagePayload::Damage {
+            amount,
+            impact: Some(result),
+        } = msg.payload
+        else {
+            panic!("missing impact")
+        };
+        assert_eq!(amount, 9.0); // 2 * 1.5 * 3; the hitbox applies limb scaling later.
+        assert_eq!(result.bone, None);
+        assert_eq!(result.point, impact.point);
+        assert_eq!(result.direction, impact.direction);
+    }
+
+    #[test]
+    fn non_damage_and_immune_contacts_do_not_send_damage_messages() {
+        let mut world = World::new();
+        world.add_unique(GlobalContactStims(HashMap::from([(
+            -1352,
+            vec![(-1486, 8.0)],
+        )])));
+        let projectile = world.add_entity(PropTemplateId { template_id: -1352 });
+        let immune = world.add_entity(());
+        assert!(matches!(
+            projectile_contact_effects(&world, projectile, immune, None),
+            Effect::NoEffect
+        ));
+        let victim = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: -1486,
+                to_entity_id: None,
+                link: Link::Receptron(ReceptronOptions {
+                    order: 82,
+                    effect: ReceptronEffect::Freeze {
+                        duration_multiplier: 1,
+                    },
+                }),
+            }],
+        });
+        assert!(matches!(
+            Effect::flatten(vec![projectile_contact_effects(&world, projectile, victim, None)]).as_slice(),
+            [Effect::Send { msg: Message { to, payload: MessagePayload::Freeze { duration_seconds } } }]
+                if *to == victim && *duration_seconds == 8.0
+        ));
     }
 }

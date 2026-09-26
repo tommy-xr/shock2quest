@@ -20,6 +20,7 @@ const EARTH_NANITES = 257;
 const EARTH_REPLICATOR = 262;
 const HE_CLIP_NAME = "*HE Clip*";
 const PANEL_HEIGHT_PX = 296;
+const PANEL_WIDTH_PX = 252;
 const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
 
 type Hand = "left" | "right";
@@ -158,9 +159,10 @@ async function hackReplicator(
   // board, payment, node rolls, and success effect remain the real game path.
   await game.player.setStats({ cyber_affinity: 6, skills: { hack: 6 } });
 
-  // PLUGHACK sidecar center, then START on the ordinary 188x296 HRM board.
-  await clickPanelPoint(game, 261, [42, 247]);
-  await clickPanelPoint(game, 188, [167, 260]);
+  // PLUGHACK button center, right of the MFD, then START on the HRM board.
+  // The canvas keeps the plug's room (252px) for the whole session.
+  await clickPanelPoint(game, PANEL_WIDTH_PX, [221, 247]);
+  await clickPanelPoint(game, PANEL_WIDTH_PX, [167, 260]);
 
   // Exercise every board coordinate through the production panel. Empty cells
   // and clicks after the board is won are authored no-ops. At 85% node success
@@ -168,7 +170,7 @@ async function hackReplicator(
   // hacked catalog and its HE purchase below prove the persistent outcome.
   for (let y = 0; y < 4; y++) {
     for (let x = 0; x < 5; x++) {
-      await clickPanelPoint(game, 188, [16 + x * 30 + 8, 48 + y * 36 + 8]);
+      await clickPanelPoint(game, PANEL_WIDTH_PX, [16 + x * 30 + 8, 48 + y * 36 + 8]);
     }
   }
 
@@ -221,11 +223,11 @@ test(
       ),
     );
 
-    // Small HE Clip is hacked inventory row 0 (188x60 at y=10). Aim the two
+    // Small HE Clip is hacked inventory box 0 (142x62 at 10,8). Aim the two
     // production hands at separate points inside that same button so both
     // emit hover samples, then hold only the right trigger for two frames.
-    await aimHandAtPanelPoint(game, 188, [55, 40], "left");
-    await aimHandAtPanelPoint(game, 188, [133, 40], "right");
+    await aimHandAtPanelPoint(game, PANEL_WIDTH_PX, [55, 40], "left");
+    await aimHandAtPanelPoint(game, PANEL_WIDTH_PX, [133, 40], "right");
     await game.input.set("right_hand.trigger", 1);
     await game.step({ frames: 2 });
     await game.input.set("right_hand.trigger", 0);
@@ -245,7 +247,7 @@ test(
     // verify the ordinary authored row still produces exactly one new vend.
     await game.input.set("left_hand.position", [0, -10, 0]);
     await game.step({ frames: 2 });
-    await aimHandAtPanelPoint(game, 188, [94, 40], "right");
+    await aimHandAtPanelPoint(game, PANEL_WIDTH_PX, [94, 40], "right");
     await game.input.set("right_hand.trigger", 1);
     await game.step({ frames: 2 });
     await game.input.set("right_hand.trigger", 0);

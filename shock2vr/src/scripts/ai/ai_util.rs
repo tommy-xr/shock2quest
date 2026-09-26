@@ -5,7 +5,7 @@ use std::{
 
 use cgmath::{
     Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad, Rotation, Rotation3,
-    SquareMatrix, Transform, Vector3, point3, vec3, vec4,
+    Transform, Vector3, point3, vec3, vec4,
 };
 use dark::{EnvSoundQuery, SCALE_FACTOR, properties::*};
 use engine::audio::AudioHandle;
@@ -14,7 +14,11 @@ use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
 use crate::{
     creature,
-    mission::{PlayerInfo, entity_creator::CreateEntityOptions},
+    mission::{
+        GlobalPathfinding, PlayerInfo, entity_creator::CreateEntityOptions,
+        mission_core::GlobalTemplateClassTags,
+    },
+    pathfinding::MovementHold,
     physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropProxyEntity, RuntimePropTransform},
     scripts::{
@@ -29,11 +33,102 @@ use crate::{
 /// random_binomial
 ///
 /// Returns a random number between -1 and 1, where values around 0 are more likely
+/// Tell every watchdog that this AI is standing still on purpose (or is free
+/// to move again). Published by the AI script BEFORE it steers - see
+/// `MovementHold`.
+pub fn publish_movement_hold(world: &World, entity_id: EntityId, hold: MovementHold) {
+    if let Some(service) = world
+        .borrow::<UniqueView<GlobalPathfinding>>()
+        .ok()
+        .and_then(|g| g.0.clone())
+    {
+        service.record_movement_hold(entity_id.inner(), hold);
+    }
+}
+
+/// Why this AI is standing still this frame, if it is.
+pub fn movement_hold(world: &World, entity_id: EntityId) -> MovementHold {
+    world
+        .borrow::<UniqueView<GlobalPathfinding>>()
+        .ok()
+        .and_then(|g| g.0.clone())
+        .map(|service| service.movement_hold(entity_id.inner()))
+        .unwrap_or_default()
+}
+
 pub fn random_binomial() -> f32 {
     let mut rng = thread_rng();
     let a = rng.gen_range(0.0..1.0);
     let b = rng.gen_range(0.0..1.0);
     a - b
+}
+
+/// Height to fall back on when the creature has no definition (world units)
+const CREATURE_DEFAULT_HEIGHT: f32 = 6.5 / SCALE_FACTOR;
+
+/// ...and the body radius to fall back on (half a human's 3.5-foot width)
+const CREATURE_DEFAULT_RADIUS: f32 = 1.75 / SCALE_FACTOR;
+
+/// The creature's own definition, or None when it has no `PropCreature`.
+fn creature_definition(
+    world: &World,
+    entity_id: EntityId,
+) -> Option<std::sync::Arc<crate::creature::CreatureDefinition>> {
+    world
+        .borrow::<View<PropCreature>>()
+        .ok()
+        .and_then(|v_creature| v_creature.get(entity_id).ok().map(|creature| creature.0))
+        .and_then(crate::creature::get_creature_definition)
+}
+
+/// The creature's height in world units. Fractions of it (rather than fixed
+/// feet) are what let the same reasoning work on a monkey and on a hybrid.
+pub fn creature_height(world: &World, entity_id: EntityId) -> f32 {
+    creature_definition(world, entity_id)
+        .map(|definition| definition.bounding_size.y)
+        .or_else(|| object_actor_radius(world, entity_id).map(|radius| radius * 2.0))
+        .unwrap_or(CREATURE_DEFAULT_HEIGHT)
+}
+
+fn object_actor_radius(world: &World, entity: EntityId) -> Option<f32> {
+    let ai = world.borrow::<View<dark::properties::PropAI>>().ok()?;
+    let ai = &ai.get(entity).ok()?.0;
+    if ai.eq_ignore_ascii_case("swarmer") {
+        return Some(super::SWARM_CORE_RADIUS);
+    }
+    if !ai.eq_ignore_ascii_case("grub") {
+        return None;
+    }
+    let dimensions = world.borrow::<View<PropPhysDimensions>>().ok()?;
+    let dimensions = dimensions.get(entity).ok()?;
+    let radius = dimensions.radius0.abs().max(dimensions.radius1.abs());
+    (radius > 0.0 && radius.is_finite()).then_some(radius)
+}
+
+/// The radius of the capsule this creature actually collides with - the same
+/// resolution its body is built from, authored sphere dimensions included, so
+/// a probe asks for the room the creature really occupies rather than for a
+/// bounding box it may be much narrower than.
+pub fn creature_radius(world: &World, entity_id: EntityId) -> f32 {
+    let Some(definition) = creature_definition(world, entity_id) else {
+        return object_actor_radius(world, entity_id).unwrap_or(CREATURE_DEFAULT_RADIUS);
+    };
+    let v_phys_type = world.borrow::<View<PropPhysType>>().ok();
+    let v_dimensions = world.borrow::<View<PropPhysDimensions>>().ok();
+    let shape = crate::mission::entity_creator::live_creature_shape(
+        &definition,
+        v_phys_type
+            .as_ref()
+            .and_then(|view| view.get(entity_id).ok()),
+        v_dimensions
+            .as_ref()
+            .and_then(|view| view.get(entity_id).ok()),
+    );
+    match shape {
+        crate::physics::PhysicsShape::Capsule { radius, .. } => radius,
+        crate::physics::PhysicsShape::Sphere(radius) => radius,
+        crate::physics::PhysicsShape::Cuboid(half_extents) => half_extents.x.max(half_extents.z),
+    }
 }
 
 pub fn get_position_and_forward(
@@ -335,19 +430,16 @@ pub(crate) fn is_entity_door(world: &shipyard::World, entity_id: shipyard::Entit
     v_door_prop.contains(entity_id)
 }
 
-pub(crate) fn does_entity_have_hitboxes(world: &World, entity_id: EntityId) -> bool {
-    let v_creature_prop = world.borrow::<View<PropCreature>>().unwrap();
-
-    // If the entity has a creature prop, we use hitboxes for damage
-    v_creature_prop.contains(entity_id)
-}
-
 /// Fire Ranged Weapon
 ///
 /// Handles firing a projectile through the AIRangedWeapon link, which is a proxy between the main entity link
 /// Used primarily by turrets
 ///
-pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaternion<f32>) -> Effect {
+pub fn fire_ranged_weapon(
+    world: &World,
+    entity_id: EntityId,
+    muzzle_transform: Matrix4<f32>,
+) -> Effect {
     // First, let's find the link
     let maybe_ranged_weapon = get_first_link_with_template_and_data(world, entity_id, |link| {
         if matches!(link, Link::AIRangedWeapon) {
@@ -367,27 +459,19 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
 
     let maybe_ranged_weapon_entity_id = find_first_entity_by_template_id(world, ranged_weapon);
 
-    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
-    let root_transform = v_transform.get(entity_id).unwrap();
-    let forward_offset = 3.0 / SCALE_FACTOR;
-    let up_offset = 0.5 / SCALE_FACTOR;
-    let right_offset = 0.5 / SCALE_FACTOR;
-    let forward = vec3(right_offset, up_offset, 1.0 * forward_offset);
-    let firing_transform = root_transform.0 * Matrix4::from(rotation);
-    let muzzle_transform = firing_transform * Matrix4::from_translation(forward);
     let position = muzzle_transform.transform_point(point3(0.0, 0.0, 0.0));
 
     if maybe_ranged_weapon_entity_id.is_none() {
         // Let's create the proxy entity...
         Effect::CreateEntity {
             template_id: ranged_weapon,
-            position: point3(0.0, 0.0, 0.0) + forward,
+            position: point3(0.0, 0.0, 0.0),
             orientation: Quaternion::from_angle_y(Deg(90.0)),
-            root_transform: firing_transform,
+            root_transform: muzzle_transform,
             options: CreateEntityOptions::default(),
         }
     } else {
-        let transformed_forward = firing_transform.transform_vector(forward);
+        let transformed_forward = muzzle_transform.transform_vector(vec3(0.0, 0.0, 1.0));
         let debug_effect = Effect::DrawDebugLines {
             lines: vec![(
                 position,
@@ -444,9 +528,9 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
         if let Some((muzzle_flash_template_id, _muzzle_flash_options)) = maybe_muzzle_flash {
             fire_effects.push(Effect::CreateEntity {
                 template_id: muzzle_flash_template_id,
-                position: point3(0.0, 0.0, 0.0) + forward,
+                position: point3(0.0, 0.0, 0.0),
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
-                root_transform: firing_transform,
+                root_transform: muzzle_transform,
                 options: CreateEntityOptions::default(),
             })
         }
@@ -493,21 +577,44 @@ pub fn fire_ranged_projectile(
         let forward = vec3(0.0, 0.0, 1.0);
 
         let creature_type = v_creature.get(entity_id).unwrap();
-        let joint_index = creature::get_creature_definition(creature_type.0)
+        // Launch joint 0 means the object's default launch position, not
+        // skeleton joint 0 (usually a foot). Dark's cAILaunchAction only
+        // resolves a creature joint for positive launch-joint values.
+        // Security/assault droids and SHODAN author 0; using their foot bone
+        // put shots into the floor or failed the muzzle line-of-fire check.
+        let joint_transform = creature::get_creature_definition(creature_type.0)
+            .filter(|_| options.joint > 0)
             .and_then(|def| def.get_mapped_joint(options.joint))
-            .unwrap_or(0);
-        let joint_transform = v_joint_transforms
-            .get(entity_id)
-            .map(|transform| transform.0.get(joint_index as usize))
-            .ok()
-            .flatten()
-            .copied()
-            .unwrap_or(Matrix4::identity());
-
-        let transform = root_transform.0;
-        let position = joint_transform.transform_point(point3(0.0, 0.0, 0.0));
-        let muzzle_transform = transform * Matrix4::from_translation((position + forward).to_vec());
-        let muzzle_position = muzzle_transform.transform_point(point3(0.0, 0.0, 0.0));
+            .and_then(|joint| {
+                v_joint_transforms
+                    .get(entity_id)
+                    .ok()
+                    .and_then(|pose| pose.0.get(joint as usize))
+                    .copied()
+            });
+        let (transform, position) = if let Some(joint) = joint_transform {
+            (
+                root_transform.0,
+                joint.transform_point(point3(0.0, 0.0, 0.0)),
+            )
+        } else {
+            let offset = world
+                .borrow::<View<PropAIRangedShoot>>()
+                .unwrap()
+                .get(entity_id)
+                .map(|p| p.launch_offset)
+                .unwrap_or(vec3(0.0, 0.0, 0.0));
+            let positions = world.borrow::<View<PropPosition>>().unwrap();
+            let position = positions.get(entity_id).unwrap();
+            // Authored offsets are world-sized and yaw-relative, independent
+            // of the rendered model's scale, pitch and roll (AIGetLaunchOffset).
+            let facing = position.rotation.rotate_vector(forward);
+            let yaw = Rad(facing.x.atan2(facing.z));
+            (
+                Matrix4::from_translation(position.position) * Matrix4::from_angle_y(yaw),
+                point3(offset.x, offset.y, offset.z),
+            )
+        };
         let Some((target_entity, target_position)) = world
             .borrow::<UniqueView<PlayerInfo>>()
             .ok()
@@ -515,6 +622,19 @@ pub fn fire_ranged_projectile(
         else {
             return Effect::NoEffect;
         };
+
+        // The muzzle stands a unit ahead of the firing joint so the shot
+        // clears the shooter's own body. An AI with no melee weapon fires
+        // right down to contact range, where that unit can reach PAST the
+        // target - spawning the shot behind it, aimed back at the shooter,
+        // and a contact-fused grenade at the thrower's own feet. Keep the
+        // muzzle short of the target instead.
+        let joint_position = transform.transform_point(position);
+        let distance_to_target = (target_position - joint_position.to_vec()).magnitude();
+        let muzzle_offset = muzzle_offset_for_distance(distance_to_target);
+        let muzzle_transform =
+            transform * Matrix4::from_translation((position + forward * muzzle_offset).to_vec());
+        let muzzle_position = muzzle_transform.transform_point(point3(0.0, 0.0, 0.0));
         if !has_line_of_fire_from(
             entity_id,
             muzzle_position,
@@ -528,15 +648,51 @@ pub fn fire_ranged_projectile(
         let projectile_transform =
             projectile_transform_aimed_at_player(world, muzzle_position, muzzle_transform);
 
-        Effect::CreateEntity {
-            template_id: projectile_id,
-            position: point3(0.0, 0.0, 0.0),
-            orientation: Quaternion::from_angle_y(Deg(90.0)),
-            root_transform: projectile_transform,
-            options: CreateEntityOptions::default(),
-        }
+        Effect::combine(vec![
+            Effect::CreateEntity {
+                template_id: projectile_id,
+                position: point3(0.0, 0.0, 0.0),
+                orientation: Quaternion::from_angle_y(Deg(90.0)),
+                root_transform: projectile_transform,
+                options: CreateEntityOptions::default(),
+            },
+            projectile_launch_sound(world, projectile_id, muzzle_position.to_vec()),
+        ])
     } else {
         Effect::NoEffect
+    }
+}
+
+/// The report of an AI's weapon going off.
+///
+/// Dark keys creature fire on `event:launch` plus the *projectile*
+/// archetype's own class tag - `Grunt Shotgun Slug` carries
+/// `enemyammotype ogslug`, which resolves the `fire_og_shotgun` schema - not
+/// on the player's `event:shoot`/`weapontype` query. The projectile entity
+/// does not exist yet at launch, so the tags come from the template map
+/// rather than a live `PropClassTag`.
+fn projectile_launch_sound(
+    world: &World,
+    projectile_template_id: i32,
+    position: Vector3<f32>,
+) -> Effect {
+    let Ok(class_tags) = world.borrow::<UniqueView<GlobalTemplateClassTags>>() else {
+        return Effect::NoEffect;
+    };
+    let Some(tags) = class_tags.0.get(&projectile_template_id) else {
+        return Effect::NoEffect;
+    };
+
+    let mut query = vec![("event", "launch")];
+    query.extend(
+        tags.iter()
+            .map(|(tag, value)| (tag.as_str(), value.as_str())),
+    );
+
+    Effect::PlayEnvironmentalSound {
+        audio_handle: AudioHandle::new(),
+        query: EnvSoundQuery::from_tag_values(query),
+        position,
     }
 }
 
@@ -582,6 +738,22 @@ pub const MONSTER_FOV_HALF_ANGLE: f32 = 60.0;
 /// whether to keep swinging, and a swing may only connect inside it.
 pub const MELEE_ATTACK_RANGE: f32 = 8.0 / SCALE_FACTOR;
 
+/// How far ahead of the firing joint an AI's muzzle sits, so a shot clears
+/// the shooter's own body.
+const MUZZLE_CLEARANCE: f32 = 1.0;
+
+/// The muzzle is pulled back to at least this far short of the target, so a
+/// point-blank shot still spawns between shooter and target rather than
+/// behind it.
+const MUZZLE_TARGET_MARGIN: f32 = 0.25;
+
+/// How far ahead of the firing joint to put the muzzle when the target is
+/// `distance_to_target` away: the full clearance normally, pulled in to stay
+/// short of the target at point-blank range, and never behind the shooter.
+fn muzzle_offset_for_distance(distance_to_target: f32) -> f32 {
+    MUZZLE_CLEARANCE.min((distance_to_target - MUZZLE_TARGET_MARGIN).max(0.0))
+}
+
 ///
 /// Melee Contact
 ///
@@ -614,7 +786,10 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
         v_current_pos
             .get(entity_id)
             .ok()
-            .map(|pos| (pos.position - player_pos).magnitude() < MELEE_ATTACK_RANGE)
+            .map(|pos| {
+                (pos.position + creature::sense_offset(world, entity_id) - player_pos).magnitude()
+                    < MELEE_ATTACK_RANGE
+            })
             .unwrap_or(false)
     };
     if !in_range {
@@ -625,12 +800,7 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
         return Effect::NoEffect;
     }
 
-    let Some((weapon_template_id, _)) =
-        get_first_link_with_template_and_data(world, entity_id, |link| match link {
-            Link::Weapon => Some(()),
-            _ => None,
-        })
-    else {
+    let Some(weapon_template_id) = melee_weapon_template(world, entity_id) else {
         return Effect::NoEffect;
     };
 
@@ -639,19 +809,28 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
         weapon_template_id,
         player_entity_id,
     );
+    let hazard = crate::mission::stim_response::contact_hazard_effects(
+        world,
+        weapon_template_id,
+        player_entity_id,
+        1.0,
+    );
     if damage <= 0.0 {
-        return Effect::NoEffect;
+        return hazard;
     }
 
-    Effect::Send {
-        msg: crate::scripts::Message {
-            to: player_entity_id,
-            payload: crate::scripts::MessagePayload::Damage {
-                amount: damage,
-                impact: None,
+    Effect::combine(vec![
+        hazard,
+        Effect::Send {
+            msg: crate::scripts::Message {
+                to: player_entity_id,
+                payload: crate::scripts::MessagePayload::Damage {
+                    amount: damage,
+                    impact: None,
+                },
             },
         },
-    }
+    ])
 }
 
 /// Where this AI should chase: its last-known target position when it has
@@ -689,22 +868,159 @@ pub fn hit_points(entity_id: EntityId, world: &World) -> Option<i32> {
     v_prop_hit_points.get(entity_id).ok().map(|p| p.hit_points)
 }
 
-/// Horizontal crowd-separation bias: the sum of repulsions from other
-/// LIVING creatures within `radius` of `position` (same floor), each
-/// weighted by proximity. Returns a direction-and-magnitude vector in the
-/// XZ plane; empty crowd = zero. Callers blend a capped amount of this
-/// into their steering target so converging AIs bend around each other
-/// instead of pushing capsule-to-capsule into a gridlock (issue #487) -
-/// it must BIAS the route, never veto it (see collision avoidance history).
-pub fn separation_bias(
+/// AI-to-AI repel, the near-field half of `crowd_bias`: how hard one
+/// neighbour pushes, ramping from nothing at `none` to a full push at
+/// `full`.
+pub struct CrowdRepel {
+    /// At or inside this distance the push is at full strength
+    pub full: f32,
+    /// At or beyond this distance there is no push at all
+    pub none: f32,
+    /// Overall multiplier, so a caller can fade the whole term in and out
+    /// smoothly (see the melee suppression in the path-follow strategy)
+    pub strength: f32,
+}
+
+/// Repel strength for one neighbour: 0 at (or beyond) `none`, 1 at (or
+/// inside) `full`, linear in between.
+pub fn repel_ramp(distance: f32, full: f32, none: f32) -> f32 {
+    if distance >= none {
+        0.0
+    } else if distance <= full {
+        1.0
+    } else {
+        (none - distance) / (none - full)
+    }
+}
+
+/// A push counts as head-on when it points back down the travel direction
+/// within this cone of exactly anti-parallel. Wider and an ordinary
+/// glancing push gets turned sideways; narrower and two bodies converging
+/// a few degrees off dead-centre still cancel each other out.
+const HEAD_ON_CONE: Deg<f32> = Deg(30.0);
+
+/// The XZ direction of `v`, or None when it has no horizontal extent.
+pub(crate) fn normalized_horizontal(v: Vector3<f32>) -> Option<Vector3<f32>> {
+    let length = (v.x * v.x + v.z * v.z).sqrt();
+    (length > 1e-6).then(|| vec3(v.x / length, 0.0, v.z / length))
+}
+
+/// Drop whatever part of `v` points against `direction`, keeping the rest.
+/// Used both to keep a bias from pulling a body backwards down its route
+/// and to stop a crowd push from bidding against the whiskers.
+pub(crate) fn drop_opposing(v: Vector3<f32>, direction: Vector3<f32>) -> Vector3<f32> {
+    match normalized_horizontal(direction) {
+        Some(direction) => {
+            let opposing = (v.x * direction.x + v.z * direction.z).min(0.0);
+            v - direction * opposing
+        }
+        None => v,
+    }
+}
+
+/// The AI's own side of the direction of travel: the perpendicular that
+/// `yield_sideways` yields onto and that `blend_biases` applies the
+/// geometry-over-crowd priority along. Both must read the same handedness -
+/// the opposite one would zero exactly the sidesteps it has to preserve -
+/// so they share this. Length follows `heading`'s; only its direction is used.
+pub(crate) fn lateral_axis(heading: Vector3<f32>) -> Vector3<f32> {
+    vec3(heading.z, 0.0, -heading.x)
+}
+
+/// Turn a head-on crowd push into a sidestep of the same strength.
+///
+/// A neighbour squarely ahead pushes straight back down the route, and a
+/// bias pointing backwards is worth nothing: the aim point keeps only its
+/// sideways part (`aim_with_bias`), so the whole push is discarded and two
+/// AIs meeting head-on walk into each other. Yielding around is what the
+/// original engine's regulator does, so inside `HEAD_ON_CONE` the push is
+/// rotated onto the perpendicular instead of being thrown away.
+///
+/// Apply this to the WHOLE crowd bias, not to one neighbour's share: a
+/// neighbour dead ahead and another abreast would otherwise yield onto the
+/// same axis and cancel, leaving an AI with two neighbours worse off than
+/// with one. Summed first, a push that still has somewhere sideways to go
+/// falls outside the cone and is left exactly as it was.
+///
+/// The side is always the same one relative to the direction of travel,
+/// which is what lets two AIs pass without coordinating: facing opposite
+/// ways, their own sides are opposite sides of the corridor. Leaning toward
+/// whichever side the push already favours reads as more natural and is
+/// wrong - two bodies converging a few degrees off dead-centre lean the
+/// same way in world space and stay nose to nose.
+///
+/// `avoid` is the static-geometry bias (the whiskers), which outranks the
+/// choice of side: if the AI's own side is a wall, the other one is open by
+/// construction, and both AIs of a pair read the same wall the same way.
+pub(crate) fn yield_sideways(
+    push: Vector3<f32>,
+    heading: Vector3<f32>,
+    avoid: Vector3<f32>,
+) -> Vector3<f32> {
+    let magnitude = (push.x * push.x + push.z * push.z).sqrt();
+    if magnitude < 1e-6 {
+        return push;
+    }
+    let Some(heading) = normalized_horizontal(heading) else {
+        return push;
+    };
+    let along = push.x * heading.x + push.z * heading.z;
+    if along >= 0.0 {
+        return push; // not pointing back at all
+    }
+    // sin of the angle off exactly anti-parallel, ramped so the conversion
+    // eases in rather than stepping the aim point by the whole offset
+    // budget as a neighbour drifts across the edge of the cone.
+    let lateral = push - heading * along;
+    let lateral_length = (lateral.x * lateral.x + lateral.z * lateral.z).sqrt();
+    let head_on = repel_ramp(
+        lateral_length / magnitude,
+        0.0,
+        Rad::from(HEAD_ON_CONE).0.sin(),
+    );
+    if head_on <= 0.0 {
+        return push;
+    }
+    let side = lateral_axis(heading);
+    let side = if side.x * avoid.x + side.z * avoid.z < 0.0 {
+        -side
+    } else {
+        side
+    };
+    push + (side * magnitude - push) * head_on
+}
+
+/// Horizontal crowd bias: the sum of repulsions from other LIVING
+/// creatures near `position` (same floor). Returns a direction-and-
+/// magnitude vector in the XZ plane; empty crowd = zero. Callers blend a
+/// capped amount of this into their steering target so converging AIs bend
+/// around each other instead of pushing capsule-to-capsule into a gridlock
+/// (issue #487) - it must BIAS the route, never veto it (see collision
+/// avoidance history).
+///
+/// Two terms over one neighbour walk:
+/// - crowd separation, a mild proximity-weighted push over the whole
+///   `separation_radius`, which keeps a group's lines from converging; and
+/// - `repel` (optional), the near-field push modelled on the original
+///   engine's object regulator, which is what actually stops bodies from
+///   stacking up in a doorway.
+///
+/// The player is not a creature body (no `PropCreature`), so nothing here
+/// ever pushes an AI off its chase target.
+pub fn crowd_bias(
     world: &World,
     entity_id: EntityId,
     position: Vector3<f32>,
-    radius: f32,
+    separation_radius: f32,
+    repel: Option<CrowdRepel>,
 ) -> Vector3<f32> {
     let v_creature = world.borrow::<View<PropCreature>>().unwrap();
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let v_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
+    let reach = repel
+        .as_ref()
+        .map(|repel| separation_radius.max(repel.none))
+        .unwrap_or(separation_radius);
     let mut bias = vec3(0.0, 0.0, 0.0);
     for (other_id, (_, xform)) in (&v_creature, &v_transform).iter().with_id() {
         if other_id == entity_id {
@@ -725,10 +1041,18 @@ pub fn separation_bias(
         let dx = position.x - other.x;
         let dz = position.z - other.z;
         let distance = (dx * dx + dz * dz).sqrt();
-        if distance >= radius || distance < 1e-3 {
+        if distance >= reach || distance < 1e-3 {
             continue;
         }
-        let weight = (radius - distance) / radius;
+        // Two ramps with different knees: separation fades in gently from
+        // the whole radius, repel bites hard up close.
+        let mut weight = repel_ramp(distance, 0.0, separation_radius);
+        if let Some(repel) = &repel {
+            weight += repel.strength * repel_ramp(distance, repel.full, repel.none);
+        }
+        if weight <= 0.0 {
+            continue;
+        }
         bias += vec3(dx / distance, 0.0, dz / distance) * weight;
     }
     bias
@@ -753,6 +1077,17 @@ pub fn is_self_destructing(world: &World, entity_id: EntityId) -> bool {
     v_ai.get(entity_id)
         .map(|prop_ai| prop_ai.0.eq_ignore_ascii_case("protocol"))
         .unwrap_or(false)
+}
+
+/// The melee weapon archetype this AI strikes with, if it has one. Melee
+/// damage is the weapon's contact stims, so an AI with no `Weapon` link
+/// cannot land a blow at all.
+pub fn melee_weapon_template(world: &World, entity_id: EntityId) -> Option<i32> {
+    get_first_link_with_template_and_data(world, entity_id, |link| match link {
+        Link::Weapon => Some(()),
+        _ => None,
+    })
+    .map(|(template_id, _)| template_id)
 }
 
 /// Check if an entity has a ranged weapon capability
@@ -943,7 +1278,17 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
     let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
 
     if let Ok(ent_pos) = v_current_pos.get(from_entity) {
-        let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
+        // Object-model crawlers can have their origin below the collider's
+        // support plane. Sense from the actual live sphere, including the
+        // model-dependent offset resolved by entity creation.
+        let start_point = if object_actor_radius(world, from_entity).is_some() {
+            physics
+                .actor_sphere(from_entity)
+                .map(|(center, _)| Point3::from_vec(center))
+                .unwrap_or_else(|| Point3::from_vec(ent_pos.position))
+        } else {
+            Point3::from_vec(ent_pos.position + creature::sense_offset(world, from_entity))
+        };
         let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
         return has_clear_sight_between(
             from_entity,
@@ -983,7 +1328,8 @@ pub fn has_line_of_fire(
     let Ok(ent_pos) = v_current_pos.get(from_entity) else {
         return false;
     };
-    let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
+    let start_point =
+        point3(0.0, 0.0, 0.0) + ent_pos.position + creature::sense_offset(world, from_entity);
     let Some(target_entity) = world
         .borrow::<UniqueView<PlayerInfo>>()
         .ok()
@@ -1093,8 +1439,8 @@ fn ai_team(world: &World, entity_id: EntityId) -> AITeam {
 ///   `pose.rotation` already contains the full orientation.
 /// - **Cameras**: Pass `Deg(view_angle + 90.0)` - rotation is via joint transforms,
 ///   not entity rotation. The +90 offset aligns with the joint coordinate system.
-/// - **Turrets**: Pass `-current_heading` - similar to cameras but with negated heading
-///   due to how the turret joint rotation is calculated.
+/// - **Turrets**: Pass `90 - joint_parameter_degrees`: LGMD models face -X,
+///   and the joint parameter rotates that authored direction around +Y.
 ///
 /// # Returns
 /// `true` if the player is within the FOV cone AND there's line-of-sight
@@ -1145,7 +1491,8 @@ pub fn is_player_visible_in_fov(
         }
 
         // Player is in FOV, now check line-of-sight
-        let start_point = point3(0.0, 0.0, 0.0) + entity_pos;
+        let start_point =
+            point3(0.0, 0.0, 0.0) + entity_pos + creature::sense_offset(world, from_entity);
         let end_point = point3(0.0, 0.0, 0.0) + player_pos;
         return has_clear_sight_between(
             from_entity,
@@ -1166,6 +1513,9 @@ mod separation_tests {
     use cgmath::Matrix4;
     use shipyard::World;
 
+    /// No static geometry nearby, so the whiskers express no preference
+    const NO_WALL: Vector3<f32> = vec3(0.0, 0.0, 0.0);
+
     fn spawn_creature(world: &mut World, at: Vector3<f32>, hit_points: i32) -> EntityId {
         world.add_entity((
             PropCreature(0),
@@ -1180,7 +1530,7 @@ mod separation_tests {
         let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
         spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 10);
 
-        let bias = separation_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4);
+        let bias = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4, None);
         assert!(
             bias.x < -0.1,
             "neighbor at +x must push toward -x: {bias:?}"
@@ -1197,10 +1547,64 @@ mod separation_tests {
         spawn_creature(&mut world, vec3(10.0, 0.0, 0.0), 10); // out of radius
         spawn_creature(&mut world, vec3(1.0, 5.0, 0.0), 10); // floor above
 
-        let bias = separation_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4);
+        let bias = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4, None);
         assert!(
             bias.magnitude() < 1e-6,
             "corpses, far and stacked-floor creatures must not repel: {bias:?}"
+        );
+    }
+
+    #[test]
+    fn repel_ramps_from_nothing_at_reach_to_full_up_close() {
+        assert_eq!(repel_ramp(4.5, 1.5, 4.5), 0.0, "no push at the reach");
+        assert_eq!(repel_ramp(9.0, 1.5, 4.5), 0.0, "none beyond it either");
+        assert_eq!(repel_ramp(1.5, 1.5, 4.5), 1.0, "full push at the near end");
+        assert_eq!(repel_ramp(0.1, 1.5, 4.5), 1.0, "and no more than full");
+        assert!(
+            (repel_ramp(3.0, 1.5, 4.5) - 0.5).abs() < 1e-6,
+            "linear in between"
+        );
+    }
+
+    #[test]
+    fn repel_outpushes_separation_up_close() {
+        let mut world = World::new();
+        let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
+        spawn_creature(&mut world, vec3(1.5, 0.0, 0.0), 10);
+
+        let separation_only = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 6.0, None);
+        let with_repel = crowd_bias(
+            &world,
+            me,
+            vec3(0.0, 0.0, 0.0),
+            6.0,
+            Some(CrowdRepel {
+                full: 1.5,
+                none: 4.5,
+                strength: 1.0,
+            }),
+        );
+        assert!(
+            with_repel.x < separation_only.x - 0.5,
+            "a neighbor inside the full-push distance must push much harder \
+             than separation alone: {with_repel:?} vs {separation_only:?}"
+        );
+
+        // ...and a faded-out repel is exactly the separation bias again
+        let faded = crowd_bias(
+            &world,
+            me,
+            vec3(0.0, 0.0, 0.0),
+            6.0,
+            Some(CrowdRepel {
+                full: 1.5,
+                none: 4.5,
+                strength: 0.0,
+            }),
+        );
+        assert!(
+            (faded.x - separation_only.x).abs() < 1e-6,
+            "{faded:?} vs {separation_only:?}"
         );
     }
 
@@ -1211,10 +1615,114 @@ mod separation_tests {
         spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 10);
         spawn_creature(&mut world, vec3(-1.0, 0.0, 0.0), 10);
 
-        let bias = separation_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4);
+        let bias = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4, None);
         assert!(
             bias.x.abs() < 1e-6,
             "symmetric neighbors cancel on x: {bias:?}"
+        );
+    }
+
+    /// A neighbour squarely ahead pushes straight backwards, and a
+    /// backwards bias is discarded by the aim point - so head-on the crowd
+    /// term used to be worth exactly nothing and the two bodies met.
+    #[test]
+    fn a_head_on_push_becomes_a_sidestep() {
+        let stepped = yield_sideways(vec3(0.0, 0.0, -2.0), vec3(0.0, 0.0, 1.0), NO_WALL);
+        assert!(
+            stepped.x.abs() > 1.9,
+            "a neighbour dead ahead must be stepped around, not pushed back \
+             through: {stepped:?}"
+        );
+        assert!(
+            stepped.z.abs() < 1e-6,
+            "and the sidestep keeps nothing pointing back down the route: {stepped:?}"
+        );
+    }
+
+    /// Two AIs walking into each other each yield to their own side, which
+    /// is the opposite side of the corridor because they face opposite
+    /// ways. This must hold when they are NOT exactly anti-parallel too:
+    /// picking the side the push happens to lean toward looks natural but
+    /// sends both of them the same way in world space (here both headings
+    /// lean +x, e.g. two AIs aiming at the same off-centre doorway), which
+    /// is the very nose-to-nose case this exists to break.
+    #[test]
+    fn two_ai_meeting_head_on_yield_to_opposite_sides() {
+        // A stands at -z looking north, B stands at +z looking south, so
+        // A's push (away from B) is -z and B's is its exact opposite.
+        let push_a = vec3(0.0, 0.0, -1.0);
+        let opposite = |heading_a: Vector3<f32>, heading_b: Vector3<f32>| {
+            let a = yield_sideways(push_a, heading_a, NO_WALL);
+            let b = yield_sideways(-push_a, heading_b, NO_WALL);
+            assert!(
+                a.x * b.x < 0.0,
+                "opposed AIs must pass on opposite sides: {a:?} vs {b:?}"
+            );
+        };
+        opposite(vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, -1.0));
+        // ...and five degrees off, both leaning the same way in world x
+        let lean = Rad::from(Deg(5.0_f32)).0;
+        opposite(
+            vec3(lean.sin(), 0.0, lean.cos()),
+            vec3(lean.sin(), 0.0, -lean.cos()),
+        );
+    }
+
+    /// The whiskers outrank the AI's own side: yielding into the wall they
+    /// just found would be undone by `blend_biases` and the head-on fix
+    /// would do nothing in a doorway, which is where it is needed most.
+    #[test]
+    fn a_wall_flips_the_side_the_ai_yields_to() {
+        let push = vec3(0.0, 0.0, -1.0);
+        let heading = vec3(0.0, 0.0, 1.0);
+        let open = yield_sideways(push, heading, NO_WALL);
+        let wall_on_that_side = yield_sideways(push, heading, -open);
+        assert!(
+            open.x * wall_on_that_side.x < 0.0,
+            "a wall on the AI's own side must send it the other way: \
+             {open:?} vs {wall_on_that_side:?}"
+        );
+    }
+
+    /// A push that is not head-on is left exactly as it was - sideways and
+    /// forward pushes already survive the aim point. This is also what
+    /// keeps a crowd from cancelling itself: applied to the SUM, a
+    /// neighbour dead ahead plus one abreast still has somewhere sideways
+    /// to go and is not rotated onto that neighbour's axis.
+    #[test]
+    fn a_push_off_the_head_on_cone_is_untouched() {
+        let heading = vec3(0.0, 0.0, 1.0);
+        assert_eq!(
+            yield_sideways(vec3(1.0, 0.0, 0.0), heading, NO_WALL),
+            vec3(1.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            yield_sideways(vec3(0.0, 0.0, 1.0), heading, NO_WALL),
+            vec3(0.0, 0.0, 1.0)
+        );
+        // one neighbour dead ahead (-z) plus one abreast (-x): 45 degrees
+        // off anti-parallel, outside the cone, lateral escape preserved
+        let crowd = yield_sideways(vec3(-1.0, 0.0, -1.0), heading, NO_WALL);
+        assert_eq!(crowd, vec3(-1.0, 0.0, -1.0));
+    }
+
+    /// The conversion eases in across the cone rather than switching: at
+    /// the edge the push is untouched, just inside it is barely changed.
+    #[test]
+    fn yielding_eases_in_across_the_cone() {
+        let heading = vec3(0.0, 0.0, 1.0);
+        let at_edge = Deg(30.0_f32);
+        let just_inside = Deg(29.0_f32);
+        let push = |off: Deg<f32>| {
+            let off = Rad::from(off).0;
+            vec3(off.sin(), 0.0, -off.cos())
+        };
+        let edge = yield_sideways(push(at_edge), heading, NO_WALL);
+        let inside = yield_sideways(push(just_inside), heading, NO_WALL);
+        assert_eq!(edge, push(at_edge), "untouched at the edge");
+        assert!(
+            (inside - push(just_inside)).magnitude() < 0.1,
+            "and barely changed just inside it: {inside:?}"
         );
     }
 }
@@ -1368,6 +1876,29 @@ mod line_of_fire_tests {
             &physics,
             vec3(0.0, 0.0, 5.0),
         ));
+    }
+}
+
+#[cfg(test)]
+mod creature_height_tests {
+    use super::*;
+
+    /// A creature's authored bounding box is already in world units - the same
+    /// units the no-definition fallback is written in, and the units the
+    /// physics capsule is built from. Measuring a hybrid at a third of its
+    /// height let it walk under a door leaf that had barely left the floor.
+    #[test]
+    fn a_creature_is_measured_in_the_same_units_as_the_fallback() {
+        let mut world = World::new();
+        // 0 is the human schema, whose bounding box is the 6.5 feet the
+        // fallback also uses.
+        let human = world.add_entity((PropCreature(0),));
+        assert!(
+            (creature_height(&world, human) - CREATURE_DEFAULT_HEIGHT).abs() < 1e-3,
+            "human measured {} against a {} fallback",
+            creature_height(&world, human),
+            CREATURE_DEFAULT_HEIGHT
+        );
     }
 }
 
@@ -1622,5 +2153,215 @@ mod sight_occlusion_tests {
             player_is_visible(&scene),
             "moving the door collider to its open pose must restore sight"
         );
+    }
+}
+
+#[cfg(test)]
+mod muzzle_tests {
+    use super::*;
+    use cgmath::SquareMatrix;
+
+    #[test]
+    fn default_launch_uses_object_origin_and_explicit_joint_uses_the_pose() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 2.0, 10.0),
+            rotation: Quaternion::from_angle_y(Deg(0.0)),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: player,
+        });
+        let mut pose = [Matrix4::identity(); 40];
+        pose[0] = Matrix4::from_translation(vec3(0.0, -2.0, 0.0));
+        pose[17] = Matrix4::from_translation(vec3(0.5, 0.5, 0.0));
+        let shooter = world.add_entity((
+            PropCreature(0),
+            RuntimePropTransform(Matrix4::from_translation(vec3(0.0, 2.0, 0.0))),
+            RuntimePropJointTransforms(pose),
+        ));
+        for (joint, offset, yaw, pitch, scale, expected) in [
+            (0, vec3(0.0, 0.0, 0.0), 0.0, 0.0, 1.0, point3(0.0, 2.0, 1.0)),
+            (0, vec3(0.3, 0.6, 0.0), 0.0, 0.0, 1.0, point3(0.3, 2.6, 1.0)),
+            (
+                12,
+                vec3(0.3, 0.6, 0.0),
+                0.0,
+                0.0,
+                1.0,
+                point3(0.5, 2.5, 1.0),
+            ),
+            (
+                0,
+                vec3(0.3, 0.6, 0.0),
+                90.0,
+                30.0,
+                3.0,
+                point3(1.0, 2.6, -0.3),
+            ),
+        ] {
+            let rotation =
+                Quaternion::from_angle_y(Deg(yaw)) * Quaternion::from_angle_x(Deg(pitch));
+            world.add_component(
+                shooter,
+                (
+                    PropPosition {
+                        position: vec3(0.0, 2.0, 0.0),
+                        cell: 0,
+                        rotation,
+                    },
+                    RuntimePropTransform(
+                        Matrix4::from_translation(vec3(0.0, 2.0, 0.0))
+                            * Matrix4::from(rotation)
+                            * Matrix4::from_scale(scale),
+                    ),
+                ),
+            );
+            world.add_component(
+                shooter,
+                PropAIRangedShoot {
+                    launch_offset: offset,
+                },
+            );
+            world.add_component(
+                shooter,
+                Links {
+                    to_links: vec![ToLink {
+                        to_template_id: -4629,
+                        to_entity_id: None,
+                        link: Link::AIProjectile(AIProjectileOptions {
+                            targeting_method: AITargetMethod::StraightLine,
+                            delay: 0.0,
+                            should_lead_target: false,
+                            ammo: 0,
+                            accuracy: 0,
+                            select_time: 0.0,
+                            joint,
+                            vhot: 0,
+                        }),
+                    }],
+                },
+            );
+            let Some(Effect::CreateEntity { root_transform, .. }) = created_entity(
+                fire_ranged_projectile(&world, &PhysicsWorld::new(), shooter),
+            ) else {
+                panic!("expected projectile");
+            };
+            let muzzle = root_transform.transform_point(point3(0.0, 0.0, 0.0));
+            assert!(
+                (muzzle - expected).magnitude() < 1.0e-5,
+                "joint {joint}: {muzzle:?}"
+            );
+        }
+    }
+
+    /// The single `CreateEntity` inside a fire effect, whatever else it is
+    /// combined with.
+    fn created_entity(effect: Effect) -> Option<Effect> {
+        match effect {
+            Effect::CreateEntity { .. } => Some(effect),
+            Effect::Multiple(effects) | Effect::Combined { effects } => {
+                effects.into_iter().find_map(created_entity)
+            }
+            _ => None,
+        }
+    }
+
+    /// The tags of the single `PlayEnvironmentalSound` inside a fire effect.
+    fn sound_query_tags(effect: Effect) -> Option<Vec<(String, String)>> {
+        match effect {
+            Effect::PlayEnvironmentalSound { query, .. } => Some(query.tag_values()),
+            Effect::Multiple(effects) | Effect::Combined { effects } => {
+                effects.into_iter().find_map(sound_query_tags)
+            }
+            _ => None,
+        }
+    }
+
+    /// An AI firing its weapon must be audible: Dark resolves the report from
+    /// `event:launch` plus the projectile archetype's class tag (a shotgun
+    /// hybrid's `enemyammotype ogslug` -> `fire_og_shotgun`).
+    #[test]
+    fn firing_plays_the_projectile_archetype_launch_schema() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 2.0, 10.0),
+            rotation: Quaternion::from_angle_y(Deg(0.0)),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: player,
+        });
+        world.add_unique(GlobalTemplateClassTags(HashMap::from([(
+            -676,
+            HashMap::from([("enemyammotype".to_owned(), "ogslug".to_owned())]),
+        )])));
+        let shooter = world.add_entity((
+            PropCreature(0),
+            PropPosition {
+                position: vec3(0.0, 2.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::from_angle_y(Deg(0.0)),
+            },
+            RuntimePropTransform(Matrix4::from_translation(vec3(0.0, 2.0, 0.0))),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: -676,
+                    to_entity_id: None,
+                    link: Link::AIProjectile(AIProjectileOptions {
+                        targeting_method: AITargetMethod::StraightLine,
+                        delay: 0.0,
+                        should_lead_target: false,
+                        ammo: 0,
+                        accuracy: 0,
+                        select_time: 0.0,
+                        joint: 0,
+                        vhot: 0,
+                    }),
+                }],
+            },
+        ));
+
+        let effect = fire_ranged_projectile(&world, &PhysicsWorld::new(), shooter);
+        let tags = sound_query_tags(effect).expect("fire plays a launch sound");
+        assert!(
+            tags.contains(&("event".to_owned(), "launch".to_owned())),
+            "{tags:?}"
+        );
+        assert!(
+            tags.contains(&("enemyammotype".to_owned(), "ogslug".to_owned())),
+            "{tags:?}"
+        );
+    }
+
+    /// At ordinary firing range the muzzle keeps its full clearance, so the
+    /// shot still leaves from in front of the shooter's own body.
+    #[test]
+    fn a_distant_target_gets_the_full_muzzle_clearance() {
+        assert_eq!(muzzle_offset_for_distance(10.0), MUZZLE_CLEARANCE);
+    }
+
+    /// A melee-less gun AI fires at contact range. The muzzle must stay
+    /// SHORT of the target - past it, the shot spawns behind the target
+    /// aimed back at the shooter (a contact grenade at its own feet).
+    #[test]
+    fn a_point_blank_target_pulls_the_muzzle_in_short_of_it() {
+        let distance = 0.8;
+        let offset = muzzle_offset_for_distance(distance);
+        assert!(
+            offset < distance,
+            "muzzle {offset} reached past target at {distance}"
+        );
+        assert_eq!(offset, distance - MUZZLE_TARGET_MARGIN);
+    }
+
+    /// Closer than the margin the muzzle collapses onto the joint rather
+    /// than reversing behind the shooter.
+    #[test]
+    fn a_target_inside_the_margin_never_puts_the_muzzle_behind_the_shooter() {
+        assert_eq!(muzzle_offset_for_distance(0.1), 0.0);
+        assert_eq!(muzzle_offset_for_distance(0.0), 0.0);
     }
 }

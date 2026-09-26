@@ -137,6 +137,14 @@ test(
     await clickUiElement(game, button(won, "close"));
     await physicallyOpenEarthReplicator(game, replicator);
     const hacked = await activePanel(game);
+    assert.ok(
+      texts(hacked).includes("Standard bullets"),
+      "hacked catalog must use the active localized Small Standard Clip name",
+    );
+    assert.ok(
+      texts(hacked).every((text) => !text.includes("%d") && !text.includes('"')),
+      "hacked catalog must not expose raw property strings or quantity tokens",
+    );
     for (const label of [
       "buy:small he clip",
       "buy:small standard clip",

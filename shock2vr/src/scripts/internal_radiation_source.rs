@@ -51,6 +51,8 @@ impl Script for InternalRadiationSource {
         let center = point3_to_vec3(transform.0.transform_point(point3(0.0, 0.0, 0.0)));
 
         Effect::RadiusStim {
+            linear_falloff: true,
+            source_entity_id: None,
             center,
             radius,
             intensity,
@@ -97,6 +99,8 @@ mod tests {
         assert!(matches!(
             effect,
             Effect::RadiusStim {
+            linear_falloff: true,
+                source_entity_id: None,
                 center,
                 radius: 6.0,
                 intensity: 8.0,

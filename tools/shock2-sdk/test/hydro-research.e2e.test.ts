@@ -279,14 +279,22 @@ test(
     );
 
     const report = panel.active_panel!.elements.find(
-      (element) => element.label === "Research report",
+      (element) => element.label === "Research reports",
     );
     assert.ok(report, "completed research unlocks report #5");
     await clickUiElement(game, report);
     await game.step({ frames: 3 });
+    const reportEntry = (await game.ui.state()).strip?.elements.find(
+      element => element.label === "research_entry:0",
+    );
+    assert.ok(reportEntry, "completed Toxin-A appears in the research journal");
+    await clickUiElement(game, reportEntry);
     let reportPanel = await game.ui.state();
+    const reportTexts = (ui: UiState) => ui.strip?.elements
+      .filter(element => element.label === "utility_text")
+      .flatMap(element => element.text ? [element.text] : []) ?? [];
     assert.ok(
-      panelTexts(reportPanel).some((text) => text.includes("Summary:")),
+      reportTexts(reportPanel).some((text) => text.includes("Summary:")),
       "the report button reveals the authored analysis",
     );
 
@@ -294,11 +302,11 @@ test(
     // scroll gadget and prove the late recommendation is reachable rather
     // than silently truncated or drawn under the report button.
     for (let page = 0; page < 8; page += 1) {
-      if (panelTexts(reportPanel).some((text) => text.includes("Recommendation:"))) {
+      if (reportTexts(reportPanel).some((text) => text.includes("Recommendation:"))) {
         break;
       }
-      const nextPage = reportPanel.active_panel?.elements.find(
-        (element) => element.label === "Research report next page",
+      const nextPage = reportPanel.strip?.elements.find(
+        (element) => element.label === "utility_next",
       );
       assert.ok(nextPage, "a long research report should expose next-page navigation");
       await clickUiElement(game, nextPage);
@@ -306,8 +314,8 @@ test(
       reportPanel = await game.ui.state();
     }
     assert.ok(
-      panelTexts(reportPanel).some((text) => text.includes("Recommendation:")),
-      `late report recommendation should be reachable; got ${JSON.stringify(panelTexts(reportPanel))}`,
+      reportTexts(reportPanel).some((text) => text.includes("Recommendation:")),
+      `late report recommendation should be reachable; got ${JSON.stringify(reportTexts(reportPanel))}`,
     );
 
     // Both vials predated completion, so both must be normalized to researched

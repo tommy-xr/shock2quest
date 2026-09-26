@@ -16,6 +16,11 @@ impl<TEvent> GuiComponent<TEvent>
 where
     TEvent: Clone,
 {
+    pub fn with_rect(self, rect: Rect) -> Self {
+        self.with_position(vec2(rect.x, rect.y))
+            .with_size(vec2(rect.w, rect.h))
+    }
+
     pub fn with_position(self, new_position: Vector2<f32>) -> GuiComponent<TEvent> {
         match self {
             Self::Image {
@@ -87,6 +92,14 @@ where
                 v,
                 alpha,
                 fit_to_rect,
+            },
+            Self::Fill {
+                size, color, alpha, ..
+            } => Self::Fill {
+                position: new_position,
+                size,
+                color,
+                alpha,
             },
         }
     }
@@ -162,6 +175,17 @@ where
                 v,
                 alpha,
                 fit_to_rect,
+            },
+            Self::Fill {
+                position,
+                color,
+                alpha,
+                ..
+            } => Self::Fill {
+                position,
+                size: new_size,
+                color,
+                alpha,
             },
         }
     }
@@ -267,6 +291,17 @@ where
                 alpha,
                 fit_to_rect,
             },
+            Self::Fill {
+                position,
+                size,
+                color,
+                ..
+            } => Self::Fill {
+                position,
+                size,
+                color,
+                alpha,
+            },
         }
     }
 
@@ -350,7 +385,7 @@ where
                 label,
                 kind,
             },
-            Self::Text { .. } => self,
+            Self::Text { .. } | Self::Fill { .. } => self,
         }
     }
     /// Declare this element's art to be Dark object-icon art: keyed on
@@ -358,6 +393,19 @@ where
     /// the element's rect (see [`ImageKind`]). The rect still defines layout
     /// and hit-testing.
     pub fn with_object_icon(self) -> GuiComponent<TEvent> {
+        self.with_kind(ImageKind::ObjectIcon)
+    }
+
+    /// Declare this element's art to be a holographic grid tile, repeated
+    /// `tiles_x` x `tiles_y` across the element's rect (see
+    /// [`ImageKind::Hologram`]).
+    pub fn with_hologram(self, tiles_x: u8, tiles_y: u8) -> GuiComponent<TEvent> {
+        self.with_kind(ImageKind::Hologram { tiles_x, tiles_y })
+    }
+
+    /// How this element's art is keyed and sized. No-op for components that
+    /// draw no art.
+    fn with_kind(self, kind: ImageKind) -> GuiComponent<TEvent> {
         match self {
             Self::Image {
                 position,
@@ -370,7 +418,7 @@ where
                 size,
                 texture,
                 alpha,
-                kind: ImageKind::ObjectIcon,
+                kind,
             },
             Self::Button {
                 position,
@@ -393,7 +441,7 @@ where
                 alpha,
                 entity,
                 label,
-                kind: ImageKind::ObjectIcon,
+                kind,
             },
             other => other,
         }
@@ -539,6 +587,17 @@ where
                 entity,
                 label,
             },
+            Self::Fill {
+                position,
+                size,
+                color,
+                alpha,
+            } => GuiComponent::Fill {
+                position,
+                size,
+                color,
+                alpha,
+            },
         }
     }
 }
@@ -638,6 +697,17 @@ pub enum GuiComponentRenderInfo {
         font: String,
         text: String,
         alpha: f32,
+        font_size: f32,
+        h: HAlign,
+        v: VAlign,
+        fit_to_rect: bool,
+    },
+    /// A flat colour rectangle (see [`UiElement::Fill`]).
+    Fill {
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        color: [u8; 3],
+        alpha: f32,
     },
 }
 
@@ -646,6 +716,7 @@ impl GuiComponentRenderInfo {
         match self {
             Self::Image { position, .. } => *position,
             Self::Text { position, .. } => *position,
+            Self::Fill { position, .. } => *position,
         }
     }
 
@@ -653,6 +724,7 @@ impl GuiComponentRenderInfo {
         match self {
             Self::Image { size, .. } => *size,
             Self::Text { size, .. } => *size,
+            Self::Fill { size, .. } => *size,
         }
     }
 
@@ -696,21 +768,30 @@ impl GuiComponentRenderInfo {
                 kind: *kind,
             },
             Self::Text {
-                text, font, alpha, ..
+                text,
+                font,
+                alpha,
+                font_size,
+                h,
+                v,
+                fit_to_rect,
+                ..
             } => UiElement::Text {
                 position: vec2(rect.x, rect.y),
                 size: vec2(rect.w, rect.h),
                 text: text.clone(),
                 font: font.clone(),
-                // Render at the font's native pixel height (the Dark engine
-                // draws its bitmap fonts 1:1), not the component's box height -
-                // the `size` on a GUI text component is its bounding box, not a
-                // font size. Vertically center the native-height text in that box.
-                font_size: 0.0,
-                h: HAlign::Left,
-                v: VAlign::Middle,
+                font_size: *font_size,
+                h: *h,
+                v: *v,
                 alpha: *alpha,
-                fit_to_rect: false,
+                fit_to_rect: *fit_to_rect,
+            },
+            Self::Fill { color, alpha, .. } => UiElement::Fill {
+                position: vec2(rect.x, rect.y),
+                size: vec2(rect.w, rect.h),
+                color: *color,
+                alpha: *alpha,
             },
         }
     }
@@ -762,13 +843,20 @@ where
                 font,
                 text,
                 alpha,
-                ..
+                font_size,
+                h,
+                v,
+                fit_to_rect,
             } => GuiComponentRenderInfo::Text {
                 position: vec2(position.x / screen_size.x, (-position.y) / screen_size.y),
                 size: vec2(size.x / screen_size.x, size.y / screen_size.y),
                 font: font.clone(),
                 text: text.clone(),
                 alpha: *alpha,
+                font_size: *font_size,
+                h: *h,
+                v: *v,
+                fit_to_rect: *fit_to_rect,
             },
             GuiComponent::Image {
                 position,
@@ -844,6 +932,17 @@ where
                     kind: *kind,
                 }
             }
+            GuiComponent::Fill {
+                position,
+                size,
+                color,
+                alpha,
+            } => GuiComponentRenderInfo::Fill {
+                position: vec2(position.x / screen_size.x, position.y / screen_size.y),
+                size: vec2(size.x / screen_size.x, size.y / screen_size.y),
+                color: *color,
+                alpha: *alpha,
+            },
         }
     }
 
@@ -856,6 +955,7 @@ where
             GuiComponent::Text { .. } => None,
             GuiComponent::Image { .. } => None,
             GuiComponent::Bar { .. } => None,
+            GuiComponent::Fill { .. } => None,
             GuiComponent::Button { on_click, .. } => {
                 let is_pressed = !last_input.is_pressed && current_input.is_pressed;
                 let is_grabbed = current_input.is_grabbed;
@@ -886,6 +986,33 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_layout_survives_the_effect_boundary() {
+        let element: GuiComponent<()> = GuiComponent::Text {
+            position: vec2(15.0, 20.0),
+            size: vec2(136.0, 14.0),
+            text: "bounded text".into(),
+            font: "mainaa.fon".into(),
+            font_size: 9.0,
+            h: HAlign::Center,
+            v: VAlign::Top,
+            alpha: 1.0,
+            fit_to_rect: true,
+        };
+        let info = element.to_render_info(vec2(188.0, 296.0), cgmath::point2(-1.0, -1.0));
+        let restored = info.to_ui_element(Rect::new(0.0, 0.0, 188.0, 296.0));
+        assert!(matches!(
+            restored,
+            GuiComponent::Text {
+                font_size: 9.0,
+                h: HAlign::Center,
+                v: VAlign::Top,
+                fit_to_rect: true,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn gui_buttons_are_canvas_elements() {

@@ -8,7 +8,7 @@ pub static AUDIO_IMPORTER: Lazy<AssetImporter<AudioClip, AudioClip, ()>> =
     Lazy::new(|| AssetImporter::define(load_audio, |audio, _cache, _config| audio));
 
 fn load_audio(
-    _name: String,
+    name: String,
     reader: &mut Box<dyn engine::assets::asset_paths::ReadableAndSeekable>,
     _assets: &mut AssetCache,
     _config: &(),
@@ -16,5 +16,5 @@ fn load_audio(
     let mut buf = Vec::new();
     let _ = reader.read_to_end(&mut buf);
 
-    AudioClip::from_bytes(buf)
+    AudioClip::from_bytes(buf).with_sample_name(name)
 }

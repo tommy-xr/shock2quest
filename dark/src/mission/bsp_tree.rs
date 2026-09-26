@@ -58,11 +58,11 @@ bitflags! {
 
 impl BspTree {
     pub fn cell_from_position(&self, position: Vector3<f32>) -> Option<u32> {
-        Self::cell_from_position_recursive(self.root_node.clone(), position)
+        Self::cell_from_position_recursive(&self.root_node, position)
     }
 
-    fn cell_from_position_recursive(node: Arc<BspNode>, position: Vector3<f32>) -> Option<u32> {
-        match node.as_ref() {
+    fn cell_from_position_recursive(node: &BspNode, position: Vector3<f32>) -> Option<u32> {
+        match node {
             BspNode::Leaf { cell_idx } => Some(*cell_idx as u32),
             BspNode::Split {
                 cell_idx: _,
@@ -79,12 +79,15 @@ impl BspTree {
                     + plane.w
                     >= 0.0;
 
-                if is_in_front && front.is_some() {
-                    return Self::cell_from_position_recursive(front.clone().unwrap(), position);
+                // Borrow rather than clone the Arc: this descends once per lit
+                // object per frame, and an atomic refcount round-trip per node
+                // is pure overhead for a read.
+                if is_in_front && let Some(front) = front {
+                    return Self::cell_from_position_recursive(front, position);
                 }
 
-                if !is_in_front && back.is_some() {
-                    return Self::cell_from_position_recursive(back.clone().unwrap(), position);
+                if !is_in_front && let Some(back) = back {
+                    return Self::cell_from_position_recursive(back, position);
                 }
 
                 None

@@ -29,6 +29,12 @@ fn has_incoming_keypad_switch(world: &World, door: EntityId) -> bool {
     })
 }
 
+/// Shared by the door's player Frob path and glove feedback. An open/opening
+/// door can be closed even while locked; keypad ownership gates opening only.
+pub(crate) fn player_door_frob_blocked(world: &World, entity: EntityId, target_open: bool) -> bool {
+    !target_open && (is_entity_locked(world, entity) || has_incoming_keypad_switch(world, entity))
+}
+
 pub struct StdDoor {
     audio_handle: AudioHandle,
     current_position: Vector3<f32>,
@@ -270,9 +276,7 @@ impl Script for StdDoor {
                     // while scripted TurnOn below deliberately bypasses locks.
                     if self.target_is_open(&trans_door) {
                         self.close(entity_id, world, &trans_door)
-                    } else if is_entity_locked(world, entity_id)
-                        || has_incoming_keypad_switch(world, entity_id)
-                    {
+                    } else if player_door_frob_blocked(world, entity_id, false) {
                         // SS2's existing locked-control feedback; the player
                         // still gets a response without changing door state.
                         Effect::PlaySound {

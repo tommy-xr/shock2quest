@@ -11,15 +11,16 @@ use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
     scene::{
-        SceneObject, basic_material, color_material, create_plane_with_uv_scale, light::SpotLight,
+        SceneObject, basic_material, color_material, create_plane_with_uv_scale, cube,
+        light::SpotLight,
     },
 };
-use rapier3d::prelude::{Collider, ColliderBuilder};
+use rapier3d::prelude::{Collider, ColliderBuilder, Isometry, SharedShape};
 use shipyard::EntityId;
 
 use crate::{
     GameOptions,
-    game_scene::GameScene,
+    game_scene::{DebugPlayerStatsRequest, DebugSkillLevelsRequest, DebuggableScene, GameScene},
     input_context::InputContext,
     mission::{
         AbstractMission, AlwaysVisible, GlobalContext, SpawnLocation,
@@ -28,9 +29,68 @@ use crate::{
     },
     quest_info::QuestInfo,
     save_load::HeldItemSaveData,
-    scripts::{Effect, GlobalEffect},
+    scripts::{
+        Effect, GlobalEffect,
+        gui::{PSI_TIER_CAP, SKILL_CAP, STAT_CAP},
+    },
     time::Time,
 };
+
+/// A box of debug geometry: (color, center, size) in world units.
+pub type DebugBox = (Vector3<f32>, Vector3<f32>, Vector3<f32>);
+
+/// Visuals plus one compound collider for a list of boxes. Every piece is a
+/// (visual, collider) pair built from the same box so the two cannot drift:
+/// the unit cube spans [-0.5, 0.5], so a size is twice the collider
+/// half-extent.
+pub fn boxes_to_geometry(boxes: &[DebugBox]) -> (Vec<SceneObject>, Collider) {
+    let scene_objects = boxes
+        .iter()
+        .map(|(color, translation, scale)| cube_object(*color, *translation, *scale))
+        .collect();
+    let collider = ColliderBuilder::compound(
+        boxes
+            .iter()
+            .map(|(_, translation, scale)| {
+                (
+                    Isometry::translation(translation.x, translation.y, translation.z),
+                    SharedShape::cuboid(scale.x / 2.0, scale.y / 2.0, scale.z / 2.0),
+                )
+            })
+            .collect(),
+    )
+    .build();
+    (scene_objects, collider)
+}
+
+/// Max the character sheet (every stat, skill and psi tier at cap) through
+/// the same provisioning path as `POST /v1/player/stats`, so no skill gate
+/// stands between a tester and the scene's content. `scene` tags the warning.
+pub fn max_player_stats(core: &mut MissionCore, scene: &str) {
+    let request = DebugPlayerStatsRequest {
+        strength: Some(STAT_CAP),
+        endurance: Some(STAT_CAP),
+        agility: Some(STAT_CAP),
+        psionic_ability: Some(STAT_CAP),
+        cyber_affinity: Some(STAT_CAP),
+        skills: DebugSkillLevelsRequest {
+            standard_weapons: Some(SKILL_CAP),
+            energy_weapons: Some(SKILL_CAP),
+            heavy_weapons: Some(SKILL_CAP),
+            exotic_weapons: Some(SKILL_CAP),
+            hack: Some(SKILL_CAP),
+            repair: Some(SKILL_CAP),
+            modify: Some(SKILL_CAP),
+            maintenance: Some(SKILL_CAP),
+            research: Some(SKILL_CAP),
+        },
+        psi_tier: Some(PSI_TIER_CAP),
+        cyber_modules: None,
+    };
+    if let Err(err) = core.set_player_stats(&request) {
+        tracing::warn!("[{scene}] failed to max player stats: {err}");
+    }
+}
 
 /// Convenience builder for MissionCore-backed debug scenes that only need a floor and spawn point.
 pub struct DebugSceneBuilder {
@@ -182,6 +242,10 @@ impl DebugScene {
 }
 
 impl GameScene for DebugScene {
+    fn cancel_transient_input(&mut self) {
+        self.core.cancel_transient_input();
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }
@@ -267,16 +331,20 @@ impl GameScene for DebugScene {
         self.core.queue_entity_trigger(entity_name)
     }
 
+    fn flat_eye_pose(&self) -> Option<crate::death_camera::EyePose> {
+        self.core.flat_eye_pose()
+    }
+
     fn player_is_crouched(&self) -> bool {
         self.core.player_is_crouched()
     }
 
-    fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
-        self.core.fov_pull_deg(game_options)
+    fn player_tracking_is_crouched(&self) -> bool {
+        self.core.player_tracking_is_crouched()
     }
 
-    fn use_mode_vignette_intensity(&self) -> f32 {
-        self.core.use_mode_vignette_intensity()
+    fn player_is_gripping(&self) -> bool {
+        self.core.player_is_gripping()
     }
 
     fn player_save_position(&self) -> Result<Vector3<f32>, crate::game_scene::PlayerSavePoseError> {
@@ -388,6 +456,10 @@ impl<H> HookedDebugScene<H> {
 }
 
 impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
+    fn cancel_transient_input(&mut self) {
+        self.core.cancel_transient_input();
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }
@@ -499,16 +571,20 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
         self.core.queue_entity_trigger(entity_name)
     }
 
+    fn flat_eye_pose(&self) -> Option<crate::death_camera::EyePose> {
+        self.core.flat_eye_pose()
+    }
+
     fn player_is_crouched(&self) -> bool {
         self.core.player_is_crouched()
     }
 
-    fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
-        self.core.fov_pull_deg(game_options)
+    fn player_tracking_is_crouched(&self) -> bool {
+        self.core.player_tracking_is_crouched()
     }
 
-    fn use_mode_vignette_intensity(&self) -> f32 {
-        self.core.use_mode_vignette_intensity()
+    fn player_is_gripping(&self) -> bool {
+        self.core.player_is_gripping()
     }
 
     fn player_save_position(&self) -> Result<Vector3<f32>, crate::game_scene::PlayerSavePoseError> {
@@ -661,13 +737,37 @@ impl DebugSceneFloor {
     }
 }
 
+/// A solid-color unit cube scaled to `scale` and centered on `translation`
+/// - the building block of every debug scene's floor, walls and benches.
+pub fn cube_object(
+    color: Vector3<f32>,
+    translation: Vector3<f32>,
+    scale: Vector3<f32>,
+) -> SceneObject {
+    let mut object = SceneObject::new(color_material::create(color), Box::new(cube::create()));
+    object.set_transform(
+        Matrix4::from_translation(translation)
+            * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z),
+    );
+    object
+}
+
 /// `Effect::CreateEntity` at a world position with identity orientation - the
 /// spawn shape every populate hook wants.
 pub fn spawn_at(template_id: i32, position: Point3<f32>) -> Effect {
+    spawn_at_oriented(template_id, position, Quaternion::new(1.0, 0.0, 0.0, 0.0))
+}
+
+/// [`spawn_at`] with an explicit orientation.
+pub fn spawn_at_oriented(
+    template_id: i32,
+    position: Point3<f32>,
+    orientation: Quaternion<f32>,
+) -> Effect {
     Effect::CreateEntity {
         template_id,
         position,
-        orientation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        orientation,
         // Identity, not `from_translation(position)`: the root transform is
         // applied *on top of* `position`, so passing the position twice lands
         // the entity at double the offset.

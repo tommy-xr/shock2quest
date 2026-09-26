@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { GameServer, findRepoRoot } from "../src/index.js";
 import type { EntitySummary, UiElement, Vec3 } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
+import { LOOT_PANEL_SIZE_PX, add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
 
 // MedSci2 production-VR guard for #974: the whole carry cycle for an ordinary
 // contained prop, player-observable and using no direct Frob/Grab/Give message:
@@ -187,7 +187,7 @@ test(
     assert.ok(lootPanel, "loot panel must have a production VR collider");
     const itemButtonWorld = panelElementWorldPoint(
       lootPanel,
-      [188, 296, 0],
+      LOOT_PANEL_SIZE_PX,
       1,
       itemButton,
     );

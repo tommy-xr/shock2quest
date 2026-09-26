@@ -56,6 +56,11 @@ name = "android.permission.WRITE_EXTERNAL_STORAGE"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.READ_EXTERNAL_STORAGE"
 
+# Optional so ordinary VR remains usable when passthrough is unavailable.
+[[package.metadata.android.uses_feature]]
+name = "com.oculus.feature.PASSTHROUGH"
+required = false
+
 [[package.metadata.android.uses_feature]]
 name = "oculus.software.handtracking"
 required = false

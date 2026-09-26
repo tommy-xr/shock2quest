@@ -7,9 +7,14 @@ use dark::{
 use shipyard::{EntityId, Get, Unique, UniqueView, View, ViewMut, World};
 
 /// Projectile archetype -> compatible ammo-clip archetypes, authored by the
-/// Dark engine's `Clip` relation.
+/// Dark engine's `Clip` relation, plus each clip archetype's authored stack
+/// size (its effective `P$StackCount`) so an eject can mint the box that
+/// actually fits the rounds.
 #[derive(Unique, Clone, Default)]
-pub(crate) struct GlobalProjectileClips(pub HashMap<i32, Vec<i32>>);
+pub(crate) struct GlobalProjectileClips {
+    pub clips: HashMap<i32, Vec<i32>>,
+    pub clip_sizes: HashMap<i32, i32>,
+}
 
 impl GlobalProjectileClips {
     pub fn from_entity_info(entity_info: &SystemShock2EntityInfo) -> Self {
@@ -20,15 +25,13 @@ impl GlobalProjectileClips {
         // relation for every archetype so a concrete projectile child can use a
         // relation authored on its family archetype.
         //
-        // MOST-DERIVED FIRST, and that order is load-bearing: an unload mints
-        // `[0]` as the ammo type's canonical clip, so a projectile's OWN
-        // authored clip must outrank anything it merely inherits, and the
-        // data's own preference must be preserved within a template (the
-        // pistol's standard bullet lists the full Standard Clip first, the
-        // assault rifle's lists the Small Standard Clip first - each weapon
-        // family's intended default). `get_ancestors` is root-first, so it is
-        // reversed here. Compatibility checks elsewhere only test membership
-        // and are indifferent to the order.
+        // MOST-DERIVED FIRST, and that order is load-bearing: it is an unload's
+        // tie-break and its fallback when no clip has an authored size (see
+        // [`mint_clip_template`]), so a projectile's OWN authored clip must
+        // outrank anything it merely inherits, and the data's own preference
+        // must be preserved within a template. `get_ancestors` is root-first,
+        // so it is reversed here. Compatibility checks elsewhere only test
+        // membership and are indifferent to the order.
         for template_id in entity_info.entity_to_properties.keys() {
             let mut lineage = vec![*template_id];
             lineage.extend(
@@ -56,7 +59,25 @@ impl GlobalProjectileClips {
             }
         }
 
-        Self(projectile_clips)
+        // Resolve each clip archetype's authored stack size - "Small Standard
+        // Clip" holds 6, "Standard Clip" 12 - which is what an eject sizes its
+        // minted clip against.
+        let unique_clips: std::collections::HashSet<i32> =
+            projectile_clips.values().flatten().copied().collect();
+        let mut clip_sizes = HashMap::new();
+        for clip in unique_clips {
+            if let Some(stack) = crate::scripts::script_util::hydrate_template_component::<
+                PropStackCount,
+            >(clip, entity_info)
+            {
+                clip_sizes.insert(clip, stack.0);
+            }
+        }
+
+        Self {
+            clips: projectile_clips,
+            clip_sizes,
+        }
     }
 }
 
@@ -75,17 +96,168 @@ fn selected_clip_templates(world: &World, weapon: EntityId) -> Option<Vec<i32>> 
     if projectiles.is_empty() {
         return None;
     }
-    let selected = world
-        .borrow::<View<crate::runtime_props::RuntimePropSelectedAmmo>>()
-        .ok()
-        .and_then(|selected| selected.get(weapon).ok().map(|selected| selected.0))
-        .unwrap_or(0);
-    let projectile_template = projectiles[selected % projectiles.len()].0;
+    clip_templates_for_projectile(world, projectiles[selected_ammo_index(world, weapon)].0)
+}
+
+/// The clip archetypes authored for one projectile archetype.
+fn clip_templates_for_projectile(world: &World, projectile_template: i32) -> Option<Vec<i32>> {
     world
         .borrow::<UniqueView<GlobalProjectileClips>>()
         .ok()
-        .and_then(|clips| clips.0.get(&projectile_template).cloned())
+        .and_then(|clips| clips.clips.get(&projectile_template).cloned())
         .filter(|clips| !clips.is_empty())
+}
+
+/// Which of `weapon`'s projectile links is currently selected, already wrapped
+/// into range. A weapon with no `RuntimePropSelectedAmmo` is on its first.
+pub(crate) fn selected_ammo_index(world: &World, weapon: EntityId) -> usize {
+    let count = crate::scripts::script_util::ordered_projectile_links(world, weapon).len();
+    if count == 0 {
+        return 0;
+    }
+    world
+        .borrow::<View<crate::runtime_props::RuntimePropSelectedAmmo>>()
+        .ok()
+        .and_then(|selected| selected.get(weapon).ok().map(|selected| selected.0))
+        .unwrap_or(0)
+        % count
+}
+
+/// Whether `item`'s class descends from any clip archetype the data authors a
+/// `Clip` relation to - "this is ammo", regardless of which gun it fits.
+///
+/// The physical insert gesture needs this separately from
+/// [`clip_projectile_index`]: an item that is not ammo at all must pass through
+/// the magazine zone in silence, while ammo the gun cannot take earns a
+/// refusal.
+pub(crate) fn is_ammo_clip(world: &World, item: EntityId) -> bool {
+    let Some(class_template_id) =
+        crate::scripts::script_util::entity_class_template_id(world, item)
+    else {
+        return false;
+    };
+    let (Ok(projectile_clips), Ok(hierarchy)) = (
+        world.borrow::<UniqueView<GlobalProjectileClips>>(),
+        world.borrow::<UniqueView<crate::mission::GlobalTemplateHierarchy>>(),
+    ) else {
+        return false;
+    };
+    projectile_clips
+        .clips
+        .values()
+        .flatten()
+        .any(|clip_template| hierarchy.is_or_descends_from(class_template_id, *clip_template))
+}
+
+/// Which of `weapon`'s ammo types the clip entity `clip` loads, as an index
+/// into its ordered projectile links. `None` when the weapon takes no such
+/// clip at all.
+///
+/// The CURRENTLY selected type is tested first, so a clip that fits more than
+/// one of a weapon's projectiles (a family archetype two ammo types both
+/// inherit) tops the loaded type off rather than silently swapping it.
+pub(crate) fn clip_projectile_index(
+    world: &World,
+    weapon: EntityId,
+    clip: EntityId,
+) -> Option<usize> {
+    let projectiles = crate::scripts::script_util::ordered_projectile_links(world, weapon);
+    if projectiles.is_empty() {
+        return None;
+    }
+    let class_template_id = crate::scripts::script_util::entity_class_template_id(world, clip)?;
+    let hierarchy = world
+        .borrow::<UniqueView<crate::mission::GlobalTemplateHierarchy>>()
+        .ok()?;
+    let selected = selected_ammo_index(world, weapon);
+    let order = std::iter::once(selected).chain((0..projectiles.len()).filter(|i| *i != selected));
+    order.into_iter().find(|index| {
+        clip_templates_for_projectile(world, projectiles[*index].0).is_some_and(|clip_templates| {
+            clip_templates.iter().any(|clip_template| {
+                hierarchy.is_or_descends_from(class_template_id, *clip_template)
+            })
+        })
+    })
+}
+
+/// How many rounds a clip entity still carries (0 for anything with no stack).
+pub(crate) fn clip_rounds(world: &World, clip: EntityId) -> i32 {
+    world
+        .borrow::<View<PropStackCount>>()
+        .ok()
+        .and_then(|stacks| stacks.get(clip).ok().map(|stack| stack.0))
+        .unwrap_or(0)
+}
+
+/// Move rounds from ONE clip entity the player is physically holding into
+/// `weapon`'s magazine - the physical VR reload's counterpart to
+/// [`load_from_reserve`], which draws from the backpack instead.
+///
+/// Only as many rounds as the magazine is missing move, so a fuller clip keeps
+/// its remainder and stays in the hand. A clip drained to zero is reported in
+/// `depleted_items` for the caller to destroy, exactly as a reserve stack is.
+pub(crate) fn load_from_held_clip(
+    world: &World,
+    weapon: EntityId,
+    clip: EntityId,
+    capacity: i32,
+) -> ReloadOutcome {
+    let current_ammo = world
+        .borrow::<View<PropGunState>>()
+        .ok()
+        .and_then(|states| states.get(weapon).ok().map(|state| state.ammo));
+    let Some(current_ammo) = current_ammo else {
+        return ReloadOutcome::default();
+    };
+    let rounds_needed = (capacity.max(0) - current_ammo.max(0)).max(0);
+    if rounds_needed == 0 {
+        return ReloadOutcome::default();
+    }
+
+    let mut outcome = ReloadOutcome::default();
+    {
+        let Ok(mut stacks) = world.borrow::<ViewMut<PropStackCount>>() else {
+            return outcome;
+        };
+        let Ok(stack) = (&mut stacks).get(clip) else {
+            return outcome;
+        };
+        let consumed = stack.0.min(rounds_needed).max(0);
+        if consumed == 0 {
+            return outcome;
+        }
+        stack.0 -= consumed;
+        outcome.rounds_loaded = consumed;
+        if stack.0 == 0 {
+            outcome.depleted_items.push(clip);
+        }
+    }
+
+    let mut states = world.borrow::<ViewMut<PropGunState>>().unwrap();
+    if let Ok(state) = (&mut states).get(weapon) {
+        state.ammo = (state.ammo.max(0) + outcome.rounds_loaded).min(capacity.max(0));
+    }
+    outcome
+}
+
+/// Enter/exit radii (world units) of a weapon's magazine zone - the volume a
+/// held clip is inserted by entering. One world unit is ~0.76 m, so this is a
+/// generous ~19 cm sphere around the weapon's magazine anchor
+/// (`vr_config::magazine_anchor_from_entity`), entered deliberately but not
+/// requiring the player to thread a needle in mid-air.
+pub(crate) const CLIP_INSERT_ENTER_RADIUS: f32 = 0.25;
+pub(crate) const CLIP_INSERT_EXIT_RADIUS: f32 = 0.35;
+
+/// Whether the magazine zone is engaged this frame, given whether it was
+/// engaged last frame. The two radii are deliberately different: a single
+/// threshold flickers on hand jitter right at the boundary, and every flicker
+/// is another insert attempt.
+pub(crate) fn clip_insert_zone_engaged(was_engaged: bool, distance: f32) -> bool {
+    if was_engaged {
+        distance <= CLIP_INSERT_EXIT_RADIUS
+    } else {
+        distance <= CLIP_INSERT_ENTER_RADIUS
+    }
 }
 
 /// The backpack's stackable items whose class descends from one of
@@ -135,6 +307,51 @@ fn compatible_reserve_items(world: &World, clip_templates: &[i32]) -> Vec<Entity
                 })
         })
         .collect()
+}
+
+/// A read-only offer shared by the pouch preview and atomic withdrawal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PouchClip {
+    pub reserve: EntityId,
+    pub template: i32,
+    pub rounds: i32,
+    pub stock: i32,
+}
+
+pub(crate) fn reserve_clip_for_pouch(world: &World, weapon: EntityId) -> Option<PouchClip> {
+    let templates = selected_clip_templates(world, weapon)?;
+    let reserve = compatible_reserve_items(world, &templates)
+        .into_iter()
+        .next()?;
+    let class = crate::scripts::script_util::entity_class_template_id(world, reserve)?;
+    let clips = world.borrow::<UniqueView<GlobalProjectileClips>>().ok()?;
+    let hierarchy = world
+        .borrow::<UniqueView<crate::mission::GlobalTemplateHierarchy>>()
+        .ok()?;
+    // Prefer the concrete clip's authored size (e.g. small six-round clip),
+    // then a compatible authored ancestor. Never convert to another ammo type.
+    let template = if clips.clip_sizes.contains_key(&class) {
+        class
+    } else {
+        *templates
+            .iter()
+            .filter(|t| hierarchy.is_or_descends_from(class, **t))
+            .min_by_key(|t| if **t == class { 0 } else { 1 })?
+    };
+    let stock = clip_rounds(world, reserve);
+    let rounds = clips
+        .clip_sizes
+        .get(&template)
+        .copied()
+        .unwrap_or(stock)
+        .max(1)
+        .min(stock);
+    (rounds > 0).then_some(PouchClip {
+        reserve,
+        template,
+        rounds,
+        stock,
+    })
 }
 
 /// Move matching reserve rounds from the backpack into `weapon`.
@@ -244,10 +461,13 @@ pub(crate) fn unload_to_reserve(world: &World, weapon: EntityId) -> UnloadOutcom
         .next();
 
     let Some(item) = destination else {
-        // The most-derived authored clip is the ammo type's canonical archetype.
+        let template = world
+            .borrow::<UniqueView<GlobalProjectileClips>>()
+            .map(|clips| mint_clip_template(&compatible_clip_templates, &clips.clip_sizes, loaded))
+            .unwrap_or(compatible_clip_templates[0]);
         return UnloadOutcome {
             rounds_unloaded: 0,
-            spawn_clip: Some((compatible_clip_templates[0], loaded)),
+            spawn_clip: Some((template, loaded)),
         };
     };
 
@@ -265,6 +485,144 @@ pub(crate) fn unload_to_reserve(world: &World, weapon: EntityId) -> UnloadOutcom
         rounds_unloaded: loaded,
         spawn_clip: None,
     }
+}
+
+/// A physical ejection is an offer until the caller successfully spawns it.
+pub(crate) fn world_clip_offer(world: &World, weapon: EntityId) -> Option<(i32, i32)> {
+    let rounds = world
+        .borrow::<View<PropGunState>>()
+        .ok()?
+        .get(weapon)
+        .ok()?
+        .ammo;
+    if rounds <= 0 {
+        return None;
+    }
+    let templates = selected_clip_templates(world, weapon)?;
+    let clips = world.borrow::<UniqueView<GlobalProjectileClips>>().ok()?;
+    Some((
+        mint_clip_template(&templates, &clips.clip_sizes, rounds),
+        rounds,
+    ))
+}
+
+/// Next stocked type fitting the same gun. The held clip determines the start,
+/// independently of what that gun currently has loaded.
+pub(crate) fn next_carried_clip(
+    world: &World,
+    weapon: EntityId,
+    held: EntityId,
+) -> Option<EntityId> {
+    let projectiles = crate::scripts::script_util::ordered_projectile_links(world, weapon)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect::<Vec<_>>();
+    next_carried_clip_in_family(world, held, &projectiles)
+}
+
+fn next_carried_clip_in_family(
+    world: &World,
+    held: EntityId,
+    projectiles: &[i32],
+) -> Option<EntityId> {
+    let class = crate::scripts::script_util::entity_class_template_id(world, held)?;
+    let hierarchy = world
+        .borrow::<UniqueView<crate::mission::GlobalTemplateHierarchy>>()
+        .ok()?;
+    let current = projectiles.iter().position(|projectile| {
+        clip_templates_for_projectile(world, *projectile).is_some_and(|templates| {
+            templates
+                .iter()
+                .any(|t| hierarchy.is_or_descends_from(class, *t))
+        })
+    })?;
+    for offset in 1..projectiles.len() {
+        let index = (current + offset) % projectiles.len();
+        let Some(templates) = clip_templates_for_projectile(world, projectiles[index]) else {
+            continue;
+        };
+        if let Some(item) = compatible_reserve_items(world, &templates)
+            .into_iter()
+            .find(|item| {
+                *item != held
+                    && crate::scripts::script_util::entity_class_template_id(world, *item)
+                        .is_some_and(|class| {
+                            !clip_templates_for_projectile(world, projectiles[current])
+                                .unwrap_or_default()
+                                .iter()
+                                .any(|t| hierarchy.is_or_descends_from(class, *t))
+                        })
+            })
+        {
+            return Some(item);
+        }
+    }
+    None
+}
+
+/// Ammo can be switched with no gun in hand or inventory. Infer its family
+/// from authored weapon projectile relations, never from arbitrary clip names.
+pub(crate) fn next_carried_clip_without_gun(
+    world: &World,
+    held: EntityId,
+    info: &SystemShock2EntityInfo,
+) -> Option<EntityId> {
+    let mut templates = info.template_to_links.iter().collect::<Vec<_>>();
+    templates.sort_by_key(|(id, _)| **id);
+    for (_, links) in templates {
+        for setting in 0..2 {
+            let mut projectiles = links
+                .to_links
+                .iter()
+                .filter_map(|link| match &link.link {
+                    Link::Projectile(options)
+                        if options.setting < 0 || options.setting == setting =>
+                    {
+                        Some((options.order, link.to_template_id))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            projectiles.sort_by_key(|(order, _)| *order);
+            let family = projectiles
+                .into_iter()
+                .map(|(_, id)| id)
+                .collect::<Vec<_>>();
+            if family.len() > 1
+                && let Some(next) = next_carried_clip_in_family(world, held, &family)
+            {
+                return Some(next);
+            }
+        }
+    }
+    None
+}
+
+/// The clip archetype to mint for `rounds` ejected rounds: the smallest
+/// authored box that holds them all, so the label matches the contents - an
+/// assault rifle's 30 rounds must not come back as a "Small Standard Clip"
+/// (issue #1171). When even the largest box cannot hold them, the largest is
+/// minted holding them all anyway: reserve stacks have no capacity ceiling in
+/// this port. The data's authored order breaks ties and stands in for
+/// archetypes with no authored size.
+fn mint_clip_template(clip_templates: &[i32], sizes: &HashMap<i32, i32>, rounds: i32) -> i32 {
+    let mut fitting: Option<(i32, i32)> = None;
+    let mut largest: Option<(i32, i32)> = None;
+    for &clip in clip_templates {
+        let Some(&size) = sizes.get(&clip) else {
+            continue;
+        };
+        if size >= rounds && fitting.is_none_or(|(_, best)| size < best) {
+            fitting = Some((clip, size));
+        }
+        if largest.is_none_or(|(_, best)| size > best) {
+            largest = Some((clip, size));
+        }
+    }
+    fitting
+        .or(largest)
+        .map(|(clip, _)| clip)
+        .unwrap_or(clip_templates[0])
 }
 
 /// Zero `weapon`'s magazine, once its rounds are safely somewhere else.
@@ -302,10 +660,97 @@ mod tests {
     const SMALL_PRISM: i32 = -41;
     const LARGE_PRISM: i32 = -44;
 
+    #[test]
+    fn pouch_offer_respects_selected_ammo_real_stock_and_authored_clip_size() {
+        let mut f = Fixture::new(0, 0);
+        assert_eq!(reserve_clip_for_pouch(&f.world, f.weapon), None);
+        let standard = f.reserve(STD_CLIP, 27);
+        let he = f.reserve(HE_CLIP, 4);
+        let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
+        assert_eq!(
+            (offer.reserve, offer.rounds, offer.stock),
+            (standard, 12, 27)
+        );
+        assert_eq!(
+            clip_rounds(&f.world, standard),
+            27,
+            "preview cannot debit stock"
+        );
+        f.world.add_component(f.weapon, RuntimePropSelectedAmmo(1));
+        let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
+        assert_eq!((offer.reserve, offer.rounds), (he, 4));
+    }
+
+    #[test]
+    fn pouch_offer_uses_small_clip_canonical_size_after_a_mission_remap() {
+        let mut f = Fixture::new(0, 0);
+        let clip = f.reserve_with_canonical_template(EARTH_SMALL_STD_CLIP, SMALL_STD_CLIP, 17);
+        let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
+        assert_eq!(
+            (offer.reserve, offer.template, offer.rounds),
+            (clip, SMALL_STD_CLIP, 6)
+        );
+    }
+
     struct Fixture {
         world: World,
         weapon: EntityId,
         inventory: EntityId,
+    }
+
+    #[test]
+    fn physical_ejection_offers_exact_rounds_without_touching_reserve() {
+        let mut f = Fixture::new(5, 1);
+        let reserve = f.reserve(HE_CLIP, 9);
+        assert_eq!(world_clip_offer(&f.world, f.weapon), Some((HE_CLIP, 5)));
+        assert_eq!(f.ammo(), 5);
+        assert_eq!(f.rounds(reserve), 9);
+        empty_magazine(&f.world, f.weapon);
+        assert_eq!(world_clip_offer(&f.world, f.weapon), None);
+    }
+
+    #[test]
+    fn ammo_family_without_a_gun_includes_all_setting_links() {
+        let mut f = Fixture::new(0, 0);
+        let held = f.held_clip(HE_CLIP, 3);
+        let reserve = f.reserve(STD_CLIP, 7);
+        let mut info = SystemShock2EntityInfo::empty();
+        info.template_to_links.insert(
+            PISTOL,
+            dark::properties::TemplateLinks {
+                to_links: [STD_PROJECTILE, HE_PROJECTILE]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(order, projectile)| dark::properties::ToTemplateLink {
+                        to_template_id: projectile,
+                        link: Link::Projectile(ProjectileOptions {
+                            order: order as i32,
+                            setting: -1,
+                        }),
+                    })
+                    .collect(),
+            },
+        );
+        assert_eq!(
+            next_carried_clip_without_gun(&f.world, held, &info),
+            Some(reserve)
+        );
+        assert_eq!(f.rounds(held), 3);
+        assert_eq!(f.rounds(reserve), 7);
+    }
+
+    #[test]
+    fn held_ammo_cycles_real_stock_relative_to_clip_not_loaded_type() {
+        let mut f = Fixture::new(5, 1);
+        let held = f.held_clip(STD_CLIP, 3);
+        f.reserve(STD_CLIP, 17);
+        f.reserve(HE_CLIP, 0);
+        assert_eq!(next_carried_clip(&f.world, f.weapon, held), None);
+        let alternate = f.reserve(HE_CLIP, 7);
+        assert_eq!(next_carried_clip(&f.world, f.weapon, held), Some(alternate));
+        assert_eq!(f.rounds(held), 3);
+        assert_eq!(f.rounds(alternate), 7);
+        assert_eq!(f.ammo(), 5);
     }
 
     impl Fixture {
@@ -319,7 +764,7 @@ mod tests {
                 },
                 PropGunState {
                     ammo,
-                    condition: 1.0,
+                    condition: 100.0,
                     setting: 0,
                     modification: 0,
                     silence_value: 0.0,
@@ -354,12 +799,22 @@ mod tests {
                 right_hand_entity_id: None,
                 inventory_entity_id: inventory,
             });
-            world.add_unique(GlobalProjectileClips(HashMap::from([
-                (STD_PROJECTILE, vec![STD_CLIP, SMALL_STD_CLIP]),
-                (ASSAULT_STD_PROJECTILE, vec![SMALL_STD_CLIP, STD_CLIP]),
-                (HE_PROJECTILE, vec![HE_CLIP]),
-                (PRISM_PROJECTILE, vec![SMALL_PRISM, LARGE_PRISM]),
-            ])));
+            world.add_unique(GlobalProjectileClips {
+                clips: HashMap::from([
+                    (STD_PROJECTILE, vec![STD_CLIP, SMALL_STD_CLIP]),
+                    (ASSAULT_STD_PROJECTILE, vec![SMALL_STD_CLIP, STD_CLIP]),
+                    (HE_PROJECTILE, vec![HE_CLIP]),
+                    (PRISM_PROJECTILE, vec![SMALL_PRISM, LARGE_PRISM]),
+                ]),
+                // The shipped archetypes' authored sizes.
+                clip_sizes: HashMap::from([
+                    (STD_CLIP, 12),
+                    (SMALL_STD_CLIP, 6),
+                    (HE_CLIP, 12),
+                    (SMALL_PRISM, 10),
+                    (LARGE_PRISM, 20),
+                ]),
+            });
             world.add_unique(GlobalTemplateHierarchy(HashMap::from([
                 (SMALL_STD_CLIP, vec![STD_CLIP]),
                 (EARTH_SMALL_STD_CLIP, vec![SMALL_STD_CLIP]),
@@ -412,6 +867,14 @@ mod tests {
                     to_template_id: concrete_template_id,
                 });
             item
+        }
+
+        /// A clip the player is physically holding: an ordinary stackable
+        /// entity with NO `Contains` link, since a grabbed item has left the
+        /// backpack.
+        fn held_clip(&mut self, template_id: i32, rounds: i32) -> EntityId {
+            self.world
+                .add_entity((PropTemplateId { template_id }, PropStackCount(rounds)))
         }
 
         fn set_standard_projectile(&mut self, template_id: i32) {
@@ -683,8 +1146,9 @@ mod tests {
             UnloadOutcome {
                 // Nothing has moved yet - this is a request, not a completed
                 // unload, so the rounds are still counted in the magazine.
+                // 5 rounds fit the small box, so that is the one requested.
                 rounds_unloaded: 0,
-                spawn_clip: Some((STD_CLIP, 5)),
+                spawn_clip: Some((SMALL_STD_CLIP, 5)),
             }
         );
         assert_eq!(fixture.rounds(mismatched), 6, "HE reserve is untouched");
@@ -700,11 +1164,98 @@ mod tests {
 
         let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
 
-        assert_eq!(outcome.spawn_clip, Some((STD_CLIP, 5)));
+        assert_eq!(outcome.spawn_clip, Some((SMALL_STD_CLIP, 5)));
         assert_eq!(fixture.ammo(), 5, "still loaded until the clip is carried");
 
         empty_magazine(&fixture.world, fixture.weapon);
         assert_eq!(fixture.ammo(), 0);
+    }
+
+    #[test]
+    fn ejecting_more_rounds_than_any_box_holds_mints_the_largest_archetype() {
+        // Issue #1171's headline case: the assault rifle's data prefers the
+        // SMALL standard clip, but 30 rounds fit neither the 6- nor the
+        // 12-round box, so the largest must absorb them rather than labeling
+        // 30 rounds a "Small Standard Clip".
+        let mut fixture = Fixture::new(30, 0);
+        fixture.set_standard_projectile(ASSAULT_STD_PROJECTILE);
+
+        let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
+
+        assert_eq!(outcome.spawn_clip, Some((STD_CLIP, 30)));
+    }
+
+    #[test]
+    fn ejecting_exactly_a_full_box_mints_that_box() {
+        // 12 rounds are exactly a full Standard Clip, even for the assault
+        // rifle whose authored order prefers the small one.
+        let mut fixture = Fixture::new(12, 0);
+        fixture.set_standard_projectile(ASSAULT_STD_PROJECTILE);
+
+        let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
+
+        assert_eq!(outcome.spawn_clip, Some((STD_CLIP, 12)));
+    }
+
+    #[test]
+    fn ejecting_fewer_rounds_than_the_smallest_box_mints_the_smallest() {
+        // 6 rounds fit the Small Standard Clip exactly, even for the pistol
+        // whose authored order prefers the full-size one.
+        let fixture = Fixture::new(6, 0);
+
+        let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
+
+        assert_eq!(outcome.spawn_clip, Some((SMALL_STD_CLIP, 6)));
+    }
+
+    #[test]
+    fn minting_without_authored_sizes_falls_back_to_the_authored_order() {
+        assert_eq!(
+            mint_clip_template(&[SMALL_STD_CLIP, STD_CLIP], &HashMap::new(), 7),
+            SMALL_STD_CLIP
+        );
+    }
+
+    #[test]
+    fn from_entity_info_records_each_clip_archetypes_authored_size() {
+        use dark::properties::ToTemplateLink;
+        use std::sync::Arc;
+
+        let mut entity_info = SystemShock2EntityInfo::empty();
+        entity_info
+            .entity_to_properties
+            .insert(STD_PROJECTILE, vec![]);
+        entity_info
+            .entity_to_properties
+            .insert(STD_CLIP, vec![Arc::new(Box::new(PropStackCount(12)))]);
+        entity_info
+            .entity_to_properties
+            .insert(SMALL_STD_CLIP, vec![Arc::new(Box::new(PropStackCount(6)))]);
+        entity_info.template_to_links.insert(
+            STD_PROJECTILE,
+            dark::properties::TemplateLinks {
+                to_links: vec![
+                    ToTemplateLink {
+                        link: Link::Clip,
+                        to_template_id: SMALL_STD_CLIP,
+                    },
+                    ToTemplateLink {
+                        link: Link::Clip,
+                        to_template_id: STD_CLIP,
+                    },
+                ],
+            },
+        );
+
+        let clips = GlobalProjectileClips::from_entity_info(&entity_info);
+
+        assert_eq!(
+            clips.clips.get(&STD_PROJECTILE),
+            Some(&vec![SMALL_STD_CLIP, STD_CLIP]),
+            "the authored order is preserved - the mint's tie-break and fallback"
+        );
+        assert_eq!(clips.clip_sizes.get(&STD_CLIP), Some(&12));
+        assert_eq!(clips.clip_sizes.get(&SMALL_STD_CLIP), Some(&6));
     }
 
     #[test]
@@ -750,6 +1301,132 @@ mod tests {
         fixture.set_standard_projectile(CLIPLESS_PROJECTILE);
 
         assert!(!can_cycle_ammo(&fixture.world, fixture.weapon));
+    }
+
+    // --- the physical VR insert gesture (a clip carried to the magazine) ---
+
+    #[test]
+    fn a_held_clip_of_the_selected_type_loads_that_type() {
+        let mut fixture = Fixture::new(0, 0);
+        let clip = fixture.held_clip(EARTH_SMALL_STD_CLIP, 6);
+
+        assert_eq!(
+            clip_projectile_index(&fixture.world, fixture.weapon, clip),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn a_held_clip_of_another_carried_type_names_that_types_projectile() {
+        // Standard is selected and HE is what the hand brought: the gesture has
+        // to name index 1 so the caller ejects and swaps to it.
+        let mut fixture = Fixture::new(0, 0);
+        let clip = fixture.held_clip(HE_CLIP, 4);
+
+        assert_eq!(
+            clip_projectile_index(&fixture.world, fixture.weapon, clip),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn a_clip_this_weapon_does_not_take_has_no_projectile_index() {
+        // Real ammo (a prism), but for a gun the pistol's projectiles never
+        // link - the refusal case, as distinct from carrying a medkit past.
+        let mut fixture = Fixture::new(0, 0);
+        let clip = fixture.held_clip(SMALL_PRISM, 10);
+
+        assert!(is_ammo_clip(&fixture.world, clip));
+        assert_eq!(
+            clip_projectile_index(&fixture.world, fixture.weapon, clip),
+            None
+        );
+    }
+
+    #[test]
+    fn an_item_that_is_not_ammo_at_all_is_not_a_clip() {
+        const A_MEDKIT: i32 = -9999;
+        let mut fixture = Fixture::new(0, 0);
+        let item = fixture.held_clip(A_MEDKIT, 1);
+
+        assert!(!is_ammo_clip(&fixture.world, item));
+    }
+
+    #[test]
+    fn inserting_a_held_clip_fills_the_magazine_and_empties_the_clip() {
+        let mut fixture = Fixture::new(0, 0);
+        let clip = fixture.held_clip(EARTH_SMALL_STD_CLIP, 12);
+
+        let outcome = load_from_held_clip(&fixture.world, fixture.weapon, clip, 12);
+
+        assert_eq!(fixture.ammo(), 12);
+        assert_eq!(fixture.rounds(clip), 0);
+        assert_eq!(outcome.rounds_loaded, 12);
+        assert_eq!(
+            outcome.depleted_items,
+            vec![clip],
+            "a spent clip is the caller's to destroy - it leaves the hand with it"
+        );
+    }
+
+    #[test]
+    fn a_fuller_clip_keeps_its_remainder_in_the_hand() {
+        let mut fixture = Fixture::new(0, 0);
+        let clip = fixture.held_clip(STD_CLIP, 20);
+
+        let outcome = load_from_held_clip(&fixture.world, fixture.weapon, clip, 12);
+
+        assert_eq!(fixture.ammo(), 12);
+        assert_eq!(fixture.rounds(clip), 8, "the remainder stays on the clip");
+        assert_eq!(outcome.rounds_loaded, 12);
+        assert!(
+            outcome.depleted_items.is_empty(),
+            "a clip with rounds left is not destroyed"
+        );
+    }
+
+    #[test]
+    fn a_partly_loaded_magazine_is_topped_off_from_the_held_clip() {
+        let mut fixture = Fixture::new(7, 0);
+        let clip = fixture.held_clip(EARTH_SMALL_STD_CLIP, 6);
+
+        let outcome = load_from_held_clip(&fixture.world, fixture.weapon, clip, 12);
+
+        assert_eq!(fixture.ammo(), 12);
+        assert_eq!(fixture.rounds(clip), 1);
+        assert_eq!(outcome.rounds_loaded, 5);
+    }
+
+    #[test]
+    fn inserting_into_a_full_magazine_moves_nothing() {
+        // The rounds must not be silently burned: a full gun simply refuses the
+        // clip, and the player still carries it.
+        let mut fixture = Fixture::new(12, 0);
+        let clip = fixture.held_clip(EARTH_SMALL_STD_CLIP, 6);
+
+        let outcome = load_from_held_clip(&fixture.world, fixture.weapon, clip, 12);
+
+        assert_eq!(outcome, ReloadOutcome::default());
+        assert_eq!(fixture.ammo(), 12);
+        assert_eq!(fixture.rounds(clip), 6);
+    }
+
+    #[test]
+    fn the_magazine_zone_needs_a_closer_approach_than_it_needs_to_hold() {
+        // Hysteresis: without it, hand jitter right at the boundary re-enters
+        // the zone every few frames, and every entry is another insert.
+        let between = (CLIP_INSERT_ENTER_RADIUS + CLIP_INSERT_EXIT_RADIUS) / 2.0;
+
+        assert!(!clip_insert_zone_engaged(false, between));
+        assert!(clip_insert_zone_engaged(true, between));
+        assert!(clip_insert_zone_engaged(
+            false,
+            CLIP_INSERT_ENTER_RADIUS - 0.01
+        ));
+        assert!(!clip_insert_zone_engaged(
+            true,
+            CLIP_INSERT_EXIT_RADIUS + 0.01
+        ));
     }
 
     #[test]

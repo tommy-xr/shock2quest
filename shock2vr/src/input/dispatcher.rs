@@ -1,5 +1,7 @@
+use crate::hand_buttons::HandButton;
 use crate::input_context::InputContext;
 use crate::scripts::{Effect, GlobalEffect};
+use crate::vr_config::Handedness;
 use dark::properties::AIAlertLevel;
 
 use super::{InputAction, InputActionState};
@@ -42,6 +44,30 @@ const CARRIED_WEAPON_ACTIONS: &[(InputAction, i32)] = &[
     (InputAction::EquipViralProliferator, -29),
     (InputAction::EquipWormLauncher, -27),
     (InputAction::EquipPsiAmp, -247),
+];
+
+/// The raw per-hand face buttons, in the terms `crate::hand_buttons` resolves.
+const HAND_BUTTON_ACTIONS: &[(InputAction, Handedness, HandButton)] = &[
+    (
+        InputAction::LeftHandLowerButton,
+        Handedness::Left,
+        HandButton::Lower,
+    ),
+    (
+        InputAction::LeftHandUpperButton,
+        Handedness::Left,
+        HandButton::Upper,
+    ),
+    (
+        InputAction::RightHandLowerButton,
+        Handedness::Right,
+        HandButton::Lower,
+    ),
+    (
+        InputAction::RightHandUpperButton,
+        Handedness::Right,
+        HandButton::Upper,
+    ),
 ];
 
 pub struct ActionDispatcher;
@@ -97,13 +123,24 @@ impl ActionDispatcher {
             }
         }
         if state.just_triggered(InputAction::CycleAmmo) {
-            effects.push(Effect::CycleAmmo);
+            effects.push(Effect::CycleAmmo { weapon: None });
+        }
+        if state.just_triggered(InputAction::CycleGunSetting) {
+            // Hand-agnostic: the flat key and HTTP mean "the wielded weapon".
+            // A per-hand press arrives as `Effect::HandButton` instead.
+            effects.push(Effect::CycleGunSetting { hand: None });
         }
         if state.just_triggered(InputAction::Reload) {
-            effects.push(Effect::ReloadWeapon);
+            effects.push(Effect::ReloadWeapon { weapon: None });
         }
         if state.just_triggered(InputAction::CyclePsiPower) {
-            effects.push(Effect::CyclePsiPower);
+            effects.push(Effect::StepPsiSelection {
+                axis: crate::psi::PsiSelectionAxis::Any,
+                forward: true,
+            });
+        }
+        if state.just_triggered(InputAction::SelectPsiPower) {
+            effects.push(Effect::OpenPsiPowers);
         }
         if state.just_triggered(InputAction::DebugReloadLevel) {
             effects.push(Effect::GlobalEffect(GlobalEffect::TestReload));
@@ -122,6 +159,11 @@ impl ActionDispatcher {
                 pin: false,
             });
         }
+        if state.just_triggered(InputAction::DebugStartHordeWave) {
+            effects.push(Effect::StartHordeWave {
+                wave: crate::dev_params::get(crate::dev_params::HORDE_START_WAVE) as u32,
+            });
+        }
         if state.just_triggered(InputAction::DebugForceChase) {
             // Pinned: never decays, and every AI keeps hunting the player's
             // live position until DebugCalmAll clears the pin
@@ -133,14 +175,33 @@ impl ActionDispatcher {
         if state.just_triggered(InputAction::ToggleUseMode) {
             effects.push(Effect::ToggleUseMode);
         }
+        if state.just_triggered(InputAction::EjectClip) {
+            // Hand-agnostic: the flat key and HTTP mean "the wielded weapon".
+            // A per-hand press arrives as `Effect::HandButton` instead.
+            effects.push(Effect::EjectClip { hand: None });
+        }
         if state.just_triggered(InputAction::ToggleMap) {
             effects.push(Effect::ToggleMap);
         }
         if state.just_triggered(InputAction::ReadLastUnreadLog) {
-            effects.push(Effect::ReadLastUnreadLog {
-                head_rotation: input_context.head.rotation,
-            });
+            effects.push(Effect::ReadLastUnreadLog);
         }
+        if state.just_triggered(InputAction::Jump) {
+            effects.push(Effect::Jump);
+        }
+        // The face buttons are forwarded RAW, hand and position intact: what a
+        // press means depends on what that hand is holding, which only the
+        // mission can see. This dispatcher stays non-contextual; the table
+        // lives in `crate::hand_buttons`.
+        for &(action, hand, button) in HAND_BUTTON_ACTIONS {
+            if state.just_triggered(action) {
+                effects.push(Effect::HandButton { hand, button });
+            }
+        }
+        // `InputAction::MenuButton` deliberately produces no effect either:
+        // it is raw, and `Game` splits it into a short press (the interface)
+        // and a long one (the pause menu) before dispatching.
+        //
         // `InputAction::TogglePauseMenu` deliberately produces no effect: the
         // pause overlay is owned by `Game`, which reads the action directly
         // before dispatching. Routing it through the scene would make it
@@ -162,20 +223,13 @@ mod tests {
     }
 
     #[test]
-    fn audio_log_reader_carries_the_current_head_rotation() {
-        use cgmath::{Deg, Rotation3};
-
+    fn audio_log_reader_action_maps_to_the_reader_effect() {
         let mut state = InputActionState::new();
         state.trigger(InputAction::ReadLastUnreadLog);
-        let mut input = InputContext::default();
-        input.head.rotation = cgmath::Quaternion::from_angle_y(Deg(37.0));
 
-        let effects = ActionDispatcher::dispatch(&state, &input);
+        let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
 
-        assert!(matches!(
-            effects.as_slice(),
-            [Effect::ReadLastUnreadLog { head_rotation }] if *head_rotation == input.head.rotation
-        ));
+        assert!(matches!(effects.as_slice(), [Effect::ReadLastUnreadLog]));
     }
 
     #[test]

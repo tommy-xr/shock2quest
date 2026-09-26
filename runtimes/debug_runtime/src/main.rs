@@ -92,6 +92,10 @@ struct Args {
     #[arg(short, long, default_value = "main_menu")]
     mission: String,
 
+    /// Difficulty of a fresh campaign (saved campaigns retain their selection).
+    #[arg(long, default_value = "normal")]
+    difficulty: dark::gamesys::Difficulty,
+
     /// Port to bind the HTTP server to. Bound exactly as given: a taken port
     /// is a hard, loud failure rather than a silent move to another port,
     /// because a caller that then talks to the old port would be driving
@@ -110,7 +114,7 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_IDLE_TIMEOUT_SECS)]
     idle_timeout_secs: u64,
 
-    /// Enable debug physics rendering
+    /// Start with physics wireframes on; toggle live in Developer > Visualizations.
     #[arg(long)]
     debug_physics: bool,
 
@@ -248,6 +252,10 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
+    // Seed before any HTTP server or game starts: later live writes must win.
+    if args.debug_physics {
+        shock2vr::dev_params::set(shock2vr::dev_params::DEBUG_PHYSICS, 1.0);
+    }
     let _ = INSTANCE_ID.set(args.instance_id.clone());
 
     info!(
@@ -400,11 +408,16 @@ async fn start_http_server(
         .route("/v1/player/give", axum::routing::post(give_item))
         .route("/v1/player/spawn-item", axum::routing::post(spawn_item))
         .route("/v1/player/stats", axum::routing::post(set_player_stats))
+        .route(
+            "/v1/player/stat-modifier",
+            axum::routing::post(apply_stat_modifier),
+        )
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/scene", get(list_scene_objects))
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
         .route("/v1/physics/joints", get(list_physics_joints))
+        .route("/v1/physics/grip", get(climb_grip))
         .route(
             "/v1/physics/bodies/:id/impulse",
             axum::routing::post(apply_body_impulse),
@@ -419,6 +432,7 @@ async fn start_http_server(
         )
         .route("/v1/pathfinding/stats", get(pathfinding_stats))
         .route("/v1/ai/paths", get(ai_paths))
+        .route("/v1/pathfinding/route", get(pathfinding_route))
         .route(
             "/v1/input/action",
             axum::routing::post(trigger_input_action),
@@ -427,6 +441,7 @@ async fn start_http_server(
         .route("/v1/dev-params", get(list_dev_params))
         .route("/v1/dev-params", axum::routing::post(set_dev_param))
         .route("/v1/audio/recent", get(get_recent_audio))
+        .route("/v1/audio/loops", get(get_audio_loops))
         .route("/v1/messages/recent", get(get_recent_messages))
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
         .with_state(command_tx)
@@ -490,7 +505,12 @@ async fn start_http_server(
     info!(
         "  POST /v1/dev-params       - Set a dev param {{key, value}} (clamped + snapped, live next frame)"
     );
-    info!("  GET  /v1/audio/recent     - Recently played sounds (sample, tags, duration, source)");
+    info!(
+        "  GET  /v1/audio/recent     - Recently played sounds (sample, tags, duration, source); ?sample= / ?playing=true filter"
+    );
+    info!(
+        "  GET  /v1/audio/loops      - Live looping sinks (sample, handle, owner, elapsed wall time)"
+    );
     info!("  GET  /v1/messages/recent  - Recently delivered script messages (to/payload/from)");
     info!("  POST /v1/screenshot       - Capture the current framebuffer");
     info!("");
@@ -582,11 +602,11 @@ fn run_game_blocking(
 
     let options = GameOptions {
         mission: mission.clone(),
+        difficulty: args.difficulty,
         presentation_mode,
         spawn_location,
         save_file: args.save_file,
         debug_draw: args.debug_draw,
-        debug_physics: args.debug_physics,
         debug_portals: args.debug_portals,
         debug_show_ids: args.debug_show_ids,
         debug_skeletons: args.debug_skeletons,
@@ -967,7 +987,7 @@ fn run_game_blocking(
         // Add hand spotlights
         let hand_spotlights = game.get_hand_spotlights();
         for spotlight in hand_spotlights {
-            scene_for_render.lights_mut().add_spotlight(spotlight);
+            scene_for_render.lights_mut().add_light(spotlight);
         }
 
         // Actually render the scene
@@ -1011,7 +1031,8 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
         .iter()
         .map(|obj| {
             let tag = obj.debug_tag();
-            let translation = obj.get_transform().w;
+            let transform = obj.get_transform();
+            let translation = transform.w;
             let render_layer = obj.render_layer();
             let first_in_layer = seen_layers.insert(render_layer);
             commands::SceneObjectSummary {
@@ -1020,12 +1041,25 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
                 model: tag.and_then(|t| t.model.clone()),
                 source: tag.and_then(|t| t.source.clone()),
                 position: [translation.x, translation.y, translation.z],
+                scale: [
+                    transform.x.truncate().magnitude(),
+                    transform.y.truncate().magnitude(),
+                    transform.z.truncate().magnitude(),
+                ],
                 transparency: obj.effective_transparency(),
                 depth_write: obj.depth_write,
                 depth_bias: obj.depth_bias(),
                 render_layer: render_layer.as_str().to_owned(),
                 clear_depth: render_layer.clears_depth() && first_in_layer,
                 backface_culling: obj.backface_culling().map(|w| format!("{w:?}")),
+                lighting: obj.lights().map(|lights| {
+                    let position = cgmath::vec3(translation.x, translation.y, translation.z);
+                    commands::ObjectLightingSummary {
+                        light_count: lights.active_count(),
+                        received: shock2vr::object_lighting::received_light(lights, position),
+                        ambient: [lights.ambient.x, lights.ambient.y, lights.ambient.z],
+                    }
+                }),
             }
         })
         .collect()
@@ -1267,11 +1301,10 @@ fn process_command(
         }
         RuntimeCommand::LoadGame { file, reply } => {
             tracing::info!("Loading game from '{}'", file);
-            // Existence is pre-checked in the handler, but a file that exists yet
-            // is truncated / not UTF-8 / an incompatible save schema still panics
-            // inside SaveData::read. Contain it so a corrupt save returns an error
-            // rather than bricking the game-loop thread. load_from_file only swaps
-            // `active_game_scene` as its final step (after all fallible reads), so
+            // Truncated, non-UTF-8 and schema-incompatible saves return a normal
+            // load error. Keep this outer guard for an unexpected panic deeper in
+            // mission reconstruction rather than bricking the game-loop thread.
+            // load_from_file only swaps `active_game_scene` as its final step, so
             // a caught panic leaves the previously-active scene intact.
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 game.load_game(file.clone())
@@ -1330,22 +1363,36 @@ fn process_command(
                         mode: ui.mode,
                         active_panel: ui.active_panel,
                         strip: ui.strip,
+                        name_strip: ui.name_strip,
                         cursor: ui.cursor,
-                        ammo_cycle: ui.ammo_cycle,
+                        readout: ui.readout,
+                        readout_elements: ui.readout_elements,
+                        utilities: ui.utilities,
                         pointer: ui.pointer,
                         panel_pose: ui.panel_pose,
                         debrief_text: debrief_text.clone(),
+                        scanner_pose: ui.scanner_pose,
+                        messages: ui.messages,
+                        banner: ui.banner,
+                        security_alarm: ui.security_alarm,
                     }
                 })
                 .unwrap_or(commands::UiStateResult {
                     mode: "shooter".to_string(),
                     active_panel: None,
                     strip: None,
+                    name_strip: None,
                     cursor: None,
-                    ammo_cycle: None,
+                    readout: Vec::new(),
+                    readout_elements: Vec::new(),
+                    utilities: Vec::new(),
                     pointer: None,
                     panel_pose: None,
                     debrief_text,
+                    scanner_pose: None,
+                    messages: Vec::new(),
+                    banner: None,
+                    security_alarm: None,
                 });
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send ui state - receiver dropped");
@@ -1375,9 +1422,13 @@ fn process_command(
             }
         }
         RuntimeCommand::SetQuestBit { name, value, reply } => {
-            let result = match game.debug_scene_mut() {
-                Some(scene) => scene.set_quest_bit(&name, &value),
-                None => Err("no debuggable scene available".to_string()),
+            let result = if name.eq_ignore_ascii_case("difficulty") {
+                Err("difficulty is fixed when the campaign starts".to_string())
+            } else {
+                match game.debug_scene_mut() {
+                    Some(scene) => scene.set_quest_bit(&name, &value),
+                    None => Err("no debuggable scene available".to_string()),
+                }
             };
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send set-quest-bit result - receiver dropped");
@@ -1451,6 +1502,13 @@ fn process_command(
                 tracing::warn!("Failed to send camera state - receiver dropped");
             }
         }
+        RuntimeCommand::GetAudioLoops(reply) => {
+            let loops: Vec<_> = game.active_audio_loops().into_iter().map(|entry| json!({
+                "handle": entry.handle, "sample": entry.sample, "owner": entry.owner,
+                "entity_id": entry.source.map(|id| id.inner()), "elapsed_secs": entry.elapsed_secs,
+            })).collect();
+            let _ = reply.send(json!({ "loops": loops }));
+        }
         RuntimeCommand::SetCameraState { request, reply } => {
             let result = apply_camera_request(game, current_input, &request)
                 .map(|()| camera_snapshot(game, current_input));
@@ -1479,6 +1537,13 @@ fn process_command(
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send spawn-item result - receiver dropped");
             }
+        }
+        RuntimeCommand::ApplyStatModifier { request, reply } => {
+            let result = match game.debug_scene_mut() {
+                Some(scene) => scene.apply_stat_modifier(&request),
+                None => Err("no debuggable scene available".to_string()),
+            };
+            let _ = reply.send(result);
         }
         RuntimeCommand::SetPlayerStats { request, reply } => {
             let result = match game.debug_scene_mut() {
@@ -1515,13 +1580,26 @@ fn process_command(
                 tracing::warn!("Failed to send pathfinding test result - receiver dropped");
             }
         }
-        RuntimeCommand::TriggerAction(action, reply) => {
-            action_state.trigger(action);
-            // Single-shot semantics: don't leave the action held
-            action_state.release(action);
+        RuntimeCommand::TriggerAction(action, hold, reply) => {
+            let message = match hold {
+                // Single-shot semantics: don't leave the action held.
+                None => {
+                    action_state.trigger(action);
+                    action_state.release(action);
+                    format!("Triggered action '{}' - applies on next update", action)
+                }
+                Some(true) => {
+                    action_state.trigger(action);
+                    format!("Holding action '{}' until it is released", action)
+                }
+                Some(false) => {
+                    action_state.release(action);
+                    format!("Released action '{}'", action)
+                }
+            };
             let result = CommandResult {
                 success: true,
-                message: format!("Triggered action '{}' - applies on next update", action),
+                message,
                 data: None,
             };
             if let Err(_) = reply.send(result) {
@@ -1560,6 +1638,14 @@ fn process_command(
                 .unwrap_or_default();
             if reply.send(paths).is_err() {
                 tracing::warn!("Failed to send AI paths - receiver dropped");
+            }
+        }
+        RuntimeCommand::GetPathfindingRoute { from, to, reply } => {
+            let route = game
+                .debug_scene()
+                .and_then(|debug_scene| debug_scene.pathfinding_route(from, to));
+            if reply.send(route).is_err() {
+                tracing::warn!("Failed to send pathfinding route - receiver dropped");
             }
         }
         RuntimeCommand::ListEntities {
@@ -1655,6 +1741,8 @@ fn process_command(
                                 position: point.position,
                             })
                             .collect(),
+                        selection_bounds: detail.selection_bounds,
+                        magazine_anchor: detail.magazine_anchor,
                     })
             } else {
                 None
@@ -1787,19 +1875,7 @@ fn process_command(
             let objects = matched
                 .into_iter()
                 .take(limit.unwrap_or(usize::MAX))
-                .map(|o| commands::SceneObjectSummary {
-                    entity_id: o.entity_id,
-                    name: o.name.clone(),
-                    model: o.model.clone(),
-                    source: o.source.clone(),
-                    position: o.position,
-                    transparency: o.transparency,
-                    depth_write: o.depth_write,
-                    depth_bias: o.depth_bias,
-                    render_layer: o.render_layer.clone(),
-                    clear_depth: o.clear_depth,
-                    backface_culling: o.backface_culling.clone(),
-                })
+                .cloned()
                 .collect();
             let result = commands::SceneListResult {
                 objects,
@@ -1837,6 +1913,7 @@ fn process_command(
                         is_enabled: detail.is_enabled,
                         is_sleeping: detail.is_sleeping,
                         contact_count: detail.contact_count,
+                        contacts: detail.contacts,
                     })
             } else {
                 None
@@ -1921,6 +1998,32 @@ fn process_command(
                 .unwrap_or_default();
             if let Err(_) = reply.send(commands::PhysicsJointsResult { joints }) {
                 tracing::warn!("Failed to send physics joints - receiver dropped");
+            }
+        }
+        RuntimeCommand::ClimbGrip {
+            point,
+            radius,
+            feet_y,
+            reply,
+        } => {
+            let grip = game
+                .debug_scene()
+                .and_then(|scene| {
+                    scene.climb_grip(
+                        cgmath::Vector3::new(point[0], point[1], point[2]),
+                        radius,
+                        feet_y,
+                    )
+                })
+                .map(|grip| commands::ClimbGripEntry {
+                    kind: grip.kind.to_string(),
+                    entity_id: grip.entity_id,
+                    entity_name: grip.entity_name,
+                    point: grip.point,
+                    normal: grip.normal,
+                });
+            if reply.send(commands::ClimbGripResult { grip }).is_err() {
+                tracing::warn!("Failed to send climb grip - receiver dropped");
             }
         }
         RuntimeCommand::ApplyBodyImpulse {
@@ -2018,6 +2121,7 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
         right_hand: hand(&input.right_hand),
         crouch: input.crouch,
         jump: input.jump,
+        lean: input.lean,
     }
 }
 
@@ -2165,7 +2269,14 @@ fn apply_camera_request(
         );
     }
 
-    let (head_offset, head_rotation) = composed_head(game, input);
+    let (tracked_offset, tracked_rotation) = tracked_head(game, input);
+    let detached_head = game.resolve_free_camera(
+        vec3(0.0, 0.0, 0.0),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        tracked_offset,
+        tracked_rotation,
+    );
+    let (head_offset, head_rotation) = (detached_head.head_offset, detached_head.head_rotation);
     // Patch semantics are against the *eye* pose, which is the pose the caller
     // named last time - not the compensated one stored underneath.
     let current_eye = game
@@ -2324,6 +2435,7 @@ fn capture_frame_snapshot(
             // held/wielded entities), or zeros when the scene has no player.
             let state = game.player_state();
             PlayerInfo {
+                difficulty: state.as_ref().map(|s| s.difficulty),
                 entity_id: state.as_ref().map(|s| s.entity_id),
                 inventory_entity_id: state.as_ref().map(|s| s.inventory_entity_id),
                 position: state
@@ -2357,6 +2469,12 @@ fn capture_frame_snapshot(
                 reload_pitch_deg: state.as_ref().map(|s| s.reload_pitch_deg).unwrap_or(0.0),
                 reload_progress: state.as_ref().map(|s| s.reload_progress).unwrap_or(0.0),
                 wielded_ammo_type: state.as_ref().and_then(|s| s.wielded_ammo_type.clone()),
+                wielded_gun_setting: state.as_ref().and_then(|s| s.wielded_gun_setting),
+                wielded_gun_setting_header: state
+                    .as_ref()
+                    .and_then(|s| s.wielded_gun_setting_header.clone()),
+                wielded_gun_cooldown_ms: state.as_ref().and_then(|s| s.wielded_gun_cooldown_ms),
+                wielded_gun_condition: state.as_ref().and_then(|s| s.wielded_gun_condition),
                 hit_points: state
                     .as_ref()
                     .and_then(|s| s.hit_points.map(|(cur, _)| cur)),
@@ -2370,6 +2488,7 @@ fn capture_frame_snapshot(
                     .as_ref()
                     .and_then(|s| s.psi_points.map(|(_, max)| max)),
                 radiation_level: state.as_ref().map(|s| s.radiation_level).unwrap_or(0.0),
+                toxin_level: state.as_ref().map(|s| s.toxin_level).unwrap_or(0.0),
                 selected_psi_power: state.as_ref().and_then(|s| s.selected_psi_power.clone()),
                 psi_charge: state.as_ref().and_then(|s| s.psi_charge.map(|(f, _)| f)),
                 psi_charge_phase: state
@@ -2379,7 +2498,16 @@ fn capture_frame_snapshot(
                     .as_ref()
                     .map(|s| s.active_psi_powers.clone())
                     .unwrap_or_default(),
+                seekersense_contacts: state
+                    .as_ref()
+                    .map(|s| s.seekersense_contacts.clone())
+                    .unwrap_or_default(),
+                radar_contacts: state
+                    .as_ref()
+                    .map(|s| s.radar_contacts.clone())
+                    .unwrap_or_default(),
                 stats: state.as_ref().and_then(|s| s.stats.clone()),
+                effective_stats: state.as_ref().and_then(|s| s.effective_stats.clone()),
                 collected_logs: state
                     .as_ref()
                     .map(|s| s.collected_logs.clone())
@@ -2387,6 +2515,18 @@ fn capture_frame_snapshot(
                 explored_map_locations: state
                     .as_ref()
                     .map(|s| s.explored_map_locations.clone())
+                    .unwrap_or_default(),
+                hand_feedback: game
+                    .debug_scene()
+                    .map(|s| s.hand_feedback())
+                    .unwrap_or(serde_json::Value::Null),
+                hand_grips: game
+                    .debug_scene()
+                    .map(|s| s.hand_grips())
+                    .unwrap_or_else(|| json!([])),
+                climb: game
+                    .debug_scene()
+                    .and_then(|scene| scene.player_climb())
                     .unwrap_or_default(),
             }
         },
@@ -3102,8 +3242,8 @@ async fn load_game(
     match reply_rx.await {
         Ok(result) if result.success => Ok(Json(result)),
         // The save existed but was corrupt / schema-incompatible: the game loop
-        // caught the panic and kept the previous scene, so surface a 500 rather
-        // than a misleading success.
+        // kept the previous scene, so surface a 500 rather than a misleading
+        // success.
         Ok(result) => Err((StatusCode::INTERNAL_SERVER_ERROR, result.message)),
         Err(_) => {
             tracing::error!("Failed to receive load result - sender dropped");
@@ -3275,6 +3415,21 @@ async fn spawn_item(
             tracing::error!("Failed to receive spawn-item result - sender dropped");
             Err(game_loop_unavailable())
         }
+    }
+}
+
+async fn apply_stat_modifier(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<shock2vr::game_scene::StatModifierRequest>,
+) -> Result<Json<shock2vr::player_stats::PlayerStats>, (StatusCode, String)> {
+    let (reply, result) = oneshot::channel();
+    command_tx
+        .send(RuntimeCommand::ApplyStatModifier { request, reply })
+        .map_err(|_| game_loop_unavailable())?;
+    match result.await {
+        Ok(Ok(stats)) => Ok(Json(stats)),
+        Ok(Err(error)) => Err((StatusCode::BAD_REQUEST, error)),
+        Err(_) => Err(game_loop_unavailable()),
     }
 }
 
@@ -3575,6 +3730,47 @@ async fn get_ragdoll_metrics(
         Err(_) => {
             tracing::error!("Failed to receive ragdoll metrics - sender dropped");
             Json(RagdollMetricsResult { ragdolls: vec![] })
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ClimbGripQueryParams {
+    x: f32,
+    y: f32,
+    z: f32,
+    /// Probe ball radius, world units (default: the hand-sized grip radius).
+    radius: Option<f32>,
+    /// Reference feet height for the ledge test (default: the player's own).
+    feet_y: Option<f32>,
+}
+
+/// HTTP handler for `GET /v1/physics/grip`: what a hand at (x, y, z) could
+/// grab. `grip` is null when nothing there is grabbable.
+async fn climb_grip(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Query(params): Query<ClimbGripQueryParams>,
+) -> Json<commands::ClimbGripResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if command_tx
+        .send(RuntimeCommand::ClimbGrip {
+            point: [params.x, params.y, params.z],
+            radius: params.radius,
+            feet_y: params.feet_y,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send ClimbGrip command - game loop receiver dropped");
+        return Json(commands::ClimbGripResult { grip: None });
+    }
+
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive climb grip - sender dropped");
+            Json(commands::ClimbGripResult { grip: None })
         }
     }
 }
@@ -3982,6 +4178,63 @@ async fn pathfinding_stats(
     }
 }
 
+#[derive(Deserialize)]
+struct RouteQueryParams {
+    /// Start position as "x,y,z"
+    from: String,
+    /// Goal position as "x,y,z"
+    to: String,
+}
+
+fn parse_vec3_param(s: &str) -> Option<[f32; 3]> {
+    // Every component must parse and be finite: dropping a bad one would
+    // answer a reachability question about a point nobody asked for.
+    let parts: Vec<f32> = s
+        .split(',')
+        .map(|p| p.trim().parse::<f32>().ok().filter(|v| v.is_finite()))
+        .collect::<Option<Vec<f32>>>()?;
+    match parts.len() {
+        3 => Some([parts[0], parts[1], parts[2]]),
+        _ => None,
+    }
+}
+
+/// HTTP endpoint handler: does a walk route exist between two world
+/// positions? Answers "unreachable by design" vs "the AI failed to route".
+async fn pathfinding_route(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Query(params): Query<RouteQueryParams>,
+) -> Result<Json<shock2vr::game_scene::DebugPathRoute>, StatusCode> {
+    let (Some(from), Some(to)) = (parse_vec3_param(&params.from), parse_vec3_param(&params.to))
+    else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::GetPathfindingRoute {
+            from,
+            to,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send GetPathfindingRoute - game loop receiver dropped");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    match reply_rx.await {
+        // No pathfinding data in this scene (e.g. a debug scene): not found,
+        // rather than a route answer the caller would read as "unreachable".
+        Ok(Some(route)) => Ok(Json(route)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(_) => {
+            tracing::error!("Failed to receive pathfinding route - sender dropped");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 /// HTTP endpoint handler: the latest path each AI computed (goal, waypoints,
 /// outcome: Full/Partial/Failed). Empty until an AI has pathed.
 async fn ai_paths(
@@ -4009,6 +4262,10 @@ async fn ai_paths(
 #[derive(Deserialize)]
 struct TriggerActionRequest {
     action: String,
+    /// Hold the button rather than tapping it: `true` presses and keeps it
+    /// down, `false` releases it. Omitted = a single-shot press.
+    #[serde(default)]
+    hold: Option<bool>,
 }
 
 /// HTTP endpoint handler: Trigger a discrete input action
@@ -4035,7 +4292,11 @@ async fn trigger_input_action(
     let (reply_tx, reply_rx) = oneshot::channel();
 
     if command_tx
-        .send(RuntimeCommand::TriggerAction(action, reply_tx))
+        .send(RuntimeCommand::TriggerAction(
+            action,
+            request.hold,
+            reply_tx,
+        ))
         .is_err()
     {
         tracing::error!("Failed to send TriggerAction command - game loop receiver dropped");
@@ -4068,10 +4329,12 @@ async fn list_dev_params() -> Json<Value> {
             match param.kind {
                 shock2vr::dev_params::DevParamKind::Float { min, max, step } => json!({
                     "key": key, "label": label, "value": value, "default": default,
+                    "category": param.category.label(), "locked": param.locked,
                     "kind": "float", "min": min, "max": max, "step": step,
                 }),
                 shock2vr::dev_params::DevParamKind::Bool => json!({
                     "key": key, "label": label, "value": value, "default": default,
+                    "category": param.category.label(), "locked": param.locked,
                     "kind": "bool",
                 }),
             }
@@ -4137,8 +4400,36 @@ async fn list_input_actions() -> Json<Value> {
 /// sample + query tags + position). This is the only headless way to observe
 /// audio, e.g. asserting a bullet impact played a material-tagged collision
 /// schema. Reads a process-wide log, so no game-loop round-trip is needed.
-async fn get_recent_audio() -> Json<Value> {
-    Json(serde_json::json!({ "sounds": shock2vr::audio_log::recent() }))
+/// `?sample=` keeps only samples containing it, ignoring case; `?playing=true`
+/// only what is audible now (e.g. two narrations overlapping).
+#[derive(Deserialize)]
+struct RecentAudioQueryParams {
+    sample: Option<String>,
+    playing: Option<bool>,
+}
+
+async fn get_recent_audio(Query(params): Query<RecentAudioQueryParams>) -> Json<Value> {
+    let mut sounds = match params.sample {
+        Some(needle) => shock2vr::audio_log::recent_matching(&needle),
+        None => shock2vr::audio_log::recent(),
+    };
+    if params.playing == Some(true) {
+        sounds.retain(|sound| sound.still_playing);
+    }
+    Json(serde_json::json!({ "sounds": sounds }))
+}
+
+async fn get_audio_loops(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    command_tx
+        .send(RuntimeCommand::GetAudioLoops(reply_tx))
+        .map_err(|_| game_loop_unavailable())?;
+    reply_rx
+        .await
+        .map(Json)
+        .map_err(|_| game_loop_unavailable())
 }
 
 /// HTTP handler for the recently delivered script messages (receiver, payload

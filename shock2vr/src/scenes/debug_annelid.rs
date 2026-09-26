@@ -1,0 +1,335 @@
+//! Annelid egg pods, one station per authored kind, tripped by walking up to
+//! them.
+//!
+//! The floor pods look identical and differ only in their script, so the bug
+//! "eggs spawn nothing" is invisible in a real level: a pod that opens and
+//! produces nothing is indistinguishable from one that was never near enough
+//! to hatch. Here each kind stands alone at a labeled station with a known
+//! trip radius, so "walk up, watch what comes out" answers the question for
+//! one kind at a time:
+//!
+//! - Goo pod (`GooEgg`)     - a toxic emitter lobbing venom-stimmed goo shots
+//! - Grub pod (`GrubEgg`)   - a crawling annelid
+//! - Swarmer pod (`SwarmerEgg`) - a flying annelid swarm
+//! - Wall grub pod - unmodified GrubEgg archetype, mounted against a wall
+//!
+//! Missions trip their pods with an authored "Floor Egg Tripwire" (a once,
+//! player-enter tripwire SwitchLinked to the pod). Runtime link authoring has
+//! no effect of its own, so this scene stands in for that wiring with a
+//! distance check that sends the same `TurnOn` - the pod script sees exactly
+//! what a mission tripwire would send.
+
+use cgmath::{Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, Vector3, vec3};
+use dark::{importers::FONT_IMPORTER, properties::PropTemplateId};
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext, scene::SceneObject};
+use shipyard::{EntityId, IntoIter, IntoWithId, UniqueView, UniqueViewMut, View};
+
+use crate::{
+    GameOptions, dev_params,
+    game_scene::GameScene,
+    input_context::InputContext,
+    mission::{
+        GlobalContext, SpawnLocation,
+        mission_core::{EffectQueue, MissionCore, PlayerInfo},
+    },
+    scripts::{Effect, Message, MessagePayload},
+    time::Time,
+};
+
+use super::debug_common::{
+    DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
+    boxes_to_geometry, max_player_stats, spawn_at,
+};
+
+struct EggStation {
+    label: &'static str,
+    /// Unmodified gamesys archetype, including a wall-mounted GrubEgg.
+    template_id: i32,
+    /// Station centre along +Z; every pod is the same distance ahead.
+    z: f32,
+}
+
+const STATIONS: &[EggStation] = &[
+    EggStation {
+        label: "Goo pod - toxic",
+        template_id: -1476,
+        z: -6.0,
+    },
+    EggStation {
+        label: "Grub pod - crawler",
+        template_id: -1335,
+        z: 0.0,
+    },
+    EggStation {
+        label: "Swarmer pod - flier",
+        template_id: -1332,
+        z: 6.0,
+    },
+    EggStation {
+        label: "Wall grub pod - approach from -Z",
+        template_id: -1333,
+        z: 12.0,
+    },
+];
+
+/// Stations sit this far along -X, the default view forward at an identity
+/// spawn yaw (same convention as `debug_melee` / `debug_weapons`).
+const STATION_DISTANCE: f32 = 8.0;
+
+/// How close the player must get for a station to hatch. Comfortably smaller
+/// than the 6-unit gap between stations, so approaching one pod never trips
+/// its neighbours - the whole point of separate stations.
+const TRIP_RADIUS: f32 = 2.5;
+
+// One fixed lamp per station: white, warm, cool, green. The same rig lights
+// both base draws and their incidence overlays, including newly hatched grubs.
+const LAMP_COLORS: [[f32; 3]; 4] = [
+    [1.0, 1.0, 1.0],
+    [1.0, 0.55, 0.25],
+    [0.25, 0.55, 1.0],
+    [0.35, 1.0, 0.45],
+];
+
+pub fn create_debug_annelid_scene(
+    global_context: &GlobalContext,
+    game_options: &GameOptions,
+    asset_cache: &mut AssetCache,
+    audio_context: &mut AudioContext<EntityId, String>,
+) -> Box<dyn GameScene> {
+    let mut boxes = vec![(
+        vec3(0.16, 0.18, 0.16),
+        vec3(-STATION_DISTANCE / 2.0, -0.5, 0.0),
+        vec3(40.0, 1.0, 40.0),
+    )];
+    // Low kerbs mark each station's footprint so the trip radius is visible
+    // from the spawn rather than something you discover by walking into it.
+    for station in STATIONS {
+        boxes.push((
+            vec3(0.26, 0.30, 0.24),
+            vec3(-STATION_DISTANCE, 0.05, station.z),
+            vec3(2.0 * TRIP_RADIUS, 0.1, 2.0 * TRIP_RADIUS),
+        ));
+    }
+    for (station, color) in STATIONS.iter().zip(LAMP_COLORS) {
+        boxes.push((
+            color.into(),
+            vec3(-STATION_DISTANCE + 2.0, 3.2, station.z + 1.0),
+            vec3(0.18, 0.18, 0.18),
+        ));
+    }
+    // wpod's mouth faces local -Z; mount its back against this solid wall.
+    boxes.push((
+        vec3(0.25, 0.25, 0.30),
+        vec3(-STATION_DISTANCE, 2.0, 12.6),
+        vec3(5.0, 4.0, 0.4),
+    ));
+    let (objects, collider) = boxes_to_geometry(&boxes);
+
+    let mut builder = DebugSceneBuilder::new("debug_annelid")
+        .with_spawn_location(SpawnLocation::PositionRotation(
+            vec3(0.0, 2.0, 0.0),
+            Quaternion::from_angle_y(Deg(0.0)),
+        ))
+        .with_physics_geometry(collider);
+    for object in objects {
+        builder = builder.add_scene_object(object);
+    }
+
+    let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
+    for station in STATIONS {
+        let mut label = SceneObject::world_space_text(station.label, font.clone(), 0.0);
+        label.set_transform(
+            Matrix4::from_translation(vec3(
+                -STATION_DISTANCE,
+                if station.template_id == -1333 {
+                    3.3
+                } else {
+                    2.4
+                },
+                station.z,
+            )) * Matrix4::from_nonuniform_scale(
+                0.10 * engine::measure_text_width(&**font, station.label, 1.0),
+                0.10,
+                1.0,
+            ) * Matrix4::from_angle_x(Deg(180.0))
+                * Matrix4::from_angle_y(Deg(if station.template_id == -1333 {
+                    180.0
+                } else {
+                    0.0
+                })),
+        );
+        builder = builder.add_scene_object(label);
+    }
+
+    // No mission of its own: borrow medsci1's cubemap so shine reflections show.
+    let environment = crate::environment_map::load(asset_cache, "medsci1");
+    let mut core = builder.build_core(DebugSceneBuildOptions {
+        global_context,
+        game_options,
+        asset_cache,
+        audio_context,
+    });
+    // A hatching pod is a fight; start the player able to survive every station.
+    max_player_stats(&mut core, "debug_annelid");
+
+    println!(
+        "[debug_annelid] Four annelid egg pods stand {STATION_DISTANCE} units ahead, one per kind.\n\
+         Walk within {TRIP_RADIUS} units of a pod (onto its kerb) to trip it, exactly as a\n\
+         mission's Floor Egg Tripwire would. Goo = toxic projectiles, Grub = a crawler,\n\
+         Swarmer = a flying swarm. Each pod trips once."
+    );
+
+    Box::new(HookedDebugScene::new(
+        core,
+        AnnelidHooks {
+            environment,
+            ..AnnelidHooks::default()
+        },
+    ))
+}
+
+#[derive(Default)]
+struct AnnelidHooks {
+    populated: bool,
+    /// One entry per station, in `STATIONS` order; `None` until the pod is
+    /// spawned, dropped again once that pod has been tripped.
+    pods: Vec<Option<EntityId>>,
+    environment: Option<std::rc::Rc<engine::texture::CubeTexture>>,
+}
+
+impl DebugSceneHooks for AnnelidHooks {
+    fn after_render(
+        &mut self,
+        _core: &mut MissionCore,
+        scene_objects: &mut Vec<SceneObject>,
+        _camera_position: &mut Vector3<f32>,
+        _camera_rotation: &mut Quaternion<f32>,
+        _asset_cache: &mut AssetCache,
+        _options: &GameOptions,
+    ) {
+        if !dev_params::get_bool(dev_params::OBJECT_LIGHTING) {
+            return;
+        }
+        // Debug scenes have no world-rep cells/light table. Supply the renderer
+        // equivalent of authored lights, with the usual live Lighting controls.
+        let ambient = 0.08 + dev_params::get(dev_params::OBJECT_LIGHT_AMBIENT_BOOST);
+        let mut lights = engine::scene::light::LightArray::new()
+            .with_object_lighting(
+                vec3(ambient, ambient, ambient),
+                dev_params::get(dev_params::OBJECT_LIGHT_WRAP),
+            )
+            .with_specular(dev_params::get(dev_params::OBJECT_SPECULAR))
+            .with_environment(
+                self.environment.clone(),
+                dev_params::get(dev_params::OBJECT_REFLECTION),
+            )
+            .with_veins(
+                crate::object_lighting::growth_vein_tuning(),
+                crate::object_lighting::weapon_vein_tuning(),
+            );
+        let brightness = 2.5
+            * dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS)
+            * dev_params::get(dev_params::LEVEL_LIGHT_INTENSITY);
+        for (station, color) in STATIONS.iter().zip(LAMP_COLORS) {
+            let position = vec3(-STATION_DISTANCE + 2.0, 3.2, station.z + 1.0);
+            let mut light = engine::scene::SpotLight::new(
+                position,
+                vec3(-STATION_DISTANCE, 0.7, station.z) - position,
+                color.into(),
+                brightness,
+            );
+            light.range = 5.5;
+            lights.add_light(light);
+        }
+        let lights = std::rc::Rc::new(lights);
+        for object in scene_objects {
+            object.set_lights(Some(lights.clone()));
+        }
+    }
+
+    fn before_handle_effects(
+        &mut self,
+        core: &mut MissionCore,
+        _effects: &mut Vec<Effect>,
+        global_context: &GlobalContext,
+        game_options: &GameOptions,
+        asset_cache: &mut AssetCache,
+        audio_context: &mut AudioContext<EntityId, String>,
+    ) {
+        if !self.populated {
+            self.populated = true;
+            let spawns = STATIONS
+                .iter()
+                .map(|station| {
+                    spawn_at(
+                        station.template_id,
+                        Point3::new(
+                            -STATION_DISTANCE,
+                            if station.template_id == -1333 {
+                                1.7
+                            } else {
+                                0.6
+                            },
+                            station.z,
+                        ),
+                    )
+                })
+                .collect();
+            core.handle_effects(
+                spawns,
+                global_context,
+                game_options,
+                asset_cache,
+                audio_context,
+            );
+            // Runtime entity ids are assigned at creation and are not stable
+            // across runs, so find each pod by the template it came from.
+            self.pods = STATIONS
+                .iter()
+                .map(|station| {
+                    core.world.run(|v_template: View<PropTemplateId>| {
+                        (&v_template)
+                            .iter()
+                            .with_id()
+                            .find(|(_, template)| template.template_id == station.template_id)
+                            .map(|(id, _)| id)
+                    })
+                })
+                .collect();
+        }
+    }
+
+    /// The trip check belongs here, not beside the populate above: `update` is
+    /// what a paused game skips, so a pod cannot hatch behind the pause menu.
+    fn before_update(
+        &mut self,
+        core: &mut MissionCore,
+        _time: &Time,
+        _input_context: &InputContext,
+        _asset_cache: &mut AssetCache,
+        _game_options: &GameOptions,
+    ) {
+        let player_position = core.world.run(|player: UniqueView<PlayerInfo>| player.pos);
+        for (index, pod) in self.pods.iter_mut().enumerate() {
+            let Some(entity_id) = *pod else { continue };
+            // Compared on the floor plane: the pod sits at ankle height and
+            // the player's position is their feet, but a VR crouch should not
+            // change how close "close" is.
+            let station_position = vec3(-STATION_DISTANCE, player_position.y, STATIONS[index].z);
+            if (player_position - station_position).magnitude() > TRIP_RADIUS {
+                continue;
+            }
+            // Once, like the authored tripwire: forget the pod so a second
+            // pass over the kerb cannot re-hatch it.
+            *pod = None;
+            core.world.run(|mut effects: UniqueViewMut<EffectQueue>| {
+                effects.push(Effect::Send {
+                    msg: Message {
+                        to: entity_id,
+                        payload: MessagePayload::TurnOn { from: entity_id },
+                    },
+                });
+            });
+        }
+    }
+}

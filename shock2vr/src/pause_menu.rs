@@ -34,7 +34,7 @@ use crate::{
     input_context::InputContext,
     ui::{
         FrontendCanvasPresenter, FrontendMenu, FrontendMenuItem, HAlign, Rect, ScaleMode, UiCanvas,
-        VAlign, dev_params_panel, hit_menu_item,
+        VAlign, cheats_panel, dev_params_panel, hit_menu_item, label_lines,
     },
 };
 
@@ -106,8 +106,12 @@ use crate::ui::world_dim::{WORLD_DIM_EXTENT_RATIO, world_dim_min_distance, world
 pub enum PauseAction {
     /// Close the menu and let the simulation run again.
     Resume,
+    ContinueHorde,
     /// Abandon the run and go back to the main menu.
     QuitToMainMenu,
+    /// Carry out a developer cheat. The overlay stays up - a cheat sets a
+    /// situation up, it does not resume the game.
+    Cheat(cheats_panel::CheatAction),
 }
 
 /// Which page of the overlay is showing. The Developer page is a page of the
@@ -116,7 +120,12 @@ pub enum PauseAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseMenuPage {
     Root,
+    HordeReport,
     Developer,
+    /// The Developer screen's [`cheats_panel`] page. It lives here rather than
+    /// on the main menu's Developer scene because a cheat acts on the running
+    /// mission, so there is nothing for it to do before one is loaded.
+    Cheats,
 }
 
 /// What a click on a root-page entry means: either something [`PauseAction`]
@@ -130,8 +139,13 @@ enum PauseMenuEntry {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseMenuTarget {
+    HordeReport(bool),
     Root(PauseMenuEntry),
     Developer(dev_params_panel::DevParamsEvent),
+    /// The Developer page's upper framed button - the slot the main menu's
+    /// Developer scene fills with its scene launcher.
+    OpenCheats,
+    Cheats(cheats_panel::CheatsEvent),
 }
 
 // `SIM.PCX` (native 640x480) has a vertical stack of five buttons down the
@@ -223,15 +237,6 @@ fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
 /// authored as `"    Quit to \nMain Menu"` - a literal backslash-n escape the
 /// string importer passes through verbatim - and the canvas has no multi-line
 /// text element, so the break is resolved here, once, in shared layout.
-fn label_lines(label: &str) -> Vec<&str> {
-    label
-        .split("\\n")
-        .flat_map(|part| part.split('\n'))
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect()
-}
-
 /// The menu entry at a canvas point, if any. Both the click and the hover
 /// highlight go through this, so the two can never disagree about where an
 /// entry is - or about which entries are live at all.
@@ -242,14 +247,29 @@ fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<PauseMenuEntry> {
 fn target_at(
     page: PauseMenuPage,
     panel_rects: dev_params_panel::PanelRects,
-    panel_scroll: usize,
+    navigation: dev_params_panel::DevParamsNavigation,
+    cheats_scroll: usize,
     rects: &[Rect],
     point: Vector2<f32>,
 ) -> Option<PauseMenuTarget> {
     match page {
         PauseMenuPage::Root => hit(point, rects).map(PauseMenuTarget::Root),
+        PauseMenuPage::HordeReport => crate::ui::horde_report::continue_at(
+            point,
+            rects
+                .first()
+                .copied()
+                .unwrap_or(crate::ui::horde_report::CONTINUE),
+        )
+        .map(PauseMenuTarget::HordeReport),
         PauseMenuPage::Developer => {
-            dev_params_panel::hit(panel_rects, panel_scroll, point).map(PauseMenuTarget::Developer)
+            if panel_rects.action_rect().contains(point) {
+                return Some(PauseMenuTarget::OpenCheats);
+            }
+            dev_params_panel::hit(panel_rects, &navigation, point).map(PauseMenuTarget::Developer)
+        }
+        PauseMenuPage::Cheats => {
+            cheats_panel::hit(panel_rects, cheats_scroll, point).map(PauseMenuTarget::Cheats)
         }
     }
 }
@@ -289,6 +309,7 @@ fn resolve_click(
 
 /// The pause overlay. Closed by default; [`PauseMenu::open`] arms it.
 pub struct PauseMenu {
+    horde_report: Option<(u32, crate::horde_stats::HordeBattleStats)>,
     open: bool,
     /// Which page the overlay is showing; reset to the root on every open.
     page: PauseMenuPage,
@@ -303,10 +324,15 @@ pub struct PauseMenu {
     /// The Developer page's widget rects, re-resolved from `GAMELODR.BIN`
     /// each update (the render path takes `&self`, so it reads them here).
     panel_rects: dev_params_panel::PanelRects,
-    /// Index of the registry parameter in the Developer page's top row. The
-    /// panel is stateless, so its scroll position lives here and is handed to
-    /// the hit test and the render alike.
-    panel_scroll: usize,
+    /// Session navigation shared with frontend developer scenes. Closing the
+    /// overlay or swapping missions preserves its category and scroll positions.
+    navigation: dev_params_panel::DevParamsSession,
+    /// Index of the cheat in the Cheats page's top row - the same stateless
+    /// list geometry as the developer parameter panel.
+    cheats_scroll: usize,
+    /// What the Cheats page last applied, so it can say so. Lives here rather
+    /// than in the panel because the page is redrawn from scratch each frame.
+    cheats_ack: Option<cheats_panel::CheatAck>,
 }
 
 impl Default for PauseMenu {
@@ -319,6 +345,7 @@ impl PauseMenu {
     pub fn new() -> Self {
         Self {
             open: false,
+            horde_report: None,
             page: PauseMenuPage::Root,
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
             head: (
@@ -327,8 +354,14 @@ impl PauseMenu {
             ),
             closed_under_a_held_press: false,
             panel_rects: dev_params_panel::PanelRects::default(),
-            panel_scroll: 0,
+            navigation: Default::default(),
+            cheats_ack: None,
+            cheats_scroll: 0,
         }
+    }
+
+    pub fn dev_navigation(&self) -> dev_params_panel::DevParamsSession {
+        self.navigation.clone()
     }
 
     pub fn is_open(&self) -> bool {
@@ -363,6 +396,16 @@ impl PauseMenu {
         }
     }
 
+    pub fn is_horde_report(&self) -> bool {
+        self.open && self.page == PauseMenuPage::HordeReport
+    }
+
+    pub fn show_horde_report(&mut self, wave: u32, stats: crate::horde_stats::HordeBattleStats) {
+        self.open();
+        self.horde_report = Some((wave, stats));
+        self.page = PauseMenuPage::HordeReport;
+    }
+
     /// Open the menu in front of the player.
     ///
     /// The panel anchor is reset so the menu is placed from the head pose it is
@@ -373,6 +416,7 @@ impl PauseMenu {
     /// frame - the game-over screen shipped with exactly that bug.
     pub fn open(&mut self) {
         self.open = true;
+        self.horde_report = None;
         // Always land on the root page: reopening straight onto a parameter
         // list the player forgot they left would read as a broken menu.
         self.page = PauseMenuPage::Root;
@@ -392,6 +436,7 @@ impl PauseMenu {
 
     pub fn close(&mut self) {
         self.open = false;
+        self.horde_report = None;
         self.menu.clear_pointer();
     }
 
@@ -428,13 +473,22 @@ impl PauseMenu {
 
         let page = self.page;
         let panel_rects = self.panel_rects;
-        let panel_scroll = self.panel_scroll;
+        let navigation = *self.navigation.lock().unwrap();
+        let cheats_scroll = self.cheats_scroll;
+        let developer_enabled = crate::developer_mode::enabled();
+        let resolve = |point| {
+            target_at(page, panel_rects, navigation, cheats_scroll, &rects, point).filter(
+                |target| {
+                    developer_enabled || *target != PauseMenuTarget::Root(PauseMenuEntry::Developer)
+                },
+            )
+        };
         let target = self.menu.update(
             elapsed,
             input_context,
             options.presentation_mode,
-            |point| target_at(page, panel_rects, panel_scroll, &rects, point),
-            |point| target_at(page, panel_rects, panel_scroll, &rects, point),
+            resolve,
+            resolve,
         );
         self.handle_target(target)
     }
@@ -458,20 +512,32 @@ impl PauseMenu {
     ) -> Option<PauseAction> {
         let page = self.page;
         let panel_rects = self.panel_rects;
-        let panel_scroll = self.panel_scroll;
+        let navigation = *self.navigation.lock().unwrap();
+        let cheats_scroll = self.cheats_scroll;
         let target = self.menu.resolve_pointer(
             point,
             pressed,
-            |point| target_at(page, panel_rects, panel_scroll, rects, point),
-            |point| target_at(page, panel_rects, panel_scroll, rects, point),
+            |point| target_at(page, panel_rects, navigation, cheats_scroll, rects, point),
+            |point| target_at(page, panel_rects, navigation, cheats_scroll, rects, point),
         );
         self.handle_target(target)
     }
 
     fn handle_target(&mut self, target: Option<PauseMenuTarget>) -> Option<PauseAction> {
         match target {
+            Some(PauseMenuTarget::HordeReport(continue_run)) => Some(if continue_run {
+                PauseAction::ContinueHorde
+            } else {
+                PauseAction::QuitToMainMenu
+            }),
             Some(PauseMenuTarget::Root(entry)) => self.handle_root_entry(Some(entry)),
             Some(PauseMenuTarget::Developer(event)) => self.handle_developer_event(Some(event)),
+            Some(PauseMenuTarget::OpenCheats) => {
+                self.page = PauseMenuPage::Cheats;
+                self.cheats_scroll = 0;
+                None
+            }
+            Some(PauseMenuTarget::Cheats(event)) => self.handle_cheats_event(Some(event)),
             None => None,
         }
     }
@@ -489,19 +555,54 @@ impl PauseMenu {
         }
     }
 
-    /// Route a clicked Developer-page event: parameter steps mutate the
-    /// registry, "Done" returns to the root page. Never a [`PauseAction`] -
-    /// nothing on this page closes the menu or reaches `Game`.
+    /// Resume exits directly; Back drills out and returns to the pause root
+    /// only when already at the developer root. Both preserve session state.
     fn handle_developer_event(
         &mut self,
         event: Option<dev_params_panel::DevParamsEvent>,
     ) -> Option<PauseAction> {
+        if event == Some(dev_params_panel::DevParamsEvent::Done) {
+            return Some(PauseAction::Resume);
+        }
         if let Some(event) = event {
-            if dev_params_panel::activate(self.panel_rects, event, &mut self.panel_scroll) {
+            if dev_params_panel::activate(
+                self.panel_rects,
+                event,
+                &mut self.navigation.lock().unwrap(),
+            ) {
                 self.page = PauseMenuPage::Root;
             }
         }
         None
+    }
+
+    /// Route a clicked Cheats-page event: scrolling is absorbed by the panel,
+    /// "Done" returns to the parameter rows, and a cheat row becomes the one
+    /// thing `Game` must act on - the overlay stays up either way, so several
+    /// cheats can be fired before resuming.
+    fn handle_cheats_event(
+        &mut self,
+        event: Option<cheats_panel::CheatsEvent>,
+    ) -> Option<PauseAction> {
+        let event = event?;
+        let row = match event {
+            cheats_panel::CheatsEvent::Row(index) => Some(index),
+            _ => None,
+        };
+        match cheats_panel::activate(self.panel_rects, event, &mut self.cheats_scroll)? {
+            cheats_panel::CheatsOutcome::Act(action) => {
+                if let Some(index) = row {
+                    self.cheats_ack = Some(cheats_panel::CheatAck::apply(self.cheats_ack, index));
+                }
+                Some(PauseAction::Cheat(action))
+            }
+            cheats_panel::CheatsOutcome::Done => {
+                // Leaving the page ends the run of cheats it was reporting on.
+                self.cheats_ack = None;
+                self.page = PauseMenuPage::Developer;
+                None
+            }
+        }
     }
 
     /// World-space presentation: the canvas on a panel in front of the player.
@@ -520,23 +621,28 @@ impl PauseMenu {
         asset_cache: &mut AssetCache,
         options: &GameOptions,
         pawn_to_world: Matrix4<f32>,
+        glove_fit_scene: bool,
     ) -> Vec<SceneObject> {
         if !self.open {
             return Vec::new();
         }
+        self.menu
+            .set_glove_fit(glove_fit_scene.then(crate::glove_fit::GloveFit::current));
         FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE).present_world_space(
             || {
                 let panel = self.menu.panel();
                 let canvas = self.build_canvas(asset_cache, self.menu.pointer_canvas());
-                // First in the list, and therefore first in the overlay group: the
-                // comfort dim, which the depth clear below rides on.
-                let (dim_position, dim_forward) = dim_pose(self.head.0, self.head.1, &panel);
-                let mut objects = vec![world_dim_layer(
-                    dim_position,
-                    dim_forward,
-                    dim_distance(dim_position, &panel),
-                    crate::util::render_source::PAUSE_DIM,
-                )];
+                let mut objects = Vec::new();
+                // The survival debrief floats over the arena without a blackout.
+                if !self.is_horde_report() {
+                    let (dim_position, dim_forward) = dim_pose(self.head.0, self.head.1, &panel);
+                    objects.push(world_dim_layer(
+                        dim_position,
+                        dim_forward,
+                        dim_distance(dim_position, &panel),
+                        crate::util::render_source::PAUSE_DIM,
+                    ));
+                }
                 let canvas_objects =
                     self.menu
                         .render_world_space(asset_cache, canvas, options.presentation_mode);
@@ -556,7 +662,7 @@ impl PauseMenu {
                     object.set_transform(pawn_to_world * object.get_transform());
                 }
                 // Game assigns this whole ordered stack to the system-overlay layer:
-                // dim first, then panel and rays, all over the world and scene UI.
+                // optional dim first, then panel and rays over the world and scene UI.
                 objects
             },
         )
@@ -588,7 +694,19 @@ impl PauseMenu {
     }
 
     fn rects(&self, asset_cache: &mut AssetCache) -> Vec<Rect> {
-        self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS)
+        if self.is_horde_report() {
+            self.menu
+                .rects(
+                    asset_cache,
+                    crate::ui::horde_report::LAYOUT_FILE,
+                    &[crate::ui::horde_report::RETAIL_CONTINUE],
+                )
+                .into_iter()
+                .map(crate::ui::horde_report::inset)
+                .collect()
+        } else {
+            self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS)
+        }
     }
 
     /// The menu, described once. Screen-space and world-space presentation
@@ -600,22 +718,69 @@ impl PauseMenu {
         pointer_canvas: Option<Vector2<f32>>,
     ) -> UiCanvas {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
+        if let Some((wave, stats)) = &self.horde_report {
+            let continue_rect = self
+                .rects(asset_cache)
+                .first()
+                .copied()
+                .unwrap_or(crate::ui::horde_report::CONTINUE);
+            crate::ui::horde_report::draw(&mut canvas, *wave, stats, pointer_canvas, continue_rect);
+            return canvas;
+        }
 
-        if self.page == PauseMenuPage::Developer {
-            // The Developer page: the shared parameter panel on its own
-            // backdrop. Everything about the page - rows, arrows, "Done" -
-            // is described by `dev_params_panel`, so this page and the
-            // standalone Developer scene cannot drift apart.
+        if matches!(self.page, PauseMenuPage::Developer | PauseMenuPage::Cheats) {
+            // The Developer screen: a shared panel on its own backdrop.
+            // Everything about either page - rows, arrows, "Done" - is
+            // described by the panel module, so these pages and the standalone
+            // Developer scene cannot drift apart.
             canvas.image(
                 Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H),
                 DEVELOPER_BACKDROP_TEXTURE,
             );
-            dev_params_panel::draw(
-                &mut canvas,
-                self.panel_rects,
-                self.panel_scroll,
-                pointer_canvas,
-            );
+            match self.page {
+                PauseMenuPage::Cheats => cheats_panel::draw(
+                    &mut canvas,
+                    self.panel_rects,
+                    self.cheats_scroll,
+                    pointer_canvas,
+                    self.cheats_ack,
+                ),
+                _ => {
+                    dev_params_panel::draw(
+                        &mut canvas,
+                        self.panel_rects,
+                        &self.navigation.lock().unwrap(),
+                        pointer_canvas,
+                        "Resume",
+                    );
+                    // The upper framed button: the Cheats page's door. It is
+                    // this host's rather than the panel's because the main
+                    // menu's Developer scene fills the same slot with its
+                    // scene launcher - a cheat needs a running mission, a
+                    // launcher needs there not to be one.
+                    canvas
+                        .text_native(
+                            self.panel_rects.action_rect(),
+                            cheats_panel::OPEN_LABEL,
+                            MENU_FONT,
+                            HAlign::Center,
+                            VAlign::Middle,
+                        )
+                        // The action rect is the only thing `target_at` gives
+                        // precedence over the panel on this page, so the
+                        // highlight is that same test rather than a routed
+                        // event - and cannot disagree with the click.
+                        .opacity(
+                            if pointer_canvas
+                                .is_some_and(|point| self.panel_rects.action_rect().contains(point))
+                            {
+                                HOVER_OPACITY
+                            } else {
+                                IDLE_OPACITY
+                            },
+                        );
+                }
+            }
             return canvas;
         }
 
@@ -632,10 +797,20 @@ impl PauseMenu {
         let labels = self.menu.labels(asset_cache, LABELS_FILE, MENU_ITEMS);
         // The highlight resolves through the very same `hit` the click does, so
         // an entry can never light up under a ray that would not activate it.
-        let hovered = pointer_canvas.and_then(|p| hit(p, &rects));
+        let developer_enabled = crate::developer_mode::enabled();
+        let hovered = pointer_canvas
+            .and_then(|p| hit(p, &rects))
+            .filter(|entry| developer_enabled || *entry != PauseMenuEntry::Developer);
 
         for ((item, rect), label) in MENU_ITEMS.iter().zip(&rects).zip(&labels) {
-            let opacity = if item.action.is_none() {
+            let locked_developer =
+                item.action == Some(PauseMenuEntry::Developer) && !developer_enabled;
+            let label = if locked_developer {
+                "Options"
+            } else {
+                label.as_str()
+            };
+            let opacity = if item.action.is_none() || locked_developer {
                 DISABLED_OPACITY
             } else if item.action == hovered {
                 HOVER_OPACITY
@@ -695,6 +870,23 @@ mod tests {
     }
 
     #[test]
+    fn survival_report_ignores_held_click_and_continue_requires_a_fresh_edge() {
+        let mut menu = PauseMenu::new();
+        menu.show_horde_report(10, crate::horde_stats::HordeBattleStats::default());
+        let point = Some(crate::ui::horde_report::CONTINUE.center());
+        let rects = [crate::ui::horde_report::CONTINUE];
+        assert!(menu.consume_pointer(point, true, &rects).is_none());
+        assert!(menu.consume_pointer(point, false, &rects).is_none());
+        assert_eq!(
+            menu.consume_pointer(point, true, &rects),
+            Some(PauseAction::ContinueHorde)
+        );
+        assert!(menu.consume_pointer(point, true, &rects).is_none());
+        menu.close_after_click();
+        assert!(!menu.is_horde_report());
+    }
+
+    #[test]
     fn clicking_resume_and_quit_activates_them() {
         let rects = menu_rects(None);
         for (index, expected) in [
@@ -741,7 +933,7 @@ mod tests {
     }
 
     #[test]
-    fn done_on_the_developer_page_returns_to_the_root_page() {
+    fn back_at_the_developer_root_returns_to_the_pause_root() {
         use crate::ui::dev_params_panel::DevParamsEvent;
         let mut menu = PauseMenu::new();
         menu.open();
@@ -752,33 +944,96 @@ mod tests {
         assert_eq!(menu.handle_developer_event(None), None);
         assert_eq!(menu.page, PauseMenuPage::Developer);
 
-        // "Done" returns to the root - it does not close the menu, and it
-        // does not reach `Game`. (The step events are not exercised here:
+        // Back at the developer root returns to the pause root without
+        // resuming. (The step events are not exercised here:
         // they mutate the process-global registry, which parallel tests
         // read - the SDK e2e proves a click really moves a value.)
         assert_eq!(
-            menu.handle_developer_event(Some(DevParamsEvent::Done)),
+            menu.handle_developer_event(Some(DevParamsEvent::Back)),
             None
         );
         assert_eq!(menu.page, PauseMenuPage::Root);
         assert!(menu.is_open());
     }
 
-    /// The overlay's most dangerous interaction: the Developer page's "Done"
-    /// rect OVERLAPS the root page's "Quit to Main Menu" button, so a press
-    /// that is still held when "Done" turns the page back would land on Quit
-    /// the very next frame - abandoning the run from a menu that was only
-    /// meant to close a settings page. This is the game-over insta-Quit bug
-    /// class (vr-ui-design rule 6), so it is asserted through `consume_pointer`,
-    /// which carries the real `last_pressed` flag, rather than through the
-    /// page handlers that bypass it.
+    /// The Developer page's upper framed button opens the Cheats page. It is
+    /// the slot the main menu's Developer scene fills with its scene launcher,
+    /// so the two hosts must not both claim it.
     #[test]
-    fn a_press_held_through_done_cannot_fall_through_onto_quit() {
+    fn the_upper_framed_button_opens_the_cheats_page() {
+        let panel = dev_params_panel::PanelRects::default();
+        let point = panel.action_rect().center();
+
+        assert_eq!(
+            target_at(
+                PauseMenuPage::Developer,
+                panel,
+                Default::default(),
+                0,
+                &[],
+                point
+            ),
+            Some(PauseMenuTarget::OpenCheats),
+        );
+
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.handle_root_entry(Some(PauseMenuEntry::Developer));
+        // Turning the page never reaches `Game`, and never closes the menu.
+        assert_eq!(menu.handle_target(Some(PauseMenuTarget::OpenCheats)), None);
+        assert_eq!(menu.page, PauseMenuPage::Cheats);
+        assert!(menu.is_open());
+    }
+
+    /// Every shipped cheat row reaches `Game` with its own templates, and the
+    /// overlay stays up on its page - a cheat sets a situation up, it does not
+    /// resume the game.
+    #[test]
+    fn a_cheat_row_reaches_game_and_leaves_the_overlay_up() {
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.page = PauseMenuPage::Cheats;
+
+        for (index, cheat) in cheats_panel::CHEATS.iter().enumerate() {
+            let action = menu.handle_cheats_event(Some(cheats_panel::CheatsEvent::Row(index)));
+            assert_eq!(
+                action,
+                Some(PauseAction::Cheat(cheat.action())),
+                "cheat {index} must carry out its own action",
+            );
+            assert_eq!(menu.page, PauseMenuPage::Cheats);
+            assert!(menu.is_open());
+        }
+
+        // A frame with no click changes nothing.
+        assert_eq!(menu.handle_cheats_event(None), None);
+        assert_eq!(menu.page, PauseMenuPage::Cheats);
+    }
+
+    /// "Done" on the Cheats page goes back to the parameters it was opened
+    /// from, not to the root - the page is a sub-page of the Developer screen.
+    #[test]
+    fn done_on_the_cheats_page_returns_to_the_parameters() {
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.page = PauseMenuPage::Cheats;
+
+        assert_eq!(
+            menu.handle_cheats_event(Some(cheats_panel::CheatsEvent::Done)),
+            None
+        );
+        assert_eq!(menu.page, PauseMenuPage::Developer);
+        assert!(menu.is_open());
+    }
+
+    /// The same fall-through hazard the Developer page's "Done" has: the
+    /// Cheats page shares that rect, so a press held through it must not land
+    /// on the root page's "Quit to Main Menu" the next frame.
+    #[test]
+    fn a_press_held_through_the_cheats_done_cannot_fall_through_onto_quit() {
         let rects = menu_rects(None);
         let panel = dev_params_panel::PanelRects::default();
         let done = panel.done_center();
-        // The premise: the two rects really do overlap, so this is a live
-        // hazard and not a hypothetical one.
         assert!(
             rects[QUIT_INDEX].contains(done),
             "Done must sit over Quit for this test to mean anything"
@@ -786,29 +1041,52 @@ mod tests {
 
         let mut menu = PauseMenu::new();
         menu.open();
-        menu.handle_root_entry(Some(PauseMenuEntry::Developer));
-        assert_eq!(menu.page, PauseMenuPage::Developer);
-        // Nothing pressed yet, so the next frame is a genuine rising edge.
+        menu.page = PauseMenuPage::Cheats;
         menu.menu.set_last_pressed(false);
 
-        // Frame 1: press on "Done" - the page turns back to the root.
+        // Frame 1: press on "Done" - back to the parameter rows.
         assert_eq!(menu.consume_pointer(Some(done), true, &rects), None);
-        assert_eq!(menu.page, PauseMenuPage::Root);
+        assert_eq!(menu.page, PauseMenuPage::Developer);
+        // Frame 2: the press is still held over the very same point, which is
+        // now the parameter page's own "Done". The spent edge must hold.
+        assert_eq!(menu.consume_pointer(Some(done), true, &rects), None);
+        assert_eq!(menu.page, PauseMenuPage::Developer);
+    }
 
-        // Frame 2: the SAME press is still held, over the Quit button now
-        // under the pointer. It must not activate.
+    #[test]
+    fn resume_preserves_navigation_and_cannot_repeat_on_a_held_press() {
+        use dev_params_panel::{DevParamsEvent, DevParamsLocation};
+        let rects = menu_rects(None);
+        let mut menu = PauseMenu::new();
+        let location = DevParamsLocation {
+            category: Some(crate::dev_params::DevCategory::Body),
+            locked: false,
+        };
+        menu.navigation.lock().unwrap().enter(location);
+        *menu.navigation.lock().unwrap().scroll_mut() = 2;
+        menu.open();
+        menu.handle_root_entry(Some(PauseMenuEntry::Developer));
+        menu.menu.set_last_pressed(false);
+        let done = menu.panel_rects.done_center();
         assert_eq!(
             menu.consume_pointer(Some(done), true, &rects),
-            None,
-            "a held press must not fall through onto Quit after the page turn"
+            Some(PauseAction::Resume)
         );
-        assert!(menu.is_open());
-
-        // Only a real release and a fresh press reaches Quit.
-        assert_eq!(menu.consume_pointer(Some(done), false, &rects), None);
+        assert_eq!(menu.consume_pointer(Some(done), true, &rects), None);
+        menu.close_after_click();
+        assert!(menu.suspends_scene());
+        menu.open();
+        assert_eq!(menu.page, PauseMenuPage::Root);
+        menu.handle_root_entry(Some(PauseMenuEntry::Developer));
+        assert_eq!(menu.navigation.lock().unwrap().location, location);
+        assert_eq!(menu.navigation.lock().unwrap().scroll(), 2);
         assert_eq!(
-            menu.consume_pointer(Some(done), true, &rects),
-            Some(PauseAction::QuitToMainMenu)
+            menu.handle_developer_event(Some(DevParamsEvent::Back)),
+            None
+        );
+        assert_eq!(
+            menu.navigation.lock().unwrap().location.category(),
+            crate::dev_params::DevCategory::Root
         );
     }
 

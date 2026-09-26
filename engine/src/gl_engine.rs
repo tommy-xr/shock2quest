@@ -36,7 +36,15 @@ impl Engine for OpenGLEngine {
             gl::Enable(gl::BLEND);
             // gl::Enable(gl::CULL_FACE);
             // gl::FrontFace(gl::CW);
-            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            // Shaders emit straight RGB; the framebuffer accumulates
+            // premultiplied RGB. Preserve coverage alpha for the Quest
+            // passthrough compositor instead of multiplying alpha by itself.
+            gl::BlendFuncSeparate(
+                gl::SRC_ALPHA,
+                gl::ONE_MINUS_SRC_ALPHA,
+                gl::ONE,
+                gl::ONE_MINUS_SRC_ALPHA,
+            );
             gl::ClearColor(0.0, 0.0, 0.0, 0.0);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
@@ -126,15 +134,30 @@ impl Engine for OpenGLEngine {
 
                 // SINGLE-PASS LIGHTING: Opaque pass with all lighting calculated
                 // in shaders.
-                scene
-                    .objects_in_layer(layer)
-                    .for_each(|s| s.draw_opaque(self, render_context, &view, scene.lights()));
+                scene.objects_in_layer(layer).for_each(|s| {
+                    // An object's own lights don't replace the scene's - the
+                    // player's hand lights live there, and a torch pointed at a
+                    // prop has to light it.
+                    let merged = s.lights().map(|o| o.merged_with(scene.lights()));
+                    s.draw_opaque(
+                        self,
+                        render_context,
+                        &view,
+                        merged.as_ref().unwrap_or(scene.lights()),
+                    )
+                });
 
                 // Transparent pass with all lighting calculated in shaders
                 gl::DepthMask(gl::FALSE);
-                scene
-                    .objects_in_layer(layer)
-                    .for_each(|s| s.draw_transparent(self, render_context, &view, scene.lights()));
+                scene.objects_in_layer(layer).for_each(|s| {
+                    let merged = s.lights().map(|o| o.merged_with(scene.lights()));
+                    s.draw_transparent(
+                        self,
+                        render_context,
+                        &view,
+                        merged.as_ref().unwrap_or(scene.lights()),
+                    )
+                });
                 gl::DepthMask(gl::TRUE);
             }
 

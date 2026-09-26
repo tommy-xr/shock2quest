@@ -56,7 +56,11 @@ impl SteeringStrategy for CollisionAvoidanceSteeringStrategy {
         // (vertical faces, so the mostly-vertical-normal filter doesn't
         // reject them) and treats the descent the route chose as a wall.
         // Real walls extend above body center and are still seen.
-        let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
+        let position = get_position_from_transform(
+            world,
+            entity_id,
+            crate::creature::sense_offset(world, entity_id),
+        );
 
         let mut debug_lines = vec![];
 

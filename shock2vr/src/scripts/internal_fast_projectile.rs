@@ -2,6 +2,7 @@ use cgmath::{
     Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3,
     vec3, vec4,
 };
+use collision::Contains;
 use dark::SCALE_FACTOR;
 
 use shipyard::{EntityId, Get, View, World};
@@ -10,12 +11,10 @@ use crate::{
     creature::RuntimePropHitBox,
     mission::entity_creator::CreateEntityOptions,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
-    runtime_props::{RuntimePropProjectileRayOrigin, RuntimePropTransform},
-    scripts::{
-        Message,
-        ai::ai_util::does_entity_have_hitboxes,
-        script_util::{choose_impact_spang, play_impact_sound},
+    runtime_props::{
+        RuntimePropPlayerFiredProjectile, RuntimePropProjectileRayOrigin, RuntimePropTransform,
     },
+    scripts::script_util::{choose_impact_spang, play_impact_sound, projectile_contact_effects},
     time::Time,
     util::{get_position_from_transform, get_rotation_from_forward_vector},
 };
@@ -64,12 +63,15 @@ impl Script for InternalFastProjectileScript {
             .and_then(|origins| origins.get(entity_id).ok().map(|origin| origin.0));
         let start_point =
             maybe_camera_origin.unwrap_or(current_position - forward * SCALE_FACTOR * 0.25);
-        // A camera-origin ray starts at the player's eye, which is INSIDE the
-        // player's own capsule (the eye is the head sphere). Rapier's solid
-        // raycast reports a shape containing the origin as a hit at
-        // distance 0, so keeping `PLAYER` in the mask would make every flat
-        // shot hit the shooter instead of what the crosshair is on.
-        let can_hit_player = maybe_camera_origin.is_none();
+        // A player-fired shot must never hit the player. Rapier's solid raycast
+        // reports a shape containing the ray origin as a hit at distance 0, and
+        // the ray starts inside the player's own capsule in both presentations:
+        // flat rays start at the eye (the head sphere), and a VR ray starts at
+        // the weapon's muzzle, which is inside the capsule whenever the weapon
+        // is held in close to the body. Keeping `PLAYER` in the mask makes the
+        // shot spang on the shooter before it travels. AI and turret
+        // projectiles carry no marker and can still hit the player.
+        let can_hit_player = !is_player_fired(world, entity_id);
         let maybe_hit_spot = projectile_ray_cast(
             start_point,
             forward,
@@ -99,30 +101,14 @@ impl Script for InternalFastProjectileScript {
             };
 
             let mut effects = vec![
-                Effect::Send {
-                    msg: Message {
-                        to: hit_entity_id,
-                        // TODO: Properly calculate damage
-                        payload: MessagePayload::Damage {
-                            amount: 6.0,
-                            // The shot's travel direction + hit point seed the
-                            // victim's death-ragdoll reaction. Bone is filled
-                            // in by the hitbox script when a hitbox was struck.
-                            impact: {
-                                let travel = hit_point - start_point;
-                                if travel.magnitude2() > 1.0e-12 {
-                                    Some(crate::scripts::DamageImpact {
-                                        direction: travel.normalize(),
-                                        point: hit_point.to_vec(),
-                                        bone: None,
-                                    })
-                                } else {
-                                    None
-                                }
-                            },
-                        },
-                    },
-                },
+                projectile_contact_effects(world, entity_id, hit_entity_id, {
+                    let travel = hit_point - start_point;
+                    (travel.magnitude2() > 1.0e-12).then(|| crate::scripts::DamageImpact {
+                        direction: travel.normalize(),
+                        point: hit_point.to_vec(),
+                        bone: None,
+                    })
+                }),
                 Effect::DrawDebugLines {
                     lines: vec![(start_point, hit_point, color)],
                 },
@@ -173,15 +159,54 @@ impl Script for InternalFastProjectileScript {
     }
 }
 
+/// Whether this projectile came out of a weapon the player fired (every
+/// `weapon_script::create_projectile` shot - flat and VR alike).
+fn is_player_fired(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<RuntimePropPlayerFiredProjectile>>()
+        .is_ok_and(|fired| fired.contains(entity_id))
+}
+
+/// Whether a collider is one of this creature's own hitboxes. Read from the
+/// proxy's `parent_entity_id` - the fact that says whose limb this is - rather
+/// than from the generic proxy link `resolve_proxy_entity` follows.
 fn hitbox_belongs_to_entity(world: &World, hitbox_entity: EntityId, parent: EntityId) -> bool {
     world
         .borrow::<View<RuntimePropHitBox>>()
-        .is_ok_and(|hitboxes| {
-            hitboxes
+        .ok()
+        .and_then(|hit_boxes| {
+            hit_boxes
                 .get(hitbox_entity)
-                .is_ok_and(|hitbox| hitbox.parent_entity_id == parent)
+                .ok()
+                .map(|hb| hb.parent_entity_id)
         })
+        == Some(parent)
 }
+
+/// Whether the shot started inside this entity's own bounds - a weapon pressed
+/// against a creature. Its limb proxies can then all lie behind the muzzle,
+/// so the coarse capsule hit is the only thing left that means "I shot the
+/// creature I am standing in".
+fn fired_from_inside(
+    physics: &PhysicsWorld,
+    start_point: Point3<f32>,
+    entity_id: EntityId,
+) -> bool {
+    physics
+        .get_aabb2(entity_id)
+        .is_some_and(|bounds| bounds.contains(&start_point))
+}
+
+/// How many creature capsules one shot may pass through before it gives up and
+/// keeps whatever it last hit. A shot threading two creatures' gaps is already
+/// unusual; this only bounds the work.
+const MAX_PASS_THROUGH: usize = 4;
+
+/// How far a shot reaches, in world units. The shipped value: `ray_cast`
+/// normalizes its direction and caps the cast at 100, so the caller's nominal
+/// 1000 never applied. Kept explicit here so the range stays what it has
+/// always been rather than becoming ten times longer by accident.
+const MAX_RANGE: f32 = 100.0;
 
 fn projectile_ray_cast(
     start_point: Point3<f32>,
@@ -196,72 +221,188 @@ fn projectile_ray_cast(
     } else {
         InternalCollisionGroups::empty()
     };
-    let mut maybe_hit_spot = physics.ray_cast(
-        start_point,
-        forward * distance,
-        InternalCollisionGroups::ENTITIES
-            // Sometimes, the hitbox can stick out past the bounding box...
-            // so we should still check for it here
-            | InternalCollisionGroups::HITBOX
-            | player_group
-            | InternalCollisionGroups::SELECTABLE
-            | InternalCollisionGroups::WORLD,
-    );
+    let distance = distance.min(MAX_RANGE);
+    let coarse_groups = InternalCollisionGroups::ENTITIES
+        // Sometimes, the hitbox can stick out past the bounding box...
+        // so we should still check for it here
+        | InternalCollisionGroups::HITBOX
+        | player_group
+        | InternalCollisionGroups::SELECTABLE
+        | InternalCollisionGroups::WORLD;
 
-    // If we hit an entity with a hitbox, scan again for the hitbox
-    if let Some(hit_spot) = &maybe_hit_spot {
-        //let hit_spot = &maybe_hit_spot.unwrap();
+    // Creatures whose *capsule* the shot has already passed through: it found
+    // no limb of theirs on this line. Their proxies stay in play - if a later
+    // pass finds one, that is a genuine limb hit and wins.
+    let mut passed_through: Vec<EntityId> = Vec::new();
+    for pass in 0..=MAX_PASS_THROUGH {
+        let is_not_passed_through = |entity_id: EntityId| !passed_through.contains(&entity_id);
+        let maybe_hit_spot = physics.ray_cast2_with_entity_filter(
+            start_point,
+            forward,
+            distance,
+            coarse_groups,
+            None,
+            true,
+            &is_not_passed_through,
+        );
 
-        if let Some(hit_entity_id) = &hit_spot.maybe_entity_id {
-            if does_entity_have_hitboxes(world, *hit_entity_id) {
-                let refined_hit = physics.ray_cast(
-                    start_point,
-                    forward * distance,
-                    InternalCollisionGroups::HITBOX
-                        | InternalCollisionGroups::SELECTABLE
-                        | InternalCollisionGroups::WORLD,
-                );
-                // Prefer the authored damage proxy when the ray intersects one.
-                // If the coarse creature capsule surrounds the ray origin but
-                // its proxies do not cover that exact line, retain the coarse
-                // entity hit instead of turning a contact-range shot into a
-                // terrain impact beyond the creature.
-                let refined_hits_target_hitbox = refined_hit
-                    .as_ref()
-                    .and_then(|hit| hit.maybe_entity_id)
-                    .is_some_and(|entity_id| {
-                        hitbox_belongs_to_entity(world, entity_id, *hit_entity_id)
-                    });
-                if refined_hits_target_hitbox {
-                    maybe_hit_spot = refined_hit;
-                }
-            }
+        let Some(hit_spot) = &maybe_hit_spot else {
+            return maybe_hit_spot;
+        };
+        let Some(hit_entity_id) = hit_spot.maybe_entity_id else {
+            return maybe_hit_spot;
+        };
+        // Live proxies, not the creature definition: an authored corpse
+        // carries `PropCreature` but is never animated and has none. Reading
+        // the definition would refine against hitboxes that do not exist and
+        // then pass the shot straight through the body.
+        // Out of passes: take the nearest thing that is left, capsule or not.
+        if pass == MAX_PASS_THROUGH {
+            return maybe_hit_spot;
         }
+        if !crate::creature::has_live_hit_boxes(world, hit_entity_id) {
+            return maybe_hit_spot;
+        }
+
+        // The coarse hit is a creature's capsule; the shot really landed on
+        // whichever of its hitboxes the line crosses.
+        let refined_hit = physics.ray_cast2_with_entity_filter(
+            start_point,
+            forward,
+            distance,
+            InternalCollisionGroups::HITBOX
+                | InternalCollisionGroups::SELECTABLE
+                | InternalCollisionGroups::WORLD,
+            None,
+            true,
+            &is_not_passed_through,
+        );
+        let refined_hits_target_hitbox = refined_hit
+            .as_ref()
+            .and_then(|hit| hit.maybe_entity_id)
+            .is_some_and(|entity_id| hitbox_belongs_to_entity(world, entity_id, hit_entity_id));
+        if refined_hits_target_hitbox {
+            // Found the limb: that is the hit, and its joint rides along on
+            // the damage.
+            return refined_hit;
+        }
+        if !crate::creature::hit_boxes_cover_body(world, hit_entity_id) {
+            // The creature's hitboxes do not stand in for its body: the
+            // Overlord maps a single `Body` joint, so its limbs have no proxy
+            // at all. Passing through would make whole bands of it
+            // unshootable, so the capsule keeps the shot (with no joint to
+            // report). Widening that definition is the fix that would let
+            // it join the rule above.
+            return maybe_hit_spot;
+        }
+        if fired_from_inside(physics, start_point, hit_entity_id) {
+            // Point blank, with the capsule around the muzzle: the proxies may
+            // all be behind the origin, and a shot pressed into a creature
+            // must not become a terrain impact past it. Keep the coarse hit.
+            return maybe_hit_spot;
+        }
+        // The line crossed the capsule without touching a limb - between the
+        // arm and the ribs, say. The capsule is a movement volume, not the
+        // creature, so the shot carries on to whatever is behind it.
+        passed_through.push(hit_entity_id);
     }
-
-    // TODO: If we missed the entity in the hitbox, we should still raycast through to see if we hit anything else
-    // This should be called recursively with some limit (ie, depth=3) to handle those cases
-
-    maybe_hit_spot
+    None
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{hitbox_belongs_to_entity, projectile_ray_cast};
+    use super::{hitbox_belongs_to_entity, is_player_fired, projectile_ray_cast};
     use crate::creature::{HitBoxType, RuntimePropHitBox};
     use crate::physics::PhysicsWorld;
+    use crate::runtime_props::RuntimePropPlayerFiredProjectile;
     use cgmath::{Quaternion, point3, vec3};
-    use dark::SCALE_FACTOR;
+    use dark::properties::PropCreature;
     use shipyard::{EntityId, World};
 
     #[test]
-    fn projectile_raycast_hits_the_player_collider() {
+    fn grub_shots_hit_segments_beyond_support_and_miss_empty_support_volume() {
+        use crate::physics::CollisionGroup;
+        let mut world = World::new();
         let mut physics = PhysicsWorld::new();
+        let grub = world.add_entity((
+            dark::properties::PropAI("Grub".into()),
+            crate::creature::RuntimePropHasHitBoxes,
+        ));
+        physics.add_kinematic(
+            grub,
+            vec3(0.0, 0.2, 1.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.4, 0.4, 0.4),
+            CollisionGroup::actor(),
+            false,
+        );
+        let segment = world.add_entity(RuntimePropHitBox {
+            parent_entity_id: grub,
+            hit_box_type: HitBoxType::Body,
+            joint_id: 1,
+        });
+        physics.add_kinematic_shared_shape(
+            segment,
+            vec3(0.0, 0.0, 1.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            rapier3d::prelude::SharedShape::capsule_x(0.45, 0.075),
+            vec3(0.0, 0.0, 0.0),
+            CollisionGroup::hitbox(),
+            false,
+        );
+        let mut player =
+            physics.create_player(vec3(10.0, 10.0, 10.0), EntityId::from_inner(1000).unwrap());
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let cast = |x, y| {
+            projectile_ray_cast(
+                point3(x, y, 0.0),
+                vec3(0.0, 0.0, 1.0),
+                &physics,
+                2.0,
+                &world,
+                false,
+            )
+            .and_then(|hit| hit.maybe_entity_id)
+        };
+        assert_eq!(
+            cast(0.4, 0.0),
+            Some(segment),
+            "tail outside sphere is hittable"
+        );
+        assert_eq!(
+            cast(0.0, 0.3),
+            None,
+            "empty upper sphere cannot absorb a shot"
+        );
+        assert_eq!(cast(0.4, 0.12), None, "padding must remain bounded");
+    }
+
+    fn shooter_and_target_fixture() -> (PhysicsWorld, World, EntityId, EntityId) {
+        let mut physics = PhysicsWorld::new();
+        // Put the player's capsule between the ray origin and the target so
+        // changing only the PLAYER mask changes which entity the ray hits.
         let player_entity = EntityId::from_inner(1).unwrap();
-        let mut player = physics.create_player(vec3(0.0, 0.0, 5.0), player_entity);
+        let mut player = physics.create_player(vec3(0.0, 0.0, 2.0), player_entity);
+
+        let target = EntityId::from_inner(2).unwrap();
+        physics.add_kinematic(
+            target,
+            vec3(0.0, 0.0, 5.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(2.0, 2.0, 2.0),
+            crate::physics::CollisionGroup::selectable(),
+            false,
+        );
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
 
-        let world = World::new();
+        (physics, World::new(), player_entity, target)
+    }
+
+    #[test]
+    fn projectile_raycast_hits_the_player_collider() {
+        let (physics, world, player_entity, _target) = shooter_and_target_fixture();
         let hit = projectile_ray_cast(
             point3(0.0, 0.0, 0.0),
             vec3(0.0, 0.0, 1.0),
@@ -278,44 +419,308 @@ mod tests {
         );
     }
 
-    /// The flat crosshair ray starts at the player's eye, which is inside the
-    /// player's own capsule (the eye is the head sphere). A solid raycast
-    /// reports a containing shape as a distance-0 hit, so the player's own
-    /// collider must be excluded or every flat shot hits the shooter.
     #[test]
-    fn camera_origin_projectile_shoots_past_the_shooters_own_collider() {
-        let mut physics = PhysicsWorld::new();
-        let player_entity = EntityId::from_inner(1).unwrap();
-        let mut player = physics.create_player(vec3(0.0, 0.0, 0.0), player_entity);
-        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
-        // The eye: on the capsule axis, inside the player's own collider.
-        let body = physics.get_player_translation(&player);
-        let eye = point3(
-            body.x,
-            body.y + crate::PLAYER_EYE_HEIGHT / SCALE_FACTOR,
-            body.z,
-        );
-
-        let target = EntityId::from_inner(2).unwrap();
-        physics.add_kinematic(
-            target,
-            vec3(0.0, eye.y, 5.0),
-            Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            vec3(0.0, 0.0, 0.0),
-            vec3(2.0, 2.0, 2.0),
-            crate::physics::CollisionGroup::selectable(),
+    fn player_fired_projectile_raycast_shoots_past_the_shooters_collider() {
+        let (physics, world, _player_entity, target) = shooter_and_target_fixture();
+        let hit = projectile_ray_cast(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            &physics,
+            10.0,
+            &world,
             false,
         );
-        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
-
-        let world = World::new();
-        let hit = projectile_ray_cast(eye, vec3(0.0, 0.0, 1.0), &physics, 10.0, &world, false);
 
         assert_eq!(
             hit.and_then(|result| result.maybe_entity_id),
             Some(target),
-            "a shot fired from the player's own eye must reach the target, not the shooter",
+            "a player-fired ray must reach the target, not the shooter",
         );
+    }
+
+    /// A creature whose capsule the shot crosses without touching a limb is
+    /// not what the shot hit: the capsule is a movement volume, wider than the
+    /// creature. The shot carries on to the wall behind it.
+    ///
+    /// Negative-first: keeping the coarse hit bills the creature for a shot
+    /// that passed beside it, with no joint to show for it.
+    #[test]
+    fn a_shot_through_the_gap_beside_a_limb_passes_the_creature_by() {
+        let mut physics = PhysicsWorld::new();
+        let mut world = World::new();
+
+        // The creature's capsule spans the line of fire...  Creature type 0 is
+        // HUMAN, whose definition maps fifteen joints, so its hitboxes stand
+        // in for its body.
+        let creature = world.add_entity((crate::creature::RuntimePropHasHitBoxes, PropCreature(0)));
+        physics.add_kinematic(
+            creature,
+            vec3(0.0, 0.0, 5.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(3.0, 3.0, 1.0),
+            crate::physics::CollisionGroup::actor(),
+            false,
+        );
+        // ...but its one hitbox sits well off to the side of it.
+        let hit_box = world.add_entity(RuntimePropHitBox {
+            parent_entity_id: creature,
+            hit_box_type: HitBoxType::Body,
+            joint_id: 1,
+        });
+        physics.add_kinematic(
+            hit_box,
+            vec3(1.2, 0.0, 5.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.4, 0.4, 0.4),
+            crate::physics::CollisionGroup::hitbox(),
+            false,
+        );
+        // The wall behind.
+        let wall = world.add_entity(());
+        physics.add_kinematic(
+            wall,
+            vec3(0.0, 0.0, 9.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(6.0, 6.0, 1.0),
+            crate::physics::CollisionGroup::selectable(),
+            false,
+        );
+
+        // A step so the broad phase sees the fresh bodies. The player is
+        // parked far behind the muzzle and never on the line of fire.
+        let mut player =
+            physics.create_player(vec3(0.0, 0.0, -50.0), EntityId::from_inner(9).unwrap());
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+        let hit = projectile_ray_cast(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            &physics,
+            20.0,
+            &world,
+            false,
+        );
+
+        assert_eq!(
+            hit.and_then(|result| result.maybe_entity_id),
+            Some(wall),
+            "a shot that crossed the capsule but no limb should reach the wall behind",
+        );
+    }
+
+    /// ...unless the muzzle is inside the creature. Its limbs can all lie
+    /// behind the ray origin, and a shot pressed into a body must not become a
+    /// terrain impact past it.
+    #[test]
+    fn a_point_blank_shot_still_hits_the_creature_it_is_pressed_into() {
+        let mut physics = PhysicsWorld::new();
+        let mut world = World::new();
+
+        let creature = world.add_entity((crate::creature::RuntimePropHasHitBoxes, PropCreature(0)));
+        physics.add_kinematic(
+            creature,
+            vec3(0.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(3.0, 3.0, 3.0),
+            crate::physics::CollisionGroup::actor(),
+            false,
+        );
+        let hit_box = world.add_entity(RuntimePropHitBox {
+            parent_entity_id: creature,
+            hit_box_type: HitBoxType::Body,
+            joint_id: 1,
+        });
+        // Behind the muzzle, so the refining cast cannot find it.
+        physics.add_kinematic(
+            hit_box,
+            vec3(0.0, 0.0, -1.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.4, 0.4, 0.4),
+            crate::physics::CollisionGroup::hitbox(),
+            false,
+        );
+        let wall = world.add_entity(());
+        physics.add_kinematic(
+            wall,
+            vec3(0.0, 0.0, 9.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(6.0, 6.0, 1.0),
+            crate::physics::CollisionGroup::selectable(),
+            false,
+        );
+
+        let mut player =
+            physics.create_player(vec3(0.0, 0.0, -50.0), EntityId::from_inner(9).unwrap());
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+        let hit = projectile_ray_cast(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            &physics,
+            20.0,
+            &world,
+            false,
+        );
+
+        assert_eq!(
+            hit.and_then(|result| result.maybe_entity_id),
+            Some(creature),
+            "a muzzle inside the creature keeps its coarse hit",
+        );
+    }
+
+    /// The Overlord maps a single `Body` joint, so its limbs have no proxy at
+    /// all. A shot that misses that one blob has not missed the creature -
+    /// passing through would leave whole bands of it unshootable - so it keeps
+    /// its capsule.
+    ///
+    /// Negative-first: without the coverage gate this shot reaches the wall.
+    #[test]
+    fn a_sparse_hitbox_creature_is_still_hit_on_its_capsule() {
+        let mut physics = PhysicsWorld::new();
+        let mut world = World::new();
+
+        // Creature type 5 is OVERLORD: one mapped joint.
+        let creature = world.add_entity((crate::creature::RuntimePropHasHitBoxes, PropCreature(5)));
+        physics.add_kinematic(
+            creature,
+            vec3(0.0, 0.0, 5.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(3.0, 3.0, 1.0),
+            crate::physics::CollisionGroup::actor(),
+            false,
+        );
+        let hit_box = world.add_entity(RuntimePropHitBox {
+            parent_entity_id: creature,
+            hit_box_type: HitBoxType::Body,
+            joint_id: 0,
+        });
+        // Off to the side, as a body blob is from the limbs.
+        physics.add_kinematic(
+            hit_box,
+            vec3(1.2, 0.0, 5.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.4, 0.4, 0.4),
+            crate::physics::CollisionGroup::hitbox(),
+            false,
+        );
+        let wall = world.add_entity(());
+        physics.add_kinematic(
+            wall,
+            vec3(0.0, 0.0, 9.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(6.0, 6.0, 1.0),
+            crate::physics::CollisionGroup::selectable(),
+            false,
+        );
+        let mut player =
+            physics.create_player(vec3(0.0, 0.0, -50.0), EntityId::from_inner(9).unwrap());
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+        let hit = projectile_ray_cast(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            &physics,
+            20.0,
+            &world,
+            false,
+        );
+
+        assert_eq!(
+            hit.and_then(|result| result.maybe_entity_id),
+            Some(creature),
+            "a creature whose hitboxes do not cover it keeps taking capsule hits",
+        );
+    }
+
+    /// An authored corpse carries `PropCreature` - so the creature definition
+    /// says "hitboxes" - but is never animated and has none. Refining against
+    /// hitboxes that do not exist would pass every shot straight through the
+    /// body.
+    #[test]
+    fn a_body_with_no_live_hitboxes_still_stops_the_shot() {
+        let mut physics = PhysicsWorld::new();
+        let mut world = World::new();
+
+        // No `RuntimePropHasHitBoxes`: the proxies were never built.
+        let corpse = world.add_entity(());
+        physics.add_kinematic(
+            corpse,
+            vec3(0.0, 0.0, 5.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(3.0, 3.0, 1.0),
+            crate::physics::CollisionGroup::selectable(),
+            false,
+        );
+        let wall = world.add_entity(());
+        physics.add_kinematic(
+            wall,
+            vec3(0.0, 0.0, 9.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(6.0, 6.0, 1.0),
+            crate::physics::CollisionGroup::selectable(),
+            false,
+        );
+        let mut player =
+            physics.create_player(vec3(0.0, 0.0, -50.0), EntityId::from_inner(9).unwrap());
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+        let hit = projectile_ray_cast(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            &physics,
+            20.0,
+            &world,
+            false,
+        );
+
+        assert_eq!(
+            hit.and_then(|result| result.maybe_entity_id),
+            Some(corpse),
+            "a body with no hitboxes is hit on its own collider, as it always was",
+        );
+    }
+
+    /// A VR shot carries no camera origin, so before this marker its ray kept
+    /// `PLAYER` in the mask. Held in close to the body - a natural chest or hip
+    /// hold - the muzzle sits inside the player's own capsule, and a solid
+    /// raycast reports the containing shape as a hit at distance 0: the shot
+    /// spanged on the shooter instead of leaving the weapon, spending psi/ammo
+    /// and damaging the player. What excludes the player is now this marker,
+    /// set by `create_projectile` in BOTH presentations, rather than the
+    /// incidental presence of a camera origin.
+    ///
+    /// This asserts only the predicate. The containment itself is not
+    /// reproducible in a bare `PhysicsWorld` - the sibling raycast tests below
+    /// pass with `can_hit_player` either way, so they never covered it - so the
+    /// behavioural regression test is the earth.mis e2e
+    /// (`earth-psi-cryo-self-hit.e2e.test.ts`), which fires the mission's own
+    /// psi amp from a natural hold and requires the bolt to survive.
+    #[test]
+    fn a_projectile_from_create_projectile_is_marked_player_fired() {
+        let mut world = World::new();
+        let projectile = world.add_entity(RuntimePropPlayerFiredProjectile);
+        assert!(is_player_fired(&world, projectile));
+    }
+
+    /// The counterpart gate: an unmarked projectile (AI, turret) still hits the
+    /// player, so the fix cannot be "never hit the player".
+    #[test]
+    fn an_unmarked_projectile_is_not_player_fired() {
+        let mut world = World::new();
+        let ai_projectile = world.add_entity(());
+        assert!(!is_player_fired(&world, ai_projectile));
     }
 
     #[test]

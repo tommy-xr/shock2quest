@@ -89,6 +89,46 @@ fn process_model(
 pub static MODELS_IMPORTER: Lazy<AssetImporter<SystemShockContentModel, Model, ()>> =
     Lazy::new(|| AssetImporter::define(load_model, process_model));
 
+/// Visible, bind-pose triangles of an LGMD pickup, in the same units and
+/// sub-object frames as the renderer. Animated creatures/weapons deliberately
+/// have no surface here: their moving parts need a separate grip policy.
+pub static GRIP_SURFACE_IMPORTER: Lazy<
+    AssetImporter<SystemShockContentModel, Vec<[Point3<f32>; 3]>, ()>,
+> = Lazy::new(|| {
+    AssetImporter::define(load_model, |content, _, _| {
+        let SystemShockContentModel::Obj(mesh) = content else {
+            return Vec::new();
+        };
+        object_triangles(&mesh)
+    })
+});
+
+/// Same triangulation and rest transforms for pickup fitting and weapon fitting.
+fn object_triangles(mesh: &SystemShock2ObjectMesh) -> Vec<[Point3<f32>; 3]> {
+    let transforms = ss2_bin_obj_loader::sub_object_transforms(mesh);
+    let mut buffers = ss2_bin_obj_loader::to_vertices(mesh)
+        .into_iter()
+        .collect::<Vec<_>>();
+    buffers.sort_by_key(|(slot, _)| *slot);
+    buffers
+        .into_iter()
+        .flat_map(|(_, vertices)| {
+            vertices
+                .chunks_exact(3)
+                .map(|triangle| {
+                    std::array::from_fn(|i| {
+                        // LGMD front faces are clockwise; Parry's oriented
+                        // surface queries expect counter-clockwise triangles.
+                        let vertex = &triangle[[0, 2, 1][i]];
+                        let transform = transforms[vertex.bone_indices[0] as usize].1;
+                        Point3::from_homogeneous(transform * vertex.position.extend(1.0))
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// Whether `name` is a material the 25th Anniversary Edition draws the player's
 /// hand and forearm with on a first-person weapon model (`obj/*_h.bin`).
 ///
@@ -225,11 +265,57 @@ fn split_at_terminal_joint(
         .partition(|vertex| rigid_joint(vertex) == Some(terminal_joint))
 }
 
-fn weapon_geometry(mesh: &SystemShockContentModel) -> Option<VrHeldWeaponGeometry> {
-    let SystemShockContentModel::Mesh(ai_mesh, skeleton, pmnm) = mesh else {
-        return None;
-    };
+/// The weapon-only geometry of an LGMD first-person model (the 25AE gun `_h`
+/// meshes, and any classic world model wielded as-is).
+///
+/// These carry no skeleton of their own: the "joints" are the sub-object
+/// hierarchy, which is how a slide or a magazine moves, and the renderer poses
+/// them through exactly the skeleton [`ss2_bin_obj_loader::obj_skeleton`]
+/// builds. The weapon/arm split is by material rather than by terminal joint -
+/// a gun's arm is not a joint, it is `ND-arm*` geometry that can ride any
+/// sub-object (see [`is_first_person_arm_material`]).
+///
+/// Like both skinned branches below, this measures the *authored* geometry: the
+/// renderer additionally drops any slot whose texture will not resolve, and
+/// this fit does not. A model missing a texture would therefore be fitted
+/// slightly larger than it draws - which is the safe direction (the weapon
+/// stops short rather than sinking in), and is how the melee fit has always
+/// behaved.
+fn obj_weapon_geometry(obj: &SystemShock2ObjectMesh) -> Option<VrHeldWeaponGeometry> {
+    let mut vertices = Vec::new();
+    let mut arm_vertices = Vec::new();
+    for (material, run) in ss2_bin_obj_loader::to_vertices_by_material(obj) {
+        if is_first_person_arm_material(&material) {
+            arm_vertices.extend(run);
+        } else {
+            vertices.extend(run);
+        }
+    }
 
+    (!vertices.is_empty()).then(|| VrHeldWeaponGeometry {
+        vertices,
+        arm_vertices,
+        skeleton: Rc::new(ss2_bin_obj_loader::obj_skeleton(obj)),
+        bind: None,
+    })
+}
+
+fn weapon_geometry(mesh: &SystemShockContentModel) -> Option<VrHeldWeaponGeometry> {
+    match mesh {
+        SystemShockContentModel::Obj(obj) => obj_weapon_geometry(obj),
+        SystemShockContentModel::Mesh(ai_mesh, skeleton, pmnm) => {
+            skinned_weapon_geometry(ai_mesh, skeleton, pmnm)
+        }
+    }
+}
+
+/// The weapon-only geometry of an LGMM skinned first-person model - the melee
+/// `_h` rigs, with or without a 25AE high-detail `PMNM` chunk.
+fn skinned_weapon_geometry(
+    ai_mesh: &SystemShock2AIMesh,
+    skeleton: &Rc<Skeleton>,
+    pmnm: &Option<crate::ss2_bin_pmnm::PmnmMesh>,
+) -> Option<VrHeldWeaponGeometry> {
     if let Some(pmnm) = pmnm {
         let runs = pmnm.to_skinned_vertices();
         let has_named_arm = runs
@@ -277,6 +363,26 @@ fn weapon_geometry(mesh: &SystemShockContentModel) -> Option<VrHeldWeaponGeometr
     })
 }
 
+fn skinned_point(
+    vertex: &VertexPositionTextureSkinnedNormal,
+    palette: &[Matrix4<f32>; SKINNING_PALETTE_SIZE],
+) -> Option<Point3<f32>> {
+    let point = vertex.position.extend(1.0);
+    let mut skinned = Vector4::new(0.0, 0.0, 0.0, 0.0);
+    let mut total_weight = 0.0;
+    for (joint, weight) in vertex.bone_indices.iter().zip(vertex.bone_weights) {
+        if weight > 0.0 {
+            skinned += palette.get(*joint as usize)? * point * weight;
+            total_weight += weight;
+        }
+    }
+    Some(Point3::from_homogeneous(if total_weight > 0.0 {
+        skinned
+    } else {
+        point
+    }))
+}
+
 fn bounds_of_skinned_vertices(
     vertices: &[VertexPositionTextureSkinnedNormal],
     palette: &[Matrix4<f32>; SKINNING_PALETTE_SIZE],
@@ -286,19 +392,9 @@ fn bounds_of_skinned_vertices(
     let mut max = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
 
     for vertex in vertices {
-        let point = Vector4::new(vertex.position.x, vertex.position.y, vertex.position.z, 1.0);
-        let mut skinned = Vector4::new(0.0, 0.0, 0.0, 0.0);
-        let mut total_weight = 0.0;
-        for (joint, weight) in vertex.bone_indices.iter().zip(vertex.bone_weights) {
-            if weight > 0.0 {
-                let matrix = palette.get(*joint as usize)?;
-                skinned += matrix * point * weight;
-                total_weight += weight;
-            }
-        }
-        let skinned = if total_weight > 0.0 { skinned } else { point };
-        let local = local_transform * skinned;
-        let p = Point3::new(local.x, local.y, local.z);
+        let p = Point3::from_homogeneous(
+            local_transform * skinned_point(vertex, palette)?.to_homogeneous(),
+        );
         if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
             return None;
         }
@@ -330,6 +426,97 @@ fn process_vr_held_model(
 
 pub static VR_HELD_MODELS_IMPORTER: Lazy<AssetImporter<SystemShockContentModel, VrHeldModel, ()>> =
     Lazy::new(|| AssetImporter::define(load_model, process_vr_held_model));
+
+/// Weapon-only LGMD model and the authored arm used to seed glove fitting.
+/// A distinct cache type leaves flat viewmodels and the legacy VR fallback intact.
+pub struct GloveWeaponModel {
+    pub model: Model,
+    pub triangles: Vec<[Point3<f32>; 3]>,
+    pub arm_triangles: Vec<[Point3<f32>; 3]>,
+    pub melee_joints: Option<[Matrix4<f32>; MAX_SKINNED_JOINTS]>,
+}
+
+pub static GLOVE_WEAPON_IMPORTER: Lazy<
+    AssetImporter<SystemShockContentModel, Option<GloveWeaponModel>, ()>,
+> = Lazy::new(|| {
+    AssetImporter::define(load_model, |content, cache, _| {
+        let mesh = match content {
+            SystemShockContentModel::Obj(mesh) => mesh,
+            SystemShockContentModel::Mesh(mesh, skeleton, Some(mut pmnm)) => {
+                if !pmnm
+                    .materials
+                    .iter()
+                    .any(|m| is_melee_arm_material(&m.name))
+                {
+                    return None;
+                }
+                let clip = cache.get_opt(&super::ANIMATION_CLIP_IMPORTER, "ph212203_.mc")?;
+                let player = AnimationPlayer::with_root_motion_cancelled(
+                    &AnimationPlayer::from_completed_animation(clip),
+                );
+                let joints = player.get_transforms(&skeleton);
+                let bind = ss2_bin_ai_loader::pmnm_bind_matrices(&skeleton);
+                let palette = crate::model::build_palette(&joints, &skeleton, Some(&bind));
+                let mut triangles = Vec::new();
+                let mut arm_triangles = Vec::new();
+                for (name, vertices) in pmnm.to_skinned_vertices() {
+                    let target = if is_melee_arm_material(&name) {
+                        &mut arm_triangles
+                    } else {
+                        &mut triangles
+                    };
+                    for tri in vertices.chunks_exact(3) {
+                        let points: Option<Vec<_>> =
+                            tri.iter().map(|v| skinned_point(v, &palette)).collect();
+                        let points = points?;
+                        target.push([points[0], points[1], points[2]]);
+                    }
+                }
+                pmnm.materials.retain(|m| !is_melee_arm_material(&m.name));
+                if triangles.is_empty() || pmnm.materials.is_empty() {
+                    return None;
+                }
+                let model = Model::from_ai_bin(mesh, skeleton, Some(pmnm), cache)
+                    .with_animation_pose(&player);
+                // A missing PMNM material can make the model builder fall back
+                // to the classic mesh, whose arms were not removed.
+                if model.bind_matrices().is_none() {
+                    return None;
+                }
+                return Some(GloveWeaponModel {
+                    model,
+                    triangles,
+                    arm_triangles,
+                    melee_joints: Some(joints),
+                });
+            }
+            _ => return None,
+        };
+        let arms = ss2_bin_obj_loader::retain_materials(mesh.clone(), is_first_person_arm_material);
+        let arm_triangles = object_triangles(&arms);
+        // An unrecognized material layout must keep its authored fallback.
+        if arm_triangles.is_empty()
+            && !mesh
+                .materials
+                .iter()
+                .any(|m| m.name.to_ascii_lowercase().starts_with("nd-"))
+        {
+            return None;
+        }
+        let weapon =
+            ss2_bin_obj_loader::retain_materials(mesh, |name| !is_first_person_arm_material(name));
+        let triangles = object_triangles(&weapon);
+        if triangles.is_empty() {
+            return None;
+        }
+        Some(GloveWeaponModel {
+            model: Model::from_obj_bin(weapon, cache),
+            triangles,
+            arm_triangles,
+            melee_joints: None,
+        })
+    })
+});
 
 /// Newtype so this importer gets its own [`AssetCache`] bucket.
 ///
@@ -440,3 +627,50 @@ mod tests {
         assert!(!is_melee_arm_material("ND-wrench.psd"));
     }
 }
+
+/// Cached, posed weapon surface without the authored first-person forearm.
+/// Uses the same material/terminal-joint split as held-weapon fitting, including
+/// classic LGMM meshes that do not contain a high-detail PMNM extension.
+pub struct WeaponSurface {
+    pub triangles: Vec<[Point3<f32>; 3]>,
+    pub object: engine::scene::SceneObject,
+}
+
+pub static WEAPON_SURFACE_IMPORTER: Lazy<
+    AssetImporter<SystemShockContentModel, Option<WeaponSurface>, ()>,
+> = Lazy::new(|| {
+    AssetImporter::define(load_model, |content, cache, _| {
+        use cgmath::EuclideanSpace;
+        let geometry = weapon_geometry(&content)?;
+        let clip = cache.get_opt(&super::ANIMATION_CLIP_IMPORTER, "ph212203_.mc")?;
+        let player = AnimationPlayer::with_root_motion_cancelled(
+            &AnimationPlayer::from_completed_animation(clip),
+        );
+        let joints = player.get_transforms(&geometry.skeleton);
+        let palette =
+            crate::model::build_palette(&joints, &geometry.skeleton, geometry.bind.as_ref());
+        let mut triangles = Vec::new();
+        for tri in geometry.vertices.chunks_exact(3) {
+            triangles.push([
+                skinned_point(&tri[0], &palette)?,
+                skinned_point(&tri[1], &palette)?,
+                skinned_point(&tri[2], &palette)?,
+            ]);
+        }
+        if triangles.is_empty() {
+            return None;
+        }
+        let vertices = triangles
+            .iter()
+            .flatten()
+            .map(|p| engine::scene::VertexPosition {
+                position: p.to_vec(),
+            })
+            .collect();
+        let object = engine::scene::SceneObject::new(
+            engine::scene::color_material::create(Vector3::new(1.0, 1.0, 1.0)),
+            Box::new(engine::scene::mesh::create(vertices)),
+        );
+        Some(WeaponSurface { triangles, object })
+    })
+});

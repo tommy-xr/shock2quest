@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::io::Cursor;
 use std::rc::Rc;
+use std::time::Instant;
 
 use cgmath::{Vector3, vec3};
 use rodio::buffer::SamplesBuffer;
@@ -51,6 +52,41 @@ impl AudioHandle {
 
 pub struct AudioChannel {
     name: String,
+}
+
+/// A live, sink-owned loop. Elapsed time follows the audio wall clock.
+pub struct ActiveLoop<T> {
+    pub handle: u64,
+    pub sample: String,
+    pub owner: &'static str,
+    pub source: Option<T>,
+    pub elapsed_secs: f64,
+}
+
+struct LoopPlayback {
+    handle: u64,
+    sample: String,
+    started: Instant,
+}
+
+impl LoopPlayback {
+    fn new(handle: u64, clip: &AudioClip) -> Self {
+        Self {
+            handle,
+            sample: clip.sample.clone(),
+            started: Instant::now(),
+        }
+    }
+
+    fn snapshot<T>(&self, owner: &'static str, source: Option<T>) -> ActiveLoop<T> {
+        ActiveLoop {
+            handle: self.handle,
+            sample: self.sample.clone(),
+            owner,
+            source,
+            elapsed_secs: self.started.elapsed().as_secs_f64(),
+        }
+    }
 }
 
 /// Gain, stereo channel attenuation and repeat behavior for
@@ -197,20 +233,21 @@ where
     sinks: Vec<Sink>,
     channel_to_last_handle: HashMap<String, u64>,
     handle_to_sink: HashMap<u64, SinkAdapter<TAmbientKey>>,
+    handle_loops: HashMap<u64, LoopPlayback>,
     // Background music
     background_music: Option<Sink>,
     background_music_player: Option<Box<dyn BackgroundMusic<TCue>>>,
     next_music_cue: Option<TCue>,
 
     // Environmental sounds
-    environmental_sink: Option<(Sink, Rc<AudioClip>)>,
+    environmental_sink: Option<(Sink, LoopPlayback)>,
 
     // Position audio context
     last_left_ear_position: Vector3<f32>,
     last_right_ear_position: Vector3<f32>,
 
     // Ambient, positional sounds
-    ambient_sounds: HashMap<TAmbientKey, (SpatialSink, Rc<AudioClip>)>,
+    ambient_sounds: HashMap<TAmbientKey, (SpatialSink, LoopPlayback)>,
 }
 
 impl<TAmbientKey, TCue> Default for AudioContext<TAmbientKey, TCue>
@@ -236,6 +273,7 @@ where
             sinks: vec![],
             //spatial_sinks: vec![],
             handle_to_sink: HashMap::new(),
+            handle_loops: HashMap::new(),
             channel_to_last_handle: HashMap::new(),
             background_music: None,
             background_music_player: None,
@@ -254,11 +292,15 @@ where
         &mut self,
         background_music_player: Box<dyn BackgroundMusic<TCue>>,
     ) {
+        self.stop_background_music();
         self.background_music_player = Some(background_music_player);
         self.next_music_cue = None;
     }
 
     pub fn stop_background_music(&mut self) {
+        if let Some(sink) = self.background_music.take() {
+            sink.stop();
+        }
         self.background_music_player = None;
         self.next_music_cue = None;
     }
@@ -268,11 +310,51 @@ where
     }
 
     pub fn set_environmental_sound(&mut self, clip: Rc<AudioClip>) {
+        self.stop_environmental_sound();
         let sink = rodio::Sink::try_new(&self.handle).unwrap();
-        clip.add_to_sink(&sink);
+        clip.add_to_sink_looping(&sink);
         sink.set_volume(0.2);
         sink.play();
-        self.environmental_sink = Some((sink, clip.clone()));
+        self.environmental_sink = Some((sink, LoopPlayback::new(AudioHandle::new().id(), &clip)));
+    }
+
+    pub fn stop_environmental_sound(&mut self) {
+        if let Some((sink, _)) = self.environmental_sink.take() {
+            sink.stop();
+        }
+    }
+
+    /// Mission beds belong to the outgoing scene, including silent loading/menu scenes.
+    pub fn stop_ambient_sounds(&mut self) {
+        self.stop_environmental_sound();
+        for (_, (sink, _)) in self.ambient_sounds.drain() {
+            sink.stop();
+        }
+    }
+
+    pub fn active_loops(&self) -> Vec<ActiveLoop<TAmbientKey>> {
+        let mut loops = Vec::new();
+        for (handle, playback) in &self.handle_loops {
+            if self
+                .handle_to_sink
+                .get(handle)
+                .is_some_and(|sink| !sink.empty())
+            {
+                loops.push(playback.snapshot("scene", None));
+            }
+        }
+        if let Some((sink, playback)) = &self.environmental_sink {
+            if !sink.empty() {
+                loops.push(playback.snapshot("environmental", None));
+            }
+        }
+        for (entity, (sink, playback)) in &self.ambient_sounds {
+            if !sink.empty() {
+                loops.push(playback.snapshot("ambient_emitter", Some(*entity)));
+            }
+        }
+        loops.sort_by_key(|entry| entry.handle);
+        loops
     }
 
     pub fn update<F>(
@@ -286,7 +368,6 @@ where
     {
         audio_log!(DEBUG, "Audio system update started");
         self.update_background_music();
-        self.update_environmental_sounds();
 
         trace!(
             "updating {} ambient sounds...",
@@ -308,6 +389,8 @@ where
         );
 
         self.handle_to_sink.retain(|_, sink| !sink.empty());
+        self.handle_loops
+            .retain(|handle, _| self.handle_to_sink.contains_key(handle));
         // Update positional sounds
         for sink in self.handle_to_sink.values_mut() {
             sink.update_spatial_position(
@@ -324,13 +407,9 @@ where
         }
 
         let mut sounds_to_remove = HashSet::new();
-        // First pass - check existing ambient sounds, update position, and see if they have completed
-        for (key, (sink, clip)) in &self.ambient_sounds {
+        // Refresh nearby emitters; explicitly stop those that left the active set.
+        for (key, (sink, _)) in &self.ambient_sounds {
             if let Some(current_sound) = current_sound_hash.get(key) {
-                if sink.len() == 0 {
-                    clip.add_to_spatial_sink(sink);
-                }
-
                 sink.set_emitter_position(to_audio_position(*current_sound.0));
 
                 // TODO
@@ -360,7 +439,12 @@ where
                 )
                 .unwrap();
 
-                self.ambient_sounds.insert(*key, (sink, clip.clone()));
+                clip.add_to_spatial_sink_looping(&sink);
+                sink.set_volume(0.5);
+                self.ambient_sounds.insert(
+                    *key,
+                    (sink, LoopPlayback::new(AudioHandle::new().id(), clip)),
+                );
             }
         }
     }
@@ -387,18 +471,6 @@ where
             }
         }
     }
-
-    fn update_environmental_sounds(&mut self) {
-        if let Some((current_sink, clip)) = &self.environmental_sink {
-            if current_sink.len() == 0 {
-                let sink = rodio::Sink::try_new(&self.handle).unwrap();
-                clip.add_to_sink(&sink);
-                sink.set_volume(0.2);
-                sink.play();
-                self.environmental_sink = Some((sink, clip.clone()));
-            }
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -410,12 +482,31 @@ enum SourceType {
 #[derive(Clone)]
 pub struct AudioClip {
     source: SourceType,
+    sample: String,
     /// Total playback length, when the decoder can report it. Used by the
     /// audio log to tell how long a played clip occupies its channel.
     total_duration: Option<std::time::Duration>,
 }
 
 impl AudioClip {
+    pub fn with_sample_name(mut self, sample: String) -> Self {
+        self.sample = sample;
+        self
+    }
+
+    fn add_to_sink_looping(&self, sink: &Sink) {
+        match &self.source {
+            SourceType::Bytes(source) => sink.append(source.clone().repeat_infinite()),
+            SourceType::Raw(source) => sink.append(source.clone().repeat_infinite()),
+        }
+    }
+
+    fn add_to_spatial_sink_looping(&self, sink: &SpatialSink) {
+        match &self.source {
+            SourceType::Bytes(source) => sink.append(source.clone().repeat_infinite()),
+            SourceType::Raw(source) => sink.append(source.clone().repeat_infinite()),
+        }
+    }
     /// Playback length of the clip, if the underlying source knows it.
     pub fn total_duration(&self) -> Option<std::time::Duration> {
         self.total_duration
@@ -471,6 +562,7 @@ impl AudioClip {
         let source = decoder.buffered();
         AudioClip {
             source: SourceType::Bytes(source),
+            sample: String::new(),
             total_duration,
         }
     }
@@ -481,6 +573,7 @@ impl AudioClip {
         let source = samples.buffered();
         AudioClip {
             source: SourceType::Raw(source),
+            sample: String::new(),
             total_duration,
         }
     }
@@ -611,6 +704,7 @@ pub fn stop_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     handle: AudioHandle,
 ) {
     let maybe_sink = context.handle_to_sink.remove(&handle.id);
+    context.handle_loops.remove(&handle.id);
 
     if let Some(sink) = maybe_sink {
         sink.stop();
@@ -644,6 +738,11 @@ pub fn play_audio_with_settings<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     let preempted = prepare_audio_play(context, &handle, maybe_channel);
     let sink = rodio::Sink::try_new(&context.handle).unwrap();
     audio_clip.add_to_sink_with_settings(&sink, settings);
+    if settings.looping {
+        context
+            .handle_loops
+            .insert(id, LoopPlayback::new(id, &audio_clip));
+    }
 
     context.handle_to_sink.insert(id, SinkAdapter::fixed(sink));
     preempted
@@ -745,6 +844,7 @@ fn prepare_audio_play<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
         if let Some(audio) = maybe_previous_audio {
             let previous_id = *audio;
             let maybe_sink = context.handle_to_sink.remove(&previous_id);
+            context.handle_loops.remove(&previous_id);
 
             if let Some(sink) = maybe_sink {
                 if !sink.empty() {
@@ -759,6 +859,7 @@ fn prepare_audio_play<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
             .insert(channel.name, handle.id);
     }
 
+    context.handle_loops.remove(&handle.id);
     if let Some(current_channel) = context.handle_to_sink.get(&handle.id) {
         if !current_channel.empty() {
             current_channel.stop();
@@ -776,6 +877,54 @@ mod tests {
         wav_duration,
     };
     use cgmath::vec3;
+
+    #[test]
+    #[ignore = "requires an audio output device"]
+    fn stopping_and_replacing_music_retires_the_current_clip() {
+        struct Bed;
+        impl super::BackgroundMusic<String> for Bed {
+            fn next_clip(&mut self, _: Option<String>) -> Option<std::rc::Rc<AudioClip>> {
+                // Silence makes this a device-backed lifecycle test without
+                // an audible test tone. Keep it long enough to still be queued.
+                Some(std::rc::Rc::new(AudioClip::from_raw(
+                    1,
+                    8000,
+                    vec![0; 80000],
+                )))
+            }
+        }
+        let mut audio = super::AudioContext::<(), String>::new();
+        audio.set_background_music(Box::new(Bed));
+        audio.update_background_music();
+        assert!(!audio.background_music.as_ref().unwrap().empty());
+        audio.set_background_music_cue("old event".into());
+        audio.set_background_music(Box::new(Bed));
+        assert!(
+            audio.background_music.is_none(),
+            "replacement must retire the old clip immediately"
+        );
+        assert!(audio.next_music_cue.is_none());
+        audio.update_background_music();
+        assert!(!audio.background_music.as_ref().unwrap().empty());
+        audio.stop_background_music();
+        audio.update_background_music();
+        assert!(
+            audio.background_music.is_none(),
+            "stop must leave no queued audio"
+        );
+        assert!(audio.background_music_player.is_none());
+    }
+
+    #[test]
+    fn environmental_bed_repeats_without_game_updates() {
+        let clip = AudioClip::from_raw(1, 48_000, vec![8192; 64]);
+        let (sink, mut output) = rodio::Sink::new_idle();
+        clip.add_to_sink_looping(&sink);
+        let samples: Vec<_> = output.by_ref().take(1024).collect();
+        assert_eq!(samples.len(), 1024);
+        assert!(samples.iter().all(|sample| *sample > 0.2));
+        sink.stop();
+    }
 
     /// Chunk boundaries must be inaudible: the source is one continuous
     /// soundtrack, whatever sizes the decoder happened to hand over.

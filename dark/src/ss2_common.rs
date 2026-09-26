@@ -25,10 +25,11 @@ pub struct LevelChunk {
     pub length: u32, // Length of chunk, in bytes
 }
 
+/// Angles are stored as 16-bit turns: `0x10000` units make a full circle.
+pub const DEGREES_PER_ANGLE_UNIT: f32 = 360.0 / 65536.0;
+
 pub fn read_u16_angle<T: io::Read>(reader: &mut T) -> Deg<f32> {
-    let denom = 0x8000 as f32;
-    let v = read_u16(reader) as f32;
-    Deg(v * 180.0 / denom)
+    Deg(read_u16(reader) as f32 * DEGREES_PER_ANGLE_UNIT)
 }
 
 pub fn read_u16_vec3<T: io::Read>(reader: &mut T) -> Vector3<Deg<f32>> {
@@ -99,12 +100,12 @@ pub fn read_vec2<T: io::Read>(reader: &mut T) -> Vector2<f32> {
 }
 
 pub fn read_packed_normal(packed_vector: u32) -> Vector3<f32> {
-    // Unpack using OpenDarkEngine's exact algorithm
-    let raw_x = (((packed_vector & 0x0FFC) << 4) as i16) as f32 / 16384.0;
-    let raw_y = (((packed_vector >> 6) & 0x0FFC0) as i16) as f32 / 16384.0;
-    let raw_z = (((packed_vector >> 16) & 0x0FFC0) as i16) as f32 / 16384.0;
+    // Three signed 10-bit fields: x in the high bits, z in the low.
+    let x = (((packed_vector >> 16) & 0xFFC0) as i16) as f32 / 16384.0;
+    let y = (((packed_vector >> 6) & 0xFFC0) as i16) as f32 / 16384.0;
+    let z = (((packed_vector << 4) & 0xFFC0) as i16) as f32 / 16384.0;
 
-    Vector3::new(-raw_x, raw_z, raw_y)
+    Vector3::new(-x, z, y)
 }
 
 pub fn read_duration<T: io::Read>(reader: &mut T) -> Duration {
@@ -227,5 +228,19 @@ pub fn read_matrix<T: io::Read>(reader: &mut T) -> Decomposed<Vector3<f32>, Quat
             .invert(),
             disp: vec3(-pre_translation.x, pre_translation.z, pre_translation.y),
         }
+    }
+}
+
+#[cfg(test)]
+mod packed_normal_tests {
+    use super::*;
+
+    /// Dark packs x in the high 10 bits and z in the low, then converts to
+    /// engine axes like `read_vec3`: (x, y, z) -> (-x, z, y).
+    #[test]
+    fn packed_normal_axes_match_read_vec3() {
+        assert_eq!(read_packed_normal(0x4000_0000), vec3(-1.0, 0.0, 0.0));
+        assert_eq!(read_packed_normal(0x0010_0000), vec3(0.0, 0.0, 1.0));
+        assert_eq!(read_packed_normal(0x0000_0400), vec3(0.0, 1.0, 0.0));
     }
 }

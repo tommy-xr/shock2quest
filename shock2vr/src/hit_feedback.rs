@@ -171,6 +171,7 @@ pub fn hurt_schema(damage: f32) -> &'static str {
 /// and asked for its current strength, and knows nothing about rendering.
 #[derive(Debug, Default)]
 pub struct HitFeedback {
+    radiation: bool,
     /// Strength the current hit started at.
     peak: f32,
     /// Total and remaining lifetime of the current hit, in seconds.
@@ -192,12 +193,19 @@ impl HitFeedback {
     /// the peak and the lifetime are the larger of the incoming hit and what
     /// is already on screen.
     pub fn trigger(&mut self, damage: f32) {
+        self.radiation = false;
         if damage <= 0.0 {
             return;
         }
         self.peak = peak_opacity(damage).max(self.intensity());
         self.duration = duration_secs(damage).max(self.remaining);
         self.remaining = self.duration;
+    }
+
+    /// Radiation uses the same comfortable rim geometry, tinted green.
+    pub fn trigger_radiation(&mut self, damage: f32) {
+        self.trigger(damage);
+        self.radiation = true;
     }
 
     /// Advance the decay by `delta_time_secs`.
@@ -237,6 +245,16 @@ impl HitFeedback {
         let intensity = self.intensity();
         if intensity <= 0.0 {
             return None;
+        }
+        if self.radiation {
+            return Some(vignette_layer(
+                view_extents,
+                eye_position,
+                eye_forward,
+                vec3(0.0, 1.0, 0.0),
+                intensity,
+                crate::util::render_source::HIT_FEEDBACK,
+            ));
         }
         Some(hit_layer(
             view_extents,
@@ -282,14 +300,11 @@ fn hit_layer(
     )
 }
 
-/// One view-locked, double-sided rim-vignette quad - the shared geometry
-/// behind both [`hit_layer`] (the damage tint) and the cyber interface's own
-/// entry/exit vignette ([`crate::ui::entry_ramp`]). The two are drawn as
-/// separate layers with their own color/intensity rather than merged into one
-/// number, so a hit still reads while the interface is open (they blend
-/// naturally, being translucent). Both callers want the same field-of-view
-/// geometry ([`CLEAR_FIELD_FRACTION`]/[`FULL_FIELD_FRACTION`]) - only the
-/// color and intensity differ, so those two stay the only variables.
+/// One view-locked, double-sided rim-vignette quad - the geometry
+/// [`hit_layer`] (the damage tint) builds on. The field-of-view geometry
+/// ([`CLEAR_FIELD_FRACTION`]/[`FULL_FIELD_FRACTION`]) is fixed; color,
+/// intensity and debug source are the caller's, so a second rim effect can
+/// share the quad without being relabelled as hit feedback.
 pub fn vignette_layer(
     view_extents: (f32, f32),
     eye_position: Vector3<f32>,
@@ -638,10 +653,10 @@ mod tests {
         assert_eq!(forward, vec3(0.0, 0.0, -1.0));
     }
 
-    /// [`vignette_layer`] is the shared geometry `hit_layer` and the cyber
-    /// interface's own rim tint both build on - a caller with different
-    /// color/fractions/source gets a layer tagged and colored as its own,
-    /// not silently relabeled as hit feedback.
+    /// [`vignette_layer`] is shared geometry `hit_layer` builds on, and is
+    /// parameterized for any other rim effect: a caller with a different
+    /// color/intensity/source gets a layer tagged and colored as its own, not
+    /// silently relabeled as hit feedback.
     #[test]
     fn vignette_layer_carries_the_callers_own_color_and_source() {
         let color = vec3(0.05, 0.35, 0.55);
@@ -651,11 +666,11 @@ mod tests {
             vec3(0.0, 0.0, -1.0),
             color,
             0.4,
-            "use_mode_vignette",
+            "a_caller_of_its_own",
         );
         assert_eq!(
             object.debug_tag().and_then(|tag| tag.source.clone()),
-            Some("use_mode_vignette".to_owned())
+            Some("a_caller_of_its_own".to_owned())
         );
         let transparency = object
             .effective_transparency()

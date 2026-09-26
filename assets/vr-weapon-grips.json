@@ -1,0 +1,1402 @@
+{
+  "version": 1,
+  "solver_revision": 2,
+  "entries": [
+    {
+      "authored": true,
+      "model": "gren_h",
+      "hand": "left",
+      "surface_hash": "a5c70a3592e1294c",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.4,
+        "pose_family": "trigger",
+        "offset": {
+          "x": 0.045,
+          "y": 0.0595,
+          "z": -0.3035
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.45,
+          0.35,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          0.16110727,
+          -0.01644706,
+          -0.21613464
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "sfg_h",
+      "hand": "left",
+      "surface_hash": "db6415a6e037a5a6",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": -0.1145235,
+          "y": 0.07404281,
+          "z": -0.11927243
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          1.0,
+          0.8333333,
+          0.9166667,
+          0.9583333,
+          0.9583333
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.2123169,
+          -0.32294098,
+          -0.33314818
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "gren_h",
+      "hand": "right",
+      "surface_hash": "3fe46b5d96db1943",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.4,
+        "pose_family": "trigger",
+        "offset": {
+          "x": -0.045,
+          "y": 0.0595,
+          "z": -0.3035
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.45,
+          0.35,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          0.06511621,
+          -0.15726417,
+          0.21613464
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "sfg_h",
+      "hand": "right",
+      "surface_hash": "20ec189d97524d8d",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": 0.1145235,
+          "y": 0.07404281,
+          "z": -0.11927243
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.375,
+          0.16666667,
+          0.16666667,
+          0.16666667,
+          0.5416667
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          0.0708475,
+          -0.13304843,
+          0.21349259
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "atek_h",
+      "hand": "left",
+      "surface_hash": "cd85ec32d21eb7ff",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": 0.016294718,
+          "y": 0.030812068,
+          "z": 0.023415025
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.7071068
+        },
+        "curls": [
+          0.45,
+          0.35,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.23858424,
+          -0.099901624,
+          0.08799514
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "sg_h",
+      "hand": "left",
+      "surface_hash": "8591b9ae4a59cc2b",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": 0.02135643,
+          "y": -0.012717393,
+          "z": -0.4455118
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.45,
+          0.35,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.45147544,
+          0.0051769614,
+          0.13060603
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "fsn_h",
+      "hand": "left",
+      "surface_hash": "92f65a6989e56237",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": 0.026356429,
+          "y": 0.15263975,
+          "z": -0.33836892
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.4,
+          0.4,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          0.41655904,
+          0.095523044,
+          0.06060409
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "al_h",
+      "hand": "left",
+      "surface_hash": "417f6e3201b7acfd",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": 0.08,
+          "y": 0.089999996,
+          "z": -0.2
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.5,
+          0.45,
+          0.5,
+          0.6,
+          0.65
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.22609654,
+          -0.06624173,
+          0.04549408
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "wrench_h",
+      "hand": "left",
+      "surface_hash": "b60b69f44acee767",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.7,
+        "pose_family": "cylindrical",
+        "offset": {
+          "x": 0.013123338,
+          "y": 1.04308135e-8,
+          "z": -0.078740105
+        },
+        "rotation": {
+          "v": {
+            "x": -8.673601e-19,
+            "y": -3.7252903e-9,
+            "z": 7.683412e-9
+          },
+          "s": 1.0
+        },
+        "curls": [
+          0.041666668,
+          0.41500002,
+          0.41500002,
+          0.41500002,
+          0.625
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.048345536,
+          0.10182576,
+          -0.053235114
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "ar15_h",
+      "hand": "left",
+      "surface_hash": "90aba773ddd8fad8",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": 0.02,
+          "y": 0.084,
+          "z": -0.277
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.45,
+          0.35,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.33429563,
+          -0.0051457137,
+          0.09582028
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "lasehand",
+      "hand": "left",
+      "surface_hash": "7b17e5d08bdf08ed",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.7,
+        "pose_family": "trigger",
+        "offset": {
+          "x": 0.020028908,
+          "y": 0.07784965,
+          "z": 0.11255199
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.45,
+          0.35,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.3831423,
+          -0.1521008,
+          0.069966815
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "empgun_h",
+      "hand": "left",
+      "surface_hash": "bbfd8ea26f069ad6",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": 0.02,
+          "y": 0.011,
+          "z": -0.301
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.45,
+          0.35,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.29314196,
+          0.08658447,
+          0.11772537
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "model": "viro_h",
+      "hand": "left",
+      "surface_hash": "ed9d7938d6399bb4",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": 0.020774055,
+          "y": 0.1720879,
+          "z": -0.44876298
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          1.0,
+          0.125,
+          0.5416667,
+          0.5833333,
+          0.7916667
+        ],
+        "contacts": [
+          null,
+          [
+            0.59391004,
+            -0.21983267,
+            0.026236663
+          ],
+          [
+            0.6916866,
+            -0.2767708,
+            -0.026447143
+          ],
+          [
+            0.6920483,
+            -0.29022968,
+            -0.02616018
+          ],
+          null
+        ],
+        "anchor": [
+          0.66640526,
+          -0.30602765,
+          0.0
+        ],
+        "score": 4.0956783
+      }
+    },
+    {
+      "model": "rapier_h",
+      "hand": "left",
+      "surface_hash": "6d329510bb5130a3",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.7,
+        "pose_family": "cylindrical",
+        "offset": {
+          "x": -0.011656262,
+          "y": -0.07223689,
+          "z": -0.042253524
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "s": 1.0
+        },
+        "curls": [
+          0.29166666,
+          0.45833334,
+          0.41666666,
+          0.5833333,
+          0.6666667
+        ],
+        "contacts": [
+          [
+            0.086138986,
+            0.16753687,
+            -0.05812224
+          ],
+          [
+            0.08465174,
+            0.15746242,
+            -0.05201122
+          ],
+          [
+            0.096281074,
+            0.13567086,
+            -0.08152596
+          ],
+          [
+            0.06819568,
+            0.11117121,
+            -0.033388883
+          ],
+          [
+            0.043903217,
+            0.03746103,
+            -0.060249314
+          ]
+        ],
+        "anchor": [
+          -0.01676488,
+          0.098326854,
+          -0.05029863
+        ],
+        "score": 6.4191
+      }
+    },
+    {
+      "model": "shard_h",
+      "hand": "left",
+      "surface_hash": "5985cf3c2791a1f2",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.7,
+        "pose_family": "cylindrical",
+        "offset": {
+          "x": 0.005504638,
+          "y": -0.055739038,
+          "z": -0.044223733
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "s": 1.0
+        },
+        "curls": [
+          0.8333333,
+          0.5416667,
+          0.5,
+          0.5416667,
+          0.5833333
+        ],
+        "contacts": [
+          [
+            0.064021595,
+            0.075798914,
+            -0.0048467466
+          ],
+          [
+            0.051074523,
+            0.12896176,
+            -0.025464734
+          ],
+          [
+            0.053604998,
+            0.10995949,
+            -0.032178484
+          ],
+          [
+            0.053313073,
+            0.0892855,
+            -0.03715675
+          ],
+          [
+            0.052191127,
+            0.062191904,
+            -0.045712315
+          ]
+        ],
+        "anchor": [
+          0.021813452,
+          0.08501673,
+          -0.05430907
+        ],
+        "score": 6.406662
+      }
+    },
+    {
+      "model": "psword_h",
+      "hand": "left",
+      "surface_hash": "373984e46346144f",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.85,
+        "pose_family": "cylindrical",
+        "offset": {
+          "x": -0.015676748,
+          "y": -0.0885426,
+          "z": -0.024856161
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "s": 1.0
+        },
+        "curls": [
+          0.29166666,
+          0.375,
+          0.45833334,
+          0.5833333,
+          0.9583333
+        ],
+        "contacts": [
+          [
+            0.08333248,
+            0.15961014,
+            -0.06785995
+          ],
+          [
+            0.093248405,
+            0.1525429,
+            -0.07532666
+          ],
+          [
+            0.08124103,
+            0.13623103,
+            -0.06019772
+          ],
+          [
+            0.06764228,
+            0.113185026,
+            -0.04417973
+          ],
+          [
+            0.06453578,
+            0.0847219,
+            -0.04618285
+          ]
+        ],
+        "anchor": [
+          -0.009076387,
+          0.10015825,
+          -0.061889887
+        ],
+        "score": 6.629632
+      }
+    },
+    {
+      "authored": true,
+      "model": "atek_h",
+      "hand": "right",
+      "surface_hash": "f3b1fee5cb975907",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": -0.016294718,
+          "y": 0.030812068,
+          "z": 0.023415025
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.45,
+          0.35,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.23858424,
+          -0.099901624,
+          -0.08799514
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "sg_h",
+      "hand": "right",
+      "surface_hash": "6f8d9f7338274bc2",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": -0.02135643,
+          "y": -0.012717393,
+          "z": -0.4455118
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.45,
+          0.35,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.45147544,
+          0.0051769614,
+          -0.13060603
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "fsn_h",
+      "hand": "right",
+      "surface_hash": "f243c946fd3dba05",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": -0.026356429,
+          "y": 0.15263975,
+          "z": -0.33836892
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.4,
+          0.4,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          0.41655904,
+          0.095523044,
+          -0.06060409
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "al_h",
+      "hand": "right",
+      "surface_hash": "110e48276868b9f5",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": -0.08,
+          "y": 0.089999996,
+          "z": -0.2
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.5,
+          0.45,
+          0.5,
+          0.6,
+          0.65
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.3364582,
+          -0.03583771,
+          -0.03666172
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "wrench_h",
+      "hand": "right",
+      "surface_hash": "e8a35331abc8357e",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.7,
+        "pose_family": "cylindrical",
+        "offset": {
+          "x": -0.013123359,
+          "y": 0.0,
+          "z": -0.07874015
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "s": 1.0
+        },
+        "curls": [
+          0.041666668,
+          0.41500002,
+          0.41500002,
+          0.41500002,
+          0.625
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          0.04834557,
+          0.10182578,
+          -0.053235054
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "ar15_h",
+      "hand": "right",
+      "surface_hash": "71d991197fc4d055",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": -0.02,
+          "y": 0.084,
+          "z": -0.277
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.45,
+          0.35,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.33429563,
+          -0.0051457137,
+          -0.09582028
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "lasehand",
+      "hand": "right",
+      "surface_hash": "d2f3fa1eb56544f6",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.7,
+        "pose_family": "trigger",
+        "offset": {
+          "x": -0.020028893,
+          "y": 0.07784965,
+          "z": 0.11255202
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.45,
+          0.35,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.3831423,
+          -0.1521008,
+          -0.069966815
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "authored": true,
+      "model": "empgun_h",
+      "hand": "right",
+      "surface_hash": "086a0f0bd9e66871",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": -0.02,
+          "y": 0.011,
+          "z": -0.301
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          0.45,
+          0.35,
+          0.65,
+          0.7,
+          0.75
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.29314196,
+          0.08658447,
+          -0.11772537
+        ],
+        "score": 0.0
+      }
+    },
+    {
+      "model": "viro_h",
+      "hand": "right",
+      "surface_hash": "bcf91f972e665092",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.55,
+        "pose_family": "trigger",
+        "offset": {
+          "x": -0.020774055,
+          "y": 0.1720879,
+          "z": -0.44876298
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": -0.70710677,
+            "z": 0.0
+          },
+          "s": 0.70710677
+        },
+        "curls": [
+          1.0,
+          0.125,
+          0.5416667,
+          0.5833333,
+          0.7916667
+        ],
+        "contacts": [
+          null,
+          [
+            0.59391,
+            -0.21983266,
+            -0.026236609
+          ],
+          [
+            0.6916865,
+            -0.2767708,
+            0.026447145
+          ],
+          [
+            0.69204825,
+            -0.29022965,
+            0.026160173
+          ],
+          null
+        ],
+        "anchor": [
+          0.66640526,
+          -0.30602765,
+          0.0
+        ],
+        "score": 4.0956783
+      }
+    },
+    {
+      "model": "rapier_h",
+      "hand": "right",
+      "surface_hash": "85bca09b3eadc8a7",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.7,
+        "pose_family": "cylindrical",
+        "offset": {
+          "x": 0.011656387,
+          "y": -0.07223689,
+          "z": -0.042253524
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "s": 1.0
+        },
+        "curls": [
+          0.29166666,
+          0.45833334,
+          0.41666666,
+          0.5833333,
+          0.6666667
+        ],
+        "contacts": [
+          [
+            -0.086139165,
+            0.16753687,
+            -0.058122236
+          ],
+          [
+            -0.08465192,
+            0.15746242,
+            -0.05201122
+          ],
+          [
+            -0.096281245,
+            0.13567086,
+            -0.08152596
+          ],
+          [
+            -0.068195865,
+            0.11117121,
+            -0.033388883
+          ],
+          [
+            -0.043903396,
+            0.037461028,
+            -0.060249314
+          ]
+        ],
+        "anchor": [
+          0.0167647,
+          0.098326854,
+          -0.05029863
+        ],
+        "score": 6.4191
+      }
+    },
+    {
+      "model": "shard_h",
+      "hand": "right",
+      "surface_hash": "ea60923961bd3cc8",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.7,
+        "pose_family": "cylindrical",
+        "offset": {
+          "x": -0.005504681,
+          "y": -0.055739038,
+          "z": -0.044223733
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "s": 1.0
+        },
+        "curls": [
+          0.8333333,
+          0.5416667,
+          0.5,
+          0.5416667,
+          0.5833333
+        ],
+        "contacts": [
+          [
+            -0.064021535,
+            0.075798914,
+            -0.0048467466
+          ],
+          [
+            -0.05107446,
+            0.12896176,
+            -0.025464736
+          ],
+          [
+            -0.053604934,
+            0.10995949,
+            -0.032178484
+          ],
+          [
+            -0.05331302,
+            0.0892855,
+            -0.037156746
+          ],
+          [
+            -0.052191064,
+            0.062191904,
+            -0.045712315
+          ]
+        ],
+        "anchor": [
+          -0.021813393,
+          0.08501673,
+          -0.05430907
+        ],
+        "score": 6.406662
+      }
+    },
+    {
+      "model": "psword_h",
+      "hand": "right",
+      "surface_hash": "05ad0b266d96056d",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "3e42e05263705d8b",
+      "grip": {
+        "item_scale": 0.85,
+        "pose_family": "cylindrical",
+        "offset": {
+          "x": 0.015676748,
+          "y": -0.0885426,
+          "z": -0.024856161
+        },
+        "rotation": {
+          "v": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "s": 1.0
+        },
+        "curls": [
+          0.29166666,
+          0.375,
+          0.45833334,
+          0.5833333,
+          0.9583333
+        ],
+        "contacts": [
+          [
+            -0.08333248,
+            0.15961014,
+            -0.06785995
+          ],
+          [
+            -0.093248405,
+            0.1525429,
+            -0.07532666
+          ],
+          [
+            -0.08124103,
+            0.13623103,
+            -0.06019772
+          ],
+          [
+            -0.06764228,
+            0.113185026,
+            -0.04417973
+          ],
+          [
+            -0.06453578,
+            0.0847219,
+            -0.04618285
+          ]
+        ],
+        "anchor": [
+          0.009076387,
+          0.10015825,
+          -0.061889887
+        ],
+        "score": 6.629632
+      }
+    }
+  ]
+}

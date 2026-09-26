@@ -69,6 +69,28 @@ impl GlobalContactStims {
 /// emitter carries are summed; a victim with no receptron for a stim simply
 /// feels nothing from it.
 pub fn contact_stim_damage(world: &World, emitter_template: i32, victim: EntityId) -> f32 {
+    contact_stim_damage_scaled(world, emitter_template, victim, 1.0)
+}
+
+/// Launch modifiers scale source intensity before the receiver's response,
+/// matching Dark's source-scale property. Flat damage responses stay flat.
+pub fn contact_stim_damage_scaled(
+    world: &World,
+    emitter_template: i32,
+    victim: EntityId,
+    intensity_scale: f32,
+) -> f32 {
+    contact_stim_damage_with_bonus(world, emitter_template, victim, intensity_scale, 0.0)
+}
+
+/// Melee charge changes base intensity before source scaling and target armor.
+pub fn contact_stim_damage_with_bonus(
+    world: &World,
+    emitter_template: i32,
+    victim: EntityId,
+    intensity_scale: f32,
+    base_bonus: f32,
+) -> f32 {
     let Ok(contact_stims) = world.borrow::<UniqueView<GlobalContactStims>>() else {
         return 0.0;
     };
@@ -80,27 +102,84 @@ pub fn contact_stim_damage(world: &World, emitter_template: i32, victim: EntityI
     stims
         .iter()
         .filter_map(|(stim_template_id, intensity)| {
-            resolve_stim_damage(&receptrons, *stim_template_id, *intensity)
+            resolve_stim_damage(
+                &receptrons,
+                *stim_template_id,
+                (*intensity + base_bonus) * intensity_scale,
+            )
         })
         .filter(|damage| *damage > 0.0)
         .sum()
 }
 
+/// Resolve the last applicable freeze response. As in AISetFrozen, a new
+/// stimulus replaces the previous timer rather than adding to it.
+pub fn contact_stim_freeze(
+    world: &World,
+    emitter_template: i32,
+    victim: EntityId,
+    intensity_scale: f32,
+) -> Option<f32> {
+    let sources = world.borrow::<UniqueView<GlobalContactStims>>().ok()?;
+    let stims = sources.0.get(&emitter_template)?;
+    let receptrons = victim_receptrons(world, victim);
+    stims
+        .iter()
+        .filter_map(|(stim, intensity)| {
+            resolve_stim_freeze(&receptrons, *stim, *intensity * intensity_scale)
+        })
+        .last()
+}
+
+pub fn resolve_stim_freeze(
+    receptrons: &[(i32, ReceptronOptions)],
+    stim_template_id: i32,
+    intensity: f32,
+) -> Option<f32> {
+    // No delivered stimulus (for example a fully occluded blast) must not
+    // replace an existing timer. An authored zero duration with a positive
+    // stimulus still resolves to Some(0), allowing an explicit thaw.
+    if intensity <= 0.0 {
+        return None;
+    }
+    let mut amplify = 1.0;
+    let mut duration = None;
+    for (_, options) in receptrons
+        .iter()
+        .filter(|(stim, _)| *stim == stim_template_id)
+    {
+        match options.effect {
+            ReceptronEffect::Abort => return None,
+            ReceptronEffect::Amplify { factor } => amplify *= factor,
+            ReceptronEffect::Freeze {
+                duration_multiplier,
+            } => {
+                if duration.is_none_or(|(order, _)| options.order >= order) {
+                    duration = Some((options.order, duration_multiplier));
+                }
+            }
+            _ => {}
+        }
+    }
+    let seconds = duration?.1 as f32 * intensity * amplify;
+    seconds.is_finite().then_some(seconds.trunc())
+}
+
 fn victim_receptrons(world: &World, victim: EntityId) -> Vec<(i32, ReceptronOptions)> {
+    // Immolate's caster is fireproof against contact stims too, not just the
+    // radius ones - the power reads as a metaproperty on the player.
+    let mut receptrons = crate::scripts::immolate::immolate_caster_receptrons(world, victim);
     let Ok(v_links) = world.borrow::<View<Links>>() else {
-        return Vec::new();
+        return receptrons;
     };
     let Ok(links) = v_links.get(victim) else {
-        return Vec::new();
+        return receptrons;
     };
-    links
-        .to_links
-        .iter()
-        .filter_map(|link| match &link.link {
-            Link::Receptron(options) => Some((link.to_template_id, options.clone())),
-            _ => None,
-        })
-        .collect()
+    receptrons.extend(links.to_links.iter().filter_map(|link| match &link.link {
+        Link::Receptron(options) => Some((link.to_template_id, options.clone())),
+        _ => None,
+    }));
+    receptrons
 }
 
 /// Resolve what damage a stim deals to a receiver, given the receiver's
@@ -151,7 +230,7 @@ pub fn resolve_stim_damage(
                     flat_damage += multiplier;
                 }
             }
-            ReceptronEffect::Radiate { .. } => {}
+            ReceptronEffect::Radiate { .. } | ReceptronEffect::Freeze { .. } => {}
             ReceptronEffect::Unhandled(_) => {}
         }
     }
@@ -183,7 +262,9 @@ pub fn resolve_stim_radiation(
                 has_radiate = true;
                 multiplier += factor;
             }
-            ReceptronEffect::Damage { .. } | ReceptronEffect::Unhandled(_) => {}
+            ReceptronEffect::Damage { .. }
+            | ReceptronEffect::Freeze { .. }
+            | ReceptronEffect::Unhandled(_) => {}
         }
     }
 
@@ -210,6 +291,30 @@ mod tests {
                 use_intensity: true,
             },
         )
+    }
+
+    #[test]
+    fn freeze_response_uses_amplification_immunity_and_whole_seconds() {
+        let freeze = |order, duration_multiplier| {
+            receptron(
+                order,
+                ReceptronEffect::Freeze {
+                    duration_multiplier,
+                },
+            )
+        };
+        let mut responses = vec![(EMP, freeze(82, 1))];
+        assert_eq!(resolve_stim_freeze(&responses, EMP, 8.0), Some(8.0));
+        assert_eq!(resolve_stim_freeze(&responses, EMP, 0.0), None);
+        assert_eq!(
+            resolve_stim_freeze(&[(EMP, freeze(82, 0))], EMP, 8.0),
+            Some(0.0)
+        );
+        assert_eq!(resolve_stim_freeze(&responses, HIGH_EXPLOSIVE, 8.0), None);
+        responses.push((EMP, receptron(90, ReceptronEffect::Amplify { factor: 0.7 })));
+        assert_eq!(resolve_stim_freeze(&responses, EMP, 8.0), Some(5.0));
+        responses.push((EMP, receptron(99, ReceptronEffect::Abort)));
+        assert_eq!(resolve_stim_freeze(&responses, EMP, 8.0), None);
     }
 
     #[test]
@@ -408,6 +513,16 @@ mod tests {
     }
 
     #[test]
+    fn smasher_adds_base_damage_before_player_scale_and_target_armor() {
+        let (world, victim) = world_with_victim(
+            GlobalContactStims(HashMap::from([(LEAD_PIPE, vec![(WEAPON_BASH, 9.0)])])),
+            vec![(WEAPON_BASH, damage(16, 0.5))],
+        );
+        let damage = contact_stim_damage_with_bonus(&world, LEAD_PIPE, victim, 1.35, 6.0);
+        assert!((damage - (9.0 + 6.0) * 1.35 * 0.5).abs() < 0.00001);
+    }
+
+    #[test]
     fn a_victim_with_no_receptron_for_the_stim_is_unharmed() {
         // Type effectiveness still applies: a swing whose stim the victim has
         // no response to does nothing (a robot has no WeaponBash receptron).
@@ -422,6 +537,35 @@ mod tests {
     }
 
     #[test]
+    fn launch_scale_precedes_responses_and_does_not_scale_flat_damage() {
+        let (world, victim) = world_with_victim(
+            GlobalContactStims(HashMap::from([(LEAD_PIPE, vec![(WEAPON_BASH, 10.0)])])),
+            vec![
+                (WEAPON_BASH, damage(1, 2.0)),
+                (
+                    WEAPON_BASH,
+                    receptron(2, ReceptronEffect::Amplify { factor: 0.5 }),
+                ),
+                (
+                    WEAPON_BASH,
+                    receptron(
+                        3,
+                        ReceptronEffect::Damage {
+                            multiplier: 7.0,
+                            use_intensity: false,
+                        },
+                    ),
+                ),
+            ],
+        );
+        assert_eq!(
+            contact_stim_damage_scaled(&world, LEAD_PIPE, victim, 1.5),
+            22.0
+        );
+        assert_eq!(contact_stim_damage(&world, LEAD_PIPE, victim), 17.0);
+    }
+
+    #[test]
     fn an_emitter_with_no_contact_stims_deals_nothing() {
         // An inert object (no melee weapon archetype behind it) cannot hurt
         // anyone, even at point-blank range.
@@ -432,4 +576,67 @@ mod tests {
 
         assert_eq!(contact_stim_damage(&world, LEAD_PIPE, victim), 0.0);
     }
+}
+
+/// Status responses travel beside HP damage so mixed toxin/melee attacks keep both.
+pub fn contact_hazard_effects(
+    world: &World,
+    emitter: i32,
+    victim: EntityId,
+    scale: f32,
+) -> crate::scripts::Effect {
+    let Ok(sources) = world.borrow::<UniqueView<GlobalContactStims>>() else {
+        return crate::scripts::Effect::NoEffect;
+    };
+    let Some(stims) = sources.0.get(&emitter) else {
+        return crate::scripts::Effect::NoEffect;
+    };
+    let receptrons = victim_receptrons(world, victim);
+    let effects: Vec<_> = stims
+        .iter()
+        .flat_map(|(stim, amount)| hazard_effects(&receptrons, *stim, amount * scale, victim))
+        .collect();
+    if effects.is_empty() {
+        crate::scripts::Effect::NoEffect
+    } else {
+        crate::scripts::Effect::combine(effects)
+    }
+}
+
+pub fn hazard_effects(
+    receptrons: &[(i32, ReceptronOptions)],
+    stim: i32,
+    intensity: f32,
+    victim: EntityId,
+) -> Vec<crate::scripts::Effect> {
+    let mut amplify = 1.0;
+    let mut toxin = false;
+    for (_, response) in receptrons.iter().filter(|(id, _)| *id == stim) {
+        match &response.effect {
+            ReceptronEffect::Abort => return vec![],
+            ReceptronEffect::Amplify { factor } => amplify *= factor,
+            ReceptronEffect::Unhandled(name) if name.eq_ignore_ascii_case("toxin") => toxin = true,
+            _ => {}
+        }
+    }
+    let amount = intensity * amplify;
+    if !amount.is_finite() || amount <= 0.0 {
+        return vec![];
+    }
+    let mut effects = Vec::new();
+    if toxin {
+        effects.push(crate::scripts::Effect::ApplyHazard {
+            entity_id: victim,
+            toxin: true,
+            amount,
+        });
+    }
+    if let Some(amount) = resolve_stim_radiation(receptrons, stim, intensity) {
+        effects.push(crate::scripts::Effect::ApplyHazard {
+            entity_id: victim,
+            toxin: false,
+            amount,
+        });
+    }
+    effects
 }

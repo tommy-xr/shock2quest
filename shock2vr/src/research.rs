@@ -110,6 +110,13 @@ pub enum AdvanceResearchResult {
 }
 
 impl ResearchState {
+    /// Stable identities of projects the player has begun, including finished
+    /// and suspended work whose original inventory instance no longer exists.
+    pub fn project_template_ids(&self) -> Vec<i32> {
+        let mut ids: Vec<_> = self.progress.keys().copied().collect();
+        ids.sort_by_key(|id| (Some(*id) != self.active_template_id, *id));
+        ids
+    }
     pub fn active_template_id(&self) -> Option<i32> {
         self.active_template_id
     }

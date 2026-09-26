@@ -9,7 +9,9 @@
 //!
 //! See `projects/flatscreen-and-vr-architecture.md` (Slices 5-6).
 
-use cgmath::{Deg, Point3, Quaternion, Rotation, Rotation3, Vector3, point3, vec3};
+use cgmath::{
+    Deg, Matrix4, Point3, Quaternion, Rotation, Rotation3, Vector2, Vector3, point3, vec2, vec3,
+};
 use shipyard::{EntityId, Get, View, World};
 
 use dark::{
@@ -27,6 +29,14 @@ use crate::{
         FROB_REACH, VirtualHandEffect, can_grab_item, is_wieldable_weapon, uses_scripted_world_frob,
     },
 };
+
+/// The original first-person FOV, applied in projection space so shading
+/// continues to use undistorted world positions and normals.
+pub fn viewmodel_projection(projection: Matrix4<f32>) -> Matrix4<f32> {
+    const FOV_Y_DEG: f32 = 73.74; // 90 degrees horizontal at 4:3.
+    let scale = (1.0 / projection.y.y) / (FOV_Y_DEG / 2.0).to_radians().tan();
+    projection * Matrix4::from_nonuniform_scale(scale, scale, 1.0)
+}
 
 /// Fallback viewmodel framing offset (look space: +x right, +y up, -z forward),
 /// before the world-scale divide. Used only for wielded items with no
@@ -62,6 +72,14 @@ pub struct FlatPlayerController {
     /// Camera/crosshair fire ray (world space) from the last `update`, so the
     /// firing path can spawn projectiles along the crosshair (camera-origin aim).
     last_aim: Option<(Point3<f32>, Vector3<f32>)>,
+    /// Where recoil has pushed the fire ray off the camera axis this frame, in
+    /// radians (+x right, +y up). Recorded rather than recomputed, so the
+    /// reticle draws the exact deflection the shot takes.
+    last_aim_bias: Vector2<f32>,
+    /// Firing kick for the viewmodel only - the same spring the VR held gun
+    /// uses. The camera and `last_aim` are deliberately untouched, so recoil
+    /// never moves the crosshair or the shot (see `weapon_recoil::flat_impulse`).
+    recoil: crate::weapon_recoil::RecoilState,
 }
 
 impl FlatPlayerController {
@@ -71,6 +89,15 @@ impl FlatPlayerController {
             last_fire_pressed: false,
             last_use_pressed: false,
             last_aim: None,
+            last_aim_bias: vec3(0.0, 0.0, 0.0).truncate(),
+            recoil: crate::weapon_recoil::RecoilState::default(),
+        }
+    }
+
+    /// Kick the viewmodel spring for a shot just fired by the wielded weapon.
+    pub fn kick(&mut self, entity_id: EntityId, impulse: crate::weapon_recoil::RecoilImpulse) {
+        if self.wielded_entity == Some(entity_id) {
+            self.recoil.kick(impulse);
         }
     }
 
@@ -85,6 +112,12 @@ impl FlatPlayerController {
     /// The camera/crosshair fire ray (origin, forward) from the last `update`.
     pub fn aim_ray(&self) -> Option<(Point3<f32>, Vector3<f32>)> {
         self.last_aim
+    }
+
+    /// Recoil's deflection of that ray off the camera axis, in radians
+    /// (+x right, +y up) - what the reticle shifts by.
+    pub fn aim_bias(&self) -> Vector2<f32> {
+        self.last_aim_bias
     }
 
     /// Stop wielding `entity_id` if it was the held weapon (e.g. it was
@@ -120,6 +153,9 @@ impl FlatPlayerController {
         }
         self.wielded_entity = Some(entity_id);
         self.last_fire_pressed = false;
+        // A new gun starts at rest: the outgoing one's kick is not its own.
+        self.recoil = crate::weapon_recoil::RecoilState::default();
+        self.last_aim_bias = vec2(0.0, 0.0);
         effects.push(VirtualHandEffect::HoldItem { entity_id });
         effects
     }
@@ -136,6 +172,36 @@ impl FlatPlayerController {
         }
     }
 
+    /// Place the gun viewmodel: the eye-pivoted carry/reload pitch, then this
+    /// frame of the firing recoil spring pivoted around the gun's OWN origin
+    /// (muzzle rise + kickback). The spring works in the held model's frame,
+    /// which the base yaw is exactly the rotation into, so it composes on the
+    /// right of that yaw. Takes this frame's already-stepped spring pose, so
+    /// the spring advances on every frame rather than only on frames that
+    /// happen to place a gun. Returns (rotation, world position, and the same
+    /// kick expressed in WORLD space, for [`recoil_aim`]).
+    fn gun_pose(
+        look: Quaternion<f32>,
+        camera_pos: Vector3<f32>,
+        offset: Vector3<f32>,
+        pitch_deg: f32,
+        (kickback, kick_rotation): (Vector3<f32>, Quaternion<f32>),
+    ) -> (Quaternion<f32>, Vector3<f32>, Quaternion<f32>) {
+        let pitch = Quaternion::from_angle_x(Deg(pitch_deg));
+        let model = look * pitch * Quaternion::from_angle_y(Deg(VIEWMODEL_BASE_YAW_DEG));
+        (
+            model * kick_rotation,
+            camera_pos
+                + (look * pitch).rotate_vector(offset / SCALE_FACTOR)
+                // Already in world units (the authored kick divides by
+                // SCALE_FACTOR), unlike the framing offset above.
+                + model.rotate_vector(kickback),
+            // Same rotation, world frame: conjugating by the model transform
+            // turns a model-space rotation into the world-space one.
+            model * kick_rotation * model.conjugate(),
+        )
+    }
+
     /// Per-frame update. Returns the effects to apply plus the entity currently
     /// under the crosshair (for highlight rendering), if any.
     pub fn update(
@@ -143,20 +209,26 @@ impl FlatPlayerController {
         input: &Hand,
         player_pos: Vector3<f32>,
         player_rotation: Quaternion<f32>,
-        head_rotation: Quaternion<f32>,
-        eye_height: f32,
+        eye: crate::death_camera::EyePose,
+        step_dt: f32,
         world: &World,
         physics: &PhysicsWorld,
     ) -> (Vec<VirtualHandEffect>, Option<EntityId>) {
         let mut effects = Vec::new();
 
-        let look = player_rotation * head_rotation;
-        let camera_pos = player_pos + vec3(0.0, eye_height / SCALE_FACTOR, 0.0);
+        let look = player_rotation * eye.rotation;
+        let camera_pos = player_pos + player_rotation * eye.position;
+        // Unconditional, so a kick cannot freeze mid-flight while a melee
+        // weapon (or nothing) is wielded and thaw on the next gun frame.
+        let kick = self.recoil.step(step_dt);
 
         // Crosshair raycast: the frobbable entity under the reticle (resolving
         // hitbox proxies to their parent, and ignoring the weapon we hold).
         let forward = look.rotate_vector(vec3(0.0, 0.0, -1.0));
         self.last_aim = Some((point3(camera_pos.x, camera_pos.y, camera_pos.z), forward));
+        // Melee and empty hands keep this unbent ray, so they must also start
+        // with no bias. Gun recoil below updates the ray and bias together.
+        self.last_aim_bias = vec2(0.0, 0.0);
         let highlighted = physics
             .ray_cast2(
                 point3(camera_pos.x, camera_pos.y, camera_pos.z),
@@ -233,11 +305,23 @@ impl FlatPlayerController {
                     }
                     _ => GUN_CARRY_PITCH_DEG,
                 };
-                let pitch = Quaternion::from_angle_x(Deg(pitch_deg));
-                (
-                    look * pitch * Quaternion::from_angle_y(Deg(VIEWMODEL_BASE_YAW_DEG)),
-                    camera_pos + (look * pitch).rotate_vector(offset / SCALE_FACTOR),
-                )
+                let (rotation, position, aim_kick) =
+                    Self::gun_pose(look, camera_pos, offset, pitch_deg, kick);
+                // VR shots leave along the physically displaced muzzle; flat
+                // reproduces that by riding the same kick, so firing faster
+                // than the spring recovers walks the shot up. A settled gun
+                // fires exactly on the crosshair. The crosshair RAYCAST above
+                // is untouched - recoil must not move what you can frob.
+                self.last_aim = self.last_aim.map(|(origin, forward)| {
+                    let bent = recoil_aim(
+                        forward,
+                        aim_kick,
+                        crate::dev_params::get(crate::dev_params::FLAT_RECOIL_AIM),
+                    );
+                    self.last_aim_bias = aim_bias(look, bent);
+                    (origin, bent)
+                });
+                (rotation, position)
             };
             effects.push(VirtualHandEffect::SetPositionRotation {
                 entity_id,
@@ -283,6 +367,45 @@ impl Default for FlatPlayerController {
     }
 }
 
+/// Bend the flat fire ray by `fraction` of the viewmodel's current recoil.
+/// `fraction` 0 leaves the shot on the crosshair (recoil stays cosmetic), 1
+/// makes it ride the full kick. Always identity for a settled gun, so the
+/// reticle only ever lies while the gun is visibly displaced.
+fn recoil_aim(forward: Vector3<f32>, kick: Quaternion<f32>, fraction: f32) -> Vector3<f32> {
+    use cgmath::InnerSpace;
+    let fraction = if fraction.is_finite() {
+        fraction.clamp(0.0, 1.0)
+    } else {
+        return forward;
+    };
+    let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+    // nlerp, not slerp: the kick is a small rotation, so the two agree to well
+    // under a degree, and nlerp cannot divide by a near-zero sine at identity.
+    let bent = identity.nlerp(kick, fraction).rotate_vector(forward);
+    if bent.magnitude2() > 1e-8 {
+        bent.normalize() * forward.magnitude()
+    } else {
+        forward
+    }
+}
+
+/// Decompose a bent fire ray into yaw/pitch away from the camera axis, in
+/// radians (+x right, +y up) - the reticle's shift. Taken from the ray the
+/// shot actually uses rather than recomputed from the spring, so the two can
+/// never disagree.
+fn aim_bias(look: Quaternion<f32>, bent: Vector3<f32>) -> Vector2<f32> {
+    use cgmath::InnerSpace;
+    if bent.magnitude2() < 1e-8 {
+        return vec2(0.0, 0.0);
+    }
+    // Into camera space, where the axis is -z, +x right and +y up.
+    let local = look.invert().rotate_vector(bent.normalize());
+    if !local.x.is_finite() || !local.y.is_finite() || !local.z.is_finite() {
+        return vec2(0.0, 0.0);
+    }
+    vec2(local.x.atan2(-local.z), local.y.atan2(-local.z))
+}
+
 fn out_message(to: EntityId, payload: MessagePayload) -> VirtualHandEffect {
     VirtualHandEffect::OutMessage {
         message: Message { to, payload },
@@ -307,6 +430,29 @@ mod tests {
 
     use crate::physics::CollisionGroup;
 
+    #[test]
+    fn viewmodel_projection_preserves_framing_without_moving_world_geometry() {
+        use cgmath::{InnerSpace, SquareMatrix, vec4};
+        for fov in [45.0, 73.74, 100.0] {
+            let projection = cgmath::perspective(Deg(fov), 4.0 / 3.0, 0.1, 1000.0);
+            let view = Matrix4::look_at_rh(
+                point3(-2.0, 2.0, -213.0),
+                point3(2.0, 0.5, -213.0),
+                Vector3::unit_y(),
+            );
+            let framed = viewmodel_projection(projection);
+            assert!((2.0 * (1.0 / framed.y.y).atan().to_degrees() - 73.74).abs() < 0.0001);
+            let scale = framed.x.x / projection.x.x;
+            let old_squish =
+                view.invert().unwrap() * Matrix4::from_nonuniform_scale(scale, scale, 1.0) * view;
+            for point in [vec4(-1.0, 1.3, -212.5, 1.0), vec4(0.0, 2.1, -214.0, 1.0)] {
+                let old_clip = projection * view * old_squish * point;
+                let new_clip = framed * view * point;
+                assert!((old_clip / old_clip.w - new_clip / new_clip.w).magnitude() < 0.0001);
+            }
+        }
+    }
+
     fn frob_info(world_action: FrobFlag) -> PropFrobInfo {
         PropFrobInfo {
             world_action,
@@ -326,6 +472,220 @@ mod tests {
             reload_pitch: 0,
             reload_rate: 0,
             gun_type: 0,
+        }
+    }
+
+    #[test]
+    fn aiming_uses_the_same_displaced_rotated_eye_as_rendering() {
+        use cgmath::{Deg, InnerSpace, Rotation3};
+        let pawn = vec3(3.0, 4.0, 5.0);
+        let rotation = Quaternion::from_angle_y(Deg(90.0));
+        let eye = crate::death_camera::EyePose {
+            position: vec3(0.4, 0.2, 0.0),
+            rotation: Quaternion::from_angle_z(Deg(-7.0)),
+        };
+        let mut controller = FlatPlayerController::new();
+        controller.update(
+            &Hand::default(),
+            pawn,
+            rotation,
+            eye,
+            1.0 / 60.0,
+            &World::new(),
+            &PhysicsWorld::new(),
+        );
+        let (origin, direction) = controller.aim_ray().unwrap();
+        let expected = pawn + rotation * eye.position;
+        assert!((origin - point3(expected.x, expected.y, expected.z)).magnitude() < 1e-6);
+        assert!((direction - rotation * eye.rotation * -Vector3::unit_z()).magnitude() < 1e-6);
+    }
+
+    /// Recoil must raise the MUZZLE and push the gun back along its own barrel
+    /// while leaving the camera alone, then settle back to the carry pose.
+    /// The `_h` gun meshes point down model -x (`weapon_muzzle::barrel_axis`).
+    #[test]
+    fn firing_recoil_raises_the_viewmodel_muzzle_and_settles_back() {
+        use cgmath::InnerSpace;
+        const BARREL: Vector3<f32> = vec3(-1.0, 0.0, 0.0);
+        let look = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let camera = vec3(0.0, 5.0, 0.0);
+        let mut controller = FlatPlayerController::new();
+        let pose = |c: &mut FlatPlayerController, dt| {
+            let kick = c.recoil.step(dt);
+            let (rotation, position, _) =
+                FlatPlayerController::gun_pose(look, camera, VIEWMODEL_OFFSET, -11.25, kick);
+            (rotation.rotate_vector(BARREL), position)
+        };
+
+        let (rest_muzzle, rest_pos) = pose(&mut controller, 0.0);
+        controller.kick(EntityId::dead(), impulse());
+        assert_eq!(
+            pose(&mut controller, 0.0),
+            (rest_muzzle, rest_pos),
+            "a kick aimed at another entity must not move this gun"
+        );
+
+        controller.wield(EntityId::dead());
+        controller.kick(EntityId::dead(), impulse());
+        let (muzzle, position) = pose(&mut controller, 0.1);
+        assert!(
+            muzzle.y > rest_muzzle.y + 0.02,
+            "the muzzle should rise: {muzzle:?} vs {rest_muzzle:?}"
+        );
+        // Kickback travels back along the barrel, not down the view axis.
+        let travel = position - rest_pos;
+        assert!(
+            travel.dot(rest_muzzle) < -0.02,
+            "expected kickback, got {travel:?}"
+        );
+
+        for _ in 0..600 {
+            pose(&mut controller, 1.0 / 60.0);
+        }
+        let (settled_muzzle, settled_pos) = pose(&mut controller, 0.0);
+        assert!((settled_muzzle - rest_muzzle).magnitude() < 1e-4);
+        assert!((settled_pos - rest_pos).magnitude() < 1e-4);
+    }
+
+    /// The shot rides the same kick the viewmodel does, scaled by the knob,
+    /// and a settled gun always fires exactly on the crosshair.
+    #[test]
+    fn the_fire_ray_follows_the_kick_by_the_tuned_fraction() {
+        use cgmath::InnerSpace;
+        const BARREL: Vector3<f32> = vec3(-1.0, 0.0, 0.0);
+        let look = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let crosshair = look.rotate_vector(vec3(0.0, 0.0, -1.0));
+        let mut controller = FlatPlayerController::new();
+        controller.wield(EntityId::dead());
+        controller.kick(EntityId::dead(), impulse());
+        let kick = controller.recoil.step(0.1);
+        let (rotation, _, aim_kick) = FlatPlayerController::gun_pose(
+            look,
+            vec3(0.0, 5.0, 0.0),
+            VIEWMODEL_OFFSET,
+            -11.25,
+            kick,
+        );
+
+        // The bend is the muzzle's own rise, not some independent number.
+        let muzzle_rise = rotation.rotate_vector(BARREL).y
+            - Quaternion::from_angle_x(Deg(-11.25))
+                .rotate_vector(
+                    Quaternion::from_angle_y(Deg(VIEWMODEL_BASE_YAW_DEG)).rotate_vector(BARREL),
+                )
+                .y;
+        assert!(muzzle_rise > 0.01, "the fixture should actually kick");
+        let full = recoil_aim(crosshair, aim_kick, 1.0);
+        assert!(
+            (full.magnitude() - 1.0).abs() < 1e-5,
+            "aim stays unit length"
+        );
+        assert!(full.y > crosshair.y + 0.01, "the shot should ride upward");
+        assert!(
+            (full.y - muzzle_rise).abs() < 1e-3,
+            "the shot should ride the muzzle: {} vs {muzzle_rise}",
+            full.y
+        );
+
+        // 0 restores the purely cosmetic behaviour; the knob is monotonic.
+        assert_eq!(recoil_aim(crosshair, aim_kick, 0.0), crosshair);
+        let half = recoil_aim(crosshair, aim_kick, 0.5);
+        assert!(half.y > crosshair.y && half.y < full.y);
+        // Out-of-range/NaN fractions must never poison the fire ray.
+        assert_eq!(recoil_aim(crosshair, aim_kick, f32::NAN), crosshair);
+        assert_eq!(recoil_aim(crosshair, aim_kick, 5.0), full);
+
+        // A settled gun fires exactly on the crosshair at every setting.
+        for _ in 0..600 {
+            controller.recoil.step(1.0 / 60.0);
+        }
+        let (_, _, settled) = FlatPlayerController::gun_pose(
+            look,
+            vec3(0.0, 5.0, 0.0),
+            VIEWMODEL_OFFSET,
+            -11.25,
+            controller.recoil.step(0.0),
+        );
+        assert!((recoil_aim(crosshair, settled, 1.0) - crosshair).magnitude() < 1e-4);
+    }
+
+    /// The spring advances with `update`, not with gun placement, so a kick
+    /// cannot freeze mid-flight while a melee weapon (or nothing) is wielded
+    /// and thaw when a gun comes back out.
+    #[test]
+    fn recoil_keeps_settling_while_no_gun_is_being_placed() {
+        use cgmath::InnerSpace;
+        let mut controller = FlatPlayerController::new();
+        controller.wield(EntityId::dead());
+        controller.kick(EntityId::dead(), impulse());
+        let mut world = World::new();
+        let physics = PhysicsWorld::new();
+        for _ in 0..600 {
+            controller.update(
+                &Hand::default(),
+                vec3(0.0, 0.0, 0.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                crate::death_camera::EyePose::flat(0.0, Quaternion::new(1.0, 0.0, 0.0, 0.0)),
+                1.0 / 60.0,
+                &mut world,
+                &physics,
+            );
+        }
+        let (kickback, rotation) = controller.recoil.step(0.0);
+        assert!(kickback.magnitude() < 1e-5, "kickback should have settled");
+        assert!(
+            (rotation.s.abs() - 1.0).abs() < 1e-5,
+            "rotation should have settled"
+        );
+    }
+
+    #[test]
+    fn switching_to_melee_clears_the_previous_guns_aim_bias() {
+        let mut world = World::new();
+        let gun = world.add_entity(pistol());
+        let melee = world.add_entity(PropLimbModel("wrench".to_owned()));
+        let physics = PhysicsWorld::new();
+        let mut controller = FlatPlayerController::new();
+        let update = |controller: &mut FlatPlayerController| {
+            controller.update(
+                &Hand::default(),
+                vec3(0.0, 0.0, 0.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                crate::death_camera::EyePose::flat(0.0, Quaternion::new(1.0, 0.0, 0.0, 0.0)),
+                1.0 / 60.0,
+                &world,
+                &physics,
+            );
+        };
+
+        controller.wield(gun);
+        controller.kick(gun, impulse());
+        update(&mut controller);
+        assert!(
+            controller.aim_bias().y > 0.01,
+            "the gun must actually recoil"
+        );
+
+        controller.wield(melee);
+        assert_eq!(controller.aim_bias(), vec2(0.0, 0.0));
+        for _ in 0..60 {
+            update(&mut controller);
+            assert_eq!(controller.aim_bias(), vec2(0.0, 0.0));
+            assert_eq!(controller.aim_ray().unwrap().1, vec3(0.0, 0.0, -1.0));
+        }
+    }
+
+    fn impulse() -> crate::weapon_recoil::RecoilImpulse {
+        crate::weapon_recoil::RecoilImpulse {
+            pitch: 8.0,
+            heading: 0.0,
+            back: -0.2,
+            pitch_limit: 12.0,
+            back_limit: 0.4,
+            heading_limit: f32::MAX,
+            angular_rate: 1.0,
+            back_rate: 1.0,
+            forward: vec3(-1.0, 0.0, 0.0),
         }
     }
 
@@ -525,8 +885,8 @@ mod tests {
             },
             vec3(0.0, 0.0, 0.0),
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            0.0,
+            crate::death_camera::EyePose::flat(0.0, Quaternion::new(1.0, 0.0, 0.0, 0.0)),
+            1.0 / 60.0,
             &world,
             &physics,
         );

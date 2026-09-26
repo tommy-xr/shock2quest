@@ -26,7 +26,6 @@ const skip = !e2eEnabled && "set SHOCK2_E2E=1 to run";
 test("the free camera is inert until the developer option enables it", { skip }, async () => {
   await using game = await GameServer.launch({
     mission: "medsci1.mis",
-    port: 8113,
   });
   await game.step({ frames: 30 });
 
@@ -58,7 +57,6 @@ test("the free camera is inert until the developer option enables it", { skip },
 test("flying the camera moves it and leaves the pawn standing", { skip }, async () => {
   await using game = await GameServer.launch({
     mission: "medsci1.mis",
-    port: 8114,
   });
   await game.step({ frames: 30 });
 
@@ -99,7 +97,6 @@ test("flying the camera moves it and leaves the pawn standing", { skip }, async 
 test("a level reload re-attaches the camera", { skip }, async () => {
   await using game = await GameServer.launch({
     mission: "medsci1.mis",
-    port: 8115,
   });
   await game.step({ frames: 30 });
 
@@ -139,7 +136,6 @@ test("a level reload re-attaches the camera", { skip }, async () => {
 test("a placed camera renders from where it was put", { skip }, async () => {
   await using game = await GameServer.launch({
     mission: "medsci1.mis",
-    port: 8700,
   });
   await game.step({ frames: 30 });
 
@@ -222,7 +218,6 @@ test("a placed camera renders from where it was put", { skip }, async () => {
 test("a nonsense camera placement is refused, not half-applied", { skip }, async () => {
   await using game = await GameServer.launch({
     mission: "medsci1.mis",
-    port: 8701,
   });
   await game.step({ frames: 30 });
 

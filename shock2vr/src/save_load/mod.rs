@@ -24,7 +24,8 @@ use crate::{
     mission::{GlobalTemplateIdMap, PlayerInfo},
     runtime_props::{
         RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropDoNotSerialize,
-        RuntimePropLaunchedProjectile, RuntimePropSelectedAmmo,
+        RuntimePropLaunchedProjectile, RuntimePropMetaProperties, RuntimePropPlayerFiredProjectile,
+        RuntimePropSelectedAmmo,
     },
     scripts::{ScriptWorld, script_util},
     util::partition_map,
@@ -42,6 +43,16 @@ fn get_held_items(world: &World) -> HashSet<u64> {
     if let Some(right_hand) = player.right_hand_entity_id {
         out.insert(right_hand.inner());
         add_contained_entities(&mut out, world, 2, right_hand);
+    }
+
+    for (entity, _) in world
+        .borrow::<View<crate::runtime_props::RuntimePropHolstered>>()
+        .unwrap()
+        .iter()
+        .with_id()
+    {
+        out.insert(entity.inner());
+        add_contained_entities(&mut out, world, 2, entity);
     }
 
     out.insert(player.inventory_entity_id.inner());
@@ -133,6 +144,7 @@ pub fn to_save_data_with_scripts(
     let v_launched_projectiles = world
         .borrow::<View<RuntimePropLaunchedProjectile>>()
         .unwrap();
+    let v_meta_properties = world.borrow::<View<RuntimePropMetaProperties>>().unwrap();
     let v_entities = world.borrow::<EntitiesView>().unwrap();
 
     let (all_properties, _, _) = dark::properties::get::<File>();
@@ -194,6 +206,33 @@ pub fn to_save_data_with_scripts(
         }
     }
 
+    let implants: HashMap<_, _> = world
+        .borrow::<View<crate::runtime_props::RuntimePropImplantSlot>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .filter(|(id, _)| !entities_to_filter.contains(&id.inner()))
+        .map(|(id, slot)| (id.inner(), *slot))
+        .collect();
+    let (held_implants, world_implants) = partition_map(implants, |id| held_entities.contains(id));
+    let (held_hazard_equipment, world_hazard_equipment): (Vec<_>, Vec<_>) = world
+        .borrow::<View<crate::runtime_props::RuntimePropHazardEquipment>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .map(|(id, _)| id.inner())
+        .filter(|id| !entities_to_filter.contains(id))
+        .partition(|id| held_entities.contains(id));
+    let raw_amp_selections = world
+        .borrow::<View<crate::psi_amp_selection::AmpSelection>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .filter(|(id, _)| !entities_to_filter.contains(&id.inner()))
+        .map(|(id, selected)| (id.inner(), *selected))
+        .collect();
+    let (held_amp_selections, world_amp_selections) =
+        partition_map(raw_amp_selections, |id| held_entities.contains(id));
     let raw_selected_ammo: HashMap<u64, usize> = v_selected_ammo
         .iter()
         .with_id()
@@ -225,27 +264,110 @@ pub fn to_save_data_with_scripts(
             world_launched_projectiles.push(entity_id.inner());
         }
     }
+    let (held_player_fired_projectiles, world_player_fired_projectiles): (Vec<_>, Vec<_>) = world
+        .borrow::<View<RuntimePropPlayerFiredProjectile>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .map(|(entity_id, _)| entity_id.inner())
+        .filter(|entity_id| !entities_to_filter.contains(entity_id))
+        .partition(|entity_id| held_entities.contains(entity_id));
+
+    let raw_holstered: HashMap<u64, crate::runtime_props::RuntimePropHolstered> = world
+        .borrow::<View<crate::runtime_props::RuntimePropHolstered>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .filter(|(id, _)| !entities_to_filter.contains(&id.inner()))
+        .map(|(id, slot)| (id.inner(), *slot))
+        .collect();
+    let (held_holstered, world_holstered) =
+        partition_map(raw_holstered, |id| held_entities.contains(id));
+    let raw_shoulders: HashMap<u64, crate::runtime_props::RuntimePropShoulderWeapon> = world
+        .borrow::<View<crate::runtime_props::RuntimePropShoulderWeapon>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .filter(|(id, _)| !entities_to_filter.contains(&id.inner()))
+        .map(|(id, marker)| (id.inner(), *marker))
+        .collect();
+    let (held_shoulders, world_shoulders) =
+        partition_map(raw_shoulders, |id| held_entities.contains(id));
+    let (held_velocities, world_velocities): (Vec<_>, Vec<_>) = world
+        .borrow::<View<crate::runtime_props::RuntimePropProjectileVelocity>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .map(|(id, velocity)| (id.inner(), velocity.0))
+        .filter(|(id, _)| !entities_to_filter.contains(id))
+        .partition(|(id, _)| held_entities.contains(id));
+    let raw_meta_properties: HashMap<u64, RuntimePropMetaProperties> = v_meta_properties
+        .iter()
+        .with_id()
+        .filter(|(entity_id, _)| !entities_to_filter.contains(&entity_id.inner()))
+        .map(|(entity_id, state)| (entity_id.inner(), state.clone()))
+        .collect();
+    let (held_meta_properties, world_meta_properties) =
+        partition_map(raw_meta_properties, |entity_id| {
+            held_entities.contains(entity_id)
+        });
+    let thrown_props = world
+        .borrow::<UniqueView<crate::throwing::SavedThrows>>()
+        .map(|saved| {
+            saved
+                .0
+                .iter()
+                .filter(|(id, _)| !entities_to_filter.contains(id) && !held_entities.contains(id))
+                .map(|(id, value)| (*id, *value))
+                .collect()
+        })
+        .unwrap_or_default();
     let world_entity_data = EntitySaveData {
+        security_alarm: Some(crate::security_alarm::status(world)),
+        player_trail: world
+            .borrow::<UniqueView<crate::mission::player_trail::PlayerTrail>>()
+            .ok()
+            .map(|trail| (*trail).clone()),
         properties: world_serialized_properties,
         template_id_to_entity_id: template_id_to_entity_id.0.clone(),
         links: world_serialized_links,
         all_entities: all_world_entities,
         death_poses: world_death_poses,
+        amp_selections: world_amp_selections,
         selected_ammo: world_selected_ammo,
+        hazard_equipment: world_hazard_equipment,
+        implant_slots: world_implants,
+        holstered: world_holstered,
+        shoulder_weapons: world_shoulders,
         canonical_template_ids: world_canonical_templates,
         launched_projectiles: world_launched_projectiles,
+        player_fired_projectiles: world_player_fired_projectiles,
+        projectile_velocities: world_velocities.into_iter().collect(),
+        thrown_props,
+        meta_properties: world_meta_properties,
         script_states: world_script_states,
     };
 
     let held_entity_data = EntitySaveData {
+        security_alarm: None,
+        player_trail: None,
         all_entities: all_held_entities,
         template_id_to_entity_id: HashMap::new(),
         links: held_serialized_links,
         properties: held_serialized_properties,
         death_poses: held_death_poses,
+        amp_selections: held_amp_selections,
         selected_ammo: held_selected_ammo,
+        hazard_equipment: held_hazard_equipment,
+        implant_slots: held_implants,
+        holstered: held_holstered,
+        shoulder_weapons: held_shoulders,
         canonical_template_ids: held_canonical_templates,
         launched_projectiles: held_launched_projectiles,
+        player_fired_projectiles: held_player_fired_projectiles,
+        projectile_velocities: held_velocities.into_iter().collect(),
+        thrown_props: HashMap::new(),
+        meta_properties: held_meta_properties,
         script_states: held_script_states,
     };
 

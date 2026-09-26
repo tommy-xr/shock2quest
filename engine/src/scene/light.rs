@@ -35,88 +35,294 @@ pub trait Light: std::fmt::Debug {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LightType {
     Spotlight,
-    // Future extensions:
-    // PointLight,
-    // DirectionalLight,
+    /// Casts in every direction. In the shader these share the spotlight slots
+    /// and are told apart by a negative inner cone angle - see
+    /// [`SceneLight::inner_cone_angle`].
+    PointLight,
 }
 
-/// Container for managing up to 6 spotlights for single-pass lighting
+/// An omni light: a position, a colour and a reach, with no cone.
+#[derive(Debug, Clone)]
+pub struct PointLight {
+    /// World space position
+    pub position: Vector3<f32>,
+
+    /// RGB color and intensity in the alpha channel
+    pub color_intensity: Vector4<f32>,
+
+    /// Maximum range of the light (for optimization)
+    pub range: f32,
+}
+
+impl Light for PointLight {
+    fn position(&self) -> Vector3<f32> {
+        self.position
+    }
+
+    fn color_intensity(&self) -> Vector4<f32> {
+        self.color_intensity
+    }
+
+    fn light_type(&self) -> LightType {
+        LightType::PointLight
+    }
+
+    fn affects_position(&self, world_pos: Vector3<f32>) -> bool {
+        (world_pos - self.position).magnitude() <= self.range
+    }
+}
+
+/// A light occupying one of the renderer's light slots. Both kinds upload
+/// through the same uniforms; a point light is a spotlight slot whose cone
+/// covers everything.
+#[derive(Debug, Clone)]
+pub enum SceneLight {
+    Spot(SpotLight),
+    Point(PointLight),
+}
+
+/// Marks a slot as having no cone. Angles are otherwise non-negative, so the
+/// shader can branch on the sign rather than carry another uniform array
+/// through every material.
+pub const NO_CONE: f32 = -1.0;
+
+impl SceneLight {
+    pub fn position(&self) -> Vector3<f32> {
+        match self {
+            SceneLight::Spot(light) => light.position,
+            SceneLight::Point(light) => light.position,
+        }
+    }
+
+    pub fn color_intensity(&self) -> Vector4<f32> {
+        match self {
+            SceneLight::Spot(light) => light.color_intensity,
+            SceneLight::Point(light) => light.color_intensity,
+        }
+    }
+
+    pub fn direction(&self) -> Vector3<f32> {
+        match self {
+            SceneLight::Spot(light) => light.direction,
+            SceneLight::Point(_) => Vector3::new(0.0, 0.0, 0.0),
+        }
+    }
+
+    /// Negative for a point light - that is how the shader tells the two apart.
+    pub fn inner_cone_angle(&self) -> f32 {
+        match self {
+            SceneLight::Spot(light) => light.inner_cone_angle,
+            SceneLight::Point(_) => NO_CONE,
+        }
+    }
+
+    pub fn outer_cone_angle(&self) -> f32 {
+        match self {
+            SceneLight::Spot(light) => light.outer_cone_angle,
+            SceneLight::Point(_) => NO_CONE,
+        }
+    }
+
+    pub fn range(&self) -> f32 {
+        match self {
+            SceneLight::Spot(light) => light.range,
+            SceneLight::Point(light) => light.range,
+        }
+    }
+
+    pub fn affects_position(&self, world_pos: Vector3<f32>) -> bool {
+        match self {
+            SceneLight::Spot(light) => light.affects_position(world_pos),
+            SceneLight::Point(light) => light.affects_position(world_pos),
+        }
+    }
+}
+
+impl From<SpotLight> for SceneLight {
+    fn from(light: SpotLight) -> Self {
+        SceneLight::Spot(light)
+    }
+}
+
+impl From<PointLight> for SceneLight {
+    fn from(light: PointLight) -> Self {
+        SceneLight::Point(light)
+    }
+}
+
+/// How a light's contribution falls off with distance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LightFalloff {
+    /// The renderer's own smooth curve, used by the player's hand lights.
+    Smooth,
+    /// Inverse distance, which is what the original engine used to light
+    /// objects. Falls off far more slowly than an inverse square.
+    InverseDistance,
+}
+
+/// The unlit floor: what a surface shows before any light reaches it.
+pub const DEFAULT_AMBIENT: f32 = 0.5;
+
+/// Treat every light as a source of this radius rather than a point, in world
+/// units. Inverse-distance has no upper bound, so a light sitting inside the
+/// model it belongs to - a lamp lighting its own housing - would otherwise
+/// contribute thousands and, worse, crowd every other light out of the
+/// selection. Shading and ranking MUST use the same floor or the lights chosen
+/// are not the lights drawn; the shader spells it `SOURCE_RADIUS`.
+pub const LIGHT_SOURCE_RADIUS: f32 = 0.8;
+
+/// Container for managing up to 6 lights for single-pass lighting
 #[derive(Debug, Clone)]
 pub struct LightArray {
-    /// Array of up to 6 spotlights (None = disabled slot)
-    pub spotlights: [Option<SpotLight>; 6],
+    /// Array of up to 6 lights (None = disabled slot)
+    pub lights: [Option<SceneLight>; 6],
+    /// Light every surface receives regardless of the lights above.
+    pub ambient: Vector3<f32>,
+    /// How the lights in this array attenuate.
+    pub falloff: [LightFalloff; 6],
+    /// Wraps diffuse light around the terminator: 0 is plain lambert (a
+    /// surface facing away gets nothing, which is what the original did for
+    /// objects), 1 is half-lambert (what it baked into lightmaps, where a wall
+    /// facing away still catches half). Between the two trades directional
+    /// contrast for lifted shadows.
+    pub lambert_wrap: f32,
+    /// Strength of the moving highlight on shine materials; 0 draws none.
+    pub specular: f32,
+    /// What shine materials reflect, and how strongly; no reflection without
+    /// a capture or at 0.
+    pub environment: Option<std::rc::Rc<crate::texture::CubeTexture>>,
+    pub reflection: f32,
+    /// Vein tuning for shine on growth and on the annelid weapons.
+    pub growth_veins: super::shine::VeinTuning,
+    pub weapon_veins: super::shine::VeinTuning,
 }
 
 impl LightArray {
     /// Create a new empty light array
     pub fn new() -> Self {
         Self {
-            spotlights: [None, None, None, None, None, None],
+            lights: [None, None, None, None, None, None],
+            ambient: Vector3::new(DEFAULT_AMBIENT, DEFAULT_AMBIENT, DEFAULT_AMBIENT),
+            falloff: [LightFalloff::Smooth; 6],
+            lambert_wrap: 0.0,
+            specular: 0.0,
+            environment: None,
+            reflection: 0.0,
+            growth_veins: Default::default(),
+            weapon_veins: Default::default(),
         }
     }
 
-    /// Add a spotlight to the first available slot
+    /// Add a light to the first available slot
     /// Returns the slot index if successful, None if array is full
-    pub fn add_spotlight(&mut self, spotlight: SpotLight) -> Option<usize> {
-        for (i, slot) in self.spotlights.iter_mut().enumerate() {
+    pub fn add_light(&mut self, light: impl Into<SceneLight>) -> Option<usize> {
+        let light = light.into();
+        for (i, slot) in self.lights.iter_mut().enumerate() {
             if slot.is_none() {
-                *slot = Some(spotlight);
+                *slot = Some(light);
                 return Some(i);
             }
         }
         None
     }
 
-    /// Remove a spotlight from the specified slot
-    pub fn remove_spotlight(&mut self, index: usize) -> Option<SpotLight> {
-        if index < 6 {
-            self.spotlights[index].take()
-        } else {
-            None
-        }
+    /// Get a reference to the light in the specified slot
+    pub fn get_light(&self, index: usize) -> Option<&SceneLight> {
+        self.lights.get(index).and_then(|slot| slot.as_ref())
     }
 
-    /// Get a reference to a spotlight at the specified slot
-    pub fn get_spotlight(&self, index: usize) -> Option<&SpotLight> {
-        if index < 6 {
-            self.spotlights[index].as_ref()
-        } else {
-            None
-        }
+    /// Light everything in this array by the original engine's rule: inverse
+    /// distance, over the mission's own ambient floor.
+    pub fn with_object_lighting(mut self, ambient: Vector3<f32>, lambert_wrap: f32) -> Self {
+        self.ambient = ambient;
+        self.falloff = [LightFalloff::InverseDistance; 6];
+        self.lambert_wrap = lambert_wrap;
+        self
     }
 
-    /// Get a mutable reference to a spotlight at the specified slot
-    pub fn get_spotlight_mut(&mut self, index: usize) -> Option<&mut SpotLight> {
-        if index < 6 {
-            self.spotlights[index].as_mut()
-        } else {
-            None
-        }
+    pub fn with_specular(mut self, specular: f32) -> Self {
+        self.specular = specular;
+        self
     }
 
-    /// Clear all spotlights
+    pub fn with_environment(
+        mut self,
+        environment: Option<std::rc::Rc<crate::texture::CubeTexture>>,
+        reflection: f32,
+    ) -> Self {
+        self.environment = environment;
+        self.reflection = reflection;
+        self
+    }
+
+    pub fn with_veins(
+        mut self,
+        growth: super::shine::VeinTuning,
+        weapon: super::shine::VeinTuning,
+    ) -> Self {
+        self.growth_veins = growth;
+        self.weapon_veins = weapon;
+        self
+    }
+
+    /// This array's lights plus as many of `scene`'s as still fit, with the
+    /// scene's taking priority.
+    ///
+    /// The player's hand lights live in the scene array and are added by the
+    /// runtime after the game has resolved per-object lights, so an object that
+    /// carries its own lights would otherwise be invisible to the torch pointed
+    /// at it. The scene's go in first because a light the player is holding is
+    /// the one they expect to see working.
+    ///
+    /// Preserve each source's falloff per slot: the hand lights keep their
+    /// smooth curve even when sharing a draw with inverse-distance room lights.
+    /// Ambient and the authored-light wrap setting come from the object.
+    pub fn merged_with(&self, scene: &LightArray) -> LightArray {
+        let mut merged = LightArray {
+            lights: [None, None, None, None, None, None],
+            ambient: self.ambient,
+            falloff: self.falloff,
+            lambert_wrap: self.lambert_wrap,
+            specular: self.specular,
+            environment: self.environment.clone(),
+            reflection: self.reflection,
+            growth_veins: self.growth_veins,
+            weapon_veins: self.weapon_veins,
+        };
+        for source in [scene, self] {
+            for (index, light) in source.iter_active() {
+                let Some(slot) = merged.add_light(light.clone()) else {
+                    return merged;
+                };
+                merged.falloff[slot] = source.falloff[index];
+            }
+        }
+        merged
+    }
+
+    /// Clear all lights
     pub fn clear(&mut self) {
-        self.spotlights = [None, None, None, None, None, None];
+        self.lights = [None, None, None, None, None, None];
     }
 
-    /// Get the number of active spotlights
+    /// Get the number of active lights
     pub fn active_count(&self) -> usize {
-        self.spotlights.iter().filter(|s| s.is_some()).count()
+        self.lights.iter().filter(|s| s.is_some()).count()
     }
 
     /// Check if the array is empty
     pub fn is_empty(&self) -> bool {
-        self.spotlights.iter().all(|s| s.is_none())
+        self.lights.iter().all(|s| s.is_none())
     }
 
     /// Check if the array is full
     pub fn is_full(&self) -> bool {
-        self.spotlights.iter().all(|s| s.is_some())
+        self.lights.iter().all(|s| s.is_some())
     }
 
-    /// Iterator over active spotlights with their indices
-    pub fn iter_active(&self) -> impl Iterator<Item = (usize, &SpotLight)> {
-        self.spotlights
+    /// Iterator over active lights with their indices
+    pub fn iter_active(&self) -> impl Iterator<Item = (usize, &SceneLight)> {
+        self.lights
             .iter()
             .enumerate()
             .filter_map(|(i, light)| light.as_ref().map(|l| (i, l)))
@@ -267,6 +473,46 @@ impl SpotLight {
 mod tests {
     use super::*;
 
+    /// Hand lights merge in every frame; the object's highlight strength must
+    /// survive it or shine materials lose their highlight under a torch.
+    #[test]
+    fn merging_keeps_the_object_specular_strength() {
+        let object = LightArray::new().with_specular(1.5);
+        assert_eq!(object.merged_with(&LightArray::new()).specular, 1.5);
+    }
+
+    #[test]
+    fn merging_keeps_the_object_reflection_strength() {
+        let object = LightArray::new().with_environment(None, 2.0);
+        let scene = LightArray::new().with_environment(None, 0.5);
+        assert_eq!(object.merged_with(&scene).reflection, 2.0);
+    }
+
+    #[test]
+    fn merging_authored_lights_preserves_flashlight_falloff() {
+        let mut scene = LightArray::new();
+        scene.add_light(SpotLight::new(
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(1.0, 1.0, 1.0),
+            1.0,
+        ));
+        let mut object = LightArray::new().with_object_lighting(Vector3::new(0.1, 0.2, 0.3), 0.4);
+        object.add_light(PointLight {
+            position: Vector3::new(2.0, 1.0, 0.0),
+            color_intensity: Vector4::new(1.0, 0.0, 0.0, 1.0),
+            range: 10.0,
+        });
+        let merged = object.merged_with(&scene);
+        assert_eq!(merged.falloff[0], LightFalloff::Smooth);
+        assert_eq!(merged.falloff[1], LightFalloff::InverseDistance);
+        assert_eq!(merged.ambient, object.ambient);
+        assert_eq!(
+            merged.get_light(0).unwrap().position(),
+            scene.get_light(0).unwrap().position()
+        );
+    }
+
     #[test]
     fn test_spotlight_creation() {
         let light = SpotLight::new(
@@ -341,20 +587,85 @@ mod tests {
         );
 
         // Add light
-        let index = light_array.add_spotlight(light.clone()).unwrap();
+        let index = light_array.add_light(light.clone()).unwrap();
         assert_eq!(index, 0);
         assert_eq!(light_array.active_count(), 1);
         assert!(!light_array.is_empty());
 
         // Get light
-        let retrieved = light_array.get_spotlight(0).unwrap();
+        let retrieved = light_array.get_light(0).unwrap();
         assert_eq!(retrieved.position(), light.position());
 
-        // Remove light
-        let removed = light_array.remove_spotlight(0).unwrap();
-        assert_eq!(removed.position(), light.position());
+        // Clearing empties every slot - the array is rebuilt each frame
+        light_array.clear();
         assert!(light_array.is_empty());
         assert_eq!(light_array.active_count(), 0);
+    }
+
+    /// The shader tells a point light from a spotlight by the sign of the inner
+    /// cone angle, so a point light must report a negative one and a spotlight
+    /// must not.
+    #[test]
+    fn point_lights_are_marked_by_a_negative_inner_cone() {
+        let point: SceneLight = PointLight {
+            position: Vector3::new(1.0, 2.0, 3.0),
+            color_intensity: Vector4::new(1.0, 1.0, 1.0, 1.0),
+            range: 10.0,
+        }
+        .into();
+        assert!(point.inner_cone_angle() < 0.0);
+        assert!(point.outer_cone_angle() < 0.0);
+        assert_eq!(point.range(), 10.0);
+
+        let spot: SceneLight = SpotLight::new(
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(1.0, 1.0, 1.0),
+            1.0,
+        )
+        .into();
+        assert!(
+            spot.inner_cone_angle() >= 0.0,
+            "a real cone must not look like a point light"
+        );
+    }
+
+    #[test]
+    fn a_point_light_reaches_in_every_direction_within_range() {
+        let light = PointLight {
+            position: Vector3::new(0.0, 0.0, 0.0),
+            color_intensity: Vector4::new(1.0, 1.0, 1.0, 1.0),
+            range: 5.0,
+        };
+
+        for direction in [
+            Vector3::new(5.0, 0.0, 0.0),
+            Vector3::new(-5.0, 0.0, 0.0),
+            Vector3::new(0.0, 0.0, -4.9),
+        ] {
+            assert!(light.affects_position(direction), "{direction:?}");
+        }
+        assert!(!light.affects_position(Vector3::new(0.0, 5.1, 0.0)));
+    }
+
+    #[test]
+    fn a_light_array_holds_both_kinds() {
+        let mut light_array = LightArray::new();
+        light_array.add_light(SpotLight::new(
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(1.0, 1.0, 1.0),
+            1.0,
+        ));
+        light_array.add_light(PointLight {
+            position: Vector3::new(3.0, 0.0, 0.0),
+            color_intensity: Vector4::new(1.0, 0.0, 0.0, 2.0),
+            range: 8.0,
+        });
+
+        assert_eq!(light_array.active_count(), 2);
+        assert!(light_array.get_light(0).unwrap().inner_cone_angle() >= 0.0);
+        assert!(light_array.get_light(1).unwrap().inner_cone_angle() < 0.0);
     }
 
     #[test]
@@ -369,7 +680,7 @@ mod tests {
 
         // Fill array to capacity
         for i in 0..6 {
-            let index = light_array.add_spotlight(light.clone()).unwrap();
+            let index = light_array.add_light(light.clone()).unwrap();
             assert_eq!(index, i);
         }
 
@@ -377,7 +688,7 @@ mod tests {
         assert_eq!(light_array.active_count(), 6);
 
         // Try to add one more (should fail)
-        assert!(light_array.add_spotlight(light).is_none());
+        assert!(light_array.add_light(light).is_none());
     }
 
     #[test]
@@ -396,8 +707,8 @@ mod tests {
             1.0,
         );
 
-        light_array.add_spotlight(light1);
-        light_array.add_spotlight(light2);
+        light_array.add_light(light1);
+        light_array.add_light(light2);
 
         let active_lights: Vec<_> = light_array.iter_active().collect();
         assert_eq!(active_lights.len(), 2);

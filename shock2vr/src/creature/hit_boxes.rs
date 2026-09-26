@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 
 use cgmath::{EuclideanSpace, Matrix4, Vector3, vec3};
-use collision::{Aabb, Aabb3};
+use collision::{Aabb, Aabb3, Union};
 use dark::{hit_box::HitBoxShape, model::Model, motion::JointId, properties::PropPosition};
 use rapier3d::{
     na::Point3 as NaPoint3,
     prelude::{RigidBodyHandle, SharedShape},
 };
-use shipyard::{Component, EntitiesViewMut, EntityId, IntoIter, IntoWithId, View, ViewMut, World};
+use shipyard::{
+    Component, EntitiesViewMut, EntityId, Get, IntoIter, IntoWithId, View, ViewMut, World,
+};
 
 use crate::{
     physics::PhysicsWorld,
@@ -21,6 +23,49 @@ use crate::{
 
 use super::{get_entity_creature, hit_box_script::HitBoxScript};
 
+/// Marks a creature that has live hitbox proxies, so anything asking "is this
+/// struck through limbs?" reads the world rather than the creature definition.
+/// The two disagree in shipped data: an authored corpse carries `PropCreature`
+/// (so its definition maps hitboxes) but is never animated, so it has none.
+#[derive(Component)]
+pub struct RuntimePropHasHitBoxes;
+
+/// Whether an entity is one of a creature's hitbox proxies.
+pub(crate) fn is_hit_box(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<RuntimePropHitBox>>()
+        .is_ok_and(|hit_boxes| hit_boxes.get(entity_id).is_ok())
+}
+
+/// Whether a creature's hitboxes stand in for its *body*, i.e. whether missing
+/// all of them means the shot missed the creature.
+///
+/// A definition that maps one `Body` joint (`OVERLORD_HIT_BOXES`) leaves the
+/// limbs with no proxy at all, so treating a miss on that one blob as a miss
+/// on the animal would make whole bands of it unshootable. That creature keeps
+/// its capsule; widening its definition is what would let it join the rule.
+pub(crate) fn hit_boxes_cover_body(world: &World, entity_id: EntityId) -> bool {
+    is_grub(world, entity_id)
+        || crate::creature::get_entity_creature(world, entity_id)
+            .is_some_and(|creature| creature.hit_boxes.len() > 1)
+}
+
+fn is_grub(world: &World, entity: EntityId) -> bool {
+    world
+        .borrow::<View<dark::properties::PropAI>>()
+        .unwrap()
+        .get(entity)
+        .is_ok_and(|ai| ai.0.eq_ignore_ascii_case("grub"))
+}
+
+/// Whether an entity is a creature with live hitbox proxies - i.e. whether a
+/// blow on it arrives through a limb.
+pub(crate) fn has_live_hit_boxes(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<RuntimePropHasHitBoxes>>()
+        .is_ok_and(|marked| marked.get(entity_id).is_ok())
+}
+
 #[derive(Component)]
 pub struct RuntimePropHitBox {
     pub parent_entity_id: EntityId,
@@ -28,14 +73,31 @@ pub struct RuntimePropHitBox {
     pub joint_id: JointId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HitBoxType {
     Head,
     Body,
     Limb,
     Extremity,
-    #[allow(dead_code)]
-    NoDamage,
+}
+
+impl HitBoxType {
+    /// What a blow on this part is worth, as a factor on the authored damage.
+    ///
+    /// A deliberate divergence: the original scales damage by the *stim* and
+    /// the victim's receptrons, never by where the blow landed. Aiming is what
+    /// the per-joint hitboxes make possible, so this is what makes aiming
+    /// matter - a head is worth more than a shin.
+    pub fn damage_multiplier(self) -> f32 {
+        match self {
+            HitBoxType::Head => 1.25,
+            HitBoxType::Body => 1.0,
+            // The near half of a limb: thigh, shoulder.
+            HitBoxType::Limb => 0.75,
+            // The far half: forearm, shin, hand, foot.
+            HitBoxType::Extremity => 0.5,
+        }
+    }
 }
 
 /// Floor for the AABB fallback's half-extents: a degenerate joint AABB (a joint
@@ -127,6 +189,39 @@ pub struct HitBoxManager {
 }
 
 impl HitBoxManager {
+    /// World-space bounds of a creature's hitbox proxies - the volume its
+    /// limbs actually occupy in the pose it is drawn in.
+    ///
+    /// This is what the HUD outline wants: the entity's own collider is a
+    /// standing capsule sized from the creature definition, so it frames a
+    /// nominal cylinder rather than the creature - and frames the same
+    /// cylinder whatever the creature is doing.
+    ///
+    /// A definition that maps a single `Body` joint (the Overlord) gets a
+    /// body-only frame, limbs excluded. That is not the animal either - the
+    /// shipped creature colliders are their own known problem (#904) - but the
+    /// hitbox is at least measured from the mesh, so it is what is used, and
+    /// widening that definition is the fix worth making.
+    ///
+    /// The boxes are world AABBs of the *rotated* proxy shapes, so a diagonal
+    /// limb contributes a little more than its thickness. The extremes come
+    /// from the head, hands and feet, so the inflation is small against the
+    /// error it replaces. (It is deliberately read from physics rather than
+    /// recomputed from the joint transforms with `dark`'s `joint_box_bounds`:
+    /// this is the volume the creature is actually *shot* by, the same proxies
+    /// `aim_points` reports.)
+    pub fn hit_box_bounds(
+        &self,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+    ) -> Option<Aabb3<f32>> {
+        let hit_boxes = self.hit_boxes.get(&entity_id)?;
+        hit_boxes
+            .values()
+            .filter_map(|hit_box| physics.get_aabb2(*hit_box))
+            .reduce(|acc, bounds| acc.union(&bounds))
+    }
+
     pub fn new() -> HitBoxManager {
         HitBoxManager {
             hit_boxes: HashMap::new(),
@@ -141,7 +236,7 @@ impl HitBoxManager {
         id_to_model: &HashMap<EntityId, Model>,
         id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
     ) {
-        let joint_updates = {
+        let (joint_updates, marked_parents) = {
             let v_position = world.borrow::<View<PropPosition>>().unwrap();
             let v_runtime_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
             let v_runtime_joints = world.borrow::<View<RuntimePropJointTransforms>>().unwrap();
@@ -153,6 +248,9 @@ impl HitBoxManager {
             let mut v_entities = world.borrow::<EntitiesViewMut>().unwrap();
 
             let mut joint_updates = HashMap::new();
+            // Applied after this borrow scope: the parents that just gained
+            // proxies (see `RuntimePropHasHitBoxes`).
+            let mut marked_parents = Vec::new();
 
             for (parent_entity_id, (_position, xform, joint_xforms)) in
                 (&v_position, &v_runtime_transform, &v_runtime_joints)
@@ -160,7 +258,8 @@ impl HitBoxManager {
                     .with_id()
             {
                 let maybe_creature_type = get_entity_creature(world, parent_entity_id);
-                if maybe_creature_type.is_none() {
+                let object_grub = is_grub(world, parent_entity_id);
+                if maybe_creature_type.is_none() && !object_grub {
                     continue;
                 }
 
@@ -176,13 +275,24 @@ impl HitBoxManager {
                 // the authoritative key set for which joints get a proxy.
                 let fitted_shapes = maybe_model.unwrap().hit_box_shapes();
                 let joint_aabbs = maybe_model.unwrap().get_hit_boxes();
-                let creature_type = maybe_creature_type.unwrap();
+                // Every grub segment deals normal body damage: the padding
+                // makes small moving targets forgiving without a tail penalty.
+                let hitbox_type_for = |joint| {
+                    if object_grub {
+                        Some(HitBoxType::Body)
+                    } else {
+                        maybe_creature_type
+                            .as_ref()
+                            .and_then(|c| c.get_hitbox_type(joint))
+                    }
+                };
 
+                let mut built_hit_boxes = false;
                 let hit_box_map = self.hit_boxes.entry(parent_entity_id).or_insert_with(|| {
                     let mut out_hit_boxes = HashMap::new();
 
                     for joint_id in joint_aabbs.keys() {
-                        let maybe_hitbox_type = creature_type.get_hitbox_type(*joint_id);
+                        let maybe_hitbox_type = hitbox_type_for(*joint_id);
                         if maybe_hitbox_type.is_none() {
                             continue;
                         }
@@ -233,12 +343,16 @@ impl HitBoxManager {
                         out_hit_boxes.insert(*joint_id, hit_box_entity_id);
                     }
 
+                    built_hit_boxes = !out_hit_boxes.is_empty();
                     out_hit_boxes
                 });
+                if built_hit_boxes {
+                    marked_parents.push(parent_entity_id);
+                }
 
                 let mut joint_index = 0;
                 for joint_xform in joint_xforms.0 {
-                    let maybe_hitbox_type = creature_type.get_hitbox_type(joint_index);
+                    let maybe_hitbox_type = hitbox_type_for(joint_index);
 
                     if maybe_hitbox_type.is_none() {
                         joint_index += 1;
@@ -289,8 +403,11 @@ impl HitBoxManager {
                 }
             }
 
-            joint_updates
+            (joint_updates, marked_parents)
         };
+        for parent in marked_parents {
+            world.add_component(parent, RuntimePropHasHitBoxes);
+        }
 
         for (ent, matrix) in joint_updates {
             world.add_component(ent, RuntimePropTransform(matrix));
@@ -313,6 +430,7 @@ impl HitBoxManager {
         physics: &mut PhysicsWorld,
         id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
     ) {
+        world.remove::<RuntimePropHasHitBoxes>(entity_id);
         if let Some(hitboxes) = self.hit_boxes.remove(&entity_id) {
             for (_, hitbox) in hitboxes {
                 physics.remove(hitbox);
@@ -321,5 +439,130 @@ impl HitBoxManager {
                 script_world.remove_entity(hitbox);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::physics::{CollisionGroup, PhysicsWorld};
+    use cgmath::{Quaternion, Zero};
+
+    /// Two hitboxes a body-length apart: the highlight must frame both, not
+    /// one of them and not the standing capsule the entity's own collider is.
+    #[test]
+    fn hit_box_bounds_span_every_hit_box() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let creature = world.add_entity(());
+        let mut manager = HitBoxManager::new();
+        let mut hit_boxes = HashMap::new();
+
+        for (joint, x) in [(0u32, -1.0), (1, 1.0)] {
+            let hit_box = world.add_entity(());
+            physics.add_kinematic(
+                hit_box,
+                vec3(x, 0.0, 0.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                Vector3::zero(),
+                vec3(0.5, 0.5, 0.5),
+                CollisionGroup::hitbox(),
+                false,
+            );
+            hit_boxes.insert(joint, hit_box);
+        }
+        manager.hit_boxes.insert(creature, hit_boxes);
+
+        let bounds = manager
+            .hit_box_bounds(&physics, creature)
+            .expect("a creature with hitboxes has selection bounds");
+
+        assert!(
+            bounds.min.x <= -1.25 && bounds.max.x >= 1.25,
+            "got {bounds:?}"
+        );
+        assert!(
+            bounds.min.y >= -0.3 && bounds.max.y <= 0.3,
+            "got {bounds:?}"
+        );
+    }
+
+    /// Anything without hitboxes - every prop, and a posed corpse - has no
+    /// hitbox bounds, so the caller keeps using its collider.
+    #[test]
+    fn hit_box_bounds_are_absent_without_hit_boxes() {
+        let mut world = World::new();
+        let physics = PhysicsWorld::new();
+        let entity_id = world.add_entity(());
+
+        assert!(
+            HitBoxManager::new()
+                .hit_box_bounds(&physics, entity_id)
+                .is_none()
+        );
+    }
+
+    /// A proxy whose body has gone (mid-teardown) contributes nothing, rather
+    /// than a zero-sized box at the world origin that would stretch the
+    /// highlight across the level.
+    #[test]
+    fn hit_box_bounds_ignore_a_proxy_with_no_body() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let creature = world.add_entity(());
+        let real = world.add_entity(());
+        let phantom = world.add_entity(());
+        physics.add_kinematic(
+            real,
+            vec3(3.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Vector3::zero(),
+            vec3(0.5, 0.5, 0.5),
+            CollisionGroup::hitbox(),
+            false,
+        );
+        let mut manager = HitBoxManager::new();
+        manager
+            .hit_boxes
+            .insert(creature, HashMap::from([(0, real), (1, phantom)]));
+
+        let bounds = manager.hit_box_bounds(&physics, creature).unwrap();
+
+        assert!(
+            bounds.min.x > 2.0,
+            "the phantom must not drag the box to the origin: {bounds:?}"
+        );
+    }
+
+    /// A creature that maps a single `Body` hitbox (the Overlord) still gets
+    /// that hitbox's bounds - it is measured from the mesh, unlike the capsule
+    /// beside it.
+    #[test]
+    fn a_single_hit_box_still_gives_bounds() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let creature = world.add_entity(());
+        let hit_box = world.add_entity(());
+        physics.add_kinematic(
+            hit_box,
+            vec3(0.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Vector3::zero(),
+            vec3(0.2, 0.2, 0.2),
+            CollisionGroup::hitbox(),
+            false,
+        );
+        let mut manager = HitBoxManager::new();
+        manager
+            .hit_boxes
+            .insert(creature, HashMap::from([(0, hit_box)]));
+
+        let bounds = manager
+            .hit_box_bounds(&physics, creature)
+            .expect("one hitbox is still bounds");
+        assert!(
+            (bounds.max.x - bounds.min.x - 0.2).abs() < 0.01,
+            "the lone hitbox's own extent, got {bounds:?}"
+        );
     }
 }

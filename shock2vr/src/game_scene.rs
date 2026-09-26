@@ -133,6 +133,16 @@ pub trait GameScene {
     /// run it (a debug-runtime load, a level transition).
     fn on_exit(&mut self, _audio_context: &mut AudioContext<EntityId, String>) {}
 
+    /// Notify the still-active scene that its requested save load failed.
+    ///
+    /// A successful load replaces the scene, so only the failure result needs
+    /// routing back. Frontend scenes that offer loading can turn this into
+    /// player-visible feedback; every other scene deliberately ignores it.
+    fn on_load_failed(&mut self) {}
+
+    /// Cancel scene-local input gestures when a system overlay takes ownership.
+    fn cancel_transient_input(&mut self) {}
+
     /// Whether this scene wants a 2D mouse cursor (e.g. a menu). Flat runtimes
     /// show the OS cursor and populate `InputContext::pointer` when true; by
     /// default scenes capture the mouse for look.
@@ -165,23 +175,15 @@ pub trait GameScene {
         false
     }
 
-    /// Degrees to pull the flat FOV in by this frame (subtracted from the
-    /// base FOV), eased over a personal-UI mode's entry/exit ramp - see the
-    /// cyber interface's `ui::entry_ramp`. Implementations must return 0 in
-    /// VR: OpenXR view FOVs are used as-is, and rendering at a different FOV
-    /// than submitted causes compositor reprojection warping. Default: no
-    /// pull (non-mission scenes have no such mode).
-    fn fov_pull_deg(&self, _game_options: &GameOptions) -> f32 {
-        0.0
+    /// Physical stance for VR tracking; a hanging capsule can shrink independently.
+    fn player_tracking_is_crouched(&self) -> bool {
+        self.player_is_crouched()
     }
 
-    /// Peak rim-vignette intensity (0..1) this scene wants blended in this
-    /// frame, on top of (not merged with) `HitFeedback`'s own damage tint -
-    /// see the cyber interface's `ui::entry_ramp`. The two are drawn as
-    /// separate layered quads with their own colors, so a hit still reads
-    /// while a personal-UI mode is open. Default: none.
-    fn use_mode_vignette_intensity(&self) -> f32 {
-        0.0
+    /// Whether a VR hand is holding a climb hold (see `crate::vr_climb`).
+    /// VR runtimes freeze their physical-crouch detector while it is true.
+    fn player_is_gripping(&self) -> bool {
+        false
     }
 
     /// Collision-valid, supported position to serialize for the player.
@@ -189,6 +191,11 @@ pub trait GameScene {
     /// locomotion, death, or unsupported space makes a durable save unsafe.
     fn player_save_position(&self) -> Result<Vector3<f32>, PlayerSavePoseError> {
         Err(PlayerSavePoseError::NoPlayer)
+    }
+
+    /// Collision-resolved flat eye, shared with interaction and rendering.
+    fn flat_eye_pose(&self) -> Option<crate::death_camera::EyePose> {
+        None
     }
 
     /// The death camera's contribution to this frame's view, if the player is
@@ -294,6 +301,13 @@ pub struct DebugEntityDetail {
     /// this entity lives inside a container.
     pub contained_by: Option<i32>,
     pub aim_points: Vec<DebugAimPoint>,
+    /// World-space centre of a gun's magazine zone - where a held clip must
+    /// reach to load it in VR. Null for anything that takes no magazine.
+    pub magazine_anchor: Option<[f32; 3]>,
+    /// World-space bounds the HUD highlight frames: the union of the
+    /// creature's hitboxes where it has them, otherwise the entity's own
+    /// collider. `[min, max]`, or null for an entity with neither.
+    pub selection_bounds: Option<[[f32; 3]; 2]>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -337,6 +351,40 @@ pub struct DebugRayHit {
     pub body_id: Option<u32>,
     pub collision_group: Option<String>,
     pub is_sensor: bool,
+}
+
+/// A climbing hold reported by `GET /v1/physics/grip`. `kind` is "ladder"
+/// (an authored climbable face) or "ledge" (a walkable top above the feet).
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugClimbGrip {
+    pub kind: &'static str,
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    pub point: [f32; 3],
+    pub normal: [f32; 3],
+}
+
+/// One hand's hold, in the `/v1/info` climb readout.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugClimbHold {
+    pub hand: &'static str,
+    pub kind: &'static str,
+    pub entity_id: Option<i32>,
+    pub point: [f32; 3],
+}
+
+/// The player's hand-climb state (see `crate::vr_climb`), reported by
+/// `/v1/info`. Flatscreen holds nothing, but still climbs ladders by pushing
+/// into them, so `is_climbing` is not implied by `grips`.
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct DebugClimbState {
+    pub is_climbing: bool,
+    /// A scripted top-out is carrying the body over a lip - the hand vault's
+    /// second half, and flat's ladder mantle.
+    pub vaulting: bool,
+    /// The hand currently moving the body ("left"/"right"), if any.
+    pub anchor_hand: Option<&'static str>,
+    pub grips: Vec<DebugClimbHold>,
 }
 
 /// Raycast mask for collision group filtering
@@ -420,6 +468,9 @@ pub struct DebugPhysicsBodyDetail {
     pub is_enabled: bool,
     pub is_sleeping: bool,
     pub contact_count: usize,
+    /// `body_id` of every body this one is touching. Level geometry has no
+    /// body behind it, so it raises `contact_count` without appearing here.
+    pub contacts: Vec<u32>,
 }
 
 /// Per-ragdoll quality/settle metrics for the verification harness.
@@ -530,6 +581,48 @@ pub struct DebugPlayerStatsRequest {
     pub cyber_modules: Option<i32>,
 }
 
+/// Debug hook for the same timed modifier path used by gameplay effects.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatModifierRequest {
+    pub source: String,
+    pub stat: crate::player_stats::Stat,
+    pub delta: i32,
+    pub duration_secs: f32,
+}
+
+/// Every stat, skill and psi tier at its cap - what the "Max out stats" cheat
+/// asks for. Written as a full struct literal on purpose: a new skill field
+/// then fails to compile here rather than being silently left un-maxed.
+///
+/// The upgrade currency is deliberately absent - modules are their own cheat,
+/// and provisioning the sheet should not also hand out the means to buy it.
+pub(crate) fn max_stats_request() -> DebugPlayerStatsRequest {
+    use crate::player_stats::{PSI_TIER_CAP, SKILL_CAP, STAT_CAP};
+    let stat = Some(STAT_CAP);
+    let skill = Some(SKILL_CAP);
+    DebugPlayerStatsRequest {
+        strength: stat,
+        endurance: stat,
+        agility: stat,
+        psionic_ability: stat,
+        cyber_affinity: stat,
+        skills: DebugSkillLevelsRequest {
+            standard_weapons: skill,
+            energy_weapons: skill,
+            heavy_weapons: skill,
+            exotic_weapons: skill,
+            hack: skill,
+            repair: skill,
+            modify: skill,
+            maintenance: skill,
+            research: skill,
+        },
+        psi_tier: Some(PSI_TIER_CAP),
+        cyber_modules: None,
+    }
+}
+
 /// Target skill levels, mirroring `player.stats.skills`. Named fields (rather
 /// than a map) keep the shape identical to the read side.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -559,13 +652,27 @@ pub struct DebugUiState {
     /// The top-docked inventory strip (Tab metagame mode): the player's
     /// carried items as labeled elements. `Some` exactly in "use" mode.
     pub strip: Option<DebugUiPanel>,
+    /// The inventory bar's mini-frame name line: the display name of whatever
+    /// the player is pointing at (a strip/panel item, the lifted item, or the
+    /// world object under the aim). `None` when nothing is named or the bar is
+    /// not up.
+    pub name_strip: Option<String>,
     /// The item held on the cursor mid-drag (the original's "cursor IS the
     /// item", §2.4). `Some` between a lift and the place/throw that clears it.
     pub cursor: Option<DebugUiCursor>,
     /// The AMMOFULL ammo-cycle button (use mode + empty multi-ammo weapon
     /// wielded); clicking it cycles the wielded weapon's ammo type. `None`
     /// otherwise.
-    pub ammo_cycle: Option<DebugUiElement>,
+    /// Every AMMOFULL readout control shown this frame (fire-mode SETTING,
+    /// RELOAD, the ammo-cycle arrow, the psi selector arrows), labeled by
+    /// meaning. Empty outside use mode.
+    pub readout: Vec<DebugUiElement>,
+    /// Everything the expanded use-mode readouts drew along the bottom of the
+    /// shared interface canvas - the BIOFULL/AMMOFULL backdrops, the health/psi
+    /// bars and numbers, the ammo count and labels. Empty outside use mode.
+    pub readout_elements: Vec<DebugUiElement>,
+    /// Cyber-interface utility buttons and the current character/access reader.
+    pub utilities: Vec<DebugUiElement>,
     /// Where the pointer last landed on the shared canvas (flat: the mouse;
     /// VR: the controller ray on the cyber-interface panel).
     pub pointer: Option<DebugUiPointer>,
@@ -573,6 +680,26 @@ pub struct DebugUiState {
     /// while the interface is up in VR. Lets a client aim a controller at a
     /// canvas rect without re-deriving the panel's placement.
     pub panel_pose: Option<DebugUiPanelPose>,
+    /// Physical tricorder rear lens, in pawn space; forward is local -Z.
+    pub scanner_pose: Option<DebugScannerPose>,
+    /// The HUD status-message lines showing right now, oldest first (the
+    /// channel `TrapMessage` and friends write to). Empty when none are up.
+    pub messages: Vec<String>,
+    /// The interstitial banner showing right now (the centered title card),
+    /// `\n`-separated lines as authored. `None` when none is up.
+    pub banner: Option<String>,
+    /// The station security alarm - `Some` exactly while one is up, which is
+    /// when the HUD shows its badge and countdown.
+    pub security_alarm: Option<DebugSecurityAlarm>,
+}
+
+/// The station security alarm as the HUD presents it (`GET /v1/ui`).
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugSecurityAlarm {
+    /// Alarms raised since the last station stand-down.
+    pub count: u32,
+    /// Seconds left on the alarm's deadline, floored at zero.
+    pub seconds_remaining: f32,
 }
 
 /// One frame of pointing at the shared UI canvas.
@@ -592,6 +719,12 @@ pub struct DebugUiPointer {
 
 /// The world panel a VR presentation hangs the shared canvas on, in pawn space
 /// (the same space `/v1/control/input` hand positions are given in).
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugScannerPose {
+    pub origin: [f32; 3],
+    pub rotation: [f32; 4],
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugUiPanelPose {
     /// Panel center.
@@ -774,6 +907,33 @@ pub trait DebuggableScene {
     /// Raycast hit result with entity and collision information
     fn raycast(&self, start: Point3<f32>, end: Point3<f32>, mask: RaycastMask) -> DebugRayHit;
 
+    /// What a hand at `point` could grab (see
+    /// [`crate::physics::PhysicsWorld::climbable_grip_at`]). `feet_y` defaults
+    /// to the player's own feet when None. Scenes without a player or physics
+    /// report nothing.
+    fn climb_grip(
+        &self,
+        _point: Vector3<f32>,
+        _radius: Option<f32>,
+        _feet_y: Option<f32>,
+    ) -> Option<DebugClimbGrip> {
+        None
+    }
+
+    /// The player's climb state (see [`DebugClimbState`]). Scenes without a
+    /// player report nothing.
+    fn hand_feedback(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+
+    fn hand_grips(&self) -> serde_json::Value {
+        serde_json::json!([])
+    }
+
+    fn player_climb(&self) -> Option<DebugClimbState> {
+        None
+    }
+
     /// Teleport the player to a specific position
     ///
     /// Moves the player entity to the specified world coordinates. This is
@@ -893,10 +1053,17 @@ pub trait DebuggableScene {
             mode: "shooter".to_string(),
             active_panel: None,
             strip: None,
+            name_strip: None,
             cursor: None,
-            ammo_cycle: None,
+            readout: Vec::new(),
+            readout_elements: Vec::new(),
+            utilities: Vec::new(),
             pointer: None,
             panel_pose: None,
+            scanner_pose: None,
+            messages: Vec::new(),
+            banner: None,
+            security_alarm: None,
         }
     }
 
@@ -933,6 +1100,13 @@ pub trait DebuggableScene {
         _request: &DebugPlayerStatsRequest,
     ) -> Result<crate::player_stats::PlayerStats, String> {
         Err("scene does not support a character sheet".to_string())
+    }
+
+    fn apply_stat_modifier(
+        &mut self,
+        _request: &StatModifierRequest,
+    ) -> Result<crate::player_stats::PlayerStats, String> {
+        Err("scene does not support stat modifiers".to_string())
     }
 
     /// Level-transition triggers in this scene (where each leads + its position),
@@ -999,6 +1173,28 @@ pub trait DebuggableScene {
     fn ai_paths(&self) -> Vec<DebugAiPathEntry> {
         Vec::new()
     }
+
+    /// Static walk-graph reachability between two world positions (None when
+    /// the scene has no pathfinding data). Lets remote clients tell "this AI
+    /// is failing to route" apart from "nothing walkable connects it to the
+    /// player at all".
+    fn pathfinding_route(&self, _from: [f32; 3], _to: [f32; 3]) -> Option<DebugPathRoute> {
+        None
+    }
+}
+
+/// A one-off walk-graph query between two positions, for debug introspection
+/// (GET /v1/pathfinding/route in the debug runtime)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebugPathRoute {
+    /// AIPATH cell containing `from` (None when the position is off-mesh)
+    pub from_cell: Option<u32>,
+    /// AIPATH cell containing `to` (None when the position is off-mesh)
+    pub to_cell: Option<u32>,
+    /// Whether a walk route exists between the two cells
+    pub reachable: bool,
+    /// Waypoint count of that route (0 when unreachable)
+    pub waypoints: usize,
 }
 
 /// One AI's most recent path query, for debug introspection
@@ -1022,6 +1218,10 @@ pub struct DebugAiPathEntry {
     pub live_target: Option<[f32; 3]>,
     /// Seconds without progress toward the current waypoint
     pub live_stall_seconds: Option<f32>,
+    /// Why the AI is deliberately standing still, if it is ("DoorWait",
+    /// "Pivot") - a held AI stands on purpose and is not a wedged one, and
+    /// its stall clock is frozen for as long as this is set
+    pub movement_hold: Option<String>,
 }
 
 /// Snapshot of the pathfinding service's monotonic query counters.
@@ -1034,6 +1234,13 @@ pub struct DebugPathfindingStats {
     pub queries: u64,
     pub stressed_retries: u64,
     pub no_route: u64,
+    /// Cell crossings currently excluded because an AI's steering stalled
+    /// on them, summed over every AI holding one - each exclusion applies
+    /// only to the AI that reported it (see
+    /// `PathfindingService::report_blocked_link`)
+    pub blocked_links: usize,
+    /// Cells currently penalized because an AI stalled inside them
+    pub blocked_cells: usize,
 }
 
 /// A script message a debug client can inject into a specific entity.
@@ -1045,6 +1252,10 @@ pub struct DebugPathfindingStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DebugEntityMessage {
+    Hazard {
+        toxin: bool,
+        amount: f32,
+    },
     /// Deal `amount` damage (drives `InternalSimpleHealth` / AI health).
     /// `direction` (world-space, need not be normalized) and `point` optionally
     /// describe the blow so a death ragdoll reacts to it - same data a real
@@ -1055,11 +1266,19 @@ pub enum DebugEntityMessage {
         direction: Option<[f32; 3]>,
         #[serde(default)]
         point: Option<[f32; 3]>,
+        /// Skeleton joint id of the hitbox that was struck, as a real
+        /// hitbox-forwarded hit carries. Lets a test exercise the per-limb
+        /// paths (damage readouts, ragdoll reaction) without having to land a
+        /// live shot on a chosen limb.
+        #[serde(default)]
+        bone: Option<u32>,
     },
     /// Frob (use) the entity.
     Frob,
     /// Send a named AI signal.
-    Signal { name: String },
+    Signal {
+        name: String,
+    },
     /// Force an AI's alertness level (clamped by its alert cap).
     SetAlertness {
         level: dark::properties::AIAlertLevel,
@@ -1068,6 +1287,17 @@ pub enum DebugEntityMessage {
     TurnOn,
     /// Switch-link deactivate.
     TurnOff,
+    /// Set a gun's condition (`P$GunState`, 0..100). Not a script message:
+    /// it writes the property directly, so a test can put a gun at the wear
+    /// it wants without firing hundreds of rounds into it.
+    SetGunCondition {
+        condition: f32,
+    },
+    /// Set an object's `P$ObjState` (Normal, Broken, ...) directly - e.g. to
+    /// break a gun outright rather than waiting on its break roll.
+    SetObjectState {
+        state: dark::properties::ObjectState,
+    },
 }
 
 /// Status of the interactive pathfinding test system
@@ -1077,4 +1307,46 @@ pub struct DebugPathfindingTestStatus {
     pub state: String,
     /// Number of waypoints in the computed test path (0 if no path computed)
     pub test_path_waypoints: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::player_stats::{PSI_TIER_CAP, SKILL_CAP, STAT_CAP};
+
+    /// A typo here (a stat cap on the psi tier, say) would provision a
+    /// character that quietly stops short, so assert the values, not just that
+    /// the fields are populated. Exhaustiveness is a compile error by
+    /// construction - `max_stats_request` uses a full struct literal.
+    #[test]
+    fn the_max_stats_cheat_asks_for_every_cap() {
+        let request = max_stats_request();
+        for stat in [
+            request.strength,
+            request.endurance,
+            request.agility,
+            request.psionic_ability,
+            request.cyber_affinity,
+        ] {
+            assert_eq!(stat, Some(STAT_CAP));
+        }
+        let s = &request.skills;
+        for skill in [
+            s.standard_weapons,
+            s.energy_weapons,
+            s.heavy_weapons,
+            s.exotic_weapons,
+            s.hack,
+            s.repair,
+            s.modify,
+            s.maintenance,
+            s.research,
+        ] {
+            assert_eq!(skill, Some(SKILL_CAP));
+        }
+        assert_eq!(request.psi_tier, Some(PSI_TIER_CAP));
+        // Modules are their own cheat: maxing the sheet must not also hand out
+        // the currency to buy things with.
+        assert_eq!(request.cyber_modules, None);
+    }
 }

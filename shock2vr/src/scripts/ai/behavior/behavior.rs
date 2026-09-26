@@ -37,6 +37,18 @@ pub trait Behavior {
     /// Short stable name for debug introspection (e.g. "Chase", "Wander")
     fn name(&self) -> &'static str;
 
+    /// Fixed destination being investigated, if this behavior owns one.
+    fn investigation_goal(&self) -> Option<Vector3<f32>> {
+        None
+    }
+
+    fn combat_mode(&self) -> Option<super::CombatMode> {
+        None
+    }
+    fn is_combat_frustration(&self) -> bool {
+        false
+    }
+
     fn scripted_state(&self) -> ScriptedState {
         ScriptedState::NotScripted
     }
@@ -91,6 +103,11 @@ pub trait Behavior {
         _msg: &MessagePayload,
     ) -> Effect {
         Effect::NoEffect
+    }
+
+    /// Stop root-motion travel while retaining the current pose/heading.
+    fn holds_position(&self) -> bool {
+        false
     }
 
     fn is_locomotion(&self) -> bool {

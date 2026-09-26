@@ -14,6 +14,7 @@ use tracing::{self, trace};
 
 use crate::{
     gui::GuiPropProxyEntity,
+    hand_feedback::{HandAffordance, HandFeedback, HandTarget},
     input_context::Hand,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     scripts::{Message, MessagePayload},
@@ -23,11 +24,28 @@ use crate::{
 
 const HAND_OFFSET: Vector3<f32> = vec3(0.0, 0.0, 0.0);
 
+/// Where a tracked controller is in the world. Inputs are in pawn space, so
+/// `vr_climb` resolves grips against exactly the pose the hand is drawn and
+/// raycast from.
+pub fn hand_world_position(
+    pawn_pos: Vector3<f32>,
+    pawn_rotation: Quaternion<f32>,
+    hand_local: Vector3<f32>,
+) -> Vector3<f32> {
+    pawn_pos + HAND_OFFSET + pawn_rotation.rotate_vector(hand_local)
+}
+
 /// Maximum world-space distance from the hand/eye to a frob target's visible
 /// surface. Retail `shock2.gam` authors `GAMEPARAM.Frob Dist = 50`; the
 /// original `PickSetFocus` treats that as squared SS2 units, while this engine
 /// divides authored world geometry by [`SCALE_FACTOR`].
 pub(crate) const FROB_REACH: f32 = 7.071_068 / SCALE_FACTOR;
+
+/// How close the two hands must come for releasing a tool held in one to count
+/// as applying it to what the other holds. About a foot: close enough that the
+/// player has deliberately brought the two together, loose enough that they do
+/// not have to touch.
+const TWO_HAND_TOOL_REACH: f32 = 0.3;
 
 #[derive(Clone)]
 pub struct VirtualHand {
@@ -35,6 +53,8 @@ pub struct VirtualHand {
     rotation: Quaternion<f32>,
     trigger_value: f32,
     squeeze_value: f32,
+    // A restored hold has no physical squeeze yet. Arm release after the first squeeze.
+    restored_grip_pending: bool,
     raytrace_hit: Option<RayCastResult>,
 
     // Keep track of last frobbed entity so frobbing is 'semi-auto'
@@ -43,6 +63,8 @@ pub struct VirtualHand {
     hand_state: HandState,
 
     handedness: Handedness,
+    feedback: HandFeedback,
+    motion: crate::throwing::HandMotion,
 }
 
 #[derive(Debug)]
@@ -56,6 +78,12 @@ pub enum VirtualHandEffect {
         entity_id: EntityId,
         force: Vector3<f32>,
         torque: Vector3<f32>,
+    },
+    /// Refit contact geometry once when a prepared melee grip is acquired.
+    FitHeldItem {
+        entity_id: EntityId,
+        size: Vector3<f32>,
+        center: Vector3<f32>,
     },
     SetPositionRotation {
         entity_id: EntityId,
@@ -95,11 +123,17 @@ pub enum VirtualHandEffect {
         entity_id: EntityId,
         cell: (usize, usize),
     },
+    /// A claimed body-slot release. Dispatches Drop but never creates a loose body.
+    HolsterItem {
+        entity_id: EntityId,
+        slot: usize,
+    },
     /// Eject an item into the world (it regains physics + its world model).
     /// This is an explicit drop only: VR opening its hand. Losing an item to a
     /// wield swap is a `StoreItem`, not a drop (#777).
     DropItem {
         entity_id: EntityId,
+        motion: crate::throwing::ReleaseMotion,
     },
 }
 
@@ -125,12 +159,23 @@ impl VirtualHand {
             },
             trigger_value: 0.0,
             squeeze_value: 0.0,
+            restored_grip_pending: false,
             raytrace_hit: None,
             last_frobbed_entity: None,
             hand_state: HandState::Empty,
             handedness,
+            feedback: HandFeedback::default(),
+            motion: Default::default(),
         }
     }
+    pub(crate) fn reset_throw_motion(&mut self) {
+        self.motion = Default::default();
+    }
+
+    pub(crate) fn preserve_restored_grip(&mut self) {
+        self.restored_grip_pending = self.get_held_entity().is_some();
+    }
+
     pub fn destroy_entity(&self, entity_to_destroy_id: EntityId) -> VirtualHand {
         match self.hand_state {
             // Nothing to do here!
@@ -155,6 +200,11 @@ impl VirtualHand {
         }
     }
 
+    pub(crate) fn released_entity(&self, input: &Hand) -> Option<EntityId> {
+        self.get_held_entity()
+            .filter(|_| input.squeeze_value < 0.5 && !self.restored_grip_pending)
+    }
+
     pub fn get_raytraced_entity(&self) -> Option<EntityId> {
         match &self.raytrace_hit {
             None => None,
@@ -174,6 +224,30 @@ impl VirtualHand {
         self.rotation
     }
 
+    pub(crate) fn get_trigger_value(&self) -> f32 {
+        self.trigger_value
+    }
+
+    /// A supporting hand tracks its controller but cannot also ray-grab/frob.
+    pub(crate) fn update_suppressed(
+        &self,
+        pawn_pos: Vector3<f32>,
+        pawn_rot: Quaternion<f32>,
+        input: &Hand,
+    ) -> Self {
+        debug_assert!(self.get_held_entity().is_none());
+        let mut hand = self.clone();
+        hand.position = hand_world_position(pawn_pos, pawn_rot, input.position);
+        hand.rotation = pawn_rot * input.rotation;
+        hand.squeeze_value = input.squeeze_value;
+        hand.trigger_value = input.trigger_value;
+        hand.feedback = HandFeedback::default();
+        hand.raytrace_hit = None;
+        hand.last_frobbed_entity = None;
+        hand.reset_throw_motion();
+        hand
+    }
+
     pub fn grab_entity(
         &self,
         _world: &World,
@@ -187,6 +261,8 @@ impl VirtualHand {
 
         VirtualHand {
             hand_state: HandState::Grabbing { entity_id },
+            restored_grip_pending: false,
+            feedback: HandFeedback::default(),
             ..self.clone()
         }
     }
@@ -222,49 +298,84 @@ impl VirtualHand {
         pawn_rot: Quaternion<f32>,
         input_hand: &Hand,
         held_by_other_hand: Option<EntityId>,
+        other_hand_position: Vector3<f32>,
+        dt: f32,
     ) -> (VirtualHand, Vec<VirtualHandEffect>) {
         let handedness = prev.handedness;
-        let hand_position = pawn_pos + HAND_OFFSET + pawn_rot.rotate_vector(input_hand.position);
+        let hand_position = hand_world_position(pawn_pos, pawn_rot, input_hand.position);
         let hand_rotation = pawn_rot * input_hand.rotation;
+        let mut motion = prev.motion.clone();
+        motion.sync_epoch(world);
+        let release = motion.sample(
+            input_hand.position,
+            input_hand.rotation,
+            pawn_pos,
+            pawn_rot,
+            dt,
+        );
 
         // Also do a raycast to provide the 'Hover' effect
         let ray_start = point3(hand_position.x, hand_position.y, hand_position.z);
         let forward = hand_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-        let result =
-            interaction_ray_cast(physics, world, ray_start, forward, prev.get_held_entity());
+        // Empty hands resolve their target once in handle_empty_hand_state.
+        let result = prev
+            .get_held_entity()
+            .and_then(|held| interaction_ray_cast(physics, world, ray_start, forward, Some(held)));
 
-        let (hand, mut effs) = match prev.hand_state {
+        let (mut hand, mut effs) = match prev.hand_state {
             HandState::Grabbing { entity_id } => {
                 // See what we're hitting
                 let mut msgs = Vec::new();
 
                 // If we're holding onto something, but not grabbing, we can drop it
-                if input_hand.squeeze_value < 0.5 {
-                    let mut msgs = vec![VirtualHandEffect::DropItem { entity_id }];
+                if prev.released_entity(input_hand).is_some() {
+                    let mut msgs = vec![VirtualHandEffect::DropItem {
+                        entity_id,
+                        motion: release,
+                    }];
 
-                    let result_copy = result.clone();
-                    if let Some(ray_cast_result) = result_copy {
-                        if let Some(hit_entity_id) = ray_cast_result.maybe_entity_id {
-                            msgs.push(VirtualHandEffect::OutMessage {
-                                message: Message {
-                                    to: hit_entity_id,
-                                    payload: MessagePayload::ProvideForConsumption {
-                                        entity: entity_id,
-                                    },
+                    // Releasing a tool against the weapon in the other hand is
+                    // the natural two-hand gesture, and it is the one target
+                    // the release ray usually misses: the hands are alongside
+                    // each other, not one pointed at the other. So the tool is
+                    // offered to what the other hand holds once it has been
+                    // brought to it - only for a pairing that item can take,
+                    // since offering on every release near the other hand would
+                    // e.g. post any dropped item into a held container.
+                    let two_hand_target = held_by_other_hand.filter(|other_held| {
+                        (hand_position - other_hand_position).magnitude() <= TWO_HAND_TOOL_REACH
+                            && crate::scripts::maintenance::offers_to(world, entity_id, *other_held)
+                    });
+
+                    // Exactly one recipient: a deliberate two-hand gesture wins
+                    // over whatever the ray happened to be pointing at, so one
+                    // tool can never be spent on two weapons (a released tool
+                    // over a weapons bench sees a second gun most of the time).
+                    let target = two_hand_target
+                        .or_else(|| result.clone().and_then(|hit| hit.maybe_entity_id));
+                    if let Some(target) = target {
+                        msgs.push(VirtualHandEffect::OutMessage {
+                            message: Message {
+                                to: target,
+                                payload: MessagePayload::ProvideForConsumption {
+                                    entity: entity_id,
                                 },
-                            });
-                        }
-                    };
+                            },
+                        });
+                    }
 
                     let updated_hand = VirtualHand {
                         position: hand_position,
                         rotation: hand_rotation,
                         trigger_value: input_hand.trigger_value,
                         squeeze_value: input_hand.squeeze_value,
+                        restored_grip_pending: false,
                         raytrace_hit: None,
                         last_frobbed_entity: None,
                         hand_state: HandState::Empty,
                         handedness,
+                        feedback: HandFeedback::default(),
+                        motion: Default::default(),
                     };
                     (updated_hand, msgs)
                 } else {
@@ -304,7 +415,7 @@ impl VirtualHand {
                         // grip in the palm), so it must rotate with the hand
                         position: hand_position + hand_rotation.rotate_vector(vr_offsets.offset),
                         rotation: hand_rotation * vr_offsets.rotation,
-                        scale: vec3(1.0, 1.0, 1.0), //vr_offsets.scale,
+                        scale: vec3(1.0, 1.0, 1.0),
                     });
 
                     let updated_hand = VirtualHand {
@@ -312,10 +423,14 @@ impl VirtualHand {
                         rotation: hand_rotation,
                         trigger_value: input_hand.trigger_value,
                         squeeze_value: input_hand.squeeze_value,
+                        restored_grip_pending: prev.restored_grip_pending
+                            && input_hand.squeeze_value < 0.5,
                         raytrace_hit: None,
                         last_frobbed_entity: None,
                         hand_state: next_hand_state,
                         handedness,
+                        feedback: HandFeedback::default(),
+                        motion: Default::default(),
                     };
                     (updated_hand, msgs)
                 }
@@ -332,6 +447,35 @@ impl VirtualHand {
             ),
         };
 
+        let observed = if hand.get_held_entity().is_some() {
+            HandAffordance::None
+        } else {
+            hand.feedback.observed
+        };
+        let failed = observed == HandAffordance::Blocked
+            && effs.iter().any(|effect| {
+                matches!(
+                    effect,
+                    VirtualHandEffect::OutMessage {
+                        message: Message {
+                            payload: MessagePayload::Frob,
+                            ..
+                        }
+                    }
+                )
+            });
+        hand.feedback = if hand.get_held_entity().is_some() {
+            HandFeedback::default()
+        } else {
+            prev.feedback
+        };
+        hand.feedback.update(observed, failed, dt);
+        hand.motion = motion;
+        let result = if matches!(prev.hand_state, HandState::Empty) {
+            hand.raytrace_hit.clone()
+        } else {
+            result
+        };
         match result {
             Some(RayCastResult {
                 hit_point,
@@ -364,22 +508,44 @@ impl VirtualHand {
         &self,
         world: &World,
         glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
+        grip: Option<(&crate::vr_grip::ResolvedGrip, f32)>,
+        visual_pose: Option<crate::vr_support::GripPose>,
+        lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<SceneObject> {
+        let hand_pose = visual_pose.unwrap_or(crate::vr_support::GripPose {
+            position: self.position,
+            rotation: self.rotation,
+        });
+        // Invalid controller tracking must not send a non-finite transform to GL.
+        if !hand_pose.is_tracked() {
+            return Vec::new();
+        }
         // The hand itself: the skinned hand model, posed from the analog
         // inputs - unless a wielded weapon's model stands in for it.
+        let hand_lights = lighting.map(|lighting| lighting.at_player_position(hand_pose.position));
         let mut scene_objects = glove_renderer
             .filter(|_| shows_hand_visual(world, self.get_held_entity()))
             .map(|renderer| {
                 renderer.render_hand(
-                    self.position,
-                    self.rotation,
+                    hand_pose.position,
+                    hand_pose.rotation,
                     self.handedness,
                     self.trigger_value,
                     self.squeeze_value,
                     self.get_held_entity().is_some(),
+                    grip.map(|(grip, blend)| (grip.finger_amounts_at(self.trigger_value), blend)),
+                    self.feedback.light(),
+                    hand_lights,
                 )
             })
             .unwrap_or_default();
+
+        let invisibility = crate::psi_invisibility::transparency(world);
+        let charge_transform = crate::melee_charge_visual::transform(world, self.get_held_entity());
+        for object in &mut scene_objects {
+            object.set_transform(charge_transform * object.get_transform());
+            crate::psi_invisibility::apply(object, invisibility);
+        }
 
         let hit_color = self.color_from_state();
 
@@ -397,6 +563,11 @@ impl VirtualHand {
         }
 
         scene_objects
+    }
+
+    pub(crate) fn feedback_diagnostics(&self) -> serde_json::Value {
+        serde_json::json!({"target": self.get_raytraced_entity().map(|id| id.inner() as i32),
+            "affordance": self.feedback.observed, "light": format!("{:?}", self.feedback.light())})
     }
 
     fn color_from_state(&self) -> Vector3<f32> {
@@ -423,12 +594,32 @@ fn handle_empty_hand_state(
 ) -> (VirtualHand, Vec<VirtualHandEffect>) {
     let ray_start = point3(hand_position.x, hand_position.y, hand_position.z);
     let forward = hand_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-    let result = interaction_ray_cast(physics, world, ray_start, forward, held_by_other_hand);
+    let tracked = crate::vr_support::GripPose {
+        position: hand_position,
+        rotation: hand_rotation,
+    }
+    .is_tracked();
+    let result = tracked
+        .then(|| interaction_ray_cast(physics, world, ray_start, forward, held_by_other_hand))
+        .flatten();
+    let target = result
+        .as_ref()
+        .and_then(|hit| {
+            hit.maybe_entity_id.map(|entity| {
+                HandTarget::resolve(world, entity, hit.maybe_rigid_body_handle.is_some())
+            })
+        })
+        .unwrap_or_default();
     trace!("ray cast result: {:?}", &result);
     let mut msgs = Vec::new();
     let mut last_frobbed_entity = frobbed_entity;
     let mut next_hand_state = HandState::Empty;
-    if input_hand.trigger_value > 0.5 || input_hand.a_value > 0.5 {
+    if (input_hand.trigger_value > 0.5 || input_hand.a_value > 0.5)
+        && !result
+            .as_ref()
+            .and_then(|hit| hit.maybe_entity_id)
+            .is_some_and(|entity| crate::scripts::script_util::is_download_pickup(world, entity))
+    {
         if let Some(RayCastResult {
             hit_point: _,
             hit_normal: _,
@@ -469,17 +660,12 @@ fn handle_empty_hand_state(
             hit_point: _,
             hit_normal: _,
             maybe_entity_id: Some(entity_id),
-            maybe_rigid_body_handle: Some(rigid_body_handle),
+            maybe_rigid_body_handle: Some(_),
             is_sensor: _,
         }) = result
         {
-            let needs_scripted_frob = uses_scripted_world_frob(world, entity_id);
-            if Some(entity_id) != held_by_other_hand
-                && can_grab_item(world, entity_id)
-                && !needs_scripted_frob
-            {
-                let position = &physics.get_position(rigid_body_handle).unwrap();
-                let _dir = hand_position - position;
+            let needs_scripted_frob = target.scripted;
+            if Some(entity_id) != held_by_other_hand && target.grabbable {
                 msgs.push(VirtualHandEffect::HoldItem { entity_id });
 
                 next_hand_state = HandState::Grabbing { entity_id };
@@ -487,10 +673,8 @@ fn handle_empty_hand_state(
                 && needs_scripted_frob
                 && last_frobbed_entity != Some(entity_id)
             {
-                // Items whose taking must go through a script (nanites
-                // collected straight into the player stat, keycards, ...) are
-                // always Frob'd, never squeeze-grabbed into the hand - see
-                // `uses_scripted_world_frob`.
+                // Script-only interactions such as logs still Frob on squeeze.
+                // Downloads took the physical HoldItem branch above.
                 msgs.push(VirtualHandEffect::OutMessage {
                     message: Message {
                         to: entity_id,
@@ -502,15 +686,20 @@ fn handle_empty_hand_state(
         }
     }
 
+    let mut feedback = HandFeedback::default();
+    feedback.observed = target.affordance;
     let updated_hand = VirtualHand {
         position: hand_position,
         rotation: hand_rotation,
         trigger_value: input_hand.trigger_value,
         squeeze_value: input_hand.squeeze_value,
+        restored_grip_pending: false,
         raytrace_hit: result,
         last_frobbed_entity,
         hand_state: next_hand_state,
         handedness,
+        feedback,
+        motion: Default::default(),
     };
     (updated_hand, msgs)
 }
@@ -536,10 +725,10 @@ fn get_held_position_orientation(
 /// protocol even though the Weapon archetype also inherits that inventory
 /// flag. The decision stays tied to Dark's production frob metadata.
 fn held_trigger_press_payload(world: &World, entity_id: EntityId) -> MessagePayload {
-    // An always-collected item can only be in a hand at all if an older save put
-    // it there, and it must still collect rather than act: PropKeySrc injects
-    // `internal_keycard` at runtime even though retail ID cards author no
-    // inventory SCRIPT flag, so the metadata check below would miss a card.
+    if crate::scripts::script_util::is_download_pickup(world, entity_id) {
+        return MessagePayload::TriggerPull;
+    }
+    // Logs normally collect immediately, but recover a manually restored one.
     if crate::scripts::script_util::is_always_collected(world, entity_id) {
         return MessagePayload::Frob;
     }
@@ -619,14 +808,11 @@ pub(crate) fn is_wieldable_weapon(world: &World, entity_id: EntityId) -> bool {
             .unwrap_or(false)
 }
 
-/// Whether the hand visual (skin + forearm) is drawn for a hand holding
-/// `held_entity`.
+/// Whether the calibrated glove is drawn for a hand holding `held_entity`.
 ///
-/// A wielded weapon's model is drawn at the hand's transform and *replaces*
-/// the hand - drawing both puts a hand inside the gun. On a 25AE install VR
-/// wields the remastered first-person model (baked hand and forearm included);
-/// otherwise the weapon's world model is drawn. Anything else - an empty hand,
-/// or a held object that is not a wieldable weapon - keeps the hand.
+/// Successfully stripped weapon models keep the glove. Legacy weapon models
+/// and the psi amp replace it with their authored hand; drawing both would
+/// overlap. Empty hands and ordinary held objects also keep the glove.
 pub(crate) fn shows_hand_visual(world: &World, held_entity: Option<EntityId>) -> bool {
     // Calibration override: draw the glove *as well as* the weapon model, so
     // the `_h` rig's baked fist can be compared against where the controller
@@ -636,7 +822,13 @@ pub(crate) fn shows_hand_visual(world: &World, held_entity: Option<EntityId>) ->
     }
     match held_entity {
         None => true,
-        Some(entity_id) => !is_wieldable_weapon(world, entity_id),
+        Some(entity_id) => {
+            !is_wieldable_weapon(world, entity_id)
+                || world
+                    .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+                    .map(|v| v.get(entity_id).is_ok())
+                    .unwrap_or(false)
+        }
     }
 }
 
@@ -675,7 +867,7 @@ fn resolve_hit_proxy_entity(world: &World, ray_cast_result: RayCastResult) -> Ra
     }
 }
 
-fn interaction_ray_cast(
+pub(crate) fn interaction_ray_cast(
     physics: &PhysicsWorld,
     world: &World,
     ray_start: cgmath::Point3<f32>,
@@ -778,6 +970,8 @@ mod tests {
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             &input,
             None,
+            Vector3::zero(),
+            1.0 / 60.0,
         );
 
         effects
@@ -942,6 +1136,65 @@ mod tests {
     /// continue reaching WeaponScript/PsiAmpScript as TriggerPull even though
     /// their inherited inventory action is also SCRIPT.
     #[test]
+    fn vr_grip_holds_downloads_but_logs_still_collect_immediately() {
+        use crate::test_support::{CollectedKind, spawn_collected};
+        for kind in CollectedKind::ALL {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity = spawn_collected(&mut world, kind);
+            register_kinematic_body(
+                &mut world,
+                &mut physics,
+                entity,
+                vec3(0.0, 0.0, -0.5),
+                vec3(1.0, 1.0, 1.0),
+                CollisionGroup::selectable(),
+            );
+            let mut input = Hand::default();
+            input.squeeze_value = 1.0;
+            let (hand, effects) = handle_empty_hand_state(
+                Handedness::Right,
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                None,
+                &world,
+                &physics,
+                &input,
+                None,
+            );
+            if kind == CollectedKind::AudioLog {
+                assert_eq!(hand.get_held_entity(), None);
+                assert_eq!(frob_message_count(&effects), 1);
+            } else {
+                assert_eq!(hand.get_held_entity(), Some(entity), "{kind:?}");
+                assert_eq!(
+                    frob_message_count(&effects),
+                    0,
+                    "no credit before release: {kind:?}"
+                );
+            }
+        }
+        let mut world = World::new();
+        let soft = world.add_entity((
+            dark::properties::PropSoftType(1),
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::SCRIPT,
+                tool_action: FrobFlag::empty(),
+            },
+        ));
+        assert!(HandTarget::resolve(&world, soft, true).grabbable);
+        assert!(matches!(
+            held_trigger_press_payload(&world, soft),
+            MessagePayload::TriggerPull
+        ));
+        let invalid = world.add_entity(dark::properties::PropSoftType(0));
+        assert!(!crate::scripts::script_util::is_download_pickup(
+            &world, invalid
+        ));
+    }
+
+    #[test]
     fn held_player_gun_preserves_trigger_pull() {
         let mut world = World::new();
         let weapon_or_psi_amp = world.add_entity((scripted_inventory_use(), player_gun()));
@@ -952,12 +1205,9 @@ mod tests {
         ));
     }
 
-    /// A keycard physically held by an older save or a pre-fix backpack grab
-    /// must still be recoverable through the production VR trigger gesture.
-    /// Its inventory metadata has no SCRIPT bit, so PropKeySrc is the semantic
-    /// source of truth.
+    /// Trigger use must not collect a card before grip release.
     #[test]
-    fn held_keycard_trigger_collects_it_through_frob() {
+    fn held_keycard_trigger_waits_for_release() {
         let mut world = World::new();
         let keycard = world.add_entity((
             PropFrobInfo {
@@ -974,7 +1224,7 @@ mod tests {
 
         assert!(matches!(
             held_trigger_payload(&world, keycard),
-            MessagePayload::Frob
+            MessagePayload::TriggerPull
         ));
     }
 
@@ -988,6 +1238,20 @@ mod tests {
         assert!(!shows_hand_visual(&world, Some(weapon)));
     }
 
+    #[test]
+    fn only_successfully_stripped_weapons_keep_the_glove() {
+        let mut world = World::new();
+        let gun = world.add_entity((player_gun(),));
+        assert!(!shows_hand_visual(&world, Some(gun)));
+        world.add_component(
+            gun,
+            crate::runtime_props::RuntimePropGloveWeapon { item_scale: 0.7 },
+        );
+        assert!(shows_hand_visual(&world, Some(gun)));
+        world.remove::<crate::runtime_props::RuntimePropGloveWeapon>(gun);
+        assert!(!shows_hand_visual(&world, Some(gun)));
+    }
+
     /// An empty hand, or one holding something with no first-person weapon
     /// model (a crate, a consumable), still shows the hand.
     #[test]
@@ -999,30 +1263,17 @@ mod tests {
         assert!(shows_hand_visual(&world, Some(consumable)));
     }
 
-    /// A scripted world pickup (here, a keycard - nanite piles are the
-    /// motivating case) that also carries a `MOVE` frob action, so a test can
-    /// tell the deliberate "route through Frob" branch apart from simply
-    /// never being grabbable (`can_grab_item` alone would already be false
-    /// without it).
+    /// A SCRIPT-only world interaction for frob-latch regression coverage.
     fn scripted_world_pickup_at(
         world: &mut World,
         physics: &mut PhysicsWorld,
         position: Vector3<f32>,
     ) -> EntityId {
-        use dark::properties::{KeyCard, PropKeySrc};
-
-        let entity = world.add_entity((
-            PropKeySrc(KeyCard {
-                is_master: false,
-                region_id: 0,
-                lock_id: 0,
-            }),
-            PropFrobInfo {
-                world_action: FrobFlag::MOVE,
-                inventory_action: FrobFlag::empty(),
-                tool_action: FrobFlag::empty(),
-            },
-        ));
+        let entity = world.add_entity(PropFrobInfo {
+            world_action: FrobFlag::SCRIPT,
+            inventory_action: FrobFlag::empty(),
+            tool_action: FrobFlag::empty(),
+        });
         register_kinematic_body(
             world,
             physics,
@@ -1055,12 +1306,7 @@ mod tests {
             .count()
     }
 
-    /// Negative-first regression: a scripted world pickup (here, a keycard -
-    /// nanite piles are the motivating case) is not physically grabbable, so
-    /// squeeze routes it through Frob (see `uses_scripted_world_frob`). The
-    /// trigger-idle branch used to clear the frob latch unconditionally every
-    /// frame, so a squeeze held across frames re-sent Frob every tick the
-    /// entity survived instead of just once on the rising edge.
+    /// A squeeze held over a SCRIPT-only target must send only one Frob.
     #[test]
     fn held_squeeze_frobs_a_scripted_pickup_only_once() {
         let mut world = World::new();
@@ -1204,6 +1450,8 @@ mod tests {
             identity,
             &input,
             None,
+            Vector3::zero(),
+            1.0 / 60.0,
         );
         assert_eq!(far_hand.get_raytraced_entity(), None);
         assert!(
@@ -1220,6 +1468,8 @@ mod tests {
             identity,
             &input,
             None,
+            Vector3::zero(),
+            1.0 / 60.0,
         );
         assert_eq!(near_hand.get_raytraced_entity(), Some(near_target));
         assert!(
@@ -1234,5 +1484,105 @@ mod tests {
             )),
             "an in-reach VR trigger should preserve frob behavior, got {near_effects:?}"
         );
+    }
+    #[test]
+    fn glove_feedback_matches_lock_attempt_and_ignores_untracked_hands() {
+        use crate::hand_glove::HandLight;
+        let (mut world, physics, target) = frob_fixture(1.0);
+        world.add_unique(crate::quest_info::QuestInfo::new());
+        world.add_component(target, dark::properties::PropLocked(true));
+        let mut input = Hand::default();
+        let update = |hand: &VirtualHand, input: &Hand, world: &World| {
+            VirtualHand::update(
+                hand,
+                &physics,
+                world,
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                input,
+                None,
+                Vector3::zero(),
+                1.0 / 60.0,
+            )
+        };
+        let (hand, effects) = update(&VirtualHand::new(Handedness::Right), &input, &world);
+        assert_eq!(hand.feedback.light(), HandLight::Amber);
+        assert_eq!(frob_message_count(&effects), 0);
+        input.trigger_value = 1.0;
+        let (mut hand, effects) = update(&hand, &input, &world);
+        assert_eq!(hand.feedback.light(), HandLight::Red);
+        assert_eq!(frob_message_count(&effects), 1);
+        for _ in 0..16 {
+            let (next, effects) = update(&hand, &input, &world);
+            assert_eq!(
+                frob_message_count(&effects),
+                0,
+                "held trigger must not repeat refusal"
+            );
+            hand = next;
+        }
+        assert_eq!(hand.feedback.light(), HandLight::Amber);
+        world.add_component(target, dark::properties::PropLocked(false));
+        input.trigger_value = 0.0;
+        let (hand, _) = update(&hand, &input, &world);
+        assert_eq!(hand.feedback.light(), HandLight::Green);
+        input.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        input.trigger_value = 1.0;
+        let (hand, effects) = update(&hand, &input, &world);
+        assert_eq!(hand.feedback.light(), HandLight::Off);
+        assert_eq!(frob_message_count(&effects), 0);
+    }
+
+    #[test]
+    fn grabbing_or_support_suppression_clears_the_glove_prompt() {
+        use crate::hand_glove::HandLight;
+        let (mut world, physics, target) = frob_fixture(1.0);
+        world.add_component(
+            target,
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+        );
+        let input = Hand::default();
+        let (hand, _) = VirtualHand::update(
+            &VirtualHand::new(Handedness::Right),
+            &physics,
+            &world,
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            &input,
+            None,
+            Vector3::zero(),
+            1.0 / 60.0,
+        );
+        assert_eq!(hand.feedback.light(), HandLight::Green);
+        assert_eq!(
+            hand.update_suppressed(Vector3::zero(), Quaternion::new(1.0, 0.0, 0.0, 0.0), &input)
+                .feedback
+                .light(),
+            HandLight::Off
+        );
+        let input = Hand {
+            squeeze_value: 1.0,
+            ..input
+        };
+        let (hand, effects) = VirtualHand::update(
+            &hand,
+            &physics,
+            &world,
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            &input,
+            None,
+            Vector3::zero(),
+            1.0 / 60.0,
+        );
+        assert!(effects.iter().any(
+            |e| matches!(e, VirtualHandEffect::HoldItem { entity_id } if *entity_id == target)
+        ));
+        assert_eq!(hand.get_held_entity(), Some(target));
+        assert_eq!(hand.feedback.light(), HandLight::Off);
     }
 }

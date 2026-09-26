@@ -12,6 +12,16 @@ pub enum AnimationFlags {
     PlayOnce,
 }
 
+/// The cross-fade weight of the incoming pose at normalized blend progress
+/// `t`. Raised-cosine ease-in/ease-out rather than linear - a linear ramp
+/// starts and stops the correction abruptly, which reads as two small hitches
+/// bracketing the fade. Public so anything that has to move IN STEP with a
+/// blend (the AI's turn-clip yaw handoff) rides the same curve.
+pub fn blend_alpha(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    (1.0 - (std::f32::consts::PI * t).cos()) / 2.0
+}
+
 pub enum AnimationEvent {
     DirectionChanged(Deg<f32>),
     VelocityChanged(Vector3<f32>),
@@ -246,6 +256,22 @@ impl AnimationPlayer {
         let mut new_player = player.clone();
         new_player.cancel_root_motion = true;
         new_player
+    }
+
+    /// How much of the pose the INCOMING clip owns right now: the very weight
+    /// `get_transforms` blends with, so anything that has to move in step with
+    /// the fade (the AI's turn-clip yaw handoff) reads the pose's own number
+    /// rather than integrating a clock of its own. 1.0 when nothing is fading -
+    /// which, read straight after queueing, is also how a caller learns that
+    /// the clip it just started hard-cuts (`queue_animation` takes the INCOMING
+    /// clip's authored blend length, and a stride clip authors none).
+    pub fn blend_alpha_now(&self) -> f32 {
+        match &self.blend_state {
+            Some(blend) if blend.duration > f32::EPSILON && blend.elapsed < blend.duration => {
+                blend_alpha(blend.elapsed / blend.duration)
+            }
+            _ => 1.0,
+        }
     }
 
     pub fn set_additional_joint_transform(
@@ -556,11 +582,7 @@ impl AnimationPlayer {
 
         if let Some(blend) = &self.blend_state {
             if blend.duration > f32::EPSILON && blend.elapsed < blend.duration {
-                // Raised-cosine ease-in/ease-out rather than linear - a linear
-                // ramp starts and stops the correction abruptly, which reads
-                // as two small hitches bracketing the fade.
-                let t = (blend.elapsed / blend.duration).clamp(0.0, 1.0);
-                let alpha = (1.0 - (std::f32::consts::PI * t).cos()) / 2.0;
+                let alpha = self.blend_alpha_now();
                 // update() keeps from_frame in range (loops wrap, one-shots
                 // clamp), and the fractional position advances smoothly
                 // during the fade.
@@ -973,6 +995,53 @@ mod tests {
             assert!(next.snapshot().queue.is_empty());
             assert_eq!(next.snapshot().last_clip.as_deref(), Some("death_pose"));
         }
+    }
+
+    /// What the turn-clip yaw handoff reads every frame: the weight
+    /// `get_transforms` blends with, so the facing the entity takes and the
+    /// facing the pose gives up are the same number. Read straight after
+    /// queueing, it is also what tells a caller whether there is a fade at all -
+    /// `queue_animation` takes the INCOMING clip's authored length, and a
+    /// stride clip authors none however long the clip it interrupts did.
+    #[test]
+    fn blend_alpha_now_is_the_weight_the_fade_has_reached() {
+        let mut outgoing = (*clip_with_root_motion()).clone();
+        outgoing.blend_length = Duration::from_millis(500);
+        let player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), Rc::new(outgoing));
+        let (player, _, _, _) = AnimationPlayer::update(&player, Duration::from_millis(100));
+        assert_eq!(player.blend_alpha_now(), 1.0, "nothing is fading");
+
+        // A stride clip queued after it: a hard cut, however long the clip it
+        // interrupts authored.
+        let stride = AnimationPlayer::queue_animation(&player, clip_with_root_motion());
+        assert_eq!(stride.blend_alpha_now(), 1.0, "no fade to ride");
+
+        let mut incoming = (*clip_with_root_motion()).clone();
+        incoming.blend_length = Duration::from_millis(200);
+        let fading = AnimationPlayer::queue_animation(&player, Rc::new(incoming));
+        assert_eq!(fading.blend_alpha_now(), 0.0, "the fade has not started");
+
+        let (fading, _, _, _) = AnimationPlayer::update(&fading, Duration::from_millis(50));
+        assert!((fading.blend_alpha_now() - blend_alpha(0.25)).abs() < 1e-6);
+
+        // Run past the end: the fade is gone and the incoming clip owns the
+        // whole pose, which is the 1.0 the handover finishes on.
+        let (fading, _, _, _) = AnimationPlayer::update(&fading, Duration::from_millis(200));
+        assert_eq!(fading.blend_alpha_now(), 1.0);
+    }
+
+    /// The pose's cross-fade weight, which the AI's yaw handoff rides so the
+    /// facing the pose gives up and the facing the entity takes cancel out.
+    #[test]
+    fn blend_alpha_is_a_clamped_raised_cosine() {
+        assert_eq!(blend_alpha(0.0), 0.0);
+        assert!((blend_alpha(0.5) - 0.5).abs() < 1e-6);
+        assert!((blend_alpha(1.0) - 1.0).abs() < 1e-6);
+        assert_eq!(blend_alpha(-1.0), 0.0);
+        assert!((blend_alpha(2.0) - 1.0).abs() < 1e-6);
+        // Eased, not linear: a quarter of the way in it has moved much less.
+        assert!(blend_alpha(0.25) < 0.25);
+        assert!(blend_alpha(0.75) > 0.75);
     }
 
     #[test]

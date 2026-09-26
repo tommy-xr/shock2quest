@@ -12,18 +12,21 @@
 //! full bar is a psi burnout - the cast fails, the points are spent, and the
 //! player takes damage. Non-overloadable powers cast immediately on pull.
 //!
-//! Only projectile ("shot") powers actually fire so far - sustained, shield,
-//! and cursor-targeted powers are logged and skipped without spending points.
+//! Projectile ("shot"), sustained, and instant powers - self-targeted (the
+//! heals) and aimed (Soma Transference) - cast so far; the remaining kinds are
+//! logged and skipped without spending points.
 
+use cgmath::{EuclideanSpace, InnerSpace, Point3, Transform, Vector3};
 use engine::{audio::AudioHandle, game_log};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
     mission::PlayerInfo,
-    physics::PhysicsWorld,
-    psi::{self, GlobalPsiPowers, PsiPowerInfo, PsiPowerSelection, charge_duration_secs},
+    physics::{InternalCollisionGroups, PhysicsWorld},
+    psi::{self, PsiPowerInfo, charge_duration_secs},
     runtime_props::PsiChargePhase,
     time::Time,
+    util::resolve_proxy_entity,
 };
 
 use super::{
@@ -32,11 +35,29 @@ use super::{
     weapon_script::{create_muzzle_flash, create_projectile},
 };
 
-/// The caster's effective PSI stat, used to pick the power's projectile
-/// (links are ordered by PSI level 1..8) - a mid-range placeholder until
-/// player stats are tracked (P$BaseStats authors all stats at 1, pending
-/// character creation/training).
-const EFFECTIVE_PSI_STAT: i32 = 5;
+/// The caster's PSI stat from the character sheet, used to pick the power's
+/// projectile (links are ordered by PSI level 1..8) and to scale sustained
+/// durations. Falls back to the sheet's baseline when the scene has no
+/// `QuestInfo` (a bare debug scene) - logged, because the same borrow also
+/// fails if something else holds `QuestInfo` mutably, and a silent fallback
+/// would cast at the wrong tier.
+fn player_psi_stat(world: &World) -> i32 {
+    match world.borrow::<UniqueView<crate::quest_info::QuestInfo>>() {
+        Ok(quests) => crate::implants::effective_stats(world)
+            .unwrap_or_else(|| quests.player_stats().clone())
+            .stat_level(crate::player_stats::Stat::PsionicAbility),
+        Err(err) => {
+            let baseline = crate::player_stats::PlayerStats::default().psionic_ability;
+            game_log!(
+                WARN,
+                "No character sheet for the psi cast ({}); casting at PSI {}",
+                err,
+                baseline
+            );
+            baseline
+        }
+    }
+}
 
 /// The amp's charge/result state while the meter is on screen.
 enum ChargeState {
@@ -68,12 +89,15 @@ impl Script for PsiAmpScript {
         &mut self,
         entity_id: EntityId,
         world: &World,
-        _physics: &PhysicsWorld,
+        physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
+            MessagePayload::TriggerPull if crate::psi_sword::active(world, entity_id) => {
+                Effect::NoEffect
+            }
             MessagePayload::TriggerPull => {
-                let Some(power) = selected_power(world) else {
+                let Some(power) = crate::psi_amp_selection::selected_power(world, entity_id) else {
                     return Effect::NoEffect;
                 };
                 // Untrained powers can't be cast (selection gating should
@@ -84,16 +108,9 @@ impl Script for PsiAmpScript {
                     game_log!(INFO, "Psi power {} is not trained", power.name);
                     return Effect::NoEffect;
                 }
-                // Hold-to-overload runs only in flat presentation (the meter
-                // renders on the flat HUD; a flat-aimed amp carries
-                // RuntimePropFlatAim). In VR the amp keeps cast-on-pull until
-                // a VR meter exists - charging blind would spend points with
-                // no feedback.
-                let is_flat = world
-                    .borrow::<View<crate::runtime_props::RuntimePropFlatAim>>()
-                    .map(|v| v.get(entity_id).is_ok())
-                    .unwrap_or(false);
-                if power.overloadable && is_flat {
+                // Both presentations show the per-amp charge on their shared
+                // ammo readout, so the same trigger timing applies in VR.
+                if power.overloadable {
                     // No points, no charge: gate up front so a broke caster
                     // can't charge into a burnout (which spends points and
                     // deals damage) they couldn't afford as a cast.
@@ -105,6 +122,21 @@ impl Script for PsiAmpScript {
                             player_psi_points(world),
                             power.power.psi_cost
                         );
+                        return Effect::NoEffect;
+                    }
+                    // Nor charge a cast that resolves to nothing right now (a
+                    // heal at full health, a drain with nothing in its sights):
+                    // over-holding it would burn out for a cast worth nothing.
+                    // Aim-dependent powers can still lose their target during
+                    // the hold - the release refuses, as an over-hold does.
+                    if instant_cast_is_futile(
+                        world,
+                        physics,
+                        entity_id,
+                        &power,
+                        player_psi_stat(world),
+                    ) {
+                        game_log!(INFO, "{} would do nothing right now", power.name);
                         return Effect::NoEffect;
                     }
                     // Cast happens on release; start the meter.
@@ -120,7 +152,7 @@ impl Script for PsiAmpScript {
                         phase: PsiChargePhase::Charging,
                     }
                 } else {
-                    cast_selected_power(world, entity_id, EFFECTIVE_PSI_STAT)
+                    cast_selected_power(world, physics, entity_id, player_psi_stat(world))
                 }
             }
             MessagePayload::TriggerRelease => {
@@ -135,22 +167,19 @@ impl Script for PsiAmpScript {
                 // The selection changed mid-hold: the bar wasn't timed for
                 // the now-selected power, so the charge fizzles. (A cycle
                 // and a release landing on the SAME frame still cast the
-                // held power - CyclePsiPower is an effect applied after
+                // held power - the selection step is an effect applied after
                 // message dispatch - which matches the player's intent: they
                 // charged that power the whole hold.)
-                if selected_power(world).map(|p| p.template_id) != Some(power_template_id) {
+                if crate::psi_amp_selection::selected_power(world, entity_id).map(|p| p.template_id)
+                    != Some(power_template_id)
+                {
                     self.charge = None;
                     return Effect::ClearPsiCharge { entity_id };
                 }
                 let fraction = elapsed / duration;
                 let overload = fraction >= psi::OVERLOAD_ZONE_START;
-                let effective_psi = if overload {
-                    (EFFECTIVE_PSI_STAT + psi::OVERLOAD_PSI_BONUS)
-                        .min(psi::OVERLOAD_MAX_EFFECTIVE_PSI)
-                } else {
-                    EFFECTIVE_PSI_STAT
-                };
-                let cast = cast_selected_power(world, entity_id, effective_psi);
+                let effective_psi = psi::effective_psi_for_cast(player_psi_stat(world), overload);
+                let cast = cast_selected_power(world, physics, entity_id, effective_psi);
                 // A successful overload flashes the success art briefly; a
                 // normal cast - or a fizzle (no psi / power not implemented)
                 // - just drops the meter.
@@ -172,7 +201,7 @@ impl Script for PsiAmpScript {
             // Losing the amp mid-charge (weapon swap, drop, holster) cancels
             // the charge - otherwise the holstered amp would keep charging
             // and later "burn out" on its own.
-            MessagePayload::Drop => {
+            MessagePayload::Drop | MessagePayload::CancelPsiCharge => {
                 if self.charge.is_some() {
                     self.charge = None;
                     Effect::ClearPsiCharge { entity_id }
@@ -202,7 +231,9 @@ impl Script for PsiAmpScript {
                 let power_template_id = *power_template_id;
                 *elapsed += dt;
                 let fraction = *elapsed / *duration;
-                if selected_power(world).map(|p| p.template_id) != Some(power_template_id) {
+                if crate::psi_amp_selection::selected_power(world, entity_id).map(|p| p.template_id)
+                    != Some(power_template_id)
+                {
                     // Selection changed mid-hold: the charge fizzles.
                     self.charge = None;
                     Effect::ClearPsiCharge { entity_id }
@@ -234,14 +265,8 @@ impl Script for PsiAmpScript {
     }
 }
 
-fn selected_power(world: &World) -> Option<PsiPowerInfo> {
-    let powers = world.borrow::<UniqueView<GlobalPsiPowers>>().ok()?;
-    let selection = world.borrow::<UniqueView<PsiPowerSelection>>().ok()?;
-    powers.0.get(selection.index).cloned()
-}
-
 /// The player's current psi points (0 when the player has no psi pool).
-fn player_psi_points(world: &World) -> i32 {
+pub(crate) fn player_psi_points(world: &World) -> i32 {
     let player_info = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
     let v_psi = world
         .borrow::<View<dark::properties::PropPsiState>>()
@@ -256,13 +281,24 @@ fn player_psi_points(world: &World) -> i32 {
 /// player takes damage (3 per tier - PSI/Endurance mitigation comes later
 /// with player stats). The meter flashes red.
 fn burnout(world: &World, amp_entity: EntityId) -> Effect {
-    let Some(power) = selected_power(world) else {
+    let Some(power) = crate::psi_amp_selection::selected_power(world, amp_entity) else {
         return Effect::ClearPsiCharge {
             entity_id: amp_entity,
         };
     };
     let player_entity = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
-    let damage = psi::BURNOUT_DAMAGE_PER_TIER * power.power.psi_cost;
+    let protected = world
+        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+        .is_ok_and(|quests| {
+            quests
+                .player_stats()
+                .has_os_trait(super::gui::TRAIT_POWER_PSI)
+        });
+    let damage = if protected {
+        0
+    } else {
+        psi::BURNOUT_DAMAGE_PER_TIER * power.power.psi_cost
+    };
     game_log!(
         WARN,
         "Psi burnout! {} failed ({} damage)",
@@ -289,7 +325,7 @@ fn burnout(world: &World, amp_entity: EntityId) -> Effect {
 }
 
 /// Whether the player has been trained in the power. Selection gating
-/// (`Effect::CyclePsiPower`) means an untrained power should never be
+/// (`Effect::StepPsiSelection`) means an untrained power should never be
 /// selected; this is the belt-and-braces check on the cast paths. Fails
 /// closed: the unique is seeded unconditionally at mission load, so a
 /// missing one is a setup bug - don't let it disable the gate.
@@ -300,8 +336,13 @@ fn power_is_known(world: &World, template_id: i32) -> bool {
         .unwrap_or(false)
 }
 
-fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) -> Effect {
-    let Some(power) = selected_power(world) else {
+fn cast_selected_power(
+    world: &World,
+    physics: &PhysicsWorld,
+    amp_entity: EntityId,
+    effective_psi: i32,
+) -> Effect {
+    let Some(power) = crate::psi_amp_selection::selected_power(world, amp_entity) else {
         return Effect::NoEffect;
     };
     if !power_is_known(world, power.template_id) {
@@ -325,10 +366,26 @@ fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) 
         return Effect::NoEffect;
     }
 
+    // Pull is authored as sustained but is a one-shot interaction with no shield duration.
+    if power.template_id == crate::psi_pull::POWER {
+        return crate::psi_pull::resolve(world, physics, amp_entity)
+            .map(|_| Effect::PsiPull {
+                amp: amp_entity,
+                cost: power.power.psi_cost,
+            })
+            .unwrap_or(Effect::NoEffect);
+    }
+
     // Sustained (timed) powers activate a player status for a data-driven
     // duration instead of firing a projectile.
     if power.power.activation_type == psi::ACTIVATION_TYPE_SUSTAINED {
         return cast_sustained_power(world, amp_entity, &power, effective_psi);
+    }
+
+    // Instant powers resolve immediately - no duration, no projectile. Some
+    // target the caster (the heals), some the creature under the aim.
+    if power.power.activation_type == psi::ACTIVATION_TYPE_INSTANT {
+        return cast_instant_power(world, physics, amp_entity, &power, effective_psi);
     }
 
     let Some(projectile_template) = power.projectile_for_psi_stat(effective_psi) else {
@@ -356,6 +413,10 @@ fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) 
                 order: 0,
                 setting: 0,
             },
+            // A psi bolt is not a gun shot: the amp's fire-setting record is
+            // the editor's uninitialized one (every multiplier 0), so cast at
+            // the projectile's own authored damage and speed.
+            crate::runtime_props::RuntimePropShotModifiers::default(),
         ),
     ];
     effects.extend(amp_cast_flashes(world, amp_entity));
@@ -371,7 +432,7 @@ fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) 
 }
 
 /// Cast a sustained (activation type 1) power: spend the tier, activate the
-/// player status for `duration_base + duration_per_psi × PSI` seconds (from
+/// player status for `duration_base + duration_per_psi × max(PSI - baseline_psi, 0)` seconds (from
 /// the power's `P$PsiShield` data), and play the amp's cast flash/sound like
 /// a projectile cast. Re-casting an active power spends again and refreshes
 /// the duration.
@@ -381,6 +442,13 @@ fn cast_sustained_power(
     power: &PsiPowerInfo,
     effective_psi: i32,
 ) -> Effect {
+    if power.template_id == crate::psi_sword::POWER
+        && world
+            .borrow::<UniqueView<psi::ActivePsiPowers>>()
+            .is_ok_and(|p| p.is_active(crate::psi_sword::POWER))
+    {
+        return Effect::NoEffect;
+    }
     let Some(duration) = &power.duration else {
         game_log!(
             INFO,
@@ -389,7 +457,7 @@ fn cast_sustained_power(
         );
         return Effect::NoEffect;
     };
-    let duration_secs = (duration.duration_base + duration.duration_per_psi * effective_psi) as f32;
+    let duration_secs = duration.duration_for_psi(effective_psi);
 
     let mut effects = vec![
         play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
@@ -402,6 +470,14 @@ fn cast_sustained_power(
             duration_secs,
         },
     ];
+    if power.template_id == crate::psi_sword::POWER {
+        effects.push(Effect::Send {
+            msg: super::Message {
+                to: amp_entity,
+                payload: MessagePayload::BeginPsiSword,
+            },
+        });
+    }
     effects.extend(amp_cast_flashes(world, amp_entity));
 
     game_log!(
@@ -414,6 +490,354 @@ fn cast_sustained_power(
     Effect::Multiple(effects)
 }
 
+/// Cast an instant (activation type 2) power: it resolves on the spot, with
+/// no duration and no projectile. Dispatch is by template id so the remaining
+/// instant powers (ForceWall, CyberHack) slot in beside the heals and the
+/// aimed drain.
+fn cast_instant_power(
+    world: &World,
+    physics: &PhysicsWorld,
+    amp_entity: EntityId,
+    power: &PsiPowerInfo,
+    effective_psi: i32,
+) -> Effect {
+    match power.template_id {
+        // Cerebro-stimulated Regeneration and its Advanced (tier 5) version:
+        // both restore the caster's health from the same authored data.
+        id if is_self_heal_power(id) => cast_self_heal(world, amp_entity, power, effective_psi),
+        // Soma Transference: drain the creature under the amp's aim.
+        psi::SOMA_DRAIN_TEMPLATE_ID => {
+            cast_soma_drain(world, physics, amp_entity, power, effective_psi)
+        }
+        _ => {
+            game_log!(
+                INFO,
+                "Instant psi power {} is not implemented yet",
+                power.name
+            );
+            Effect::NoEffect
+        }
+    }
+}
+
+/// Heal the caster by [`self_heal_amount`], spending the power's tier. A cast
+/// at full health is refused and spends nothing, matching the empty-pool
+/// guard - the player keeps their points rather than burning them on a cast
+/// that could do nothing.
+fn cast_self_heal(
+    world: &World,
+    amp_entity: EntityId,
+    power: &PsiPowerInfo,
+    effective_psi: i32,
+) -> Effect {
+    let Some((player_entity, current_hp, max_hp)) = super::script_util::player_hit_points(world)
+    else {
+        game_log!(WARN, "No player hit points for {}", power.name);
+        return Effect::NoEffect;
+    };
+    let amount = self_heal_amount(&power.power.data, effective_psi);
+    if amount <= 0 {
+        game_log!(INFO, "{} has no heal data (P$PsiPower)", power.name);
+        return Effect::NoEffect;
+    }
+    let heal = clamped_self_heal(&power.power.data, effective_psi, current_hp, max_hp);
+    if heal <= 0 {
+        game_log!(
+            INFO,
+            "{} would heal nothing (already at full health)",
+            power.name
+        );
+        return Effect::NoEffect;
+    }
+
+    let mut effects = vec![
+        play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
+        Effect::SpendPsiPoints {
+            amount: power.power.psi_cost,
+        },
+        // PlayerScript handles only Damage - there is no heal message - so
+        // adjust HP directly. The applier does not clamp to the maximum,
+        // hence the clamp above.
+        Effect::AdjustHitPoints {
+            entity_id: player_entity,
+            delta: heal,
+        },
+    ];
+    effects.push(Effect::HealingPulse { amp: amp_entity });
+    effects.extend(amp_cast_flashes(world, amp_entity));
+
+    game_log!(
+        INFO,
+        "Cast psi power: {} (tier {}, healed {} HP at effective PSI {})",
+        power.name,
+        power.power.psi_cost,
+        heal,
+        effective_psi
+    );
+    Effect::Multiple(effects)
+}
+
+/// Soma Transference: drain the creature under the amp's aim, healing the
+/// caster by the transferred health. With nothing live in range the cast is
+/// refused and spends nothing, matching the empty-pool guard - a whiff is not
+/// punished.
+fn cast_soma_drain(
+    world: &World,
+    physics: &PhysicsWorld,
+    amp_entity: EntityId,
+    power: &PsiPowerInfo,
+    effective_psi: i32,
+) -> Effect {
+    let Some(drain) = drain_target(world, physics, amp_entity, power) else {
+        game_log!(
+            INFO,
+            "{} found no living target within {} units of the aim",
+            power.name,
+            SOMA_DRAIN_RANGE
+        );
+        return Effect::NoEffect;
+    };
+    let Some((player_entity, current_hp, max_hp)) = super::script_util::player_hit_points(world)
+    else {
+        game_log!(WARN, "No player hit points for {}", power.name);
+        return Effect::NoEffect;
+    };
+
+    let available = world
+        .borrow::<View<dark::properties::PropHitPoints>>()
+        .unwrap()
+        .get(drain.target)
+        .map(|hp| hp.hit_points.max(0))
+        .unwrap_or(0);
+    let damage = drain_damage(&power.power.data, effective_psi).min(available as f32);
+    // The applier does not clamp to the maximum, so clamp the transfer to the
+    // caster's missing health (a drain at full health still damages).
+    let heal = whole_hit_points(damage).min((max_hp - current_hp).max(0));
+
+    let mut effects = vec![
+        play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
+        Effect::SpendPsiPoints {
+            amount: power.power.psi_cost,
+        },
+        Effect::Send {
+            msg: super::Message {
+                to: drain.target,
+                payload: MessagePayload::Damage {
+                    amount: damage,
+                    // Contact point + aim direction seed the victim's
+                    // death-ragdoll reaction, as a melee hit does. No bone:
+                    // hitbox proxies resolve to their parent before the send.
+                    impact: Some(super::DamageImpact {
+                        direction: drain.direction,
+                        point: drain.hit_point.to_vec(),
+                        bone: None,
+                    }),
+                },
+            },
+        },
+    ];
+    if heal > 0 {
+        // PlayerScript handles only Damage - there is no heal message - so
+        // adjust HP directly.
+        effects.push(Effect::AdjustHitPoints {
+            entity_id: player_entity,
+            delta: heal,
+        });
+    }
+    let to = world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
+    effects.push(Effect::PsiDrainVisual {
+        from: drain.hit_point.to_vec(),
+        to,
+    });
+    effects.extend(amp_cast_flashes(world, amp_entity));
+
+    game_log!(
+        INFO,
+        "Cast psi power: {} (tier {}, drained {} HP, transferred {})",
+        power.name,
+        power.power.psi_cost,
+        damage,
+        heal
+    );
+    Effect::Multiple(effects)
+}
+
+/// The creature an aimed instant cast resolves against.
+struct DrainTarget {
+    target: EntityId,
+    hit_point: Point3<f32>,
+    direction: Vector3<f32>,
+}
+
+/// The live creature under the amp's aim within the power's range.
+fn drain_target(
+    world: &World,
+    physics: &PhysicsWorld,
+    amp_entity: EntityId,
+    _power: &PsiPowerInfo,
+) -> Option<DrainTarget> {
+    let range = SOMA_DRAIN_RANGE;
+    if range <= 0.0 {
+        return None;
+    }
+    let (origin, direction) = amp_aim_ray(world, amp_entity)?;
+    // ray_cast2, not ray_cast: the latter normalizes the direction and casts a
+    // fixed 100 units, which would silently ignore the authored range. WORLD is
+    // in the mask so a wall between caster and creature stops the drain - the
+    // nearest hit then carries no entity and the cast is refused.
+    let hit = physics.ray_cast2(
+        origin,
+        direction,
+        range,
+        InternalCollisionGroups::ENTITIES
+            | InternalCollisionGroups::HITBOX
+            | InternalCollisionGroups::SELECTABLE
+            | InternalCollisionGroups::WORLD,
+        Some(amp_entity),
+        true,
+    )?;
+    let target = resolve_proxy_entity(world, hit.maybe_entity_id?);
+    if !is_live_creature(world, target) {
+        return None;
+    }
+    Some(DrainTarget {
+        target,
+        hit_point: hit.hit_point,
+        direction,
+    })
+}
+
+/// Whether an entity is a living creature: `P$AI` **and** hit points left.
+///
+/// Both halves matter. The authored corpse props scattered through the levels
+/// carry creature data but no AI, and draining the scenery is not a cast;
+/// `ai_util::is_killed` is the wrong test here because it answers "false" for
+/// an entity with no hit-point component at all - there is no health to
+/// transfer out of one.
+fn is_live_creature(world: &World, entity_id: EntityId) -> bool {
+    let has_ai = world
+        .borrow::<View<dark::properties::PropAI>>()
+        .map(|v_ai| v_ai.get(entity_id).is_ok())
+        .unwrap_or(false);
+    let organic = world
+        .borrow::<View<dark::properties::PropMaterial>>()
+        .ok()
+        .and_then(|v| {
+            v.get(entity_id)
+                .ok()
+                .map(|m| m.0.to_ascii_lowercase().contains("flesh"))
+        })
+        .unwrap_or(false);
+    has_ai
+        && organic
+        && world
+            .borrow::<View<dark::properties::PropHitPoints>>()
+            .map(|v_hp| v_hp.get(entity_id).is_ok_and(|hp| hp.hit_points > 0))
+            .unwrap_or(false)
+}
+
+/// The world-space ray an aimed instant cast travels (origin, unit direction):
+/// the flat crosshair ray when the amp carries one, otherwise the amp's own
+/// muzzle and barrel axis (VR, where the amp is a physical object in the
+/// hand). The same two sources `create_projectile` uses, so an aimed cast goes
+/// where a psi bolt would.
+pub(crate) fn amp_aim_ray(
+    world: &World,
+    amp_entity: EntityId,
+) -> Option<(Point3<f32>, Vector3<f32>)> {
+    if let Ok(v_flat_aim) = world.borrow::<View<crate::runtime_props::RuntimePropFlatAim>>()
+        && let Ok(aim) = v_flat_aim.get(amp_entity)
+    {
+        return Some((aim.origin, aim.forward.normalize()));
+    }
+
+    let v_transform = world
+        .borrow::<View<crate::runtime_props::RuntimePropTransform>>()
+        .ok()?;
+    let transform = v_transform.get(amp_entity).ok()?.0;
+    let muzzle = crate::weapon_muzzle::resolve(world, amp_entity);
+    Some((
+        transform.transform_point(muzzle.point),
+        transform.transform_vector(muzzle.axis).normalize(),
+    ))
+}
+
+/// Manual: transfer 10 HP + 5 HP per PSI above 5. All three floats
+/// are the amount curve; none is the aiming range.
+fn drain_damage(data: &[f32; 4], effective_psi: i32) -> f32 {
+    if !data[..3].iter().all(|v| v.is_finite() && *v >= 0.0) {
+        return 0.0;
+    }
+    positive_or_zero(data[0] + data[1] * (effective_psi as f32 - data[2]).max(0.0))
+}
+/// Port interaction reach, separate from the authored amount curve.
+const SOMA_DRAIN_RANGE: f32 = 5.0;
+
+/// A `data` float as a usable positive quantity; 0 for anything unusable
+/// (NaN, infinite, zero or negative).
+fn positive_or_zero(value: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        0.0
+    }
+}
+
+/// A `data` float as a whole number of hit points; 0 for anything unusable.
+fn whole_hit_points(value: f32) -> i32 {
+    let value = positive_or_zero(value);
+    if value == 0.0 {
+        return 0;
+    }
+    value.floor().min(i32::MAX as f32) as i32
+}
+
+/// The instant powers that heal the caster: Cerebro-stimulated Regeneration
+/// and its Advanced version, which share a script and a `data` shape.
+fn is_self_heal_power(template_id: i32) -> bool {
+    template_id == psi::PSI_HEAL_TEMPLATE_ID || template_id == psi::MAJOR_HEAL_TEMPLATE_ID
+}
+
+/// The HP an instant self-heal restores at full strength (the caller clamps
+/// it to the caster's missing health): `data[0] + data[1] x effective PSI`.
+/// 0 for a power with no (or unusable) heal data.
+///
+/// Assumption: the two floats split base / per-PSI the way the sustained
+/// powers' `P$PsiShield` duration data does. PsiHeal's `[0, 2]` therefore
+/// reads as 2 HP per point of PSI (Major Heal's `[5, 5]` as 5 + 5 x PSI).
+fn self_heal_amount(data: &[f32; 4], effective_psi: i32) -> i32 {
+    whole_hit_points(data[0] + data[1] * effective_psi as f32)
+}
+
+/// Whether an instant cast would resolve to nothing right now (a heal with no
+/// health missing, a drain with no living target in range). Checked before a
+/// charge starts so a pointless cast cannot be over-held into a burnout, which
+/// spends points and deals damage.
+fn instant_cast_is_futile(
+    world: &World,
+    physics: &PhysicsWorld,
+    amp_entity: EntityId,
+    power: &PsiPowerInfo,
+    effective_psi: i32,
+) -> bool {
+    if power.template_id == psi::SOMA_DRAIN_TEMPLATE_ID {
+        return drain_target(world, physics, amp_entity, power).is_none();
+    }
+    if !is_self_heal_power(power.template_id) {
+        return false;
+    }
+    let Some((_, current_hp, max_hp)) = super::script_util::player_hit_points(world) else {
+        return false;
+    };
+    clamped_self_heal(&power.power.data, effective_psi, current_hp, max_hp) <= 0
+}
+
+/// The HP a cast actually restores: [`self_heal_amount`] clamped to the
+/// caster's missing health.
+fn clamped_self_heal(data: &[f32; 4], effective_psi: i32, current_hp: i32, max_hp: i32) -> i32 {
+    self_heal_amount(data, effective_psi).min((max_hp - current_hp).max(0))
+}
+
 /// The amp's `GunFlash` links supply the cast visual (Spinning Psi Ring).
 fn amp_cast_flashes(world: &World, amp_entity: EntityId) -> Vec<Effect> {
     super::script_util::get_all_links_with_template(world, amp_entity, |link| match link {
@@ -423,4 +847,231 @@ fn amp_cast_flashes(world: &World, amp_entity: EntityId) -> Vec<Effect> {
     .into_iter()
     .map(|(template_id, options)| create_muzzle_flash(world, amp_entity, template_id, &options))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::psi::{GlobalPsiPowers, PsiPowerSelection};
+    use crate::quest_info::QuestInfo;
+    use cgmath::{point3, vec3};
+
+    #[test]
+    fn power_psi_prevents_burnout_damage_but_keeps_cost_and_failed_cast() {
+        for owned in [false, true] {
+            let mut world = World::new();
+            let player = world.add_entity(());
+            let amp = world.add_entity(());
+            world.add_unique(PlayerInfo {
+                pos: cgmath::vec3(0.0, 0.0, 0.0),
+                rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                entity_id: player,
+                left_hand_entity_id: Some(amp),
+                right_hand_entity_id: None,
+                inventory_entity_id: player,
+            });
+            let mut quests = QuestInfo::new();
+            if owned {
+                quests.player_stats_mut().add_os_trait(14);
+            }
+            world.add_unique(quests);
+            world.add_unique(GlobalPsiPowers(vec![PsiPowerInfo {
+                template_id: -1,
+                name: "Test power".into(),
+                display_name: None,
+                power: dark::properties::PropPsiPower {
+                    power_id: 1,
+                    activation_type: 0,
+                    psi_cost: 1,
+                    data: [0.0; 4],
+                },
+                projectiles: vec![],
+                overloadable: true,
+                duration: None,
+            }]));
+            world.add_unique(PsiPowerSelection { index: 0 });
+            let Effect::Multiple(effects) = burnout(&world, amp) else {
+                panic!("burnout effects");
+            };
+            assert!(
+                effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::SpendPsiPoints { amount: 1 }))
+            );
+            assert!(effects.iter().any(|e| matches!(
+                e,
+                Effect::SetPsiCharge {
+                    phase: PsiChargePhase::Burnout,
+                    ..
+                }
+            )));
+            let damage: i32 = effects
+                .iter()
+                .filter_map(|e| match e {
+                    Effect::AdjustHitPoints { delta, .. } => Some(*delta),
+                    _ => None,
+                })
+                .sum();
+            assert_eq!(damage, if owned { 0 } else { -3 });
+            assert!(effects.iter().all(|e| matches!(
+                e,
+                Effect::AdjustHitPoints { .. }
+                    | Effect::SpendPsiPoints { .. }
+                    | Effect::SetPsiCharge { .. }
+            )));
+        }
+    }
+
+    #[test]
+    fn soma_vr_aim_uses_visible_muzzle_without_vhots_and_authored_id_zero() {
+        use crate::runtime_props::{RuntimePropTransform, RuntimePropVhots};
+        use crate::weapon_muzzle::MuzzleFallback;
+        use cgmath::Matrix4;
+        use dark::ss2_bin_obj_loader::Vhot;
+        let mut world = World::new();
+        let amp = world.add_entity((
+            RuntimePropTransform(Matrix4::from_translation(vec3(10.0, 2.0, 3.0))),
+            MuzzleFallback {
+                point: point3(-0.6, 0.2, 0.1),
+                axis: vec3(0.0, 0.0, -1.0),
+            },
+        ));
+        let (origin, forward) = amp_aim_ray(&world, amp).unwrap();
+        assert!((origin - point3(9.4, 2.2, 3.1)).magnitude() < 0.0001);
+        assert_eq!(forward, vec3(0.0, 0.0, -1.0));
+        world.add_component(
+            amp,
+            RuntimePropVhots(vec![
+                Vhot {
+                    id: 2,
+                    point: point3(99.0, 99.0, 99.0),
+                },
+                Vhot {
+                    id: 0,
+                    point: point3(-1.0, 0.5, 0.0),
+                },
+            ]),
+        );
+        let (origin, forward) = amp_aim_ray(&world, amp).unwrap();
+        assert_eq!(origin, point3(9.0, 2.5, 3.0));
+        assert_eq!(forward, vec3(0.0, 0.0, -1.0));
+    }
+
+    #[test]
+    fn self_heal_scales_with_psi() {
+        // PsiHeal's authored data: 0 base + 2 HP per PSI point.
+        assert_eq!(self_heal_amount(&[0.0, 2.0, 0.0, 0.0], 5), 10);
+        assert_eq!(self_heal_amount(&[0.0, 2.0, 0.0, 0.0], 7), 14);
+        // A base term adds on top of the per-PSI term (Major Heal's shape).
+        assert_eq!(self_heal_amount(&[5.0, 5.0, 0.0, 0.0], 5), 30);
+    }
+
+    #[test]
+    fn self_heal_ignores_powers_with_no_heal_data() {
+        assert_eq!(self_heal_amount(&[0.0, 0.0, 0.0, 0.0], 5), 0);
+        assert_eq!(self_heal_amount(&[f32::NAN, 2.0, 0.0, 0.0], 5), 0);
+        assert_eq!(self_heal_amount(&[-4.0, 0.0, 0.0, 0.0], 5), 0);
+    }
+
+    /// The applier does not clamp, so an overshoot would push HP past the
+    /// maximum - the clamp lives here instead.
+    #[test]
+    fn the_heal_is_clamped_to_missing_health() {
+        // 2 x PSI 5 = 10, but only 4 HP are missing.
+        assert_eq!(clamped_self_heal(&[0.0, 2.0, 0.0, 0.0], 5, 96, 100), 4);
+        // At full health the heal is nothing (the cast is refused).
+        assert_eq!(clamped_self_heal(&[0.0, 2.0, 0.0, 0.0], 5, 100, 100), 0);
+        // Over-healed (or a bogus maximum) never produces a negative delta.
+        assert_eq!(clamped_self_heal(&[0.0, 2.0, 0.0, 0.0], 5, 120, 100), 0);
+    }
+
+    #[test]
+    fn both_regeneration_powers_heal() {
+        assert!(is_self_heal_power(psi::PSI_HEAL_TEMPLATE_ID));
+        assert!(is_self_heal_power(psi::MAJOR_HEAL_TEMPLATE_ID));
+        assert!(!is_self_heal_power(psi::INVISO_TEMPLATE_ID));
+    }
+
+    /// SomaDrain's authored data, read as damage / transferred health / range.
+    #[test]
+    fn soma_drain_reads_its_authored_data() {
+        let data = [10.0, 5.0, 5.0, 0.0];
+        for (psi, amount) in [(1, 10.0), (5, 10.0), (6, 15.0), (8, 25.0), (10, 35.0)] {
+            assert_eq!(drain_damage(&data, psi), amount);
+        }
+        assert_eq!(drain_damage(&[f32::NAN, 5.0, 5.0, 0.0], 6), 0.0);
+    }
+
+    /// The drain takes only living creatures: an authored corpse prop carries
+    /// creature data with no hit points left, and is not a target.
+    #[test]
+    fn only_live_creatures_can_be_drained() {
+        let mut world = World::new();
+        let alive = world.add_entity((
+            dark::properties::PropAI("Grunt".to_owned()),
+            dark::properties::PropMaterial("Flesh".to_owned()),
+            dark::properties::PropHitPoints { hit_points: 12 },
+        ));
+        let dead = world.add_entity((
+            dark::properties::PropAI("Grunt".to_owned()),
+            dark::properties::PropMaterial("Flesh".to_owned()),
+            dark::properties::PropHitPoints { hit_points: 0 },
+        ));
+        let prop = world.add_entity((dark::properties::PropHitPoints { hit_points: 5 },));
+
+        let robot = world.add_entity((
+            dark::properties::PropAI("Robot".into()),
+            dark::properties::PropMaterial("Metal".into()),
+            dark::properties::PropHitPoints { hit_points: 40 },
+        ));
+        assert!(!is_live_creature(&world, robot));
+        assert!(is_live_creature(&world, alive));
+        assert!(!is_live_creature(&world, dead));
+        assert!(!is_live_creature(&world, prop));
+    }
+
+    /// An amp with neither a flat crosshair ray nor a transform has no aim, so
+    /// the cast finds nothing rather than casting from the origin.
+    #[test]
+    fn an_amp_with_no_aim_has_no_ray() {
+        let mut world = World::new();
+        let amp = world.add_entity((dark::properties::PropHitPoints { hit_points: 1 },));
+
+        assert!(amp_aim_ray(&world, amp).is_none());
+    }
+
+    #[test]
+    fn the_flat_crosshair_ray_is_the_aim() {
+        let mut world = World::new();
+        let amp = world.add_entity((crate::runtime_props::RuntimePropFlatAim {
+            origin: point3(1.0, 2.0, 3.0),
+            // Deliberately un-normalized: the ray must come back as a unit
+            // direction so the range is measured in world units.
+            forward: vec3(0.0, 0.0, 4.0),
+        },));
+
+        let (origin, direction) = amp_aim_ray(&world, amp).unwrap();
+        assert_eq!(origin, point3(1.0, 2.0, 3.0));
+        assert_eq!(direction, vec3(0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn psi_stat_comes_from_the_character_sheet() {
+        let world = World::new();
+        let mut quests = QuestInfo::new();
+        quests.player_stats_mut().psionic_ability = 6;
+        world.add_unique(quests);
+
+        assert_eq!(player_psi_stat(&world), 6);
+    }
+
+    #[test]
+    fn psi_stat_falls_back_to_the_sheet_baseline_without_quest_info() {
+        let world = World::new();
+
+        assert_eq!(
+            player_psi_stat(&world),
+            crate::player_stats::PlayerStats::default().psionic_ability
+        );
+    }
 }

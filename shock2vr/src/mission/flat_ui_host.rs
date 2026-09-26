@@ -27,10 +27,12 @@ use shipyard::{EntitiesView, EntityId, Get, UniqueView, View, World};
 
 use crate::{
     gui::GuiComponentRenderInfo,
+    hud::ammo_panel::{ReadoutButton, ReadoutButtonSpec},
+    hud::readouts::{self, UseModeReadouts},
     input_context::Pointer2D,
     mission::PlayerInfo,
     scripts::{Message, MessagePayload},
-    ui::{Rect, ScaleMode, UiCanvas, pointer_to_canvas},
+    ui::{HAlign, MFD_FONT, Rect, ScaleMode, UiCanvas, UiElement, VAlign, pointer_to_canvas},
     vr_config::Handedness,
 };
 
@@ -49,6 +51,12 @@ const LEFT_MFD_ANCHOR: Vector2<f32> = Vector2::new(2.0, 124.0);
 /// canvas, flush with the top edge.
 const STRIP_ANCHOR: Vector2<f32> = Vector2::new(2.0, 0.0);
 
+// INVBACK's arm column occupies texels x1054..1128 in the 1272x242
+// remaster art (x527..564 at the original 636x121 resolution). Append
+// its mirror beyond the torso, fitting both arms without losing grid cells.
+const EXTRA_ARM_WIDTH: f32 = 37.0;
+const STRIP_SCALE: f32 = 635.0 / (635.0 + EXTRA_ARM_WIDTH);
+
 /// Walk-away auto-close distance (world units; dark units / SCALE_FACTOR).
 /// ~10 feet - past normal frob range, so a panel opened up close survives
 /// small repositioning but closes when the player leaves the object.
@@ -63,6 +71,9 @@ const CLOSE_BUTTON_MARGIN: Vector2<f32> = Vector2::new(25.0, 8.0);
 /// `CURSOR.PCX` native size.
 const CURSOR_SIZE: Vector2<f32> = Vector2::new(12.0, 16.0);
 
+/// The HUD's data font, as the rest of this canvas uses.
+const NAME_STRIP_FONT: &str = "mainfont.fon";
+
 /// A host-side action produced by the cursor-is-the-item drag (§1.5/§2.4),
 /// applied by `mission_core` because it touches physics/effects.
 ///
@@ -75,12 +86,13 @@ const CURSOR_SIZE: Vector2<f32> = Vector2::new(12.0, 16.0);
 /// click, acting on the still-contained item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlatUiDragAction {
+    ToggleMap,
     Throw(EntityId),
     Wield(EntityId),
-    /// Cycle the wielded weapon's ammo type (the AMMOFULL cycle button
-    /// was clicked). Not tied to a cursor item - the caller maps it to
-    /// `Effect::CycleAmmo`, which acts on the wielded weapon.
-    CycleAmmo,
+    /// One of the AMMOFULL readout's controls was clicked (fire-mode setting,
+    /// reload, ammo cycle, psi selector). Not tied to a cursor item - the
+    /// target is the entity in the last drawn readout, never a hand lookup.
+    Readout(ReadoutButton, Option<EntityId>),
 }
 
 /// Double-click window (frames at 60Hz) and radius (canvas px) for the
@@ -129,10 +141,21 @@ pub struct CanvasPointer {
     pub canvas_pos: Option<Vector2<f32>>,
     /// The click button: flat LMB, VR trigger.
     pub pressed: bool,
-    /// The grab gesture: the VR squeeze. Flat has none, so it is always false
-    /// there - the same `GUIHover` field the hand ray fills, which is what lets
-    /// a squeeze on a panel item pull it into the hand.
+    /// The grab gesture: the VR squeeze, for the hand this pointer belongs to.
+    /// Flat has none, so it is always false there - the same `GUIHover` field
+    /// the hand ray fills, which is what lets a squeeze on a panel item pull it
+    /// into the hand.
     pub grabbing: bool,
+    /// BOTH controllers' squeeze this frame, indexed by
+    /// [`crate::vr_config::hand_slot`].
+    ///
+    /// The panel edge-detects each hand separately, and it needs both hands to
+    /// do it: a VR player holds a gun by holding that hand's squeeze DOWN, so a
+    /// single shared latch reads "already grabbing" forever and the other
+    /// hand's fresh squeeze on a slot never registers an edge - which is
+    /// exactly the reach for a clip that the physical reload is made of.
+    /// Flat has no grab gesture, so it passes `[false; 2]`.
+    pub grabbing_hands: [bool; 2],
     /// Which hand the gesture belongs to, for the panel's per-hand edge
     /// tracking and for `GrabEntity`'s destination hand. Flat reports `Right`.
     pub hand: Handedness,
@@ -160,14 +183,19 @@ pub fn vr_canvas_pointer(
         .active_ray()
         .map(|ray| ray.handedness)
         .unwrap_or(Handedness::Right);
-    let input_hand = match hand {
-        Handedness::Left => &input_context.left_hand,
-        Handedness::Right => &input_context.right_hand,
+    let squeezing = |input_hand: &crate::input_context::Hand| {
+        input_hand.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD
     };
+    let mut grabbing_hands = [false; 2];
+    grabbing_hands[crate::vr_config::hand_slot(Handedness::Left)] =
+        squeezing(&input_context.left_hand);
+    grabbing_hands[crate::vr_config::hand_slot(Handedness::Right)] =
+        squeezing(&input_context.right_hand);
     CanvasPointer {
         canvas_pos: pass.point(),
         pressed: pass.pressed,
-        grabbing: input_hand.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD,
+        grabbing: grabbing_hands[crate::vr_config::hand_slot(hand)],
+        grabbing_hands,
         hand,
         bare_view: BareViewPress::Ignore,
     }
@@ -196,10 +224,13 @@ struct CursorItem {
 /// open, the panel's latest components (from `Effect::SetUI`), and the
 /// cursor/pointer bookkeeping needed to render and hit-test them.
 pub struct FlatUiHost {
+    pub(crate) device: bool,
+    pub(crate) scan_label: Option<String>,
     active_panel: Option<EntityId>,
     /// Panel size in panel-local pixels (from `SetUI.world_size`); `None`
     /// until the panel's first `SetUI` arrives (the frame after opening).
     panel_size_px: Option<Vector2<f32>>,
+    panel_sidecar: Option<crate::gui::PanelSidecar>,
     /// Latest `SetUI` components for the active panel (normalized panel
     /// coordinates, as `GuiScript` emits them).
     components: Vec<GuiComponentRenderInfo>,
@@ -210,17 +241,39 @@ pub struct FlatUiHost {
     /// The item lifted onto the cursor (the original's "cursor IS the item"
     /// drag, §2.4). `Some` between a lift and the place/throw that clears it.
     cursor_item: Option<CursorItem>,
+    /// Resolved inventory destination, drawn by the shared canvas in both presentations.
+    placement_preview: Option<PlacementPreview>,
     /// The most recent lift, for double-click (wield) detection. Counts down
     /// each frame and clears when the window elapses.
     last_lift: Option<LiftMark>,
-    /// The AMMOFULL ammo-cycle button rect on the 640x480 canvas, set each
-    /// frame by the mission when use mode has a multi-ammo weapon wielded
-    /// (flat UI 5); `None` otherwise. Clicking it emits `CycleAmmo`.
-    ammo_cycle_rect: Option<Rect>,
+    /// The use-mode bio + ammo readouts the interface canvas carries along its
+    /// bottom edge, set each frame by the mission (`None` outside use mode).
+    /// The host both DRAWS them and hit-tests their controls off this one
+    /// value, so a clickable rect cannot diverge from a drawn button - in
+    /// either presentation. Clicking one emits `FlatUiDragAction::Readout`.
+    readouts: Option<UseModeReadouts>,
     /// The active panel was opened unbound (the automap): it has no world
     /// object, so the walk-away distance auto-close is skipped. Cleared on
     /// open/close.
     sticky_panel: bool,
+    /// The mini-frame's current name line, resolved by the mission each frame
+    /// from [`Self::pointed_item`] / the world object the player is aiming at
+    /// (see [`Self::set_name_strip`]). `None` draws an empty frame.
+    name_strip: Option<String>,
+    /// Live backpack recall assignments, left/right. These decorate the
+    /// existing item icons; they never create another inventory owner.
+    shoulder_weapons: [Option<EntityId>; 2],
+    /// Read-only snapshots in physical left/right order. A support hand owns
+    /// no item; flat wielding is mapped to its visible right hand by the caller.
+    hand_items: [Option<CursorItem>; 2],
+    /// Read-only paperdoll contents, in physical left/right holster order.
+    holster_items: [Option<CursorItem>; 2],
+    implant_items: [Option<CursorItem>; 2],
+    implant_energy: [f32; 2],
+    implant_capacity: usize,
+    hand_ammo: [crate::hud::ammo_panel::AmmoReadout; 2],
+    selected_ammo: Option<EntityId>,
+    pub(crate) utilities: super::mfd_utilities::MfdUtilities,
     /// Pointer position on the 640x480 canvas (None: no pointer / letterbox).
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
@@ -234,7 +287,7 @@ pub struct FlatUiHost {
     /// is level-triggered (`GuiComponent::get_event` reads `is_grabbed`
     /// directly), so a squeeze held while the ray swept the grid would take
     /// every slot it crossed.
-    last_pointer_grabbing: bool,
+    last_pointer_grabbing: [bool; 2],
     /// Last known render-target size, for pointer->canvas letterbox mapping
     /// (updated every rendered frame; 4:3 default until the first render).
     screen_size: Vector2<f32>,
@@ -250,22 +303,69 @@ struct StripSlot {
     components: Vec<GuiComponentRenderInfo>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PlacementStatus {
+    Place,
+    Merge,
+    AutoPlace,
+    NoRoom,
+}
+
+impl PlacementStatus {
+    pub(super) fn text(self) -> &'static str {
+        match self {
+            Self::Place => "RELEASE TO PLACE",
+            Self::Merge => "RELEASE TO MERGE",
+            Self::AutoPlace => "AUTO-PLACE ON RELEASE",
+            Self::NoRoom => "NO ROOM - RELEASE DROPS ITEM",
+        }
+    }
+
+    fn outline_texture(self) -> &'static str {
+        match self {
+            Self::Place | Self::Merge => "iface/resprog.pcx",
+            Self::AutoPlace => "HPBAR1.PCX",
+            Self::NoRoom => "HPBAR0.PCX",
+        }
+    }
+}
+
+struct PlacementPreview {
+    rect: Rect,
+    icon: Option<String>,
+    status: PlacementStatus,
+}
+
 impl FlatUiHost {
     pub fn new() -> FlatUiHost {
         FlatUiHost {
+            device: false,
+            scan_label: None,
             active_panel: None,
             panel_size_px: None,
+            panel_sidecar: None,
             components: Vec::new(),
             strip: None,
             cursor_item: None,
+            placement_preview: None,
             last_lift: None,
-            ammo_cycle_rect: None,
+            readouts: None,
             sticky_panel: false,
+            name_strip: None,
+            shoulder_weapons: [None; 2],
+            hand_items: [None, None],
+            holster_items: [None, None],
+            implant_items: [None, None],
+            implant_energy: [0.0; 2],
+            implant_capacity: 1,
+            hand_ammo: Default::default(),
+            selected_ammo: None,
+            utilities: Default::default(),
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
             last_pointer: None,
-            last_pointer_grabbing: false,
+            last_pointer_grabbing: [false; 2],
             screen_size: CANVAS_SIZE,
         }
     }
@@ -295,9 +395,8 @@ impl FlatUiHost {
     /// The backpack grid cell `canvas_pos` lands in, or `None` when it is off
     /// the strip (including a blocked/strength-capped column) - the deposit
     /// target for a VR release aimed at the strip (see
-    /// `MissionCore::strip_deposit_entities`). The strip is drawn at 1:1
-    /// scale onto the canvas (`strip_canvas_rect` reuses `size_px` directly),
-    /// so the canvas offset alone recovers the panel-local pixel position
+    /// `MissionCore::strip_deposit_entities`). Invert the strip's scale to
+    /// recover the panel-local pixel position
     /// [`crate::scripts::gui::backpack_cell_at`] lays items out in - the same
     /// inverse the strip's own rendering uses, so the resolved cell can never
     /// drift from what is drawn.
@@ -307,9 +406,37 @@ impl FlatUiHost {
         if !rect.contains(canvas_pos) {
             return None;
         }
-        let panel_pos = canvas_pos - Vector2::new(rect.x, rect.y);
+        let panel_size = strip.size_px?;
+        let panel_pos = Vector2::new(
+            (canvas_pos.x - rect.x) * panel_size.x / rect.w,
+            (canvas_pos.y - rect.y) * panel_size.y / rect.h,
+        );
         let grid = crate::inventory::grid_for(world, strip.entity);
         crate::scripts::gui::backpack_cell_at(panel_pos, grid)
+    }
+
+    pub(super) fn set_placement_preview(
+        &mut self,
+        world: &World,
+        preview: Option<(EntityId, (usize, usize), (usize, usize), PlacementStatus)>,
+    ) {
+        self.placement_preview = preview.and_then(|(entity, cell, dimensions, status)| {
+            let strip = self.strip.as_ref()?;
+            let rect = self.strip_rect()?;
+            let size = strip.size_px?;
+            let footprint = crate::scripts::gui::backpack_footprint_rect(cell, dimensions);
+            let footprint = Rect::new(
+                rect.x + footprint.x * rect.w / size.x,
+                rect.y + footprint.y * rect.h / size.y,
+                footprint.w * rect.w / size.x,
+                footprint.h * rect.h / size.y,
+            );
+            Some(PlacementPreview {
+                rect: footprint,
+                icon: make_cursor_item(world, entity).icon,
+                status,
+            })
+        });
     }
 
     /// The item currently held on the cursor mid-drag (for `/v1/ui` `cursor`).
@@ -339,6 +466,165 @@ impl FlatUiHost {
             })
     }
 
+    /// The item the canvas pointer is currently on: the item riding the cursor
+    /// if the player has lifted one (the cursor *is* that item), otherwise the
+    /// interactive strip or panel element under the pointer.
+    ///
+    /// The mini-frame's first-priority content, resolved here because only the
+    /// host knows its own hit-testing - the mission turns the entity into a
+    /// name and hands it back through [`Self::set_name_strip`].
+    pub fn pointed_item(&self) -> Option<EntityId> {
+        if let Some(cursor) = self.cursor_item.as_ref() {
+            return Some(cursor.entity);
+        }
+        let canvas_pos = self.cursor_canvas?;
+        self.strip_item_at(canvas_pos)
+            .or_else(|| self.panel_item_at(canvas_pos))
+    }
+
+    /// Set the mini-frame's name line (already resolved to a display name).
+    pub fn set_name_strip(&mut self, name: Option<String>) {
+        self.name_strip = name;
+    }
+
+    pub(crate) fn set_shoulder_weapons(&mut self, weapons: [Option<EntityId>; 2]) {
+        self.shoulder_weapons = weapons;
+    }
+
+    pub(crate) fn set_equipment_items(
+        &mut self,
+        world: &World,
+        asset_cache: &mut AssetCache,
+        items: [Option<EntityId>; 2],
+        holsters: [Option<EntityId>; 2],
+    ) {
+        self.hand_ammo = items
+            .map(|entity| crate::hud::ammo_panel::AmmoReadout::for_weapon(world, entity, true));
+        let implants = crate::implants::equipped(world);
+        self.implant_energy = implants.map(|id| {
+            id.map(|id| crate::implants::energy(world, id))
+                .unwrap_or(0.0)
+        });
+        self.implant_capacity = crate::implants::capacity(world);
+        let [held, holstered, implanted] = [items, holsters, implants].map(|items| {
+            items.map(|entity| {
+                let entity = entity.filter(|entity| {
+                    world
+                        .borrow::<EntitiesView>()
+                        .is_ok_and(|entities| entities.is_alive(*entity))
+                })?;
+                let mut item = make_cursor_item(world, entity);
+                item.label =
+                    crate::hud::resolve_item_name(asset_cache, world, entity).or(item.label);
+                Some(item)
+            })
+        });
+        self.hand_items = held;
+        self.holster_items = holstered;
+        self.implant_items = implanted;
+        self.reconcile_ammo_selection();
+    }
+
+    fn reconcile_ammo_selection(&mut self) {
+        if !self.hand_items.iter().enumerate().any(|(slot, item)| {
+            item.as_ref()
+                .is_some_and(|item| Some(item.entity) == self.selected_ammo)
+                && !self.hand_ammo[slot].is_empty()
+        }) {
+            self.selected_ammo = [1, 0].into_iter().find_map(|slot| {
+                (!self.hand_ammo[slot].is_empty())
+                    .then(|| self.hand_items[slot].as_ref().map(|item| item.entity))
+                    .flatten()
+            });
+        }
+    }
+
+    pub(crate) fn ammo_selection(
+        &self,
+    ) -> (Option<EntityId>, Option<crate::vr_config::Handedness>) {
+        let hand = self
+            .selected_ammo
+            .and_then(|entity| {
+                self.hand_items
+                    .iter()
+                    .position(|item| item.as_ref().is_some_and(|item| item.entity == entity))
+            })
+            .map(|slot| {
+                [
+                    crate::vr_config::Handedness::Left,
+                    crate::vr_config::Handedness::Right,
+                ][slot]
+            });
+        (self.selected_ammo, hand)
+    }
+
+    pub(crate) fn pointed_equipment_name(&self) -> Option<String> {
+        if self.cursor_item.is_some() {
+            return None;
+        }
+        let pointer = self.cursor_canvas?;
+        if let Some(slot) = implant_readout_rects(self.strip_rect()?)
+            .iter()
+            .position(|r| r.contains(pointer))
+        {
+            let name = self.implant_items[slot]
+                .as_ref()
+                .and_then(|i| i.label.as_deref())
+                .unwrap_or(if slot < self.implant_capacity {
+                    "Use an implant in your inventory to equip it"
+                } else {
+                    "Requires Cybernetically Enhanced"
+                });
+            return Some(format!("Implant {}: {name}", slot + 1));
+        }
+        let rects = holster_readout_rects(self.strip_rect()?);
+        let slot = rects.iter().position(|rect| rect.contains(pointer))?;
+        let side = ["Left holster", "Right holster"][slot];
+        let name = self.holster_items[slot]
+            .as_ref()
+            .map(|item| item.label.as_deref().unwrap_or("Holstered item"))
+            .unwrap_or("Empty");
+        Some(format!("{side}: {name}"))
+    }
+
+    /// Badge geometry comes from the same cached item rects as inventory
+    /// drawing and hit testing. A lifted item hides its badge with its icon.
+    fn shoulder_badges(&self) -> Vec<(EntityId, Rect, &'static str, &'static str)> {
+        let (Some(strip), Some(rect)) = (self.strip.as_ref(), self.strip_rect()) else {
+            return Vec::new();
+        };
+        strip
+            .components
+            .iter()
+            .filter_map(|component| {
+                let entity = component_entity(component)?;
+                if Some(entity) == self.held_entity() {
+                    return None;
+                }
+                let side = self
+                    .shoulder_weapons
+                    .iter()
+                    .position(|item| *item == Some(entity))?;
+                let slot = component.canvas_rect(rect);
+                let badge = Rect::new(slot.x + slot.w - 23.0, slot.y + slot.h - 13.0, 22.0, 12.0);
+                let (letter, label) = if side == 0 {
+                    ("L", "Left shoulder")
+                } else {
+                    ("R", "Right shoulder")
+                };
+                Some((entity, badge, letter, label))
+            })
+            .collect()
+    }
+
+    /// The mini-frame's current name line, for `GET /v1/ui`.
+    pub fn name_strip_debug(&self) -> Option<String> {
+        self.placement_preview
+            .as_ref()
+            .map(|preview| preview.status.text().to_owned())
+            .or_else(|| self.name_strip.clone())
+    }
+
     /// Swallow a button that is already held as the host takes over input, so
     /// it cannot read as a fresh press-edge on the next frame.
     ///
@@ -351,26 +637,112 @@ impl FlatUiHost {
         self.last_pointer_pressed = true;
     }
 
-    /// Set (or clear) the AMMOFULL ammo-cycle button's canvas rect for this
-    /// frame. The mission passes `Some(rect)` only in use mode with a
-    /// multi-ammo weapon wielded, matching what the flat HUD draws.
-    pub fn set_ammo_cycle_button(&mut self, rect: Option<Rect>) {
-        self.ammo_cycle_rect = rect;
+    /// Set the use-mode readouts for this frame (`None` outside use mode).
+    pub(crate) fn set_readouts(&mut self, mut readouts: Option<UseModeReadouts>) {
+        if let Some(readout) = &mut readouts {
+            readout.hands = self.hand_ammo.clone();
+            readout.hand_entities =
+                std::array::from_fn(|slot| self.hand_items[slot].as_ref().map(|item| item.entity));
+        }
+        self.readouts = readouts;
     }
 
-    /// The ammo-cycle button as a `/v1/ui` element (so tests click it by
-    /// meaning), or `None` when it is not shown.
-    pub fn ammo_cycle_debug(&self) -> Option<crate::game_scene::DebugUiElement> {
-        self.ammo_cycle_rect
-            .map(|r| crate::game_scene::DebugUiElement {
+    /// The readout's clickable controls on the canvas this frame - exactly the
+    /// ones [`readouts::emit_use_mode`] drew.
+    fn readout_buttons(&self) -> Vec<ReadoutButtonSpec> {
+        self.readouts
+            .as_ref()
+            .map(readouts::buttons)
+            .unwrap_or_default()
+    }
+
+    /// The readout's controls as `/v1/ui` elements (so tests click them by
+    /// meaning), empty when none are shown.
+    pub fn readout_buttons_debug(&self) -> Vec<crate::game_scene::DebugUiElement> {
+        self.readout_buttons()
+            .iter()
+            .map(|spec| crate::game_scene::DebugUiElement {
                 kind: "button".to_string(),
-                texture: Some("ammoarw0.pcx".to_string()),
-                text: None,
-                label: Some("cycle_ammo".to_string()),
-                entity_id: None,
-                rect: [r.x, r.y, r.w, r.h],
-                screen_rect: self.to_screen_rect(r),
+                texture: spec.texture.map(str::to_string),
+                text: spec.text.clone(),
+                label: Some(spec.button.label().to_string()),
+                entity_id: self
+                    .readouts
+                    .as_ref()
+                    .and_then(|r| match spec.button {
+                        ReadoutButton::SystemMenu | ReadoutButton::Logs => None,
+                        ReadoutButton::SelectLeftHand => r.hand_entities[0],
+                        ReadoutButton::SelectRightHand => r.hand_entities[1],
+                        _ => r.weapon,
+                    })
+                    .map(|entity| entity.inner() as i32),
+                rect: [spec.rect.x, spec.rect.y, spec.rect.w, spec.rect.h],
+                screen_rect: self.to_screen_rect(spec.rect),
             })
+            .collect()
+    }
+
+    /// Utility geometry uses the same viewport mapping as the readouts.
+    pub fn utility_elements_debug(&self) -> Vec<crate::game_scene::DebugUiElement> {
+        if self.strip.is_none() && !self.device {
+            return Vec::new();
+        }
+        self.utilities
+            .debug_elements()
+            .into_iter()
+            .map(|mut element| {
+                let [x, y, w, h] = element.rect;
+                element.screen_rect = self.to_screen_rect(Rect::new(x, y, w, h));
+                element
+            })
+            .collect()
+    }
+
+    /// Everything the use-mode readouts DREW on the canvas this frame - the
+    /// BIOFULL/AMMOFULL backdrops, the bars, the numbers, the labels - so a
+    /// client can see the readouts are present and where, not merely that some
+    /// buttons are clickable. Empty outside use mode.
+    ///
+    /// Derived by replaying the same [`readouts::emit_use_mode`] that drew
+    /// them, so it cannot drift from what is on screen. Images and bars label
+    /// as their art's stem (`biofull`, `hpbar`); text has no label.
+    pub fn readout_elements_debug(&self) -> Vec<crate::game_scene::DebugUiElement> {
+        let Some(readouts) = self.readouts.as_ref() else {
+            return Vec::new();
+        };
+        let mut canvas = UiCanvas::new(CANVAS_SIZE);
+        readouts::emit_use_mode(&mut canvas, readouts);
+        canvas
+            .elements()
+            .iter()
+            .map(|element| {
+                let (kind, texture, text) = match element {
+                    UiElement::Image { texture, .. } => ("image", Some(texture), None),
+                    UiElement::Bar { texture, .. } => ("bar", Some(texture), None),
+                    UiElement::Text { text, .. } => ("text", None, Some(text)),
+                    UiElement::Button { texture, .. } => ("button", Some(texture), None),
+                    UiElement::Fill { .. } => ("fill", None, None),
+                };
+                let rect = element.rect();
+                crate::game_scene::DebugUiElement {
+                    kind: kind.to_string(),
+                    texture: texture.cloned(),
+                    text: text.cloned(),
+                    label: texture.and_then(|t| art_stem(t)),
+                    entity_id: None,
+                    rect: [rect.x, rect.y, rect.w, rect.h],
+                    screen_rect: self.to_screen_rect(rect),
+                }
+            })
+            .collect()
+    }
+
+    /// The ammo-cycle control specifically, kept as its own `/v1/ui` field
+    /// because clients grew up on it before the readout gained the rest.
+    pub fn ammo_cycle_debug(&self) -> Option<crate::game_scene::DebugUiElement> {
+        self.readout_buttons_debug()
+            .into_iter()
+            .find(|element| element.label.as_deref() == Some(ReadoutButton::CycleAmmo.label()))
     }
 
     /// Take the item off the cursor (clearing it), returning its entity id.
@@ -388,6 +760,16 @@ impl FlatUiHost {
     /// a recycled `EntityId`. The destruction effect pipeline calls this before
     /// deleting the world entity.
     pub fn on_entity_destroyed(&mut self, entity: EntityId) {
+        for item in self
+            .hand_items
+            .iter_mut()
+            .chain(self.holster_items.iter_mut())
+            .chain(self.implant_items.iter_mut())
+        {
+            if item.as_ref().is_some_and(|item| item.entity == entity) {
+                *item = None;
+            }
+        }
         if self.active_panel == Some(entity) {
             self.close();
         }
@@ -426,6 +808,12 @@ impl FlatUiHost {
     /// entity, whose `GuiScript` already emits `SetUI` every frame - the
     /// strip just stashes and re-anchors it.
     pub fn set_strip(&mut self, entity: Option<EntityId>) {
+        self.utilities = Default::default();
+        self.placement_preview = None;
+        // The readout belongs to the bar: leaving use mode must not leave a
+        // stale name behind for `/v1/ui` (the mission's per-frame update runs
+        // before the effect that unbinds the strip).
+        self.name_strip = None;
         self.strip = entity.map(|entity| StripSlot {
             entity,
             size_px: None,
@@ -436,9 +824,13 @@ impl FlatUiHost {
     /// Bind the MFD to `entity` (the original's `gOverlayObj`). Opening a
     /// second panel replaces the first - one panel per (left) slot.
     pub fn open(&mut self, entity: EntityId) {
+        if self.utilities.has_left_panel() {
+            self.utilities = Default::default();
+        }
         if self.active_panel != Some(entity) {
             self.components.clear();
             self.panel_size_px = None;
+            self.panel_sidecar = None;
         }
         self.active_panel = Some(entity);
         self.sticky_panel = false;
@@ -463,6 +855,7 @@ impl FlatUiHost {
         self.active_panel = None;
         self.sticky_panel = false;
         self.panel_size_px = None;
+        self.panel_sidecar = None;
         self.components.clear();
         self.hover_close = false;
     }
@@ -475,6 +868,7 @@ impl FlatUiHost {
         world: &World,
         parent_entity: EntityId,
         world_size: Vector2<f32>,
+        sidecar: Option<crate::gui::PanelSidecar>,
         components: &[GuiComponentRenderInfo],
     ) {
         let is_strip = self
@@ -506,6 +900,7 @@ impl FlatUiHost {
             return;
         }
         self.panel_size_px = Some(size_px);
+        self.panel_sidecar = sidecar;
         self.components = components;
     }
 
@@ -517,10 +912,55 @@ impl FlatUiHost {
         }
     }
 
+    /// Advance frame-counted gestures by one simulation frame.
+    ///
+    /// The debug runtime also calls [`update`](Self::update) with zero elapsed
+    /// time when it applies an HTTP command. Those administrative updates must
+    /// not consume the documented double-click window.
+    pub fn advance_simulation_frame(&mut self) {
+        if let Some(mark) = self.last_lift.as_mut() {
+            match mark.frames_left.checked_sub(1) {
+                Some(remaining) => mark.frames_left = remaining,
+                None => self.last_lift = None,
+            }
+        }
+    }
+
     /// The active panel's rect on the 640x480 canvas (None until its first
     /// `SetUI` arrives).
     fn panel_rect(&self) -> Option<Rect> {
         self.panel_size_px.map(panel_canvas_rect)
+    }
+
+    pub(crate) fn device_screen_source(&self) -> Option<Rect> {
+        self.panel_rect().or_else(|| self.utilities.panel_rect())
+    }
+
+    /// The host close button, on the panel body's corner rather than the
+    /// canvas's, so a companion beside the body cannot carry it off the MFD.
+    fn close_rect(&self, panel: Rect) -> Rect {
+        let body = match self.panel_sidecar {
+            Some(sidecar) => Rect::new(panel.x, panel.y, sidecar.body_width, panel.h),
+            None => panel,
+        };
+        close_button_canvas_rect(body)
+    }
+
+    /// Whether `canvas_pos` is on the panel: its body, or its companion.
+    /// Sidecar offsets are in unscaled panel pixels; no sidecar panel is wide
+    /// enough to be scaled onto the canvas.
+    fn panel_hit(&self, panel: Rect, canvas_pos: Vector2<f32>) -> bool {
+        match self.panel_sidecar {
+            Some(sidecar) => {
+                let body = Rect::new(panel.x, panel.y, sidecar.body_width, panel.h);
+                body.contains(canvas_pos)
+                    || sidecar.rect.is_some_and(|rect| {
+                        Rect::new(panel.x + rect.x, panel.y + rect.y, rect.w, rect.h)
+                            .contains(canvas_pos)
+                    })
+            }
+            None => panel.contains(canvas_pos),
+        }
     }
 
     /// The inventory strip's top-docked rect on the 640x480 canvas (None
@@ -550,13 +990,25 @@ impl FlatUiHost {
         // themselves live in the shared core below.
         let pointer = pointer.map(|pointer| CanvasPointer {
             canvas_pos: pointer_to_canvas(
-                CANVAS_SIZE,
+                if self.device {
+                    super::mfd_device::layout(self.device_screen_source()).size
+                } else {
+                    CANVAS_SIZE
+                },
                 pointer.position,
                 self.screen_size,
                 ScaleMode::PreserveAspect,
-            ),
+            )
+            .and_then(|point| {
+                if self.device {
+                    super::mfd_device::to_native(point, self.device_screen_source())
+                } else {
+                    Some(point)
+                }
+            }),
             pressed: pointer.pressed,
             grabbing: false,
+            grabbing_hands: [false; 2],
             hand: Handedness::Right,
             bare_view: BareViewPress::Exit,
         });
@@ -573,10 +1025,26 @@ impl FlatUiHost {
         pointer: Option<CanvasPointer>,
     ) -> (Vec<Message>, Vec<FlatUiDragAction>) {
         // Edge-detect the grab before anything can return early, so a squeeze
-        // held across frames is one gesture wherever the ray goes.
-        let grabbing = pointer.map(|p| p.grabbing).unwrap_or(false);
-        let grab_edge = grabbing && !self.last_pointer_grabbing;
-        self.last_pointer_grabbing = grabbing;
+        // held across frames is one gesture wherever the ray goes. Both hands
+        // are latched every frame, and the edge that reaches the panel is the
+        // POINTING hand's own: the other hand's squeeze is very often held for
+        // the whole session (that is how a VR player keeps hold of a gun) and
+        // must not stand in for a gesture it did not make.
+        //
+        // A frame with NO pointer at all (the VR pass is still coming up, flat
+        // with the cursor off the window) leaves the latches ALONE rather than
+        // clearing them: a hand that has been squeezing throughout would
+        // otherwise read as a rising edge on the first frame a pointer exists
+        // and grab whatever slot it happened to be over.
+        let grab_edge = match pointer {
+            Some(pointer) => {
+                let slot = crate::vr_config::hand_slot(pointer.hand);
+                let edge = pointer.grabbing_hands[slot] && !self.last_pointer_grabbing[slot];
+                self.last_pointer_grabbing = pointer.grabbing_hands;
+                edge
+            }
+            None => false,
+        };
         // `/v1/ui` reports the gesture as the player is making it (held or
         // not); only what reaches the panel is reduced to the edge.
         self.last_pointer = pointer;
@@ -587,14 +1055,6 @@ impl FlatUiHost {
         let pressed = pointer.map(|p| p.pressed).unwrap_or(false);
         let pressed_edge = pressed && !self.last_pointer_pressed;
         self.last_pointer_pressed = pressed;
-
-        // Age out the double-click window since the last lift.
-        if let Some(mark) = self.last_lift.as_mut() {
-            match mark.frames_left.checked_sub(1) {
-                Some(remaining) => mark.frames_left = remaining,
-                None => self.last_lift = None,
-            }
-        }
 
         // MFD-slot auto-close: the bound object is gone (destroyed / level
         // state changed), or the player walked away from it (the original's
@@ -627,7 +1087,7 @@ impl FlatUiHost {
             }
         }
 
-        if self.active_panel.is_none() && self.strip.is_none() {
+        if self.active_panel.is_none() && self.strip.is_none() && !self.device {
             self.cursor_canvas = None;
             return (Vec::new(), Vec::new());
         }
@@ -647,6 +1107,9 @@ impl FlatUiHost {
         // bare-view click: throw a held item, else close the panel. In VR the
         // canvas is the panel, so an off-panel press belongs to the world hand.
         let Some(canvas_pos) = canvas_pos else {
+            if self.utilities.is_inspecting() {
+                return (Vec::new(), Vec::new());
+            }
             if pressed_edge && pointer.bare_view == BareViewPress::Exit {
                 if let Some(held) = self.cursor_item.take() {
                     return (Vec::new(), vec![FlatUiDragAction::Throw(held.entity)]);
@@ -662,17 +1125,94 @@ impl FlatUiHost {
             .and_then(|s| s.size_px)
             .map(strip_canvas_rect);
         let over_strip = strip_rect.map(|r| r.contains(canvas_pos)).unwrap_or(false);
+        if let Some(rect) = strip_rect.or(self.device.then_some(Rect::new(0.0, 0.0, 0.0, 0.0))) {
+            let holster_item = holster_readout_rects(rect)
+                .iter()
+                .position(|r| r.contains(canvas_pos))
+                .and_then(|slot| self.holster_items[slot].as_ref().map(|item| item.entity));
+            let candidate = self
+                .held_entity()
+                .or(holster_item)
+                .or_else(|| self.strip_item_at(canvas_pos));
+            if self.utilities.update(
+                canvas_pos,
+                pressed_edge || grab_edge,
+                candidate,
+                self.cursor_item.is_some(),
+            ) {
+                if self.utilities.has_left_panel() {
+                    self.close();
+                }
+                self.hover_close = false;
+                if self.utilities.is_open()
+                    && (self
+                        .panel_rect()
+                        .is_some_and(|rect| rect.x + rect.w > 450.0)
+                        || (self.device
+                            && self
+                                .panel_size_px
+                                .is_some_and(|size| size.x > super::mfd_device::SCREEN.w)))
+                {
+                    // A wide map and the right utility reader share space.
+                    // Switching utilities must not leave an opaque map over it.
+                    self.close();
+                }
+                let actions = if self.utilities.take_map_request() {
+                    vec![FlatUiDragAction::ToggleMap]
+                } else {
+                    Vec::new()
+                };
+                return (Vec::new(), actions);
+            }
+        }
+        if let Some(slot) = strip_rect.and_then(|r| {
+            implant_readout_rects(r)
+                .iter()
+                .position(|r| r.contains(canvas_pos))
+        }) {
+            self.hover_close = false;
+            let messages = if pressed_edge && self.cursor_item.is_none() {
+                self.implant_items[slot]
+                    .as_ref()
+                    .map(|item| Message {
+                        to: item.entity,
+                        payload: MessagePayload::Frob,
+                    })
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            return (messages, Vec::new());
+        }
+        if strip_rect.is_some_and(|r| {
+            holster_readout_rects(r)
+                .iter()
+                .any(|r| r.contains(canvas_pos))
+        }) {
+            // These are read-only holster snapshots. Hand weapon controls use
+            // their own selectors below; a paperdoll click must not select a
+            // different, currently held object or transfer storage ownership.
+            self.hover_close = false;
+            return (Vec::new(), Vec::new());
+        }
         let panel_rect = self.panel_rect();
         // The close button hugs the panel's corner but sits just outside the
         // panel rect; treat both as "over the panel" so a held item is never
         // thrown from there.
         let over_panel = panel_rect
-            .map(|r| r.contains(canvas_pos) || close_button_canvas_rect(r).contains(canvas_pos))
+            .map(|r| self.panel_hit(r, canvas_pos) || self.close_rect(r).contains(canvas_pos))
             .unwrap_or(false);
-        let over_ammo = self
-            .ammo_cycle_rect
-            .map(|r| r.contains(canvas_pos))
-            .unwrap_or(false);
+        let readout_hit = self
+            .readout_buttons()
+            .into_iter()
+            .find(|spec| spec.rect.contains(canvas_pos))
+            .map(|spec| spec.button);
+        let over_readout = readout_hit.is_some()
+            || (self.readouts.is_some()
+                && [readouts::BIO_FULL_RECT, readouts::AMMO_FULL_RECT]
+                    .iter()
+                    .any(|rect| rect.contains(canvas_pos)));
 
         // --- Cursor-is-the-item drag: while an item rides the cursor, LMB
         // places/swaps/throws it and never routes to a GuiScript (protecting
@@ -725,11 +1265,10 @@ impl FlatUiHost {
                 }
                 return (Vec::new(), Vec::new());
             }
-            if over_panel || over_ammo || pointer.bare_view == BareViewPress::Ignore {
-                // Escape hatch: a click on an open MFD or the AMMOFULL cycle
-                // button keeps the held item (a visible button must not throw
-                // the item you're carrying) - and so does empty panel space in
-                // VR, where there is no 3D view behind the canvas to throw at.
+            if over_panel || over_readout || pointer.bare_view == BareViewPress::Ignore {
+                // A click on an open MFD or either bottom strip keeps the held
+                // item, including empty chrome between buttons. So does empty
+                // panel space in VR, which has no 3D view behind it to throw at.
                 return (Vec::new(), Vec::new());
             }
             // Bare 3D view: throw the held item along the view ray.
@@ -738,15 +1277,32 @@ impl FlatUiHost {
             return (Vec::new(), vec![FlatUiDragAction::Throw(held.entity)]);
         }
 
-        // --- AMMOFULL ammo-cycle button (use mode, multi-ammo weapon): a
-        // click cycles the wielded ammo type. Checked with an empty cursor
-        // only (mid-drag, a bottom-right click is a throw), before strip/panel
-        // routing since the button is disjoint from both. ---
+        // --- AMMOFULL readout controls (use mode): a click acts on the
+        // wielded weapon. Checked with an empty cursor only (mid-drag,
+        // readout clicks preserve the carried item), before strip/panel routing
+        // since the controls are disjoint from both. ---
         if pressed_edge {
-            if let Some(rect) = self.ammo_cycle_rect {
-                if rect.contains(canvas_pos) {
-                    return (Vec::new(), vec![FlatUiDragAction::CycleAmmo]);
+            if let Some(button) = readout_hit {
+                let slot = match button {
+                    ReadoutButton::SelectLeftHand => Some(0),
+                    ReadoutButton::SelectRightHand => Some(1),
+                    _ => None,
+                };
+                if let Some(slot) = slot {
+                    // Same selection as the inventory's hand wells. No equip,
+                    // drop, reload or other world action accompanies this edge.
+                    if !self.hand_ammo[slot].is_empty() {
+                        self.selected_ammo = self.hand_items[slot].as_ref().map(|item| item.entity);
+                    }
+                    return (Vec::new(), Vec::new());
                 }
+                return (
+                    Vec::new(),
+                    vec![FlatUiDragAction::Readout(
+                        button,
+                        self.readouts.as_ref().and_then(|r| r.weapon),
+                    )],
+                );
             }
         }
 
@@ -808,14 +1364,14 @@ impl FlatUiHost {
 
         // Host-drawn close button (the shared guis have no close component;
         // VR uses its world-space distance close instead).
-        let close_rect = close_button_canvas_rect(rect);
+        let close_rect = self.close_rect(rect);
         self.hover_close = close_rect.contains(canvas_pos);
         if pressed_edge && self.hover_close {
             self.close();
             return (Vec::new(), Vec::new());
         }
 
-        if rect.contains(canvas_pos) {
+        if self.panel_hit(rect, canvas_pos) {
             (
                 vec![gui_hover(panel, rect, canvas_pos, pointer.pressed, pointer)],
                 Vec::new(),
@@ -851,15 +1407,13 @@ impl FlatUiHost {
     fn strip_item_at(&self, canvas_pos: Vector2<f32>) -> Option<EntityId> {
         let strip = self.strip.as_ref()?;
         let rect = strip.size_px.map(strip_canvas_rect)?;
-        let held = self.held_entity();
-        strip.components.iter().find_map(|c| match c {
-            GuiComponentRenderInfo::Image {
-                interactive: true,
-                entity: Some(entity),
-                ..
-            } if Some(*entity) != held && c.canvas_rect(rect).contains(canvas_pos) => Some(*entity),
-            _ => None,
-        })
+        item_at(&strip.components, rect, self.held_entity(), canvas_pos)
+    }
+
+    /// The interactive MFD-panel item under `canvas_pos` (a loot panel's item
+    /// buttons), for the mini-frame readout.
+    fn panel_item_at(&self, canvas_pos: Vector2<f32>) -> Option<EntityId> {
+        item_at(&self.components, self.panel_rect()?, None, canvas_pos)
     }
 
     /// Render the inventory strip + active panel + cursor as screen-space
@@ -874,19 +1428,133 @@ impl FlatUiHost {
     fn build_canvas(&self) -> Option<UiCanvas> {
         let strip_rect = self.strip_rect();
         let panel_rect = self.panel_rect();
-        if strip_rect.is_none() && panel_rect.is_none() {
+        if strip_rect.is_none() && panel_rect.is_none() && self.readouts.is_none() && !self.device {
             return None;
         }
         let mut canvas = UiCanvas::new(CANVAS_SIZE);
+        // The bottom readouts paint FIRST, so the MFD slot keeps the 10 px it
+        // overlaps the bio panel by - the stacking the flat HUD had when it
+        // drew them under this canvas.
+        if let Some(readouts) = self.readouts.as_ref() {
+            readouts::emit_use_mode(&mut canvas, readouts);
+        }
+        if self.device {
+            self.utilities.draw(&mut canvas);
+        }
         if let (Some(strip), Some(rect)) = (self.strip.as_ref(), strip_rect) {
+            self.utilities.draw(&mut canvas);
+            // Reverse only the source U interval: the mirrored paperdoll is
+            // background art, never mirrored text, item icons, or input.
+            let arm = mirrored_arm_rect(rect);
+            let header_height = arm.h * 16.0 / 121.0;
+            canvas.cropped_image(
+                Rect::new(arm.x, arm.y, arm.w, header_height),
+                "invback.pcx",
+                Rect::new(460.0, 0.0, EXTRA_ARM_WIDTH, 16.0),
+                Vector2::new(636.0, 121.0),
+            );
+            canvas.cropped_image(
+                Rect::new(arm.x, arm.y + header_height, arm.w, arm.h - header_height),
+                "invback.pcx",
+                Rect::new(564.0, 16.0, -EXTRA_ARM_WIDTH, 105.0),
+                Vector2::new(636.0, 121.0),
+            );
             // Hide the item riding the cursor from the strip grid (it is drawn
             // as the cursor instead).
-            draw_components(&mut canvas, &strip.components, rect, self.held_entity());
+            draw_components(
+                &mut canvas,
+                &strip.components,
+                rect,
+                self.held_entity(),
+                true,
+            );
+            for (_, badge, letter, _) in self.shoulder_badges() {
+                canvas.image(badge, "frame.pcx");
+                canvas.text_native(
+                    badge,
+                    letter,
+                    NAME_STRIP_FONT,
+                    HAlign::Center,
+                    VAlign::Middle,
+                );
+            }
+            for (slot, arm) in holster_readout_rects(rect).into_iter().enumerate() {
+                let title = Rect::new(arm.x + 1.0, arm.y + 16.0, arm.w - 2.0, 12.0);
+                canvas.image(title, "frame.pcx");
+                canvas.text_native_fit(
+                    title,
+                    ["LEFT", "RIGHT"][slot],
+                    MFD_FONT,
+                    HAlign::Center,
+                    VAlign::Middle,
+                );
+                let content = Rect::new(arm.x + 3.0, arm.y + 30.0, arm.w - 6.0, arm.h - 34.0);
+                if let Some(item) = self.holster_items[slot].as_ref() {
+                    match item.icon.as_deref() {
+                        Some(icon) => {
+                            canvas.fitted_object_icon(content, icon);
+                        }
+                        None => {
+                            canvas.text_native_fit(
+                                content,
+                                "ITEM",
+                                NAME_STRIP_FONT,
+                                HAlign::Center,
+                                VAlign::Middle,
+                            );
+                        }
+                    }
+                }
+            }
+            for (slot, well) in implant_readout_rects(rect).into_iter().enumerate() {
+                if let Some(item) = &self.implant_items[slot] {
+                    if let Some(icon) = &item.icon {
+                        canvas.fitted_object_icon(
+                            Rect::new(well.x + 2.0, well.y, well.w - 4.0, well.h - 9.0),
+                            icon,
+                        );
+                    }
+                    canvas.text_native_fit(
+                        Rect::new(well.x, well.y + well.h - 10.0, well.w, 10.0),
+                        &format!("{:.0}%", self.implant_energy[slot]),
+                        NAME_STRIP_FONT,
+                        HAlign::Center,
+                        VAlign::Middle,
+                    );
+                } else if slot >= self.implant_capacity {
+                    // Same "unavailable" art as the backpack's locked cells.
+                    canvas.image(well, "iface/block.pcx");
+                }
+            }
+            // The mini-frame sits in the inventory bar, so it is up exactly
+            // while the bar is. Placement is decided here, once, in canvas
+            // pixels - both presentations map this rect (AGENTS.md 3).
+            let (frame, text) = name_strip_rects(rect);
+            canvas.image(frame, "frame.pcx");
+            if let Some(preview) = self.placement_preview.as_ref() {
+                canvas.text_native_fit(
+                    text,
+                    preview.status.text(),
+                    NAME_STRIP_FONT,
+                    HAlign::Left,
+                    VAlign::Middle,
+                );
+            } else if let Some(name) = self.name_strip.as_deref() {
+                canvas.text_native_fit(text, name, NAME_STRIP_FONT, HAlign::Left, VAlign::Middle);
+            } else if self.shoulder_weapons.iter().any(Option::is_some) {
+                canvas.text_native_fit(
+                    text,
+                    "L / R: shoulder recall",
+                    NAME_STRIP_FONT,
+                    HAlign::Left,
+                    VAlign::Middle,
+                );
+            }
         }
         if let Some(rect) = panel_rect {
-            draw_components(&mut canvas, &self.components, rect, None);
+            draw_components(&mut canvas, &self.components, rect, None, false);
             canvas.image(
-                close_button_canvas_rect(rect),
+                self.close_rect(rect),
                 if self.hover_close {
                     "closeon.pcx"
                 } else {
@@ -894,11 +1562,33 @@ impl FlatUiHost {
                 },
             );
         }
+        if strip_rect.is_some() {
+            if let Some(preview) = self.placement_preview.as_ref() {
+                let rect = preview.rect;
+                if let Some(icon) = &preview.icon {
+                    canvas.fitted_object_icon(rect, icon).opacity(0.45);
+                }
+                // Four explicit edges keep the full destination visible without
+                // stretching the frame art over the item's silhouette.
+                for edge in [
+                    Rect::new(rect.x, rect.y, rect.w, 2.0),
+                    Rect::new(rect.x, rect.y + rect.h - 2.0, rect.w, 2.0),
+                    Rect::new(rect.x, rect.y, 2.0, rect.h),
+                    Rect::new(rect.x + rect.w - 2.0, rect.y, 2.0, rect.h),
+                ] {
+                    canvas.image(edge, preview.status.outline_texture());
+                }
+            }
+        }
         if let Some(cursor) = self.cursor_canvas {
             // The cursor IS the lifted item: draw its icon in place of the
             // arrow (the original's `SCM_DRAGOBJ`, §2.4). Fall back to the
             // arrow when the held item has no icon or nothing is held.
             match self.cursor_item.as_ref().and_then(|c| c.icon.as_deref()) {
+                _ if self.utilities.is_inspecting() => canvas.image(
+                    Rect::new(cursor.x, cursor.y, 32.0, 32.0),
+                    "iface/lookcur.pcx",
+                ),
                 // No slot rect: object icons draw at their authored size, and
                 // any rect bigger than the art would only center the icon
                 // inside it - i.e. slide it off the pointer.
@@ -909,7 +1599,15 @@ impl FlatUiHost {
                 ),
             };
         }
-        Some(canvas)
+        Some(if self.device {
+            super::mfd_device::compose(
+                canvas,
+                self.device_screen_source(),
+                self.scan_label.as_deref(),
+            )
+        } else {
+            canvas
+        })
     }
 
     /// Screen-space presentation (flat): the canvas letterboxed onto the
@@ -959,7 +1657,7 @@ impl FlatUiHost {
         };
         let mut out = self.elements_for(world, &self.components, rect, None);
         // The host-drawn close button is clickable too.
-        let close = close_button_canvas_rect(rect);
+        let close = self.close_rect(rect);
         out.push(crate::game_scene::DebugUiElement {
             kind: "button".to_string(),
             texture: Some("closeoff.pcx".to_string()),
@@ -980,10 +1678,113 @@ impl FlatUiHost {
         match (self.strip.as_ref(), self.strip_rect()) {
             // Hide the item on the cursor: it left the grid for the drag.
             (Some(strip), Some(rect)) => {
-                self.elements_for(world, &strip.components, rect, self.held_entity())
+                let mut elements =
+                    self.elements_for(world, &strip.components, rect, self.held_entity());
+                if let Some(preview) = self.placement_preview.as_ref() {
+                    let footprint = preview.rect;
+                    elements.push(crate::game_scene::DebugUiElement {
+                        kind: "image".to_owned(),
+                        texture: Some(preview.status.outline_texture().to_owned()),
+                        text: None,
+                        label: Some(preview.status.text().to_owned()),
+                        entity_id: None,
+                        rect: [footprint.x, footprint.y, footprint.w, footprint.h],
+                        screen_rect: self.to_screen_rect(footprint),
+                    });
+                }
+                elements.extend(
+                    self.utilities
+                        .debug_elements()
+                        .into_iter()
+                        .map(|mut element| {
+                            let [x, y, w, h] = element.rect;
+                            element.screen_rect = self.to_screen_rect(Rect::new(x, y, w, h));
+                            element
+                        }),
+                );
+                elements.extend(self.shoulder_badges().into_iter().map(
+                    |(entity, r, letter, label)| crate::game_scene::DebugUiElement {
+                        kind: "text".to_owned(),
+                        texture: None,
+                        text: Some(letter.to_owned()),
+                        label: Some(label.to_owned()),
+                        entity_id: Some(entity.inner() as i32),
+                        rect: [r.x, r.y, r.w, r.h],
+                        screen_rect: self.to_screen_rect(r),
+                    },
+                ));
+                elements.extend(implant_readout_rects(rect).into_iter().enumerate().map(
+                    |(slot, r)| {
+                        let item = self.implant_items[slot].as_ref();
+                        crate::game_scene::DebugUiElement {
+                            kind: "readout".to_owned(),
+                            texture: item.and_then(|i| i.icon.clone()),
+                            text: Some(item.and_then(|i| i.label.clone()).unwrap_or_else(|| {
+                                if slot < self.implant_capacity {
+                                    "Empty"
+                                } else {
+                                    "Locked"
+                                }
+                                .to_owned()
+                            })),
+                            label: Some(format!("Implant {}", slot + 1)),
+                            entity_id: item.map(|i| i.entity.inner() as i32),
+                            rect: [r.x, r.y, r.w, r.h],
+                            screen_rect: self.to_screen_rect(r),
+                        }
+                    },
+                ));
+                elements.extend(holster_readout_rects(rect).into_iter().enumerate().map(
+                    |(slot, r)| {
+                        let item = self.holster_items[slot].as_ref();
+                        crate::game_scene::DebugUiElement {
+                            kind: "readout".to_owned(),
+                            texture: item.and_then(|item| item.icon.clone()),
+                            text: Some({
+                                let name = item
+                                    .map(|item| item.label.as_deref().unwrap_or("Holstered item"))
+                                    .unwrap_or("Empty");
+                                name.to_owned()
+                            }),
+                            label: Some(["Left holster", "Right holster"][slot].to_owned()),
+                            entity_id: item.map(|item| item.entity.inner() as i32),
+                            rect: [r.x, r.y, r.w, r.h],
+                            screen_rect: self.to_screen_rect(r),
+                        }
+                    },
+                ));
+                elements
             }
             _ => Vec::new(),
         }
+    }
+
+    pub(super) fn device_debug_elements(
+        &self,
+        elements: Vec<crate::game_scene::DebugUiElement>,
+    ) -> Vec<crate::game_scene::DebugUiElement> {
+        if !self.device {
+            return elements;
+        }
+        elements
+            .into_iter()
+            .filter_map(|mut element| {
+                let [x, y, w, h] = element.rect;
+                let rect = super::mfd_device::from_native(
+                    Rect::new(x, y, w, h),
+                    self.device_screen_source(),
+                )?;
+                element.rect = [rect.x, rect.y, rect.w, rect.h];
+                let screen = crate::ui::canvas_rect_to_screen(
+                    rect,
+                    super::mfd_device::layout(self.device_screen_source()).size,
+                    self.screen_size,
+                    ScaleMode::PreserveAspect,
+                );
+                element.screen_rect = [screen.x, screen.y, screen.w, screen.h];
+                Some(element)
+            })
+            .collect()
     }
 
     fn to_screen_rect(&self, r: Rect) -> [f32; 4] {
@@ -1049,6 +1850,7 @@ impl FlatUiHost {
                 GuiComponentRenderInfo::Text { text, .. } => {
                     ("text", None, Some(text.clone()), None, None)
                 }
+                GuiComponentRenderInfo::Fill { .. } => ("fill", None, None, None, None),
             };
             out.push(crate::game_scene::DebugUiElement {
                 kind: kind.to_string(),
@@ -1073,6 +1875,18 @@ impl Default for FlatUiHost {
 /// The active panel's rect on the canvas: panel-local pixels anchored at the
 /// original left-MFD slot.
 fn panel_canvas_rect(panel_size_px: Vector2<f32>) -> Rect {
+    if panel_size_px.x > 614.0 {
+        // Wide maps clear the utility row/HUD and leave room for CLOSE.
+        let scale = (614.0 / panel_size_px.x)
+            .min(248.0 / panel_size_px.y)
+            .min(1.0);
+        return Rect::new(
+            LEFT_MFD_ANCHOR.x,
+            LEFT_MFD_ANCHOR.y,
+            panel_size_px.x * scale,
+            panel_size_px.y * scale,
+        );
+    }
     Rect::new(
         LEFT_MFD_ANCHOR.x,
         LEFT_MFD_ANCHOR.y,
@@ -1087,9 +1901,45 @@ fn strip_canvas_rect(strip_size_px: Vector2<f32>) -> Rect {
     Rect::new(
         STRIP_ANCHOR.x,
         STRIP_ANCHOR.y,
-        strip_size_px.x,
-        strip_size_px.y,
+        strip_size_px.x * STRIP_SCALE,
+        strip_size_px.y * STRIP_SCALE,
     )
+}
+
+fn mirrored_arm_rect(strip: Rect) -> Rect {
+    Rect::new(
+        strip.x + strip.w,
+        strip.y,
+        EXTRA_ARM_WIDTH * STRIP_SCALE,
+        strip.h,
+    )
+}
+
+/// The two authored implant sockets below the paperdoll's chest.
+fn implant_readout_rects(strip: Rect) -> [Rect; 2] {
+    let scale = strip.w / 636.0;
+    [0, 1].map(|slot| {
+        Rect::new(
+            strip.x + (563.0 + slot as f32 * 36.0) * scale,
+            strip.y + 84.0 * scale,
+            34.0 * scale,
+            34.0 * scale,
+        )
+    })
+}
+
+/// The paperdoll faces the viewer: its right arm is on the viewer's left.
+/// These same rectangles draw, describe and consume input for the readouts.
+fn holster_readout_rects(strip: Rect) -> [Rect; 2] {
+    [
+        mirrored_arm_rect(strip),
+        Rect::new(
+            strip.x + strip.w * 527.0 / 636.0,
+            strip.y,
+            strip.w * EXTRA_ARM_WIDTH / 636.0,
+            strip.h,
+        ),
+    ]
 }
 
 /// A `GUIHover` for `to`, in panel-local normalized coordinates - the same
@@ -1097,6 +1947,33 @@ fn strip_canvas_rect(strip_size_px: Vector2<f32>) -> Rect {
 /// runs unchanged. The click button maps to LMB on flat and the trigger in VR;
 /// the grab gesture is the VR squeeze (flat has none), and the hand it is
 /// reported for is where a `GrabEntity` from the panel lands.
+/// The original's "mini-frame" name line, as an inlay of the inventory bar:
+/// `FRAME.PCX` (256x16) over the blank slot `invback.pcx` leaves between its
+/// INVENTORY and EQUIP labels (a black plate at invback pixels x192..442,
+/// y0..12). Returns `(frame, text line)` in canvas pixels.
+///
+/// Derived from the bar's own rect rather than written out absolutely, so the
+/// frame cannot drift off the slot if the bar's anchor moves.
+fn name_strip_rects(strip: Rect) -> (Rect, Rect) {
+    let scale = strip.w / 635.0;
+    let frame = Rect::new(
+        strip.x + 190.0 * scale,
+        strip.y,
+        256.0 * scale,
+        16.0 * scale,
+    );
+    // Inside the plate: clear of the frame's left bevel and the cyan arrow
+    // glyph baked into it, and only as tall as the plate, so the line centres
+    // on that arrow rather than on the bevel below it.
+    let text = Rect::new(
+        frame.x + 11.0 * scale,
+        frame.y,
+        frame.w - 16.0 * scale,
+        12.0 * scale,
+    );
+    (frame, text)
+}
+
 fn gui_hover(
     to: EntityId,
     rect: Rect,
@@ -1128,6 +2005,7 @@ fn draw_components(
     components: &[GuiComponentRenderInfo],
     rect: Rect,
     hide: Option<EntityId>,
+    fit_icons: bool,
 ) {
     for component in components {
         if is_gui_cursor(component) {
@@ -1159,14 +2037,44 @@ fn draw_components(
         // Only the opacity differs: the original MFD art is opaque on screen,
         // while the component alphas (the elevator's 0.7 floor labels, say) are
         // a VR world-quad translucency, deliberately not applied here.
-        canvas.push(component.to_ui_element(rect)).opacity(1.0);
+        let mut element = component.to_ui_element(rect);
+        if fit_icons {
+            if let UiElement::Image { kind, .. } = &mut element {
+                if *kind == crate::ui::ImageKind::ObjectIcon {
+                    // The compact inventory has smaller cells than the native
+                    // icon art; keep the visible item inside its hit target.
+                    *kind = crate::ui::ImageKind::ObjectIconFit;
+                }
+            }
+        }
+        canvas.push(element).opacity(1.0);
     }
+}
+
+/// The entity of the interactive image component whose canvas rect contains
+/// `canvas_pos`, ignoring `hide` (the item riding the cursor left the grid).
+/// Shared by the drag hit-test and the mini-frame readout so they can never
+/// disagree about what the pointer is on.
+fn item_at(
+    components: &[GuiComponentRenderInfo],
+    rect: Rect,
+    hide: Option<EntityId>,
+    canvas_pos: Vector2<f32>,
+) -> Option<EntityId> {
+    components.iter().find_map(|c| match c {
+        GuiComponentRenderInfo::Image {
+            interactive: true,
+            entity: Some(entity),
+            ..
+        } if Some(*entity) != hide && c.canvas_rect(rect).contains(canvas_pos) => Some(*entity),
+        _ => None,
+    })
 }
 
 fn component_entity(info: &GuiComponentRenderInfo) -> Option<EntityId> {
     match info {
         GuiComponentRenderInfo::Image { entity, .. } => *entity,
-        GuiComponentRenderInfo::Text { .. } => None,
+        GuiComponentRenderInfo::Text { .. } | GuiComponentRenderInfo::Fill { .. } => None,
     }
 }
 
@@ -1184,10 +2092,7 @@ fn close_button_canvas_rect(panel: Rect) -> Rect {
 /// Resolve a lifted item's cursor art (`objicon`) and label (`SymName`) for
 /// the cursor-is-the-item drag.
 fn make_cursor_item(world: &World, entity: EntityId) -> CursorItem {
-    let icon = world
-        .borrow::<View<dark::properties::PropObjIcon>>()
-        .ok()
-        .and_then(|v| v.get(entity).ok().map(|i| format!("{}.pcx", i.0)));
+    let icon = crate::scripts::gui::inventory_icon(world, entity).map(|icon| format!("{icon}.pcx"));
     CursorItem {
         entity,
         icon,
@@ -1225,6 +2130,13 @@ fn semantic_label(texture: &str) -> Option<String> {
 
 /// `GuiScript` appends a panel-local `cursor.pcx` image for the VR quads;
 /// the flat host draws its own screen-space cursor instead.
+/// An art path's stem, lowercased, as a `/v1/ui` label: `"BIOFULL.PCX"` ->
+/// `"biofull"`, `"iface/psi1.pcx"` -> `"psi1"`.
+fn art_stem(texture: &str) -> Option<String> {
+    let file = texture.rsplit('/').next()?;
+    Some(file.split('.').next()?.to_ascii_lowercase())
+}
+
 fn is_gui_cursor(info: &GuiComponentRenderInfo) -> bool {
     matches!(
         info,
@@ -1236,6 +2148,23 @@ fn is_gui_cursor(info: &GuiComponentRenderInfo) -> bool {
 mod tests {
     use super::*;
     use cgmath::vec2;
+
+    #[test]
+    fn device_fits_the_entire_wide_map_and_its_close_button() {
+        let mut host = FlatUiHost::new();
+        host.device = true;
+        host.panel_size_px = Some(Vector2::new(636.0, 296.0));
+        let rect = host.panel_rect().unwrap();
+        assert!((rect.w / rect.h - 636.0 / 296.0).abs() < 0.001);
+        let mapped = super::super::mfd_device::from_native(rect, Some(rect)).unwrap();
+        assert!((mapped.h - super::super::mfd_device::SCREEN.h).abs() < 0.001);
+        assert!(mapped.y >= super::super::mfd_device::SCREEN.y);
+        assert!(
+            mapped.y + mapped.h
+                <= super::super::mfd_device::SCREEN.y + super::super::mfd_device::SCREEN.h
+        );
+        assert!(super::super::mfd_device::from_native(host.close_rect(rect), Some(rect)).is_some());
+    }
 
     #[test]
     fn panel_anchors_at_the_original_left_mfd_slot() {
@@ -1281,6 +2210,10 @@ mod tests {
             font: "mainfont.fon".to_owned(),
             text: "451".to_owned(),
             alpha: 1.0,
+            font_size: 0.0,
+            h: HAlign::Left,
+            v: VAlign::Middle,
+            fit_to_rect: false,
         };
         let r = info.canvas_rect(panel);
         assert!((r.y - (124.0 + 20.0)).abs() < 1e-3);
@@ -1385,6 +2318,39 @@ mod tests {
         assert!(!is_gui_cursor(&backdrop));
     }
 
+    /// A companion beside the body keeps the close button on the body's
+    /// corner, takes clicks on itself, and leaves the canvas around it
+    /// click-through.
+    #[test]
+    fn a_sidecar_keeps_close_on_the_body_and_its_surroundings_click_through() {
+        let mut world = World::new();
+        let panel = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.open(panel);
+        let sidecar = crate::gui::PanelSidecar {
+            body_width: 188.0,
+            rect: Some(Rect::new(179.0, 96.0, 73.0, 194.0)),
+        };
+        host.on_set_ui(
+            &world,
+            panel,
+            vec2(252.0, 300.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            Some(sidecar),
+            &[],
+        );
+        let rect = host.panel_rect().unwrap();
+        let body = Rect::new(rect.x, rect.y, 188.0, rect.h);
+        assert_eq!(host.close_rect(rect), close_button_canvas_rect(body));
+
+        let at = |x: f32, y: f32| vec2(rect.x + x, rect.y + y);
+        assert!(host.panel_hit(rect, at(100.0, 50.0)), "the body");
+        assert!(host.panel_hit(rect, at(220.0, 200.0)), "the plug");
+        assert!(
+            !host.panel_hit(rect, at(220.0, 50.0)),
+            "canvas above the plug"
+        );
+    }
+
     #[test]
     fn held_button_at_open_does_not_close_the_panel() {
         // The (shift+)LMB frob that opened the panel is typically still held
@@ -1398,6 +2364,7 @@ mod tests {
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
         let bare_view_pressed = Pointer2D {
@@ -1438,6 +2405,7 @@ mod tests {
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[GuiComponentRenderInfo::Image {
                 position: vec2(15.0 / 188.0, 160.0 / 296.0),
                 size: vec2(35.0 / 188.0, 32.0 / 296.0),
@@ -1464,10 +2432,178 @@ mod tests {
         // The inventory strip: 635x120 (invback) at the original game's
         // inv_rect anchor (2, 0) - flush with the canvas top.
         let rect = strip_canvas_rect(vec2(635.0, 120.0));
-        assert_eq!(rect, Rect::new(2.0, 0.0, 635.0, 120.0));
+        assert_eq!(
+            rect,
+            Rect::new(2.0, 0.0, 635.0 * STRIP_SCALE, 120.0 * STRIP_SCALE)
+        );
         // It fits on the canvas and clears the left-MFD slot below (y 124+).
         assert!(rect.x + rect.w <= CANVAS_SIZE.x);
         assert!(rect.y + rect.h < LEFT_MFD_ANCHOR.y);
+    }
+
+    /// The mini-frame lands in the blank slot the inventory-bar art leaves
+    /// between its INVENTORY and EQUIP labels: `invback.pcx` (drawn at the
+    /// canvas anchor (2,0)) is black from its own pixel x 192..442, y 0..12,
+    /// and `FRAME.PCX` is the 256x16 border drawn over it at canvas (192, 0).
+    ///
+    /// Placed once, on the shared canvas, so the flat screen and the VR
+    /// cyber-interface panel cannot put the name line in different places -
+    /// both present exactly this canvas.
+    #[test]
+    fn the_name_frame_fills_the_inventory_bars_blank_slot() {
+        let mut world = World::new();
+        let inventory = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.set_strip(Some(inventory));
+        host.on_set_ui(
+            &world,
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
+            &[],
+        );
+
+        let canvas = host
+            .build_canvas()
+            .expect("the strip should build a canvas");
+        let frame = canvas
+            .elements()
+            .iter()
+            .find(|e| matches!(e, crate::ui::UiElement::Image { texture, .. } if texture == "frame.pcx" && e.rect().y == 0.0))
+            .expect("the inventory bar should draw the mini-frame");
+        assert_eq!(
+            frame.rect(),
+            Rect::new(
+                2.0 + 190.0 * STRIP_SCALE,
+                0.0,
+                256.0 * STRIP_SCALE,
+                16.0 * STRIP_SCALE
+            )
+        );
+        // The blank slot in canvas pixels (invback pixel 192..442 at anchor x=2).
+        let slot_left = STRIP_ANCHOR.x + 192.0 * STRIP_SCALE;
+        let slot_right = STRIP_ANCHOR.x + 442.0 * STRIP_SCALE;
+        assert!(frame.rect().x <= slot_left && frame.rect().x + frame.rect().w >= slot_right);
+        // ...and it follows the bar rather than sitting at a hardcoded spot:
+        // move the bar and the frame moves with it, by the same offset.
+        let moved = name_strip_rects(Rect::new(12.0, 40.0, 635.0, 120.0)).0;
+        assert_eq!(moved, Rect::new(202.0, 40.0, 256.0, 16.0));
+    }
+
+    /// The name line is the readout, not the frame: it is drawn inside the
+    /// frame's text area and ellipsized there, so a long object name can never
+    /// spill across the INVENTORY / EQUIP labels either side of the slot.
+    #[test]
+    fn the_name_line_is_fitted_inside_the_frame() {
+        let mut world = World::new();
+        let inventory = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.set_strip(Some(inventory));
+        host.on_set_ui(
+            &world,
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
+            &[],
+        );
+
+        // Nothing pointed at: the frame stays, with no text in it.
+        let canvas = host.build_canvas().unwrap();
+        assert!(
+            !canvas
+                .elements()
+                .iter()
+                .any(|e| matches!(e, crate::ui::UiElement::Text { .. }) && e.rect().y == 0.0),
+            "an empty readout draws no text"
+        );
+
+        host.set_name_strip(Some("Laser Rapier".to_owned()));
+        let canvas = host.build_canvas().unwrap();
+        let text = canvas
+            .elements()
+            .iter()
+            .find_map(|e| match e {
+                crate::ui::UiElement::Text {
+                    text,
+                    font,
+                    fit_to_rect,
+                    ..
+                } if text == "Laser Rapier" => {
+                    Some((text.clone(), font.clone(), *fit_to_rect, e.rect()))
+                }
+                _ => None,
+            })
+            .expect("the readout should draw its name");
+        assert_eq!(text.0, "Laser Rapier");
+        assert_eq!(text.1, NAME_STRIP_FONT);
+        assert!(text.2, "an unbounded object name must ellipsize");
+        // The line is laid out inside the frame's opaque plate (`FRAME.PCX` is
+        // 16 tall, of which only y0..12 is plate - below that is its bevel),
+        // and clear of the arrow glyph at the plate's left end. Ellipsizing
+        // itself happens in the shared layout pass, which has its own tests.
+        let (frame, plate) = name_strip_rects(strip_canvas_rect(vec2(635.0, 120.0)));
+        let r = text.3;
+        assert_eq!(r, plate);
+        assert!(
+            r.x > frame.x && r.x + r.w <= frame.x + frame.w && r.y + r.h <= frame.y + 12.0,
+            "the name line stays on the frame's plate: {r:?} in {frame:?}"
+        );
+    }
+
+    /// No inventory bar, no mini-frame: the frame belongs to the bar, so an
+    /// MFD panel open on its own draws neither it nor a readout.
+    #[test]
+    fn a_panel_without_the_inventory_bar_draws_no_name_frame() {
+        let mut world = World::new();
+        let panel = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.open(panel);
+        host.on_set_ui(
+            &world,
+            panel,
+            vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
+            &[],
+        );
+        host.set_name_strip(Some("Keypad".to_owned()));
+
+        let canvas = host
+            .build_canvas()
+            .expect("the panel should build a canvas");
+        assert!(!canvas.elements().iter().any(
+            |e| matches!(e, crate::ui::UiElement::Image { texture, .. } if texture == "frame.pcx")
+        ),);
+    }
+
+    /// What the readout names: the slot under the pointer, and - once an item
+    /// has been lifted - the item riding the cursor, wherever it is waved.
+    #[test]
+    fn the_readout_follows_the_pointer_then_the_lifted_item() {
+        let (world, mut host, wrench, _inventory) = drag_world();
+        assert_eq!(host.pointed_item(), None, "no pointer, nothing named");
+
+        // Slot 0 holds the wrench (see `drag_world`), at canvas (6..41, 17..51).
+        let over_slot = (21.0, 34.0);
+        host.update(
+            &world,
+            Some(Pointer2D {
+                position: norm(over_slot.0, over_slot.1),
+                pressed: false,
+            }),
+        );
+        assert_eq!(host.pointed_item(), Some(wrench));
+
+        // Lift it, then sweep off the slot: the cursor IS the wrench, so the
+        // readout keeps naming it.
+        press_edge(&mut host, &world, over_slot);
+        host.update(
+            &world,
+            Some(Pointer2D {
+                position: norm(320.0, 400.0),
+                pressed: false,
+            }),
+        );
+        assert_eq!(host.pointed_item(), Some(wrench));
     }
 
     /// Hover routing with both slots live: the strip gets the pointer when
@@ -1484,12 +2620,14 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
         host.on_set_ui(
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
 
@@ -1527,12 +2665,14 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
         host.on_set_ui(
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
         // Release first (open() swallows the held button), then click on the
@@ -1593,6 +2733,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[
                 GuiComponentRenderInfo::Image {
                     position: vec2(0.0, 0.0),
@@ -1726,9 +2867,316 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[strip_item(wrench, 0)],
         );
         (world, host, wrench, inventory)
+    }
+
+    #[test]
+    fn placement_preview_uses_shared_canvas_and_clears_with_strip() {
+        let (mut world, mut host, wrench, inventory) = drag_world();
+        world.add_component(inventory, crate::inventory::PlayerInventoryEntity {});
+        host.set_placement_preview(
+            &world,
+            Some((wrench, (5, 0), (1, 3), PlacementStatus::Place)),
+        );
+        let preview = host
+            .strip_debug_elements(&world)
+            .into_iter()
+            .find(|element| element.label.as_deref() == Some("RELEASE TO PLACE"))
+            .unwrap();
+        let canvas = host.build_canvas().unwrap();
+        assert!(canvas.elements().iter().any(|element| matches!(element,
+            UiElement::Text { text, .. } if text == "RELEASE TO PLACE"
+        )));
+        assert_eq!(host.name_strip_debug().as_deref(), Some("RELEASE TO PLACE"));
+        let cell = host.strip_cell_at(vec2(preview.rect[0] + 1.0, preview.rect[1] + 1.0), &world);
+        assert_eq!(cell, Some((5, 0)));
+        host.set_strip(None);
+        assert!(host.placement_preview.is_none());
+        assert!(host.name_strip_debug().is_none());
+    }
+
+    #[test]
+    fn shoulder_badges_follow_items_without_becoming_duplicate_grab_targets() {
+        let (mut world, mut host, left, _) = drag_world();
+        let right = world.add_entity(());
+        host.strip
+            .as_mut()
+            .unwrap()
+            .components
+            .push(strip_item(right, 2));
+        host.set_shoulder_weapons([Some(left), Some(right)]);
+        let badges = host.shoulder_badges();
+        assert_eq!(badges.len(), 2);
+        for (entity, rect, letter, label) in &badges {
+            assert_eq!(host.strip_item_at(rect.center()), Some(*entity));
+            assert_eq!(
+                (*letter, *label),
+                if *entity == left {
+                    ("L", "Left shoulder")
+                } else {
+                    ("R", "Right shoulder")
+                }
+            );
+        }
+        let elements = host.strip_debug_elements(&world);
+        assert_eq!(
+            elements
+                .iter()
+                .filter(|e| e.kind == "button" && e.entity_id.is_some())
+                .count(),
+            2
+        );
+        assert_eq!(
+            elements
+                .iter()
+                .filter(|e| e.label.as_deref() == Some("Left shoulder"))
+                .count(),
+            1
+        );
+        // Cursor lifts keep backpack membership, but must not leave an orphan
+        // badge where the hidden inventory icon used to be.
+        host.cursor_item = Some(make_cursor_item(&world, left));
+        assert_eq!(host.shoulder_badges().len(), 1);
+        host.cursor_item = None;
+        host.set_shoulder_weapons([None, Some(right)]);
+        assert_eq!(host.shoulder_badges()[0].0, right);
+        host.set_strip(None);
+        assert!(host.shoulder_badges().is_empty());
+    }
+
+    #[test]
+    fn mirrored_arm_fits_beside_torso_and_scaled_grid_keeps_every_drop_cell() {
+        let mut world = World::new();
+        let inventory = world.add_entity(crate::inventory::PlayerInventoryEntity {});
+        let mut host = FlatUiHost::new();
+        host.set_strip(Some(inventory));
+        host.on_set_ui(
+            &world,
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
+            &[],
+        );
+        for x in 0..15 {
+            for y in 0..3 {
+                let point = vec2(
+                    2.0 + (4.0 + 35.0 * x as f32 + 17.0) * STRIP_SCALE,
+                    (17.0 + 34.0 * y as f32 + 16.0) * STRIP_SCALE,
+                );
+                assert_eq!(host.strip_cell_at(point, &world), Some((x, y)));
+            }
+        }
+        let canvas = host.build_canvas().unwrap();
+        let arm = canvas
+            .elements()
+            .iter()
+            .find(|e| {
+                matches!(
+                    e,
+                    UiElement::Image {
+                        kind: crate::ui::ImageKind::Crop { u0, u1, .. },
+                        ..
+                    } if u0 > u1
+                )
+            })
+            .unwrap();
+        let UiElement::Image {
+            kind: crate::ui::ImageKind::Crop { u0, u1, v0, v1 },
+            ..
+        } = arm
+        else {
+            unreachable!()
+        };
+        assert!(
+            u0 > u1 && v0 < v1,
+            "only the arm art is mirrored horizontally"
+        );
+        assert!((arm.rect().x - (2.0 + 635.0 * STRIP_SCALE)).abs() < 1e-4);
+        assert!(arm.rect().x + arm.rect().w <= 637.001);
+        assert_eq!(
+            host.strip_cell_at(arm.rect().center(), &world),
+            None,
+            "the decorative arm is not another backpack cell"
+        );
+    }
+
+    #[test]
+    fn wide_map_clears_utility_row_and_keeps_close_inside_canvas() {
+        let map = panel_canvas_rect(vec2(636.0, 296.0));
+        let close = close_button_canvas_rect(map);
+        assert!(map.y + map.h <= 372.001);
+        assert!(close.x + close.w <= CANVAS_SIZE.x);
+        assert!((map.w / map.h - 636.0 / 296.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn replicator_with_hack_sidecar_keeps_native_size() {
+        let rect = panel_canvas_rect(vec2(252.0, 296.0));
+        assert_eq!((rect.w, rect.h), (252.0, 296.0));
+    }
+
+    #[test]
+    fn opening_research_closes_a_wide_map_panel() {
+        let (world, mut host, item, _) = drag_world();
+        host.open_unbound(item);
+        host.panel_size_px = Some(vec2(636.0, 296.0));
+        assert!(press_edge(&mut host, &world, (133.0, 451.0)).is_empty());
+        assert!(host.utilities.is_open());
+        assert!(host.panel_size_px.is_none());
+    }
+
+    #[test]
+    fn map_button_emits_only_map_toggle_and_keeps_cursor_item() {
+        let (world, mut host, item, _) = drag_world();
+        host.cursor_item = Some(make_cursor_item(&world, item));
+        assert_eq!(
+            press_edge(&mut host, &world, (166.0, 460.0)),
+            vec![FlatUiDragAction::ToggleMap]
+        );
+        assert_eq!(host.held_entity(), Some(item));
+    }
+
+    #[test]
+    fn character_panel_preserves_carried_items_and_toggles_without_actions() {
+        let (world, mut host, item, _) = drag_world();
+        host.cursor_item = Some(make_cursor_item(&world, item));
+        assert!(press_edge(&mut host, &world, (476.0, 450.0)).is_empty());
+        assert!(host.utilities.is_open());
+        assert!(press_edge(&mut host, &world, (530.0, 200.0)).is_empty());
+        assert_eq!(host.held_entity(), Some(item));
+        assert!(press_edge(&mut host, &world, (476.0, 450.0)).is_empty());
+        assert!(!host.utilities.is_open());
+        assert_eq!(host.held_entity(), Some(item));
+    }
+
+    #[test]
+    fn inspect_click_does_not_lift_wield_or_frob_an_inventory_item() {
+        let (world, mut host, item, _) = drag_world();
+        assert!(press_edge(&mut host, &world, (166.0, 440.0)).is_empty());
+        assert!(host.utilities.is_inspecting());
+        let point = host
+            .strip_debug_elements(&world)
+            .into_iter()
+            .find(|e| e.entity_id == Some(item.inner() as i32))
+            .unwrap()
+            .rect;
+        assert!(
+            press_edge(
+                &mut host,
+                &world,
+                (point[0] + point[2] / 2.0, point[1] + point[3] / 2.0)
+            )
+            .is_empty()
+        );
+        assert!(!host.utilities.is_inspecting());
+        assert_eq!(host.held_entity(), None);
+        assert!(world.borrow::<EntitiesView>().unwrap().is_alive(item));
+    }
+
+    #[test]
+    fn holster_readouts_name_physical_sides_and_do_not_take_ownership() {
+        let (mut world, mut host, item, _) = drag_world();
+        let held = world.add_entity(());
+        host.hand_items[1] = Some(make_cursor_item(&world, held));
+        host.selected_ammo = Some(held);
+        host.holster_items[1] = Some(make_cursor_item(&world, item));
+        let [left, right] = holster_readout_rects(host.strip_rect().unwrap());
+        assert!(right.x < left.x, "paperdoll faces the viewer");
+        host.cursor_canvas = Some(right.center());
+        assert_eq!(
+            host.pointed_equipment_name().as_deref(),
+            Some("Right holster: Wrench")
+        );
+        host.cursor_canvas = Some(left.center());
+        assert_eq!(
+            host.pointed_equipment_name().as_deref(),
+            Some("Left holster: Empty")
+        );
+        let readouts: Vec<_> = host
+            .strip_debug_elements(&world)
+            .into_iter()
+            .filter(|e| {
+                e.kind == "readout"
+                    && e.label
+                        .as_ref()
+                        .is_some_and(|label| label.ends_with("holster"))
+            })
+            .collect();
+        assert_eq!(readouts.len(), 2);
+        assert_eq!(readouts[0].entity_id, None);
+        assert_eq!(readouts[1].entity_id, Some(item.inner() as i32));
+        for rect in [left, right] {
+            assert_eq!(host.strip_cell_at(rect.center(), &world), None);
+            assert!(press_edge(&mut host, &world, (rect.center().x, rect.center().y)).is_empty());
+        }
+        assert_eq!(
+            host.selected_ammo,
+            Some(held),
+            "paperdoll clicks do not select a held item"
+        );
+        host.on_entity_destroyed(item);
+        host.cursor_canvas = Some(right.center());
+        assert_eq!(
+            host.pointed_equipment_name().as_deref(),
+            Some("Right holster: Empty")
+        );
+    }
+
+    #[test]
+    fn holster_readouts_preserve_the_cursor_item_on_both_sides() {
+        let (world, mut host, item, _) = drag_world();
+        host.cursor_item = Some(make_cursor_item(&world, item));
+        for rect in holster_readout_rects(host.strip_rect().unwrap()) {
+            let point = rect.center();
+            assert!(press_edge(&mut host, &world, (point.x, point.y)).is_empty());
+            assert_eq!(host.held_entity(), Some(item));
+            assert_eq!(host.pointed_equipment_name(), None);
+        }
+    }
+
+    #[test]
+    fn compact_inventory_fits_item_icons_inside_their_cells() {
+        let (_world, mut host, _, _) = drag_world();
+        if let GuiComponentRenderInfo::Image { kind, .. } =
+            &mut host.strip.as_mut().unwrap().components[0]
+        {
+            *kind = crate::ui::ImageKind::ObjectIcon;
+        }
+        let canvas = host.build_canvas().unwrap();
+        let kinds: Vec<_> = canvas
+            .elements()
+            .iter()
+            .filter_map(|element| match element {
+                UiElement::Image { kind, .. }
+                    if matches!(
+                        kind,
+                        crate::ui::ImageKind::ObjectIcon | crate::ui::ImageKind::ObjectIconFit
+                    ) =>
+                {
+                    Some(*kind)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!kinds.is_empty());
+        assert!(
+            kinds
+                .iter()
+                .all(|kind| *kind == crate::ui::ImageKind::ObjectIconFit)
+        );
+    }
+
+    #[test]
+    fn mirrored_arm_chrome_does_not_throw_or_equip_a_cursor_item() {
+        let (world, mut host, item, _) = drag_world();
+        host.cursor_item = Some(make_cursor_item(&world, item));
+        let point = mirrored_arm_rect(host.strip_rect().unwrap()).center();
+        let actions = press_edge(&mut host, &world, (point.x, point.y));
+        assert!(actions.is_empty());
+        assert_eq!(host.held_entity(), Some(item));
     }
 
     #[test]
@@ -1771,6 +3219,7 @@ mod tests {
                 &world,
                 inventory,
                 vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+                None,
                 &[strip_item(pickup, 0)],
             );
 
@@ -1815,6 +3264,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[strip_item(loot, 0)],
         );
         press_edge(&mut host, &world, (23.5, 34.0));
@@ -1842,6 +3292,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[strip_item(held, 0), strip_item(pickup, 1)],
         );
 
@@ -1908,6 +3359,7 @@ mod tests {
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[strip_item(wrench, 0)],
         );
         let wrench_id = wrench.inner() as i32;
@@ -1948,10 +3400,15 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[strip_item(wrench, 0)],
         );
 
-        assert!(host.strip_debug_elements(&world).is_empty());
+        assert!(
+            host.strip_debug_elements(&world)
+                .iter()
+                .all(|e| e.entity_id.is_none())
+        );
     }
 
     #[test]
@@ -1988,6 +3445,7 @@ mod tests {
             &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[strip_item(wrench, 0), strip_item(pistol, 1)],
         );
         press_edge(&mut host, &world, (23.5, 34.0)); // lift the Wrench
@@ -2005,24 +3463,186 @@ mod tests {
         assert_eq!(host.strip_item_at(vec2(58.5, 34.0)), None);
     }
 
+    /// A use-mode readout for a multi-ammo gun on NORM: the host derives the
+    /// SETTING and cycle controls from it at the canvas rects it drew them at
+    /// ((496,429) and (564,429)).
+    fn readout_fixture() -> UseModeReadouts {
+        UseModeReadouts {
+            hands: Default::default(),
+            hand_entities: [None; 2],
+            weapon: None,
+            resources: [0; 2],
+            hazards: Default::default(),
+            alarm_seconds: None,
+            bio: Default::default(),
+            ammo: crate::hud::ammo_panel::AmmoReadout {
+                ammo: Some(12),
+                gun_setting_header: Some("NORM".to_string()),
+                can_cycle_ammo: true,
+                show_buttons: true,
+                ..Default::default()
+            },
+        }
+    }
+
     #[test]
-    fn clicking_the_ammo_cycle_button_emits_cycle_ammo() {
+    fn bottom_hand_selectors_require_a_fresh_empty_cursor_click_and_name_each_weapon() {
+        let (world, mut host, left, right) = drag_world();
+        host.hand_items = [
+            Some(make_cursor_item(&world, left)),
+            Some(make_cursor_item(&world, right)),
+        ];
+        host.hand_ammo = [
+            crate::hud::ammo_panel::AmmoReadout {
+                ammo: Some(6),
+                ..Default::default()
+            },
+            crate::hud::ammo_panel::AmmoReadout {
+                ammo: Some(12),
+                ..Default::default()
+            },
+        ];
+        host.reconcile_ammo_selection();
+        let mut readouts = readout_fixture();
+        readouts.weapon = Some(right);
+        host.set_readouts(Some(readouts));
+        let tab = host
+            .readout_buttons_debug()
+            .into_iter()
+            .find(|e| e.label.as_deref() == Some("select_left_hand"))
+            .unwrap();
+        assert_eq!(tab.entity_id, Some(left.inner() as i32));
+        assert_eq!(tab.text.as_deref(), Some("LEFT 6"));
+        let point = (
+            tab.rect[0] + tab.rect[2] / 2.0,
+            tab.rect[1] + tab.rect[3] / 2.0,
+        );
+        host.cursor_item = Some(make_cursor_item(&world, left));
+        assert!(press_edge(&mut host, &world, point).is_empty());
+        assert_eq!(host.held_entity(), Some(left));
+        assert_eq!(host.ammo_selection().0, Some(right));
+        host.cursor_item = None;
+        assert!(press_edge(&mut host, &world, point).is_empty());
+        assert_eq!(host.ammo_selection().0, Some(left));
+    }
+
+    #[test]
+    fn hand_selector_preserves_weapon_identity_and_carries_the_drawn_target() {
+        let (mut world, mut host, left, _) = drag_world();
+        let right = world.add_entity(());
+        host.hand_items = [
+            Some(make_cursor_item(&world, left)),
+            Some(make_cursor_item(&world, right)),
+        ];
+        host.hand_ammo = [
+            crate::hud::ammo_panel::AmmoReadout {
+                ammo: Some(6),
+                ..Default::default()
+            },
+            crate::hud::ammo_panel::AmmoReadout {
+                ammo: Some(12),
+                ..Default::default()
+            },
+        ];
+        host.reconcile_ammo_selection();
+        assert_eq!(host.ammo_selection().0, Some(right));
+        let mut readouts = readout_fixture();
+        readouts.weapon = Some(right);
+        host.set_readouts(Some(readouts));
+        let tab = host
+            .readout_buttons_debug()
+            .into_iter()
+            .find(|e| e.label.as_deref() == Some("select_left_hand"))
+            .unwrap();
+        assert!(
+            press_edge(
+                &mut host,
+                &world,
+                (
+                    tab.rect[0] + tab.rect[2] / 2.0,
+                    tab.rect[1] + tab.rect[3] / 2.0
+                )
+            )
+            .is_empty()
+        );
+        assert_eq!(host.ammo_selection().0, Some(left));
+        let mut readouts = readout_fixture();
+        readouts.weapon = Some(left);
+        host.set_readouts(Some(readouts));
+        assert_eq!(
+            press_edge(&mut host, &world, (570.0, 449.0)),
+            vec![FlatUiDragAction::Readout(
+                ReadoutButton::CycleAmmo,
+                Some(left)
+            )]
+        );
+        // Swapping physical hands preserves the chosen weapon, not its old slot.
+        host.hand_items.swap(0, 1);
+        host.hand_ammo.swap(0, 1);
+        host.reconcile_ammo_selection();
+        assert_eq!(
+            host.ammo_selection(),
+            (Some(left), Some(crate::vr_config::Handedness::Right))
+        );
+        // Losing that weapon picks the other gun for the NEXT frame, while the
+        // cached readout action still names the gun the player actually saw.
+        host.hand_items[1] = None;
+        host.hand_ammo[1] = Default::default();
+        host.reconcile_ammo_selection();
+        assert_eq!(host.ammo_selection().0, Some(right));
+        assert_eq!(
+            press_edge(&mut host, &world, (570.0, 449.0)),
+            vec![FlatUiDragAction::Readout(
+                ReadoutButton::CycleAmmo,
+                Some(left)
+            )]
+        );
+    }
+
+    #[test]
+    fn clicking_a_readout_button_emits_its_action() {
         let (world, mut host, _wrench, _inv) = drag_world();
-        // The AMMOFULL cycle button lives at canvas (564,429,12,41).
-        host.set_ammo_cycle_button(Some(Rect::new(564.0, 429.0, 12.0, 41.0)));
-        // A click on its center (570, 449) cycles the ammo.
+        host.set_readouts(Some(readout_fixture()));
+        // A click on the cycle arrow's center (570, 449) cycles the ammo.
         let actions = press_edge(&mut host, &world, (570.0, 449.0));
-        assert_eq!(actions, vec![FlatUiDragAction::CycleAmmo]);
-        // The /v1/ui element is exposed with a clickable label.
-        let el = host.ammo_cycle_debug().expect("the button is exposed");
+        assert_eq!(
+            actions,
+            vec![FlatUiDragAction::Readout(ReadoutButton::CycleAmmo, None)]
+        );
+        // ...and one on the SETTING button switches the fire mode.
+        let actions = press_edge(&mut host, &world, (529.0, 439.0));
+        assert_eq!(
+            actions,
+            vec![FlatUiDragAction::Readout(ReadoutButton::GunSetting, None)]
+        );
+        // The /v1/ui elements are exposed with clickable labels, and the
+        // setting button carries the mode header it is drawn with.
+        let elements = host.readout_buttons_debug();
+        assert_eq!(
+            elements
+                .iter()
+                .map(|e| e.label.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["gun_setting", "cycle_ammo", "system_menu", "logs"]
+        );
+        assert_eq!(elements[0].text.as_deref(), Some("NORM"));
+        assert!(elements.iter().all(|e| e.kind == "button"));
+        let el = host.ammo_cycle_debug().expect("the arrow is exposed");
         assert_eq!(el.label.as_deref(), Some("cycle_ammo"));
-        assert_eq!(el.kind, "button");
+        // ...and one on the system button (centre 320, 390) asks for the
+        // pause menu - the interface's only visible way out of the game.
+        let actions = press_edge(&mut host, &world, (320.0, 390.0));
+        assert_eq!(
+            actions,
+            vec![FlatUiDragAction::Readout(ReadoutButton::SystemMenu, None)]
+        );
         // A click elsewhere in the bare view does not cycle.
         let actions = press_edge(&mut host, &world, (300.0, 300.0));
         assert!(actions.is_empty());
         // Cleared when not shown.
-        host.set_ammo_cycle_button(None);
+        host.set_readouts(None);
         assert!(host.ammo_cycle_debug().is_none());
+        assert!(host.readout_buttons_debug().is_empty());
     }
 
     #[test]
@@ -2031,12 +3651,37 @@ mod tests {
         // the ammo-cycle button mid-drag protects the held item (no throw, no
         // cycle) rather than treating it as a bare-view throw.
         let (world, mut host, _wrench, _inv) = drag_world();
-        host.set_ammo_cycle_button(Some(Rect::new(564.0, 429.0, 12.0, 41.0)));
+        host.set_readouts(Some(readout_fixture()));
         press_edge(&mut host, &world, (23.5, 34.0)); // lift the Wrench
         assert!(host.cursor_debug().is_some());
         let actions = press_edge(&mut host, &world, (570.0, 449.0)); // click the ammo button
         assert!(actions.is_empty(), "the click neither throws nor cycles");
         assert!(host.cursor_debug().is_some(), "the held item is protected");
+    }
+
+    #[test]
+    fn empty_bottom_strips_preserve_a_carried_item() {
+        let (world, mut host, wrench, _) = drag_world();
+        host.set_readouts(Some(UseModeReadouts {
+            hands: Default::default(),
+            hand_entities: [None; 2],
+            weapon: None,
+            resources: [0; 2],
+            hazards: Default::default(),
+            alarm_seconds: None,
+            bio: Default::default(),
+            ammo: Default::default(),
+        }));
+        press_edge(&mut host, &world, (23.5, 34.0));
+        for point in [(400.0, 460.0), (600.0, 460.0), (240.0, 460.0)] {
+            assert!(press_edge(&mut host, &world, point).is_empty());
+            assert_eq!(host.held_entity(), Some(wrench));
+        }
+        // Only the visible chrome is protected; the world still accepts drops.
+        assert_eq!(
+            press_edge(&mut host, &world, (300.0, 300.0)),
+            vec![FlatUiDragAction::Throw(wrench)]
+        );
     }
 
     #[test]
@@ -2053,6 +3698,36 @@ mod tests {
     }
 
     #[test]
+    fn paused_updates_do_not_consume_the_double_click_window() {
+        let (world, mut host, wrench, _inv) = drag_world();
+        let position = norm(23.5, 34.0);
+        let pointer = |pressed| Some(Pointer2D { position, pressed });
+
+        // The HTTP input command itself is a zero-time update and observes
+        // the first press edge before the requested stepped frames begin.
+        host.update(&world, pointer(false));
+        let (_, first) = host.update(&world, pointer(true));
+        assert!(first.is_empty());
+
+        // Six held frames, six released frames, and six more released frames
+        // before the second click: the two press edges are 18 sim frames apart.
+        for pressed in [true, false, false] {
+            for _ in 0..6 {
+                host.advance_simulation_frame();
+                host.update(&world, pointer(pressed));
+            }
+            // Setting an input channel while paused invokes a zero-time update.
+            // It must not age the gesture window.
+            for _ in 0..8 {
+                host.update(&world, pointer(pressed));
+            }
+        }
+
+        let (_, second) = host.update(&world, pointer(true));
+        assert_eq!(second, vec![FlatUiDragAction::Wield(wrench)]);
+    }
+
+    #[test]
     fn clicking_a_panel_while_holding_keeps_the_item() {
         let (mut world, mut host, wrench, _inv) = drag_world();
         let panel = world.add_entity(());
@@ -2061,6 +3736,7 @@ mod tests {
             &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
             &[],
         );
         press_edge(&mut host, &world, (23.5, 34.0)); // lift the Wrench
@@ -2169,6 +3845,68 @@ mod tests {
             .cursor_debug()
             .expect("the trigger should lift the item");
         assert_eq!(cursor.entity_id, wrench.inner() as i32);
+    }
+
+    /// The interface canvas carries the use-mode readouts, so the VR panel
+    /// shows the same BIOFULL/AMMOFULL pair the flat cursor clicks - at the
+    /// flat canvas rects, from the one shared emit.
+    #[test]
+    fn the_interface_canvas_carries_the_use_mode_readouts() {
+        let (_world, mut host, _wrench, _inv) = drag_world();
+        host.set_readouts(Some(readout_fixture()));
+        let canvas = host
+            .build_canvas()
+            .expect("the readouts alone are a canvas");
+        let art: Vec<(String, Rect)> = canvas
+            .elements()
+            .iter()
+            .filter_map(|el| match el {
+                crate::ui::UiElement::Image { texture, .. } => Some((texture.clone(), el.rect())),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            art.contains(&(
+                "BIOFULL.PCX".to_string(),
+                Rect::new(2.0, 414.0, 260.0, 64.0)
+            )),
+            "the bio readout must sit at the flat use-mode anchor: {art:?}"
+        );
+        assert!(
+            art.contains(&(
+                "AMMOFULL.PCX".to_string(),
+                Rect::new(378.0, 414.0, 260.0, 64.0)
+            )),
+            "the ammo readout must sit at the flat use-mode anchor: {art:?}"
+        );
+        // ...and they paint first, so the MFD slot keeps the 10 px it overlaps
+        // the bio panel by - the stacking flat had when the HUD drew them
+        // underneath this canvas.
+        assert_eq!(art[0].0, "BIOFULL.PCX");
+    }
+
+    /// The whole point of putting them there: the VR ray reaches the readout's
+    /// controls, so the settings and psi MFDs are openable in VR.
+    #[test]
+    fn a_vr_ray_clicks_a_readout_button() {
+        let (world, mut host, _wrench, _inv) = drag_world();
+        host.set_readouts(Some(readout_fixture()));
+        // The SETTING button's center on the canvas (496,429 + 66x20).
+        let setting = (529.0, 439.0);
+
+        let (_, actions) = host.update_canvas(
+            &world,
+            Some(vr_pointer(Handedness::Right, Some(setting), 0.0, 0.0)),
+        );
+        assert!(actions.is_empty(), "hovering must not press the button");
+        let (_, actions) = host.update_canvas(
+            &world,
+            Some(vr_pointer(Handedness::Right, Some(setting), 1.0, 0.0)),
+        );
+        assert_eq!(
+            actions,
+            vec![FlatUiDragAction::Readout(ReadoutButton::GunSetting, None)]
+        );
     }
 
     /// Rule 6 of the vr-ui-design skill: a trigger already held as the
@@ -2326,7 +4064,9 @@ mod tests {
             &input,
             CANVAS_SIZE,
             &test_support::test_panel(),
-            crate::ui::PointerEngagement::TriggerOrGrab,
+            crate::ui::PointerEngagement::TriggerOrGrab {
+                carrying: [false; 2],
+            },
         );
         let pointer = vr_canvas_pointer(&pass, &input);
         assert_eq!(pointer.hand, Handedness::Left);
@@ -2348,6 +4088,75 @@ mod tests {
         }
     }
 
+    /// A VR player keeps hold of a gun by keeping that hand's squeeze DOWN, so
+    /// the other hand's squeeze on a slot is the ONLY way to get a clip out of
+    /// the strip - the reach the physical reload is made of. A single shared
+    /// grab latch reads the gun hand's permanently-held squeeze as "already
+    /// grabbing" and swallows the free hand's rising edge forever.
+    #[test]
+    fn a_squeeze_held_in_the_other_hand_does_not_swallow_this_ones_grab() {
+        let (world, mut host, wrench, _inv) = drag_world();
+        let slot = vec2(23.5, 34.0);
+        // The gun hand: off the panel, squeezing, and never letting go.
+        let holding_right = Hand {
+            squeeze_value: 1.0,
+            ..test_support::hand_aimed_away(0.0)
+        };
+        let frame = |left_squeeze: f32| {
+            let input = InputContext {
+                right_hand: holding_right.clone(),
+                left_hand: Hand {
+                    squeeze_value: left_squeeze,
+                    ..test_support::hand_aimed_at(CANVAS_SIZE, slot, 0.0)
+                },
+                ..InputContext::default()
+            };
+            let pass = crate::ui::vr_pointer_pass(
+                &input,
+                CANVAS_SIZE,
+                &test_support::test_panel(),
+                crate::ui::PointerEngagement::TriggerOrGrab {
+                    carrying: [false; 2],
+                },
+            );
+            vr_canvas_pointer(&pass, &input)
+        };
+        let grabs = |msgs: Vec<Message>| {
+            msgs.iter()
+                .filter(|m| {
+                    matches!(
+                        m.payload,
+                        MessagePayload::GUIHover {
+                            is_grabbing: true,
+                            ..
+                        }
+                    )
+                })
+                .count()
+        };
+
+        // Several frames with the gun hand already squeezing, so a shared latch
+        // has every chance to settle on "grabbing".
+        host.update_canvas(&world, Some(frame(0.0)));
+        host.update_canvas(&world, Some(frame(0.0)));
+
+        let (grabbed, _) = host.update_canvas(&world, Some(frame(1.0)));
+        assert_eq!(
+            grabs(grabbed),
+            1,
+            "the free hand's fresh squeeze must reach the slot"
+        );
+        assert!(
+            host.cursor_debug().is_none(),
+            "a squeeze pulls the item into the HAND, not onto the cursor"
+        );
+        let _ = wrench;
+
+        // ...and it is still one gesture: holding it must not re-grab.
+        let (held, _) = host.update_canvas(&world, Some(frame(1.0)));
+        assert_eq!(grabs(held), 0, "the held squeeze must not grab again");
+    }
+
     /// The panel's grab handler is level-triggered, so a squeeze held while the
     /// ray sweeps the grid would take every slot it crossed. Only the rising
     /// edge reaches the panel.
@@ -2358,6 +4167,7 @@ mod tests {
             canvas_pos: Some(vec2(canvas.0, canvas.1)),
             pressed: false,
             grabbing: true,
+            grabbing_hands: [false, true],
             hand: Handedness::Right,
             bare_view: BareViewPress::Ignore,
         };

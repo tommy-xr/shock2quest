@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { AIM_AT_PANEL, panelPoint } from "./helpers/frontend-menu.js";
 
 // End-to-end test for the main menu -> load-game screen -> back round trip,
 // and for actually restoring a save from the list.
@@ -23,10 +27,18 @@ const CANVAS_W = 640;
 const CANVAS_H = 480;
 const norm = (x: number, y: number): [number, number] => [x / CANVAS_W, y / CANVAS_H];
 
-const LOAD_GAME_ENTRY = norm(400 + 179 / 2, 96 + 60 / 2);
-const LOAD_BUTTON = norm(527 + 96 / 2, 161 + 62 / 2);
-const DONE_BUTTON = norm(527 + 95 / 2, 405 + 62 / 2);
-const FIRST_ROW = norm(261 + 202 / 2, 54 + 19 / 2);
+const LOAD_GAME_ENTRY_CANVAS: [number, number] = [400 + 179 / 2, 96 + 60 / 2];
+const LOAD_BUTTON_CANVAS: [number, number] = [527 + 96 / 2, 161 + 62 / 2];
+const DONE_BUTTON_CANVAS: [number, number] = [527 + 95 / 2, 405 + 62 / 2];
+const FIRST_ROW_CANVAS: [number, number] = [261 + 202 / 2, 54 + 19 / 2];
+// The shared list rocker reserves a 32px gutter and puts its down arrow 6px
+// above the field at y=323. The last row stays just left of that gutter.
+const DOWN_ARROW_CANVAS: [number, number] = [261 + 202 - 16, 323 - 6 - 8];
+const LAST_ROW_WITH_GUTTER_CANVAS: [number, number] = [261 + (202 - 32) / 2, 54 + 13 * 19 + 19 / 2];
+const LOAD_GAME_ENTRY = norm(...LOAD_GAME_ENTRY_CANVAS);
+const LOAD_BUTTON = norm(...LOAD_BUTTON_CANVAS);
+const DONE_BUTTON = norm(...DONE_BUTTON_CANVAS);
+const FIRST_ROW = norm(...FIRST_ROW_CANVAS);
 
 async function click(game: GameServer, [x, y]: [number, number]): Promise<void> {
   await game.input.set("pointer.position", [x, y]);
@@ -36,6 +48,18 @@ async function click(game: GameServer, [x, y]: [number, number]): Promise<void> 
   await game.step({ frames: 2 });
   await game.input.set("pointer.pressed", 0);
   await game.step({ frames: 6 });
+}
+
+async function vrClick(game: GameServer, point: [number, number]): Promise<void> {
+  const [, y, z] = panelPoint(norm(...point));
+  await game.input.set("right_hand.rotation", AIM_AT_PANEL);
+  await game.input.set("right_hand.position", [0, y, z]);
+  await game.input.set("right_hand.trigger", 0);
+  await game.step({ frames: 3 });
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 3 });
+  await game.input.set("right_hand.trigger", 0);
+  await game.step({ frames: 3 });
 }
 
 async function entityCount(game: GameServer): Promise<number> {
@@ -110,5 +134,175 @@ test(
       (await entityCount(game)) > 100,
       "loading a save should bring up a populated mission",
     );
+  },
+);
+
+test(
+  "flat and VR can scroll to and load the fifteenth save",
+  { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async (t) => {
+    const assetRoot = process.env.DARK_ASSET_PATH;
+    assert.ok(assetRoot, "DARK_ASSET_PATH must explicitly select the 25AE root");
+    const savesDir = join(assetRoot, "saves");
+    mkdirSync(savesDir, { recursive: true });
+    const prefix = `i928_${process.pid}_${Date.now()}`;
+    const names = Array.from({ length: 15 }, (_, i) => `${prefix}_${String(i).padStart(2, "0")}`);
+    t.after(() => names.forEach((name) => rmSync(join(savesDir, `${name}.sav`), { force: true })));
+
+    // Fourteen recent MedSci saves fill the authored list. The older Earth
+    // save has a different mission, so a successful load proves which row was
+    // selected rather than merely that some save could load.
+    {
+      await using game = await GameServer.launch({ mission: "medsci1.mis" });
+      await game.step({ frames: 30 });
+      await game.save(names[0]);
+    }
+    for (let i = 1; i < 14; i++) {
+      copyFileSync(join(savesDir, `${names[0]}.sav`), join(savesDir, `${names[i]}.sav`));
+    }
+    {
+      await using game = await GameServer.launch({ mission: "earth.mis" });
+      await game.step({ frames: 30 });
+      await game.save(names[14]);
+    }
+    // Keep the fixture's order above any existing user saves without touching
+    // their files or depending on the host filesystem's mtime granularity.
+    const newest = Date.UTC(2100, 0, 1) / 1000;
+    names.forEach((name, index) => {
+      const timestamp = newest - index;
+      utimesSync(join(savesDir, `${name}.sav`), timestamp, timestamp);
+    });
+
+    for (const vr of [false, true]) {
+      await using game = await GameServer.launch({
+        mission: "main_menu",
+        ...(vr ? { debugFlags: ["--vr"] } : {}),
+      });
+      await game.step({ frames: 5 });
+      if (vr) {
+        await vrClick(game, LOAD_GAME_ENTRY_CANVAS);
+        await vrClick(game, DOWN_ARROW_CANVAS);
+        await vrClick(game, LAST_ROW_WITH_GUTTER_CANVAS);
+        await vrClick(game, LOAD_BUTTON_CANVAS);
+      } else {
+        await click(game, LOAD_GAME_ENTRY);
+        await click(game, norm(...DOWN_ARROW_CANVAS));
+        await click(game, norm(...LAST_ROW_WITH_GUTTER_CANVAS));
+        await click(game, LOAD_BUTTON);
+      }
+      assert.equal(
+        (await game.info()).mission,
+        "earth.mis",
+        `${vr ? "VR" : "flat"} should load the save beyond row 14`,
+      );
+    }
+  },
+);
+
+test(
+  "a corrupt save reports Load Failed on the shared flat and VR canvas",
+  { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async (t) => {
+    const assetRoot = process.env.DARK_ASSET_PATH;
+    assert.ok(assetRoot, "DARK_ASSET_PATH must explicitly select the 25AE root");
+    const saveName = `issue929_corrupt_${Date.now()}`;
+    const savePath = join(assetRoot, "saves", `${saveName}.sav`);
+    mkdirSync(join(assetRoot, "saves"), { recursive: true });
+    writeFileSync(savePath, "this is not a valid save file");
+    t.after(() => rmSync(savePath, { force: true }));
+
+    const captures = join(tmpdir(), `shock2quest-issue929-${process.pid}`);
+    mkdirSync(captures, { recursive: true });
+
+    let flatFailureObjects = 0;
+    {
+      await using game = await GameServer.launch({ mission: "main_menu" });
+      await game.step({ frames: 5 });
+      await click(game, LOAD_GAME_ENTRY);
+      assert.equal((await game.info()).mission, "load_game");
+
+      await game.input.set("pointer.position", norm(20, 20));
+      await game.input.set("pointer.pressed", 0);
+      await game.step({ frames: 3 });
+      const before = await game.screenshot(join(captures, "flat-before.png"));
+
+      await click(game, FIRST_ROW);
+      await click(game, LOAD_BUTTON);
+      await game.input.set("pointer.position", norm(20, 20));
+      await game.step({ frames: 3 });
+      assert.equal(
+        (await game.info()).mission,
+        "load_game",
+        "a malformed save must leave the responsive load screen active",
+      );
+      const after = await game.screenshot(join(captures, "flat-failed.png"));
+      assert.equal(
+        readFileSync(before.full_path).equals(readFileSync(after.full_path)),
+        false,
+        "the failure result must visibly change the canvas",
+      );
+      const flatObjects = (await game.scene.objects()).objects.filter(
+        (object) => object.source === null,
+      );
+      flatFailureObjects = flatObjects.length;
+      assert.ok(flatFailureObjects > 0);
+      assert.ok(
+        flatObjects.every((object) => object.position.every((axis) => axis === 0)),
+        "the flat failure canvas must stay in screen space",
+      );
+
+      // Retry remains a rising-edge action and reports the same failure
+      // without wedging the runtime.
+      await click(game, LOAD_BUTTON);
+      assert.equal((await game.info()).mission, "load_game");
+
+      // Leaving discards the transient status; re-entry starts at the shipped
+      // initial prompt again.
+      await click(game, DONE_BUTTON);
+      await click(game, LOAD_GAME_ENTRY);
+      await game.input.set("pointer.position", norm(20, 20));
+      await game.step({ frames: 3 });
+      const reentered = await game.screenshot(join(captures, "flat-reentered.png"));
+      assert.ok(
+        readFileSync(before.full_path).equals(readFileSync(reentered.full_path)),
+        "a fresh load screen must restore the initial status",
+      );
+    }
+
+    {
+      await using game = await GameServer.launch({
+        mission: "main_menu",
+        debugFlags: ["--vr"],
+      });
+      await game.step({ frames: 5 });
+      await vrClick(game, LOAD_GAME_ENTRY_CANVAS);
+      assert.equal((await game.info()).mission, "load_game");
+      await vrClick(game, FIRST_ROW_CANVAS);
+      await vrClick(game, LOAD_BUTTON_CANVAS);
+
+      // Remove the pointer visuals so object-count parity compares only the
+      // canvas built once by LoadGameScene.
+      await game.input.set("right_hand.rotation", AIM_AT_PANEL);
+      await game.input.set("right_hand.position", [0, 10, 10]);
+      await game.input.set("right_hand.trigger", 0);
+      await game.input.set("left_hand.rotation", AIM_AT_PANEL);
+      await game.input.set("left_hand.position", [0, 10, 10]);
+      await game.input.set("left_hand.trigger", 0);
+      await game.step({ frames: 3 });
+      assert.equal((await game.info()).mission, "load_game");
+      await game.screenshot(join(captures, "vr-failed.png"));
+      const vrObjects = (await game.scene.objects()).objects.filter(
+        (object) => object.source === null,
+      );
+      assert.equal(
+        vrObjects.length,
+        flatFailureObjects,
+        "flat and VR must present the same failure canvas contents",
+      );
+      assert.ok(
+        vrObjects.every((object) => Math.hypot(...object.position) > 0.5),
+        "the VR failure canvas must stay on its world panel",
+      );
+    }
   },
 );

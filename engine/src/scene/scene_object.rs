@@ -30,6 +30,18 @@ use super::quad;
 use super::skinned_material::SkinnedMaterial;
 use crate::materials;
 
+/// Composition for a transparent scene object. Incidence overlays reuse the
+/// base mesh depth, so they also allow equal-depth fragments.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BlendMode {
+    #[default]
+    Alpha,
+    AdditiveColor,
+    AdditiveAlpha,
+    /// Standard alpha composition at the base mesh depth.
+    AlphaOverlay,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FrontFaceWinding {
     Clockwise,
@@ -100,11 +112,15 @@ pub struct SceneObject {
     pub skinning_data: [Matrix4<f32>; crate::scene::SKINNING_PALETTE_SIZE],
     pub depth_write: bool,
     render_layer: RenderLayer,
+    /// Viewmodel framing changes projection, never the world-space light inputs.
+    projection_override: Option<Matrix4<f32>>,
     /// Per-object transparency override (0.0 = opaque, 1.0 = invisible).
     /// Materials are shared (`Rc`) across every object using the same model, so
     /// a lasting material-level override would bleed between entities; instead
     /// this is applied to the material only around this object's own draw.
     pub transparency_override: Option<f32>,
+    /// Authored SRC_COLOR/ONE light accumulation, scoped to this draw.
+    pub blend_mode: BlendMode,
     /// Front-face winding used to cull backfaces for this object. Most engine
     /// geometry remains double-sided; imported Dark models opt in explicitly.
     backface_culling: Option<FrontFaceWinding>,
@@ -114,6 +130,11 @@ pub struct SceneObject {
     depth_bias: bool,
     /// Debug-only provenance; `Rc` so cloning an object per frame stays cheap.
     debug_tag: Option<Rc<SceneObjectDebugTag>>,
+    /// Lights for this object alone, overriding the scene's. World geometry is
+    /// lit by baked lightmaps and wants the scene set; an object standing in a
+    /// room wants the lights that actually reach that room. `Rc` so the objects
+    /// of one entity share a resolved set and cloning stays cheap.
+    lights: Option<Rc<crate::scene::light::LightArray>>,
 }
 
 impl SceneObject {
@@ -125,12 +146,44 @@ impl SceneObject {
         position: Vector2<f32>,
         size: Vector2<f32>,
     ) -> SceneObject {
+        Self::screen_space_geometry_object(material, position, size, Box::new(quad::create()))
+    }
+
+    /// As [`Self::screen_space_quad_object`], for geometry that is not the
+    /// shared unit quad (a quad sampling a texture sub-rectangle).
+    fn screen_space_geometry_object(
+        material: Box<dyn Material>,
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        geometry: Box<dyn Geometry>,
+    ) -> SceneObject {
         let xform = Matrix4::from_translation(vec3(position.x, position.y, 0.0))
             * Matrix4::from_nonuniform_scale(size.x, size.y, 1.0)
             * Matrix4::from_translation(vec3(0.5, 0.5, 0.0));
-        let mut ret = Self::new(material, Box::new(quad::create()));
+        let mut ret = Self::new(material, geometry);
         ret.set_local_transform(xform);
         ret
+    }
+
+    /// A screen-space quad sampling `uv_min`..`uv_max` of its texture instead
+    /// of the whole of it. A range outside 0..1 tiles the texture, so a grid
+    /// bitmap can repeat across the quad.
+    pub fn screen_space_quad_uv(
+        texture: Rc<dyn TextureTrait>,
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        opacity: f32,
+        uv_min: Vector2<f32>,
+        uv_max: Vector2<f32>,
+    ) -> SceneObject {
+        let material =
+            materials::ScreenSpaceMaterial::create(texture, vec4(1.0, 1.0, 1.0, opacity));
+        Self::screen_space_geometry_object(
+            material,
+            position,
+            size,
+            Box::new(quad::create_with_uv(uv_min, uv_max)),
+        )
     }
 
     pub fn screen_space_quad2(
@@ -149,6 +202,21 @@ impl SceneObject {
         size: Vector2<f32>,
     ) -> SceneObject {
         let material = materials::ScreenSpaceMaterial::create(texture, vec4(1.0, 1.0, 1.0, 1.0));
+        Self::screen_space_quad_object(material, position, size)
+    }
+    /// A screen-space quad of one flat colour - no art. `color` is linear
+    /// RGBA; alpha below 1 blends. Drawn as the tint over the shared white
+    /// pixel, so it goes through the same material every other screen-space
+    /// element uses and needs no new shader.
+    pub fn screen_space_color_quad(
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        color: cgmath::Vector4<f32>,
+    ) -> SceneObject {
+        let material = materials::ScreenSpaceMaterial::create(
+            crate::texture::shared_white_pixel() as Rc<dyn TextureTrait>,
+            color,
+        );
         Self::screen_space_quad_object(material, position, size)
     }
     /// A screen-space quad whose texture is *clipped* at `clip` (0..1) of its
@@ -287,7 +355,8 @@ impl SceneObject {
     /// normalize into, so it produces an empty mesh.
     pub fn world_space_text(str: &str, font: Rc<Box<dyn Font>>, transparency: f32) -> SceneObject {
         let mesh = mesh::create(Self::unit_text_vertices(str, &**font));
-        let material = basic_material::create(font.get_texture(), 1.0, transparency);
+        let material =
+            basic_material::create_with_fixed_ambient(font.get_texture(), 1.0, transparency);
         Self::new(material, Box::new(mesh))
     }
 
@@ -304,11 +373,24 @@ impl SceneObject {
             skinning_data: [Matrix4::identity(); crate::scene::SKINNING_PALETTE_SIZE],
             depth_write: true,
             render_layer: RenderLayer::World,
+            projection_override: None,
             transparency_override: None,
+            blend_mode: BlendMode::Alpha,
             debug_tag: None,
             backface_culling: None,
             depth_bias: false,
+            lights: None,
         }
+    }
+
+    /// Light this object with its own set instead of the scene's.
+    pub fn set_lights(&mut self, lights: Option<Rc<crate::scene::light::LightArray>>) {
+        self.lights = lights;
+    }
+
+    /// This object's own lights, if it has them.
+    pub fn lights(&self) -> Option<&crate::scene::light::LightArray> {
+        self.lights.as_deref()
     }
 
     pub fn draw_opaque(
@@ -324,6 +406,12 @@ impl SceneObject {
                 .initialize(engine_context.is_opengl_es);
         }
 
+        let render_context = EngineRenderContext {
+            projection_matrix: self
+                .projection_override
+                .unwrap_or(render_context.projection_matrix),
+            ..*render_context
+        };
         let xform = self.transform * self.local_transform;
         if !self.depth_write {
             unsafe { gl::DepthMask(gl::FALSE) };
@@ -335,7 +423,7 @@ impl SceneObject {
                 .set_transparency_override(Some(t));
         }
         if self.material.borrow().draw_opaque(
-            render_context,
+            &render_context,
             view,
             &xform,
             &self.skinning_data,
@@ -358,6 +446,12 @@ impl SceneObject {
         view: &Matrix4<f32>,
         lights: &crate::scene::light::LightArray,
     ) {
+        let render_context = EngineRenderContext {
+            projection_matrix: self
+                .projection_override
+                .unwrap_or(render_context.projection_matrix),
+            ..*render_context
+        };
         let xform = self.transform * self.local_transform;
         if let Some(t) = self.transparency_override {
             self.material
@@ -365,7 +459,7 @@ impl SceneObject {
                 .set_transparency_override(Some(t));
         }
         if self.material.borrow().draw_transparent(
-            render_context,
+            &render_context,
             view,
             &xform,
             &self.skinning_data,
@@ -431,15 +525,19 @@ impl SceneObject {
             skinning_data: [Matrix4::identity(); crate::scene::SKINNING_PALETTE_SIZE],
             depth_write: true,
             render_layer: RenderLayer::World,
+            projection_override: None,
             transparency_override: None,
+            blend_mode: BlendMode::Alpha,
             debug_tag: None,
             backface_culling: None,
             depth_bias: false,
+            lights: None,
         }
     }
 
     pub fn duplicate(&self) -> SceneObject {
         SceneObject {
+            lights: self.lights.clone(),
             material: self.material.clone(),
             geometry: self.geometry.clone(),
             transform: self.transform,
@@ -447,7 +545,9 @@ impl SceneObject {
             skinning_data: self.skinning_data,
             depth_write: self.depth_write,
             render_layer: self.render_layer,
+            projection_override: self.projection_override,
             transparency_override: self.transparency_override,
+            blend_mode: self.blend_mode,
             debug_tag: self.debug_tag.clone(),
             backface_culling: self.backface_culling,
             depth_bias: self.depth_bias,
@@ -456,6 +556,11 @@ impl SceneObject {
 
     pub fn set_depth_write(&mut self, enabled: bool) {
         self.depth_write = enabled;
+    }
+
+    /// Override only projection for this draw; lights and normals stay in world space.
+    pub fn set_projection_override(&mut self, projection: Option<Matrix4<f32>>) {
+        self.projection_override = projection;
     }
 
     pub fn set_render_layer(&mut self, layer: RenderLayer) {
@@ -500,11 +605,16 @@ impl SceneObject {
         self.depth_bias
     }
 
-    /// `apply_depth_bias` is false on the transparent pass: the bias exists
-    /// for opaque coplanar decals, and translucent flats (membranes, glass)
-    /// were never verified with an offset applied.
+    /// Incidence overlays inherit the base decal's bias; otherwise they fail
+    /// the depth test against the very surface they are meant to enhance.
+    /// Other translucent flats keep their existing unbiased presentation.
     fn draw_geometry(&self, apply_depth_bias: bool) {
-        let depth_bias = apply_depth_bias && self.depth_bias;
+        let depth_bias = (apply_depth_bias
+            || matches!(
+                self.blend_mode,
+                BlendMode::AdditiveAlpha | BlendMode::AlphaOverlay
+            ))
+            && self.depth_bias;
         if depth_bias {
             unsafe {
                 gl::Enable(gl::POLYGON_OFFSET_FILL);
@@ -522,7 +632,36 @@ impl SceneObject {
             }
         }
 
+        unsafe {
+            match self.blend_mode {
+                BlendMode::Alpha => {}
+                BlendMode::AlphaOverlay => gl::DepthFunc(gl::LEQUAL),
+                BlendMode::AdditiveColor => gl::BlendFunc(gl::SRC_COLOR, gl::ONE),
+                BlendMode::AdditiveAlpha => {
+                    gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE, gl::ZERO, gl::ONE);
+                    gl::DepthFunc(gl::LEQUAL);
+                }
+            }
+        }
         self.geometry.draw();
+        if matches!(
+            self.blend_mode,
+            BlendMode::AdditiveAlpha | BlendMode::AlphaOverlay
+        ) {
+            unsafe {
+                gl::DepthFunc(gl::LESS);
+            }
+        }
+        if self.blend_mode != BlendMode::Alpha {
+            unsafe {
+                gl::BlendFuncSeparate(
+                    gl::SRC_ALPHA,
+                    gl::ONE_MINUS_SRC_ALPHA,
+                    gl::ONE,
+                    gl::ONE_MINUS_SRC_ALPHA,
+                );
+            }
+        }
 
         if self.backface_culling.is_some() {
             // Culling is an explicit per-object opt-in; restore the default for

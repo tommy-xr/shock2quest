@@ -33,6 +33,49 @@ pub fn measure_text_width(font: &dyn Font, text: &str, font_size: f32) -> f32 {
         .sum()
 }
 
+/// Wrap without discarding text, using the same advances as rendering.
+/// Paragraph gaps are retained; an overlong word continues on the next line.
+pub fn wrap_text_to_width(font: &dyn Font, text: &str, font_size: f32, width: f32) -> Vec<String> {
+    wrap_text_with_measure(text, width, |text| {
+        measure_text_width(font, text, font_size)
+    })
+}
+
+/// The same wrapping algorithm for callers holding CPU-only glyph metrics.
+pub fn wrap_text_with_measure(
+    text: &str,
+    width: f32,
+    measure: impl Fn(&str) -> f32,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            let candidate = if line.is_empty() {
+                word.to_owned()
+            } else {
+                format!("{line} {word}")
+            };
+            if measure(&candidate) <= width {
+                line = candidate;
+                continue;
+            }
+            if !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+            }
+            for ch in word.chars() {
+                let candidate = format!("{line}{ch}");
+                if !line.is_empty() && measure(&candidate) > width {
+                    lines.push(std::mem::take(&mut line));
+                }
+                line.push(ch);
+            }
+        }
+        lines.push(line);
+    }
+    lines
+}
+
 /// Shorten `text` until it fits `max_width`, marking the cut with a trailing
 /// ellipsis. Returns `text` unchanged when it already fits.
 ///
@@ -103,6 +146,27 @@ mod tests {
         fn get_half_pixel(&self) -> f32 {
             0.0
         }
+    }
+
+    #[test]
+    fn wrapping_keeps_paragraphs_and_every_glyph_within_width() {
+        let font = StubFont {
+            advance: 4.0,
+            base_height: 10.0,
+        };
+        let input = "one two\n\nlongwordhere 25%";
+        let lines = wrap_text_to_width(&font, input, 10.0, 20.0);
+        assert!(lines.iter().any(String::is_empty));
+        assert!(
+            lines
+                .iter()
+                .all(|line| measure_text_width(&font, line, 10.0) <= 20.0)
+        );
+        assert_eq!(
+            lines.concat().replace(' ', ""),
+            input.split_whitespace().collect::<String>()
+        );
+        assert!(!lines.iter().any(|line| line.contains("...")));
     }
 
     #[test]

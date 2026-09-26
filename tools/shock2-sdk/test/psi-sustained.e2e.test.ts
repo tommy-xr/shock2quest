@@ -3,35 +3,28 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { EntityDetailResult } from "../src/index.js";
+import { selectPsiPower } from "./helpers/psi.js";
 import { fireOnce } from "./helpers/weapon.js";
 
 // End-to-end tests for sustained (timed) psi powers. Photonic Redirection
 // ("Inviso" in the gamesys, tier 4) is the reference power: casting it spends
 // 4 psi points and makes the player invisible to AI/cameras for
-// duration_base + duration_per_psi x PSI = 5 + 5*5 = 30 seconds; the active
-// power list is published via /v1/info as player.active_psi_powers.
+// duration_base + duration_per_psi x PSI seconds (5 + 5*PSI, from the
+// player's PSI stat); the active power list is published via /v1/info as
+// player.active_psi_powers.
 //
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const INVISO_COST = 4;
-/** Inviso duration at the effective PSI stat of 5: 5 + 5*5 seconds. */
-const INVISO_DURATION_FRAMES = 30 * 60;
+/** STAT_CAP - the highest stat `POST /v1/player/stats` will provision. */
+const PSI_STAT = 6;
+/** Inviso duration at `PSI_STAT`: 5 + 5*PSI seconds. */
+const INVISO_DURATION_FRAMES = (5 + 5 * PSI_STAT) * 60;
 
 function aiProp(detail: EntityDetailResult, name: string): string | undefined {
   return detail.properties.find((p) => p.name === name)?.value;
-}
-
-/** Cycle the psi power selection until Inviso is selected (bounded). */
-async function selectInviso(game: GameServer): Promise<void> {
-  for (let i = 0; i < 40; i++) {
-    const selected = (await game.info()).player.selected_psi_power;
-    if (selected === "Inviso") return;
-    await game.input.trigger("CyclePsiPower");
-    await game.step({ frames: 1 });
-  }
-  assert.fail("could not cycle the psi power selection to Inviso");
 }
 
 /** Step `frames` in chunks so a single /v1/step call stays small. */
@@ -52,6 +45,7 @@ test(
 
     // The scene auto-equips the Psi Amp on the first update.
     await game.step({ frames: 10 });
+    await game.player.setStats({ psionic_ability: PSI_STAT });
     let player = (await game.info()).player;
     assert.ok(player.wielded_entity_id !== null, "psi amp should be auto-wielded");
     assert.deepEqual(player.active_psi_powers, [], "no sustained powers active at start");
@@ -59,7 +53,7 @@ test(
     assert.ok(startPsi !== null && startPsi >= 2 * INVISO_COST);
 
     // Cast Photonic Redirection (tier 4 sustained power).
-    await selectInviso(game);
+    await selectPsiPower(game, "Inviso");
     await fireOnce(game);
     player = (await game.info()).player;
     assert.equal(player.psi_points, startPsi! - INVISO_COST, "Inviso cast costs 4 psi points");
@@ -71,7 +65,7 @@ test(
     assert.equal(player.psi_points, startPsi! - 2 * INVISO_COST, "re-cast spends again");
     assert.deepEqual(player.active_psi_powers, ["Inviso"], "re-cast refreshes, not duplicates");
 
-    // Still active just before the 30 s duration elapses...
+    // Still active just before the duration elapses...
     await stepFrames(game, INVISO_DURATION_FRAMES - 60);
     player = (await game.info()).player;
     assert.deepEqual(player.active_psi_powers, ["Inviso"], "still active before expiry");
@@ -79,7 +73,11 @@ test(
     // ...and expired just after.
     await stepFrames(game, 120);
     player = (await game.info()).player;
-    assert.deepEqual(player.active_psi_powers, [], "Inviso expires after 30 seconds");
+    assert.deepEqual(
+      player.active_psi_powers,
+      [],
+      `Inviso expires after ${INVISO_DURATION_FRAMES / 60} seconds`,
+    );
   },
 );
 
@@ -121,12 +119,13 @@ test(
         mission: "debug_camera",
       });
       await game.step({ frames: 10 });
+      await game.player.setStats({ psionic_ability: PSI_STAT });
       const camera = (await game.entities.list({ filter: "Security Camera", limit: 5 }))
         .entities[0];
       assert.ok(camera, "debug_camera should contain a Security Camera");
 
       // Cast Inviso immediately (~0.5 s in, long before the camera reacts).
-      await selectInviso(game);
+      await selectPsiPower(game, "Inviso");
       await fireOnce(game);
       const player = (await game.info()).player;
       assert.deepEqual(player.active_psi_powers, ["Inviso"], "Inviso active in debug_camera");

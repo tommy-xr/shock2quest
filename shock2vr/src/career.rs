@@ -9,10 +9,8 @@
 //! persisted quest bit so it survives every level transition, then it is applied
 //! to the player on each mission load.
 //!
-//! The per-career attribute table here is a faithful-in-spirit starting point,
-//! not the exact retail OS-unit numbers: it emphasises each branch (Marines are
-//! tanky, OSA are psionic) so the three careers arrive observably different.
-//! A full skill/stat/cyber-module system is deferred (issue #424).
+//! Career training grants character stats; player HP and psi pools are derived
+//! from those stats and the campaign difficulty (crate::difficulty).
 
 use dark::properties::QuestBitValue;
 
@@ -31,14 +29,9 @@ pub enum Career {
     Osa,
 }
 
-/// The starting attributes a career deploys with. Applied as absolute values
-/// (not deltas) so re-applying on every level load is idempotent.
+/// Career-specific starting equipment/powers; vitals follow character stats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CareerLoadout {
-    /// Current and maximum hit points on deployment.
-    pub max_hit_points: i32,
-    /// Current and maximum psi points on deployment.
-    pub max_psi_points: i32,
     /// An extra psi power the career starts trained in (beyond the default
     /// Cryokinesis), by template id. `None` for non-psi careers.
     pub extra_psi_power: Option<i32>,
@@ -89,23 +82,15 @@ impl Career {
     /// The career-appropriate starting attributes applied on deployment.
     pub fn loadout(&self) -> CareerLoadout {
         match self {
-            // Marines: front-line combat - tanky, minimal psi.
+            // Marines and Navy gain their stats through training tours.
             Career::Marine => CareerLoadout {
-                max_hit_points: 45,
-                max_psi_points: 20,
                 extra_psi_power: None,
             },
-            // Navy: technical - balanced (tech/repair skills are deferred).
             Career::Navy => CareerLoadout {
-                max_hit_points: 35,
-                max_psi_points: 35,
                 extra_psi_power: None,
             },
-            // OSA: psi operative - frail but psionically potent, deploys with an
-            // extra offensive power.
+            // OSA deploys with an extra offensive power.
             Career::Osa => CareerLoadout {
-                max_hit_points: 30,
-                max_psi_points: 60,
                 extra_psi_power: Some(PSIPULL_TEMPLATE_ID),
             },
         }
@@ -150,17 +135,9 @@ mod tests {
     }
 
     #[test]
-    fn careers_arrive_observably_different() {
+    fn osa_keeps_its_extra_starting_power() {
         let marine = Career::Marine.loadout();
-        let navy = Career::Navy.loadout();
         let osa = Career::Osa.loadout();
-
-        // Hit points and psi points differ across all three branches.
-        assert_ne!(marine.max_hit_points, navy.max_hit_points);
-        assert_ne!(navy.max_hit_points, osa.max_hit_points);
-        assert_ne!(marine.max_hit_points, osa.max_hit_points);
-        assert_ne!(marine.max_psi_points, navy.max_psi_points);
-        assert_ne!(navy.max_psi_points, osa.max_psi_points);
 
         // Only OSA deploys with an extra psi power.
         assert!(marine.extra_psi_power.is_none());

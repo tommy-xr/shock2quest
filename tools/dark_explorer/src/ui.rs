@@ -28,7 +28,19 @@ const GRID_TILE_CAP: usize = 400;
 const THUMBS_PER_FRAME: usize = 6;
 
 pub struct UiOptions {
+    pub belt_card: bool,
+    pub belt_card_library: Option<PathBuf>,
+    pub grip: Option<String>,
+    pub grip_hand: String,
+    pub grip_support: bool,
+    pub support_grip_library: Option<PathBuf>,
+    pub grip_view: String,
+    pub grip_library: Option<PathBuf>,
     pub screenshot: Option<PathBuf>,
+    pub model_ambient: Option<f32>,
+    pub model_lights: Option<String>,
+    pub play_song: bool,
+    pub screenshot_after: f32,
     pub select: Option<String>,
     pub search: Option<String>,
     /// Open the Files tab in grid (thumbnail) view.
@@ -157,15 +169,28 @@ enum PreviewKind {
         bytes: Vec<u8>,
         duration: Option<std::time::Duration>,
     },
+    Song(crate::song_preview::SongPreview),
     Text(String),
     /// A `.bin` 3D model, rendered by `ModelPreview` from the mount key (which
     /// is not the raw archive entry name an Archives-tab selection shows).
     Model {
         key: String,
+        details: Result<crate::model_details::ModelDetails, String>,
+        /// Lower-priority copies of this key, inspected on first expansion -
+        /// reading them up front would inflate every override on selection.
+        shadowed: Vec<AssetEntry>,
+        copies: Option<Vec<(String, Result<crate::model_details::ModelDetails, String>)>>,
     },
     /// A `.mc` motion clip, played as bone lines on a matching actor's skeleton.
     Motion {
         clip: ClipInfo,
+    },
+    /// A `.fon` bitmap font: its header metadata plus a sample string
+    /// rasterized from the font's own glyphs.
+    Font {
+        summary: Vec<(&'static str, String)>,
+        sample: egui::ColorImage,
+        texture: Option<egui::TextureHandle>,
     },
     /// A `.mi` motion-info header, parsed standalone.
     MotionInfo {
@@ -237,12 +262,14 @@ struct Preview {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
+    Grips,
     Files,
     Archetypes,
     Archives,
 }
 
 pub struct ExplorerApp {
+    grip_editor: crate::grip_editor::GripEditor,
     tab: Tab,
     family_names: Vec<&'static str>,
     families: BTreeMap<String, LoadedFamily>,
@@ -259,6 +286,7 @@ pub struct ExplorerApp {
     model_preview: Option<ModelPreview>,
     /// Initial overlay toggles for the model preview (from the CLI).
     initial_overlays: (bool, bool, bool),
+    screenshot_not_before: std::time::Instant,
     frames_rendered: u32,
     /// Whether the screenshot viewport command was already sent (grid mode
     /// delays it until the visible thumbnails have decoded).
@@ -335,8 +363,17 @@ struct MountIndex {
 
 impl ExplorerApp {
     fn new(options: UiOptions) -> ExplorerApp {
+        let grip_tab = options.belt_card || options.grip.is_some() || options.grip_support;
         let mut app = ExplorerApp {
-            tab: Tab::Files,
+            grip_editor: crate::grip_editor::GripEditor::new(
+                options.grip_library,
+                options.grip,
+                options.grip_hand,
+                options.grip_view,
+                options.grip_support,
+                options.support_grip_library,
+            ),
+            tab: if grip_tab { Tab::Grips } else { Tab::Files },
             family_names: explorer::family_names(),
             families: BTreeMap::new(),
             search: options.search.unwrap_or_default(),
@@ -348,6 +385,7 @@ impl ExplorerApp {
             screenshot: options.screenshot,
             model_preview: None,
             initial_overlays: (options.skeletons, options.hitboxes, options.articulation),
+            screenshot_not_before: std::time::Instant::now(),
             frames_rendered: 0,
             screenshot_sent: false,
             scroll_frames: 0,
@@ -368,6 +406,9 @@ impl ExplorerApp {
             selected_entry: None,
             archive_results: None,
         };
+        app.grip_editor.belt_mode = options.belt_card;
+        app.grip_editor.belt_editor =
+            crate::belt_card_editor::BeltCardEditor::new(options.belt_card_library);
         if let Some(archetype) = options.archetype {
             // Fail loudly, like --select: a `--screenshot` run that quietly
             // captured an empty preview would still exit 0 otherwise.
@@ -447,6 +488,44 @@ impl ExplorerApp {
                 }
             }
         }
+        if options.play_song {
+            match app.preview.as_mut().map(|p| &mut p.kind) {
+                Some(PreviewKind::Song(song)) => song.play(),
+                _ => {
+                    eprintln!("--play-song needs a selected .snc file");
+                    std::process::exit(2);
+                }
+            }
+        }
+        if !options.screenshot_after.is_finite()
+            || !(0.0..=300.0).contains(&options.screenshot_after)
+        {
+            eprintln!("--screenshot-after must be between 0 and 300 seconds");
+            std::process::exit(2);
+        }
+        app.screenshot_not_before = std::time::Instant::now()
+            + std::time::Duration::from_secs_f32(options.screenshot_after);
+        if options.model_ambient.is_some() || options.model_lights.is_some() {
+            let host = preview_host(
+                &mut app.model_preview,
+                app.initial_overlays,
+                app.screenshot.is_some(),
+            );
+            if let Some(ambient) = options.model_ambient {
+                if !ambient.is_finite() || !(0.0..=1.0).contains(&ambient) {
+                    eprintln!("--model-ambient must be between 0 and 1");
+                    std::process::exit(2);
+                }
+                host.ambient = ambient;
+            }
+            host.light_strengths = match options.model_lights.as_deref() {
+                Some("warm") => [1.0, 0.0, 0.0],
+                Some("cool") => [0.0, 1.0, 0.0],
+                Some("green") => [0.0, 0.0, 1.0],
+                Some("all") => [1.0; 3],
+                _ => [0.0; 3],
+            };
+        }
         app
     }
 
@@ -484,7 +563,15 @@ impl ExplorerApp {
             .or_insert_with(|| LoadedFamily::load(name))
     }
 
+    fn stop_wav(&mut self) {
+        if let (Some(audio), Some(handle)) = (&mut self.audio, self.audio_handle.take()) {
+            engine::audio::stop_audio(audio, handle);
+        }
+        self.audio_error = None;
+    }
+
     fn select(&mut self, family: String, key: String) {
+        self.stop_wav();
         self.family(&family);
         self.ensure_motion_db(&key);
         let loaded = self.families.get(&family).expect("just loaded");
@@ -604,6 +691,7 @@ impl ExplorerApp {
     }
 
     fn select_archive_entry(&mut self, archive: String, entry_name: String) {
+        self.stop_wav();
         self.ensure_archives();
         self.ensure_motion_db(&entry_name);
         let Some(path) = self
@@ -678,7 +766,15 @@ fn build_preview(
         }
     };
     let size = bytes.len();
-    let kind = decode_preview(family, key, bytes, motion_db);
+    let mut kind = decode_preview(family, key, bytes, motion_db);
+    if let PreviewKind::Model { shadowed, .. } = &mut kind {
+        if let PreviewOrigin::Mount {
+            shadowed: entries, ..
+        } = &origin
+        {
+            *shadowed = entries.clone();
+        }
+    }
     Preview {
         key: key.to_string(),
         size,
@@ -754,6 +850,12 @@ fn decode_preview(
             Err(msg) => raw_fallback(&bytes, format!(".{ext} decode failed: {msg}")),
         };
     }
+    if ext == "snc" {
+        return match quiet_catch(|| dark::audio::Song::read(&mut std::io::Cursor::new(&bytes))) {
+            Ok(song) => PreviewKind::Song(crate::song_preview::SongPreview::new(song)),
+            Err(msg) => raw_fallback(&bytes, format!("song decode failed: {msg}")),
+        };
+    }
     if ext == "wav" {
         let duration = quiet_catch(|| AudioClip::from_bytes(bytes.clone()).total_duration());
         return match duration {
@@ -769,6 +871,9 @@ fn decode_preview(
     if ext == "bin" && matches!(family, "obj" | "mesh") {
         return PreviewKind::Model {
             key: key.to_string(),
+            details: crate::model_details::ModelDetails::inspect(&bytes),
+            shadowed: Vec::new(),
+            copies: None,
         };
     }
     if ext == "mc" {
@@ -778,6 +883,13 @@ fn decode_preview(
                 Err(reason) => raw_fallback(&bytes, reason),
             },
             Err(reason) => raw_fallback(&bytes, reason),
+        };
+    }
+    if ext == "fon" {
+        return match quiet_catch(|| decode_font(&bytes)) {
+            Ok(Ok(kind)) => kind,
+            Ok(Err(reason)) => raw_fallback(&bytes, reason),
+            Err(msg) => raw_fallback(&bytes, format!(".fon parse failed: {msg}")),
         };
     }
     if ext == "mi" {
@@ -792,6 +904,47 @@ fn decode_preview(
         };
     }
     raw_fallback(&bytes, format!("cannot render .{ext} files"))
+}
+
+/// Sample text drawn with a previewed `.fon`, chosen to cover both cases and
+/// the digits.
+const FONT_SAMPLE: &str = "The quick brown fox jumps over the lazy dog 0123456789";
+/// Integer scales the sample is drawn at (the fonts are bitmaps, so only whole
+/// multiples of their native height are meaningful).
+const FONT_SAMPLE_SCALES: &[usize] = &[1, 2, 3];
+
+/// Rasterize the sample string with the font's own glyphs, plus the header
+/// metadata rows. Glyph coverage becomes the alpha of white pixels, so the
+/// sample reads against the panel background.
+fn decode_font(bytes: &[u8]) -> Result<PreviewKind, String> {
+    let font = dark::font::FontBitmap::read(&mut std::io::Cursor::new(bytes));
+    let metrics = &font.metrics;
+    let summary = vec![
+        ("Format", metrics.format_label().to_string()),
+        (
+            "Glyphs",
+            format!(
+                "{} (codes {}..={})",
+                metrics.num_chars(),
+                metrics.first_char,
+                metrics.last_char
+            ),
+        ),
+        ("Height", format!("{} px", metrics.height)),
+        ("Row width", format!("{} bytes", metrics.row_width)),
+    ];
+
+    let (width, height, alpha) = font.render_string(FONT_SAMPLE);
+    if width == 0 || height == 0 {
+        return Err("font defines none of the sample characters".to_string());
+    }
+    let rgba: Vec<u8> = alpha.iter().flat_map(|&a| [255, 255, 255, a]).collect();
+    let sample = egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba);
+    Ok(PreviewKind::Font {
+        summary,
+        sample,
+        texture: None,
+    })
 }
 
 /// Decode image bytes to a `ColorImage` under the panic guard (Ok(None) = no
@@ -958,14 +1111,17 @@ impl eframe::App for ExplorerApp {
                     ui.selectable_value(&mut self.tab, Tab::Files, "Files");
                     ui.selectable_value(&mut self.tab, Tab::Archetypes, "Archetypes");
                     ui.selectable_value(&mut self.tab, Tab::Archives, "Archives");
+                    ui.selectable_value(&mut self.tab, Tab::Grips, "VR Setup");
                 });
                 // The preview belongs to the tab that selected it; a Files
                 // asset must not keep showing under the Archives tab.
                 if self.tab != previous_tab {
+                    self.stop_wav();
                     self.preview = None;
                 }
                 ui.separator();
                 match self.tab {
+                    Tab::Grips => self.grip_editor.show_list(ui),
                     Tab::Files => {
                         ui.horizontal(|ui| {
                             ui.selectable_value(&mut self.grid_view, false, "List");
@@ -996,7 +1152,10 @@ impl eframe::App for ExplorerApp {
             });
 
         egui::CentralPanel::default_margins().show(ui, |ui| {
-            if self.tab == Tab::Archetypes {
+            if self.tab == Tab::Grips {
+                let host = self.model_preview.get_or_insert_with(ModelPreview::new);
+                self.grip_editor.show(ui, frame, host);
+            } else if self.tab == Tab::Archetypes {
                 self.show_archetype_preview(ui, frame);
             } else if self.tab == Tab::Archives {
                 self.show_preview(ui, frame);
@@ -1025,6 +1184,7 @@ impl eframe::App for ExplorerApp {
             self.select_archive_entry(archive, entry);
         }
 
+        self.grip_editor.guard_close(&ctx);
         self.drive_screenshot(&ctx);
     }
 }
@@ -1639,6 +1799,7 @@ impl ExplorerApp {
                     ui.colored_label(egui::Color32::RED, error);
                 }
             }
+            PreviewKind::Song(song) => song.show(ui),
             PreviewKind::Text(text) => {
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])
@@ -1650,13 +1811,59 @@ impl ExplorerApp {
                         );
                     });
             }
-            PreviewKind::Model { key } => {
+            PreviewKind::Model {
+                key,
+                details,
+                shadowed,
+                copies,
+            } => {
+                match details {
+                    Ok(details) => details.show(ui),
+                    Err(error) => {
+                        ui.label(format!("Cannot inspect mesh: {error}"));
+                    }
+                }
+                if !shadowed.is_empty() {
+                    ui.collapsing("Compare overridden meshes", |ui| {
+                        // First expansion pays for the reads; the cache keeps
+                        // re-opening the section free.
+                        let copies = copies.get_or_insert_with(|| {
+                            shadowed
+                                .iter()
+                                .map(|entry| {
+                                    let details = archives::read_entry(
+                                        std::path::Path::new(&entry.source),
+                                        &entry.entry_name,
+                                    )
+                                    .and_then(|bytes| {
+                                        crate::model_details::ModelDetails::inspect(&bytes)
+                                    });
+                                    (explorer::short_source(&entry.source), details)
+                                })
+                                .collect()
+                        });
+                        for (source, details) in copies.iter() {
+                            match details {
+                                Ok(details) => {
+                                    ui.label(format!("{source}: {}", details.summary()));
+                                }
+                                Err(error) => {
+                                    ui.label(format!("{source}: {error}"));
+                                }
+                            }
+                        }
+                    });
+                }
                 let key = key.clone();
                 let host = preview_host(
                     &mut self.model_preview,
                     self.initial_overlays,
                     self.screenshot.is_some(),
                 );
+                if ui.button("Edit VR Grip").clicked() {
+                    self.grip_editor.open_model(&key);
+                    self.tab = Tab::Grips;
+                }
                 host.show(ui, frame, &key, &PreviewScene::Model);
             }
             PreviewKind::Motion { clip } => {
@@ -1690,6 +1897,37 @@ impl ExplorerApp {
                     self.screenshot.is_some(),
                 );
                 host.show(ui, frame, &model_key, &PreviewScene::Skeleton(clip_name));
+            }
+            PreviewKind::Font {
+                summary,
+                sample,
+                texture,
+            } => {
+                egui::Grid::new("font_info").num_columns(2).show(ui, |ui| {
+                    for (label, value) in summary.iter() {
+                        ui.label(*label);
+                        ui.label(value);
+                        ui.end_row();
+                    }
+                });
+                ui.separator();
+                let [width, height] = sample.size;
+                let texture = texture.get_or_insert_with(|| {
+                    ui.ctx().load_texture(
+                        format!("font_sample:{}", preview.key),
+                        sample.clone(),
+                        egui::TextureOptions::NEAREST,
+                    )
+                });
+                egui::ScrollArea::both().show(ui, |ui| {
+                    for scale in FONT_SAMPLE_SCALES {
+                        ui.label(format!("{scale}x ({} px)", height * scale));
+                        let display =
+                            egui::Vec2::new((width * scale) as f32, (height * scale) as f32);
+                        ui.image((texture.id(), display));
+                        ui.add_space(4.0);
+                    }
+                });
             }
             PreviewKind::MotionInfo { info, hex } => {
                 egui::Grid::new("motion_info_file")
@@ -1726,6 +1964,14 @@ impl ExplorerApp {
         let Some(path) = self.screenshot.clone() else {
             return;
         };
+        if self.tab == Tab::Grips && self.grip_editor.is_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            return;
+        }
+        if std::time::Instant::now() < self.screenshot_not_before {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+            return;
+        }
         self.frames_rendered += 1;
         ctx.request_repaint();
         // The scene exists after the first frame's show; step it before the
@@ -1740,6 +1986,22 @@ impl ExplorerApp {
         let thumbs_ready =
             !self.grid_view || self.thumbs_pending == 0 || self.frames_rendered >= 250;
         if self.frames_rendered >= 3 && thumbs_ready && !self.screenshot_sent {
+            if self.tab == Tab::Grips {
+                if let Some(error) = self.grip_editor.error() {
+                    eprintln!("cannot render grip: {error}");
+                    std::process::exit(2);
+                }
+            }
+            if let Some(Preview {
+                kind: PreviewKind::Song(song),
+                ..
+            }) = &self.preview
+            {
+                if let Some(error) = song.error() {
+                    eprintln!("cannot play song: {error}");
+                    std::process::exit(2);
+                }
+            }
             // A selection that failed to load would capture only its error
             // label; fail loudly instead so automation can trust exit 0.
             if let Some(error) = self.model_preview.as_ref().and_then(|p| p.error()) {
@@ -1933,7 +2195,7 @@ fn dimmable(text: &str, mounted: bool) -> egui::RichText {
     if mounted { text } else { text.weak() }
 }
 
-fn play_wav(
+pub(crate) fn play_wav(
     audio: &mut Option<AudioContext<(), String>>,
     audio_handle: &mut Option<AudioHandle>,
     audio_error: &mut Option<String>,

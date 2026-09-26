@@ -99,14 +99,19 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
   pickup is a documented *stopgap* because VR lacks an action mapper (issue
   #921) - do not preserve it as "faithful", and do not model logs as
   carryable objects.
-- **Keycards are COLLECTED, not inventoried.** Frobbing a `PropKeySrc` item
-  emits `AcquireKeyCard`, records the credential in `QuestInfo`'s key-card
-  list (a separate mechanism from quest bits - contrast `FrobQB`), destroys
-  the pickup, and doors consult it implicitly via `can_unlock`. Never put a
-  keycard in the inventory grid or require wielding one at a door. Known gap:
-  the VR *hold/grab* path currently just grabs the card physically instead of
-  collecting it - issue #583 (open) tracks reconciling the pickup paths; the
-  intended spec is that both frob and hold collect.
+- **VR downloads on release.** Nanites, cyber modules, valid software upgrades,
+  and found access cards are physically held until grip release, anywhere
+  (including shoulder/backpack and against the personal card). Collection uses
+  their existing scripts to credit balances, install software or record credentials;
+  they never occupy backpack cells. Logs retain their separate immediate-collection
+  behavior. Flat pickup remains immediate. See
+  `projects/vr-personal-access-card.md` for the accepted design and implementation status.
+- **The personal belt card is permanent.** Available before the first credential,
+  drawn by either free hand, returned on release, never consumable or lost. In VR,
+  scanning is mandatory at credential-locked doors/readers and supported machines;
+  ordinary unlocked doors remain ordinary interactions. A scan authorizes a machine
+  interface, never a purchase. Require withdrawal before another scan. This design
+  supersedes the immediate-VR-pickup/no-wielding rule and PR #1387's optional card.
 - When implementing any pickup, check which model the original game uses
   (collected flag / credential vs. inventory object) before defaulting to
   "add to inventory" - `cargo dq` on the template's properties/links usually
@@ -135,3 +140,106 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
     luminance) when correctness of *which* element reacted matters; and for
     timing-dependent device bugs, prefer deterministic fault injection over
     waiting for a natural repro (#1009's technique).
+
+## Held items and body inventory
+
+14. **One item, one owner, including within a frame.** A support hand steers
+    the primary hand's item; it never owns a second copy. Reserve a released
+    entity until its effects finish, because a release may become a backpack
+    deposit. The other hand must not acquire its still-present collider during
+    that frame. Test simultaneous grabs/releases, not only alternating input.
+15. **Attached gloves follow the final physical item.** Drive the weapon toward
+    the controller, then derive attached glove transforms from the synchronized,
+    collision-resolved weapon. Sampling the controller for one and the physics
+    body for the other separates them during locomotion and impacts. Verify the
+    relative grip transform every frame while walking and touching a wall.
+16. **Body storage needs an explicit grip edge and a clear refusal.** Reaching
+    through a slot while holding must not silently store an item. Deposit on a
+    deliberate release; retrieval requires a fresh squeeze. Define occupied/full
+    behavior before implementation. A refused shoulder deposit retains the item,
+    plays a refusal cue, and explains how to re-grip; leaving the zone must not
+    unexpectedly drop it behind the player. Enter disabled/recovered states
+    disarmed so stale input cannot create a gesture.
+17. **Tracking validity is separate from plausible pose values.** A finite pose
+    and nonzero quaternion can still be a stale runtime fallback. Body gestures
+    must honor live head/hand validity (`InputContext::pose_tracking`) as well as
+    numeric validation. Head-relative body targets use horizontal heading, not
+    head pitch/roll. Treat their offsets as estimates until tested seated and
+    standing in a headset; debug-runtime coordinates do not prove reach comfort.
+18. **Reuse ownership and inventory transitions.** Preserve the exact entity,
+    ammo, condition, and script state. Keep the normal `Drop`/`Hold` signals when
+    redirecting a release, and preserve deferred effects returned by shared
+    handlers. Check real capacity and reserve simultaneous destinations before
+    claiming releases. Carry additional body storage through save/load and level
+    transitions explicitly; hiding a world model is not storage.
+19. **Resolve readouts per hand and per weapon.** Dual wielding makes a global
+    “current weapon” ambiguous. Ammo, ammo type, condition, settings, and their
+    actions must all come from the same explicit entity. Exercise gun/gun and
+    gun/psi-amp combinations. Preserve the complete authored UI canvas when
+    mounting it on a glove; avoid arbitrary cropping to make it fit.
+
+## Physical glove fit
+
+- Use `debug_gloves` for the passthrough fit experiment; its controls and units
+  are in `DEVELOPMENT.md` under “Glove fit check”. Forward is global (default
+  −15 cm); side/up/size and pose-reference selection remain scene-only previews.
+- Trace the pose actually consumed. The Quest runtime binds both grip and aim,
+  but gameplay currently locates the **aim** spaces for hand transforms. A
+  binding declaration is not evidence that grip drives the glove. Compare both
+  in the fit scene; they can differ in orientation as well as translation.
+- Compare the physical wrist, palm and fingertips while holding controllers,
+  at several orientations, changing offset and size independently. Passthrough
+  visibility does not imply optical hand tracking. A translated silhouette in
+  a debug screenshot does not establish real-hand registration.
+- Fit controls must also reach the pause menu’s separate pointer gloves while
+  the fit scene is active. Share the visual calibration transform; keep the
+  tracked beam, hit dot and click arbitration coherent. Test leaving the scene
+  so preview settings cannot leak into normal menus.
+- Diagnose orientation-dependent error with controller-local side/up offsets
+  (mirror side for left/right), then inspect wrist versus fingertip alignment
+  before assuming translation alone is sufficient. The wearer reported aim
+  reference / forward −15 cm as a useful candidate, with residual palms-down
+  error. The user chose −15 cm as the global forward default; remaining axes
+  still require physical verification.
+- Keep `dark::SCALE_FACTOR` a load-time unit convention. It also feeds tracked
+  meter conversion; changing only some consumers mixes units. A glove-size
+  preview should scale about the hand origin without rescaling head/eye poses.
+  Keep rendered gloves, wrist mounts, held-item transforms and cached/baked
+  grip samples in the same corrected frame. Global forward is applied once to a
+  copy of tracked hand input before menu/gameplay routing (`glove_fit::calibrated_input`),
+  preserving the raw input and head/eye poses. Do not also shift the mesh or bake
+  a live dev parameter into grip/wrist caches.
+
+## Glove readout implementation notes
+
+- `hand_glove::GloveRenderer::wrist_frame` provides the calibrated mount:
+  local +Y runs from wrist toward fingers and +Z points out of the glove's
+  back. `hud/virtual_arms.rs::wrist_panel_transform` places the bio readout at
+  the wrist facing dorsally. The held weapon's ammo/psi readout caps the cuff
+  opening where the arm enters, facing back along the forearm (local -Y),
+  rotated 90 degrees counterclockwise as viewed face-on and sized inside the
+  cuff rim. Apply this roll in the panel plane after the cuff-facing rotation.
+  Treat offsets and size as glove-specific fit values, not a general UI spacing rule.
+- The compact gun layout lives in `hud/ammo_panel.rs::emit`, shared by the
+  flat HUD and glove: bold centered count, ammo icon left, condition badge
+  upper right, and ammo type/current fire mode below. The expanded interface
+  reserves room for its clickable controls. Bound type and mode separately so
+  long authored tags cannot displace the mode; resolve both from that hand's gun.
+- `interaction.rs` passes the final visible hand poses into
+  `create_wrist_hud_panels`; preserve this attachment so weapon physics and
+  support grips move glove and readout together. Mirrored hands already have
+  readable bases from `wrist_frame`; do not mirror the text a second time.
+- For a flush mount, inspect the cuff opening end-on for legibility and an
+  oblique view for clipping or a floating gap, with a weapon actually held. Check both
+  hands. Keep the shared canvas layout intact while adjusting its mount;
+  verify comfort and glance readability in-headset before calling the fit final.
+
+## Evidence for physical interactions
+
+20. **Pair pictures with state assertions.** Before/after screenshots can show a
+    release, but cannot prove the stored item is the original instance. Assert
+    entity identity, ownership, containment, physics removal/restoration, and
+    retained weapon state. Include refusal, tracking recovery, and simultaneous
+    hand cases. Show the interaction's approach and release, not just an empty
+    hand afterward. Label debug zones as instrumentation; they do not establish
+    production discoverability or headset tracking reliability.

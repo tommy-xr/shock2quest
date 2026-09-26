@@ -82,6 +82,9 @@ fn is_traced(payload: &MessagePayload) -> bool {
             | MessagePayload::Collided { .. }
             | MessagePayload::AnimationFlagTriggered { .. }
             | MessagePayload::AnimationCompleted
+            // One per frame of a pivot's handover fade; it would push the
+            // damage/signal history the trace exists for out of the buffer.
+            | MessagePayload::TurnClipBlend { .. }
     )
 }
 

@@ -7,7 +7,7 @@ import { fireOnce } from "./helpers/weapon.js";
 
 // End-to-end regression for authored reserve accounting: the real Earth
 // Weapons Training pistol reloads only from normally-picked-up Small Standard
-// Clips, destroying exhausted stacks and retaining a partial remainder.
+// Clips, which merge on pickup; reloading retains the unused remainder.
 //
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
@@ -36,9 +36,10 @@ test(
     await game.step({ frames: 30 });
     let { pistol, clips } = await pickupEarthWeapons(game, 3);
     assert.equal(ammoOf(await game.entities.detail(pistol.id)), 0, "Earth pistol starts empty");
-    for (const clip of clips) {
-      assert.equal(stackOf(await game.entities.detail(clip.id)), 6, "authored small clip has 6");
-    }
+    const carried = new Set((await game.player.inventory()).items.map(item => item.entity_id));
+    clips = clips.filter(clip => carried.has(clip.id));
+    assert.equal(clips.length, 1, "picked-up standard clips merge into one reserve stack");
+    assert.equal(stackOf(await game.entities.detail(clips[0].id)), 18);
 
     // The selected ammo type controls compatibility. AP is selected here, so
     // carrying only standard clips must neither consume reserve nor mint ammo.
@@ -53,7 +54,7 @@ test(
     for (const clip of clips) {
       assert.equal(
         stackOf(await game.entities.detail(clip.id)),
-        6,
+        18,
         "mismatched standard reserve remains untouched",
       );
     }
@@ -75,7 +76,7 @@ test(
       )
       .sort((a, b) => a.template_id - b.template_id);
     assert.ok(pistol, "saved Earth pistol should be restored");
-    assert.equal(clips.length, 3, "all three saved reserve clips should be restored");
+    assert.equal(clips.length, 1, "the merged reserve stack should be restored");
     assert.equal((await game.info()).player.wielded_entity_id, pistol.id);
 
     // Return through HE to standard for the matching-reserve scenarios.
@@ -86,30 +87,15 @@ test(
     await game.step({ frames: 2 });
     assert.equal((await game.info()).player.wielded_ammo_type, "std");
 
-    // One reload fills the 12-round magazine from two real six-round entities.
-    await game.input.trigger("Reload");
-    await game.step({ frames: 2 });
+    // Cycling back to stocked standard ammo automatically starts the reload.
+    assert.equal((await game.info()).player.reloading, true);
     assert.equal(
       ammoOf(await game.entities.detail(pistol.id)),
       12,
-      "two six-round reserve entities fill the 12-round pistol",
+      "twelve rounds from the merged reserve fill the pistol",
     );
-    const afterFull = await game.player.inventory();
-    const liveAfterFull = new Set(
-      (await game.entities.list()).entities.map((entity) => entity.id),
-    );
-    for (const exhausted of clips.slice(0, 2)) {
-      assert.ok(
-        !afterFull.items.some((item) => item.entity_id === exhausted.id),
-        `exhausted reserve ${exhausted.template_id} should leave the backpack`,
-      );
-      assert.ok(
-        !liveAfterFull.has(exhausted.id),
-        `exhausted reserve ${exhausted.template_id} should be destroyed`,
-      );
-    }
     assert.equal(
-      stackOf(await game.entities.detail(clips[2].id)),
+      stackOf(await game.entities.detail(clips[0].id)),
       6,
       "reload stops once the magazine is full",
     );
@@ -136,7 +122,7 @@ test(
       "partial reload restores only the four missing rounds",
     );
     assert.equal(
-      stackOf(await game.entities.detail(clips[2].id)),
+      stackOf(await game.entities.detail(clips[0].id)),
       2,
       "partial reload leaves the unused reserve remainder",
     );
@@ -147,6 +133,6 @@ test(
     await game.step({ frames: 2 });
     assert.equal((await game.info()).player.reloading, false, "full gun does not start reload");
     assert.equal(ammoOf(await game.entities.detail(pistol.id)), 12);
-    assert.equal(stackOf(await game.entities.detail(clips[2].id)), 2);
+    assert.equal(stackOf(await game.entities.detail(clips[0].id)), 2);
   },
 );

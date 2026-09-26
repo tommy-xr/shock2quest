@@ -16,16 +16,13 @@ import path from "node:path";
 import { findRepoRoot, GameServer } from "../src/index.js";
 import type { Game } from "../src/index.js";
 import { analyzePhase, type PhaseReport } from "../src/anim-metrics.js";
+import { distance3 as distance } from "../src/ai-reachability.js";
 import type { AnimationState, EntitySummary, Vec3 } from "../src/types.js";
 
 const PORT = 8095;
 const MISSION = "medsci1.mis";
 const CAPTURE_FRAMES = 600; // 10 s at the fixed 60 Hz step rate
 const FPS = 60;
-
-function distance(a: Vec3, b: Vec3): number {
-  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-}
 
 /**
  * Find the pipe hybrids by NAME - runtime entity ids are NOT stable across

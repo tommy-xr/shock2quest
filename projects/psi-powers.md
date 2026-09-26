@@ -18,8 +18,9 @@ Landed (phase 1 - all powers selectable, projectile powers castable):
 - **Casting**: `psiampscript` → `PsiAmpScript` casts the selected power on
   trigger pull: checks/deducts psi points (`Effect::SpendPsiPoints`), spawns
   the PSI-scaled projectile plus the amp's `GunFlash` (Spinning Psi Ring).
-  Non-projectile activation types log and spend nothing (yet). Effective PSI
-  stat is a fixed placeholder (5) until player stats land.
+  Non-projectile activation types log and spend nothing (yet). The effective
+  PSI stat is the character sheet's `PlayerStats::psionic_ability` (from
+  `QuestInfo`), plus the overload bonus.
 - **HUD/introspection**: the psi bar shows the real pool; `/v1/info` (and the
   SDK `FrameSnapshot`) expose `psi_points`, `max_psi_points`,
   `selected_psi_power`.
@@ -42,7 +43,7 @@ Landed (phase 1 - all powers selectable, projectile powers castable):
   unique (`shock2vr/src/psi.rs`), ticked down/expired per frame by
   `MissionCore::update`, and are exposed via `/v1/info`
   (`active_psi_powers`) and the SDK. **Photonic Redirection** (`Inviso`,
-  tier 4, 30 s at PSI 5) is the first wired behavior: while active the
+  tier 4, `5 + 5 × PSI` seconds) is the first wired behavior: while active the
   player fails every AI/camera/turret visibility check
   (`scripts/ai/ai_util.rs`). The `debug_camera` scene auto-equips the amp
   so this is testable end-to-end (`psi-sustained.e2e.test.ts`: cost,

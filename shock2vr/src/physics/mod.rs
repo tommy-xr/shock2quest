@@ -1,5 +1,7 @@
 mod debug_render_pipeline;
+mod held_recovery;
 mod physics_events;
+pub use held_recovery::{HeldRecovery, HeldRecoveryContext};
 pub(crate) mod util;
 
 use collision::Aabb3;
@@ -31,6 +33,96 @@ use self::debug_render_pipeline::DebugRenderer;
 /// Original standing player collision profile (SS2 ft): six feet tall and
 /// 2.4 feet wide. Dark represents it as a vertical stack of spheres; a capsule
 /// is the continuous equivalent and preserves the rounded traversal behavior.
+/// Speed (world units/s) a kinematic body must carry along an axis before it
+/// counts as moving terrain sweeping a creature. A kinematic body's velocity
+/// is derived from its pose deltas, so a prop that never moves still reports
+/// ~1e-3 of float jitter - and the old 1e-3 gate let a STATIONARY railing
+/// pin a hybrid touching it at its current translation, every frame, forever
+/// (the medsci2 balcony patroller, frozen to the last decimal for a minute).
+/// A door leaf in motion runs an order of magnitude above this.
+const MOVING_TERRAIN_SPEED: f32 = 0.1;
+
+/// Largest contact-normal Y that still counts as a *side* contact rather than
+/// one the actor is resting on. Above it the surface is under (or over) the
+/// actor and carries it through the contact *normal*, which is how a lift or a
+/// platform is ridden.
+///
+/// This is deliberately not the walkable threshold ([`is_walkable_normal`],
+/// 0.7): the question here is "can this contact push the actor along the
+/// surface" rather than "can the actor stand on it", and erring low leaves
+/// borderline contacts carrying rather than sliding. It is the same 0.5 the
+/// moving-terrain sweep recovery already uses to call a contact a side one.
+const SIDE_CONTACT_MAX_NORMAL_Y: f32 = 0.5;
+
+/// Which Rapier contact hooks a collider needs, given what it collides as.
+/// Only actor capsules ask for contact modification, so
+/// [`MovingTerrainContactHooks`] runs on creature contacts and nothing else.
+fn active_hooks_for(group: CollisionGroup) -> ActiveHooks {
+    if group.collision.memberships.bits() & InternalCollisionGroups::ACTOR.bits != 0 {
+        ActiveHooks::MODIFY_SOLVER_CONTACTS
+    } else {
+        ActiveHooks::empty()
+    }
+}
+
+/// Keeps a vertically travelling door leaf from dragging an actor with it.
+///
+/// A leaf is a kinematic body, and an actor pressed against its *face* makes a
+/// contact whose normal is horizontal. Rapier's friction constraint then works
+/// to erase the relative tangential velocity between the two surfaces - and for
+/// a rising leaf that relative velocity is entirely vertical, so the capsule is
+/// pulled up to the leaf's own speed (#1255: a grunt at a medsci1 security door
+/// rode it up 1.6 units at close to the leaf's own 2.4 u/s). Nothing about the
+/// contact is wrong; only the friction the solver is allowed to apply is.
+///
+/// So drop friction, and only where it can do that:
+/// * on *side* contacts alone (see [`SIDE_CONTACT_MAX_NORMAL_Y`]) - a rider
+///   stands ON a lift or platform and is carried by the contact normal, which
+///   this never touches, so lifts keep working;
+/// * only when the mover travels mostly vertically - a sideways-sliding leaf
+///   transfers horizontal motion, which is a different mechanism with its own
+///   handling ([`PhysicsWorld::recover_live_creatures_swept_off_support`]);
+/// * and only on actor colliders, the only ones that ask for the hook (see
+///   [`active_hooks_for`]).
+///
+/// The leaf still pushes along the contact normal, which is what shoves an
+/// actor standing in the doorway out of the leaf's way.
+struct MovingTerrainContactHooks {
+    /// This frame's timestep, to turn a kinematic body's pending move into a
+    /// speed. Rapier derives kinematic velocities *after* contact
+    /// modification runs, so `linvel()` in here is last frame's - and the
+    /// frame a leaf starts moving is exactly the frame that matters.
+    dt: Real,
+}
+
+impl PhysicsHooks for MovingTerrainContactHooks {
+    fn modify_solver_contacts(&self, context: &mut ContactModificationContext) {
+        if self.dt <= 0.0 || context.normal.y.abs() >= SIDE_CONTACT_MAX_NORMAL_Y {
+            return;
+        }
+        let lifts_vertically = [context.rigid_body1, context.rigid_body2]
+            .into_iter()
+            .flatten()
+            .filter_map(|handle| context.bodies.get(handle))
+            .any(|body| {
+                if body.body_type() != RigidBodyType::KinematicPositionBased {
+                    return false;
+                }
+                let step = (body.next_position().translation.vector
+                    - body.position().translation.vector)
+                    / self.dt;
+                let horizontal = (step.x * step.x + step.z * step.z).sqrt();
+                step.y.abs() > MOVING_TERRAIN_SPEED && step.y.abs() > horizontal
+            });
+        if !lifts_vertically {
+            return;
+        }
+        for contact in context.solver_contacts.iter_mut() {
+            contact.friction = 0.0;
+        }
+    }
+}
+
 const PLAYER_STANDING_HEIGHT: f32 = 6.0;
 const PLAYER_STANDING_RADIUS: f32 = 1.2;
 
@@ -94,6 +186,27 @@ const PLAYER_STAND_TEST_MARGIN: f32 = 0.05;
 /// while crouched doesn't reload a standing capsule embedded in the floor.
 pub fn player_crouch_center_shift() -> f32 {
     (PLAYER_STANDING_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR
+}
+
+/// What holds a crouching player up, and therefore what stays put as the
+/// capsule changes size (see [`PhysicsWorld::set_player_crouch`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CrouchAnchor {
+    /// Standing on something: the feet stay planted and the center moves.
+    Feet,
+    /// Hanging from their hands: nothing is under the feet, and the tracked
+    /// hands and eye ride the body center, so the center stays put and the
+    /// capsule shrinks toward the hands instead.
+    Center,
+}
+
+impl CrouchAnchor {
+    fn center_shift(self) -> f32 {
+        match self {
+            CrouchAnchor::Feet => player_crouch_center_shift(),
+            CrouchAnchor::Center => 0.0,
+        }
+    }
 }
 
 /// Clearance (SS2 ft) kept between a capped eye and the capsule crown, so the
@@ -232,6 +345,14 @@ const PLAYER_STEP_HEIGHT: f32 = 2.0;
 const PLAYER_JUMP_SPEED: f32 = 28.0;
 const PLAYER_JUMP_GRAVITY: f32 = 40.0;
 const PLAYER_MAX_FALL_SPEED: f32 = 30.0;
+/// Swimming: locomotion is scaled down and a held jump rises at 2.5 SS2
+/// feet per second, with neutral buoyancy (no gravity) otherwise.
+const PLAYER_SWIM_SPEED_SCALE: f32 = 0.7;
+const PLAYER_SWIM_UP_SPEED: f32 = 2.5;
+/// The jump's launch speed in world units/second. Doubles as the ceiling on
+/// any other way of throwing the player into the air (see
+/// [`crate::vr_climb::CLIMB_RELEASE_MAX_SPEED`]).
+pub(crate) const PLAYER_JUMP_LAUNCH_SPEED: f32 = PLAYER_JUMP_SPEED / SCALE_FACTOR;
 /// Maximum forward search for a jump-through landing. This is deliberately a
 /// short body-scale transition, not a general wall bypass.
 const PLAYER_JUMP_MANTLE_FORWARD: f32 = 8.0;
@@ -246,6 +367,13 @@ const PLAYER_JUMP_MANTLE_MAX_DROP: f32 = 40.0;
 /// imported float normals from landing just beyond Rapier's exact pi/4
 /// climb/slide boundary.
 const PLAYER_MIN_WALKABLE_NORMAL: f32 = 0.7;
+
+/// Whether a surface with this upward normal component can be stood on - and
+/// so whether a hand touching it is lying ON the surface rather than hooked on
+/// a face of it (see [`crate::vr_climb::vault_ready`]).
+pub fn is_walkable_normal(normal_y: f32) -> bool {
+    normal_y >= PLAYER_MIN_WALKABLE_NORMAL
+}
 
 /// How far below the player's feet (world units) a surface still counts as the
 /// thing they are *standing on* for support-motion transfer (see
@@ -657,11 +785,35 @@ struct ClimbPass<'a> {
 
 #[derive(Clone, Copy)]
 struct ClimbTopOut {
+    /// Hand vaults follow a real clear route; flat retains Dark jump-through semantics.
+    collide_terrain: bool,
+    /// Expand at the validated final center, without a feet-planted camera jump.
+    stand_on_completion: bool,
     waypoints: [Vector<Real>; 7],
     next_waypoint: usize,
     save_pose: Vector<Real>,
     reversing: bool,
     is_crouched: bool,
+}
+
+impl ClimbTopOut {
+    /// Hand vaults retain the tucked capsule that made the hold valid. A
+    /// sphere can classify a one-sided level mesh differently at that same
+    /// pose, aborting an otherwise clear climb the moment the shape changes.
+    /// Flat Dark jump-throughs retain their original compressed sphere.
+    fn movement_shape(&self) -> SharedShape {
+        if self.collide_terrain {
+            // Hand routes always tuck (is_crouched=true); the requested
+            // landing stance is tracked separately by stand_on_completion.
+            crouched_player_shared_shape()
+        } else {
+            SharedShape::ball(if self.is_crouched {
+                PLAYER_CROUCH_RADIUS / SCALE_FACTOR
+            } else {
+                CLIMB_TOP_OUT_RADIUS
+            })
+        }
+    }
 }
 
 struct PlayerMovement {
@@ -934,6 +1086,19 @@ fn shape_sweep_is_clear(
             },
         )
         .is_none()
+}
+
+/// Static overlap alone can miss the underside of one-sided ceiling triangles.
+/// Sweeping the capsule's generating sphere upward covers that same volume
+/// from the blocking side. Shared by ordinary stand-up and hand-vault landing.
+fn capsule_pose_is_clear(queries: &QueryPipeline, center: Vector<Real>, capsule: &Capsule) -> bool {
+    !shape_intersects(queries, center, capsule)
+        && shape_sweep_is_clear(
+            queries,
+            center + capsule.segment.a.coords,
+            center + capsule.segment.b.coords,
+            &Ball::new(capsule.radius),
+        )
 }
 
 fn ray_segment_is_clear(queries: &QueryPipeline, from: Vector<Real>, to: Vector<Real>) -> bool {
@@ -1237,6 +1402,8 @@ fn plan_climb_top_out(
         self_translation: first_step,
         is_climbing: true,
         top_out: Some(ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints,
             next_waypoint: 0,
             save_pose: pos.translation.vector,
@@ -1246,6 +1413,43 @@ fn plan_climb_top_out(
         slope_displacement: Vector::zeros(),
         actor_collisions: Vec::new(),
     })
+}
+
+/// Plan a mantle out of water: a swimmer holding jump whose forward stroke is
+/// blocked (a pool lip) takes the same top-out a ladder climber would.
+/// Unlike [`plan_jump_mantle`] this never picks a lower landing, which in a
+/// pool would be the floor beneath the swimmer.
+fn plan_swim_mantle(
+    controller: &KinematicCharacterController,
+    queries: &QueryPipeline,
+    scripted_queries: &QueryPipeline,
+    shape: &dyn Shape,
+    pos: &Isometry<Real>,
+    desired: Vector<Real>,
+    facing: Vector<Real>,
+    dt: Real,
+) -> Option<PlayerMovement> {
+    let direction = climb_top_out_direction(desired, facing)?;
+    let desired_h = vector![desired.x, 0.0, desired.z];
+    let attempted = desired_h.norm();
+    if attempted <= 1.0e-6 {
+        return None;
+    }
+    let probe = controller.move_shape(dt, queries, shape, pos, desired_h, |_c| ());
+    let progress = probe.translation.dot(&(desired_h / attempted));
+    if progress > PLAYER_MOVE_PROGRESS_FRACTION * attempted {
+        return None;
+    }
+    plan_climb_top_out(
+        controller,
+        queries,
+        queries,
+        scripted_queries,
+        pos,
+        direction,
+        CLIMB_TOP_OUT_PROBE_FORWARD,
+        dt,
+    )
 }
 
 /// Plan Dark's ordinary jump-through/mantle for a grounded player pressing
@@ -1506,6 +1710,8 @@ fn plan_jump_mantle(
         self_translation: first_movement,
         is_climbing: true,
         top_out: Some(ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints,
             next_waypoint: 0,
             save_pose: pos.translation.vector,
@@ -1523,6 +1729,43 @@ fn plan_jump_mantle(
 /// exception. A newly-blocked route returns to its last valid standing pose
 /// before the capsule is expanded, and final standing fit is checked against
 /// every collider.
+/// Give the player the collider their top-out state calls for: the scripted
+/// route's tucked capsule or compressed ball while it runs, their own capsule once it
+/// ends. One place, because a top-out is entered both from the movement pass
+/// (flat, pushing into a ladder top) and outright (a VR hand vault - see
+/// [`PhysicsWorld::plan_hand_top_out`]).
+fn sync_top_out_collider(
+    collider_set: &mut ColliderSet,
+    rigid_body_set: &mut RigidBodySet,
+    was_top_out: bool,
+    player_handle: &PlayerHandle,
+) {
+    let is_top_out = player_handle.top_out.is_some();
+    let collider_handle = rigid_body_set[player_handle.character_handle].colliders()[0];
+    if !was_top_out && is_top_out {
+        collider_set[collider_handle]
+            .set_shape(player_handle.top_out.as_ref().unwrap().movement_shape());
+    } else if was_top_out && !is_top_out {
+        let restored = if player_handle.is_crouched {
+            crouched_player_shared_shape()
+        } else {
+            standing_player_shared_shape()
+        };
+        collider_set[collider_handle].set_shape(restored);
+    }
+    rigid_body_set[player_handle.character_handle].enable_ccd(!is_top_out);
+}
+
+/// Whether a collider is NOT an authored climbable surface. Membership is
+/// checked rather than filtered by group because a ladder is also an `ENTITY`,
+/// so masking the CLIMBABLE bit out of a group filter would not exclude it.
+fn collider_is_not_climbable(collider: &Collider) -> bool {
+    !collider
+        .collision_groups()
+        .memberships
+        .intersects(InternalCollisionGroups::CLIMBABLE.bits.into())
+}
+
 fn advance_climb_top_out(
     controller: &KinematicCharacterController,
     validation_queries: &QueryPipeline,
@@ -1531,7 +1774,8 @@ fn advance_climb_top_out(
     mut top_out: ClimbTopOut,
     dt: Real,
 ) -> (EffectiveCharacterMovement, Option<ClimbTopOut>) {
-    let final_shape = if top_out.is_crouched {
+    let final_shape = if top_out.is_crouched && (!top_out.stand_on_completion || top_out.reversing)
+    {
         crouched_player_capsule()
     } else {
         standing_player_capsule()
@@ -1544,7 +1788,11 @@ fn advance_climb_top_out(
             }
         } else if let Some(target) = top_out.waypoints.get(top_out.next_waypoint) {
             *target
-        } else if shape_intersects(validation_queries, pos.translation.vector, &final_shape) {
+        } else if if top_out.collide_terrain {
+            !capsule_pose_is_clear(validation_queries, pos.translation.vector, &final_shape)
+        } else {
+            shape_intersects(validation_queries, pos.translation.vector, &final_shape)
+        } {
             top_out.reversing = true;
             continue;
         } else {
@@ -1556,7 +1804,17 @@ fn advance_climb_top_out(
         }
         if top_out.reversing {
             if top_out.next_waypoint == 0 {
-                if shape_intersects(validation_queries, top_out.save_pose, &final_shape) {
+                let recovery_queries = if top_out.collide_terrain {
+                    scripted_queries
+                } else {
+                    validation_queries
+                };
+                let recovery_shape = if top_out.is_crouched {
+                    crouched_player_capsule()
+                } else {
+                    standing_player_capsule()
+                };
+                if shape_intersects(recovery_queries, top_out.save_pose, &recovery_shape) {
                     return (scripted_character_movement(Vector::zeros()), Some(top_out));
                 }
                 return (scripted_character_movement(Vector::zeros()), None);
@@ -1566,24 +1824,22 @@ fn advance_climb_top_out(
             top_out.next_waypoint += 1;
         }
     };
-    let compressed_radius = if top_out.is_crouched {
-        PLAYER_CROUCH_RADIUS / SCALE_FACTOR
-    } else {
-        CLIMB_TOP_OUT_RADIUS
-    };
-    let compressed = Ball::new(compressed_radius);
-    // A live entity can move into the compressed sphere between frames. The
+    let compressed = top_out.movement_shape();
+    // A live entity can move into the movement shape between frames. The
     // forward route must stop, but refusing every cast from an overlapping
     // pose would pin the recovery forever. During reversal only, let Rapier's
     // character controller compute a collision-checked depenetrating step
     // toward the preceding validated waypoint.
-    let movement = (!shape_intersects(scripted_queries, pos.translation.vector, &compressed)
-        || top_out.reversing)
+    let movement = (!shape_intersects(
+        scripted_queries,
+        pos.translation.vector,
+        compressed.as_ref(),
+    ) || top_out.reversing)
         .then(|| {
             slide_toward(
                 controller,
                 scripted_queries,
-                &compressed,
+                compressed.as_ref(),
                 pos.translation.vector,
                 target,
                 dt,
@@ -1851,7 +2107,9 @@ fn step_player_movement(
     };
     mvt.translation += fall.translation;
     mvt.grounded = fall.grounded;
-    if mvt.grounded {
+    // Only a downward gravity pass consumes the lift again; without one (a
+    // swimmer resting on the pool floor) it would accumulate into a rise.
+    if mvt.grounded && gravity < 0.0 {
         mvt.translation += Vector::y() * (PLAYER_REST_LIFT / SCALE_FACTOR);
     }
     // Stairs: if grounded walking was blocked, probe for a step and hop onto
@@ -1932,6 +2190,11 @@ bitflags! {
         // physical entities: interaction-only/model-bounds stand-ins can then
         // let characters pass while remaining solid to projectiles and props.
         const ACTOR = 1 << 8;
+        // A melee weapon in the player's hand. Its own membership, because a
+        // creature's hitboxes answer to it and to nothing else: they are
+        // damage volumes, and generating contacts against every prop that
+        // brushes a limb is both meaningless and expensive.
+        const HELD_MELEE = 1 << 9;
         /// Every physical ECS object, including living creature actors. Use
         /// this for entity queries/filters; use `ENTITY` or `ACTOR` for an
         /// individual collider's membership.
@@ -1982,12 +2245,26 @@ impl CollisionGroup {
         }
     }
 
+    /// A creature's per-joint damage proxy. Raycasts find it (that is how a
+    /// shot picks a limb), and a held melee weapon *contacts* it - so a swing
+    /// lands on the arm it visually struck rather than on the capsule around
+    /// the creature.
+    ///
+    /// It solves against nothing: these are damage volumes, and a limb that
+    /// shoved the weapon out of the swing (or the creature off its feet) would
+    /// be a physics body, which the actor capsule already is.
     pub fn hitbox() -> CollisionGroup {
+        // `solid` mirrors these into the solver groups, which resolves to
+        // nothing anyway: no group filters on `HITBOX`, and `held_melee`'s
+        // solver filter deliberately excludes it - so a limb never shoves the
+        // weapon that struck it.
         Self::solid(InteractionGroups {
             memberships: (InternalCollisionGroups::HITBOX.bits
                 | InternalCollisionGroups::RAYCAST.bits)
                 .into(),
-            filter: InternalCollisionGroups::RAYCAST.bits.into(),
+            filter: (InternalCollisionGroups::RAYCAST.bits
+                | InternalCollisionGroups::HELD_MELEE.bits)
+                .into(),
             test_mode: Default::default(),
         })
     }
@@ -2014,10 +2291,16 @@ impl CollisionGroup {
     /// weapon's trigger-gated script; this group only filters physical contact.
     pub fn held_melee() -> CollisionGroup {
         let collision = InteractionGroups {
-            memberships: InternalCollisionGroups::ENTITY.bits.into(),
+            memberships: (InternalCollisionGroups::ENTITY.bits
+                | InternalCollisionGroups::HELD_MELEE.bits)
+                .into(),
             filter: (InternalCollisionGroups::WORLD.bits
                 | InternalCollisionGroups::ENTITIES.bits
-                | InternalCollisionGroups::SELECTABLE.bits)
+                | InternalCollisionGroups::SELECTABLE.bits
+                // A creature's own hitboxes, so a swing lands on the limb it
+                // struck. The capsule contact is still generated and is what
+                // a creature with no hitboxes is hit on.
+                | InternalCollisionGroups::HITBOX.bits)
                 .into(),
             test_mode: Default::default(),
         };
@@ -2035,6 +2318,50 @@ impl CollisionGroup {
             test_mode: Default::default(),
         };
         CollisionGroup { collision, solver }
+    }
+
+    /// A projectile the *player* fired: an ordinary physical entity that is
+    /// transparent to the player's own capsule.
+    ///
+    /// A slow (physics) projectile leaves the muzzle of a weapon the player is
+    /// holding, and in VR that muzzle is inside the player's own capsule
+    /// whenever the weapon is held in close to the body - a natural chest or
+    /// hip hold. Solid to `PLAYER`, the shot collides on its first step, and a
+    /// `DESTROY_ON_IMPACT` projectile is consumed there and then: the psi bolt
+    /// never leaves the amp, the points are spent, and the player takes their
+    /// own damage. AI and turret projectiles keep `CollisionGroup::entity()`
+    /// and hit the player normally.
+    ///
+    /// Rapier's `InteractionGroups` test is an AND across both colliders, so
+    /// clearing `PLAYER` from this side alone is enough - the player capsule's
+    /// own `ALL_COLLIDABLE` filter cannot re-enable the pair. Same idiom as
+    /// `held_melee`. See `RuntimePropPlayerFiredProjectile` for what the
+    /// lifetime-long transparency does and does not cost.
+    pub fn player_projectile() -> CollisionGroup {
+        Self::solid(InteractionGroups {
+            memberships: InternalCollisionGroups::ENTITY.bits.into(),
+            filter: (InternalCollisionGroups::ALL_COLLIDABLE.bits
+                & !InternalCollisionGroups::PLAYER.bits)
+                .into(),
+            test_mode: Default::default(),
+        })
+    }
+
+    /// An inert held gun: the drive queries world geometry, but the body
+    /// neither blocks projectiles nor generates physical contacts.
+    pub fn held_inert() -> CollisionGroup {
+        Self::solid(InteractionGroups {
+            memberships: Group::empty(),
+            filter: Group::empty(),
+            test_mode: Default::default(),
+        })
+    }
+
+    /// Whether this group takes part in no collision at all.
+    pub fn is_inert(&self) -> bool {
+        [self.collision, self.solver]
+            .iter()
+            .all(|groups| groups.memberships.is_empty() && groups.filter.is_empty())
     }
 
     /// Collision behavior for a living creature capsule. It collides exactly
@@ -2123,6 +2450,27 @@ impl CollisionGroup {
         })
     }
 
+    /// The same membership as this group, with only the *player* dropped from
+    /// its filter. Creature capsules, props, projectiles and rays keep it.
+    ///
+    /// This is the narrower sibling of [`non_solid_to_characters`], for a
+    /// *dynamic* body the player must not shove. The player capsule is the
+    /// one character Rapier treats as infinite mass
+    /// (`kinematic_position_based`), so its contact against a light dynamic
+    /// prop launches the prop instead of nudging it. Creatures are ordinary
+    /// dynamic bodies and never do that, and keeping them solid is what lets
+    /// a thrown item still report the contact it damages on.
+    ///
+    /// [`non_solid_to_characters`]: CollisionGroup::non_solid_to_characters
+    pub fn non_solid_to_player(self) -> CollisionGroup {
+        let filter = self.collision.filter.bits() & !InternalCollisionGroups::PLAYER.bits;
+        Self::solid(InteractionGroups {
+            memberships: self.collision.memberships,
+            filter: filter.into(),
+            test_mode: self.collision.test_mode,
+        })
+    }
+
     /// Collision group for ragdoll limb bodies. Members are `SELECTABLE` (so
     /// they remain raycast/selectable) and collide with `WORLD` geometry *and*
     /// each other (`SELECTABLE`), so limbs don't pass through the torso/head.
@@ -2151,6 +2499,111 @@ impl CollisionGroup {
     pub fn ragdoll_no_self() -> CollisionGroup {
         Self::corpse()
     }
+}
+
+/// Radius (world units) of the ball a hand probes with in
+/// [`PhysicsWorld::climbable_grip_at`]. Roughly a fist: big enough to find the
+/// surface a tracked hand is resting on, small enough that it only finds the
+/// one face the hand is actually against.
+pub const CLIMB_GRIP_RADIUS: f32 = 0.15;
+/// Extra reach around a lip (about 23 cm), separate from direct ladder contact.
+/// The raised approach must be clear, so this cannot reach through a wall.
+pub const CLIMB_LIP_REACH: f32 = 0.3;
+
+/// What a hand found to hold onto.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClimbGripKind {
+    /// An authored climbable surface (`PropPhysAttr.climbable`), on a face
+    /// whose per-face bit is set - a ladder rail or rung.
+    Ladder,
+    /// A walkable top surface above the player's feet: the mantle-emulation
+    /// hold. Any solid, non-climbable geometry can offer one.
+    Ledge,
+}
+
+/// A hold found by [`PhysicsWorld::climbable_grip_at`].
+#[derive(Clone, Copy, Debug)]
+pub struct ClimbGrip {
+    pub kind: ClimbGripKind,
+    /// Owning entity, when the surface belongs to one (level terrain has none).
+    pub entity_id: Option<EntityId>,
+    /// World-space point on the surface.
+    pub point: Vector3<f32>,
+    /// World-space surface normal, pointing out of the surface toward the hand.
+    pub normal: Vector3<f32>,
+}
+
+/// The medium around the player's body, from the world cell it occupies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayerMedium {
+    Air,
+    Water,
+    /// Treading water with the body center just above the surface: no
+    /// gravity and no further swim-up, but the swim mantle stays available.
+    WaterSurface,
+}
+
+/// What the player's movement pass is being asked to do this frame.
+///
+/// Physics stays presentation-agnostic: flat resolves "push into a ladder"
+/// and VR resolves "a hand is gripping here", and both arrive as a request.
+#[derive(Clone, Copy, Debug)]
+pub enum PlayerMoveRequest {
+    /// Ordinary locomotion. `push_to_climb` enables the flat push-into-ladder
+    /// climb; VR turns it off and climbs with its hands instead.
+    Walk {
+        movement: Vector3<f32>,
+        facing: Vector3<f32>,
+        jump_pressed: bool,
+        push_to_climb: bool,
+        medium: PlayerMedium,
+    },
+    /// A gripping VR hand demands this body translation (see
+    /// [`crate::vr_climb`]). Gravity and the walk pass are both suspended.
+    HandClimb { translation: Vector3<f32> },
+}
+
+/// Dark's `PropPhysAttr.climbable` is a per-face bitmask over the six OBB
+/// faces in Dark's Z-up local frame: 1=+X, 2=+Y, 4=+Z (top), 8=-X, 16=-Y,
+/// 32=-Z (bottom). The importer maps a Dark vector (x, y, z) to engine
+/// (-x, z, y) (`read_vec3`, dark/src/ss2_common.rs:54), so in the engine's
+/// Y-up frame those bits are: 1=-X, 2=+Z, 4=+Y (top), 8=+X, 16=-Z, 32=-Y.
+///
+/// `local_normal` is the outward face normal in the collider's local frame.
+/// The shipped ladders author 27 (= 1|2|8|16, the four vertical sides) on the
+/// `Ladders` template, and some instances override it - medsci1's `Rick
+/// Ladder 16`s author 54 (= 2|4|16|32), the two broad faces plus both caps.
+/// Both include the faces a ladder is actually climbed on.
+///
+/// Returns every face the normal plausibly touches, OR-ed together, not just
+/// the dominant one: a contact on an edge has a diagonal normal, and
+/// collapsing it to whichever axis wins by a hair leaves a dead wedge at the
+/// top of a ladder - exactly where a hand reaches when topping out.
+fn climbable_face_bits(local_normal: Vector<Real>) -> u32 {
+    /// How far off the dominant axis a component still counts as touching its
+    /// face. 0.3 admits an edge contact from either side while a square-on
+    /// face normal still names one face.
+    const EDGE_FRACTION: f32 = 0.3;
+
+    let axes = [
+        (local_normal.x, 8, 1),
+        (local_normal.y, 4, 32),
+        (local_normal.z, 2, 16),
+    ];
+    let threshold = axes
+        .iter()
+        .fold(0.0f32, |acc, (component, _, _)| acc.max(component.abs()))
+        * EDGE_FRACTION;
+    axes.iter()
+        .filter(|(component, _, _)| component.abs() > threshold)
+        .map(|(component, positive, negative)| {
+            if *component >= 0.0 {
+                *positive
+            } else {
+                *negative
+            }
+        })
+        .fold(0, |acc, bit| acc | bit)
 }
 
 #[derive(Clone, Debug)]
@@ -2209,6 +2662,54 @@ pub struct CollisionContact {
     pub point: Vector3<f32>,
     /// Unit normal pointing from `entity1_id` toward `entity2_id`.
     pub normal: Vector3<f32>,
+    /// How fast the bodies were closing when the contact was found, when the
+    /// finder knows. Set for a swing stopped by a creature's hitbox: the sweep
+    /// measured the speed *before* it clamped the weapon, and by the time the
+    /// contact is read the weapon is standing still against the limb. `None`
+    /// for an ordinary narrow-phase contact, where the reader computes it from
+    /// the live bodies.
+    pub closing_speed: Option<f32>,
+}
+
+/// How hard a swing landed: the smaller of two readings, because a blow has to
+/// be both.
+///
+/// - **A real closing speed** (`weapon - victim`). Two bodies keeping station
+///   are not hitting each other however fast they travel - a player
+///   backpedalling from a creature that chases at the same speed is not
+///   swinging at it.
+/// - **Not merely the player's own locomotion** (`weapon - player - victim`).
+///   A held weapon rides the player, so walking carries it at ~10 world
+///   units/s, five times the gate; that alone billed a free authored hit on
+///   anything walked into.
+///
+/// Each is wrong by itself in one direction, and the smaller of the two is
+/// right in every case: a hand swing clears the gate whether the player is
+/// walking or standing, while walking, riding and backpedalling all read ~0.
+/// A creature charging onto a held blade still impales itself - both readings
+/// see its approach.
+///
+/// The velocities are taken along the surface that was touched, because
+/// sliding a weapon *along* something is fast but closes on nothing. `abs`
+/// because the normal's orientation depends on which collider Rapier listed
+/// first; with no contact geometry there is no surface to project onto, so the
+/// speeds are taken whole.
+///
+/// Only *translation* is divided out - a player who turns on the spot still
+/// swings the weapon head around at arm's length, and that reads as the swing
+/// it looks like.
+pub fn relative_swing_speed(
+    weapon_velocity: Vector3<f32>,
+    player_velocity: Vector3<f32>,
+    victim_velocity: Vector3<f32>,
+    normal: Option<Vector3<f32>>,
+) -> f32 {
+    let speed_of = |velocity: Vector3<f32>| match normal {
+        Some(normal) => velocity.dot(normal).abs(),
+        None => velocity.magnitude(),
+    };
+    let closing = weapon_velocity - victim_velocity;
+    speed_of(closing).min(speed_of(closing - player_velocity))
 }
 
 /// Predicate selecting *only* sensor colliders - the volumes the player's
@@ -2273,6 +2774,12 @@ pub struct PlayerHandle {
     // `PhysicsWorld::set_player_crouch`, which keeps the shape and this flag
     // in sync.
     is_crouched: bool,
+    // Whether that crouch was made by `set_player_crouch_hanging` (anchored on
+    // the body center rather than the feet). It has to be undone the same way,
+    // or the body ends up a crouch shift above where it hung.
+    is_hanging_crouched: bool,
+    // Physical stance used by the tracked rig; hanging capsule changes leave it alone.
+    tracking_crouched: bool,
     // Live-validated waypoints for an in-progress ladder top-out. This is
     // transient locomotion state: direct relocation and crouching cancel it,
     // while save/load uses the last valid standing pose stored with it.
@@ -2293,6 +2800,10 @@ pub struct PlayerHandle {
     jump_velocity: Option<Real>,
     // Held-button edge state: one press launches at most one jump.
     jump_was_pressed: bool,
+    // Horizontal velocity (world units/second) carried through the current
+    // ballistic arc: what a VR climb release throws the player sideways with.
+    // Ordinary jumps steer with the stick instead and leave this zero.
+    air_velocity: Vector<Real>,
     // The player's OWN translation from the last movement frame - this
     // frame's total travel minus the moving-support carry - so a rider
     // standing still on an elevator reports zero. Purely derived per-frame
@@ -2309,11 +2820,32 @@ pub struct PlayerHandle {
 /// target out of `entity_id_to_body` makes the weapon remain the entity's one
 /// authoritative rendered/contact body.
 #[derive(Clone, Copy)]
-struct HeldMeleeDrive {
+struct HeldItemDrive {
+    weight: crate::weapon_recoil::GunWeightState,
+    weight_target: Option<crate::weapon_recoil::GunWeightTarget>,
+    recoil: crate::weapon_recoil::RecoilState,
+    one_hand_recoil: crate::weapon_recoil::RecoilState,
     target: RigidBodyHandle,
+    /// The weapon's own entity, so a swept blow can be reported without
+    /// digging it back out of the body's user data every frame.
+    weapon_entity: Option<EntityId>,
     /// The loose/restored world body is seated at the first tracked pose once;
     /// later hand poses move only `target` so world contact stays physical.
     seated: bool,
+    /// The creature hitbox this swing is currently resting against, so the
+    /// blow is reported when the weapon arrives rather than every frame it
+    /// leans there.
+    stopped_on: Option<EntityId>,
+    recovery: held_recovery::RecoveryState,
+    recovered_this_step: bool,
+}
+
+/// What stopped a swing: the limb, and where the cast met it.
+#[derive(Clone, Copy, Debug)]
+struct SweepStop {
+    limb: EntityId,
+    point: Vector3<f32>,
+    normal: Vector3<f32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2338,6 +2870,24 @@ impl PlayerHandle {
     /// the requested input.
     pub fn is_crouched(&self) -> bool {
         self.is_crouched
+    }
+
+    /// Whether the current crouch is a hanging ball-up (see
+    /// [`PhysicsWorld::set_player_crouch_hanging`]), which must be undone the
+    /// same way it was made.
+    pub fn is_hanging_crouched(&self) -> bool {
+        self.is_hanging_crouched
+    }
+
+    /// Stance anchoring floor-relative VR tracking, independent of a hanging capsule.
+    pub fn tracking_is_crouched(&self) -> bool {
+        self.tracking_crouched
+    }
+
+    /// Whether a scripted mantle/top-out currently owns the body. Nothing else
+    /// may move it, resize it, or take a climb hold while it does.
+    pub fn is_topping_out(&self) -> bool {
+        self.top_out.is_some()
     }
 
     /// Ground contact reported by the last movement frame. Unlike a support
@@ -2366,7 +2916,7 @@ impl PlayerHandle {
 
 /// Clearance the held-melee sweep stops short of a surface by, so a weapon
 /// resting against one does not re-report a zero-distance hit every frame.
-const HELD_MELEE_SKIN: f32 = 0.01;
+const HELD_ITEM_SKIN: f32 = 0.01;
 
 pub struct PhysicsWorld {
     gravity: Vector<Real>,
@@ -2394,6 +2944,11 @@ pub struct PhysicsWorld {
 
     entity_id_to_body: HashMap<EntityId, RigidBodyHandle>,
 
+    // Per-face grip bits (Dark `PropPhysAttr.climbable`) for climbable
+    // entities, keyed by owner. Contact detection only needs the CLIMBABLE
+    // group membership; the hand grip query needs to know WHICH face.
+    climbable_sides: HashMap<EntityId, u32>,
+
     // Short-lived recovery state created only while a living, gravity-driven
     // creature is touching the side of horizontally-moving kinematic terrain.
     // Ordinary supported movement, falling, and knockback allocate no entry.
@@ -2412,10 +2967,27 @@ pub struct PhysicsWorld {
     // Dynamic held-melee bodies driven toward invisible controller targets by
     // Rapier joint motors. Keyed by the weapon body handle so the normal
     // set_position_rotation path can redirect hand poses to the target.
-    held_melee_drives: HashMap<RigidBodyHandle, HeldMeleeDrive>,
+    held_item_drives: HashMap<RigidBodyHandle, HeldItemDrive>,
+    held_target_frame: Option<(
+        Vector3<f32>,
+        Quaternion<f32>,
+        Option<crate::vr_tracking::TrackingTransform>,
+    )>,
+    held_tracking_translation: Vector3<f32>,
+
+    // The player's travel over the previous frame, in world units per second,
+    // and where they were when it was sampled. A held weapon rides the player,
+    // so this is what the melee swing gate divides out of the weapon's motion
+    // (see [`relative_swing_speed`]).
+    //
+    // Sampled at the top of a frame rather than when the player moves, because
+    // the hand poses this is subtracted from are one frame old: they were
+    // composed onto the player's position as of the END of the previous frame.
+    // Derived per-frame state, so nothing saves it.
+    player_velocity: Vector3<f32>,
+    last_player_translation: Option<Vector3<f32>>,
 
     // TODO:
-    // physics_hooks: Box<dyn PhysicsHooks>,
     // event_handler: Box<dyn EventHandler>,
 
     // Debug
@@ -2437,6 +3009,11 @@ pub struct PhysicsWorld {
     // edges are only delivered by a stepped frame, so moving while the sim is
     // paused accumulates them until it resumes.
     pending_player_sensor_events: Vec<CollisionEvent>,
+    /// Blows reported by the held-melee sweep: a swing stopped by a limb is a
+    /// hit on that limb, and the stop is what prevents the narrow phase from
+    /// ever seeing it.
+    pending_held_sweep_events: Vec<CollisionEvent>,
+    held_recoveries: Vec<HeldRecovery>,
 
     // Entities already reported by report_nonfinite_rigid_body_state, so a
     // body fed bad state every frame (e.g. NaN animation joints driving a
@@ -2513,7 +3090,11 @@ impl PhysicsWorld {
 
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        for geo in &level.all_geometry {
+        for geo in level
+            .all_geometry
+            .iter()
+            .filter(|geo| !geo.is_water_surface())
+        {
             let verts = &geo.verts;
 
             let mut idx = 0;
@@ -2584,7 +3165,7 @@ impl PhysicsWorld {
             vector: vec_to_nvec(position),
         };
 
-        if let Some(drive) = self.held_melee_drives.get(&handle).copied() {
+        if let Some(drive) = self.held_item_drives.get(&handle).copied() {
             let mut just_seated = false;
             if !drive.seated {
                 if let Some(weapon) = self.rigid_body_set.get_mut(handle) {
@@ -2592,7 +3173,7 @@ impl PhysicsWorld {
                     weapon.set_linvel(Vector::zeros(), true);
                     weapon.set_angvel(Vector::zeros(), true);
                 }
-                if let Some(drive) = self.held_melee_drives.get_mut(&handle) {
+                if let Some(drive) = self.held_item_drives.get_mut(&handle) {
                     drive.seated = true;
                 }
                 just_seated = true;
@@ -2642,6 +3223,24 @@ impl PhysicsWorld {
                 rigid_body.set_rotation(quat_to_nquat(quat), true);
             }
         }
+    }
+
+    /// Levitate a loose dynamic item without bypassing its collision shape.
+    /// Returns the previous gravity scale for restoration on arrival/cancellation.
+    pub(crate) fn begin_psi_pull(&mut self, entity: EntityId) -> Option<f32> {
+        let body = self
+            .entity_id_to_body
+            .get(&entity)
+            .and_then(|h| self.rigid_body_set.get_mut(*h))?;
+        if !body.is_dynamic() {
+            return None;
+        }
+        let gravity = body.gravity_scale();
+        body.set_gravity_scale(0.0, true);
+        body.set_linvel(Vector::zeros(), true);
+        body.set_angvel(Vector::zeros(), true);
+        body.enable_ccd(true);
+        Some(gravity)
     }
 
     pub fn set_gravity(&mut self, entity_id: EntityId, percent: f32) {
@@ -2732,23 +3331,29 @@ impl PhysicsWorld {
             if let Some(collider) = self.collider_set.get_mut(collider_handle) {
                 collider.set_collision_groups(group.collision);
                 collider.set_solver_groups(group.solver);
+                collider.set_active_hooks(active_hooks_for(group));
             }
         }
     }
 
-    /// Turn an existing loose-prop body into a swept kinematic contact shape
-    /// while a melee weapon is held in VR.
+    /// Turn an existing loose-prop body into a swept kinematic shape while the
+    /// item is held in VR, so it cannot travel through the level.
+    ///
+    /// `group` decides what the held body is to everything else: a melee
+    /// weapon takes [`CollisionGroup::held_melee`] (contacts, so the
+    /// trigger-gated damage script sees them), a merely physical held item
+    /// takes [`CollisionGroup::held_inert`].
     ///
     /// The hand pose drives an invisible kinematic target; each step the
     /// visible weapon is *shape-cast* from where it is toward that target and
     /// stopped at the first world surface in the way (see
-    /// [`Self::drive_held_melee`]). Kinematic, not dynamic: a dynamic weapon
+    /// [`Self::drive_held_items`]). Kinematic, not dynamic: a dynamic weapon
     /// is subject to contact impulses, and a contact against a body whose
     /// origin sits out on the weapon head torques it - which in a headset
     /// read as the weapon spinning out of the player's hand the moment it
     /// touched anything. A swept kinematic body cannot be spun by the solver,
     /// cannot tunnel, and still reports every contact.
-    pub fn set_held_melee(&mut self, entity_id: EntityId) {
+    pub fn set_held_item_physical(&mut self, entity_id: EntityId, group: CollisionGroup) {
         let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
             return;
         };
@@ -2763,17 +3368,30 @@ impl PhysicsWorld {
             (*body.position(), body.colliders().to_vec())
         };
 
-        if !self.held_melee_drives.contains_key(&handle) {
+        if !self.held_item_drives.contains_key(&handle) {
             let target = self.rigid_body_set.insert(
                 RigidBodyBuilder::kinematic_position_based()
                     .pose(pose)
                     .build(),
             );
-            self.held_melee_drives.insert(
+            self.held_item_drives.insert(
                 handle,
-                HeldMeleeDrive {
+                HeldItemDrive {
+                    weight: crate::weapon_recoil::GunWeightState::default(),
+                    weight_target: None,
+                    recoil: crate::weapon_recoil::RecoilState::default(),
+                    one_hand_recoil: crate::weapon_recoil::RecoilState::default(),
                     target,
+                    weapon_entity: EntityId::from_inner(
+                        self.rigid_body_set
+                            .get(handle)
+                            .map(|body| body.user_data as u64)
+                            .unwrap_or(0),
+                    ),
                     seated: false,
+                    stopped_on: None,
+                    recovery: held_recovery::RecoveryState::default(),
+                    recovered_this_step: false,
                 },
             );
         }
@@ -2790,7 +3408,78 @@ impl PhysicsWorld {
                 );
             }
         }
-        self.set_collision_group(entity_id, CollisionGroup::held_melee());
+        self.set_collision_group(entity_id, group);
+    }
+
+    /// Whether this body is currently driven by a held-item target.
+    pub fn is_held_item(&self, entity_id: EntityId) -> bool {
+        self.entity_id_to_body
+            .get(&entity_id)
+            .is_some_and(|handle| self.held_item_drives.contains_key(handle))
+    }
+
+    pub fn set_held_gun_weight(
+        &mut self,
+        entity: EntityId,
+        target: Option<crate::weapon_recoil::GunWeightTarget>,
+    ) {
+        if !self.is_held_inert(entity) {
+            return;
+        }
+        let handle = self.entity_id_to_body[&entity];
+        if let Some(drive) = self.held_item_drives.get_mut(&handle) {
+            drive.weight_target = target.filter(|t| {
+                [
+                    t.anchor.x,
+                    t.anchor.y,
+                    t.anchor.z,
+                    t.forward.x,
+                    t.forward.y,
+                    t.forward.z,
+                    t.degrees,
+                ]
+                .into_iter()
+                .all(f32::is_finite)
+            });
+        }
+    }
+
+    pub fn kick_held_gun(
+        &mut self,
+        entity: EntityId,
+        impulse: crate::weapon_recoil::RecoilImpulse,
+        one_hand: crate::weapon_recoil::RecoilImpulse,
+        strength: i32,
+        supported: bool,
+    ) {
+        if !self.is_held_inert(entity) {
+            return;
+        }
+        let handle = self.entity_id_to_body[&entity];
+        if let Some(drive) = self.held_item_drives.get_mut(&handle) {
+            let (baseline, extra) =
+                crate::weapon_recoil::vr_impulses(impulse, one_hand, strength, supported);
+            drive.recoil.kick(baseline);
+            if let Some(extra) = extra {
+                drive.one_hand_recoil.kick(extra);
+            }
+        }
+    }
+
+    /// A held gun uses empty groups so its sweep is its only collision source.
+    pub fn is_held_inert(&self, entity_id: EntityId) -> bool {
+        if !self.is_held_item(entity_id) {
+            return false;
+        }
+        let body = &self.rigid_body_set[self.entity_id_to_body[&entity_id]];
+        !body.colliders().is_empty()
+            && body.colliders().iter().all(|handle| {
+                let collider = &self.collider_set[*handle];
+                collider.collision_groups().memberships.is_empty()
+                    && collider.collision_groups().filter.is_empty()
+                    && collider.solver_groups().memberships.is_empty()
+                    && collider.solver_groups().filter.is_empty()
+            })
     }
 
     /// Replace a held melee body's inherited loose-pickup box with the local
@@ -2799,20 +3488,20 @@ impl PhysicsWorld {
     /// The rigid-body target stays controller-driven at the authored weapon
     /// joint; the collider's parent-relative center covers the rest of the
     /// handle/blade without moving the rendered model or the motor target.
-    pub fn fit_held_melee_cuboid(
+    pub fn fit_held_item_cuboid(
         &mut self,
         entity_id: EntityId,
         size: Vector3<f32>,
         center: Vector3<f32>,
     ) {
-        let size = sanitize_collider_size(entity_id, "fit_held_melee_cuboid", size);
+        let size = sanitize_collider_size(entity_id, "fit_held_item_cuboid", size);
         let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
             return;
         };
         let Some(body) = self.rigid_body_set.get(handle) else {
             return;
         };
-        if !self.held_melee_drives.contains_key(&handle) {
+        if !self.held_item_drives.contains_key(&handle) {
             return;
         }
 
@@ -2964,11 +3653,16 @@ impl PhysicsWorld {
     ) {
         let previous =
             nvec_to_cgmath(*self.rigid_body_set[player_handle.character_handle].translation());
-        self.translate_held_melee_for_player_relocation(position - previous);
+        self.translate_held_items_for_player_relocation(position - previous);
         player_handle.top_out = None;
+        // Relocated, so they are no longer hanging off anything: the stance
+        // they are in is now an ordinary crouch, undone feet-planted.
+        player_handle.is_hanging_crouched = false;
+        player_handle.tracking_crouched = player_handle.is_crouched;
         player_handle.slope_displacement = Vector::zeros();
         player_handle.is_grounded = false;
         player_handle.jump_velocity = None;
+        player_handle.air_velocity = Vector::zeros();
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         let shape = if player_handle.is_crouched {
             crouched_player_shared_shape()
@@ -2982,12 +3676,74 @@ impl PhysicsWorld {
             .unwrap();
         character_body.enable_ccd(true);
         character_body.set_translation(vec_to_nvec(position), true);
+        // A relocation is not travel. Re-seat the swing gate's sampler on the
+        // destination, or the jump reads as hundreds of units/s of "player
+        // motion" for one frame - which, subtracted from a still weapon, bills
+        // a free blow on whatever the player lands touching.
+        self.last_player_translation = Some(position);
         // Whatever the player was riding, they are not standing on it here.
         // Re-probe now rather than just forgetting: a stale support would carry
         // them by a platform's next step from clear across the level, and an
         // absent one would drop the first frame of a ride they land in the
         // middle of (a teleport, or a save restored onto a moving deck).
         self.refresh_player_support(player_handle);
+    }
+
+    /// Rebase queued hand targets into the pawn frame Rapier will commit now.
+    /// Hand interaction runs after physics and authored these targets relative
+    /// to the recorded pawn frame. The player already has a
+    /// collision-resolved next position; leaving the targets in the old frame
+    /// makes held weapons trail locomotion by one full update.
+    ///
+    /// Only move the targets. The weapons still take their normal swept path
+    /// and Rapier step, preserving obstruction, contact velocity and CCD.
+    pub fn rebase_held_targets(
+        &mut self,
+        player: &PlayerHandle,
+        rotation: Quaternion<f32>,
+        tracking: Option<crate::vr_tracking::TrackingTransform>,
+    ) {
+        self.held_tracking_translation = vec3(0.0, 0.0, 0.0);
+        let Some((previous_position, previous_rotation, previous_tracking)) =
+            self.held_target_frame
+        else {
+            return;
+        };
+        let next_position = vec_to_nvec(self.get_player_next_translation(player));
+        // Tracked stance conversion can cancel the capsule-center change.
+        // Carry that origin change too, rather than bobbing a physically still
+        // controller when crouching/standing. Synthetic input has no rig offset.
+        if let (Some(previous), Some(current)) = (previous_tracking, tracking) {
+            use cgmath::Rotation;
+            self.held_tracking_translation = rotation.rotate_vector(
+                current.stage_to_pawn(vec3(0.0, 0.0, 0.0))
+                    - previous.stage_to_pawn(vec3(0.0, 0.0, 0.0)),
+            );
+        }
+        let rotation_delta = quat_to_nquat(rotation * previous_rotation.conjugate());
+        for drive in self.held_item_drives.values() {
+            let Some(target) = self.rigid_body_set.get_mut(drive.target) else {
+                continue;
+            };
+            let mut pose = *target.next_position();
+            pose.translation.vector = next_position
+                + vec_to_nvec(self.held_tracking_translation)
+                + rotation_delta * (pose.translation.vector - vec_to_nvec(previous_position));
+            pose.rotation = rotation_delta * pose.rotation;
+            target.set_next_kinematic_position(pose);
+        }
+    }
+
+    /// Record the frame used by the just-published hand targets, including
+    /// paused input updates. This is independent of PlayerInfo: a scripted
+    /// teleport can move the physical pair before PlayerInfo is synchronized.
+    pub fn set_held_target_frame(
+        &mut self,
+        position: Vector3<f32>,
+        rotation: Quaternion<f32>,
+        tracking: Option<crate::vr_tracking::TrackingTransform>,
+    ) {
+        self.held_target_frame = Some((position, rotation, tracking));
     }
 
     /// Carry the complete physical-hand pair through a discontinuous player
@@ -2997,13 +3753,16 @@ impl PhysicsWorld {
     /// tries to motor across the entire level through every wall in between.
     /// Ordinary hand motion remains motor-driven because it never calls the
     /// player relocation seam.
-    fn translate_held_melee_for_player_relocation(&mut self, delta: Vector3<f32>) {
+    fn translate_held_items_for_player_relocation(&mut self, delta: Vector3<f32>) {
         if delta.magnitude2() <= f32::EPSILON {
             return;
         }
+        if let Some((position, _, _)) = &mut self.held_target_frame {
+            *position += delta;
+        }
         let delta = vec_to_nvec(delta);
         let pairs = self
-            .held_melee_drives
+            .held_item_drives
             .iter()
             .map(|(weapon, drive)| (*weapon, drive.target))
             .collect::<Vec<_>>();
@@ -3018,6 +3777,10 @@ impl PhysicsWorld {
                 pose.translation.vector += delta;
                 body.set_position(pose, true);
                 body.set_next_kinematic_position(pose);
+            }
+            if let Some(drive) = self.held_item_drives.get_mut(&weapon) {
+                drive.recovery = held_recovery::RecoveryState::default();
+                drive.recovered_this_step = false;
             }
         }
     }
@@ -3182,6 +3945,20 @@ impl PhysicsWorld {
             .get(player_handle.character_handle)
             .unwrap();
         nvec_to_cgmath(*character_body.translation())
+    }
+
+    /// The pose the next step will move the character body to - the queued
+    /// kinematic target, which is where this frame's movement will be cast
+    /// FROM. The pawn-space hand composition has to use this: composing
+    /// against the already-superseded `get_player_translation` applies each
+    /// correction on top of a body that has already absorbed the last one,
+    /// which rings instead of settling.
+    pub fn get_player_next_translation(&self, player_handle: &PlayerHandle) -> Vector3<f32> {
+        let character_body = self
+            .rigid_body_set
+            .get(player_handle.character_handle)
+            .unwrap();
+        nvec_to_cgmath(character_body.next_position().translation.vector)
     }
 
     fn top_out_save_pose_is_clear(
@@ -3535,6 +4312,123 @@ impl PhysicsWorld {
         maybe_rigid_body.map(|rigid_body| nvec_to_cgmath(*rigid_body.translation()))
     }
 
+    /// Move a kinematic sensor immediately without inventing a swept velocity.
+    /// The ordinary pose setter schedules a kinematic target for the next
+    /// step, which is too late for same-frame overlap and explosion queries.
+    pub fn sync_sensor_position_rotation(
+        &mut self,
+        entity_id: EntityId,
+        position: Vector3<f32>,
+        rotation: Quaternion<f32>,
+    ) {
+        let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
+            return;
+        };
+        let is_sensor = self.rigid_body_set.get(handle).is_some_and(|body| {
+            body.is_kinematic()
+                && body
+                    .colliders()
+                    .iter()
+                    .all(|c| self.collider_set[*c].is_sensor())
+        });
+        if !is_sensor {
+            return;
+        }
+        self.set_position_rotation(handle, position, rotation);
+        if let Some(body) = self.rigid_body_set.get_mut(handle) {
+            let pose = *body.next_position();
+            body.set_position(pose, false);
+        }
+    }
+
+    /// A missing body is not a settled projectile.
+    pub fn is_entity_sleeping(&self, entity_id: EntityId) -> bool {
+        self.entity_id_to_body
+            .get(&entity_id)
+            .and_then(|handle| self.rigid_body_set.get(*handle))
+            .is_some_and(|body| body.is_sleeping())
+    }
+
+    /// Exact overlap of two entities' authored colliders, including sensors.
+    pub fn entities_overlap(&self, first: EntityId, second: EntityId) -> bool {
+        let bodies = self
+            .entity_id_to_body
+            .get(&first)
+            .and_then(|handle| self.rigid_body_set.get(*handle))
+            .zip(
+                self.entity_id_to_body
+                    .get(&second)
+                    .and_then(|handle| self.rigid_body_set.get(*handle)),
+            );
+        bodies.is_some_and(|(first, second)| {
+            first.colliders().iter().any(|a| {
+                let a = &self.collider_set[*a];
+                // Body poses may have been synchronized since the last physics
+                // step. Compose the local collider offset rather than reading its
+                // cached world pose (which updates in the next broad-phase pass).
+                let a_pose =
+                    first.position() * a.position_wrt_parent().copied().unwrap_or_default();
+                second.colliders().iter().any(|b| {
+                    let b = &self.collider_set[*b];
+                    let b_pose =
+                        second.position() * b.position_wrt_parent().copied().unwrap_or_default();
+                    a.is_enabled()
+                        && b.is_enabled()
+                        && rapier3d::parry::query::intersection_test(
+                            &a_pose,
+                            a.shape(),
+                            &b_pose,
+                            b.shape(),
+                        )
+                        .unwrap_or(false)
+                })
+            })
+        })
+    }
+
+    /// A resting actor can be supported by a curved prop even when a ray
+    /// through its centre misses the contact. Use the solver's normal.
+    pub fn actor_has_support(&self, entity: EntityId) -> bool {
+        let Some(body) = self
+            .entity_id_to_body
+            .get(&entity)
+            .and_then(|h| self.rigid_body_set.get(*h))
+        else {
+            return false;
+        };
+        body.colliders().iter().any(|own| {
+            self.narrow_phase.contact_pairs_with(*own).any(|pair| {
+                pair.has_any_active_contact
+                    && pair.manifolds.iter().any(|manifold| {
+                        let normal = manifold.data.normal;
+                        let support_y = if pair.collider1 == *own {
+                            -normal.y
+                        } else {
+                            normal.y
+                        };
+                        support_y > 0.55 && !manifold.data.solver_contacts.is_empty()
+                    })
+            })
+        })
+    }
+
+    /// World-space support geometry of an object's live sphere, including
+    /// model-dependent offsets applied at creation. Sensors are not support.
+    pub fn actor_sphere(&self, entity: EntityId) -> Option<(Vector3<f32>, f32)> {
+        let body = self
+            .rigid_body_set
+            .get(*self.entity_id_to_body.get(&entity)?)?;
+        body.colliders().iter().find_map(|handle| {
+            let collider = self.collider_set.get(*handle)?;
+            if collider.is_sensor() {
+                return None;
+            }
+            let radius = collider.shape().as_ball()?.radius;
+            let center = collider.position().translation.vector;
+            Some((vec3(center.x, center.y, center.z), radius))
+        })
+    }
+
     pub fn get_velocity(&self, entity_id: EntityId) -> Option<Vector3<f32>> {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
             let maybe_rigid_body = self.rigid_body_set.get(*handle);
@@ -3545,6 +4439,49 @@ impl PhysicsWorld {
         } else {
             None
         }
+    }
+
+    /// How fast the player themselves travelled over the previous frame, in
+    /// world units per second. A held melee weapon rides the player, so a
+    /// swing gate must divide this out: walking carries a wrench at ~10 u/s,
+    /// five times the swing threshold.
+    pub fn player_velocity(&self) -> Vector3<f32> {
+        self.player_velocity
+    }
+
+    /// The velocity the player's hand is driving a held melee weapon at, at a
+    /// world-space point on it - read from the invisible controller target
+    /// rather than the weapon body.
+    ///
+    /// The two differ whenever the drive is catching up: a weapon held back by
+    /// world geometry and then released covers the accumulated error in one
+    /// step, and the weapon body reports that catch-up as speed the hand never
+    /// had. `None` when this entity is not a driven held melee weapon.
+    pub fn held_melee_target_velocity_at_point(
+        &self,
+        entity_id: EntityId,
+        point: Vector3<f32>,
+    ) -> Option<Vector3<f32>> {
+        let handle = self.entity_id_to_body.get(&entity_id)?;
+        let drive = self.held_item_drives.get(handle)?;
+        if drive.recovered_this_step {
+            // Recovery has no hand motion relative to the player, even if
+            // locomotion continues. A zero world velocity would subtract the
+            // moving player's speed and could masquerade as a reverse swing.
+            return Some(self.player_velocity);
+        }
+        self.body_velocity_at_point(drive.target, point)
+    }
+
+    fn body_velocity_at_point(
+        &self,
+        handle: RigidBodyHandle,
+        point: Vector3<f32>,
+    ) -> Option<Vector3<f32>> {
+        let body = self.rigid_body_set.get(handle)?;
+        Some(nvec_to_cgmath(
+            body.velocity_at_point(&Point::from(vec_to_nvec(point))),
+        ))
     }
 
     /// Velocity of `entity_id`'s body at a world-space point on it.
@@ -3558,11 +4495,51 @@ impl PhysicsWorld {
         entity_id: EntityId,
         point: Vector3<f32>,
     ) -> Option<Vector3<f32>> {
-        let handle = self.entity_id_to_body.get(&entity_id)?;
-        let rigid_body = self.rigid_body_set.get(*handle)?;
-        Some(nvec_to_cgmath(
-            rigid_body.velocity_at_point(&Point::from(vec_to_nvec(point))),
-        ))
+        let handle = *self.entity_id_to_body.get(&entity_id)?;
+        self.body_velocity_at_point(handle, point)
+    }
+
+    /// Capture incoming motion before the contact solver removes impact speed.
+    pub(crate) fn snapshot_body_motion(&self) -> HashMap<EntityId, crate::throwing::BodyMotion> {
+        self.entity_id_to_body
+            .iter()
+            .filter_map(|(entity, handle)| {
+                let body = self.rigid_body_set.get(*handle)?;
+                Some((
+                    *entity,
+                    crate::throwing::BodyMotion {
+                        center: vec3(
+                            body.center_of_mass().x,
+                            body.center_of_mass().y,
+                            body.center_of_mass().z,
+                        ),
+                        linear: nvec_to_cgmath(*body.linvel()),
+                        angular: nvec_to_cgmath(*body.angvel()),
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    pub(crate) fn release_motion(
+        &mut self,
+        entity: EntityId,
+        motion: crate::throwing::ReleaseMotion,
+    ) -> bool {
+        let Some(body) = self
+            .entity_id_to_body
+            .get(&entity)
+            .and_then(|h| self.rigid_body_set.get_mut(*h))
+        else {
+            return false;
+        };
+        if !body.is_dynamic() {
+            return false;
+        }
+        body.set_linvel(vec_to_nvec(motion.linear), true);
+        body.set_angvel(vec_to_nvec(motion.angular), true);
+        body.enable_ccd(true);
+        true
     }
 
     pub fn set_velocity(&mut self, entity_id: EntityId, velocity: Vector3<f32>) {
@@ -3673,6 +4650,7 @@ impl PhysicsWorld {
         collider.set_sensor(is_sensor);
         collider.set_collision_groups(collision_group.collision);
         collider.set_solver_groups(collision_group.solver);
+        collider.set_active_hooks(active_hooks_for(collision_group));
         collider
             .set_active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS);
         collider.user_data = entity_id.inner() as u128;
@@ -3767,6 +4745,7 @@ impl PhysicsWorld {
         collider.user_data = entity_id.inner() as u128;
         collider.set_collision_groups(collision_groups.collision);
         collider.set_solver_groups(collision_groups.solver);
+        collider.set_active_hooks(active_hooks_for(collision_groups));
 
         self.collider_set
             .insert_with_parent(collider, handle, &mut self.rigid_body_set);
@@ -3939,52 +4918,118 @@ impl PhysicsWorld {
     /// Rotational sweeps are expensive and ill-defined against thin geometry,
     /// and the failure they would prevent (turning the blade into a wall) is
     /// far milder than the one taking the hand's rotation prevents (a weapon
-    /// whose angle is not the angle of the hand holding it).
+    /// whose angle is not the angle of the hand holding it). A held gun makes
+    /// that more visible than a wrench does - a long barrel can be *turned*
+    /// into a wall it cannot be *pushed* into - but the tradeoff is the same
+    /// one, and the same choice.
     ///
-    /// Only WORLD geometry blocks. Actors deliberately do not: a swing has to
-    /// travel *into* a creature to damage it, and loose props are better
-    /// swept through than treated as walls.
-    fn drive_held_melee(&mut self) {
+    /// World geometry blocks, and so do a creature's hitboxes - the limbs a
+    /// swing can see. Its actor capsule deliberately does not: that is a
+    /// movement volume wider than the creature, and stopping on it would halt
+    /// the weapon in the air beside its target. Loose props are likewise
+    /// better swept through than treated as walls.
+    /// Record how far the player travelled over the previous frame, as the
+    /// velocity a held weapon rides along with.
+    ///
+    /// Measured from the character body's own displacement, so it covers every
+    /// way the player moves - walking, a moving platform, a relocation - which
+    /// is what the hand poses composed onto it did too. Whatever this misses
+    /// is billed as a swing, so it deliberately over-covers.
+    fn sample_player_velocity(&mut self, player_handle: &PlayerHandle) {
+        // Match the pawn frame the held targets will use in this step, rather
+        // than sampling the previous committed pose (which misclassifies a
+        // start/stop as hand motion).
+        let translation = self.get_player_next_translation(player_handle);
+        let dt = self.integration_parameters.dt;
+        self.player_velocity = match self.last_player_translation {
+            Some(previous) if dt > 0.0 => {
+                (translation - previous + self.held_tracking_translation) / dt
+            }
+            _ => Vector3::new(0.0, 0.0, 0.0),
+        };
+        self.last_player_translation = Some(translation);
+        self.held_tracking_translation = vec3(0.0, 0.0, 0.0);
+    }
+
+    fn drive_held_items(&mut self) {
         let max_step = crate::dev_params::get(crate::dev_params::MELEE_MAX_SPEED)
             * self.integration_parameters.dt;
         let pairs = self
-            .held_melee_drives
+            .held_item_drives
             .iter()
             .map(|(weapon, drive)| (*weapon, drive.target))
             .collect::<Vec<_>>();
         for (weapon, target) in pairs {
+            self.held_item_drives
+                .get_mut(&weapon)
+                .unwrap()
+                .recovered_this_step = false;
             // `next_position`, not `position`: the hand pose arrives through
             // `set_next_kinematic_position`, which Rapier only commits during
             // the step. Reading the committed pose would aim at where the hand
             // was last frame, a permanent one-frame lag no gain removes.
-            let Some(desired) = self
+            let Some(mut desired) = self
                 .rigid_body_set
                 .get(target)
                 .map(|body| *body.next_position())
             else {
                 continue;
             };
+            let controller_pose = desired;
+            if let Some(drive) = self.held_item_drives.get_mut(&weapon) {
+                if let Some(weight) = drive.weight_target {
+                    let anchor =
+                        desired.translation.vector + desired.rotation * vec_to_nvec(weight.anchor);
+                    let forward = nvec_to_cgmath(desired.rotation * vec_to_nvec(weight.forward));
+                    let rotation =
+                        drive
+                            .weight
+                            .step(self.integration_parameters.dt, forward, weight.degrees);
+                    desired.rotation = quat_to_nquat(rotation) * desired.rotation;
+                    desired.translation.vector =
+                        anchor - desired.rotation * vec_to_nvec(weight.anchor);
+                }
+                let (offset, rotation) = drive.recoil.step(self.integration_parameters.dt);
+                let (extra_offset, extra_rotation) =
+                    drive.one_hand_recoil.step(self.integration_parameters.dt);
+                desired.translation.vector += desired.rotation * vec_to_nvec(offset + extra_offset);
+                desired.rotation *= quat_to_nquat(rotation * extra_rotation);
+            }
             let Some(body) = self.rigid_body_set.get(weapon) else {
                 continue;
             };
             let current = *body.position();
             let delta = desired.translation.vector - current.translation.vector;
             let distance = delta.norm();
+            let mut sweep_stop: Option<SweepStop> = None;
 
             // Cap how far one step may carry the weapon, and sweep the capped
             // distance - never skip the sweep for a long jump. Skipping it is
             // how a fast hand walks the weapon through a wall, and "fast" is
             // not a rare case in a test or a hitched frame. A genuine
             // teleport does not need the bypass either: it carries both motor
-            // endpoints together (`translate_held_melee_for_player_relocation`),
+            // endpoints together (`translate_held_items_for_player_relocation`),
             // so the error the drive sees is already near zero.
             let step = distance.min(max_step);
             let allowed = if distance <= 1.0e-6 {
                 0.0
             } else {
                 let direction = delta / distance;
-                step * self.held_melee_sweep_fraction(weapon, &current, direction, step)
+                let (fraction, stop) =
+                    self.held_item_sweep_fraction(weapon, &current, direction, step);
+                sweep_stop = stop;
+                step * fraction
             };
+
+            if self.recover_held_item(
+                weapon,
+                current,
+                desired,
+                controller_pose,
+                allowed + 1.0e-5 < step,
+            ) {
+                continue;
+            }
 
             let mut next = desired;
             next.translation.vector = if distance <= 1.0e-6 {
@@ -3995,25 +5040,106 @@ impl PhysicsWorld {
             if let Some(body) = self.rigid_body_set.get_mut(weapon) {
                 body.set_next_kinematic_position(next);
             }
+
+            // One blow per arrival: the sweep re-reports the same limb every
+            // frame the weapon leans on it, and a swing is a swing, not a
+            // per-frame billing.
+            let (weapon_entity, previous) = self
+                .held_item_drives
+                .get(&weapon)
+                .map(|drive| (drive.weapon_entity, drive.stopped_on))
+                .unwrap_or((None, None));
+            let arrived = sweep_stop
+                .as_ref()
+                .filter(|stop| previous != Some(stop.limb))
+                .zip(weapon_entity);
+            if let Some((stop, weapon_entity)) = arrived {
+                // How fast the weapon was closing on the limb, not how fast the
+                // hand was travelling: a weapon dragged along a creature, or
+                // simply carried into one at walking pace, covers ground
+                // without closing on anything. This is the swept equivalent of
+                // `melee_weapon::closing_speed`'s projection, which cannot be
+                // computed later because the stop leaves the weapon still.
+                let travel = if self.integration_parameters.dt > 0.0 {
+                    step / self.integration_parameters.dt
+                } else {
+                    0.0
+                };
+                let heading = delta / distance;
+                // Minus the player's own motion: the target pose is world
+                // space, so walking a weapon into a creature moves it just as
+                // fast as swinging it does. The travel itself is still the
+                // drive's - it carries whatever error the weapon had accrued
+                // behind the hand - which is why the script path reads the
+                // hand target instead of a body that has been obstructed.
+                let speed = if self.is_held_inert(weapon_entity) {
+                    // Gun audio measures arrival before the sweep truncates
+                    // motion, including locomotion into the surface.
+                    nvec_to_cgmath(heading * travel).dot(stop.normal).max(0.0)
+                } else {
+                    relative_swing_speed(
+                        nvec_to_cgmath(heading * travel),
+                        self.player_velocity,
+                        Vector3::new(0.0, 0.0, 0.0),
+                        Some(stop.normal),
+                    )
+                };
+                self.pending_held_sweep_events
+                    .push(CollisionEvent::CollisionStarted {
+                        entity1_id: weapon_entity,
+                        entity2_id: stop.limb,
+                        contact: Some(CollisionContact {
+                            point: stop.point,
+                            normal: stop.normal,
+                            closing_speed: Some(speed),
+                        }),
+                    });
+            }
+            if let Some(drive) = self.held_item_drives.get_mut(&weapon) {
+                drive.stopped_on = sweep_stop.map(|stop| stop.limb);
+            }
         }
     }
 
     /// How far along `direction * distance` this weapon's colliders may travel
     /// before one of them meets world geometry, as a fraction in `0..=1`.
-    fn held_melee_sweep_fraction(
+    fn held_item_sweep_fraction(
         &self,
         weapon: RigidBodyHandle,
         current: &Isometry<Real>,
         direction: Vector<Real>,
         distance: Real,
-    ) -> Real {
+    ) -> (Real, Option<SweepStop>) {
         let Some(body) = self.rigid_body_set.get(weapon) else {
-            return 1.0;
+            return (1.0, None);
         };
+        let inert = EntityId::from_inner(body.user_data as u64)
+            .is_some_and(|entity| self.is_held_inert(entity));
         let filter = QueryFilter::new()
             .groups(InteractionGroups::new(
-                InternalCollisionGroups::ENTITY.bits.into(),
-                InternalCollisionGroups::WORLD.bits.into(),
+                // The weapon carries its melee membership here, not just
+                // `ENTITY`: a creature's hitboxes answer to `HELD_MELEE`
+                // alone, so without it the pair test fails and the swing
+                // sweeps straight through the limb.
+                (InternalCollisionGroups::ENTITY.bits | InternalCollisionGroups::HELD_MELEE.bits)
+                    .into(),
+                // Stopped by the world, and by the limbs of a creature - not
+                // by its actor capsule, which is a movement volume wider than
+                // the creature: stopping on that would halt the weapon in the
+                // air beside it.
+                (InternalCollisionGroups::WORLD.bits
+                    | if body.colliders().iter().any(|handle| {
+                        self.collider_set.get(*handle).is_some_and(|collider| {
+                            collider.collision_groups().memberships.bits()
+                                & InternalCollisionGroups::HELD_MELEE.bits
+                                != 0
+                        })
+                    }) {
+                        InternalCollisionGroups::HITBOX.bits
+                    } else {
+                        0
+                    })
+                .into(),
                 Default::default(),
             ))
             .exclude_rigid_body(weapon)
@@ -4027,6 +5153,7 @@ impl PhysicsWorld {
         );
 
         let mut nearest = distance;
+        let mut stopped_by: Option<SweepStop> = None;
         for collider_handle in body.colliders() {
             let Some(collider) = self.collider_set.get(*collider_handle) else {
                 continue;
@@ -4035,7 +5162,7 @@ impl PhysicsWorld {
             // is offset from the body origin, so sweeping the body's origin
             // would probe empty space beside the weapon.
             let shape_pose = current * collider.position_wrt_parent().copied().unwrap_or_default();
-            if let Some((_, hit)) = queries.cast_shape(
+            if let Some((hit_collider, hit)) = queries.cast_shape(
                 &shape_pose,
                 &direction,
                 collider.shape(),
@@ -4043,21 +5170,50 @@ impl PhysicsWorld {
                     max_time_of_impact: distance,
                     // Leave a hair of clearance so a weapon resting on a
                     // surface does not re-report a zero-distance hit forever.
-                    target_distance: HELD_MELEE_SKIN,
+                    target_distance: HELD_ITEM_SKIN,
                     // An already-penetrating start must not pin the weapon in
                     // place; let it keep sweeping out.
                     stop_at_penetration: false,
                     compute_impact_geometry_on_penetration: true,
                 },
             ) {
-                nearest = nearest.min(hit.time_of_impact);
+                if hit.time_of_impact >= nearest {
+                    continue;
+                }
+                nearest = hit.time_of_impact;
+                // A swing stopped by a creature's hitbox *is* a blow landing
+                // on that limb: the cast knows which one, where, and how fast
+                // the weapon was travelling. Reported so the damage can come
+                // from here rather than from a contact the stop prevents.
+                stopped_by = self
+                    .collider_set
+                    .get(hit_collider)
+                    .filter(|collider| {
+                        inert
+                            || collider.collision_groups().memberships.bits()
+                                & InternalCollisionGroups::HITBOX.bits
+                                != 0
+                    })
+                    .and_then(|collider| EntityId::from_inner(collider.user_data as u64))
+                    .map(|limb| SweepStop {
+                        limb,
+                        // World-space, on the limb: the pipeline is shape 1 of
+                        // the cast, so witness1/normal1 belong to what was hit.
+                        point: npoint_to_cgvec(hit.witness1),
+                        // ...which means `normal1` points limb -> weapon, and a
+                        // `CollisionContact` normal points entity1 -> entity2,
+                        // i.e. weapon -> limb. Un-negated it drives the killing
+                        // blow's ragdoll impulse back toward the player.
+                        normal: -nvec_to_cgmath(hit.normal1.into_inner()),
+                    });
             }
         }
-        if distance <= 0.0 {
+        let fraction = if distance <= 0.0 {
             1.0
         } else {
             (nearest / distance).clamp(0.0, 1.0)
-        }
+        };
+        (fraction, stopped_by)
     }
 
     pub fn remove(&mut self, entity_id: EntityId) {
@@ -4073,7 +5229,7 @@ impl PhysicsWorld {
         });
         let drives_to_remove = bodies_to_remove
             .iter()
-            .filter_map(|handle| self.held_melee_drives.remove(handle))
+            .filter_map(|handle| self.held_item_drives.remove(handle))
             .collect::<Vec<_>>();
         for drive in drives_to_remove {
             self.rigid_body_set.remove(
@@ -4096,6 +5252,7 @@ impl PhysicsWorld {
             );
         }
         self.entity_id_to_body.remove(&entity_id);
+        self.climbable_sides.remove(&entity_id);
         self.live_creature_sweep_recovery.remove(&entity_id);
         self.pending_player_push_velocity.remove(&entity_id);
     }
@@ -4137,12 +5294,15 @@ impl PhysicsWorld {
             controller,
             character_handle,
             is_crouched: false,
+            is_hanging_crouched: false,
+            tracking_crouched: false,
             top_out: None,
             support: None,
             slope_displacement: Vector::zeros(),
             is_grounded: false,
             jump_velocity: None,
             jump_was_pressed: false,
+            air_velocity: Vector::zeros(),
             self_translation: Vector3::new(0.0, 0.0, 0.0),
             is_climbing: false,
         }
@@ -4158,20 +5318,58 @@ impl PhysicsWorld {
         want_crouch: bool,
         player_handle: &mut PlayerHandle,
     ) -> bool {
+        self.set_player_crouch_anchored(want_crouch, CrouchAnchor::Feet, player_handle)
+    }
+
+    /// Set the crouch state of a player whose weight hangs from their hands
+    /// (a VR climb hold - see [`crate::vr_climb`]), balling them up so their
+    /// knees clear the lip they are pulling over.
+    ///
+    /// Same capsules, anchored on the BODY CENTER instead of the feet: a
+    /// hanging body has no feet on anything, and the tracked hands and eye
+    /// ride that center, so planting the feet instead would drag the gripping
+    /// hand off its hold (the shift is larger than the grip's whole stretch
+    /// tolerance). Holding the center still makes the swap invisible to the
+    /// grip: the capsule shrinks toward the hands, which is what balling up
+    /// physically is.
+    pub fn set_player_crouch_hanging(
+        &mut self,
+        want_crouch: bool,
+        player_handle: &mut PlayerHandle,
+    ) -> bool {
+        self.set_player_crouch_anchored(want_crouch, CrouchAnchor::Center, player_handle)
+    }
+
+    fn set_player_crouch_anchored(
+        &mut self,
+        want_crouch: bool,
+        anchor: CrouchAnchor,
+        player_handle: &mut PlayerHandle,
+    ) -> bool {
         // Dark disables ordinary player motion while its mantle sequence is
         // active. In particular, do not resize the temporary head sphere in
         // response to a crouch edge part-way across a lip.
         if player_handle.top_out.is_some() {
             return player_handle.is_crouched;
         }
+        if anchor == CrouchAnchor::Feet {
+            player_handle.tracking_crouched = player_handle.is_crouched;
+        }
         if want_crouch == player_handle.is_crouched {
+            // Already in the wanted stance, so nothing moves - but the request
+            // still says how the body is being held up NOW, and the undo has to
+            // match that, not how the crouch happened to be made. A player who
+            // crouch-walked a duct and then took a ledge hold is hanging from
+            // it, however they got low.
+            if want_crouch {
+                player_handle.is_hanging_crouched = anchor == CrouchAnchor::Center;
+            }
             return player_handle.is_crouched;
         }
 
         let character_handle = player_handle.character_handle;
         let collider_handle = self.rigid_body_set[character_handle].colliders()[0];
-        // Feet-planted center shift between the two capsule sizes.
-        let center_shift = (PLAYER_STANDING_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR;
+        let center_shift = anchor.center_shift();
 
         if want_crouch {
             self.collider_set[collider_handle].set_shape(crouched_player_shared_shape());
@@ -4180,6 +5378,7 @@ impl PhysicsWorld {
             translation.y -= center_shift;
             body.set_translation(translation, true);
             player_handle.is_crouched = true;
+            player_handle.is_hanging_crouched = anchor == CrouchAnchor::Center;
         } else {
             // Headroom check: intersect a test capsule at the feet-planted
             // standing pose against the same groups the movement casts use.
@@ -4211,36 +5410,8 @@ impl PhysicsWorld {
                 &self.collider_set,
                 filter,
             );
-            let overlaps_final_pose = queries
-                .intersect_shape(standing_pos, &test_shape)
-                .next()
-                .is_some();
-            // Level ceilings are authored as one-sided triangles facing down.
-            // A static overlap against their underside can miss them, even
-            // though an upward movement cast correctly blocks. Sweep a sphere
-            // from the standing capsule's bottom axis endpoint to its top
-            // endpoint: the swept sphere is exactly the capsule volume and
-            // approaches those ceiling faces from below. Keep the final-pose
-            // overlap above as well, because a cast configured to leave an
-            // initial penetration may not report a prop already intersecting
-            // the bottom sphere.
-            let bottom_sphere_pos =
-                Translation::from(Vector::y() * test_shape.segment.a.y) * standing_pos;
-            let axis_length = (test_shape.segment.b - test_shape.segment.a).norm();
-            let crown_sweep = Ball::new(test_shape.radius);
-            let blocked_by_crown_sweep = queries
-                .cast_shape(
-                    &bottom_sphere_pos,
-                    &Vector::y(),
-                    &crown_sweep,
-                    rapier3d::parry::query::ShapeCastOptions {
-                        max_time_of_impact: axis_length,
-                        target_distance: 0.0,
-                        stop_at_penetration: false,
-                        compute_impact_geometry_on_penetration: true,
-                    },
-                )
-                .is_some();
+            let pose_is_clear =
+                capsule_pose_is_clear(&queries, standing_pos.translation.vector, &test_shape);
             // Both probes above are spatial queries, and Rapier only builds the
             // broad-phase BVH inside `PhysicsPipeline::step`. On a world that
             // has never been stepped they therefore match nothing and report
@@ -4255,7 +5426,7 @@ impl PhysicsWorld {
             // Room" ledge, issue #773). A standing capsule embedded in level
             // geometry is unrecoverable: the character controller resolves zero
             // movement in every direction for the rest of the session.
-            let blocked = !self.has_stepped || overlaps_final_pose || blocked_by_crown_sweep;
+            let blocked = !self.has_stepped || !pose_is_clear;
 
             if !blocked {
                 self.collider_set[collider_handle].set_shape(standing_player_shared_shape());
@@ -4264,9 +5435,13 @@ impl PhysicsWorld {
                 translation.y += center_shift;
                 body.set_translation(translation, true);
                 player_handle.is_crouched = false;
+                player_handle.is_hanging_crouched = false;
             }
         }
 
+        if anchor == CrouchAnchor::Feet {
+            player_handle.tracking_crouched = player_handle.is_crouched;
+        }
         player_handle.is_crouched
     }
 
@@ -4315,15 +5490,22 @@ impl PhysicsWorld {
             // physics_hooks: Box::new(physics_hooks),
             // event_handler: Box::new(event_handler),
             entity_id_to_body: HashMap::new(),
+            climbable_sides: HashMap::new(),
             live_creature_sweep_recovery: HashMap::new(),
             pending_player_push_velocity: HashMap::new(),
             kinematic_attachments: HashMap::new(),
-            held_melee_drives: HashMap::new(),
+            held_item_drives: HashMap::new(),
+            held_target_frame: None,
+            held_tracking_translation: vec3(0.0, 0.0, 0.0),
+            player_velocity: Vector3::new(0.0, 0.0, 0.0),
+            last_player_translation: None,
 
             debug_pipeline,
 
             player_sensor_intersections: HashSet::new(),
             pending_player_sensor_events: Vec::new(),
+            pending_held_sweep_events: Vec::new(),
+            held_recoveries: Vec::new(),
 
             reported_nonfinite_entities: HashSet::new(),
 
@@ -4542,12 +5724,168 @@ impl PhysicsWorld {
         jump_pressed: bool,
         player_handle: &mut PlayerHandle,
     ) -> (Vector3<f32>, Vec<CollisionEvent>) {
+        self.update_player_movement(
+            PlayerMoveRequest::Walk {
+                movement: desired_movement,
+                facing,
+                jump_pressed,
+                push_to_climb: true,
+                medium: PlayerMedium::Air,
+            },
+            player_handle,
+        )
+    }
+
+    /// Throw the player into the air at `velocity` (world units/second).
+    ///
+    /// The same ballistic state an ordinary jump launches, seeded from
+    /// somewhere else: a VR climb release hands over the momentum of the pull
+    /// it let go of (see [`crate::vr_climb::release_velocity`]). Everything
+    /// after - the arc, the ceiling rejection, the landing - is the existing
+    /// jump path. Must be called before this frame's movement request.
+    pub fn launch_player(&mut self, velocity: Vector3<f32>, player_handle: &mut PlayerHandle) {
+        // A scripted mantle owns the body until it finishes and would drop the
+        // arc on its next frame anyway; same rule as `set_player_crouch`.
+        if player_handle.top_out.is_some() {
+            return;
+        }
+        player_handle.jump_velocity = Some(velocity.y);
+        player_handle.air_velocity = vector![velocity.x, 0.0, velocity.z];
+        player_handle.is_grounded = false;
+        // Launched off whatever was carrying them, as a jump is.
+        player_handle.support = None;
+    }
+
+    /// Plan a short, collision-checked route onto the surface actually held.
+    /// Stay compressed along the route, expanding only at the validated landing.
+    /// This reuses the scripted mover/reversal without requiring a standing
+    /// capsule to fit at the hanging start or choosing a different floor ahead.
+    pub fn plan_hand_top_out(&mut self, grip: ClimbGrip, player: &mut PlayerHandle) -> bool {
+        if player.top_out.is_some() || grip.kind != ClimbGripKind::Ledge {
+            return false;
+        }
+        // The next physics step consumes the last hand pull before advancing
+        // this route. Planning from the old pose would first pull backwards to
+        // it; a tiny rejected step reverses the vault after its grips release.
+        let start = self.rigid_body_set[player.character_handle]
+            .next_position()
+            .translation
+            .vector;
+        let toward = vec_to_nvec(grip.point) - start;
+        let horizontal = vector![toward.x, 0.0, toward.z];
+        if horizontal.norm() < 1e-4 {
+            return false;
+        }
+        let direction = horizontal.normalize();
+        let filter = player_movement_filter(player.character_handle);
+        let not_climbable =
+            |_handle: ColliderHandle, collider: &Collider| collider_is_not_climbable(collider);
+        let planned = {
+            let queries =
+                self.player_movement_queries(self.narrow_phase.query_dispatcher(), filter);
+            let route_queries = queries.with_filter(filter.predicate(&not_climbable));
+            let crouched = crouched_player_capsule();
+            let stand_on_completion = !player.tracking_is_crouched();
+            let final_shape = if stand_on_completion {
+                standing_player_capsule()
+            } else {
+                crouched_player_capsule()
+            };
+            if shape_intersects(&route_queries, start, &crouched) {
+                return false;
+            }
+            let mut route = None;
+            // Bounded inset search: a fist can hold an edge that cannot support
+            // the body, so prove the landing capsule fits and stays supported.
+            for inset in [0.4, 0.8] {
+                let above = vec_to_nvec(grip.point) + direction * inset + Vector::y() * 0.3;
+                let ray = Ray::new(Point::from(above), -Vector::y());
+                let Some((handle, hit)) = route_queries.cast_ray_and_get_normal(&ray, 0.6, true)
+                else {
+                    continue;
+                };
+                let floor = ray.point_at(hit.time_of_impact).coords;
+                if !is_walkable_normal(hit.normal.y)
+                    || (floor.y - grip.point.y).abs() > 0.1
+                    || EntityId::from_inner(self.collider_set[handle].user_data as u64)
+                        != grip.entity_id
+                {
+                    continue;
+                }
+                let landing = floor + Vector::y() * player_center_above_floor(!stand_on_completion);
+                if !capsule_pose_is_clear(&queries, landing, &final_shape)
+                    || !shape_has_stable_support(
+                        &player.controller,
+                        &queries,
+                        &final_shape,
+                        landing,
+                        self.integration_parameters.dt,
+                    )
+                {
+                    continue;
+                }
+                let raised = vector![start.x, start.y.max(landing.y), start.z];
+                let crossed = vector![landing.x, raised.y, landing.z];
+                if !shape_sweep_is_clear(&route_queries, start, raised, &crouched)
+                    || !shape_sweep_is_clear(&route_queries, raised, crossed, &crouched)
+                    || !shape_sweep_is_clear(&route_queries, crossed, landing, &crouched)
+                {
+                    continue;
+                }
+                route = Some(ClimbTopOut {
+                    collide_terrain: true,
+                    stand_on_completion,
+                    waypoints: [start, raised, crossed, landing, landing, landing, landing],
+                    next_waypoint: 0,
+                    save_pose: start,
+                    reversing: false,
+                    is_crouched: true,
+                });
+                break;
+            }
+            route
+        };
+        let Some(route) = planned else {
+            return false;
+        };
+        self.set_player_crouch_hanging(true, player);
+        // A stance change may reset the body's queued translation. Preserve
+        // the collision-resolved hand movement this route was planned from.
+        self.rigid_body_set[player.character_handle].set_next_kinematic_translation(start);
+        player.top_out = Some(route);
+        sync_top_out_collider(
+            &mut self.collider_set,
+            &mut self.rigid_body_set,
+            false,
+            player,
+        );
+        true
+    }
+
+    /// The fixed timestep one movement frame integrates with. A velocity
+    /// handed to [`launch_player`](Self::launch_player) has to be expressed in
+    /// it - see [`crate::vr_climb::release_velocity`].
+    pub fn player_step_dt(&self) -> f32 {
+        self.integration_parameters.dt
+    }
+
+    /// Step the simulation and resolve one frame of player movement.
+    ///
+    /// How far the player actually got is
+    /// [`PlayerHandle::self_translation`]; a hand climb's leftover separation
+    /// (the hand's drift from its hold) is what breaks its grip.
+    pub fn update_player_movement(
+        &mut self,
+        request: PlayerMoveRequest,
+        player_handle: &mut PlayerHandle,
+    ) -> (Vector3<f32>, Vec<CollisionEvent>) {
         // Queue every PhysAttach child at its parent's same next-frame target
         // before Rapier derives kinematic velocities. Moving-terrain assemblies
         // (tram floor + walls/buttons) therefore advance as one physical body,
         // matching Dark's source->destination attachment flow.
         self.update_kinematic_attachments();
-        self.drive_held_melee();
+        self.sample_player_velocity(player_handle);
+        self.drive_held_items();
 
         // Attribute any non-finite body state to its entity before the step
         // consumes it (see report_nonfinite_rigid_body_state) - by the time
@@ -4567,17 +5905,16 @@ impl PhysicsWorld {
                 &mut self.impulse_joint_set,
                 &mut self.multibody_joint_set,
                 &mut self.ccd_solver,
-                &(),
+                &MovingTerrainContactHooks {
+                    dt: self.integration_parameters.dt,
+                },
                 &self.events,
             )
         });
         self.has_stepped = true;
 
         // Update character controller
-        let desired_movement = vec_to_nvec(desired_movement);
-        let facing = vec_to_nvec(facing);
-        let (mut collision_events, character_body) =
-            { self.move_player(desired_movement, facing, jump_pressed, player_handle) };
+        let (mut collision_events, character_body) = { self.move_player(request, player_handle) };
         let translation = nvec_to_cgmath(*character_body.translation());
 
         let mut additional_collision_events = { self.events.get_and_clear_events() };
@@ -4645,18 +5982,350 @@ impl PhysicsWorld {
         queries
     }
 
+    /// Record an entity's authored per-face climbable bits (see
+    /// [`climbable_face_bit`]). Called at creation for every climbable entity.
+    pub fn set_climbable_sides(&mut self, entity_id: EntityId, sides: u32) {
+        self.climbable_sides.insert(entity_id, sides);
+    }
+
+    /// What, if anything, a hand at `point` can hold onto.
+    ///
+    /// Probes a ball of `radius` and returns the nearest qualifying contact.
+    /// Two classes (see [`ClimbGripKind`]): a **Ladder** face is an authored
+    /// climbable whose touched face has its bit set, so a ladder authored 27
+    /// rejects grabs on its top and bottom caps; a **Ledge** is any other
+    /// solid, player-blocking surface whose face is walkable and sits more
+    /// than a step above `feet_y` - the mantle-emulation hold. A wall face,
+    /// and the floor the player is standing on, offer neither.
+    /// If direct contact fails, a bounded clear approach can hook a nearby
+    /// ledge lip or an authored ladder side around its top cap. The returned
+    /// point/normal belong to that actual surface, never the refused cap.
+    ///
+    /// The nearest *qualifying* contact wins: a nearer ungrippable face does
+    /// not occlude a grippable one behind it. A hand reaching past a ladder's
+    /// bare top edge onto the block beside it should still find the block,
+    /// and both surfaces have to be inside one fist-sized ball to compete.
+    ///
+    /// Only this query consults the per-face bits. Flat push-into-ladder
+    /// climbing (`move_player`) grips any sufficiently vertical face of a
+    /// climbable - identical behavior for the 27 every shipped ladder authors.
+    pub fn climbable_grip_at(
+        &self,
+        point: Vector3<f32>,
+        radius: f32,
+        feet_y: f32,
+    ) -> Option<ClimbGrip> {
+        self.climbable_grip_above(point, radius, feet_y + PLAYER_STEP_HEIGHT / SCALE_FACTOR)
+    }
+
+    /// Near an existing ladder or ledge hold, the deck can be less than a step
+    /// above the feet, including when bringing the second hand onto the deck.
+    /// It must still be above them, so ordinary floor support is never a grip.
+    pub fn climbable_grip_during_transfer_at(
+        &self,
+        point: Vector3<f32>,
+        feet_y: f32,
+    ) -> Option<ClimbGrip> {
+        self.climbable_grip_above(point, CLIMB_GRIP_RADIUS, feet_y + 0.1)
+    }
+
+    fn climbable_grip_above(
+        &self,
+        point: Vector3<f32>,
+        radius: f32,
+        min_ledge_height: f32,
+    ) -> Option<ClimbGrip> {
+        let ball = Ball::new(radius.max(1.0e-3));
+        let ball_pos = Isometry::translation(point.x, point.y, point.z);
+        // Probe AS the player, so only geometry that blocks the player can be
+        // held. Ladders match through `ENTITY`; `CLIMBABLE` is listed so one
+        // authored with only the marker membership is still found.
+        let filter = QueryFilter::new()
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::PLAYER.bits.into(),
+                (InternalCollisionGroups::WORLD.bits
+                    | InternalCollisionGroups::ENTITY.bits
+                    | InternalCollisionGroups::SELECTABLE.bits
+                    | InternalCollisionGroups::CLIMBABLE.bits)
+                    .into(),
+                Default::default(),
+            ))
+            .exclude_sensors();
+        let dispatcher = self.narrow_phase.query_dispatcher();
+        let queries = self.broad_phase.as_query_pipeline(
+            dispatcher,
+            &self.rigid_body_set,
+            &self.collider_set,
+            filter,
+        );
+
+        let mut nearest: Option<(f32, ClimbGrip)> = None;
+        for (_handle, collider) in queries.intersect_shape(ball_pos, &ball) {
+            let Ok(Some(contact)) = rapier3d::parry::query::contact(
+                &ball_pos,
+                &ball,
+                collider.position(),
+                collider.shape(),
+                0.0,
+            ) else {
+                continue;
+            };
+            // normal1 points from the hand toward the surface; the outward
+            // surface normal is its opposite.
+            let outward = -contact.normal1.into_inner();
+            let is_climbable = collider
+                .collision_groups()
+                .memberships
+                .intersects(InternalCollisionGroups::CLIMBABLE.bits.into());
+            let entity_id = EntityId::from_inner(collider.user_data as u64);
+            let kind = if is_climbable {
+                // A climbable with no recorded mask is grippable all over;
+                // refusing it would make it silently unclimbable by hand.
+                let sides = entity_id
+                    .and_then(|id| self.climbable_sides.get(&id).copied())
+                    .unwrap_or(u32::MAX);
+                let local = collider.rotation().inverse_transform_vector(&outward);
+                if sides & climbable_face_bits(local) == 0 {
+                    // A climbable object's authored mask is the whole answer
+                    // for it - a refused face does not fall through to the
+                    // ledge rule and come back as a hold anyway.
+                    continue;
+                }
+                ClimbGripKind::Ladder
+            } else {
+                let world_point = contact.point2;
+                if !is_walkable_normal(outward.y) || world_point.y <= min_ledge_height {
+                    continue;
+                }
+                ClimbGripKind::Ledge
+            };
+            if nearest.is_none_or(|(dist, _)| contact.dist < dist) {
+                nearest = Some((
+                    contact.dist,
+                    ClimbGrip {
+                        kind,
+                        entity_id,
+                        point: vec3(contact.point2.x, contact.point2.y, contact.point2.z),
+                        normal: vec3(outward.x, outward.y, outward.z),
+                    },
+                ));
+            }
+        }
+        if let Some((_, grip)) = nearest {
+            return Some(grip);
+        }
+
+        // Descending starts with a hand ABOVE the cap. Hook around it onto
+        // an authored side: the cap itself remains ungrippable. Every segment
+        // of the approach must be clear, and the final hit must be this same
+        // ladder, so an adjacent deck/wall cannot be reached through.
+        let hand = point![point.x, point.y, point.z];
+        let directions = [
+            (1.0, 0.0),
+            (-1.0, 0.0),
+            (0.0, 1.0),
+            (0.0, -1.0),
+            (1.0, 1.0),
+            (1.0, -1.0),
+            (-1.0, 1.0),
+            (-1.0, -1.0),
+        ]
+        .map(|(x, z)| vector![x, 0.0, z].normalize());
+        // A hand can be slightly outside the cap's footprint. Probe nearby
+        // points too; the hook route below still starts at the actual hand.
+        let cap_origins =
+            std::iter::once(hand).chain([0.05, 0.15, 0.25].into_iter().flat_map(|reach| {
+                directions
+                    .into_iter()
+                    .map(move |direction| hand + direction * reach)
+            }));
+        let top = cap_origins.filter_map(|origin| {
+            let ray = Ray::new(origin, -Vector::y());
+            let (handle, hit) = queries.cast_ray_and_get_normal(&ray, CLIMB_LIP_REACH, true)?;
+            let cap = ray.point_at(hit.time_of_impact);
+            (!collider_is_not_climbable(&self.collider_set[handle])
+                && is_walkable_normal(hit.normal.y)
+                && (cap - hand).norm() <= CLIMB_LIP_REACH)
+                .then_some((handle, cap.y))
+        });
+        let mut tried_caps = HashSet::new();
+        for (top_handle, top_y) in top {
+            if !tried_caps.insert(top_handle) {
+                continue;
+            }
+            let collider = &self.collider_set[top_handle];
+            let entity_id = EntityId::from_inner(collider.user_data as u64);
+            let sides = entity_id
+                .and_then(|id| self.climbable_sides.get(&id).copied())
+                .unwrap_or(u32::MAX);
+            let drop = hand.y - top_y + 0.05;
+            let mut hook: Option<(f32, ClimbGrip)> = None;
+            // Try short approaches before the full reach, so a clear
+            // narrow gap beside a ladder is usable too.
+            for (direction, reach) in directions.into_iter().flat_map(|direction| {
+                [0.075, 0.15, CLIMB_LIP_REACH]
+                    .into_iter()
+                    .map(move |reach| (direction, reach))
+            }) {
+                let outside = hand + direction * reach;
+                if queries
+                    .cast_ray(&Ray::new(hand, direction), reach, true)
+                    .is_some()
+                    || queries
+                        .cast_ray(&Ray::new(outside, -Vector::y()), drop, true)
+                        .is_some()
+                {
+                    continue;
+                }
+                let inward = Ray::new(outside - Vector::y() * drop, -direction);
+                // The hand may be outside the footprint too: continue past
+                // its XZ position, keeping the final contact reach-bounded.
+                let Some((handle, hit)) =
+                    queries.cast_ray_and_get_normal(&inward, 2.0 * CLIMB_LIP_REACH, true)
+                else {
+                    continue;
+                };
+                let local = collider.rotation().inverse_transform_vector(&hit.normal);
+                let contact = inward.point_at(hit.time_of_impact);
+                let distance = (contact - hand).norm();
+                if handle != top_handle
+                    || hit.normal.y.abs() > 0.3
+                    || sides & climbable_face_bits(local) == 0
+                    || distance > CLIMB_LIP_REACH
+                {
+                    continue;
+                }
+                if hook.as_ref().is_none_or(|(nearest, _)| distance < *nearest) {
+                    hook = Some((
+                        distance,
+                        ClimbGrip {
+                            kind: ClimbGripKind::Ladder,
+                            entity_id,
+                            point: nvec_to_cgmath(contact.coords),
+                            normal: nvec_to_cgmath(hit.normal),
+                        },
+                    ));
+                }
+            }
+            if let Some((_, grip)) = hook {
+                return Some(grip);
+            }
+        }
+
+        // A fist against the front of a lip has a side/diagonal separation
+        // normal, even when its fingers could hook over the top. Find the
+        // actual walkable surface by approaching above the hand, then down.
+        // Both approach segments must be clear: no grabbing through a wall or
+        // ceiling. Authored ladder masks still decide ladder contacts alone.
+        let raised = hand + Vector::y() * CLIMB_LIP_REACH;
+        if queries
+            .cast_ray(&Ray::new(hand, Vector::y()), CLIMB_LIP_REACH, true)
+            .is_some()
+        {
+            return None;
+        }
+        let mut lip: Option<(f32, ClimbGrip)> = None;
+        for x in [-1.0, 0.0, 1.0] {
+            for z in [-1.0, 0.0, 1.0] {
+                let offset = vector![x * CLIMB_LIP_REACH / 2.0, 0.0, z * CLIMB_LIP_REACH / 2.0];
+                let distance = offset.norm();
+                if distance > 0.0
+                    && queries
+                        .cast_ray(&Ray::new(raised, offset / distance), distance, true)
+                        .is_some()
+                {
+                    continue;
+                }
+                let ray = Ray::new(raised + offset, -Vector::y());
+                let Some((handle, hit)) =
+                    queries.cast_ray_and_get_normal(&ray, 2.0 * CLIMB_LIP_REACH, true)
+                else {
+                    continue;
+                };
+                let collider = &self.collider_set[handle];
+                if !collider_is_not_climbable(collider) || !is_walkable_normal(hit.normal.y) {
+                    continue;
+                }
+                let top = ray.point_at(hit.time_of_impact);
+                let distance = (top - hand).norm();
+                if top.y <= min_ledge_height || distance > CLIMB_LIP_REACH {
+                    continue;
+                }
+                if lip.as_ref().is_none_or(|(nearest, _)| distance < *nearest) {
+                    lip = Some((
+                        distance,
+                        ClimbGrip {
+                            kind: ClimbGripKind::Ledge,
+                            entity_id: EntityId::from_inner(collider.user_data as u64),
+                            point: nvec_to_cgmath(top.coords),
+                            normal: nvec_to_cgmath(hit.normal),
+                        },
+                    ));
+                }
+            }
+        }
+        lip.map(|(_, grip)| grip)
+    }
+
     fn move_player(
         &mut self,
-        desired_movement: Vector<Real>,
-        facing: Vector<Real>,
-        jump_pressed: bool,
+        request: PlayerMoveRequest,
         player_handle: &mut PlayerHandle,
     ) -> (Vec<CollisionEvent>, &RigidBody) {
+        let hand_climb = match request {
+            PlayerMoveRequest::HandClimb { translation } => Some(vec_to_nvec(translation)),
+            PlayerMoveRequest::Walk { .. } => None,
+        };
+        let (desired_movement, facing, jump_pressed, push_to_climb, medium) = match request {
+            PlayerMoveRequest::Walk {
+                movement,
+                facing,
+                jump_pressed,
+                push_to_climb,
+                medium,
+            } => (
+                vec_to_nvec(movement),
+                vec_to_nvec(facing),
+                jump_pressed,
+                push_to_climb,
+                medium,
+            ),
+            // A hand climb has no locomotion input at all. Reporting the jump
+            // button as unchanged leaves its edge state exactly where the last
+            // walking frame left it, so a button held across a climb neither
+            // fires nor re-arms.
+            PlayerMoveRequest::HandClimb { .. } => (
+                Vector::zeros(),
+                Vector::zeros(),
+                player_handle.jump_was_pressed,
+                false,
+                PlayerMedium::Air,
+            ),
+        };
+        let swimming = medium != PlayerMedium::Air;
+        if hand_climb.is_some() || swimming {
+            // Hanging or swimming: the hand or the water owns the body, so any
+            // ballistic arc ends here and no gravity pass runs below.
+            player_handle.jump_velocity = None;
+            player_handle.air_velocity = Vector::zeros();
+        }
+        // Carried launch momentum rides along with whatever the player steers
+        // this frame; it lives only as long as the arc that started it.
+        let desired_movement = if player_handle.jump_velocity.is_some() {
+            desired_movement + player_handle.air_velocity * self.integration_parameters.dt
+        } else if swimming {
+            desired_movement * PLAYER_SWIM_SPEED_SCALE
+        } else {
+            desired_movement
+        };
         let jump_edge = jump_pressed && !player_handle.jump_was_pressed;
         player_handle.jump_was_pressed = jump_pressed;
-        let launch_jump = jump_edge && player_handle.is_grounded && player_handle.top_out.is_none();
+        // Underwater the held button swims up (below) instead of launching.
+        let launch_jump =
+            !swimming && jump_edge && player_handle.is_grounded && player_handle.top_out.is_none();
         if launch_jump {
-            player_handle.jump_velocity = Some(PLAYER_JUMP_SPEED / SCALE_FACTOR);
+            player_handle.jump_velocity = Some(PLAYER_JUMP_LAUNCH_SPEED);
+            player_handle.air_velocity = Vector::zeros();
             player_handle.is_grounded = false;
             // A jumping player has left their moving support. Its carry is
             // already represented by the first frame's body pose; do not keep
@@ -4676,7 +6345,11 @@ impl PhysicsWorld {
         let character_shape = character_collider.shared_shape().clone();
         let character_pos = *character_collider.position();
 
-        let gravity = player_gravity_step(&self.rigid_body_set[player_handle.character_handle]);
+        let gravity = if swimming {
+            0.0
+        } else {
+            player_gravity_step(&self.rigid_body_set[player_handle.character_handle])
+        };
 
         let movement_filter = player_movement_filter(player_handle.character_handle);
         let dispatcher = self.narrow_phase.query_dispatcher();
@@ -4684,7 +6357,7 @@ impl PhysicsWorld {
         // Flat climbing: when the player overlaps a climbable surface (ladder)
         // and pushes toward it, redirect that input to vertical movement and
         // suppress the gravity pass for this frame (see `climb_redirect`).
-        let climb_movement = if player_handle.jump_velocity.is_some() {
+        let climb_movement = if !push_to_climb || player_handle.jump_velocity.is_some() {
             None
         } else {
             let climb_filter = QueryFilter::new()
@@ -4785,14 +6458,10 @@ impl PhysicsWorld {
         // by predicate rather than by group filter because a ladder is also an
         // `ENTITY`, so masking the CLIMBABLE bit out of the group filter would
         // not exclude it.
-        let not_climbable = |_handle: ColliderHandle, collider: &Collider| {
-            !collider
-                .collision_groups()
-                .memberships
-                .intersects(InternalCollisionGroups::CLIMBABLE.bits.into())
-        };
-        let parented_non_climbable = |handle: ColliderHandle, collider: &Collider| {
-            collider.parent().is_some() && not_climbable(handle, collider)
+        let not_climbable =
+            |_handle: ColliderHandle, collider: &Collider| collider_is_not_climbable(collider);
+        let parented_non_climbable = |_handle: ColliderHandle, collider: &Collider| {
+            collider.parent().is_some() && collider_is_not_climbable(collider)
         };
         let climb_pass_filter = movement_filter.predicate(&not_climbable);
         // Dark's scripted jump-through may cross immutable world terrain.
@@ -4820,7 +6489,7 @@ impl PhysicsWorld {
                 let (movement, top_out) = advance_climb_top_out(
                     &player_handle.controller,
                     &queries,
-                    &queries.with_filter(scripted_top_out_filter),
+                    &queries.with_filter(if top_out.collide_terrain { climb_pass_filter } else { scripted_top_out_filter }),
                     &character_pos,
                     top_out,
                     self.integration_parameters.dt,
@@ -4830,6 +6499,31 @@ impl PhysicsWorld {
                     movement,
                     is_climbing: true,
                     top_out,
+                    slope_displacement: Vector::zeros(),
+                    actor_collisions: Vec::new(),
+                }
+            } else if let Some(translation) = hand_climb {
+                // The gripping hand IS the movement: no walk, no gravity, and
+                // the same climbable-excluding cast the ladder pass uses, so a
+                // body pulled up a ladder passes through the slab it holds.
+                //
+                // A scripted mantle outranks it (above): that state runs on a
+                // temporary compressed collider, and abandoning it mid-lip
+                // would restore the full capsule inside the geometry it is
+                // crossing.
+                let mvt = player_handle.controller.move_shape(
+                    self.integration_parameters.dt,
+                    &queries.with_filter(climb_pass_filter),
+                    character_shape.as_ref(),
+                    &character_pos,
+                    translation,
+                    |_c| (),
+                );
+                PlayerMovement {
+                    self_translation: mvt.translation,
+                    movement: mvt,
+                    is_climbing: true,
+                    top_out: None,
                     slope_displacement: Vector::zeros(),
                     actor_collisions: Vec::new(),
                 }
@@ -4850,13 +6544,39 @@ impl PhysicsWorld {
                             player_handle.is_crouched,
                         )
                     })
-                    .flatten();
+                    .flatten()
+                    .or_else(|| {
+                        (swimming && jump_pressed)
+                            .then(|| {
+                                plan_swim_mantle(
+                                    &player_handle.controller,
+                                    &queries,
+                                    &queries.with_filter(scripted_top_out_filter),
+                                    character_shape.as_ref(),
+                                    &character_pos,
+                                    desired_movement,
+                                    facing,
+                                    self.integration_parameters.dt,
+                                )
+                            })
+                            .flatten()
+                    });
                 if let Some(jump_mantle) = jump_mantle {
                     jump_mantle
                 } else {
-                    let airborne_vertical = player_handle
-                        .jump_velocity
-                        .map(|velocity| velocity * self.integration_parameters.dt);
+                    // Swimming reuses the airborne pass (no ground snap) so a
+                    // held jump can lift off the pool floor.
+                    let airborne_vertical = if swimming {
+                        Some(if jump_pressed && medium == PlayerMedium::Water {
+                            PLAYER_SWIM_UP_SPEED / SCALE_FACTOR * self.integration_parameters.dt
+                        } else {
+                            0.0
+                        })
+                    } else {
+                        player_handle
+                            .jump_velocity
+                            .map(|velocity| velocity * self.integration_parameters.dt)
+                    };
                     step_player_movement(
                         &player_handle.controller,
                         &queries,
@@ -4885,29 +6605,26 @@ impl PhysicsWorld {
         let self_translation = player_movement.self_translation;
         player_handle.self_translation = nvec_to_cgmath(self_translation);
         player_handle.is_climbing = player_movement.is_climbing;
+        if player_movement.top_out.is_none()
+            && player_handle
+                .top_out
+                .is_some_and(|route| route.stand_on_completion && !route.reversing)
+        {
+            // The route already moved to a full-height supported center.
+            // Expand there; a feet-planted crouch toggle would add another 0.64.
+            player_handle.is_crouched = false;
+            player_handle.is_hanging_crouched = false;
+            player_handle.tracking_crouched = false;
+        }
         player_handle.top_out = player_movement.top_out;
         player_handle.slope_displacement = player_movement.slope_displacement;
         let is_top_out = player_handle.top_out.is_some();
-        let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
-        if !was_top_out && is_top_out {
-            let compressed_radius = if player_handle
-                .top_out
-                .is_some_and(|top_out| top_out.is_crouched)
-            {
-                PLAYER_CROUCH_RADIUS / SCALE_FACTOR
-            } else {
-                CLIMB_TOP_OUT_RADIUS
-            };
-            self.collider_set[collider_handle].set_shape(SharedShape::ball(compressed_radius));
-        } else if was_top_out && !is_top_out {
-            let restored = if player_handle.is_crouched {
-                crouched_player_shared_shape()
-            } else {
-                standing_player_shared_shape()
-            };
-            self.collider_set[collider_handle].set_shape(restored);
-        }
-        self.rigid_body_set[player_handle.character_handle].enable_ccd(!is_top_out);
+        sync_top_out_collider(
+            &mut self.collider_set,
+            &mut self.rigid_body_set,
+            was_top_out,
+            player_handle,
+        );
         let scripted_top_out_frame = was_top_out || is_top_out;
         let mvt = player_movement.movement;
         let actor_collisions = player_movement.actor_collisions;
@@ -4981,12 +6698,14 @@ impl PhysicsWorld {
 
         if is_top_out {
             player_handle.jump_velocity = None;
+            player_handle.air_velocity = Vector::zeros();
             player_handle.is_grounded = false;
         } else if let Some(mut velocity) = player_handle.jump_velocity {
             let requested_vertical = velocity * self.integration_parameters.dt;
             let applied_vertical = self_translation.y;
             if mvt.grounded && requested_vertical <= 0.0 {
                 player_handle.jump_velocity = None;
+                player_handle.air_velocity = Vector::zeros();
                 player_handle.is_grounded = true;
             } else {
                 // A ceiling (or other overhead collision) consumes the upward
@@ -5009,6 +6728,7 @@ impl PhysicsWorld {
         // `player_sensor_intersections` at the hop's final occupancy, so the
         // diff below sees no change for anything they already reported.
         let mut collision_events = std::mem::take(&mut self.pending_player_sensor_events);
+        collision_events.append(&mut std::mem::take(&mut self.pending_held_sweep_events));
         let current_sensor_intersections = profile!(scope: "physics", level: TRACE, "physics.intersections_with_shape", {
             // Only consider sensor colliders for player/sensor intersections.
             let sensor_filter = QueryFilter::new().predicate(&is_sensor_collider);
@@ -5062,6 +6782,72 @@ impl PhysicsWorld {
             character_body.set_next_kinematic_translation(target);
         }
         (collision_events, character_body)
+    }
+
+    /// Move a host-bound panel just far enough outward to clear neighboring
+    /// geometry across its full footprint. The center must have a clear path
+    /// to the bounded search start, so this cannot relocate a panel through a
+    /// wall into another room. A blocked search leaves its authored pose alone.
+    pub fn clear_world_panel_position(
+        &self,
+        position: Vector3<f32>,
+        facing: Quaternion<f32>,
+        size: cgmath::Vector2<f32>,
+        entity_filter: &dyn Fn(EntityId) -> bool,
+    ) -> Vector3<f32> {
+        const MAX_OUTSET: f32 = 0.5;
+        const SKIN: f32 = 0.02;
+        if !size.x.is_finite() || !size.y.is_finite() || size.x <= 0.0 || size.y <= 0.0 {
+            return position;
+        }
+        let filter_entity = |_handle: ColliderHandle, collider: &Collider| {
+            EntityId::from_inner(collider.user_data as u64).is_none_or(entity_filter)
+        };
+        let groups = InternalCollisionGroups::ENTITIES
+            | InternalCollisionGroups::SELECTABLE
+            | InternalCollisionGroups::WORLD
+            | InternalCollisionGroups::RAYCAST;
+        let filter = QueryFilter::new()
+            .exclude_sensors()
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::ALL.bits.into(),
+                groups.bits.into(),
+                Default::default(),
+            ))
+            .predicate(&filter_entity);
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            filter,
+        );
+        let rotation = quat_to_nquat(facing);
+        let outward = rotation * -Vector::z();
+        let center = vec_to_nvec(position);
+        let start = center + outward * MAX_OUTSET;
+        let shape = Cuboid::new(vector![size.x / 2.0, size.y / 2.0, SKIN]);
+        let start_pose = Isometry::from_parts(Translation::from(start), rotation);
+        if queries.intersect_shape(start_pose, &shape).next().is_some()
+            || queries
+                .cast_ray(&Ray::new(Point::from(center), outward), MAX_OUTSET, true)
+                .is_some()
+        {
+            return position;
+        }
+        let Some((_, hit)) = queries.cast_shape(
+            &start_pose,
+            &-outward,
+            &shape,
+            rapier3d::parry::query::ShapeCastOptions {
+                max_time_of_impact: MAX_OUTSET,
+                target_distance: SKIN,
+                stop_at_penetration: true,
+                compute_impact_geometry_on_penetration: true,
+            },
+        ) else {
+            return position;
+        };
+        nvec_to_cgmath(center + outward * (MAX_OUTSET - hit.time_of_impact).max(0.0))
     }
 
     pub fn ray_cast2(
@@ -5144,6 +6930,91 @@ impl PhysicsWorld {
     /// Ownerless world geometry is always retained. This is intentionally the
     /// same all-membership query as [`Self::ray_cast2`]; callers use it only
     /// when a semantic relationship makes one entity transparent to the ray.
+    /// Sweep a projectile's enclosing sphere through its forward spawn offset.
+    pub(crate) fn projectile_spawn_distance(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        distance: f32,
+        radius: f32,
+        can_hit: &dyn Fn(EntityId) -> bool,
+    ) -> f32 {
+        self.sphere_clearance(
+            origin,
+            direction,
+            distance,
+            radius,
+            can_hit,
+            false,
+            InternalCollisionGroups::ALL,
+        )
+    }
+
+    /// Camera clearance includes the near plane. Starting in geometry must
+    /// refuse leaning rather than letting the eye emerge through a thin wall.
+    pub(crate) fn lean_distance(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        distance: f32,
+        can_hit: &dyn Fn(EntityId) -> bool,
+    ) -> f32 {
+        self.sphere_clearance(
+            origin,
+            direction,
+            distance,
+            0.5 / SCALE_FACTOR,
+            can_hit,
+            true,
+            InternalCollisionGroups::PLAYER,
+        )
+    }
+
+    fn sphere_clearance(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        distance: f32,
+        radius: f32,
+        can_hit: &dyn Fn(EntityId) -> bool,
+        stop_at_penetration: bool,
+        memberships: InternalCollisionGroups,
+    ) -> f32 {
+        let predicate = |_: ColliderHandle, collider: &Collider| {
+            EntityId::from_inner(collider.user_data as u64).is_none_or(can_hit)
+        };
+        let groups = InternalCollisionGroups::ALL_COLLIDABLE & !InternalCollisionGroups::PLAYER;
+        let filter = QueryFilter::default()
+            .exclude_sensors()
+            .predicate(&predicate)
+            .groups(InteractionGroups::new(
+                memberships.bits.into(),
+                groups.bits.into(),
+                Default::default(),
+            ));
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            filter,
+        );
+        queries
+            .cast_shape(
+                &Isometry::translation(origin.x, origin.y, origin.z),
+                &vector![direction.x, direction.y, direction.z],
+                &Ball::new(radius),
+                rapier3d::parry::query::ShapeCastOptions {
+                    max_time_of_impact: distance,
+                    target_distance: 0.01,
+                    // Projectiles may leave an initial overlap; cameras must
+                    // not emerge through geometry from an overlapping eye.
+                    stop_at_penetration,
+                    compute_impact_geometry_on_penetration: true,
+                },
+            )
+            .map_or(distance, |(_, hit)| hit.time_of_impact)
+    }
+
     pub fn ray_cast2_with_entity_filter(
         &self,
         start_point: Point3<f32>,
@@ -5286,6 +7157,12 @@ impl PhysicsWorld {
         }
     }
 
+    /// An effectively unbounded probe: casts a fixed **100 world units**.
+    ///
+    /// `direction` is normalized before the cast, so scaling it does NOT bound
+    /// the reach - pass the distance to [`Self::ray_cast2`]'s `max_toi` when a
+    /// ray is meant to stop short (issue #1327: a flat melee swing scaled its
+    /// direction by `MELEE_RANGE` and reached across the room).
     pub fn ray_cast(
         &self,
         start_point: Point3<f32>,
@@ -5352,10 +7229,10 @@ impl PhysicsWorld {
                             + other_body.linvel().z * other_body.linvel().z;
                         let is_horizontal_kinematic_side_contact = other_body.body_type()
                             == RigidBodyType::KinematicPositionBased
-                            && horizontal_motion > 1.0e-6
+                            && horizontal_motion > MOVING_TERRAIN_SPEED * MOVING_TERRAIN_SPEED
                             && pair.manifolds.iter().any(|manifold| {
                                 !manifold.data.solver_contacts.is_empty()
-                                    && manifold.data.normal.y.abs() < 0.5
+                                    && manifold.data.normal.y.abs() < SIDE_CONTACT_MAX_NORMAL_Y
                             });
                         is_horizontal_kinematic_side_contact.then(|| {
                             (
@@ -5954,7 +7831,14 @@ impl PhysicsWorld {
         self.rigid_body_set
             .iter()
             .find(|(handle, _)| handle.into_raw_parts().0 == body_id)
-            .map(|(handle, body)| self.debug_body_info(handle, body))
+            .map(|(handle, body)| {
+                let (active_contacts, contact_body_ids) = self.active_contacts(body);
+                DebugBodyInfo {
+                    active_contacts,
+                    contact_body_ids,
+                    ..self.debug_body_info(handle, body)
+                }
+            })
     }
 
     /// Enumerate every impulse joint with its anchor separation and applied
@@ -6089,7 +7973,43 @@ impl PhysicsWorld {
             is_sensor,
             is_enabled: body.is_enabled(),
             is_sleeping: body.is_sleeping(),
+            active_contacts: 0,
+            contact_body_ids: Vec::new(),
         }
+    }
+
+    /// Contact pairs currently touching this body, and the `body_id` of the
+    /// body on the other side of each - level colliders have no body and so
+    /// contribute to the count only. Walks the narrow phase, so only the
+    /// single-body detail path pays for it.
+    fn active_contacts(&self, body: &RigidBody) -> (usize, Vec<u32>) {
+        let mut count = 0;
+        let mut others = Vec::new();
+        for own in body.colliders() {
+            for pair in self
+                .narrow_phase
+                .contact_pairs_with(*own)
+                .filter(|pair| pair.has_any_active_contact)
+            {
+                count += 1;
+                let other = if pair.collider1 == *own {
+                    pair.collider2
+                } else {
+                    pair.collider1
+                };
+                if let Some(parent) = self
+                    .collider_set
+                    .get(other)
+                    .and_then(|collider| collider.parent())
+                {
+                    let id = parent.into_raw_parts().0;
+                    if !others.contains(&id) {
+                        others.push(id);
+                    }
+                }
+            }
+        }
+        (count, others)
     }
 }
 
@@ -6182,6 +8102,21 @@ pub struct DebugBodyInfo {
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,
+    /// Contact pairs currently touching (not merely broad-phase neighbours).
+    /// Zero means the body touches nothing at all - which is what tells a body
+    /// hanging in the air apart from one resting on something. Only the
+    /// single-body detail path fills this in; the list path reports 0.
+    pub active_contacts: usize,
+    /// `body_id` of every *body* this one is actually touching, deduplicated.
+    /// Turns "it touches *something*" into "it touches *that*" - which is how
+    /// a creature pressed against a door leaf is told apart from one merely
+    /// standing near it. Filled in on the single-body detail path only.
+    ///
+    /// Level geometry is inserted as colliders with no rigid body behind them,
+    /// so standing on the floor of a mission contributes to `active_contacts`
+    /// and nothing here: an empty list next to a non-zero count means every
+    /// contact is with the level itself.
+    pub contact_body_ids: Vec<u32>,
 }
 
 /// Decode an `InteractionGroups` membership bitmask into human-readable names.
@@ -6207,7 +8142,7 @@ fn collision_group_names(bits: u32) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod held_melee_drive;
+mod held_item_drive;
 
 #[cfg(test)]
 mod tests {
@@ -6219,6 +8154,63 @@ mod tests {
 
     fn identity_quat() -> Quaternion<f32> {
         Quaternion::new(1.0, 0.0, 0.0, 0.0)
+    }
+
+    /// A player-fired projectile is transparent to the shooter's own capsule -
+    /// the muzzle of a weapon held in at the body sits inside it - while
+    /// staying solid to everything it is supposed to hit. With
+    /// `CollisionGroup::entity()` the first assertion fails: the bolt collides
+    /// with the player on its first step and, being DESTROY_ON_IMPACT, never
+    /// leaves the weapon.
+    #[test]
+    fn a_player_fired_projectile_passes_through_the_shooter_but_hits_everything_else() {
+        let mut world = PhysicsWorld::new();
+        let bolt = EntityId::from_inner(1).unwrap();
+        world.add_dynamic(
+            bolt,
+            vec3(0.0, 0.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Sphere(0.1),
+            CollisionGroup::player_projectile(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+
+        let body = world
+            .debug_list_bodies()
+            .into_iter()
+            .find(|body| body.entity_id == Some(bolt.inner() as i32))
+            .unwrap();
+        assert!(
+            !body.blocks_player,
+            "a player-fired shot must pass through the player who fired it"
+        );
+        assert!(
+            body.blocks_actor,
+            "a player-fired shot must still hit creatures"
+        );
+
+        // Rapier's `test` is an AND across both colliders, so clearing PLAYER
+        // from this side alone is what makes the shot transparent.
+        let filter = CollisionGroup::player_projectile().collision.filter.bits();
+        assert_eq!(
+            filter & InternalCollisionGroups::PLAYER.bits,
+            0,
+            "the player's own capsule must not interact with the shot"
+        );
+        for still_solid in [
+            InternalCollisionGroups::WORLD,
+            InternalCollisionGroups::ENTITY,
+            InternalCollisionGroups::ACTOR,
+            InternalCollisionGroups::SELECTABLE,
+        ] {
+            assert_ne!(
+                filter & still_solid.bits,
+                0,
+                "a player-fired shot must still hit {still_solid:?}"
+            );
+        }
     }
 
     #[test]
@@ -6236,7 +8228,7 @@ mod tests {
             DynamicPhysicsOptions::default(),
         );
 
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
 
         let body = world
             .debug_list_bodies()
@@ -6288,7 +8280,7 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
         world.set_position_rotation2(weapon, vec3(-2.0, 1.0, 0.0), identity_quat());
         step(&mut world, &mut player, 1);
         world.set_position_rotation2(weapon, vec3(0.0, 1.0, 0.0), identity_quat());
@@ -6300,7 +8292,7 @@ mod tests {
             (weapon_x - 0.0).abs() < 0.02,
             "the weapon should arrive on the tracked hand: x={weapon_x}"
         );
-        let target = world.held_melee_drives[&handle].target;
+        let target = world.held_item_drives[&handle].target;
         assert!((world.get_position(target).unwrap().x - 0.0).abs() < 1.0e-4);
     }
 
@@ -6321,22 +8313,22 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
 
         let tracked_pose = vec3(3.0, 1.0, -4.0);
         world.set_position_rotation2(weapon, tracked_pose, identity_quat());
 
-        let drive = world.held_melee_drives[&handle];
+        let drive = world.held_item_drives[&handle];
         assert!(drive.seated);
         assert!((world.get_position(handle).unwrap() - tracked_pose).magnitude() < 1.0e-4);
         assert!((world.get_position(drive.target).unwrap() - tracked_pose).magnitude() < 1.0e-4);
         assert!(world.get_velocity(weapon).unwrap().magnitude() < 1.0e-4);
     }
 
-    /// World solver contact must win over the hand motor, then releasing that
-    /// obstruction must let the weapon return to the tracked pose.
-    #[test]
-    fn held_melee_weapon_stops_at_world_geometry_then_springs_back() {
+    /// Drive a held body of `group` from x=-1 at a fixed wall at x=0, then let
+    /// the hand retreat. Shared by the melee and inert cases: what the level
+    /// does to a held body must not depend on which group it is held with.
+    fn held_item_pushed_into_a_wall_then_withdrawn(group: CollisionGroup) {
         let (mut world, mut player) = world_with_floor();
         world.add_collider(
             EntityId::from_inner(2).unwrap(),
@@ -6355,7 +8347,7 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, group);
         world.set_position_rotation2(weapon, vec3(-1.0, 1.0, 0.0), identity_quat());
         step(&mut world, &mut player, 1);
         world.set_position_rotation2(weapon, vec3(1.0, 1.0, 0.0), identity_quat());
@@ -6365,7 +8357,7 @@ mod tests {
         let blocked_x = world.get_position(handle).unwrap().x;
         assert!(
             blocked_x < -0.20,
-            "the dynamic weapon crossed the fixed wall instead of stopping: x={blocked_x}"
+            "the held body crossed the fixed wall instead of stopping: x={blocked_x}"
         );
 
         world.set_position_rotation2(weapon, vec3(-1.0, 1.0, 0.0), identity_quat());
@@ -6373,7 +8365,92 @@ mod tests {
         let returned_x = world.get_position(handle).unwrap().x;
         assert!(
             returned_x < -0.8,
-            "the weapon did not spring back after the target cleared the wall: x={returned_x}"
+            "the held body did not spring back after the target cleared the wall: x={returned_x}"
+        );
+    }
+
+    /// World solver contact must win over the hand motor, then releasing that
+    /// obstruction must let the weapon return to the tracked pose.
+    #[test]
+    fn held_melee_weapon_stops_at_world_geometry_then_springs_back() {
+        held_item_pushed_into_a_wall_then_withdrawn(CollisionGroup::held_melee());
+    }
+
+    /// The `physical_held_items` case: a held gun only has to stop travelling
+    /// into the level, so it is held with no collision membership and no
+    /// filter at all. The sweep that stops it runs its own query, which does
+    /// not consult the body's groups - this is the test that says so, because
+    /// the whole design rests on it.
+    #[test]
+    fn an_inert_held_item_is_still_stopped_by_world_geometry() {
+        held_item_pushed_into_a_wall_then_withdrawn(CollisionGroup::held_inert());
+    }
+
+    /// ...and it touches nothing while it does. A held gun swept through a
+    /// creature must report no contact: contact is what bills melee damage
+    /// (`TriggeredMeleeWeapon`), and a gun that bludgeons by touch would be a
+    /// nasty surprise from a change that is only about walls. The same sweep
+    /// with `held_melee` reports the contact (see
+    /// `held_melee_contacts_live_actor_without_solver_launch`).
+    #[test]
+    fn an_inert_held_item_touches_nothing_it_sweeps_through() {
+        let (mut world, mut player) = world_with_floor();
+        let gun = EntityId::from_inner(2).unwrap();
+        let actor = EntityId::from_inner(3).unwrap();
+
+        world.add_dynamic(
+            actor,
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Capsule {
+                height: 0.8,
+                radius: 0.4,
+            },
+            CollisionGroup::actor(),
+            false,
+            DynamicPhysicsOptions {
+                gravity_scale: 0.0,
+                restitution: 0.0,
+                friction: 0.0,
+            },
+        );
+        world.set_enabled_rotations(actor, false, false, false);
+        world.add_dynamic(
+            gun,
+            vec3(-2.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.3, 0.1, 0.1)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions {
+                gravity_scale: 0.0,
+                restitution: 0.0,
+                friction: 0.0,
+            },
+        );
+        world.set_held_item_physical(gun, CollisionGroup::held_inert());
+
+        world.set_position_rotation2(gun, vec3(-2.0, 1.0, 0.0), identity_quat());
+        step(&mut world, &mut player, 1);
+        world.set_position_rotation2(gun, vec3(0.0, 1.0, 0.0), identity_quat());
+        let mut events = Vec::new();
+        for _ in 0..30 {
+            let (_, mut frame_events) = world.update(vec3(0.0, 0.0, 0.0), &mut player);
+            events.append(&mut frame_events);
+        }
+
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                CollisionEvent::CollisionStarted {
+                    entity1_id,
+                    entity2_id,
+                    ..
+                } if *entity1_id == gun || *entity2_id == gun
+            )),
+            "an inert held item reported a contact"
         );
     }
 
@@ -6394,8 +8471,8 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_melee(weapon);
-        let target_handle = world.held_melee_drives[&weapon_handle].target;
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
+        let target_handle = world.held_item_drives[&weapon_handle].target;
         let weapon_before = world.get_position(weapon_handle).unwrap();
         let target_before = world.get_position(target_handle).unwrap();
         let player_before = world.get_player_translation(&player);
@@ -6430,11 +8507,11 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
 
         let rendered_size = vec3(0.24, 1.02, 0.18);
         let rendered_center = vec3(0.0, -0.51, 0.01);
-        world.fit_held_melee_cuboid(weapon, rendered_size, rendered_center);
+        world.fit_held_item_cuboid(weapon, rendered_size, rendered_center);
 
         assert_eq!(world.cuboid_full_size(handle), Some(rendered_size));
         let collider = &world.collider_set[world.rigid_body_set[handle].colliders()[0]];
@@ -6493,7 +8570,7 @@ mod tests {
                 friction: 0.0,
             },
         );
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
 
         // Seat the just-held body at its first tracked pose, establish the
         // broad phase, then put only the hand target beyond the actor. The
@@ -6533,6 +8610,7 @@ mod tests {
             } if *entity1_id == actor && *entity2_id == weapon => Some(CollisionContact {
                 point: contact.point,
                 normal: -contact.normal,
+                closing_speed: None,
             }),
             _ => None,
         });
@@ -6575,9 +8653,9 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
         let held_handle = world.entity_id_to_body[&weapon];
-        let target_handle = world.held_melee_drives[&held_handle].target;
+        let target_handle = world.held_item_drives[&held_handle].target;
         let held_collider = &world.collider_set[world.rigid_body_set[held_handle].colliders()[0]];
         assert!(!held_collider.solver_groups().test(actor.solver));
 
@@ -6641,6 +8719,51 @@ mod tests {
         assert!(
             obstacle.collision.test(generic_entity_ray),
             "selection/projectile rays must still hit the obstacle"
+        );
+    }
+
+    /// Walking into a loose simulated prop must step through it, not launch
+    /// it. The player capsule is kinematic, so an ordinary contact solves as
+    /// infinite mass against the prop's finite mass and a brushed mug flies
+    /// across the room.
+    ///
+    /// Negative-first: the `CollisionGroup::entity()` half of this test is the
+    /// old behavior, and it kicks the prop several units away.
+    #[test]
+    fn walking_into_a_loose_prop_steps_through_it_instead_of_kicking_it() {
+        fn prop_displacement_after_walking_through(group: CollisionGroup) -> f32 {
+            let (mut world, mut player) = world_with_floor();
+            world.set_player_translation(vec3(0.0, 1.2, 0.0), &mut player);
+
+            let start = vec3(0.0, 0.2, 1.0);
+            let prop = world.add_dynamic(
+                EntityId::from_inner(2001).unwrap(),
+                start,
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                PhysicsShape::Sphere(0.2),
+                group,
+                false,
+                DynamicPhysicsOptions::default(),
+            );
+
+            walk_player_toward(&mut world, &mut player, vec3(0.0, 0.0, 3.0), 240);
+
+            let end = world.rigid_body_set[prop].translation();
+            vec3(end.x - start.x, 0.0, end.z - start.z).magnitude()
+        }
+
+        let kicked = prop_displacement_after_walking_through(CollisionGroup::entity());
+        assert!(
+            kicked > 0.5,
+            "a prop solid to the player is shoved by the walk (got {kicked})"
+        );
+
+        let stepped_through =
+            prop_displacement_after_walking_through(CollisionGroup::entity().non_solid_to_player());
+        assert!(
+            stepped_through < 0.05,
+            "the player must pass through a loose prop without moving it (got {stepped_through})"
         );
     }
 
@@ -6845,10 +8968,276 @@ mod tests {
         (world, player)
     }
 
+    #[test]
+    fn world_panel_clearance_respects_host_orientation_and_keeps_clear_poses() {
+        use cgmath::{Rotation, Rotation3, vec2};
+        for yaw in [0.0, 90.0] {
+            let (mut world, mut player) = world_with_floor();
+            let facing = Quaternion::from_angle_y(cgmath::Deg(yaw));
+            let authored = facing.rotate_vector(vec3(0.0, 3.0, -0.1));
+            let size = vec2(0.752, 1.184);
+            step(&mut world, &mut player, 1);
+            assert_eq!(
+                world.clear_world_panel_position(authored, facing, size, &|_| true),
+                authored
+            );
+            world.add_kinematic(
+                EntityId::from_inner(2200).unwrap(),
+                facing.rotate_vector(vec3(-0.32, 3.0, -0.12)),
+                facing,
+                vec3(0.0, 0.0, 0.0),
+                vec3(0.12, 2.0, 0.2),
+                CollisionGroup::entity(),
+                false,
+            );
+            step(&mut world, &mut player, 1);
+            let placed = world.clear_world_panel_position(authored, facing, size, &|_| true);
+            let local = facing.conjugate().rotate_vector(placed);
+            assert!(
+                local.z < -0.22 && local.z > -0.3,
+                "minimal outward clearance: {local:?}"
+            );
+            assert!(local.x.abs() < 0.001 && (local.y - 3.0).abs() < 0.001);
+            // Left and right controls remain reachable by real world rays.
+            for x in [-0.32, 0.32] {
+                let start = facing.rotate_vector(vec3(0.0, 3.0, -1.0));
+                let target = placed + facing.rotate_vector(vec3(x, 0.0, 0.0));
+                assert!(
+                    world
+                        .ray_cast2(
+                            Point3::new(start.x, start.y, start.z),
+                            target - start,
+                            (target - start).magnitude(),
+                            InternalCollisionGroups::ENTITY,
+                            None,
+                            true
+                        )
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn world_panel_clearance_never_crosses_an_intervening_wall_or_exceeds_its_bound() {
+        use cgmath::vec2;
+        for (center, size) in [
+            (vec3(0.0, 3.0, -0.35), vec3(2.0, 2.0, 0.1)),
+            // Only the left edge covers the bounded search start; the center
+            // ray is clear but no full panel can fit within the allowed inset.
+            (vec3(-0.32, 3.0, -0.6), vec3(0.12, 2.0, 0.4)),
+        ] {
+            let (mut world, mut player) = world_with_floor();
+            world.add_kinematic(
+                EntityId::from_inner(2201).unwrap(),
+                center,
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                size,
+                CollisionGroup::entity(),
+                false,
+            );
+            step(&mut world, &mut player, 1);
+            let authored = vec3(0.0, 3.0, -0.1);
+            assert_eq!(
+                world.clear_world_panel_position(
+                    authored,
+                    identity_quat(),
+                    vec2(0.752, 1.184),
+                    &|_| true
+                ),
+                authored
+            );
+        }
+    }
+
+    fn swim(
+        world: &mut PhysicsWorld,
+        player: &mut PlayerHandle,
+        movement: Vector3<f32>,
+        jump: bool,
+    ) {
+        world.update_player_movement(
+            PlayerMoveRequest::Walk {
+                movement,
+                facing: Vector3::new(1.0, 0.0, 0.0),
+                jump_pressed: jump,
+                push_to_climb: true,
+                medium: PlayerMedium::Water,
+            },
+            player,
+        );
+    }
+
+    #[test]
+    fn water_medium_suspends_gravity_and_jump_swims_upward() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 10.0, 0.0), EntityId::from_inner(1101).unwrap());
+        let start = world.get_player_translation(&player);
+
+        for _ in 0..60 {
+            swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), false);
+        }
+        let floating = world.get_player_translation(&player);
+        assert!(
+            (floating.y - start.y).abs() < 0.05,
+            "neutral buoyancy must hold the player in place, moved from {start:?} to {floating:?}"
+        );
+
+        for _ in 0..60 {
+            swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), true);
+        }
+        let swum = world.get_player_translation(&player);
+        assert!(
+            swum.y > floating.y + 0.2,
+            "holding jump in water must swim upward, moved from {floating:?} to {swum:?}"
+        );
+    }
+
+    #[test]
+    fn treading_water_holds_height_without_swimming_up() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 10.0, 0.0), EntityId::from_inner(1150).unwrap());
+        let start = world.get_player_translation(&player);
+        for _ in 0..60 {
+            world.update_player_movement(
+                PlayerMoveRequest::Walk {
+                    movement: Vector3::new(0.0, 0.0, 0.0),
+                    facing: Vector3::new(1.0, 0.0, 0.0),
+                    jump_pressed: true,
+                    push_to_climb: true,
+                    medium: PlayerMedium::WaterSurface,
+                },
+                &mut player,
+            );
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            (end.y - start.y).abs() < 0.01,
+            "treading water must neither sink nor rise, moved from {start:?} to {end:?}"
+        );
+    }
+
+    #[test]
+    fn held_jump_swims_up_off_the_pool_floor() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1200).unwrap(),
+            ColliderBuilder::cuboid(10.0, 1.0, 10.0)
+                .translation(vector![0.0, -1.0, 0.0])
+                .build(),
+        );
+        let mut player = world.create_player(
+            vec3(0.0, player_center_above_floor(false) + 0.1, 0.0),
+            EntityId::from_inner(1201).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+        let settled = world.get_player_translation(&player);
+
+        for _ in 0..60 {
+            swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), false);
+        }
+        let floor = world.get_player_translation(&player);
+        assert!(
+            (floor.y - settled.y).abs() < 0.02,
+            "an idle swimmer must rest on the floor, moved from {settled:?} to {floor:?}"
+        );
+
+        for _ in 0..60 {
+            swim(&mut world, &mut player, Vector3::new(0.0, 0.0, 0.0), true);
+        }
+        let swum = world.get_player_translation(&player);
+        assert!(
+            swum.y > floor.y + 0.2,
+            "a held jump must lift a swimmer off the floor, moved from {floor:?} to {swum:?}"
+        );
+    }
+
+    #[test]
+    fn held_jump_mantles_a_blocking_pool_lip_without_a_ladder() {
+        let quad = |x0: f32, x1: f32, y: f32| {
+            let verts = vec![
+                point![x0, y, -100.0],
+                point![x1, y, -100.0],
+                point![x1, y, 100.0],
+                point![x0, y, 100.0],
+            ];
+            ColliderBuilder::trimesh(verts, vec![[0u32, 1, 2], [0, 2, 3]]).expect("trimesh")
+        };
+
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1300).unwrap(),
+            quad(-100.0, 100.0, 0.0).build(),
+        );
+        world.add_collider(
+            EntityId::from_inner(1301).unwrap(),
+            quad(-5.2, 100.0, 1.2).build(),
+        );
+        let mut player =
+            world.create_player(vec3(-6.0, 1.3, 0.0), EntityId::from_inner(1302).unwrap());
+
+        let walk = 25.0 / SCALE_FACTOR / 60.0;
+        let mut saw_mantle = false;
+        for _ in 0..180 {
+            swim(&mut world, &mut player, Vector3::new(walk, 0.0, 0.0), true);
+            saw_mantle |= player.top_out.is_some();
+        }
+        let end = world.get_player_translation(&player);
+
+        assert!(
+            saw_mantle,
+            "a held jump against a pool lip must enter the mantle transition"
+        );
+        assert!(
+            end.x > -4.5 && end.y > 1.5,
+            "the mantle must leave the player standing beyond the upper lip, ended {end:?}"
+        );
+    }
+
     fn step(world: &mut PhysicsWorld, player: &mut PlayerHandle, frames: usize) {
         for _ in 0..frames {
             world.update(Vector3::new(0.0, 0.0, 0.0), player);
         }
+    }
+
+    #[test]
+    fn object_actor_support_uses_the_live_offset_and_rejects_airborne_contacts() {
+        let (mut world, mut player) = world_with_floor();
+        let actor = EntityId::from_inner(42).unwrap();
+        world.add_dynamic(
+            actor,
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.148, 0.0),
+            PhysicsShape::Sphere(0.2),
+            CollisionGroup::actor(),
+            false,
+            DynamicPhysicsOptions {
+                restitution: 0.0,
+                ..DynamicPhysicsOptions::default()
+            },
+        );
+        world.set_enabled_rotations(actor, false, false, false);
+        assert!(!world.actor_has_support(actor));
+        step(&mut world, &mut player, 120);
+        assert!(world.actor_has_support(actor));
+        let (center, radius) = world.actor_sphere(actor).unwrap();
+        assert!((center.y - radius).abs() < 0.01);
+        let origin = world
+            .get_position(*world.entity_id_to_body.get(&actor).unwrap())
+            .unwrap();
+        assert!((origin.y - 0.052).abs() < 0.01);
+        world.set_velocity(actor, vec3(2.0, 4.0, 0.0));
+        step(&mut world, &mut player, 10);
+        assert!(!world.actor_has_support(actor));
+        assert!(
+            world.get_velocity(actor).unwrap().x > 1.9,
+            "airborne launch is preserved"
+        );
+        assert_eq!(world.get_rotation2(actor).unwrap(), identity_quat());
     }
 
     fn add_ramp(world: &mut PhysicsWorld, start: (f32, f32), end: (f32, f32), half_width: f32) {
@@ -7124,6 +9513,67 @@ mod tests {
             world.get_player_save_translation(&player),
             Err(PlayerSavePoseError::UnsupportedPose),
             "a falling player with no walkable support must not brick a save slot"
+        );
+    }
+
+    /// A hanging ball-up must be invisible to the hand holding the player up:
+    /// the tracked hands ride the body center, and moving it by the ordinary
+    /// feet-planted crouch shift (0.64 wu) would exceed the grip's whole
+    /// stretch tolerance (0.6 wu) and drop them off the hold.
+    #[test]
+    fn hanging_capsule_keeps_stationary_stage_hands_and_head_in_place() {
+        use crate::vr_tracking::TrackingTransform;
+        for start_crouched in [false, true] {
+            let mut world = PhysicsWorld::new();
+            let mut player =
+                world.create_player(vec3(0.0, 5.0, 0.0), EntityId::from_inner(2107).unwrap());
+            step(&mut world, &mut player, 1);
+            world.set_player_crouch(start_crouched, &mut player);
+            let rig = |player: &PlayerHandle| {
+                TrackingTransform::new(
+                    player_center_above_floor(player.tracking_is_crouched()),
+                    player_eye_cap_above_center(player.tracking_is_crouched()),
+                    1.65,
+                    0.0,
+                )
+            };
+            let before = rig(&player);
+            let center = world.get_player_translation(&player);
+            world.set_player_crouch_hanging(true, &mut player);
+            let after = rig(&player);
+            for tracked in [vec3(0.0, 1.65, 0.0), vec3(0.25, 1.4, -0.4)] {
+                assert_eq!(
+                    before.stage_to_pawn(tracked) + center,
+                    after.stage_to_pawn(tracked) + world.get_player_translation(&player)
+                );
+            }
+            world.set_player_crouch_hanging(false, &mut player);
+            assert_eq!(player.tracking_is_crouched(), start_crouched);
+            assert_eq!(world.get_player_translation(&player), center);
+        }
+    }
+
+    #[test]
+    fn a_hanging_crouch_shrinks_the_capsule_without_moving_the_body() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 3.0, 0.0), EntityId::from_inner(2104).unwrap());
+        // Standing up consults the broad phase, which only exists after a step.
+        step(&mut world, &mut player, 1);
+        let hanging = world.get_player_translation(&player);
+
+        assert!(world.set_player_crouch_hanging(true, &mut player));
+        assert_eq!(world.get_player_translation(&player), hanging);
+        assert!(!world.set_player_crouch_hanging(false, &mut player));
+        assert_eq!(world.get_player_translation(&player), hanging);
+
+        // The feet-planted crouch the flat runtime uses moves it, which is
+        // exactly what the hanging variant exists to avoid.
+        assert!(world.set_player_crouch(true, &mut player));
+        assert!(
+            (world.get_player_translation(&player).y - hanging.y + player_crouch_center_shift())
+                .abs()
+                < 1.0e-5,
         );
     }
 
@@ -7607,6 +10057,219 @@ mod tests {
         assert!(
             end.y > 0.5 && end.x < 2.5,
             "moving terrain swept the live creature off its supported deck: {end:?}"
+        );
+    }
+
+    /// A kinematic prop that never actually goes anywhere still reports a
+    /// whisper of velocity, because a kinematic body's velocity is derived
+    /// from its pose deltas. Reading that as moving terrain pinned a creature
+    /// brushing against it at its exact translation, every frame, for as long
+    /// as it stood there - the medsci2 balcony railing, which froze the
+    /// patroller to the last decimal.
+    #[test]
+    fn a_stationary_kinematic_with_jitter_does_not_pin_a_creature() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2130, 40.0);
+        let wall = add_sweeping_wall(&mut world, 2133);
+        // Up against the creature's side, and staying there
+        world.set_translation(wall, vec3(-1.15, 1.0, 0.0));
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let start = world.get_position(creature).unwrap();
+        for frame in 0..120 {
+            // ~3e-3 units/s of jitter: nothing, but ten times the old gate
+            let jitter = if frame % 2 == 0 { 5.0e-5 } else { -5.0e-5 };
+            world.set_translation(wall, vec3(-1.15 + jitter, 1.0, 0.0));
+            let y_velocity = world.get_velocity(creature_id).unwrap().y;
+            // Leaning on the wall while walking along it, so the side
+            // contact holds - the pose an AI takes rounding a railing
+            world.set_velocity(creature_id, vec3(-0.5, y_velocity, 1.0));
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+        }
+
+        let end = world.get_position(creature).unwrap();
+        assert!(
+            end.z - start.z > 1.0,
+            "a stationary railing must not hold a walking creature in place: {start:?} -> {end:?}"
+        );
+    }
+
+    /// A door leaf rising past a creature pressed against its face must leave
+    /// the creature on the floor. The contact normal is horizontal, so the
+    /// leaf's whole velocity lies in the contact's tangent plane and Rapier's
+    /// friction drags the capsule up with it (#1255).
+    #[test]
+    fn a_rising_kinematic_leaf_does_not_lift_a_creature_against_its_face() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2150, 40.0);
+        let leaf = add_sweeping_wall(&mut world, 2153);
+        // Up against the creature's side, the pose an AI takes at a threshold
+        world.set_translation(leaf, vec3(-1.15, 1.0, 0.0));
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let start = world.get_position(creature).unwrap();
+        let mut peak = start.y;
+        // 2.4 units/s, the speed medsci1's security door leaf travels at
+        for frame in 1..=60 {
+            world.set_translation(leaf, vec3(-1.15, 1.0 + frame as f32 * 0.04, 0.0));
+            // Walking into the leaf, which is what presses the capsule to its
+            // face - the whole precondition for friction to drag it upward.
+            let y_velocity = world.get_velocity(creature_id).unwrap().y;
+            world.set_velocity(creature_id, vec3(-0.5, y_velocity, 0.0));
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+            peak = peak.max(world.get_position(creature).unwrap().y);
+        }
+
+        assert!(
+            peak - start.y < 0.05,
+            "a rising leaf must not carry the creature beside it: rest {}, peak {peak}",
+            start.y
+        );
+    }
+
+    /// The detail endpoint's contact report must name *which* body it touches,
+    /// not just how many: that is what separates a creature pressed against a
+    /// door leaf from one standing beside it. Bodies only - a mission's level
+    /// geometry has no rigid body, so it raises the count and nothing else.
+    #[test]
+    fn a_body_at_rest_reports_the_body_it_is_resting_on() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2180, 40.0);
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let floor = world.entity_id_to_body[&EntityId::from_inner(2180).unwrap()]
+            .into_raw_parts()
+            .0;
+        let creature_body = creature.into_raw_parts().0;
+        let detail = world.debug_body_detail(creature_body).unwrap();
+
+        assert!(
+            detail.active_contacts > 0,
+            "a creature standing on the floor must report a contact"
+        );
+        assert_eq!(
+            detail.contact_body_ids,
+            vec![floor],
+            "the contact must name the floor body it rests on"
+        );
+        assert!(
+            world
+                .debug_body_detail(floor)
+                .unwrap()
+                .contact_body_ids
+                .contains(&creature_body),
+            "and the pair must read the same way round"
+        );
+    }
+
+    /// The other direction of travel: a leaf coming *down* on a creature
+    /// standing under it, where it settled while the leaf was parked open. The leaf's underside meets
+    /// the capsule's head, so the contact normal is vertical - the hook leaves
+    /// it alone (it only ever touches side contacts) and the solver resolves it
+    /// the ordinary way. What must never happen is the creature being driven
+    /// through the floor or launched off it; what must happen is that it ends
+    /// up out of the doorway, standing.
+    ///
+    /// The port's door script has no obstruction/reopen path, so a closing leaf
+    /// really does come all the way down on whoever is under it - the pushout
+    /// below is the only thing keeping them out of the floor.
+    ///
+    /// Negative-first: without the hook, the capsule squeezed out sideways is
+    /// then pressed against the leaf's *face*, and friction against the still-
+    /// descending leaf flings it to y = 1.61 and leaves it hanging at 1.47 -
+    /// half a unit off the floor - after the leaf has shut.
+    #[test]
+    fn a_closing_kinematic_leaf_pushes_a_creature_clear_instead_of_through_the_floor() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2170, 40.0);
+        let leaf = add_sweeping_wall(&mut world, 2173);
+        // Parked open, over the creature but 0.2 to its +x, so the direction it
+        // is pushed follows from the geometry rather than from solver
+        // tie-breaking. The leaf's underside (y - 1.5) clears the capsule's
+        // head at y = 2.0, so the creature stands under it undisturbed.
+        world.set_translation(leaf, vec3(0.2, 4.0, 0.0));
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let start = world.get_position(creature).unwrap();
+        assert!(
+            (start.y - 1.0).abs() < 0.05,
+            "the creature should stand under the parked leaf, not be moved by it: {start:?}"
+        );
+
+        let mut lowest = start.y;
+        let mut highest = start.y;
+        // Closing at the same 2.4 units/s the leaf opens at, down to shut.
+        for frame in 1..=75 {
+            world.set_translation(leaf, vec3(0.2, 4.0 - frame as f32 * 0.04, 0.0));
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+            let y = world.get_position(creature).unwrap().y;
+            lowest = lowest.min(y);
+            highest = highest.max(y);
+        }
+        // Keep sampling through the settle: a creature launched by the closing
+        // leaf reaches its peak after the leaf has stopped.
+        for _ in 0..60 {
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+            let y = world.get_position(creature).unwrap().y;
+            lowest = lowest.min(y);
+            highest = highest.max(y);
+        }
+
+        let end = world.get_position(creature).unwrap();
+        // The squeeze between leaf and floor bottoms out ~0.58 into the 1.0-
+        // thick floor slab before the capsule squirts sideways; it must stay
+        // inside that slab (recoverable penetration) rather than pass through.
+        assert!(
+            lowest > start.y - 0.75,
+            "a closing leaf must not push the creature through the floor: rest {}, lowest {lowest}",
+            start.y
+        );
+        // Without the hook this peaks at 1.61, a full unit above rest; with it
+        // the capsule never rises above its resting height at all.
+        assert!(
+            highest < start.y + 0.25,
+            "a closing leaf must not launch the creature: rest {}, highest {highest}",
+            start.y
+        );
+        assert!(
+            (end.y - start.y).abs() < 0.1,
+            "the creature must end standing on the floor: rest {}, end {}",
+            start.y,
+            end.y
+        );
+        // Pushed out the -x side (leaf centre 0.2, half-thickness 0.4, capsule
+        // radius 0.5), resting against the shut leaf's face less Rapier's
+        // contact tolerance.
+        assert!(
+            end.x < -0.65,
+            "the creature must end pushed clear of the leaf, not inside it: {end:?}"
+        );
+    }
+
+    /// The other half of the same contact: a platform rising *under* a
+    /// creature carries it, through the contact normal rather than friction.
+    #[test]
+    fn a_rising_kinematic_platform_still_carries_the_creature_on_it() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2160, 40.0);
+        let platform = world.add_kinematic(
+            EntityId::from_inner(2163).unwrap(),
+            vec3(0.0, 0.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 1.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let start = world.get_position(creature).unwrap();
+        for frame in 1..=60 {
+            world.set_translation(platform, vec3(0.0, frame as f32 * 0.04, 0.0));
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+        }
+
+        let end = world.get_position(creature).unwrap();
+        assert!(
+            end.y - start.y > 2.0,
+            "a rising platform must carry its rider: {} -> {}",
+            start.y,
+            end.y
         );
     }
 
@@ -8114,6 +10777,8 @@ mod tests {
         let controller = KinematicCharacterController::default();
         let mut pos = Isometry::translation(0.0, 0.0, 0.0);
         let top_out = ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints: test_waypoints(),
             next_waypoint: 2,
             save_pose: vector![-1.0, 0.0, 0.0],
@@ -8167,6 +10832,8 @@ mod tests {
         let controller = KinematicCharacterController::default();
         let mut pos = Isometry::translation(0.0, 0.0, 0.0);
         let mut active = ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints: test_waypoints(),
             next_waypoint: 2,
             save_pose: vector![-1.0, 0.0, 0.0],
@@ -8220,6 +10887,8 @@ mod tests {
         let controller = KinematicCharacterController::default();
         let pos = Isometry::identity();
         let completed = ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints: test_waypoints(),
             next_waypoint: test_waypoints().len(),
             save_pose: Vector::zeros(),
@@ -8258,6 +10927,8 @@ mod tests {
         world.collider_set[collider_handle].set_shape(SharedShape::ball(CLIMB_TOP_OUT_RADIUS));
         world.rigid_body_set[player.character_handle].enable_ccd(false);
         player.top_out = Some(ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints: [compressed_pose; 7],
             next_waypoint: 3,
             save_pose,
@@ -8282,6 +10953,662 @@ mod tests {
             world.get_player_translation(&player),
             nvec_to_cgmath(compressed_pose),
             "the body must remain at its live compressed pose"
+        );
+    }
+
+    /// Grip-query fixture: the shared floor world (top at y=0, player parked
+    /// far away), stepped once so the broad-phase BVH the query reads exists.
+    fn grip_world() -> (PhysicsWorld, PlayerHandle) {
+        let (mut world, mut player) = world_with_floor();
+        step(&mut world, &mut player, 1);
+        (world, player)
+    }
+
+    /// A `ladder.bin`-shaped box (0.9 x 6.4 x 0.1, faces on +-Z at identity)
+    /// stood on the floor at x=-5 and yawed 90 degrees, exactly as the
+    /// `debug_ladder` scene spawns them. After the yaw its broad face points
+    /// along world +X and its narrow edges along world +-Z.
+    fn add_yawed_ladder(
+        world: &mut PhysicsWorld,
+        player: &mut PlayerHandle,
+        climbable: Option<u32>,
+    ) -> EntityId {
+        let entity = EntityId::from_inner(2001).unwrap();
+        let yaw_90 = <Quaternion<f32> as cgmath::Rotation3>::from_angle_y(cgmath::Deg(90.0));
+        world.add_kinematic(
+            entity,
+            vec3(-5.0, 3.2, 0.0),
+            yaw_90,
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.9, 6.4, 0.1),
+            if climbable.is_some() {
+                CollisionGroup::climbable_entity()
+            } else {
+                CollisionGroup::entity()
+            },
+            false,
+        );
+        if let Some(sides) = climbable {
+            world.set_climbable_sides(entity, sides);
+        }
+        step(world, player, 1);
+        entity
+    }
+
+    /// Dark's per-face bits live in its Z-up frame; the importer flips X and
+    /// swaps Y/Z. Verified through the query on a YAWED collider, so a wrong
+    /// local/world frame or a wrong axis swap shows up as a grip on the wrong
+    /// face. 27 is the shipped `Ladders` template's mask; 54 is what medsci1's
+    /// ladder instances override it with.
+    #[test]
+    fn ladder_face_bits_grip_only_the_authored_faces() {
+        // The broad face (world +X after the yaw) is one of the four vertical
+        // sides in mask 27.
+        let (mut world, mut player) = grip_world();
+        add_yawed_ladder(&mut world, &mut player, Some(27));
+        let side = world
+            .climbable_grip_at(vec3(-4.85, 3.0, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+            .expect("the broad face of a 27 ladder is grippable");
+        assert_eq!(side.kind, ClimbGripKind::Ladder);
+        assert!(
+            side.normal.x > 0.9,
+            "expected a +X face, got {:?}",
+            side.normal
+        );
+        // From above the thin cap, fingers can now hook an authored SIDE.
+        let hook = world
+            .climbable_grip_at(vec3(-5.0, 6.45, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+            .expect("hook around the cap onto a side");
+        assert_eq!(hook.kind, ClimbGripKind::Ladder);
+        assert!(hook.normal.x.abs() > 0.9);
+        assert!(hook.normal.y.abs() < 0.01);
+        assert!(hook.point.y < 6.4);
+
+        // The top EDGE, where a hand lands when topping out: its contact
+        // normal is diagonal, so a single-dominant-axis pick would call it
+        // the (unauthored) top cap and refuse the whole wedge above 45
+        // degrees. Both plausible faces are tested, so the +X side carries it.
+        assert_eq!(
+            world
+                .climbable_grip_at(vec3(-4.899, 6.451, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .map(|grip| grip.kind),
+            Some(ClimbGripKind::Ladder),
+            "the top edge is still the authored side face"
+        );
+
+        // Top-only (4) is the exact inverse.
+        let (mut world, mut player) = grip_world();
+        add_yawed_ladder(&mut world, &mut player, Some(4));
+        assert_eq!(
+            world
+                .climbable_grip_at(vec3(-5.0, 6.45, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .map(|grip| grip.kind),
+            Some(ClimbGripKind::Ladder),
+            "mask 4 is the top cap"
+        );
+        assert!(
+            world
+                .climbable_grip_at(vec3(-4.85, 3.0, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .is_none(),
+            "mask 4 excludes the sides"
+        );
+
+        // 54 (medsci1's instance override) keeps the broad faces and ADDS
+        // the caps - the mapping has to distinguish it from 27, not just
+        // accept both.
+        let (mut world, mut player) = grip_world();
+        add_yawed_ladder(&mut world, &mut player, Some(54));
+        assert_eq!(
+            world
+                .climbable_grip_at(vec3(-4.85, 3.0, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .map(|grip| grip.kind),
+            Some(ClimbGripKind::Ladder),
+            "54 keeps the broad face"
+        );
+        assert_eq!(
+            world
+                .climbable_grip_at(vec3(-5.0, 6.45, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .map(|grip| grip.kind),
+            Some(ClimbGripKind::Ladder),
+            "54 adds the top cap that 27 refuses"
+        );
+
+        // Asymmetric single side: Dark +X (bit 1) is engine -X, which the
+        // 90-degree yaw turns into world +Z. The opposite edge stays bare.
+        let (mut world, mut player) = grip_world();
+        add_yawed_ladder(&mut world, &mut player, Some(1));
+        assert_eq!(
+            world
+                .climbable_grip_at(vec3(-5.0, 3.0, 0.5), CLIMB_GRIP_RADIUS, 0.0)
+                .map(|grip| grip.kind),
+            Some(ClimbGripKind::Ladder),
+            "bit 1 lands on world +Z once the ladder is yawed"
+        );
+        assert!(
+            world
+                .climbable_grip_at(vec3(-5.0, 3.0, -0.5), CLIMB_GRIP_RADIUS, 0.0)
+                .is_none(),
+            "the opposite edge has no bit"
+        );
+    }
+
+    #[test]
+    fn ladder_cap_hook_respects_reach_masks_and_blocked_approaches() {
+        let (mut world, mut player) = grip_world();
+        let ladder = add_yawed_ladder(&mut world, &mut player, Some(2));
+        let hand = vec3(-5.0, 6.45, 0.0);
+        let hook = world
+            .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 6.0)
+            .unwrap();
+        assert_eq!(hook.entity_id, Some(ladder));
+        assert!(hook.normal.x > 0.9, "only +X is authored after yaw");
+        assert!((hook.point - hand).magnitude() <= CLIMB_LIP_REACH);
+        assert!(
+            world
+                .climbable_grip_at(vec3(-5.0, 6.75, 0.0), CLIMB_GRIP_RADIUS, 6.0)
+                .is_none()
+        );
+
+        let outside_cap = world
+            .climbable_grip_at(vec3(-4.93, 6.56, 0.0), CLIMB_GRIP_RADIUS, 6.0)
+            .expect("a hand just outside the cap footprint can hook the side");
+        assert!(outside_cap.normal.x > 0.9);
+
+        world.set_climbable_sides(ladder, 1); // only a narrow edge, out of reach
+        assert!(
+            world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 6.0)
+                .is_none()
+        );
+        world.set_climbable_sides(ladder, 0);
+        assert!(
+            world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 6.0)
+                .is_none()
+        );
+        world.set_climbable_sides(ladder, 2);
+
+        // A narrow clear gap still admits a short hook.
+        world.add_kinematic(
+            EntityId::from_inner(2030).unwrap(),
+            vec3(-4.75, 6.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.2, 0.8, 2.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        assert!(
+            world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 6.0)
+                .is_some()
+        );
+        // Seal that gap. The unobstructed opposite side is not authored.
+        world.add_kinematic(
+            EntityId::from_inner(2031).unwrap(),
+            vec3(-4.9, 6.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.1, 0.8, 2.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        assert!(
+            world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 6.0)
+                .is_none()
+        );
+    }
+
+    /// The same box without the climbable marker offers nothing to a hand on
+    /// its vertical face - a wall is not a hold.
+    #[test]
+    fn plain_wall_face_offers_no_grip() {
+        let (mut world, mut player) = grip_world();
+        add_yawed_ladder(&mut world, &mut player, None);
+        assert!(
+            world
+                .climbable_grip_at(vec3(-4.85, 3.0, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_held_ledge_consumes_blocked_pull_without_falling_or_storing_motion() {
+        use crate::vr_climb::{ClimbHandInput, HandClimb};
+        let (mut world, mut player) = grip_world();
+        let block = EntityId::from_inner(2027).unwrap();
+        world.add_kinematic(
+            block,
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        world.set_player_translation(vec3(2.4, 2.0, 0.0), &mut player);
+        world.set_player_crouch_hanging(true, &mut player);
+        let mut climb = HandClimb::default();
+        let mut hand = vec3(-0.38, 1.04, 0.0);
+        let input = |local_position, squeeze| ClimbHandInput {
+            local_position,
+            squeeze,
+            is_empty: true,
+        };
+        let mut frame = climb.update(
+            world.get_player_next_translation(&player),
+            identity_quat(),
+            world.player_step_dt(),
+            [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 1.0)],
+            |p, _| world.climbable_grip_at(p, CLIMB_GRIP_RADIUS, 0.0),
+            |_| true,
+        );
+        assert!(climb.holds_a_ledge(), "must acquire the actual box's top");
+        let surface = climb.anchor_grip().unwrap().grip.point;
+        for _ in 0..8 {
+            let requested = frame.translation.expect("squeezed ledge retains support");
+            world.update_player_movement(
+                PlayerMoveRequest::HandClimb {
+                    translation: requested,
+                },
+                &mut player,
+            );
+            climb.resolve_translation(requested, player.self_translation());
+            let center = world.get_player_next_translation(&player);
+            assert!(
+                center.x >= 2.3,
+                "wall must stop the inward pull: {center:?}"
+            );
+            assert!(
+                (center.y - 2.0).abs() < 0.01,
+                "held hand must suppress gravity"
+            );
+            hand.x += 0.2;
+            frame = climb.update(
+                center,
+                identity_quat(),
+                world.player_step_dt(),
+                [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 1.0)],
+                |_, _| None,
+                |_| true,
+            );
+        }
+        // Settle the last requested pull, then freeze the tracked hand. There
+        // must be no stored correction to snap the body inward on a later frame.
+        let requested = frame.translation.unwrap();
+        world.update_player_movement(
+            PlayerMoveRequest::HandClimb {
+                translation: requested,
+            },
+            &mut player,
+        );
+        climb.resolve_translation(requested, player.self_translation());
+        frame = climb.update(
+            world.get_player_next_translation(&player),
+            identity_quat(),
+            world.player_step_dt(),
+            [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 1.0)],
+            |_, _| None,
+            |_| true,
+        );
+        assert!(frame.translation.unwrap().magnitude() < 0.001);
+        assert_eq!(climb.anchor_grip().unwrap().grip.point, surface);
+        // A small reverse motion takes effect immediately and only by the
+        // amount moved, instead of first paying back the blocked 1.6-unit pull.
+        hand.x -= 0.1;
+        frame = climb.update(
+            world.get_player_next_translation(&player),
+            identity_quat(),
+            world.player_step_dt(),
+            [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 1.0)],
+            |_, _| None,
+            |_| true,
+        );
+        assert!((frame.translation.unwrap().x - 0.1).abs() < 0.001);
+        // Opening the hand still drops the body normally.
+        frame = climb.update(
+            world.get_player_next_translation(&player),
+            identity_quat(),
+            world.player_step_dt(),
+            [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 0.0)],
+            |_, _| None,
+            |_| true,
+        );
+        assert!(frame.translation.is_none());
+        step(&mut world, &mut player, 30);
+        assert!(world.get_player_translation(&player).y < 1.5);
+    }
+
+    #[test]
+    fn hand_top_out_tucks_past_the_wall_and_expands_only_at_the_landing() {
+        for (physically_crouched, pending_rise) in
+            [(false, 0.0), (true, 0.0), (false, 0.01), (true, 0.01)]
+        {
+            let (mut world, mut player) = grip_world();
+            let block = EntityId::from_inner(2020).unwrap();
+            world.add_kinematic(
+                block,
+                vec3(0.0, 1.5, 0.0),
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                vec3(4.0, 3.0, 4.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            step(&mut world, &mut player, 1);
+            world.set_player_crouch(physically_crouched, &mut player);
+            world.set_player_translation(vec3(2.4, 2.4, 0.0), &mut player);
+            let grip = ClimbGrip {
+                kind: ClimbGripKind::Ledge,
+                entity_id: Some(block),
+                point: vec3(2.0, 3.0, 0.0),
+                normal: vec3(0.0, 1.0, 0.0),
+            };
+            assert!(!world.standing_player_pose_is_clear(vec3(2.4, 2.4, 0.0), &player));
+            // Real hand pulls are queued for the next physics step; a static
+            // teleport alone misses the hand-to-vault transition. The held
+            // ledge has already tucked the body without changing tracking.
+            if pending_rise > 0.0 {
+                world.set_player_crouch_hanging(true, &mut player);
+            }
+            world.rigid_body_set[player.character_handle].set_next_kinematic_translation(vector![
+                2.4,
+                2.4 + pending_rise,
+                0.0
+            ]);
+            assert!(world.plan_hand_top_out(grip, &mut player));
+            assert!(player.is_crouched());
+            assert_eq!(
+                world.get_player_next_translation(&player),
+                vec3(2.4, 2.4 + pending_rise, 0.0),
+                "committing a vault must retain the queued hand pull"
+            );
+            assert_eq!(
+                player.top_out.unwrap().save_pose,
+                vector![2.4, 2.4 + pending_rise, 0.0],
+                "the route must start where the queued pull will land"
+            );
+            let mut previous = world.get_player_translation(&player);
+            for _ in 0..180 {
+                step(&mut world, &mut player, 1);
+                let position = world.get_player_translation(&player);
+                assert!(
+                    (position - previous).magnitude() < 0.1,
+                    "landing must not add a stance jump"
+                );
+                previous = position;
+                if !player.is_topping_out() {
+                    break;
+                }
+            }
+            assert!(!player.is_topping_out());
+            assert_eq!(player.is_crouched(), physically_crouched);
+            assert!(
+                (previous.y - (3.0 + player_center_above_floor(physically_crouched))).abs() < 0.05
+            );
+            assert!(previous.x <= 2.01, "landing {previous:?}");
+        }
+    }
+
+    #[test]
+    fn hand_vault_does_not_expand_through_a_one_sided_ceiling() {
+        let (mut world, mut player) = grip_world();
+        let block = EntityId::from_inner(2025).unwrap();
+        world.add_kinematic(
+            block,
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        world.set_player_translation(vec3(2.4, 2.4, 0.0), &mut player);
+        let grip = ClimbGrip {
+            kind: ClimbGripKind::Ledge,
+            entity_id: Some(block),
+            point: vec3(2.0, 3.0, 0.0),
+            normal: vec3(0.0, 1.0, 0.0),
+        };
+        // The sphere can pass underneath y=5, but the standing crown cannot.
+        world.add_collider(
+            EntityId::from_inner(2026).unwrap(),
+            ColliderBuilder::trimesh(
+                vec![
+                    point![-2.0, 5.0, -2.0],
+                    point![2.0, 5.0, -2.0],
+                    point![2.0, 5.0, 2.0],
+                    point![-2.0, 5.0, 2.0],
+                ],
+                vec![[0, 1, 2], [0, 2, 3]],
+            )
+            .unwrap()
+            .build(),
+        );
+        step(&mut world, &mut player, 1);
+        assert!(!world.plan_hand_top_out(grip, &mut player));
+        assert!(!player.is_crouched());
+        assert!(!player.is_topping_out());
+    }
+
+    #[test]
+    fn a_new_blocker_reverses_a_hand_vault_to_its_crouched_source() {
+        let (mut world, mut player) = grip_world();
+        let block = EntityId::from_inner(2023).unwrap();
+        world.add_kinematic(
+            block,
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        let start = vec3(2.4, 2.4, 0.0);
+        world.set_player_translation(start, &mut player);
+        assert!(world.plan_hand_top_out(
+            ClimbGrip {
+                kind: ClimbGripKind::Ledge,
+                entity_id: Some(block),
+                point: vec3(2.0, 3.0, 0.0),
+                normal: vec3(0.0, 1.0, 0.0),
+            },
+            &mut player
+        ));
+        step(&mut world, &mut player, 10);
+        world.add_kinematic(
+            EntityId::from_inner(2024).unwrap(),
+            vec3(1.5, 3.6, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 1.0, 3.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        for _ in 0..180 {
+            step(&mut world, &mut player, 1);
+            if !player.is_topping_out() {
+                break;
+            }
+        }
+        assert!(!player.is_topping_out(), "blocked route must recover");
+        assert!(
+            player.is_crouched(),
+            "reversal must not expand into the source wall"
+        );
+        assert!((world.get_player_translation(&player) - start).magnitude() < 0.05);
+    }
+
+    #[test]
+    fn hand_top_out_rejects_a_blocked_or_different_height_landing_without_resizing() {
+        let (mut world, mut player) = grip_world();
+        let block = EntityId::from_inner(2021).unwrap();
+        world.add_kinematic(
+            block,
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        world.set_player_translation(vec3(2.6, 2.4, 0.0), &mut player);
+        let mut grip = ClimbGrip {
+            kind: ClimbGripKind::Ledge,
+            entity_id: Some(block),
+            point: vec3(2.0, 3.8, 0.0),
+            normal: vec3(0.0, 1.0, 0.0),
+        };
+        assert!(
+            !world.plan_hand_top_out(grip, &mut player),
+            "must not choose another floor"
+        );
+        grip.point.y = 3.0;
+        world.add_kinematic(
+            EntityId::from_inner(2022).unwrap(),
+            vec3(0.0, 4.6, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 0.2, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        let before = world.get_player_translation(&player);
+        assert!(!world.plan_hand_top_out(grip, &mut player));
+        assert_eq!(world.get_player_translation(&player), before);
+        assert!(!player.is_crouched());
+        assert!(!player.is_topping_out());
+    }
+
+    #[test]
+    fn a_ceiling_blocks_the_approach_around_a_lip() {
+        let (mut world, mut player) = grip_world();
+        world.add_kinematic(
+            EntityId::from_inner(2012).unwrap(),
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        let hand = vec3(2.05, 2.99, 0.0);
+        assert!(
+            world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 0.0)
+                .is_some()
+        );
+        world.add_kinematic(
+            EntityId::from_inner(2013).unwrap(),
+            vec3(2.1, 3.15, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.4, 0.1, 0.4),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        assert!(
+            world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 0.0)
+                .is_none(),
+            "a ceiling prevents curling fingers over the lip"
+        );
+    }
+
+    /// Mantle emulation: the walkable top of a solid block above the player's
+    /// feet is a Ledge; the floor they are standing on is not (it is not more
+    /// than a step above their feet).
+    #[test]
+    fn walkable_top_above_the_feet_is_a_ledge_but_the_floor_is_not() {
+        let (mut world, mut player) = grip_world();
+        world.add_kinematic(
+            EntityId::from_inner(2002).unwrap(),
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+
+        for hand in [
+            vec3(2.05, 2.99, 0.0),
+            vec3(-2.05, 2.99, 0.0),
+            vec3(0.0, 2.99, 2.05),
+            vec3(0.0, 2.99, -2.05),
+        ] {
+            let lip = world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 0.0)
+                .expect("fingers can hook around a nearby lip");
+            assert_eq!(lip.kind, ClimbGripKind::Ledge);
+            assert!(lip.normal.y > 0.99);
+            assert!((lip.point.y - 3.0).abs() < 1e-4);
+            assert!((lip.point - hand).magnitude() <= CLIMB_LIP_REACH);
+        }
+        for hand in [vec3(2.05, 2.5, 0.0), vec3(2.5, 2.99, 0.0)] {
+            assert!(
+                world
+                    .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 0.0)
+                    .is_none(),
+                "a remote top cannot turn a wall into a hold"
+            );
+        }
+
+        let lip = world
+            .climbable_grip_at(vec3(0.0, 3.05, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+            .expect("a block top above the feet is grippable");
+        assert!(
+            world
+                .climbable_grip_at(vec3(0.0, 3.05, 0.0), CLIMB_GRIP_RADIUS, 2.5)
+                .is_none()
+        );
+        assert!(
+            world
+                .climbable_grip_during_transfer_at(vec3(0.0, 3.05, 0.0), 2.5)
+                .is_some(),
+            "a nearby deck within a step is available during ladder transfer"
+        );
+        assert!(
+            world
+                .climbable_grip_during_transfer_at(vec3(0.0, 3.05, 0.0), 3.0)
+                .is_none(),
+            "even a transfer must not grip the floor under the feet"
+        );
+        assert_eq!(lip.kind, ClimbGripKind::Ledge);
+        assert!(
+            lip.normal.y > 0.9,
+            "expected an up-facing hold, got {:?}",
+            lip.normal
+        );
+
+        assert!(
+            world
+                .climbable_grip_at(vec3(0.0, 3.05, 0.0), CLIMB_GRIP_RADIUS, 3.0)
+                .is_none(),
+            "the surface the player stands ON is not a hold"
+        );
+        assert!(
+            world
+                .climbable_grip_at(vec3(8.0, 0.05, 8.0), CLIMB_GRIP_RADIUS, 0.0)
+                .is_none(),
+            "the floor at the player's feet is not a hold"
+        );
+        assert!(
+            world
+                .climbable_grip_at(vec3(2.15, 1.5, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .is_none(),
+            "the block's vertical side is not a hold"
         );
     }
 
@@ -9980,6 +13307,8 @@ mod tests {
         world.collider_set[collider_handle].set_shape(SharedShape::ball(CLIMB_TOP_OUT_RADIUS));
         world.rigid_body_set[player.character_handle].enable_ccd(false);
         player.top_out = Some(ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints: [compressed_pose; 7],
             next_waypoint: 3,
             save_pose,

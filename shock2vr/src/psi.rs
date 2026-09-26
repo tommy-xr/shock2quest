@@ -11,16 +11,20 @@ use std::collections::HashSet;
 
 use dark::properties::{
     Link, ProjectileOptions, PropPsiPower, PropPsiPowerLearned, PropPsiPowerLearned2,
-    PropPsiShield, PropSymName,
+    PropPsiShield, PropSymName, ReceptronEffect,
 };
 use dark::ss2_entity_info::{self, SystemShock2EntityInfo};
-use shipyard::Unique;
+use shipyard::{Unique, UniqueView, World};
 
 use crate::scripts::script_util::hydrate_template_component;
 
+/// Power ids per tier: the tier's capacity marker plus its seven
+/// disciplines. See [`PsiPowerInfo::tier`].
+pub const POWERS_PER_TIER: i32 = 8;
+
 /// `Projected Cryokinesis` - the power every trained OSA agent starts with,
 /// and the default selection.
-const CRYOKINESIS_TEMPLATE_ID: i32 = -1143;
+pub(crate) const CRYOKINESIS_TEMPLATE_ID: i32 = -1143;
 
 /// The `Psi Powers` meta-prop root - every psi power template descends from
 /// it (`MetaProperty → Psi Powers → Level 1..5 → power`).
@@ -30,10 +34,100 @@ const PSI_POWERS_ROOT_TEMPLATE_ID: i32 = -962;
 /// the player is invisible to AI and security devices.
 pub const INVISO_TEMPLATE_ID: i32 = -3157;
 
+/// `Low Grav` in the gamesys: Psycho-reflective Screen grants the player the
+/// same damage reduction on every authored damage stimulus.
+pub const PSYCHO_REFLECTIVE_SCREEN_TEMPLATE_ID: i32 = -963;
+
+/// The screen's uniform Amplify factor, read from its gamesys receptrons.
+/// Damage messages already contain the resolved stimulus damage, so the
+/// player applies this final factor once to both stim hits and direct hits.
+#[derive(Unique)]
+pub struct PsychoReflectiveScreenFactor(pub f32);
+
+impl PsychoReflectiveScreenFactor {
+    pub fn from_entity_info(entity_info: &SystemShock2EntityInfo) -> Self {
+        let factors: Vec<f32> = entity_info
+            .template_to_links
+            .get(&PSYCHO_REFLECTIVE_SCREEN_TEMPLATE_ID)
+            .into_iter()
+            .flat_map(|links| &links.to_links)
+            .filter_map(|link| match &link.link {
+                Link::Receptron(options) => match &options.effect {
+                    ReceptronEffect::Amplify { factor } => Some(*factor),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        // The shipped screen authors the same x0.85 factor for all eleven
+        // damage types. A nonuniform set cannot scale an untyped Damage message.
+        let factor = factors
+            .first()
+            .copied()
+            .filter(|first| factors.iter().all(|factor| factor == first))
+            .unwrap_or(1.0);
+        Self(factor)
+    }
+}
+
+pub fn screen_damage_factor(world: &World) -> f32 {
+    let active = world
+        .borrow::<UniqueView<ActivePsiPowers>>()
+        .is_ok_and(|powers| powers.is_active(PSYCHO_REFLECTIVE_SCREEN_TEMPLATE_ID));
+    if !active {
+        return 1.0;
+    }
+    world
+        .borrow::<UniqueView<PsychoReflectiveScreenFactor>>()
+        .map(|factor| factor.0)
+        .unwrap_or(1.0)
+}
+
+/// `Berserk` - Adrenaline Overproduction (tier 2 sustained power): while
+/// active, the player's melee hits do more damage and the adrenaline drains
+/// their health (see `scripts::berserk`).
+pub const BERSERK_TEMPLATE_ID: i32 = -3155;
+
+/// `Might` - Psychogenic Strength (tier 2 sustained power): grants the
+/// authored `P$PsiPower.data[0]` Strength bonus until the power expires.
+pub const MIGHT_TEMPLATE_ID: i32 = -1162;
+
+/// Source key shared by activation and explicit deactivation. The stat model
+/// replaces a modifier with the same source on re-cast rather than stacking it.
+pub const MIGHT_MODIFIER_SOURCE: &str = "psi:might";
+
+/// `Stability` - Anti-entropic Field (tier 2 sustained power): while active,
+/// the player's guns neither wear nor break (see `scripts::weapon_script`).
+pub const STABILITY_TEMPLATE_ID: i32 = -3148;
+
+/// `Immolate` - Localized Pyrokinesis (tier 2 sustained power): while active,
+/// the caster burns everything within the aura authored on this template
+/// (see `scripts::immolate`).
+pub const IMMOLATE_TEMPLATE_ID: i32 = -3152;
+
 /// `PropPsiPower::activation_type` for sustained/timed self effects - the
 /// power activates for a duration given by its `P$PsiShield` data
-/// (`duration_base + duration_per_psi × PSI` seconds).
+/// (`duration_base + duration_per_psi × max(PSI - baseline_psi, 0)` seconds).
 pub const ACTIVATION_TYPE_SUSTAINED: i32 = 1;
+
+/// `PropPsiPower::activation_type` for instant/special powers - they resolve
+/// immediately on cast, with no duration and no projectile. Self-targeted
+/// (the heals), aimed (SomaDrain) and remote (CyberHack, ForceWall) powers all
+/// land here.
+pub const ACTIVATION_TYPE_INSTANT: i32 = 2;
+
+/// `PsiHeal` - Cerebro-stimulated Regeneration (tier 2 instant power): heals
+/// the caster.
+pub const PSI_HEAL_TEMPLATE_ID: i32 = -1017;
+
+/// `Major Heal` - Advanced Cerebro-stimulated Regeneration (tier 5 instant
+/// power): the large version of [`PSI_HEAL_TEMPLATE_ID`] - same script, same
+/// `data` shape, bigger numbers.
+pub const MAJOR_HEAL_TEMPLATE_ID: i32 = -1139;
+
+/// `SomaDrain` - Soma Transference (tier 5 instant power): drains health from
+/// the creature under the amp's aim and transfers it to the caster.
+pub const SOMA_DRAIN_TEMPLATE_ID: i32 = -3160;
 
 /// The powers that support hold-to-overload (per the published gameplay
 /// tables), by template id. Comments give the gamesys name and the
@@ -78,6 +172,16 @@ pub const OVERLOAD_ZONE_START: f32 = 0.85;
 pub const OVERLOAD_PSI_BONUS: i32 = 2;
 pub const OVERLOAD_MAX_EFFECTIVE_PSI: i32 = 10;
 
+/// The effective PSI a cast resolves at: the caster's PSI stat, plus the
+/// overload bonus when the charge released in the end zone, capped.
+pub fn effective_psi_for_cast(psi_stat: i32, overload: bool) -> i32 {
+    if overload {
+        (psi_stat + OVERLOAD_PSI_BONUS).min(OVERLOAD_MAX_EFFECTIVE_PSI)
+    } else {
+        psi_stat
+    }
+}
+
 /// Burnout damage: 3 per tier of the burned power.
 pub const BURNOUT_DAMAGE_PER_TIER: i32 = 3;
 
@@ -108,12 +212,23 @@ pub struct PsiPowerInfo {
     /// Whether the power supports hold-to-overload.
     pub overloadable: bool,
     /// The sustained-power duration formula (`P$PsiShield`:
-    /// `duration_base + duration_per_psi × PSI` seconds). `None` for powers
+    /// `duration_base + duration_per_psi × max(PSI - baseline_psi, 0)` seconds). `None` for powers
     /// without timed data.
     pub duration: Option<PropPsiShield>,
 }
 
 impl PsiPowerInfo {
+    /// The discipline tier (1..5) this power belongs to.
+    ///
+    /// Power ids are authored in blocks of eight per tier - id `(tier-1)*8` is
+    /// the tier's neural-capacity marker and `(tier-1)*8 + 1..7` are its seven
+    /// disciplines - which is also how the selection screen lays them out. The
+    /// psi-point *cost* is a separate number that happens to equal the tier in
+    /// the shipped data; reading it as the tier is a coincidence, not a rule.
+    pub fn tier(&self) -> i32 {
+        self.power.power_id / POWERS_PER_TIER + 1
+    }
+
     /// The projectile template for a caster with the given PSI stat: the
     /// highest link whose `order` (required PSI level) the stat meets,
     /// falling back to the weakest link for stats below the lowest order.
@@ -136,6 +251,108 @@ pub struct GlobalPsiPowers(pub Vec<PsiPowerInfo>);
 #[derive(Unique, Clone)]
 pub struct PsiPowerSelection {
     pub index: usize,
+}
+
+/// The tier the psi power selection MFD is currently *browsing*.
+///
+/// Separate from [`PsiPowerSelection`]: a player can page through tiers on the
+/// panel without changing the power the amp will cast, and only a click on a
+/// trained power commits. It lives here, beside the selection, rather than in
+/// the panel's own GUI state so that the mission can snap it whenever the
+/// selection moves (a stick flick, the `CyclePsiPower` key) - a GUI's state is
+/// only reachable from its own messages.
+#[derive(Unique, Clone, Copy)]
+pub struct PsiPanelTier(pub i32);
+
+/// Which axis of the psi selection a step moves along: the AMMOFULL readout's
+/// tier arrows move between tiers, its power arrows move within one, and the
+/// `CyclePsiPower` key walks every trained power in order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PsiSelectionAxis {
+    Tier,
+    Power,
+    /// Every trained power, tiers included - the single-key cycle.
+    Any,
+}
+
+/// The selection a psi selection step lands on.
+///
+/// `Tier` steps to the next tier that owns a trained power (empty tiers are
+/// skipped) and lands on its first one; `Power` wraps within the current tier;
+/// `Any` walks the whole trained list. All wrap, and all leave the selection
+/// alone when nothing else is trained, so a step can never select a power the
+/// player has not learned.
+pub fn step_selection(
+    powers: &[PsiPowerInfo],
+    known: &HashSet<i32>,
+    index: usize,
+    axis: PsiSelectionAxis,
+    forward: bool,
+) -> usize {
+    let Some(current) = powers.get(index) else {
+        return index;
+    };
+    // `powers` is sorted by (tier, power id), so a tier's trained powers are a
+    // contiguous run and tier order is just the order of the distinct tiers.
+    let trained: Vec<(usize, i32)> = powers
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| known.contains(&p.template_id))
+        .map(|(i, p)| (i, p.tier()))
+        .collect();
+    if trained.is_empty() {
+        return index;
+    }
+    // The registry holds untrained powers too, and nothing normalizes the
+    // selection when a power is granted - so the selection can be sitting on an
+    // untrained power with no neighbour to step from. Recover onto the first
+    // trained power rather than leaving every step a no-op.
+    if !known.contains(&current.template_id) {
+        return trained[0].0;
+    }
+    let tier = current.tier();
+    match axis {
+        PsiSelectionAxis::Any => {
+            let every: Vec<usize> = trained.iter().map(|(i, _)| *i).collect();
+            neighbor(&every, index, forward).unwrap_or(index)
+        }
+        PsiSelectionAxis::Power => {
+            let in_tier: Vec<usize> = trained
+                .iter()
+                .filter(|(_, t)| *t == tier)
+                .map(|(i, _)| *i)
+                .collect();
+            neighbor(&in_tier, index, forward).unwrap_or(index)
+        }
+        PsiSelectionAxis::Tier => {
+            let mut tiers: Vec<i32> = trained.iter().map(|(_, t)| *t).collect();
+            tiers.dedup();
+            let Some(next_tier) = neighbor(&tiers, tier, forward).filter(|next| *next != tier)
+            else {
+                // Only one tier is trained: a tier step has nowhere to go, and
+                // must not quietly behave like a power step.
+                return index;
+            };
+            trained
+                .iter()
+                .find(|(_, t)| *t == next_tier)
+                .map(|(i, _)| *i)
+                .unwrap_or(index)
+        }
+    }
+}
+
+/// The entry after (`forward`) or before `current` in `items`, wrapping.
+/// `None` when `current` is not in `items`.
+fn neighbor<T: Copy + PartialEq>(items: &[T], current: T, forward: bool) -> Option<T> {
+    let at = items.iter().position(|item| *item == current)?;
+    let len = items.len();
+    let next = if forward {
+        (at + 1) % len
+    } else {
+        (at + len - 1) % len
+    };
+    Some(items[next])
 }
 
 /// The psi powers the player has been trained in, by power template id -
@@ -200,7 +417,7 @@ fn learned_bit_set(dword1: u32, dword2: u32, power_id: i32) -> bool {
 }
 
 /// One currently-active sustained psi power on the player.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ActivePsiPower {
     pub template_id: i32,
     /// The gamesys symbolic name (e.g. "Inviso").
@@ -210,9 +427,8 @@ pub struct ActivePsiPower {
 
 /// The player's active sustained psi powers, ticked down each frame by
 /// `MissionCore::update` and removed on expiry. Re-casting an active power
-/// refreshes its duration. (Not yet persisted across save/load or level
-/// transitions - like the psi pool and selection.)
-#[derive(Unique, Clone, Default)]
+/// refreshes its duration. Saved with the player across load and deck changes.
+#[derive(Unique, Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ActivePsiPowers(pub Vec<ActivePsiPower>);
 
 impl ActivePsiPowers {
@@ -276,6 +492,23 @@ pub fn build_psi_power_registry(
     )
 }
 
+/// The `psihelp.str` table with its escaped line breaks made real.
+///
+/// The strings files write a paragraph break as the two characters `\` and
+/// `n`, and nothing downstream un-escapes them - so an entry read as-is draws
+/// the escape ("Screen\n\nProtects you...") and its "first line" is the whole
+/// entry. Both readers of this table want the breaks: the selection MFD wraps
+/// the help paragraphs, and [`apply_display_names`] takes line 1 as the
+/// discipline name.
+pub fn normalize_help_strings(
+    strings: &std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<String, String> {
+    strings
+        .iter()
+        .map(|(key, value)| (key.clone(), value.replace("\\n", "\n")))
+        .collect()
+}
+
 /// Fill in player-facing discipline names from the `psihelp.str` string
 /// table: each power's entry is keyed `Psi<power_id>` and its first line is
 /// the discipline name (the rest is the help text).
@@ -298,6 +531,30 @@ pub fn apply_display_names(
 mod tests {
     use super::*;
 
+    /// A help entry's escaped breaks become real ones, so its first line is
+    /// the discipline name rather than the whole paragraph.
+    #[test]
+    fn help_strings_unescape_their_line_breaks() {
+        let raw = std::collections::HashMap::from([(
+            "psi6".to_owned(),
+            "Projected Cryokinesis\\n\\nLaunches a projectile.".to_owned(),
+        )]);
+        let normalized = normalize_help_strings(&raw);
+        let entry = &normalized["psi6"];
+        assert!(!entry.contains('\\'), "{entry:?} still carries an escape");
+        assert_eq!(entry.lines().next(), Some("Projected Cryokinesis"));
+    }
+
+    #[test]
+    fn overload_adds_the_bonus_and_caps() {
+        assert_eq!(effective_psi_for_cast(2, false), 2);
+        assert_eq!(effective_psi_for_cast(2, true), 2 + OVERLOAD_PSI_BONUS);
+        assert_eq!(
+            effective_psi_for_cast(OVERLOAD_MAX_EFFECTIVE_PSI - 1, true),
+            OVERLOAD_MAX_EFFECTIVE_PSI
+        );
+    }
+
     #[test]
     fn learned_bits_split_across_dwords_by_power_id() {
         // Dword 1 covers power ids 0..=31 as bit `power_id`. The reference
@@ -314,6 +571,157 @@ mod tests {
         assert!(learned_bit_set(0, 0b10, 33));
         assert!(learned_bit_set(0, 1 << 7, 39));
         assert!(!learned_bit_set(0, 0, 39));
+    }
+
+    /// A registry in the shape `build_psi_power_registry` produces: sorted by
+    /// (tier, power id). `(template_id, tier)` pairs; the power id is authored
+    /// inside the tier's block of eight, the way the shipped data does it, so
+    /// `PsiPowerInfo::tier` reads back the tier the fixture asked for. The psi
+    /// cost is deliberately NOT the tier, so a test that passes cannot be
+    /// reading the cost by accident.
+    fn registry(powers: &[(i32, i32)]) -> Vec<PsiPowerInfo> {
+        let mut slot_in_tier = std::collections::HashMap::new();
+        powers
+            .iter()
+            .map(|(template_id, tier)| {
+                let slot = slot_in_tier.entry(*tier).or_insert(0);
+                *slot += 1;
+                PsiPowerInfo {
+                    template_id: *template_id,
+                    name: format!("Power {template_id}"),
+                    display_name: None,
+                    power: PropPsiPower {
+                        power_id: (tier - 1) * POWERS_PER_TIER + *slot,
+                        activation_type: 0,
+                        psi_cost: 99,
+                        data: [0.0; 4],
+                    },
+                    projectiles: Vec::new(),
+                    overloadable: false,
+                    duration: None,
+                }
+            })
+            .collect()
+    }
+
+    /// The tier comes from the power id's block of eight, never from the psi
+    /// cost - those agree in the shipped data but are different numbers.
+    #[test]
+    fn a_powers_tier_is_read_off_its_power_id() {
+        let powers = registry(&[(-1, 1), (-2, 4)]);
+        assert_eq!(powers[0].tier(), 1);
+        assert_eq!(powers[1].tier(), 4);
+        assert_ne!(
+            powers[1].power.psi_cost, 4,
+            "the fixture's cost is not its tier"
+        );
+    }
+
+    /// Tiers 1, 1, 3 - tier 2 is authored but untrained, so it must be skipped.
+    fn tiered() -> (Vec<PsiPowerInfo>, HashSet<i32>) {
+        let powers = registry(&[(-1, 1), (-2, 1), (-3, 2), (-4, 3), (-5, 3)]);
+        (powers, HashSet::from([-1, -2, -4, -5]))
+    }
+
+    #[test]
+    fn power_arrows_wrap_within_the_current_tier() {
+        let (powers, known) = tiered();
+        let step = |index, forward| {
+            step_selection(&powers, &known, index, PsiSelectionAxis::Power, forward)
+        };
+        assert_eq!(step(0, true), 1);
+        // ...and wraps rather than spilling into the next tier.
+        assert_eq!(step(1, true), 0);
+        assert_eq!(step(0, false), 1);
+        // Tier 3's pair is independent of tier 1's.
+        assert_eq!(step(3, true), 4);
+        assert_eq!(step(4, true), 3);
+    }
+
+    #[test]
+    fn tier_arrows_skip_tiers_with_no_trained_power() {
+        let (powers, known) = tiered();
+        let step = |index, forward| {
+            step_selection(&powers, &known, index, PsiSelectionAxis::Tier, forward)
+        };
+        // Tier 1 -> tier 3: tier 2 is untrained, so it is not a stop.
+        assert_eq!(step(0, true), 3);
+        // ...and back again, wrapping.
+        assert_eq!(step(3, true), 0);
+        assert_eq!(step(0, false), 3);
+        // A tier step lands on that tier's FIRST trained power, not the one at
+        // the same offset.
+        assert_eq!(step(4, true), 0);
+    }
+
+    #[test]
+    fn a_selection_sitting_on_an_untrained_power_recovers() {
+        // The registry holds every power, trained or not, and the default
+        // selection is index 0 - so a player whose training starts at tier 3
+        // begins on an untrained power. Both axes must escape it, not stall.
+        let (powers, _) = tiered();
+        let known = HashSet::from([-4, -5]);
+        for axis in [
+            PsiSelectionAxis::Tier,
+            PsiSelectionAxis::Power,
+            PsiSelectionAxis::Any,
+        ] {
+            assert_eq!(
+                step_selection(&powers, &known, 0, axis, true),
+                3,
+                "{axis:?} should recover onto the first trained power"
+            );
+        }
+    }
+
+    #[test]
+    fn an_arrow_never_selects_an_untrained_power() {
+        let (powers, _) = tiered();
+        // Only the tier-1 pair is trained: both axes stay inside it.
+        let known = HashSet::from([-1, -2]);
+        for axis in [PsiSelectionAxis::Tier, PsiSelectionAxis::Power] {
+            for forward in [true, false] {
+                let next = step_selection(&powers, &known, 0, axis, forward);
+                assert!(
+                    known.contains(&powers[next].template_id),
+                    "{axis:?}/{forward} selected an untrained power"
+                );
+            }
+        }
+        // A lone trained power has nowhere to go, on any axis.
+        let single = HashSet::from([-1]);
+        for axis in [
+            PsiSelectionAxis::Tier,
+            PsiSelectionAxis::Power,
+            PsiSelectionAxis::Any,
+        ] {
+            assert_eq!(
+                step_selection(&powers, &single, 0, axis, true),
+                0,
+                "{axis:?}"
+            );
+        }
+        // Nor does a tier step become a power step when the trained powers all
+        // share one tier.
+        let one_tier = HashSet::from([-1, -2]);
+        assert_eq!(
+            step_selection(&powers, &one_tier, 1, PsiSelectionAxis::Tier, true),
+            1,
+            "one trained tier means the tier arrow is inert"
+        );
+    }
+
+    #[test]
+    fn an_empty_or_out_of_range_selection_is_left_alone() {
+        let (powers, known) = tiered();
+        assert_eq!(
+            step_selection(&powers, &known, 99, PsiSelectionAxis::Tier, true),
+            99
+        );
+        assert_eq!(
+            step_selection(&[], &known, 0, PsiSelectionAxis::Power, true),
+            0
+        );
     }
 }
 

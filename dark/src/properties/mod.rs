@@ -5,12 +5,16 @@ mod prop_ai_alertness;
 mod prop_ai_aware_delay;
 mod prop_ai_camera;
 mod prop_ai_device;
+mod prop_ai_grub;
 mod prop_ai_hearing;
 mod prop_ai_mode;
+mod prop_ai_ranged_combat;
+mod prop_ai_swarm;
 mod prop_ambient_hacked;
 mod prop_anim_light;
 mod prop_anim_tex;
 mod prop_base_gun_desc;
+mod prop_base_weapon_desc;
 mod prop_bitmap_animation;
 mod prop_collision_type;
 mod prop_creature_pose;
@@ -18,23 +22,29 @@ mod prop_ecology;
 mod prop_frame_anim_config;
 mod prop_frame_anim_state;
 mod prop_frob_info;
+mod prop_gun_kick;
+mod prop_gun_reliability;
 mod prop_gun_state;
 mod prop_hack_diff;
 mod prop_hit_points;
+mod prop_homing;
 mod prop_key;
 mod prop_log;
+mod prop_loot;
 mod prop_obj_state;
 mod prop_particles;
 mod prop_phys_attr;
 mod prop_phys_initial_velocity;
 mod prop_phys_type;
 mod prop_player_gun;
+mod prop_projectile;
 mod prop_psi;
 mod prop_quest_bit;
 mod prop_render_type;
 mod prop_replicator;
 mod prop_research;
 mod prop_room_gravity;
+mod prop_schema_loop_params;
 mod prop_schema_play_params;
 mod prop_service;
 mod prop_spawn;
@@ -49,12 +59,16 @@ pub use prop_ai_alertness::*;
 pub use prop_ai_aware_delay::*;
 pub use prop_ai_camera::*;
 pub use prop_ai_device::*;
+pub use prop_ai_grub::*;
 pub use prop_ai_hearing::*;
 pub use prop_ai_mode::*;
+pub use prop_ai_ranged_combat::*;
+pub use prop_ai_swarm::*;
 pub use prop_ambient_hacked::*;
 pub use prop_anim_light::*;
 pub use prop_anim_tex::*;
 pub use prop_base_gun_desc::*;
+pub use prop_base_weapon_desc::*;
 pub use prop_bitmap_animation::*;
 pub use prop_collision_type::*;
 pub use prop_creature_pose::*;
@@ -62,23 +76,29 @@ pub use prop_ecology::*;
 pub use prop_frame_anim_config::*;
 pub use prop_frame_anim_state::*;
 pub use prop_frob_info::*;
+pub use prop_gun_kick::*;
+pub use prop_gun_reliability::*;
 pub use prop_gun_state::*;
 pub use prop_hack_diff::*;
 pub use prop_hit_points::*;
+pub use prop_homing::*;
 pub use prop_key::*;
 pub use prop_log::*;
+pub use prop_loot::*;
 pub use prop_obj_state::*;
 pub use prop_particles::*;
 pub use prop_phys_attr::*;
 pub use prop_phys_initial_velocity::*;
 pub use prop_phys_type::*;
 pub use prop_player_gun::*;
+pub use prop_projectile::*;
 pub use prop_psi::*;
 pub use prop_quest_bit::*;
 pub use prop_render_type::*;
 pub use prop_replicator::*;
 pub use prop_research::*;
 pub use prop_room_gravity::*;
+pub use prop_schema_loop_params::*;
 pub use prop_schema_play_params::*;
 pub use prop_service::*;
 pub use prop_spawn::*;
@@ -93,6 +113,7 @@ use serde::{
 };
 
 use std::{
+    any::TypeId,
     collections::HashMap,
     convert::identity,
     fmt,
@@ -128,8 +149,7 @@ pub struct PropPosition {
 /// be reconstructed without replaying tripwire ENTER.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TeleportSource {
-    /// Player-initiated movement teleport: VR teleport locomotion or a debug
-    /// teleport. Tripwire ENTER fires on arrival.
+    /// Debug player repositioning. Tripwire ENTER fires on arrival.
     #[default]
     Locomotion,
     /// A scripted teleport trap (TrapTeleportPlayer) repositioned the player.
@@ -143,9 +163,9 @@ pub enum TeleportSource {
 }
 
 #[derive(Debug, Component, Serialize, Deserialize)]
-/// Marks an entity as having just teleported (VR teleport locomotion, teleport
-/// traps, debug teleport, or save restore). Tripwires fire on locomotion
-/// teleport-entry like the original engine; the other sources reconstruct
+/// Marks an entity as having just teleported (teleport traps, debug teleport,
+/// or save restore). Tripwires fire on debug teleport-entry like the original
+/// engine; the other sources reconstruct
 /// their arrival without replaying ENTER.
 pub struct PropTeleported {
     pub countdown_timer: f32, // Remaining time to be considered 'recently teleported'
@@ -218,11 +238,39 @@ pub struct PropDestLoc(pub i32);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropExp(pub i32);
 
+/// Which weapon skill a gun is used with (`P$ShockWeap`): 0 conventional,
+/// 1 energy, 2 heavy, 3 annelid, 4 psi amp. Authored on the weapon-class
+/// archetypes (Conventional, Energy, ...) and inherited by every gun under
+/// them; a gun without it counts as conventional.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropWeaponType(pub i32);
+
+/// `P$ImplantDe`: original ImplantDesc enum; 6 is the aiming implant.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropImplantDesc(pub i32);
+
+/// Stored implant charge and authored drain tuning, in seconds/charge units.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropEnergy(pub f32);
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropDrainRate(pub f32);
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropDrainAmount(pub f32);
+
 /// The count of a stackable object (e.g. how many cyber modules an EXP-cookie
 /// pile is worth - the retail engine stores an EXP cookie's module value as its
 /// stack count, `P$StackCoun`). A 4-byte signed int.
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropStackCount(pub i32);
+
+/// `P$CombineTy`: the label two objects must share to stack together. The
+/// original engine gates every merge on this matching, then bumps the
+/// combinee's `PropStackCount` - so the label, not the template, decides what
+/// pools with what. Small and Large Prism are separate archetypes sharing
+/// `Prism` and do merge; Med Patch and Medical Kit share a parent archetype
+/// but carry different labels and do not.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropCombineType(pub String);
 
 /// The version of a piece of software (`P$SoftLevel`, 1..=3). Authored on the
 /// `Softs` base archetype as 1 and overridden by the V2/V3 archetypes, so a
@@ -329,6 +377,18 @@ pub struct PropRadiationAbsorb(pub f32);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropRadiationDrain(pub f32);
 
+/// Authored room radiation ceiling (also used on radiating objects).
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropRadiationLevel(pub f32);
+
+/// Retail armor layout: toxic, radiation, combat percentages.
+#[derive(Debug, Component, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct PropArmor {
+    pub toxic: f32,
+    pub radiation: f32,
+    pub combat: f32,
+}
+
 /// A container's inventory grid, in cells. The `Contains` link's ordinal is
 /// `y * width + x` against *this* width, so it is what makes a stored cell
 /// mean anything.
@@ -365,6 +425,42 @@ impl PropInventoryDimensions {
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropObjIcon(pub String);
+
+/// `P$ObjBroken` ("Obj/Broken icon") - the inventory art a Broken object shows
+/// in place of its `P$ObjIcon`.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropObjBrokenIcon(pub String);
+
+/// `P$Sett1` / `P$Sett2` - the description text for a gun's first / second fire
+/// setting, and `P$SHead1` / `P$SHead2` - the short header shown beside it
+/// (e.g. "NORM" / "BURST"). Each holds an object string (`key: "fallback"`)
+/// resolved against the matching `SETT1`/`SETT2`/`SHEAD1`/`SHEAD2` string
+/// table; see `dark::importers::resolve_gun_setting_string`.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropGunSettingText1(pub String);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropGunSettingText2(pub String);
+
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropModifyDiff(pub PropHackDiff);
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropModify2Diff(pub PropHackDiff);
+/// `P$Modify1` / `P$Modify2` - the object string describing a gun's first /
+/// second modification, resolved against `MODIFY1.STR` / `MODIFY2.STR`.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropModifyText1(pub String);
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropModifyText2(pub String);
+/// `P$RepairDif` - the terms a Broken object is repaired on.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropRepairDiff(pub PropHackDiff);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropGunSettingHeader1(pub String);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropGunSettingHeader2(pub String);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropObjName(pub String);
@@ -418,12 +514,34 @@ impl PropObjectNameType {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropObjShortName(pub String);
 
+/// `P$UseMsg`: the status-line message an object shows the player - either a
+/// key into USEMSG.STR or, when the value carries its own quoted text, that
+/// text (see `resolve_localized_property_string`).
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropUseMsg(pub String);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPhysState {
     pub position: Vector3<f32>,
     pub rotation: Quaternion<f32>,
     pub velocity: Vector3<f32>,
     pub rot_velocity: Vector3<f32>,
+}
+
+/// Retail masks use the gamesys difficulty index: Easy is bit 1, not bit 0.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropDifficultyDestroy(pub u32);
+impl PropDifficultyDestroy {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> Self {
+        Self(read_u32(reader))
+    }
+}
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropDifficultyPermit(pub u32);
+impl PropDifficultyPermit {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> Self {
+        Self(read_u32(reader))
+    }
 }
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
@@ -465,6 +583,10 @@ pub struct PropHasRefs(pub bool);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropImmobile(pub bool);
 
+/// Authored opt-out from Kinetic Redirection.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropPsiNotPullable(pub bool);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPhysDimensions {
     pub radius0: f32,
@@ -472,8 +594,14 @@ pub struct PropPhysDimensions {
     pub offset0: Vector3<f32>,
     pub offset1: Vector3<f32>,
     pub size: Vector3<f32>,
-    pub unk1: u32,
-    pub unk2: u32,
+    /// Treat this model as a point when tested against world terrain.
+    pub point_vs_terrain: u32,
+    /// Treat this model as a point against anything that is not "special".
+    ///
+    /// The original also uses it as a collision *filter*: two models that both
+    /// set it and are both non-special never collide with each other, which is
+    /// what keeps a stream of projectiles from detonating on one another.
+    pub point_vs_not_special: u32,
 }
 
 /// `P$MovingTer` - marks a physical object as authored moving terrain.
@@ -830,8 +958,10 @@ pub enum ReceptronEffect {
     /// Add radiation exposure scaled by `multiplier`. The player authors this
     /// response to the Radiation stimulus with a multiplier of 1.
     Radiate { multiplier: f32 },
+    /// Freeze an AI for the incoming intensity times this duration multiplier.
+    Freeze { duration_multiplier: i32 },
     /// An effect the game does not implement yet (EnvSound, add_metaprop,
-    /// Freeze, Stun, toxin, ...).
+    /// Stun, toxin, ...).
     Unhandled(String),
 }
 
@@ -868,7 +998,8 @@ impl ReceptronOptions {
         let name = String::from_utf8_lossy(&name_bytes[..name_end]).into_owned();
         let _target = read_i32(reader);
         let _agent = read_i32(reader);
-        let param_56 = read_single(reader);
+        let param_56_bits = read_u32(reader);
+        let param_56 = f32::from_bits(param_56_bits);
         let _param_60 = read_i32(reader);
         let param_64 = read_single(reader);
         let param_68 = read_i32(reader);
@@ -880,6 +1011,9 @@ impl ReceptronOptions {
             },
             "Amplify" => ReceptronEffect::Amplify { factor: param_56 },
             "Abort" => ReceptronEffect::Abort,
+            "Freeze" => ReceptronEffect::Freeze {
+                duration_multiplier: param_56_bits as i32,
+            },
             "radiate" => ReceptronEffect::Radiate {
                 multiplier: param_56,
             },
@@ -1080,6 +1214,10 @@ impl Links {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPickBias(pub f32);
 
+/// AI movement turn rate, in degrees per second.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropAITurnRate(pub f32);
+
 /// Renderer\Transparency (alpha): 0.0 = invisible, 1.0 = opaque. Authored on
 /// holo/ghost entities (e.g. the CS9 cutscene exhibits) and animated by the
 /// Transluce script family.
@@ -1176,12 +1314,6 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
     // Links
     let links = vec![
         define_link("L$AIRangedW", |_| Link::AIRangedWeapon),
-        // TODO: Why is the data not available for some of these links?
-        define_link("L$Corpse", |_| {
-            Link::Corpse(CorpseOptions {
-                propagate_scale: false,
-            })
-        }),
         define_link("L$LandingPo", |_| Link::LandingPoint),
         define_link("L$Replicato", |_| Link::Replicator),
         define_link("L$SpawnPoin", |_| Link::SpawnPoint),
@@ -1201,7 +1333,11 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
 
     // Links with data
     let links_with_data = vec![
-        // define_link_with_data("L$Corpse", "LD$Corpse", CorpseOptions::read, Link::Corpse),
+        // Sparse in the shipped data (the gamesys authors 9 records for 71
+        // links; shodan has 44 links and none), and an unauthored
+        // `propagate_scale` is false - exactly what the hardcoded stand-in
+        // this replaces assumed for every link.
+        define_link_with_optional_data("L$Corpse", "LD$Corpse", CorpseOptions::read, Link::Corpse),
         define_link_with_data(
             "L$AIWatchOb",
             "LD$AIWatchO",
@@ -1444,6 +1580,42 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$Energy",
+            |reader, _len| read_single(reader),
+            PropEnergy,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$DrainRate",
+            |reader, _len| read_single(reader),
+            PropDrainRate,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$DrainAmt",
+            |reader, _len| read_single(reader),
+            PropDrainAmount,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$ImplantDe",
+            |reader, _len| read_i32(reader),
+            PropImplantDesc,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$ShockWeap",
+            |reader, _len| read_i32(reader),
+            PropWeaponType,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$CombineTy",
+            read_prop_string,
+            PropCombineType,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$StackCoun",
             |reader, _len| read_i32(reader),
             PropStackCount,
@@ -1483,14 +1655,62 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop("P$KeyDst", KeyCard::read, PropKeyDst, accumulator::latest),
         define_prop("P$KeySrc", KeyCard::read, PropKeySrc, accumulator::latest),
         define_prop(
+            "P$Projectil",
+            PropProjectile::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$BaseGunDe",
             PropBaseGunDesc::read,
             identity,
             accumulator::latest,
         ),
         define_prop(
+            "P$Modify1",
+            read_variable_length_string,
+            PropModifyText1,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Modify2",
+            read_variable_length_string,
+            PropModifyText2,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Sett1",
+            read_variable_length_string,
+            PropGunSettingText1,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Sett2",
+            read_variable_length_string,
+            PropGunSettingText2,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$SHead1",
+            read_variable_length_string,
+            PropGunSettingHeader1,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$SHead2",
+            read_variable_length_string,
+            PropGunSettingHeader2,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$BaseTechD",
             PropBaseTechDesc::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$BaseWeapo",
+            PropBaseWeaponDesc::read,
             identity,
             accumulator::latest,
         ),
@@ -1501,9 +1721,39 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$GunKick",
+            PropGunKick::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$GunReliab",
+            PropGunReliability::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$ModifyDif",
+            PropHackDiff::read,
+            PropModifyDiff,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Modify2Di",
+            PropHackDiff::read,
+            PropModify2Diff,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$HackDiff",
             PropHackDiff::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RepairDif",
+            PropHackDiff::read,
+            PropRepairDiff,
             accumulator::latest,
         ),
         define_prop(
@@ -1539,6 +1789,24 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$LootInfo",
+            PropLootInfo::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$GuarLoot",
+            read_prop_string,
+            PropGuaranteedLoot,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RGuarLoot",
+            read_prop_string,
+            PropReallyGuaranteedLoot,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$InvDims",
             PropInventoryDimensions::read,
             identity,
@@ -1554,6 +1822,18 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$KeypadCod",
             |reader, _len| read_u32(reader),
             PropKeypadCode,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$DiffDestr",
+            PropDifficultyDestroy::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$DiffPermi",
+            PropDifficultyPermit::read,
+            identity,
             accumulator::latest,
         ),
         define_prop("P$Locked", PropLocked::read, identity, accumulator::latest),
@@ -1673,6 +1953,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$ObjBroken",
+            read_prop_string,
+            PropObjBrokenIcon,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$ObjName",
             read_variable_length_string,
             PropObjName,
@@ -1700,6 +1986,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ObjShort",
             read_variable_length_string,
             PropObjShortName,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$UseMsg",
+            read_variable_length_string,
+            PropUseMsg,
             accumulator::latest,
         ),
         define_prop(
@@ -1757,6 +2049,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$AI_TurnR",
+            |reader, _len| read_single(reader),
+            PropAITurnRate,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$PickBias",
             |reader, _len| read_single(reader),
             PropPickBias,
@@ -1766,6 +2064,22 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$RenderAlp",
             |reader, _len| read_single(reader),
             PropRenderAlpha,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RadLevel",
+            |reader, _| read_single(reader),
+            PropRadiationLevel,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Armor",
+            |reader, _| PropArmor {
+                toxic: read_single(reader),
+                radiation: read_single(reader),
+                combat: read_single(reader),
+            },
+            identity,
             accumulator::latest,
         ),
         define_prop(
@@ -1808,6 +2122,13 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$PhysInitV",
             PropPhysInitialVelocity::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop("P$Homing", PropHoming::read, identity, accumulator::latest),
+        define_prop(
+            "P$TargetTyp",
+            |reader, _len| read_u32(reader),
+            PropTargetType,
             accumulator::latest,
         ),
         define_prop(
@@ -1856,6 +2177,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$SchLoopPa",
+            PropSchemaLoopParams::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$SchPlayPa",
             PropSchemaPlayParams::read,
             identity,
@@ -1895,6 +2222,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$HasRefs",
             |reader, _len| read_bool(reader),
             PropHasRefs,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$NotPullab", // Dark chunk names truncate to 11 characters.
+            |reader, _len| read_bool(reader),
+            PropPsiNotPullable,
             accumulator::latest,
         ),
         define_prop(
@@ -2013,6 +2346,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$CfgTweqRo",
+            PropTweqRotateConfig::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$StTweqRot",
             PropTweqRotateState::read,
             identity,
@@ -2021,6 +2360,66 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$StTweqMod",
             PropTweqModelState::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$CfgTweqJo",
+            PropTweqJointsConfig::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$StTweqJoi",
+            PropTweqJointsState::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$JointPos",
+            PropJointPositions::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AIRCProp",
+            PropAIRangedCombat::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_RngSho",
+            PropAIRangedShoot::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AIRCRange",
+            PropAIRangedRanges::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_Grub_C",
+            PropAIGrubCombat::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_MoveSp",
+            PropAIMoveSpeed::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_Swarm",
+            PropAISwarm::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_MoveZO",
+            PropAIMoveZOffset::read,
             identity,
             accumulator::latest,
         ),
@@ -2130,8 +2529,8 @@ fn read_prop_phys_dimensions<T: io::Read + io::Seek>(
     let offset0 = read_vec3(reader) / SCALE_FACTOR;
     let offset1 = read_vec3(reader) / SCALE_FACTOR;
     let size = read_vec3(reader) / SCALE_FACTOR;
-    let unk1 = read_u32(reader);
-    let unk2 = read_u32(reader);
+    let point_vs_terrain = read_u32(reader);
+    let point_vs_not_special = read_u32(reader);
 
     PropPhysDimensions {
         radius0,
@@ -2139,8 +2538,8 @@ fn read_prop_phys_dimensions<T: io::Read + io::Seek>(
         offset0,
         offset1,
         size,
-        unk1,
-        unk2,
+        point_vs_terrain,
+        point_vs_not_special,
     }
 }
 
@@ -2204,6 +2603,14 @@ where
     fn initialize(&self, world: &mut World, entity: EntityId) {
         world.add_component(entity, self.clone());
     }
+
+    fn component_type_id(&self) -> TypeId {
+        TypeId::of::<C>()
+    }
+
+    fn remove(&self, world: &mut World, entity: EntityId) {
+        world.delete_component::<C>(entity);
+    }
 }
 
 #[derive(Debug)]
@@ -2239,6 +2646,14 @@ where
         drop(view);
         world.add_component(entity, value_to_set);
     }
+
+    fn component_type_id(&self) -> TypeId {
+        TypeId::of::<C>()
+    }
+
+    fn remove(&self, world: &mut World, entity: EntityId) {
+        world.delete_component::<C>(entity);
+    }
 }
 
 // `Send + Sync` is required so the level parse (which builds `Vec<Arc<Box<dyn Property>>>`)
@@ -2246,6 +2661,8 @@ where
 // for free: both blanket impls below already require `C: Send + Sync`.
 pub trait Property: fmt::Debug + Send + Sync {
     fn initialize(&self, world: &mut World, entity: EntityId);
+    fn component_type_id(&self) -> TypeId;
+    fn remove(&self, world: &mut World, entity: EntityId);
 }
 
 // `Send + Sync` so the shared `GlobalContext` (which holds these definition objects)
@@ -2292,6 +2709,13 @@ pub trait LinkDefinitionWithData: Send + Sync {
     fn link_data_chunk_name(&self) -> String;
     fn link_data_framing(&self) -> LinkDataFraming;
 
+    /// Whether a link of this flavor with no LD$ record of its own keeps the
+    /// link with a zero-filled record, instead of being dropped. Opt-in: it is
+    /// only correct where the reader parses all-zeroes as "unspecified", which
+    /// is per-flavor - a zeroed `LD$PhysAtta` offset means "welded to the
+    /// parent's origin", not "no offset authored".
+    fn defaults_missing_records(&self) -> bool;
+
     fn convert(&self, data: Vec<u8>, prop_len: u32, link: ToTemplateLinkInfo) -> ToTemplateLink;
 }
 
@@ -2299,6 +2723,7 @@ struct LinkDefinitionWithDataStruct<TData> {
     link_name: String,
     link_data_name: String,
     framing: LinkDataFraming,
+    defaults_missing_records: bool,
     converter: Converter<TData, Link>,
     reader: Reader<Box<dyn ReadAndSeek>, TData>,
 }
@@ -2317,6 +2742,10 @@ impl<TData> LinkDefinitionWithData for LinkDefinitionWithDataStruct<TData> {
 
     fn link_data_framing(&self) -> LinkDataFraming {
         self.framing
+    }
+
+    fn defaults_missing_records(&self) -> bool {
+        self.defaults_missing_records
     }
 
     fn convert(
@@ -2462,6 +2891,27 @@ pub fn define_link_with_data<TData: 'static + fmt::Debug + Send + Sync + Clone>(
         link_name: link_name.to_string(),
         link_data_name: link_data_name.to_string(),
         framing: LinkDataFraming::HeaderDeclared,
+        defaults_missing_records: false,
+        reader,
+        converter,
+    })
+}
+
+/// Like `define_link_with_data`, but for a flavor whose LD$ chunk is sparse and
+/// whose reader parses all-zeroes as "unspecified": a link with no record of
+/// its own keeps the link with a zero-filled record instead of being dropped.
+/// Check the reader before using this - see `defaults_missing_records`.
+pub fn define_link_with_optional_data<TData: 'static + fmt::Debug + Send + Sync + Clone>(
+    link_name: &str,
+    link_data_name: &str,
+    reader: Reader<Box<dyn ReadAndSeek>, TData>,
+    converter: Converter<TData, Link>,
+) -> Box<dyn LinkDefinitionWithData> {
+    Box::new(LinkDefinitionWithDataStruct {
+        link_name: link_name.to_string(),
+        link_data_name: link_data_name.to_string(),
+        framing: LinkDataFraming::HeaderDeclared,
+        defaults_missing_records: true,
         reader,
         converter,
     })
@@ -2479,6 +2929,7 @@ pub fn define_link_with_versioned_data<TData: 'static + fmt::Debug + Send + Sync
         link_name: link_name.to_string(),
         link_data_name: link_data_name.to_string(),
         framing: LinkDataFraming::VersionHeader,
+        defaults_missing_records: false,
         reader,
         converter,
     })
@@ -2533,6 +2984,19 @@ mod tests {
         let options = PhysAttachOptions::read(&mut cursor, 12);
 
         assert_eq!(options.offset, vec3(4.0, -0.2, -0.075));
+    }
+
+    /// The eng2 "Message Trap" P$UseMsg chunk: a leading u32 the readers
+    /// ignore, then the NUL-terminated key ("OutOfOrder", 15 bytes total).
+    #[test]
+    fn use_message_reads_its_key_from_a_variable_length_string_chunk() {
+        let mut bytes = 11u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(b"OutOfOrder\0");
+        let mut cursor = Cursor::new(bytes);
+
+        let property = PropUseMsg(read_variable_length_string(&mut cursor, 15));
+
+        assert_eq!(property.0, "OutOfOrder");
     }
 
     #[test]
@@ -2591,6 +3055,19 @@ mod tests {
         bytes.extend_from_slice(&p68.to_le_bytes());
         bytes.resize(88, 0);
         bytes
+    }
+
+    #[test]
+    fn freeze_reaction_reads_integer_duration_multiplier() {
+        let mut payload = vec![0u8; 88];
+        payload[16..22].copy_from_slice(b"Freeze");
+        payload[56..60].copy_from_slice(&1i32.to_le_bytes());
+        assert_eq!(
+            read_receptron(payload).effect,
+            ReceptronEffect::Freeze {
+                duration_multiplier: 1
+            }
+        );
     }
 
     fn read_receptron(payload: Vec<u8>) -> ReceptronOptions {

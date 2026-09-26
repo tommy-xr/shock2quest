@@ -1,5 +1,6 @@
-import { HttpClient } from "./client.js";
+import { HttpClient, HttpError } from "./client.js";
 import type {
+  ActiveAudioLoopsResult,
   AnimationState,
   CommandResult,
   DebugEntityMessage,
@@ -14,11 +15,13 @@ import type {
   InputAction,
   PathfindingStats,
   PathfindingTestStatus,
+  PhysicsBodyDetail,
   PhysicsBodyListResult,
   SceneListResult,
   SceneObjectSummary,
   Position,
   RagdollMetricsResult,
+  ClimbGripResult,
   RayCastRequest,
   RayCastResult,
   ScreenshotResult,
@@ -36,10 +39,12 @@ import type {
   PlayerInventoryResult,
   PlayerStats,
   PlayerStatsRequest,
+  StatModifierRequest,
   SpawnedItem,
   TransitionsResult,
   WaitForOptions,
   AiPathEntry,
+  PathRouteResult,
   AimOptions,
   AimPoint,
   AimResult,
@@ -332,6 +337,11 @@ export class PlayerApi {
     );
   }
 
+  /** Add or refresh a timed stat contribution; zero duration removes it. */
+  async applyStatModifier(request: StatModifierRequest): Promise<PlayerStats> {
+    return this.client.post("/v1/player/stat-modifier", request);
+  }
+
   /**
    * Debug provisioning: raise the character sheet to the requested levels
    * (stats, skills, psi tier, cyber modules) through the same `PlayerStats`
@@ -413,6 +423,30 @@ export class InputApi {
   async trigger(action: InputAction): Promise<CommandResult> {
     return unwrap(
       await this.client.post<CommandResult>("/v1/input/action", { action }),
+    );
+  }
+
+  /**
+   * Press a discrete action and KEEP it held, so a hold-to-activate button can
+   * be driven without a controller (the Menu button's long press). Step to let
+   * the hold accumulate, then `release`.
+   */
+  async hold(action: InputAction): Promise<CommandResult> {
+    return unwrap(
+      await this.client.post<CommandResult>("/v1/input/action", {
+        action,
+        hold: true,
+      }),
+    );
+  }
+
+  /** Release an action held by `hold`. */
+  async release(action: InputAction): Promise<CommandResult> {
+    return unwrap(
+      await this.client.post<CommandResult>("/v1/input/action", {
+        action,
+        hold: false,
+      }),
     );
   }
 
@@ -540,9 +574,45 @@ export class PhysicsApi {
     return this.client.get<PhysicsBodyListResult>(`/v1/physics/bodies${query}`);
   }
 
+  /**
+   * One body in full, including how many contacts it currently has and which
+   * bodies those contacts are with (`contacts`). The
+   * endpoint answers `null` for an unknown body id, which this reports as an
+   * error rather than handing back a null that only fails later.
+   */
+  async body(bodyId: number): Promise<PhysicsBodyDetail> {
+    const detail = await this.client.get<PhysicsBodyDetail | null>(
+      `/v1/physics/bodies/${bodyId}`,
+    );
+    if (detail === null) {
+      throw new Error(`no physics body with id ${bodyId}`);
+    }
+    return detail;
+  }
+
   /** Per-ragdoll settle/quality metrics (empty list when no ragdolls exist). */
   async ragdolls(): Promise<RagdollMetricsResult> {
     return this.client.get<RagdollMetricsResult>("/v1/ragdoll/metrics");
+  }
+
+  /**
+   * What a hand at `point` could grab: an authored ladder face, a walkable
+   * ledge above the player's feet, or nothing. `feetY` defaults to the
+   * player's own feet height.
+   */
+  async grip(
+    point: Vec3,
+    options?: { radius?: number; feetY?: number },
+  ): Promise<ClimbGripResult> {
+    const params = new URLSearchParams({
+      x: String(point[0]),
+      y: String(point[1]),
+      z: String(point[2]),
+    });
+    if (options?.radius !== undefined)
+      params.set("radius", String(options.radius));
+    if (options?.feetY !== undefined) params.set("feet_y", String(options.feetY));
+    return this.client.get<ClimbGripResult>(`/v1/physics/grip?${params}`);
   }
 }
 
@@ -720,14 +790,25 @@ export class UiApi {
 export class AudioApi {
   constructor(private readonly client: HttpClient) {}
 
+  /** Live looping sinks, queried on the game thread (elapsed time is wall time). */
+  async loops(): Promise<ActiveAudioLoopsResult> {
+    return this.client.get<ActiveAudioLoopsResult>("/v1/audio/loops");
+  }
+
   /**
    * The most recently played sounds (oldest first): resolved schema sample,
    * query tags, world position, sim time/frame, clip duration, source entity
    * and audio handle. Snapshot the last `sequence` before an action, then
    * filter for higher sequences to find the sounds that action played.
+   * `sample` keeps only samples containing it, ignoring case; `playing`
+   * keeps only sounds still audible now.
    */
-  async recent(): Promise<RecentAudioResult> {
-    return this.client.get<RecentAudioResult>("/v1/audio/recent");
+  async recent(options?: { sample?: string; playing?: boolean }): Promise<RecentAudioResult> {
+    const params = new URLSearchParams();
+    if (options?.sample !== undefined) params.set("sample", options.sample);
+    if (options?.playing) params.set("playing", "true");
+    const query = params.size > 0 ? `?${params}` : "";
+    return this.client.get<RecentAudioResult>(`/v1/audio/recent${query}`);
   }
 }
 
@@ -770,6 +851,25 @@ export class PathfindingApi {
    */
   async aiPaths(): Promise<AiPathEntry[]> {
     return this.client.get<AiPathEntry[]>("/v1/ai/paths");
+  }
+
+  /**
+   * Does a walk route exist between two world positions? Answers "the AI is
+   * failing to route" vs "nothing walkable connects these at all". Null when
+   * the scene has no pathfinding data.
+   */
+  async route(from: Vec3, to: Vec3): Promise<PathRouteResult | null> {
+    const q = (v: Vec3) => v.join(",");
+    try {
+      return await this.client.get<PathRouteResult>(
+        `/v1/pathfinding/route?from=${q(from)}&to=${q(to)}`,
+      );
+    } catch (error) {
+      // Only "this scene has no pathfinding data" is an answer; a transport
+      // error or a 500 must not masquerade as one.
+      if (error instanceof HttpError && error.status === 404) return null;
+      throw error;
+    }
   }
 }
 

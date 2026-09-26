@@ -31,6 +31,18 @@ pub struct GuiConfig {
     pub screen_size_in_pixels: Vector2<f32>,
 }
 
+/// A companion drawn beside a panel's body in the same canvas (retail raises
+/// the HRM plug as its own overlay next to the MFD). The flat host anchors its
+/// close button to the body and hit-tests only the body and `rect`, so the
+/// empty canvas around the companion stays click-through (the VR world panel
+/// still hit-tests its whole quad; it draws the same). Panel-local pixels;
+/// `rect` is `None` while the companion is hidden but its room is kept.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanelSidecar {
+    pub body_width: f32,
+    pub rect: Option<crate::ui::Rect>,
+}
+
 pub struct GuiCursor {
     pub position: Point2<f32>,
     pub held_entity_id: Option<EntityId>,
@@ -52,10 +64,20 @@ where
     fn get_config(&self) -> GuiConfig;
 
     /// State-aware panel geometry. Most panels are fixed-size and use
-    /// `get_config`; overlays with a companion plug (the retail replicator
-    /// PLUGHACK sidecar) can widen only while that companion is present.
+    /// `get_config`; panels with a companion plug (the HRM plug) keep its room
+    /// for as long as they are open, so the VR quad never resizes.
     fn get_config_for(&self, _entity_id: EntityId, _world: &World, _state: &TState) -> GuiConfig {
         self.get_config()
+    }
+
+    /// The companion drawn beside this panel's body, if any.
+    fn sidecar(
+        &self,
+        _entity_id: EntityId,
+        _world: &World,
+        _state: &TState,
+    ) -> Option<PanelSidecar> {
+        None
     }
 
     fn handle_msg(

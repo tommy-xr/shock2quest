@@ -42,8 +42,23 @@ impl InputActionState {
         self.triggered.clear();
     }
 
+    /// Consume an edge while retaining the runtime-owned held state.
+    pub fn consume_trigger(&mut self, action: InputAction) {
+        self.triggered.remove(&action);
+    }
+
     /// Release a held action
     pub fn release(&mut self, action: InputAction) {
+        self.held.remove(&action);
+    }
+
+    /// Drop an action entirely for this frame: neither triggered nor held.
+    ///
+    /// For a button that is bound to two things at once and must not fire
+    /// both - the free-camera chord's halves, which are also the right hand's
+    /// contextual face buttons.
+    pub fn suppress(&mut self, action: InputAction) {
+        self.triggered.remove(&action);
         self.held.remove(&action);
     }
 
@@ -213,6 +228,21 @@ mod tests {
         // A genuine release still re-arms it.
         state.sync_chord(InputAction::ToggleFreeCamera, true, false, false);
         state.sync_chord(InputAction::ToggleFreeCamera, true, true, true);
+        assert!(state.just_triggered(InputAction::ToggleFreeCamera));
+    }
+
+    #[test]
+    fn suppress_drops_both_the_edge_and_the_latch() {
+        let mut state = InputActionState::new();
+        state.trigger(InputAction::RightHandLowerButton);
+
+        state.suppress(InputAction::RightHandLowerButton);
+
+        assert!(!state.just_triggered(InputAction::RightHandLowerButton));
+        assert!(!state.is_held(InputAction::RightHandLowerButton));
+        // Only the named action - the chord it belongs to must survive.
+        state.trigger(InputAction::ToggleFreeCamera);
+        state.suppress(InputAction::RightHandUpperButton);
         assert!(state.just_triggered(InputAction::ToggleFreeCamera));
     }
 

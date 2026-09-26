@@ -10,9 +10,9 @@
 use std::collections::HashMap;
 
 use dark::properties::{Link, PropContainDimensions, PropInventoryDimensions};
-use shipyard::{EntityId, Get, UniqueView, View, ViewMut, World};
+use shipyard::{EntityId, Get, View, ViewMut, World};
 
-use crate::{player_stats::PlayerStats, quest_info::QuestInfo};
+use crate::player_stats::PlayerStats;
 
 pub mod player_inventory_entity;
 pub use player_inventory_entity::*;
@@ -55,9 +55,8 @@ pub fn grid_for(world: &World, container_entity: EntityId) -> (usize, usize) {
         .map(|v| v.get(container_entity).is_ok())
         .unwrap_or(false);
     if is_backpack {
-        return world
-            .borrow::<UniqueView<QuestInfo>>()
-            .map(|quests| (backpack_width(quests.player_stats()), BACKPACK_GRID.1))
+        return crate::implants::effective_stats(world)
+            .map(|stats| (backpack_width(&stats), BACKPACK_GRID.1))
             // Minimal/debug scenes normally install QuestInfo too. Keep the
             // old maximum-size behavior as a graceful fallback for any scene
             // that deliberately has no character sheet.
@@ -248,6 +247,23 @@ impl Inventory {
         true
     }
 
+    /// Keep a pointed-at item's footprint inside the grid. Near the bottom or
+    /// right edge, slide its origin back just enough to fit; never move over
+    /// another item or treat an off-grid pointer as a valid target.
+    pub fn placement_at(
+        &self,
+        target: (usize, usize),
+        dimensions: (usize, usize),
+    ) -> Option<(usize, usize)> {
+        let (width, height) = dimensions;
+        if target.0 >= self.width || target.1 >= self.height || width == 0 || height == 0 {
+            return None;
+        }
+        let x = target.0.min(self.width.checked_sub(width)?);
+        let y = target.1.min(self.height.checked_sub(height)?);
+        self.has_capacity(x, y, width, height).then_some((x, y))
+    }
+
     pub fn all_items(&self) -> impl Iterator<Item = &ContainedEntityInfo> {
         self.items.iter()
     }
@@ -299,7 +315,7 @@ impl Inventory {
 
     /// The cell an ordinal names, or `None` if it is not a cell in this grid
     /// (an equip slot, or beyond the grid's bounds).
-    fn cell_of(&self, ordinal: u32) -> Option<(usize, usize)> {
+    pub(crate) fn cell_of(&self, ordinal: u32) -> Option<(usize, usize)> {
         if ordinal >= EQUIP_SLOT_BASE {
             return None;
         }
@@ -432,6 +448,22 @@ mod tests {
             .find(|i| i.entity == entity)
             .map(|i| (i.x, i.y))
             .expect("item should be laid out")
+    }
+
+    #[test]
+    fn pointed_footprints_slide_inside_edges_without_crossing_occupants() {
+        let mut inventory = Inventory::new(8, 3);
+        for row in 0..3 {
+            assert_eq!(inventory.placement_at((5, row), (1, 3)), Some((5, 0)));
+        }
+        assert_eq!(inventory.placement_at((7, 2), (2, 2)), Some((6, 1)));
+        assert_eq!(inventory.placement_at((8, 1), (1, 1)), None);
+        assert_eq!(inventory.placement_at((2, 1), (1, 4)), None);
+        assert_eq!(inventory.placement_at((2, 1), (0, 1)), None);
+        let item = entities(1)[0];
+        inventory.insert_if_fits(item, 5, 0, 1, 1);
+        assert_eq!(inventory.placement_at((5, 1), (1, 3)), None);
+        assert_eq!(inventory.placement_at((4, 1), (1, 3)), Some((4, 0)));
     }
 
     /// An item keeps the cell stored on its containment link - it is not

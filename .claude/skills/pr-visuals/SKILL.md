@@ -70,7 +70,8 @@ curl -s -X POST http://127.0.0.1:8085/v1/shutdown
   from a fresh launch produces **byte-identical** images — that determinism is
   what makes before/after comparable (and `cmp` a cheap "did anything change?").
 - Input channels are dotted paths in flat JSON: `{"right_hand.trigger": 1.0}`,
-  `{"head.look": [yaw_deg, pitch_deg]}` — not nested objects.
+  `{"head.look": [yaw_deg, pitch_deg]}` — not nested objects. `head.look`
+  pitch is **positive down** (`+60` = floor, `-60` = ceiling).
 - **`debug_weapons` gotcha:** `CycleWeapon` drops the previously wielded weapon
   into the world in the look direction, so repeated cycling piles weapon models
   on the floor — they photobomb screenshots and look like broken viewmodels.

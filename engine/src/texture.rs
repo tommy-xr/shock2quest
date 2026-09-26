@@ -21,6 +21,7 @@ unsafe impl Sync for Texture {}
 pub trait TextureTrait {
     fn bind0(&self, render_context: &EngineRenderContext);
     fn bind1(&self, render_context: &EngineRenderContext);
+    fn bind_to(&self, render_context: &EngineRenderContext, unit: u32);
 }
 
 impl TextureTrait for Texture {
@@ -29,6 +30,9 @@ impl TextureTrait for Texture {
     }
     fn bind1(&self, _render_context: &EngineRenderContext) {
         bind1(self);
+    }
+    fn bind_to(&self, _render_context: &EngineRenderContext, unit: u32) {
+        bind_to(self, unit);
     }
 }
 
@@ -56,6 +60,11 @@ impl TextureTrait for AnimatedTexture {
         let frame = (render_context.time / self.time_per_frame) as usize;
         let frame = frame % self.textures.len();
         bind1(&self.textures[frame]);
+    }
+    fn bind_to(&self, render_context: &EngineRenderContext, unit: u32) {
+        let frame = (render_context.time / self.time_per_frame) as usize;
+        let frame = frame % self.textures.len();
+        bind_to(&self.textures[frame], unit);
     }
 }
 
@@ -105,6 +114,68 @@ impl Drop for Texture {
     }
 }
 
+/// A six-face cube map, sampled by direction.
+#[derive(Debug)]
+pub struct CubeTexture {
+    gl_id: types::GLuint,
+}
+
+impl CubeTexture {
+    /// Upload RGBA8 faces with a full mip chain: reflections sample blurred
+    /// mips, not just the sharp top level.
+    pub fn new(cube: &crate::dds::CubeFaces) -> CubeTexture {
+        let mut gl_id = 0;
+        unsafe {
+            // GLES 3 always filters across face edges; desktop GL must opt in,
+            // or blurred mips show the cube's seams.
+            #[cfg(not(target_os = "android"))]
+            gl::Enable(gl::TEXTURE_CUBE_MAP_SEAMLESS);
+            gl::GenTextures(1, &mut gl_id);
+            gl::BindTexture(gl::TEXTURE_CUBE_MAP, gl_id);
+            for (index, face) in cube.faces.iter().enumerate() {
+                gl::TexImage2D(
+                    gl::TEXTURE_CUBE_MAP_POSITIVE_X + index as u32,
+                    0,
+                    gl::RGBA as i32,
+                    cube.size as i32,
+                    cube.size as i32,
+                    0,
+                    gl::RGBA,
+                    gl::UNSIGNED_BYTE,
+                    face.as_ptr() as *const c_void,
+                );
+            }
+            let target = gl::TEXTURE_CUBE_MAP;
+            gl::TexParameteri(target, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(target, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(target, gl::TEXTURE_WRAP_R, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(
+                target,
+                gl::TEXTURE_MIN_FILTER,
+                gl::LINEAR_MIPMAP_LINEAR as i32,
+            );
+            gl::TexParameteri(target, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::GenerateMipmap(target);
+        }
+        CubeTexture { gl_id }
+    }
+
+    pub fn bind_to(&self, unit: u32) {
+        unsafe {
+            gl::ActiveTexture(gl::TEXTURE0 + unit);
+            gl::BindTexture(gl::TEXTURE_CUBE_MAP, self.gl_id);
+        }
+    }
+}
+
+impl Drop for CubeTexture {
+    fn drop(&mut self) {
+        unsafe {
+            gl::DeleteTextures(1, &self.gl_id);
+        }
+    }
+}
+
 pub fn bind0(texture: &Texture) {
     unsafe {
         gl::ActiveTexture(gl::TEXTURE0);
@@ -115,6 +186,13 @@ pub fn bind0(texture: &Texture) {
 pub fn bind1(texture: &Texture) {
     unsafe {
         gl::ActiveTexture(gl::TEXTURE1);
+        gl::BindTexture(gl::TEXTURE_2D, texture.gl_id);
+    }
+}
+
+pub fn bind_to(texture: &Texture, unit: u32) {
+    unsafe {
+        gl::ActiveTexture(gl::TEXTURE0 + unit);
         gl::BindTexture(gl::TEXTURE_2D, texture.gl_id);
     }
 }
@@ -132,6 +210,11 @@ pub enum TextureFilter {
     /// minified: blending across the key boundary turns it into a visible
     /// fringe that no colour-key test can then recognize.
     Nearest,
+    /// Linear, with mipmaps for minification. Right for fine line art drawn
+    /// smaller than its texels and at a viewpoint-dependent scale (a hologram
+    /// grid on a VR panel): plain `Linear` point-samples the lines, so their
+    /// brightness swims with sub-pixel phase as the panel moves.
+    LinearMipmap,
 }
 
 #[derive(Hash)]
@@ -141,6 +224,14 @@ pub struct TextureOptions {
     /// (PCX). Dark bitmap sprites (particles) are keyed this way; wall/UI
     /// textures are not, so this is opt-in.
     pub transparent_index_0: bool,
+    /// Turn opaque line art into a translucent tinted overlay: each texel's
+    /// alpha becomes its luminance and its colour becomes this tint. Black
+    /// therefore drops out entirely, which is what makes a grid bitmap read as
+    /// a hologram over the world instead of a black panel.
+    pub luminance_alpha_tint: Option<[u8; 3]>,
+    /// Luminance mapped to transparent/opaque when tinting. Defaults preserve
+    /// the source contrast; a narrower range removes a dim icon background.
+    pub luminance_alpha_range: [u8; 2],
     pub filter: TextureFilter,
 }
 
@@ -149,6 +240,8 @@ impl Default for TextureOptions {
         TextureOptions {
             wrap: true,
             transparent_index_0: false,
+            luminance_alpha_tint: None,
+            luminance_alpha_range: [0, 255],
             filter: TextureFilter::Linear,
         }
     }
@@ -176,12 +269,13 @@ pub fn init_from_memory2(raw_texture_data: RawTextureData, options: &TextureOpti
         // gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
 
         // set texture filtering parameters
-        let filter = match options.filter {
-            TextureFilter::Linear => gl::LINEAR,
-            TextureFilter::Nearest => gl::NEAREST,
+        let (min_filter, mag_filter) = match options.filter {
+            TextureFilter::Linear => (gl::LINEAR, gl::LINEAR),
+            TextureFilter::Nearest => (gl::NEAREST, gl::NEAREST),
+            TextureFilter::LinearMipmap => (gl::LINEAR_MIPMAP_LINEAR, gl::LINEAR),
         };
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, filter as i32);
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, filter as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, min_filter as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, mag_filter as i32);
     }
 
     let pixel_format = match raw_texture_data.format {
@@ -216,7 +310,9 @@ pub fn init_from_memory2(raw_texture_data: RawTextureData, options: &TextureOpti
             gl::UNSIGNED_BYTE,
             &raw_texture_data.bytes[0] as *const u8 as *const c_void,
         );
-        //gl::GenerateMipmap(gl::TEXTURE_2D);
+        if matches!(options.filter, TextureFilter::LinearMipmap) {
+            gl::GenerateMipmap(gl::TEXTURE_2D);
+        }
     }
 
     Texture {
@@ -245,4 +341,33 @@ pub fn init2(buffer: &[u8], format: &dyn TextureFormat) -> Texture {
 
     let raw_texture_data = format.load(buffer);
     init_from_memory(raw_texture_data)
+}
+
+thread_local! {
+    /// Uploaded once per thread, on first use. Needs a live GL context, which
+    /// rules out a `const`/`static` (the `shared_builtin_font` pattern).
+    static WHITE_PIXEL: std::cell::RefCell<Option<Rc<Texture>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A 1x1 opaque white texture, uploaded on first use.
+///
+/// The screen-space and panel materials all multiply a tint by a sampled
+/// texel, so a solid-colour quad is just that tint over this texture - no
+/// second shader, and one shared upload rather than a 1x1 bitmap per caller.
+///
+/// Requires a current GL context.
+pub fn shared_white_pixel() -> Rc<Texture> {
+    WHITE_PIXEL.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        cell.get_or_insert_with(|| {
+            Rc::new(init_from_memory(RawTextureData {
+                bytes: vec![255, 255, 255, 255],
+                width: 1,
+                height: 1,
+                format: texture_format::PixelFormat::RGBA,
+            }))
+        })
+        .clone()
+    })
 }

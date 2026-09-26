@@ -8,7 +8,7 @@ use std::{
 };
 
 use cgmath::{Matrix4, Vector2, Vector3, Vector4, vec4};
-use cgmath::{Point3, point3, prelude::*, vec3};
+use cgmath::{Point3, point3, prelude::*};
 use collision::Aabb3;
 use engine::{
     assets::asset_cache::AssetCache,
@@ -18,9 +18,7 @@ use engine::{
     },
     texture::{AnimatedTexture, TextureTrait},
 };
-use num_derive::{FromPrimitive, ToPrimitive};
-use num_traits::FromPrimitive;
-use tracing::{trace, warn};
+use tracing::warn;
 
 use crate::{
     SCALE_FACTOR,
@@ -37,38 +35,19 @@ use crate::{
 // Dark LGMD polygons use clockwise front faces.
 const DARK_OBJECT_FRONT_FACE: FrontFaceWinding = FrontFaceWinding::Clockwise;
 
-#[derive(FromPrimitive, ToPrimitive, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum VhotType {
-    Unknown = 0,
-    LightSource = 1,
-    Anchor = 2,
-    Particle1 = 3,
-    Particle2 = 4,
-    Particle3 = 5,
-    Particle4 = 6,
-    Particle5 = 7,
-    LightSource2 = 8,
-}
-
 #[derive(Debug, Clone)]
 pub struct Vhot {
-    pub vhot_type: VhotType,
+    /// Authored attachment ID, not a type or an index into the file's table.
+    /// Dark's evaluated vhot table is keyed by this integer (`md_eval_vhots`).
+    pub id: u32,
     pub point: Point3<f32>,
 }
 
 impl Vhot {
     pub fn read<T: Read + Seek>(reader: &mut T) -> Vhot {
-        let vhot_type_num = read_u32(reader);
-        // Vhot ids outside the set we model are harmless - nothing reads the type
-        // today - so treat them as Unknown rather than refusing the whole model.
-        // (SCP's escpod.bin uses ids 10 and 11.)
-        let vhot_type = VhotType::from_u32(vhot_type_num).unwrap_or_else(|| {
-            trace!("unrecognized vhot type {vhot_type_num}, treating as Unknown");
-            VhotType::Unknown
-        });
-
+        let id = read_u32(reader);
         let point = read_point3(reader) / SCALE_FACTOR;
-        Vhot { vhot_type, point }
+        Vhot { id, point }
     }
 }
 
@@ -145,12 +124,10 @@ pub fn to_scene_objects(
         .into_iter()
         .collect::<Vec<(u16, Vec<VertexPositionTextureSkinnedNormal>)>>();
 
-    let mut bones = Vec::new();
-    build_skeleton_for_obj_mesh(&mesh, 0, None, &mut bones);
-    let is_skinned = bones.len() > 1;
-    let skeleton = Skeleton::create_from_bones(bones);
+    let skeleton = obj_skeleton(mesh);
+    let is_skinned = skeleton.bone_count() > 1;
 
-    let mut mesh_objects = vertices
+    let mesh_objects = vertices
         .into_iter()
         .filter_map(|(slot, verts)| {
             if verts.is_empty() {
@@ -216,6 +193,8 @@ pub fn to_scene_objects(
                 transparency = 0.8
             }
 
+            let additive = !is_skinned && !debug_normals_enabled
+                && crate::util::object_material_is_additive_flash(asset_cache, &tex_path);
             let mat: Box<dyn engine::scene::Material> = if debug_normals_enabled {
                 if is_skinned {
                     engine::scene::debug_normal_material::create_skinned()
@@ -232,40 +211,42 @@ pub fn to_scene_objects(
                     transparency,
                 )
             } else {
-                engine::scene::basic_material::create(
+                engine::scene::basic_material::create_with_additive(
                     diffuse_texture
                         .as_ref()
                         .expect("diffuse texture should exist when debug normals disabled")
                         .clone(),
                     material.emissivity,
                     transparency,
+                    additive,
                 )
             };
 
             let material = RefCell::new(mat);
-            let mut so = create_dark_object_scene_object(material, geometry);
+            let mut so = create_dark_object_scene_object(material, geometry.clone());
 
+            so.blend_mode = if additive {
+                engine::scene::scene_object::BlendMode::AdditiveColor
+            } else {
+                engine::scene::scene_object::BlendMode::Alpha
+            };
+            if additive { so.set_depth_write(false); }
             so.set_skinning_data(skeleton.get_transforms());
 
-            Some(so)
+            let mut objects = vec![so];
+            if !debug_normals_enabled {
+                crate::util::append_incidence_overlays(
+                    &mut objects, asset_cache, &tex_path, texture, is_skinned,
+                );
+            }
+            Some(objects)
         })
+        .flatten()
         .collect::<Vec<SceneObject>>();
 
-    let vhots = &mesh.vhots;
-    let mut vhot_objs = vhots
-        .iter()
-        .map(|vhot| {
-            let geometry = engine::scene::cube::create();
-            let material = RefCell::new(engine::scene::color_material::create(vec3(0.0, 0.0, 1.0)));
-            let mut scene_obj = SceneObject::create(material, Rc::new(Box::new(geometry)));
-            scene_obj.set_local_transform(
-                Matrix4::from_translation(vhot.point.to_vec()) * Matrix4::from_scale(0.025),
-            );
-            scene_obj
-        })
-        .collect::<Vec<SceneObject>>();
-
-    mesh_objects.append(&mut vhot_objs);
+    // Vhots are attachment points (muzzle, light, particle origins), not
+    // geometry - they are read off `mesh.vhots` by whoever attaches to them.
+    // The viewer tools draw their own markers (`--debug-articulation`).
     (mesh_objects, skeleton)
 }
 
@@ -612,6 +593,29 @@ fn wrist_and_fingertip(points: &[Point3<f32>]) -> Option<(Point3<f32>, Point3<f3
     }
 }
 
+/// Preserve the LGMD parameter-to-part mapping independently of file order.
+pub fn object_articulation(
+    mesh: &SystemShock2ObjectMesh,
+) -> crate::object_articulation::ObjectArticulation {
+    use crate::object_articulation::{ObjectArticulation, ObjectJoint};
+    ObjectArticulation {
+        skeleton: obj_skeleton(mesh),
+        joints: mesh
+            .sub_objects
+            .iter()
+            .enumerate()
+            .map(|(index, part)| ObjectJoint {
+                index: index as u32,
+                parameter: part.parameter,
+                motion_type: part.motion_type,
+                vhot_range: part.vhot_start as usize
+                    ..(part.vhot_start as usize + part.vhot_count as usize),
+            })
+            .collect(),
+        vhots: mesh.vhots.clone(),
+    }
+}
+
 /// The model-space transform of every sub-object, paired with its name - the
 /// placement the artist authored for that part.
 ///
@@ -619,9 +623,7 @@ fn wrist_and_fingertip(points: &[Point3<f32>]) -> Option<(Point3<f32>, Point3<f3
 /// sub-objects (`@s01_han`, `@s02_han`) are posed onto the weapon by hand, so
 /// their transforms say exactly where a hand belongs on that gun.
 pub fn sub_object_transforms(mesh: &SystemShock2ObjectMesh) -> Vec<(String, Matrix4<f32>)> {
-    let mut bones = Vec::new();
-    build_skeleton_for_obj_mesh(mesh, 0, None, &mut bones);
-    let skeleton = Skeleton::create_from_bones(bones);
+    let skeleton = obj_skeleton(mesh);
 
     mesh.sub_objects
         .iter()
@@ -631,6 +633,77 @@ pub fn sub_object_transforms(mesh: &SystemShock2ObjectMesh) -> Vec<(String, Matr
                 sub_object.name.clone(),
                 skeleton.global_transform(&(index as u32)),
             )
+        })
+        .collect()
+}
+
+/// The sub-object tree as the skeleton the renderer poses it with (joint index
+/// = sub-object index).
+pub fn obj_skeleton(mesh: &SystemShock2ObjectMesh) -> Skeleton {
+    let mut bones = Vec::new();
+    build_skeleton_for_obj_mesh(mesh, 0, None, &mut bones);
+    Skeleton::create_from_bones(bones)
+}
+
+/// The model-space bounding box of every sub-object's own vertices, paired
+/// with its name - where each authored part actually sits under `palette`,
+/// the per-joint transforms the renderer skins with (index = sub-object
+/// index; for the rest pose, `AnimationPlayer::empty().get_transforms`).
+/// Empty parts (pure pivots) report `None`.
+///
+/// This is how a per-model anchor gets derived from the art (a magazine, a
+/// grip, a sight) instead of eyeballed in a debug scene.
+pub fn sub_object_bounds(
+    mesh: &SystemShock2ObjectMesh,
+    palette: &[Matrix4<f32>],
+) -> Vec<(String, Option<Aabb3<f32>>)> {
+    mesh.sub_objects
+        .iter()
+        .enumerate()
+        .map(|(index, sub_object)| {
+            let name = sub_object.name.clone();
+            let transform = palette
+                .get(index)
+                .copied()
+                .unwrap_or_else(Matrix4::identity);
+            use collision::Aabb as _;
+            let mut bounds: Option<Aabb3<f32>> = None;
+            for index in sub_object.point_start..sub_object.point_stop {
+                let Some(vertex) = mesh.vertices.get(index as usize) else {
+                    continue;
+                };
+                let point = transform.transform_point(point3(vertex.x, vertex.y, vertex.z));
+                bounds = Some(match bounds {
+                    None => Aabb3::new(point, point),
+                    Some(aabb) => aabb.grow(point),
+                });
+            }
+            (name, bounds)
+        })
+        .collect()
+}
+
+/// [`to_vertices`] keyed by material name rather than by slot, so a caller can
+/// select geometry the way the 25AE authors it - by material - without
+/// re-deriving the slot table. Ordered by slot, and slots with no material
+/// entry are dropped (nothing can draw them either).
+pub fn to_vertices_by_material(
+    mesh: &SystemShock2ObjectMesh,
+) -> Vec<(String, Vec<VertexPositionTextureSkinnedNormal>)> {
+    let mut by_slot = to_vertices(mesh).into_iter().collect::<Vec<_>>();
+    by_slot.sort_by_key(|(slot, _)| *slot);
+    by_slot
+        .into_iter()
+        .filter_map(|(slot, vertices)| {
+            // Last entry wins on a duplicated slot, matching the map
+            // `to_scene_objects` builds - so a caller selecting geometry by
+            // material selects what the renderer draws with.
+            let material = mesh
+                .materials
+                .iter()
+                .filter(|material| material.slot_num as u16 == slot)
+                .next_back()?;
+            Some((material.name.clone(), vertices))
         })
         .collect()
 }
@@ -828,7 +901,8 @@ pub fn read_vhots<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<
             vhots.push(Vhot::read(reader));
         }
     }
-    vhots.sort_by(|a, b| a.vhot_type.cmp(&b.vhot_type));
+    // Keep file order for consumers that explicitly need it. ID-based
+    // attachments must look up `Vhot::id`, including sparse/high identifiers.
     vhots
 }
 
@@ -967,8 +1041,8 @@ fn read_vertices<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<V
 pub struct SubObjectHeader {
     #[allow(dead_code)]
     idx: u32,
-    #[allow(dead_code)]
-    parent_idx: i32,
+    pub parameter: i32,
+    pub motion_type: u8,
     pub name: String,
     transform: Matrix4<f32>,
     #[allow(dead_code)]
@@ -979,6 +1053,8 @@ pub struct SubObjectHeader {
     next_sub_obj_idx: i16,
     point_start: u16,
     point_stop: u16,
+    vhot_start: u16,
+    vhot_count: u16,
 }
 
 fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<SubObjectHeader> {
@@ -991,8 +1067,8 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
     let mut objs = Vec::new();
     for i in 0..header.num_objs {
         let name = read_string_with_size(reader, 8);
-        let _obj_type = read_u8(reader);
-        let parent_idx = read_i32(reader);
+        let motion_type = read_u8(reader);
+        let parameter = read_i32(reader);
         let min_range = read_single(reader);
         let max_range = read_single(reader);
 
@@ -1003,8 +1079,8 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
 
         let child_sub_obj_idx = read_i16(reader);
         let next_sub_obj_idx = read_i16(reader);
-        let _vhot_start = read_i16(reader);
-        let _num_vhots = read_i16(reader);
+        let vhot_start = read_u16(reader);
+        let vhot_count = read_u16(reader);
         let point_start = read_u16(reader);
         let sub_num_points = read_u16(reader);
 
@@ -1013,7 +1089,8 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
 
         let soh = SubObjectHeader {
             idx: i as u32,
-            parent_idx,
+            parameter,
+            motion_type,
             child_sub_obj_idx,
             next_sub_obj_idx,
             min_range,
@@ -1022,6 +1099,8 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
             transform,
             point_start,
             point_stop: point_start + sub_num_points,
+            vhot_start,
+            vhot_count,
         };
         objs.push(soh);
     }
@@ -1165,7 +1244,33 @@ fn convert_skinned_vertices_to_static_vertices(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::vec3;
     use std::io::Cursor;
+
+    #[test]
+    fn subobject_parser_preserves_parameter_and_attachment_ownership() {
+        // A 93-byte LGMD record, with a deliberately unrelated file index,
+        // parameter ID and attachment ID. The old loader called parm a parent.
+        let mut bytes = vec![0u8; 93];
+        bytes[..8].copy_from_slice(b"@s07gun\0");
+        bytes[8] = 1;
+        bytes[9..13].copy_from_slice(&7i32.to_le_bytes());
+        bytes[13..17].copy_from_slice(&(-6.2f32).to_le_bytes());
+        bytes[69..71].copy_from_slice(&(-1i16).to_le_bytes());
+        bytes[71..73].copy_from_slice(&(-1i16).to_le_bytes());
+        bytes[73..75].copy_from_slice(&3u16.to_le_bytes());
+        bytes[75..77].copy_from_slice(&2u16.to_le_bytes());
+        let mut header = header_with_mat_extra(0);
+        header.num_objs = 1;
+        header.offset_objs = 0;
+        header.offset_mats = 93;
+        let objects = read_sub_objects(&header, &mut Cursor::new(bytes));
+        assert_eq!(objects[0].parameter, 7);
+        assert_eq!(objects[0].motion_type, 1);
+        assert_eq!(objects[0].vhot_start, 3);
+        assert_eq!(objects[0].vhot_count, 2);
+        assert_eq!(objects[0].min_range, -6.2);
+    }
 
     /// S_HIVOLT.BIN contains two coplanar, opposite-wound faces with inverse U
     /// mappings. Only its authored clockwise face reads left-to-right from the
@@ -1242,7 +1347,8 @@ mod tests {
     fn sub_object(name: &str, local: Vector3<f32>, child: i16, next: i16) -> SubObjectHeader {
         SubObjectHeader {
             idx: 0,
-            parent_idx: -1,
+            parameter: -1,
+            motion_type: 0,
             name: name.to_owned(),
             transform: Matrix4::from_translation(local),
             min_range: 0.0,
@@ -1251,6 +1357,8 @@ mod tests {
             next_sub_obj_idx: next,
             point_start: 0,
             point_stop: 0,
+            vhot_start: 0,
+            vhot_count: 0,
         }
     }
 
@@ -1272,6 +1380,34 @@ mod tests {
         assert_eq!(transforms[0].1.w.truncate(), vec3(1.0, 0.0, 0.0));
         assert_eq!(transforms[1].0, "child");
         assert_eq!(transforms[1].1.w.truncate(), vec3(1.0, 1.0, 0.0));
+    }
+
+    /// Fitting a collider to a first-person model's *weapon* means selecting
+    /// geometry by material (the arm is `ND-arm*`), so the vertex runs have to
+    /// come back labelled with the material that draws them.
+    #[test]
+    fn vertices_come_back_grouped_by_their_material() {
+        let mut mesh = mesh_with(
+            vec![
+                material_in_slot("ND-ar15.psd", 0),
+                material_in_slot("ND-arm.psd", 1),
+            ],
+            vec![polygon_in_slot(0), polygon_in_slot(1)],
+        );
+        mesh.vertices = vec![
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 1.0, 0.0),
+        ];
+
+        let runs = to_vertices_by_material(&mesh);
+
+        let names = runs
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["ND-ar15.psd", "ND-arm.psd"]);
+        assert!(runs.iter().all(|(_, vertices)| vertices.len() == 3));
     }
 
     #[test]
@@ -1328,6 +1464,28 @@ mod tests {
             transparency: 0.0,
             emissivity: 0.0,
         }
+    }
+
+    #[test]
+    fn vhots_preserve_sparse_ids_and_authored_file_order() {
+        let mut header = header_with_mat_extra(8);
+        header.num_vhots = 4;
+        header.offset_vhots = 0;
+        let ids = [10_u32, 1, 0, u32::MAX];
+        let mut bytes = Vec::new();
+        for id in ids {
+            bytes.extend_from_slice(&id.to_le_bytes());
+            for coordinate in [1.0_f32, 2.0, 3.0] {
+                bytes.extend_from_slice(&(coordinate * SCALE_FACTOR).to_le_bytes());
+            }
+        }
+        let vhots = read_vhots(&header, &mut Cursor::new(bytes));
+        assert_eq!(vhots.iter().map(|vhot| vhot.id).collect::<Vec<_>>(), ids);
+        assert!(
+            vhots
+                .iter()
+                .all(|vhot| vhot.point == point3(-1.0, 3.0, 2.0))
+        );
     }
 
     /// Header with just the fields `read_extended_materials` reads.

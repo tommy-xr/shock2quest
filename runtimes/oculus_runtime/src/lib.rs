@@ -23,6 +23,7 @@ use tracing;
 mod android_permissions;
 mod debug_input;
 mod frame_profiler;
+mod passthrough;
 mod quest_config;
 mod refresh_rate;
 
@@ -113,6 +114,7 @@ fn main() {
     let mut enabled_extensions = xr::ExtensionSet::default();
     enabled_extensions.khr_opengl_es_enable = true;
     enabled_extensions.fb_display_refresh_rate = true;
+    enabled_extensions.fb_passthrough = available_extensions.fb_passthrough;
     #[cfg(target_os = "android")]
     {
         enabled_extensions.khr_android_create_instance = true;
@@ -304,6 +306,12 @@ fn main() {
     let left_grip = action_set
         .create_action::<xr::Posef>("left_grip", "Left Hand Grip", &[])
         .unwrap();
+    let left_haptic = action_set
+        .create_action::<xr::Haptic>("left_haptic", "Left Hand Haptic", &[])
+        .unwrap();
+    let right_haptic = action_set
+        .create_action::<xr::Haptic>("right_haptic", "Right Hand Haptic", &[])
+        .unwrap();
 
     let right_grip = action_set
         .create_action::<xr::Posef>("right_grip", "Right Hand Grip", &[])
@@ -341,35 +349,34 @@ fn main() {
         .create_action::<xr::Vector2f>("right_hand_thumbstick", "Right Hand Thumbstick", &[])
         .unwrap();
 
-    let jump_action = action_set
-        .create_action::<bool>("jump", "Jump", &[])
-        .unwrap();
-
     let crouch_action = action_set
         .create_action::<bool>("crouch", "Crouch Toggle", &[])
         .unwrap();
 
-    let use_mode_action = action_set
-        .create_action::<bool>("use_mode", "Cyber Interface (Use Mode)", &[])
+    // The four face buttons, bound RAW by hand and position (lower = left X /
+    // right A, upper = left Y / right B). What a press means depends on what
+    // that hand is holding, and is resolved in the mission - see
+    // `shock2vr::hand_buttons`.
+    let left_lower_action = action_set
+        .create_action::<bool>("left_lower_face", "Left Hand Lower Button (X)", &[])
         .unwrap();
 
-    let audio_log_action = action_set
-        .create_action::<bool>("audio_log_reader", "Audio Log Reader", &[])
+    let left_upper_action = action_set
+        .create_action::<bool>("left_upper_face", "Left Hand Upper Button (Y)", &[])
+        .unwrap();
+
+    let right_lower_action = action_set
+        .create_action::<bool>("right_lower_face", "Right Hand Lower Button (A)", &[])
+        .unwrap();
+
+    let right_upper_action = action_set
+        .create_action::<bool>("right_upper_face", "Right Hand Upper Button (B)", &[])
         .unwrap();
 
     // The left controller's Menu button. (The right controller's is reserved
     // by the Quest system UI, so it can never be the app's.)
     let menu_action = action_set
-        .create_action::<bool>("menu", "Pause Menu", &[])
-        .unwrap();
-
-    // The gun hand's two face buttons: A reloads, B swaps ammo type.
-    let reload_action = action_set
-        .create_action::<bool>("reload", "Reload Weapon", &[])
-        .unwrap();
-
-    let cycle_ammo_action = action_set
-        .create_action::<bool>("cycle_ammo", "Cycle Ammo Type", &[])
+        .create_action::<bool>("menu", "Interface / Pause Menu", &[])
         .unwrap();
 
     // Bind our actions to input devices using the given profile
@@ -397,6 +404,18 @@ fn main() {
                     &left_aim,
                     xr_instance
                         .string_to_path("/user/hand/left/input/aim/pose")
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &left_haptic,
+                    xr_instance
+                        .string_to_path("/user/hand/left/output/haptic")
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &right_haptic,
+                    xr_instance
+                        .string_to_path("/user/hand/right/output/haptic")
                         .unwrap(),
                 ),
                 xr::Binding::new(
@@ -441,12 +460,9 @@ fn main() {
                         .string_to_path("/user/hand/right/input/thumbstick")
                         .unwrap(),
                 ),
-                xr::Binding::new(
-                    &jump_action,
-                    xr_instance
-                        .string_to_path("/user/hand/right/input/thumbstick/click")
-                        .unwrap(),
-                ),
+                // The RIGHT thumbstick click is deliberately unbound: jump
+                // moved to the lower face buttons, where it is reachable
+                // whatever the hands hold.
                 xr::Binding::new(
                     &crouch_action,
                     xr_instance
@@ -454,22 +470,42 @@ fn main() {
                         .unwrap(),
                 ),
                 xr::Binding::new(
-                    &use_mode_action,
+                    &left_lower_action,
                     xr_instance
                         .string_to_path(
-                            shock2vr::input::InputAction::ToggleUseMode
+                            shock2vr::input::InputAction::LeftHandLowerButton
                                 .quest_touch_click_path()
-                                .expect("Quest use-mode binding"),
+                                .expect("Quest left lower face-button binding"),
                         )
                         .unwrap(),
                 ),
                 xr::Binding::new(
-                    &audio_log_action,
+                    &left_upper_action,
                     xr_instance
                         .string_to_path(
-                            shock2vr::input::InputAction::ReadLastUnreadLog
+                            shock2vr::input::InputAction::LeftHandUpperButton
                                 .quest_touch_click_path()
-                                .expect("Quest audio-log binding"),
+                                .expect("Quest left upper face-button binding"),
+                        )
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &right_lower_action,
+                    xr_instance
+                        .string_to_path(
+                            shock2vr::input::InputAction::RightHandLowerButton
+                                .quest_touch_click_path()
+                                .expect("Quest right lower face-button binding"),
+                        )
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &right_upper_action,
+                    xr_instance
+                        .string_to_path(
+                            shock2vr::input::InputAction::RightHandUpperButton
+                                .quest_touch_click_path()
+                                .expect("Quest right upper face-button binding"),
                         )
                         .unwrap(),
                 ),
@@ -477,29 +513,9 @@ fn main() {
                     &menu_action,
                     xr_instance
                         .string_to_path(
-                            shock2vr::input::InputAction::TogglePauseMenu
+                            shock2vr::input::InputAction::MenuButton
                                 .quest_touch_click_path()
-                                .expect("Quest pause-menu binding"),
-                        )
-                        .unwrap(),
-                ),
-                xr::Binding::new(
-                    &reload_action,
-                    xr_instance
-                        .string_to_path(
-                            shock2vr::input::InputAction::Reload
-                                .quest_touch_click_path()
-                                .expect("Quest reload binding"),
-                        )
-                        .unwrap(),
-                ),
-                xr::Binding::new(
-                    &cycle_ammo_action,
-                    xr_instance
-                        .string_to_path(
-                            shock2vr::input::InputAction::CycleAmmo
-                                .quest_touch_click_path()
-                                .expect("Quest cycle-ammo binding"),
+                                .expect("Quest menu-button binding"),
                         )
                         .unwrap(),
                 ),
@@ -519,6 +535,14 @@ fn main() {
         .create_space(&session, xr::Path::NULL, xr::Posef::IDENTITY)
         .unwrap();
 
+    let right_grip_space = right_grip
+        .create_space(&session, xr::Path::NULL, xr::Posef::IDENTITY)
+        .unwrap();
+    let left_grip_space = left_grip
+        .create_space(&session, xr::Path::NULL, xr::Posef::IDENTITY)
+        .unwrap();
+    let mut fit_passthrough = passthrough::FitPassthrough::new(&xr_instance, system);
+
     // Main loop
     let mut swapchain = None;
     let mut event_storage = xr::EventDataBuffer::new();
@@ -529,13 +553,41 @@ fn main() {
     let now = Instant::now();
     let engine = engine::android();
     let bundle_storage = engine.get_storage();
-    let experimental_features = HashSet::new();
-    let mission = quest_config::configured_mission();
+    // Quest has no launch-flag UI: ship the physical gun path, including
+    // recoil/contact feedback and downward weight. Handling can be compared
+    // live through the Developer panel's Strength/Agility overrides.
+    let experimental_features = HashSet::from([
+        "physical_held_items".to_owned(),
+        "physical_gun_weight".to_owned(),
+    ]);
+    // Explicitly provisioned benchmark workloads are opt-in and reset by
+    // removing this file. A malformed fixture must never silently measure a
+    // different scene.
+    let mut benchmark_config =
+        match std::fs::read_to_string(paths::data_root().join("benchmark-scene.json")) {
+            Ok(json) => Some(
+                shock2vr::benchmark_scene::BenchmarkScene::parse(&json)
+                    .expect("invalid benchmark-scene.json"),
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("cannot read benchmark-scene.json: {error}"),
+        };
+    if let Some(benchmark) = &benchmark_config {
+        shock2vr::dev_params::set(
+            shock2vr::dev_params::OBJECT_LIGHTING,
+            if benchmark.object_lighting { 1.0 } else { 0.0 },
+        );
+    }
+    let mission = benchmark_config
+        .as_ref()
+        .map(|b| b.mission.clone())
+        .unwrap_or_else(quest_config::configured_mission);
     let game_init_started = Instant::now();
     let options: GameOptions = GameOptions {
-        render_particles: false,
         mission: mission.clone(),
         experimental_features,
+        // Projectile orbs/trails are authored particles, not optional polish.
+        render_particles: true,
         debug_skeletons: false,
         ..GameOptions::default()
     };
@@ -552,6 +604,7 @@ fn main() {
         engine::platform::set_event_pump(Some(pump_events));
     }
     let mut game = shock2vr::App::init(options, bundle_storage);
+    let mut benchmark_run: Option<shock2vr::benchmark_scene::BenchmarkRun> = None;
     // The real HMD orientation, from the previous frame's located view.
     // `input_context` is built before `locate_views` runs, so this frame's view
     // pose does not exist yet; one frame of latency is imperceptible for
@@ -559,7 +612,7 @@ fn main() {
     let mut last_view_rotation: Option<cgmath::Quaternion<f32>> = None;
     // Where that same view was, already converted to pawn space (the space the
     // hands and the world-anchored frontend panel live in).
-    let mut last_view_position: Option<cgmath::Vector3<f32>> = None;
+    let mut last_head_stage: Option<cgmath::Vector3<f32>> = None;
     println!(
         "SHOCK2QUEST_STARTUP mission={} init_ms={:.3}",
         mission,
@@ -578,9 +631,9 @@ fn main() {
     let mut vr_crouch = VrCrouchDetector::default();
     let mut pending_stage_change_time = None;
     // Button-crouch alternative to the physical detector: left thumbstick
-    // click toggles a latched crouch request (mirroring jump on the right
-    // stick). Either source requests the crouch; the game's headroom-gated
-    // stand-up still decides when standing is actually possible.
+    // click toggles a latched crouch request. Either source requests the
+    // crouch; the game's headroom-gated stand-up still decides when standing
+    // is actually possible.
     let mut crouch_toggled = false;
     let mut crouch_button_was_pressed = false;
 
@@ -688,10 +741,22 @@ fn main() {
                             // otherwise resume invisibly crouched).
                             crouch_toggled = false;
                             crouch_button_was_pressed = false;
-                            action_state.release(shock2vr::input::InputAction::ToggleUseMode);
-                            action_state.release(shock2vr::input::InputAction::ReadLastUnreadLog);
+                            action_state.release(shock2vr::input::InputAction::LeftHandLowerButton);
+                            action_state.release(shock2vr::input::InputAction::LeftHandUpperButton);
+                            action_state
+                                .release(shock2vr::input::InputAction::RightHandLowerButton);
+                            action_state
+                                .release(shock2vr::input::InputAction::RightHandUpperButton);
+                            // The Menu button is a HOLD, so releasing it is not
+                            // enough: the release would read as its short press.
+                            // Forget the press instead.
+                            action_state.release(shock2vr::input::InputAction::MenuButton);
+                            game.cancel_menu_hold();
                         }
                         xr::SessionState::STOPPING => {
+                            // Re-create the feature on the next running fit
+                            // frame; do not assume it survives end/begin.
+                            fit_passthrough.update(&session, false);
                             session.end().unwrap();
                             session_running = false;
                             last_update_time = Instant::now();
@@ -782,11 +847,20 @@ fn main() {
         };
 
         session.sync_actions(&[(&action_set).into()]).unwrap();
+        // Gameplay currently uses aim poses. Compare grip poses only in the
+        // fit scene, before the shared tracking conversion and validity checks.
+        let use_grip = passthrough::is_fit_scene(&game)
+            && shock2vr::dev_params::get_bool(shock2vr::dev_params::GLOVE_FIT_GRIP_POSE);
+        let (left_hand_space, right_hand_space) = if use_grip {
+            (&left_grip_space, &right_grip_space)
+        } else {
+            (&left_aim_space, &right_aim_space)
+        };
         // Find where our controllers are located in the Stage space
-        let left_aim_location = left_aim_space
+        let left_hand_location = left_hand_space
             .locate(&stage, xr_frame_state.predicted_display_time)
             .unwrap();
-        let right_aim_location = right_aim_space
+        let right_hand_location = right_hand_space
             .locate(&stage, xr_frame_state.predicted_display_time)
             .unwrap();
         let head_location = head_space
@@ -801,16 +875,12 @@ fn main() {
             .state(&session, xr::Path::NULL)
             .unwrap()
             .current_state;
-        let jump_pressed = jump_action
-            .state(&session, xr::Path::NULL)
-            .unwrap()
-            .current_state;
         let crouch_state = crouch_action.state(&session, xr::Path::NULL).unwrap();
-        let use_mode_state = use_mode_action.state(&session, xr::Path::NULL).unwrap();
-        let audio_log_state = audio_log_action.state(&session, xr::Path::NULL).unwrap();
+        let left_lower_state = left_lower_action.state(&session, xr::Path::NULL).unwrap();
+        let left_upper_state = left_upper_action.state(&session, xr::Path::NULL).unwrap();
+        let right_lower_state = right_lower_action.state(&session, xr::Path::NULL).unwrap();
+        let right_upper_state = right_upper_action.state(&session, xr::Path::NULL).unwrap();
         let menu_state = menu_action.state(&session, xr::Path::NULL).unwrap();
-        let reload_state = reload_action.state(&session, xr::Path::NULL).unwrap();
-        let cycle_ammo_state = cycle_ammo_action.state(&session, xr::Path::NULL).unwrap();
         // Only edge-detect while the action is live: with the session merely
         // VISIBLE (system overlay up), current_state reads false even though
         // the button may still be physically held, and treating that as a
@@ -821,56 +891,46 @@ fn main() {
             }
             crouch_button_was_pressed = crouch_state.current_state;
         }
+        for (action, state) in [
+            (
+                shock2vr::input::InputAction::LeftHandLowerButton,
+                &left_lower_state,
+            ),
+            (
+                shock2vr::input::InputAction::LeftHandUpperButton,
+                &left_upper_state,
+            ),
+            (
+                shock2vr::input::InputAction::RightHandLowerButton,
+                &right_lower_state,
+            ),
+            (
+                shock2vr::input::InputAction::RightHandUpperButton,
+                &right_upper_state,
+            ),
+        ] {
+            action_state.sync_discrete_button(
+                action,
+                state.is_active,
+                state.changed_since_last_sync,
+                state.current_state,
+            );
+        }
+        // Raw, like the face buttons: a short press jacks into the cyber
+        // interface and a long one opens the pause menu, and only `Game` (via
+        // `MenuHold`) can tell those apart - so both the press and the release
+        // have to reach it.
         action_state.sync_discrete_button(
-            shock2vr::input::InputAction::ToggleUseMode,
-            use_mode_state.is_active,
-            use_mode_state.changed_since_last_sync,
-            use_mode_state.current_state,
-        );
-        action_state.sync_discrete_button(
-            shock2vr::input::InputAction::ReadLastUnreadLog,
-            audio_log_state.is_active,
-            audio_log_state.changed_since_last_sync,
-            audio_log_state.current_state,
-        );
-        action_state.sync_discrete_button(
-            shock2vr::input::InputAction::TogglePauseMenu,
+            shock2vr::input::InputAction::MenuButton,
             menu_state.is_active,
             menu_state.changed_since_last_sync,
             menu_state.current_state,
         );
-        // Right A and B carry two meanings: on their own they reload and swap
-        // ammo (#1144), and together they toggle the free camera. There is no
-        // unbound button left on the Touch to give the camera, so it shares
-        // these - and only while its developer option is on, which is the one
-        // time the player is deliberately debugging rather than shooting.
+        // The free camera is right A+B together - the same two buttons the
+        // right hand carries singly, so while its dev option is on `Game`
+        // suppresses that hand's contextual buttons and the pair is the chord
+        // and nothing else.
         //
-        // While the gate is on, a button whose partner is ALREADY held is
-        // suppressed, so completing the chord cannot also swap your ammo. The
-        // first button pressed still fires its own action (its edge lands
-        // before the chord exists), which is why the pair is A-reloads-first
-        // rather than B: an extra reload costs nothing, an ammo swap is a
-        // change you have to undo. With the option off, both behave exactly as
-        // #1144 defines them.
-        let free_camera_gate = shock2vr::free_camera::FreeCamera::is_enabled();
-        let suppress_reload = free_camera_gate && cycle_ammo_state.current_state;
-        let suppress_cycle_ammo = free_camera_gate && reload_state.current_state;
-        if !suppress_reload {
-            action_state.sync_discrete_button(
-                shock2vr::input::InputAction::Reload,
-                reload_state.is_active,
-                reload_state.changed_since_last_sync,
-                reload_state.current_state,
-            );
-        }
-        if !suppress_cycle_ammo {
-            action_state.sync_discrete_button(
-                shock2vr::input::InputAction::CycleAmmo,
-                cycle_ammo_state.is_active,
-                cycle_ammo_state.changed_since_last_sync,
-                cycle_ammo_state.current_state,
-            );
-        }
         // A chord is edge-detected from the pair's raw states, so it takes
         // them directly rather than through `sync_discrete_button`. Activity
         // is passed through rather than folded into the button states: while
@@ -879,9 +939,9 @@ fn main() {
         // the same hazard the latched crouch above guards against.
         action_state.sync_chord(
             shock2vr::input::InputAction::ToggleFreeCamera,
-            reload_state.is_active && cycle_ammo_state.is_active,
-            reload_state.current_state,
-            cycle_ammo_state.current_state,
+            right_lower_state.is_active && right_upper_state.is_active,
+            right_lower_state.current_state,
+            right_upper_state.current_state,
         );
 
         let left_trigger_value = left_trigger
@@ -904,7 +964,7 @@ fn main() {
 
         let _speed = 50.0;
 
-        // let forward_xr = right_aim_location.pose.orientation;
+        // let forward_xr = right_hand_location.pose.orientation;
         // //let forward_xr = views[0].pose.orientation;
         // let dir = cgmath::Quaternion::new(forward_xr.w, forward_xr.x, forward_xr.y, forward_xr.z);
 
@@ -915,10 +975,10 @@ fn main() {
         // and is the zero quaternion entirely when the controllers are not
         // tracked.
         let aim_rotation = cgmath::Quaternion::new(
-            right_aim_location.pose.orientation.w,
-            right_aim_location.pose.orientation.x,
-            right_aim_location.pose.orientation.y,
-            right_aim_location.pose.orientation.z,
+            right_hand_location.pose.orientation.w,
+            right_hand_location.pose.orientation.x,
+            right_hand_location.pose.orientation.y,
+            right_hand_location.pose.orientation.z,
         );
         // ...so the head gets the actual head. Before any view has been
         // located (frame 0) the HEAD SPACE pose - located above, this frame -
@@ -944,62 +1004,78 @@ fn main() {
             .or(head_pose_rotation)
             .unwrap_or(aim_rotation);
 
-        // Feed the detector before the poses are transformed so this frame's
-        // physical stance is available to the crouch request below. Tracked
-        // poses are NEVER artificially displaced for a button crouch: the eye
-        // cap in `render_swapchain` alone keeps the view inside the crouched
-        // collider, and it does so continuously (a rigid pose drop keyed on
-        // detector state produced below-floor eyes/hands and frame-size view
-        // pops at the hysteresis thresholds).
+        // Keep calibration warm, but freeze physical stance while gripping.
+        // The shared rig transform applies any crouch correction to head and
+        // hands together; the mission rebases it if stance changes this frame.
         let tracked_head_position = head_location.location_flags.contains(
             xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::POSITION_TRACKED,
         );
-        let physically_crouched =
-            vr_crouch.update(tracked_head_position.then_some(head_location.pose.position.y));
-        let center_above_floor = game.player_center_above_floor();
-        let right_hand_position = stage_to_pawn(
-            vec3(
-                right_aim_location.pose.position.x,
-                right_aim_location.pose.position.y,
-                right_aim_location.pose.position.z,
-            ),
-            center_above_floor,
+        let physically_crouched = vr_crouch.update(
+            tracked_head_position.then_some(head_location.pose.position.y),
+            game.player_is_gripping(),
         );
+        let head_stage = if tracked_head_position {
+            vec3(
+                head_location.pose.position.x,
+                head_location.pose.position.y,
+                head_location.pose.position.z,
+            )
+        } else {
+            last_head_stage.unwrap_or(vec3(
+                0.0,
+                (shock2vr::input_context::DEFAULT_HEAD_HEIGHT + game.player_center_above_floor())
+                    * shock2vr::METERS_PER_WORLD_UNIT,
+                0.0,
+            ))
+        };
+        if tracked_head_position {
+            last_head_stage = Some(head_stage);
+        }
+        // A single rig correction for input and both rendered eyes. Hanging
+        // capsule compression does not change the physical tracking stance.
+        let tracking = shock2vr::vr_tracking::TrackingTransform::new(
+            game.player_center_above_floor(),
+            game.player_eye_cap_above_center(),
+            head_stage.y,
+            stage_offset_meters(),
+        );
+        let right_hand_position = tracking.stage_to_pawn(vec3(
+            right_hand_location.pose.position.x,
+            right_hand_location.pose.position.y,
+            right_hand_location.pose.position.z,
+        ));
 
-        let left_hand_position = stage_to_pawn(
-            vec3(
-                left_aim_location.pose.position.x,
-                left_aim_location.pose.position.y,
-                left_aim_location.pose.position.z,
-            ),
-            center_above_floor,
-        );
+        let left_hand_position = tracking.stage_to_pawn(vec3(
+            left_hand_location.pose.position.x,
+            left_hand_location.pose.position.y,
+            left_hand_location.pose.position.z,
+        ));
         let left_hand_rotation = cgmath::Quaternion::new(
-            left_aim_location.pose.orientation.w,
-            left_aim_location.pose.orientation.x,
-            left_aim_location.pose.orientation.y,
-            left_aim_location.pose.orientation.z,
+            left_hand_location.pose.orientation.w,
+            left_hand_location.pose.orientation.x,
+            left_hand_location.pose.orientation.y,
+            left_hand_location.pose.orientation.z,
         );
 
         let mut input_context = InputContext::default();
         input_context.head.rotation = head_rotation;
-        // The tracked eye, in pawn space. The located head space covers frame
-        // 0, before any view has been located; when the head is untracked
-        // entirely this keeps `Head::default`'s fixed eye height, which is
-        // where the camera renders from anyway.
-        let head_pose_position = tracked_head_position.then(|| {
-            stage_to_pawn(
-                vec3(
-                    head_location.pose.position.x,
-                    head_location.pose.position.y,
-                    head_location.pose.position.z,
-                ),
-                center_above_floor,
-            )
+        input_context.head.position = tracking.stage_to_pawn(head_stage);
+        input_context.tracking = Some(tracking);
+        let tracked_pose_flags = xr::SpaceLocationFlags::POSITION_VALID
+            | xr::SpaceLocationFlags::POSITION_TRACKED
+            | xr::SpaceLocationFlags::ORIENTATION_VALID
+            | xr::SpaceLocationFlags::ORIENTATION_TRACKED;
+        input_context.pose_tracking = Some(shock2vr::input_context::PoseTracking {
+            head: head_location.location_flags.contains(tracked_pose_flags),
+            hands: [
+                left_hand_location
+                    .location_flags
+                    .contains(tracked_pose_flags),
+                right_hand_location
+                    .location_flags
+                    .contains(tracked_pose_flags),
+            ],
         });
-        if let Some(position) = last_view_position.or(head_pose_position) {
-            input_context.head.position = position;
-        }
         input_context.right_hand.rotation = aim_rotation;
         input_context.right_hand.position = right_hand_position;
         input_context.right_hand.trigger_value = right_trigger_value;
@@ -1013,7 +1089,9 @@ fn main() {
         input_context.left_hand.squeeze_value = left_squeeze_value;
         input_context.left_hand.thumbstick =
             vec2(-left_thumbstick_value.x, left_thumbstick_value.y);
-        input_context.jump = jump_pressed;
+        // Jump is a hand's LOWER face button now, which arrives as an action
+        // and is resolved per hand - so no runtime channel drives it in VR.
+        input_context.jump = false;
         // The detector was already fed exactly once above (it keeps its
         // standing calibration warm even while the button latch is active).
         input_context.crouch = physically_crouched || crouch_toggled;
@@ -1024,6 +1102,44 @@ fn main() {
         }
         let update_started = Instant::now();
         game.update(&time_context, &input_context, &mut action_state);
+        if let (Some(benchmark), App::Ready(game)) = (&mut benchmark_run, &mut game) {
+            benchmark.advance_setup(game, time_context.elapsed);
+        }
+        if let Some(config) = benchmark_config.take() {
+            benchmark_run = Some({
+                println!(
+                    "SHOCK2QUEST_BENCHMARK_CONFIG {}",
+                    serde_json::to_string(&config).unwrap()
+                );
+                match &mut game {
+                    App::Ready(game) => config.apply(game).expect("benchmark setup failed"),
+                    App::MissingAssets(_) => panic!("benchmark requires installed game assets"),
+                }
+            });
+        }
+
+        let pulses = game.take_haptics();
+        if session_focused {
+            for (hand, action) in [&left_haptic, &right_haptic].into_iter().enumerate() {
+                if let Some(request) = pulses[hand] {
+                    let pulse = xr::HapticVibration::new()
+                        .amplitude(request.amplitude)
+                        .frequency(xr::FREQUENCY_UNSPECIFIED)
+                        .duration(xr::Duration::from_nanos(
+                            i64::from(request.duration_ms) * 1_000_000,
+                        ));
+                    match action.apply_feedback(&session, xr::Path::NULL, &pulse) {
+                        Ok(()) => println!(
+                            "SHOCK2QUEST_HAPTIC hand={} amplitude={} duration_ms={} status=submitted",
+                            hand, request.amplitude, request.duration_ms
+                        ),
+                        Err(error) => {
+                            println!("SHOCK2QUEST_HAPTIC hand={} error={:?}", hand, error)
+                        }
+                    }
+                }
+            }
+        }
         let update_elapsed = update_started.elapsed();
 
         // Must be called before any rendering is done!
@@ -1217,13 +1333,10 @@ fn main() {
 
         // Remember where the head actually is, for next frame's input context.
         if let Some(view) = views.first() {
-            last_view_position = Some(stage_to_pawn(
-                vec3(
-                    view.pose.position.x,
-                    view.pose.position.y,
-                    view.pose.position.z,
-                ),
-                game.player_center_above_floor(),
+            last_head_stage = Some(vec3(
+                (views[0].pose.position.x + views[1].pose.position.x) / 2.0,
+                (views[0].pose.position.y + views[1].pose.position.y) / 2.0,
+                (views[0].pose.position.z + views[1].pose.position.z) / 2.0,
             ));
             last_view_rotation = Some(cgmath::Quaternion::new(
                 view.pose.orientation.w,
@@ -1241,12 +1354,16 @@ fn main() {
             )
             .unwrap();
 
-        let scene_started = Instant::now();
-        let (scene, camera_pos, camera_rot) = game.render();
-        let scene_elapsed = scene_started.elapsed();
-
-        // Render to each eye
-        let time = now.elapsed().as_secs_f32();
+        fit_passthrough.update(
+            &session,
+            (passthrough::is_fit_scene(&game)
+                || matches!(&game, shock2vr::App::Ready(game) if game.scene_name() == "debug_psi_fit"))
+                && shock2vr::dev_params::get_bool(shock2vr::dev_params::GLOVE_FIT_PASSTHROUGH),
+        );
+        let tracking = tracking.with_stance(
+            game.player_center_above_floor(),
+            game.player_eye_cap_above_center(),
+        );
         // The midpoint of the two eyes: what the death camera resolves from, so
         // it cannot pull the eyes together (see `render_swapchain`).
         let head_centre_stage = vec3(
@@ -1254,6 +1371,17 @@ fn main() {
             (views[0].pose.position.y + views[1].pose.position.y) / 2.0,
             (views[0].pose.position.z + views[1].pose.position.z) / 2.0,
         );
+        if let (Some(benchmark), App::Ready(game)) = (&benchmark_run, &mut game) {
+            let center = tracking.stage_to_pawn(head_centre_stage);
+            let q = views[0].pose.orientation;
+            benchmark.place_camera(game, center, Quaternion::new(q.w, q.x, q.y, q.z));
+        }
+        let scene_started = Instant::now();
+        let (scene, camera_pos, camera_rot) = game.render();
+        let scene_elapsed = scene_started.elapsed();
+
+        // Render to each eye
+        let time = now.elapsed().as_secs_f32();
         let (left_eye_elapsed, _) = render_swapchain(
             &mut game,
             &engine,
@@ -1263,6 +1391,7 @@ fn main() {
             time,
             &views[0],
             head_centre_stage,
+            tracking,
             true,
             &scene,
             false,
@@ -1276,6 +1405,7 @@ fn main() {
             time,
             &views[1],
             head_centre_stage,
+            tracking,
             true,
             &scene,
             true,
@@ -1304,39 +1434,74 @@ fn main() {
         // here kills the render thread, and with it the per-frame drain of
         // NativeActivity's lifecycle/input queues - which is what turns a
         // one-frame compositor complaint into an app-wide ANR.
+        // The TRACKED pose, even while the death camera is rendering
+        // from somewhere else entirely. This looks like a bug and is
+        // not: reprojection warps a submitted frame toward the real
+        // head pose at display time, so declaring "this frame was
+        // rendered from down on the floor, on its side" makes the
+        // compositor correct out precisely the displacement the death
+        // camera just introduced. Measured on a Quest 3: submitting the
+        // rendered pose drags the image out of the display frustum and
+        // the fraction of non-black pixels falls 0.83 -> 0.00 (left)
+        // and 0.13 (right) as the fall lands, then holds there for the
+        // whole death window - a black screen for the entire death.
+        // With the tracked pose the same death renders correctly
+        // (0.74-0.75, symmetric, holds to game-over).
+        //
+        // The cost is a small reprojection seam at the image edge
+        // during the 0.9 s fall, when rendered and tracked poses
+        // disagree most. That is the accepted trade: a fraction of a
+        // second of edge artifact, against a three-second blackout.
+        let projection_views = [
+            xr::CompositionLayerProjectionView::new()
+                .pose(views[0].pose)
+                .fov(views[0].fov)
+                .sub_image(sub1),
+            xr::CompositionLayerProjectionView::new()
+                .pose(views[1].pose)
+                .fov(views[1].fov)
+                .sub_image(sub2),
+        ];
+        // openxr 0.21.1 does not export its passthrough composition builder.
+        let underlay = fit_passthrough.layer().map(|layer| {
+            use xr::sys::Handle;
+            xr::sys::CompositionLayerPassthroughFB {
+                ty: xr::sys::CompositionLayerPassthroughFB::TYPE,
+                next: std::ptr::null(),
+                flags: xr::CompositionLayerFlags::EMPTY,
+                space: xr::sys::Space::NULL,
+                layer_handle: layer.as_raw(),
+            }
+        });
+        let projection = xr::CompositionLayerProjection::new()
+            .space(&stage)
+            .layer_flags(if underlay.is_some() {
+                xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA
+            } else {
+                xr::CompositionLayerFlags::EMPTY
+            })
+            .views(&projection_views);
+        let mut layers: Vec<&xr::CompositionLayerBase<'_, xr::OpenGlEs>> = Vec::with_capacity(2);
+        if let Some(underlay) = &underlay {
+            // SAFETY: OpenXR layers share the repr(C) base header, and the
+            // crate's CompositionLayerBase is repr(transparent) over it. The
+            // complete raw layer and its live handle both outlive frame.end.
+            layers.push(unsafe {
+                &*(underlay as *const xr::sys::CompositionLayerPassthroughFB
+                    as *const xr::CompositionLayerBase<'_, xr::OpenGlEs>)
+            });
+        }
+        layers.push(&projection);
         if let Err(error) = frame_stream.end(
             xr_frame_state.predicted_display_time,
-            environment_blend_mode,
-            &[
-                // The TRACKED pose, even while the death camera is rendering
-                // from somewhere else entirely. This looks like a bug and is
-                // not: reprojection warps a submitted frame toward the real
-                // head pose at display time, so declaring "this frame was
-                // rendered from down on the floor, on its side" makes the
-                // compositor correct out precisely the displacement the death
-                // camera just introduced. Measured on a Quest 3: submitting the
-                // rendered pose drags the image out of the display frustum and
-                // the fraction of non-black pixels falls 0.83 -> 0.00 (left)
-                // and 0.13 (right) as the fall lands, then holds there for the
-                // whole death window - a black screen for the entire death.
-                // With the tracked pose the same death renders correctly
-                // (0.74-0.75, symmetric, holds to game-over).
-                //
-                // The cost is a small reprojection seam at the image edge
-                // during the 0.9 s fall, when rendered and tracked poses
-                // disagree most. That is the accepted trade: a fraction of a
-                // second of edge artifact, against a three-second blackout.
-                &xr::CompositionLayerProjection::new().space(&stage).views(&[
-                    xr::CompositionLayerProjectionView::new()
-                        .pose(views[0].pose)
-                        .fov(views[0].fov)
-                        .sub_image(sub1),
-                    xr::CompositionLayerProjectionView::new()
-                        .pose(views[1].pose)
-                        .fov(views[1].fov)
-                        .sub_image(sub2),
-                ]),
-            ],
+            // Quest passthrough uses an explicit compositor layer, not the
+            // environment ALPHA_BLEND mode. The engine already clears RGBA=0.
+            if underlay.is_some() {
+                xr::EnvironmentBlendMode::OPAQUE
+            } else {
+                environment_blend_mode
+            },
+            &layers,
         ) {
             // Only the start of a burst is logged, so a persistently unhappy
             // compositor cannot flood logcat at 90 Hz.
@@ -1381,15 +1546,21 @@ fn main() {
             submit: submit_elapsed,
         }) {
             print_frame_report(&mission, session_focused, report);
+            if let (Some(benchmark), App::Ready(game)) = (&benchmark_run, &game) {
+                println!(
+                    "SHOCK2QUEST_BENCHMARK {}",
+                    benchmark.observation(game, &scene)
+                );
+            }
         }
 
         // let mut printed = false;
         // if right_aim.is_active(&session, xr::Path::NULL).unwrap() {
         //     print!(
         //         "Right Hand: ({:0<12},{:0<12},{:0<12})",
-        //         right_aim_location.pose.position.x,
-        //         right_aim_location.pose.position.y,
-        //         right_aim_location.pose.position.z
+        //         right_hand_location.pose.position.x,
+        //         right_hand_location.pose.position.y,
+        //         right_hand_location.pose.position.z
         //     );
         //     printed = true;
         // }
@@ -1398,6 +1569,12 @@ fn main() {
         // }
         //render_time = Instant::now();
     }
+
+    // Android exits the process below without running destructors. Release
+    // fit resources while the session and activity are still available.
+    drop(fit_passthrough);
+    drop(left_grip_space);
+    drop(right_grip_space);
 
     // The session is over (EXITING / LOSS_PENDING, or an instance loss). Just
     // returning is not enough on Android: ndk-glue runs `main` on a thread it
@@ -1625,46 +1802,9 @@ fn android_pump_events() -> bool {
     false
 }
 
-/// Convert a floor-origin STAGE-space position (meters) into the game's pawn
-/// space (world units, origin at the player collider's center): scale meters
-/// to world units, then move the anchor from the physical floor up to the
-/// collider center, so a tracked eye or hand N meters above the real floor
-/// lands the equivalent height above the in-game floor. Without this the raw
-/// meters were added to the collider CENTER unscaled, placing the standing
-/// eye ~1.8 SS2 ft above the original game's eye line (and world scale ~31%
-/// large).
-fn stage_to_pawn(position_meters: Vector3<f32>, center_above_floor: f32) -> Vector3<f32> {
-    // The dev-params eye-height offset raises or lowers the whole tracked
-    // stage: every tracked position - head input, both hands, and the per-eye
-    // view - routes through this one mapping, so they move together and the
-    // hands never detach from the raised eye line. See
-    // `stage_offset_above_center` for how the per-eye cap keeps out of its way.
-    (position_meters + vec3(0.0, stage_offset_meters(), 0.0)) / shock2vr::METERS_PER_WORLD_UNIT
-        - vec3(0.0, center_above_floor, 0.0)
-}
-
 /// The dev-params eye-height offset, in meters of STAGE space.
 fn stage_offset_meters() -> f32 {
     shock2vr::dev_params::get(shock2vr::dev_params::EYE_HEIGHT_OFFSET)
-}
-
-/// The same offset expressed in world units, for raising the eye cap by
-/// exactly what [`stage_to_pawn`] already added.
-///
-/// The cap bounds the *tracked body*: a real head is not the game capsule's,
-/// so it is held inside the collider crown. The dev offset is not a tracked
-/// body - it is an explicit authored displacement of the whole stage - so the
-/// cap has to move with it, or it would silently eat the raise: standing
-/// headroom is only ~1.12 wu (0.85 m) above the collider center and an adult's
-/// tracked eye already sits within a few centimeters of it, so an uncapped-cap
-/// `eye_offset` would saturate the VIEW after a couple of centimeters while
-/// the hands kept rising the full half-meter - the head/hand desync this
-/// wiring exists to avoid. Raising the cap by the offset keeps the tracked
-/// portion bounded exactly as before (at the default offset of 0 this is
-/// bit-identical to the pre-existing cap) while letting a deliberate dev
-/// offset through.
-fn stage_offset_above_center() -> f32 {
-    stage_offset_meters() / shock2vr::METERS_PER_WORLD_UNIT
 }
 
 fn render_swapchain(
@@ -1678,6 +1818,7 @@ fn render_swapchain(
     // Midpoint of the two eyes in STAGE space. The death camera resolves from
     // the head centre, never per eye - see the comment on `camera` below.
     head_centre_stage: Vector3<f32>,
+    tracking: shock2vr::vr_tracking::TrackingTransform,
     _log: bool,
     scene: &Vec<SceneObject>,
     is_last: bool,
@@ -1694,28 +1835,11 @@ fn render_swapchain(
     let width = swapchain.width;
     let height = swapchain.height;
 
-    let mut head_offset = stage_to_pawn(
-        cgmath::Vector3::new(
-            view.pose.position.x,
-            view.pose.position.y,
-            view.pose.position.z,
-        ),
-        game.player_center_above_floor(),
-    );
-    // The tracked eye belongs to a real body, not to the game capsule, so it
-    // must be held inside the collider crown: a physically crouched adult's
-    // eye sits well above the short crouched capsule, and uncapped the player
-    // sees over and through the very geometry the capsule clears (looking out
-    // of the world from inside a duct). Only the view is capped - hand poses
-    // have no such clipping concern and clamping them would break reaching up.
-    // The cap binds essentially only while crouched (or button-latched);
-    // standing it sits above any realistic head, so tracking stays 1:1.
-    // The cap rides the dev eye-height offset (see `stage_offset_above_center`)
-    // so the knob moves the view by exactly what it moves the hands by; at the
-    // default offset of 0 this is the plain crown cap it has always been.
-    head_offset.y = head_offset
-        .y
-        .min(game.player_eye_cap_above_center() + stage_offset_above_center());
+    let head_offset = tracking.stage_to_pawn(vec3(
+        view.pose.position.x,
+        view.pose.position.y,
+        view.pose.position.z,
+    ));
     let head_rotation = cgmath::Quaternion::new(
         view.pose.orientation.w,
         view.pose.orientation.x,
@@ -1736,7 +1860,7 @@ fn render_swapchain(
     // monoscopic while the horizon rolls. Instead the eye's own displacement is
     // re-applied afterwards, carried into the fallen camera's frame so the eyes
     // roll with the new horizon rather than staying level with the room.
-    let head_centre_pawn = stage_to_pawn(head_centre_stage, game.player_center_above_floor());
+    let head_centre_pawn = tracking.stage_to_pawn(head_centre_stage);
     let camera = shock2vr::death_camera::reapply_eye_offset(
         game.resolve_camera(camera_pos, camera_rot, head_centre_pawn, head_rotation),
         head_offset - head_centre_pawn,
@@ -1759,10 +1883,10 @@ fn render_swapchain(
 
         let mut scene_for_render = Scene::from_objects(all_scene_objs);
 
-        // Add hand spotlights for enhanced lighting testing (experimental feature)
+        // Add hand spotlights (`hand_spotlights` dev param)
         let hand_spotlights = game.get_hand_spotlights();
         for spotlight in hand_spotlights {
-            scene_for_render.lights_mut().add_spotlight(spotlight);
+            scene_for_render.lights_mut().add_light(spotlight);
         }
 
         profile!(

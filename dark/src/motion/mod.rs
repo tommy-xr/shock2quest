@@ -5,6 +5,7 @@ mod motion_clip;
 mod motion_info;
 pub mod motion_query;
 mod motion_schema;
+mod turn_clips;
 
 pub use animation_clip::*;
 pub use animation_player::*;
@@ -14,6 +15,7 @@ pub use motion_info::*;
 pub use motion_query::*;
 pub use motion_schema::*;
 use rand::{Rng, thread_rng};
+pub use turn_clips::*;
 
 use crate::{
     NameMap, SCALE_FACTOR, TagDatabase, ss2_chunk_file_reader,

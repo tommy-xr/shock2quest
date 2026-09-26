@@ -112,7 +112,7 @@ impl Script for TrapNewTripwire {
         let trip_flags = v_trip_flags.get(entity_id).unwrap_or(&default_flags);
 
         // NOTE: intersections count no matter how the entity got here - walking,
-        // VR teleport locomotion, or a debug teleport. The Dark engine fires
+        // or a debug teleport. The Dark engine fires
         // PhysEnter/PhysExit for teleports too, and suppressing them made
         // teleported-in players silently skip triggers (e.g. the ops1 cutscene
         // tripwire).

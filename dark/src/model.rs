@@ -7,8 +7,8 @@ use crate::{
     ss2_bin_obj_loader::{self, SystemShock2ObjectMesh, Vhot},
     ss2_skeleton::{self, AnimationInfo, Bone, Skeleton},
 };
-use cgmath::{Matrix4, SquareMatrix, Vector2};
-use collision::Aabb3;
+use cgmath::{Matrix4, SquareMatrix, Transform, Vector2};
+use collision::{Aabb, Aabb3};
 use engine::{
     assets::asset_cache::AssetCache,
     scene::{FrontFaceWinding, MAX_SKINNED_JOINTS, SKINNING_PALETTE_SIZE, SceneObject},
@@ -22,6 +22,33 @@ fn flip_winding(winding: FrontFaceWinding) -> FrontFaceWinding {
     }
 }
 
+/// Enclose the joint's geometry with a cylinder and rounded ends. The long
+/// axis comes from the mesh, so this also handles terminal parts without a child.
+fn object_part_capsule(bounds: Aabb3<f32>, padding: f32) -> HitBoxShape {
+    use cgmath::EuclideanSpace;
+    let half = bounds.dim() * 0.5;
+    let axis = if half.x >= half.y && half.x >= half.z {
+        0
+    } else if half.y >= half.z {
+        1
+    } else {
+        2
+    };
+    let mut a = bounds.center().to_vec();
+    let mut b = a;
+    a[axis] -= half[axis];
+    b[axis] += half[axis];
+    let radial_sq: f32 = (0..3)
+        .filter(|&i| i != axis)
+        .map(|i| half[i] * half[i])
+        .sum();
+    HitBoxShape::Capsule {
+        a,
+        b,
+        radius: radial_sq.sqrt() + padding.max(0.0),
+    }
+}
+
 /// One LGMD sub-object: a named part of a static `.bin` (the pieces an in-game
 /// tweq rotates or translates - a gun slide, a door leaf) and its pivot in
 /// model space. Empty for LGMM/AI and GLB models, which articulate via joints.
@@ -29,6 +56,8 @@ fn flip_winding(winding: FrontFaceWinding) -> FrontFaceWinding {
 pub struct SubObject {
     pub name: String,
     pub transform: Matrix4<f32>,
+    /// Geometry bounds in this joint's local frame; absent for empty pivots.
+    pub local_bounds: Option<Aabb3<f32>>,
 }
 
 #[derive(Clone)]
@@ -79,15 +108,24 @@ pub struct AnimatedModel {
     /// rather than joint-local space. Holds `bind_inverse[j] * bind_correction`,
     /// so the posed palette becomes `pose[j] * bind[j]`.
     bind: Option<Rc<[Matrix4<f32>; MAX_SKINNED_JOINTS]>>,
+    /// Model-space bounds of the pose baked into `scene_objects`, set when a
+    /// model is statically posed (`animate`/`pose`). Posing bakes only the
+    /// skinning palette - the skeleton itself stays at rest - so without this
+    /// there is no record of the pose the model is actually drawn in, and a
+    /// corpse lying flat would be bounded by the standing rest skeleton.
+    posed_bounds: Option<Aabb3<f32>>,
+    /// Authored LGMD rest bounds, kept separate from posed skeletal bounds.
+    object_bounds: Option<Aabb3<f32>>,
+    object_articulation: Option<std::sync::Arc<crate::object_articulation::ObjectArticulation>>,
 }
 
 /// Build the render palette, undoing the bind pose first when the geometry needs
 /// it. `expand_skinning_palette`'s stretchy parent frames are a vanilla-LGMM
 /// concept, so a bind-space mesh takes the plain per-joint product.
-fn build_palette(
+pub(crate) fn build_palette(
     pose: &[Matrix4<f32>; MAX_SKINNED_JOINTS],
     skeleton: &Skeleton,
-    bind: Option<&Rc<[Matrix4<f32>; MAX_SKINNED_JOINTS]>>,
+    bind: Option<&[Matrix4<f32>; MAX_SKINNED_JOINTS]>,
 ) -> [Matrix4<f32>; SKINNING_PALETTE_SIZE] {
     match bind {
         None => Skeleton::expand_skinning_palette(pose, skeleton),
@@ -104,14 +142,57 @@ fn build_palette(
     }
 }
 
+/// Union of per-joint vertex AABBs, each carried into model space by that
+/// joint's transform. `None` when the mesh has no per-joint boxes at all (a
+/// jointed object mesh, a GLB).
+///
+/// The joint boxes are the coarse per-joint vertex AABBs (they cluster at the
+/// joint origins), not a fit of the skinned vertices - enough for the selection
+/// volume this feeds, and the same source the damage hitboxes use.
+fn joint_box_bounds(
+    joints: &[Matrix4<f32>; 40],
+    hit_boxes: &HashMap<u32, Aabb3<f32>>,
+) -> Option<Aabb3<f32>> {
+    let mut bounds: Option<Aabb3<f32>> = None;
+    for (joint_id, aabb) in hit_boxes.iter() {
+        let Some(transform) = joints.get(*joint_id as usize) else {
+            continue;
+        };
+        for corner in aabb.to_corners() {
+            let point = transform.transform_point(corner);
+            bounds = Some(match bounds {
+                None => Aabb3::new(point, point),
+                Some(bounds) => bounds.grow(point),
+            });
+        }
+    }
+    bounds
+}
+
 impl AnimatedModel {
+    /// Model-space bounds of the pose this model is drawn in: the baked pose
+    /// for a statically posed model (an authored corpse), the rest pose
+    /// otherwise.
+    fn bounding_box(&self) -> Option<Aabb3<f32>> {
+        self.posed_bounds
+            .or_else(|| joint_box_bounds(&self.skeleton.get_transforms(), &self.hit_boxes))
+            // A jointed *object* model (a trainer console, a turret) is
+            // Animated only because it has sub-objects; it carries no hit
+            // boxes, so fall back to the mesh's own bounds rather than to the
+            // caller's tiny default.
+            .or(self.object_bounds)
+    }
+
     fn to_scene_objects(&self) -> &Vec<SceneObject> {
         &self.scene_objects
     }
 
     fn to_animated_scene_objects(&self, player: &AnimationPlayer) -> Vec<SceneObject> {
-        let pose = player.get_transforms(&self.skeleton);
-        let palette = build_palette(&pose, &self.skeleton, self.bind.as_ref());
+        self.to_posed_scene_objects(&player.get_transforms(&self.skeleton))
+    }
+
+    fn to_posed_scene_objects(&self, pose: &[Matrix4<f32>; 40]) -> Vec<SceneObject> {
+        let palette = build_palette(pose, &self.skeleton, self.bind.as_deref());
 
         self.scene_objects
             .iter()
@@ -138,7 +219,7 @@ impl AnimatedModel {
         let new_data = build_palette(
             &animated_skeleton.get_transforms(),
             &animated_skeleton,
-            self.bind.as_ref(),
+            self.bind.as_deref(),
         );
 
         let new_scene_objects = self
@@ -160,6 +241,9 @@ impl AnimatedModel {
             vhots: self.vhots.clone(),
             sub_objects: self.sub_objects.clone(),
             bind: self.bind.clone(),
+            object_articulation: self.object_articulation.clone(),
+            posed_bounds: joint_box_bounds(&animated_skeleton.get_transforms(), &self.hit_boxes),
+            object_bounds: self.object_bounds,
         }
     }
 
@@ -183,6 +267,9 @@ impl AnimatedModel {
             vhots: model.vhots.clone(),
             sub_objects: model.sub_objects.clone(),
             bind: model.bind.clone(),
+            posed_bounds: model.posed_bounds,
+            object_bounds: model.object_bounds,
+            object_articulation: model.object_articulation.clone(),
         }
     }
 
@@ -216,6 +303,10 @@ impl Model {
         // built from the sub-object tree is exactly that hierarchy resolved.
         // Same pairs as `ss2_bin_obj_loader::sub_object_transforms` - keep them
         // in step.
+        let local_bounds = ss2_bin_obj_loader::sub_object_bounds(
+            &static_mesh,
+            &[Matrix4::identity(); MAX_SKINNED_JOINTS],
+        );
         let sub_objects = static_mesh
             .sub_objects
             .iter()
@@ -223,6 +314,7 @@ impl Model {
             .map(|(index, sub_object)| SubObject {
                 name: sub_object.name.clone(),
                 transform: skeleton.global_transform(&(index as u32)),
+                local_bounds: local_bounds[index].1,
             })
             .collect::<Vec<SubObject>>();
 
@@ -238,6 +330,11 @@ impl Model {
                     vhots: static_mesh.vhots.clone(),
                     sub_objects,
                     bind: None,
+                    posed_bounds: None,
+                    object_bounds: Some(bounding_box),
+                    object_articulation: Some(std::sync::Arc::new(
+                        ss2_bin_obj_loader::object_articulation(&static_mesh),
+                    )),
                 }),
             }
         } else {
@@ -307,6 +404,9 @@ impl Model {
                 vhots: vec![],
                 sub_objects: vec![],
                 bind,
+                posed_bounds: None,
+                object_bounds: None,
+                object_articulation: None,
             }),
         }
     }
@@ -333,6 +433,9 @@ impl Model {
                     vhots: vec![],
                     sub_objects: vec![],
                     bind: None,
+                    posed_bounds: None,
+                    object_bounds: None,
+                    object_articulation: None,
                 }),
             }
         } else {
@@ -369,6 +472,16 @@ impl Model {
         }
     }
 
+    /// Bake one player pose into the model's scene objects for immutable tool previews.
+    /// The skeleton is retained, so gameplay can still drive it with the same player.
+    pub fn with_animation_pose(&self, player: &AnimationPlayer) -> Model {
+        let mut model = self.clone();
+        if let InnerModel::Animated(ref mut animated) = model.inner {
+            animated.scene_objects = animated.to_animated_scene_objects(player);
+        }
+        model
+    }
+
     pub fn clone_scene_objects(&self) -> Vec<SceneObject> {
         match &self.inner {
             InnerModel::Animated(animated_model) => animated_model.to_scene_objects().clone(),
@@ -383,8 +496,17 @@ impl Model {
         }
     }
 
-    /// The LGMD sub-object pivots (see [`SubObject`]). Empty unless this model
-    /// came from an object `.bin`.
+    /// Authored LGMD parameter mapping and attachment ownership.
+    pub fn object_articulation(
+        &self,
+    ) -> Option<&std::sync::Arc<crate::object_articulation::ObjectArticulation>> {
+        match &self.inner {
+            InnerModel::Animated(model) => model.object_articulation.as_ref(),
+            InnerModel::Static(_) => None,
+        }
+    }
+
+    /// The LGMD sub-object pivots (see [`SubObject`]). Empty for other formats.
     pub fn sub_objects(&self) -> &[SubObject] {
         match &self.inner {
             InnerModel::Animated(animated_model) => &animated_model.sub_objects,
@@ -393,13 +515,37 @@ impl Model {
     }
 
     /// Per-joint fitted collision shapes (capsule-toward-child / box), the shared
-    /// source of truth for the ragdoll and damage hitboxes. Empty for static or
-    /// non-AI-bin models.
+    /// source of truth for the ragdoll and damage hitboxes. Articulated object
+    /// models opt in through `enable_object_joint_hit_boxes`; static models are empty.
     pub fn hit_box_shapes(&self) -> Rc<HashMap<u32, HitBoxShape>> {
         match &self.inner {
             InnerModel::Animated(animated_model) => animated_model.hit_box_shapes.clone(),
             InnerModel::Static(_) => Rc::new(HashMap::new()),
         }
+    }
+
+    /// Opt an articulated object into per-part damage geometry. Physics support
+    /// remains separate. Empty pivots receive no collider.
+    pub fn enable_object_joint_hit_boxes(&mut self, padding: f32) {
+        let InnerModel::Animated(model) = &mut self.inner else {
+            return;
+        };
+        if model.object_bounds.is_none() {
+            return;
+        }
+        let bounds: HashMap<_, _> = model
+            .sub_objects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, part)| part.local_bounds.map(|bounds| (i as u32, bounds)))
+            .collect();
+        model.hit_box_shapes = Rc::new(
+            bounds
+                .iter()
+                .map(|(&i, bounds)| (i, object_part_capsule(*bounds, padding)))
+                .collect(),
+        );
+        model.hit_boxes = Rc::new(bounds);
     }
 
     pub fn get_hit_boxes(&self) -> Rc<HashMap<u32, Aabb3<f32>>> {
@@ -422,9 +568,28 @@ impl Model {
         }
     }
 
+    /// Render a saved model-space pose using the same palette construction as
+    /// live animation (including inverse bind transforms for remaster models).
+    pub fn to_posed_scene_objects(&self, pose: &[Matrix4<f32>; 40]) -> Vec<SceneObject> {
+        match &self.inner {
+            InnerModel::Animated(model) => model.to_posed_scene_objects(pose),
+            InnerModel::Static(model) => model.to_scene_objects().clone(),
+        }
+    }
+
+    /// The rest mesh's own bounds, for physical support of articulated object
+    /// actors. Unlike `bounding_box`, it ignores per-joint hit boxes - the two
+    /// differ for a model that has both (a grub).
+    pub fn object_model_bounds(&self) -> Option<Aabb3<f32>> {
+        match &self.inner {
+            InnerModel::Static(model) => Some(model.bounding_box),
+            InnerModel::Animated(model) => model.object_bounds,
+        }
+    }
+
     pub fn bounding_box(&self) -> Option<Aabb3<f32>> {
         match &self.inner {
-            InnerModel::Animated(_animated_model) => None,
+            InnerModel::Animated(animated_model) => animated_model.bounding_box(),
             InnerModel::Static(static_model) => Some(static_model.bounding_box),
         }
     }
@@ -611,6 +776,154 @@ mod tests {
         }
     }
 
+    /// A skinned corpse or posed prop is one joint chain: its bounds are the
+    /// per-joint boxes placed by the rest pose, not the joint-local boxes
+    /// themselves.
+    fn animated_model(hit_boxes: HashMap<u32, Aabb3<f32>>, bones: Vec<Bone>) -> Model {
+        posed_model(hit_boxes, bones, None)
+    }
+
+    fn posed_model(
+        hit_boxes: HashMap<u32, Aabb3<f32>>,
+        bones: Vec<Bone>,
+        posed_joints: Option<[Matrix4<f32>; 40]>,
+    ) -> Model {
+        model_with_object_bounds(hit_boxes, bones, posed_joints, None)
+    }
+
+    fn model_with_object_bounds(
+        hit_boxes: HashMap<u32, Aabb3<f32>>,
+        bones: Vec<Bone>,
+        posed_joints: Option<[Matrix4<f32>; 40]>,
+        object_bounds: Option<Aabb3<f32>>,
+    ) -> Model {
+        let posed_bounds = posed_joints.and_then(|joints| joint_box_bounds(&joints, &hit_boxes));
+        Model {
+            transform: Matrix4::identity(),
+            inner: InnerModel::Animated(AnimatedModel {
+                skeleton: Rc::new(Skeleton::create_from_bones(bones)),
+                scene_objects: Vec::new(),
+                hit_boxes: Rc::new(hit_boxes),
+                hit_box_shapes: Rc::new(HashMap::new()),
+                vhots: Vec::new(),
+                sub_objects: Vec::new(),
+                bind: None,
+                posed_bounds,
+                object_bounds,
+                object_articulation: None,
+            }),
+        }
+    }
+
+    fn unit_box() -> Aabb3<f32> {
+        Aabb3::new(Point3::new(-0.5, -0.5, -0.5), Point3::new(0.5, 0.5, 0.5))
+    }
+
+    /// Negative-first: an animated model used to report no bounds at all, so
+    /// every consumer (the frob/selection collider a corpse is picked by) fell
+    /// back to a default-sized box at the object's origin.
+    #[test]
+    fn an_animated_model_has_the_bounds_of_its_rest_posed_joint_boxes() {
+        let bones = vec![
+            Bone {
+                joint_id: 0,
+                parent_id: None,
+                local_transform: Matrix4::identity(),
+            },
+            Bone {
+                joint_id: 1,
+                parent_id: Some(0),
+                local_transform: Matrix4::from_translation(vec3(4.0, 0.0, 0.0)),
+            },
+        ];
+        let hit_boxes = HashMap::from([(0, unit_box()), (1, unit_box())]);
+
+        let bounds = animated_model(hit_boxes, bones)
+            .bounding_box()
+            .expect("an animated model with joint boxes has bounds");
+
+        // The second joint sits 4 units along +x, so the union spans it -
+        // taking the joint-local boxes as-is would give a 1-unit cube.
+        assert_eq!(bounds.min, Point3::new(-0.5, -0.5, -0.5));
+        assert_eq!(bounds.max, Point3::new(4.5, 0.5, 0.5));
+    }
+
+    /// A statically posed model (an authored corpse) is drawn in its baked
+    /// pose, not the skeleton's rest pose: its bounds must follow the pose, or
+    /// a body lying on the floor is bounded by the standing rest skeleton.
+    #[test]
+    fn a_posed_model_is_bounded_by_the_pose_it_is_drawn_in() {
+        let bones = vec![Bone {
+            joint_id: 0,
+            parent_id: None,
+            local_transform: Matrix4::identity(),
+        }];
+        // The pose lays the single joint down 5 units along +x.
+        let mut posed = [Matrix4::identity(); 40];
+        posed[0] = Matrix4::from_translation(vec3(5.0, 0.0, 0.0));
+
+        let bounds = posed_model(HashMap::from([(0, unit_box())]), bones, Some(posed))
+            .bounding_box()
+            .expect("a posed model with joint boxes has bounds");
+
+        assert_eq!(bounds.min, Point3::new(4.5, -0.5, -0.5));
+        assert_eq!(bounds.max, Point3::new(5.5, 0.5, 0.5));
+    }
+
+    /// A skinned mesh with neither joint boxes nor mesh bounds has nothing to
+    /// report; an empty box would be worse than nothing, which callers already
+    /// handle.
+    #[test]
+    fn an_animated_model_without_joint_boxes_or_mesh_bounds_has_no_bounds() {
+        assert!(
+            animated_model(HashMap::new(), Vec::new())
+                .bounding_box()
+                .is_none()
+        );
+    }
+
+    /// Negative-first: a jointed *object* mesh (a trainer console, a turret) is
+    /// Animated only because it has sub-objects, and carries no per-joint
+    /// boxes - so it used to report no bounds at all and its selection collider
+    /// collapsed to the caller's default half-foot box.
+    #[test]
+    fn a_jointed_object_model_is_bounded_by_its_mesh() {
+        let mesh_bounds = Aabb3::new(Point3::new(-0.5, -0.7, -0.4), Point3::new(0.5, 0.7, 0.4));
+
+        let bounds = model_with_object_bounds(HashMap::new(), Vec::new(), None, Some(mesh_bounds))
+            .bounding_box()
+            .expect("a jointed object model is bounded by its mesh");
+
+        assert_eq!(bounds.min, mesh_bounds.min);
+        assert_eq!(bounds.max, mesh_bounds.max);
+    }
+
+    /// The grub is the one model carrying both, and `object_model_bounds` (its
+    /// sphere's support plane) reads the mesh box precisely because the
+    /// selection box does not. Pin the order so a later reshuffle can't quietly
+    /// swap the two.
+    #[test]
+    fn joint_boxes_outrank_the_mesh_bounds() {
+        let bones = vec![Bone {
+            joint_id: 0,
+            parent_id: None,
+            local_transform: Matrix4::identity(),
+        }];
+        let mesh_bounds = Aabb3::new(Point3::new(-9.0, -9.0, -9.0), Point3::new(9.0, 9.0, 9.0));
+
+        let bounds = model_with_object_bounds(
+            HashMap::from([(0, unit_box())]),
+            bones,
+            None,
+            Some(mesh_bounds),
+        )
+        .bounding_box()
+        .expect("a model with joint boxes has bounds");
+
+        assert_eq!(bounds.min, Point3::new(-0.5, -0.5, -0.5));
+        assert_eq!(bounds.max, Point3::new(0.5, 0.5, 0.5));
+    }
+
     fn winding(model: &Model) -> Option<FrontFaceWinding> {
         match &model.inner {
             InnerModel::Static(m) => m.scene_objects[0].backface_culling(),
@@ -643,5 +956,25 @@ mod tests {
         model.apply_local_transform(Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0));
         model.apply_local_transform(Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0));
         assert_eq!(winding(&model), Some(FrontFaceWinding::Clockwise));
+    }
+}
+
+#[cfg(test)]
+mod object_parameter_tests {
+    use super::*;
+    #[test]
+    fn object_capsule_covers_segment_ends_and_adds_radial_padding() {
+        use cgmath::point3;
+        let HitBoxShape::Capsule { a, b, radius } = object_part_capsule(
+            Aabb3::new(point3(-0.4, -0.03, -0.04), point3(0.2, 0.03, 0.04)),
+            0.025,
+        ) else {
+            panic!("joint parts must use capsules")
+        };
+        assert!((a.x + 0.4).abs() < 1e-6);
+        assert!((b.x - 0.2).abs() < 1e-6);
+        assert!((radius - 0.075).abs() < 1e-6);
+        assert_eq!(a.y, 0.0);
+        assert_eq!(b.z, 0.0);
     }
 }

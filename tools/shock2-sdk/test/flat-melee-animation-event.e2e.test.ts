@@ -80,8 +80,8 @@ test(
     const afterImpact = hitPoints(await game.entities.detail(droid.id));
     assert.equal(
       afterImpact,
-      before - 6,
-      "MF_TRIGGER1 should resolve exactly one aimed Wrench hit",
+      before - 5,
+      "MF_TRIGGER1 should resolve one authored Wrench hit: WeaponBash 9 × the droid's 0.5 receptron, rounded to 5 HP",
     );
 
     await game.step({ frames: 80 });

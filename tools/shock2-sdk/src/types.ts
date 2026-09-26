@@ -20,10 +20,22 @@ export type InputAction =
   | "EquipWormLauncher"
   | "EquipPsiAmp"
   | "CycleAmmo"
+  | "CycleGunSetting"
   | "Reload"
   | "CyclePsiPower"
   | "ToggleUseMode"
   | "TogglePauseMenu"
+  // Raw Touch face buttons: lower is left X / right A, upper is left Y /
+  // right B. What a press does is resolved per hand against what that hand
+  // holds (shock2vr/src/hand_buttons.rs).
+  | "LeftHandLowerButton"
+  | "LeftHandUpperButton"
+  | "RightHandLowerButton"
+  | "RightHandUpperButton"
+  // The raw left Menu button: a short press toggles the cyber interface, a
+  // long one (>= 0.5 s, held via input.hold) opens the pause menu.
+  | "MenuButton"
+  | "Jump"
   // Escape hatch so newly-added actions are usable before the SDK is updated.
   | (string & {});
 
@@ -66,12 +78,45 @@ export interface AiPathEntry {
   outcome: string;
   /** Route waypoints (empty for Failed). */
   waypoints: [number, number, number][];
+  /** Index of the waypoint the steering is CURRENTLY following. */
+  live_next_waypoint?: number | null;
+  /** Length of the live path being followed. */
+  live_path_len?: number | null;
+  /** World position currently steered toward. */
+  live_target?: [number, number, number] | null;
+  /** Seconds without progress toward the current waypoint. */
+  live_stall_seconds?: number | null;
+  /**
+   * Why the AI is deliberately standing still ("DoorWait" | "Pivot"), null
+   * when it is moving freely. Absent on runtimes that predate the field.
+   */
+  movement_hold?: string | null;
+}
+
+/** One-off walk-graph query between two positions (GET /v1/pathfinding/route). */
+export interface PathRouteResult {
+  /** Cell containing the start (null when off-mesh). */
+  from_cell: number | null;
+  /** Cell containing the goal (null when off-mesh). */
+  to_cell: number | null;
+  /** Whether a walk route exists between them. */
+  reachable: boolean;
+  /** Waypoint count of that route (0 when unreachable). */
+  waypoints: number;
 }
 
 export interface PathfindingStats {
   queries: number;
   stressed_retries: number;
   no_route: number;
+  /**
+   * Cell crossings currently excluded because an AI stalled on them,
+   * counted once per AI holding one (an exclusion applies only to the AI
+   * that reported it).
+   */
+  blocked_links: number;
+  /** Cells currently penalized because an AI stalled inside them. */
+  blocked_cells: number;
 }
 
 export interface PathfindingTestStatus {
@@ -85,6 +130,7 @@ export interface PathfindingTestStatus {
  * Mirrors the engine's `DebugEntityMessage`; the `type` field is the serde tag.
  */
 export type DebugEntityMessage =
+  | { type: "Hazard"; toxin: boolean; amount: number }
   | {
       type: "Damage";
       amount: number;
@@ -92,13 +138,35 @@ export type DebugEntityMessage =
       direction?: [number, number, number];
       /** Optional world-space hit point (defaults to the victim's position). */
       point?: [number, number, number];
+      /**
+       * Optional skeleton joint id of the hitbox struck, as a real
+       * hitbox-forwarded hit carries - exercises the per-limb paths (damage
+       * readouts, ragdoll reaction) without landing a live shot on a limb.
+       */
+      bone?: number;
     }
   | { type: "Frob" }
   | { type: "Signal"; name: string }
   | { type: "SetAlertness"; level: "Lowest" | "Low" | "Moderate" | "High" }
   // Switch-link activate/deactivate - what a tripwire/button sends to its targets.
   | { type: "TurnOn" }
-  | { type: "TurnOff" };
+  | { type: "TurnOff" }
+  /**
+   * Set a gun's condition (0..100) directly, so a test can put a gun at the
+   * wear it wants without firing hundreds of rounds into it.
+   */
+  | { type: "SetGunCondition"; condition: number }
+  /** Set an object's state directly - e.g. break a gun outright. */
+  | {
+      type: "SetObjectState";
+      state:
+        | "Normal"
+        | "Broken"
+        | "Destroyed"
+        | "Unresearched"
+        | "Locked"
+        | "Hacked";
+    };
 
 export interface EntitySummary {
   id: number;
@@ -147,6 +215,14 @@ export interface EntityDetailResult {
    * runtimes predating the aim-point capability.
    */
   aim_points?: AimPoint[];
+  /**
+   * World-space `[min, max]` of what the HUD highlight frames: the union of
+   * the entity's hitboxes where it has them, otherwise its own collider.
+   */
+  selection_bounds?: [[number, number, number], [number, number, number]] | null;
+  /** World-space centre of a gun's magazine zone (VR clip insert); null when
+   * the entity takes no magazine. */
+  magazine_anchor?: Vec3 | null;
 }
 
 export interface AimPoint {
@@ -326,6 +402,31 @@ export interface PhysicsBodySummary {
   is_sleeping: boolean;
 }
 
+/**
+ * One body in full (GET /v1/physics/bodies/:id). Adds the fields the list
+ * omits, notably `contact_count` - zero means the body touches nothing at all,
+ * which is what tells a body hanging in the air apart from one at rest. Note
+ * the detail response names the linear velocity `linear_velocity`, where the
+ * list calls the same thing `velocity`.
+ */
+export interface PhysicsBodyDetail extends Omit<PhysicsBodySummary, "velocity"> {
+  center_of_mass: Vec3;
+  gravity_scale: number;
+  linear_damping: number;
+  angular_damping: number;
+  linear_velocity: Vec3;
+  contact_count: number;
+  /**
+   * `body_id` of every body this one is touching. Turns "it touches something"
+   * into "it touches *that*" - e.g. that a creature is pressed against a
+   * particular door leaf rather than merely standing near it. A mission's level
+   * geometry has no rigid body behind it, so it raises `contact_count` without
+   * appearing here: an empty list beside a non-zero count means every contact
+   * is with the level. Optional when connected to runtimes predating this field.
+   */
+  contacts?: number[];
+}
+
 export interface PhysicsBodyListResult {
   bodies: PhysicsBodySummary[];
   total_count: number;
@@ -336,6 +437,14 @@ export interface PhysicsBodyListResult {
  * One object as submitted to the renderer on the last frame
  * (GET /v1/scene). Mirrors `commands::SceneObjectSummary`.
  */
+/** Authored object lights before scene/hand lights are merged for drawing. */
+export interface ObjectLightingSummary {
+  light_count: number;
+  /** Received energy at the origin, ignoring normals and spotlight coverage. */
+  received: number;
+  ambient: Vec3;
+}
+
 export interface SceneObjectSummary {
   entity_id: number | null;
   name: string | null;
@@ -346,6 +455,8 @@ export interface SceneObjectSummary {
    */
   source: string | null;
   position: Vec3;
+  /** Rendered world-transform axis magnitudes, excluding mesh-local transforms. */
+  scale: Vec3;
   /** Transparency in effect for this draw (0 = opaque, 1 = invisible). */
   transparency: number | null;
   depth_write: boolean;
@@ -355,6 +466,8 @@ export interface SceneObjectSummary {
   clear_depth: boolean;
   /** Front-face winding used for culling, or null when double-sided. */
   backface_culling: string | null;
+  /** Null unless experimental object lighting resolved a set for this object. */
+  lighting?: ObjectLightingSummary | null;
 }
 
 export interface SceneListResult {
@@ -366,6 +479,10 @@ export interface SceneListResult {
 
 /** What every developer parameter reports, whatever its kind. */
 export interface DevParamCommon {
+  /** Display category; stable parameter keys are independent of navigation. */
+  category: string;
+  /** Hidden under Locked in the menu, still editable through this API. */
+  locked: boolean;
   key: string;
   label: string;
   /** Current value. Bools are 0 or 1, the registry's own representation. */
@@ -463,7 +580,27 @@ export interface RagdollMetricsResult {
   ragdolls: RagdollMetrics[];
 }
 
+/** A climbing hold a hand could take (GET /v1/physics/grip). */
+export interface ClimbGrip {
+  /** `"ladder"` = an authored climbable face whose per-face bit is set;
+   * `"ledge"` = a walkable top surface more than a step above the feet. */
+  kind: "ladder" | "ledge";
+  entity_id: number | null;
+  entity_name: string | null;
+  /** World-space point on the gripped surface. */
+  point: Vec3;
+  /** World-space surface normal, pointing out toward the hand. */
+  normal: Vec3;
+}
+
+export interface ClimbGripResult {
+  /** Null when nothing at the queried point is grabbable. */
+  grip: ClimbGrip | null;
+}
+
 export interface PlayerSnapshot {
+  /** Read-only campaign choice; null when no player is available. */
+  difficulty: "easy" | "normal" | "hard" | "impossible" | null;
   entity_id: number | null;
   /** Runtime id of the backpack container; rediscover it after save/load. */
   inventory_entity_id?: number | null;
@@ -491,6 +628,18 @@ export interface PlayerSnapshot {
   /** The wielded weapon's selected ammo type (e.g. "std"/"he"/"ap"), or null
    * when unarmed / melee (no projectile links). */
   wielded_ammo_type: string | null;
+  /** The wielded gun's fire setting (0 or 1) and its short header ("NORM" /
+   * "BURST"), or null when nothing gun-like is wielded. Switch modes with the
+   * `CycleGunSetting` input action. */
+  wielded_gun_setting: number | null;
+  wielded_gun_setting_header: string | null;
+  /** Milliseconds left of the wielded gun's between-shots wait (0 = ready to
+   * fire, null = nothing wielded). A pull during the wait is ignored. */
+  wielded_gun_cooldown_ms: number | null;
+  /** The wielded gun's condition, 0..100 (100 = pristine), or null when
+   * nothing with a gun state is wielded. Every shot wears it down by the
+   * amount the gun's reliability authors. */
+  wielded_gun_condition: number | null;
   /** The player's current / maximum hit points, or null when the player has
    * no health pool. Drained by psi burnout. */
   hit_points: number | null;
@@ -501,6 +650,7 @@ export interface PlayerSnapshot {
   max_psi_points: number | null;
   /** Accumulated retail radiation level (zero when clear). */
   radiation_level: number;
+  toxin_level: number;
   /** The gamesys name of the selected psi power (what the psi amp casts),
    * e.g. "Cryokinesis". Cycle with the CyclePsiPower input action. */
   selected_psi_power: string | null;
@@ -511,16 +661,92 @@ export interface PlayerSnapshot {
   /** The gamesys names of the active sustained psi powers (e.g. "Inviso"),
    * in activation order; empty when none. */
   active_psi_powers: string[];
+  seekersense_contacts: { entity_id: number; position: Vec3; distance: number; strength: number }[];
+  radar_contacts: { entity_id: number; position: Vec3; distance: number; strength: number }[];
   /** The player's persistent character sheet (primary stats, trained skills,
    * mastered psi disciplines), accumulated from career + station training
    * tours; null when the scene has no player. */
   stats: PlayerStats | null;
+  /** Current stats including powered equipped implants; training is unchanged. */
+  effective_stats: PlayerStats | null;
   /** The audio logs the player has collected (frobbed), in pickup order.
    * Persisted in QuestInfo; survives level transitions and save/load. */
   collected_logs: CollectedLog[];
   /** The automap locations explored in the current mission (ascending).
    * Persisted per mission in QuestInfo; survives save/load. */
   explored_map_locations: number[];
+  /** Climb state: ladder/hand climbing, and (VR) the hands holding on. */
+  climb: ClimbState;
+  /** Resolved per-hand glove feedback; null in flat presentation. */
+  hand_feedback: Record<"left" | "right", {
+    target: number | null;
+    affordance: "None" | "Grabbable" | "Frobbable" | "Blocked";
+    light: "Off" | "Green" | "Amber" | "Red";
+  }> & {
+    /** Rendered pouch selection and per-weapon holster ammo state. */
+    body_gear?: {
+      personal_card: {
+        hand: number | null;
+        center: Vec3 | null;
+        scans: number;
+        last_scan: number | null;
+      };
+      shoulder_weapons: [number | null, number | null];
+      pouch: { weapon: number | null; icon: string | null; state: "inactive" | "ready" | "empty" | "refused"; near: boolean };
+      /** Right thigh then left thigh, independently resolved. */
+      holsters: { weapon: number | null; ammo: number | null; capacity: number | null; segments: number }[];
+    };
+    /** Hand arrays are left then right. */
+    ammo_pouch?: {
+      center: Vec3 | null;
+      radius: number;
+      near: [boolean, boolean];
+      refused: [boolean, boolean];
+      offers: [{reserve: number; template: number; rounds: number; stock: number} | null, {reserve: number; template: number; rounds: number; stock: number} | null];
+    };
+    holsters?: {
+      centers: [Vec3, Vec3] | null;
+      radius: number;
+      enabled_slots: number;
+      near: [number | null, number | null];
+      items: [number | null, number | null];
+      retained: [boolean, boolean];
+    };
+    /** Per-hand transient haptic requests and monotonic diagnostic counters. */
+    haptics?: { pending: [{ amplitude: number; duration_ms: number } | null, { amplitude: number; duration_ms: number } | null]; sequence: [number, number] };
+    glove_contacts?: { centers: [Vec3 | null, Vec3 | null]; radius: number };
+    /** Shoulder stow targets in world space; absent on older runtimes. */
+    shoulder_backpack?: {
+      centers: [Vec3, Vec3] | null;
+      radius: number;
+      near: [boolean, boolean];
+      near_slot?: [number | null, number | null];
+      entered?: [boolean, boolean];
+      retained: [boolean, boolean];
+    };
+  } | null;
+  /** Prepared VR pickup grips; empty for flat presentation or empty hands. */
+  hand_grips: HandGrip[];
+}
+
+/** One hand's hold in the /v1/info climb readout. */
+export interface ClimbHold {
+  hand: "left" | "right";
+  kind: "ladder" | "ledge";
+  entity_id: number | null;
+  point: Vec3;
+}
+
+/** The player's climb state (GET /v1/info). Flat climbs ladders by pushing
+ * into them and holds nothing, so `is_climbing` is not implied by `grips`. */
+export interface ClimbState {
+  is_climbing: boolean;
+  /** A scripted top-out is carrying the body over a lip: the second half of a
+   * VR hand vault, and flat's ladder mantle. */
+  vaulting: boolean;
+  /** The hand currently moving the body, or null. */
+  anchor_hand: "left" | "right" | null;
+  grips: ClimbHold[];
 }
 
 /** One audio log the player has collected, keyed by its per-deck identity. */
@@ -544,11 +770,20 @@ export interface SkillLevels {
   research: number;
 }
 
+export type PrimaryStat = "strength" | "endurance" | "agility" | "psionic_ability" | "cyber_affinity";
+export interface StatModifierRequest {
+  source: string;
+  stat: PrimaryStat;
+  delta: number;
+  duration_secs: number;
+}
+
 /** The player's persistent character sheet. Primary stats start at a baseline
  * of 1 and skills at 0; station training tours raise them per the (career,
  * year, tour) reward table. `psi_disciplines` lists OSA-mastered disciplines by
  * display name; `granted_years` records which training years were applied. */
 export interface PlayerStats {
+  modifiers: Array<{ source: string; stat: PrimaryStat; delta: number; remaining: { secs: number; nanos: number } }>;
   strength: number;
   endurance: number;
   agility: number;
@@ -726,7 +961,12 @@ export interface UiElement {
   entity_id: number | null;
   /** Canvas-space rect [x, y, w, h] (640x480 virtual canvas). */
   rect: [number, number, number, number];
-  /** Normalized screen-space rect [x, y, w, h]. */
+  /**
+   * Normalized screen-space rect [x, y, w, h] - the flat mouse target. Only
+   * meaningful in the flat presentation: in VR nothing maps the canvas to a
+   * screen, so this degenerates to the canvas rect. Aim a VR controller with
+   * `rect` and the interface's `panel_pose` instead.
+   */
   screen_rect: [number, number, number, number];
 }
 
@@ -754,7 +994,7 @@ export interface UiCursor {
 
 /** Active-presentation UI snapshot (GET /v1/ui). */
 export interface UiState {
-  mode: "shooter" | "use";
+  mode: "shooter" | "use" | "device";
   /** The open MFD panel, or null when none is open. */
   active_panel: UiPanel | null;
   /**
@@ -763,15 +1003,37 @@ export interface UiState {
    * shooter mode.
    */
   strip: UiPanel | null;
+  /**
+   * The inventory bar's mini-frame name line: the display name of whatever the
+   * player is pointing at - a strip/panel item, the item on the cursor, or
+   * failing all of those the world object under the aim. null when the bar is
+   * down or nothing named is being pointed at.
+   */
+  name_strip: string | null;
   /** The item held on the cursor mid-drag, or null when the cursor is empty. */
   cursor: UiCursor | null;
   /**
-   * The AMMOFULL ammo-type cycle button, exposed only in use mode when a gun
-   * with 2+ ammo types is wielded (the expanded weapon panel, flat UI 5).
-   * Click its `screen_rect` center to cycle the wielded weapon's ammo type
-   * (Effect::CycleAmmo). null in shooter mode / unarmed / single-ammo weapons.
+   * Every AMMOFULL readout control shown this frame, labeled by meaning:
+   * `gun_setting` (its `text` is the current fire-mode header), `reload`,
+   * `cycle_ammo`, the psi selector's `psi_tier_prev`/`psi_tier_next`/
+   * `psi_power_prev`/`psi_power_next`, and `psi_select` (the badge and
+   * discipline name themselves, which open the power selection MFD). Empty
+   * outside use mode. `select_left_hand` / `select_right_hand` choose which
+   * held weapon feeds the full controls; their entity IDs name their own hand.
+   * Click a control's `screen_rect` center to invoke it.
    */
-  ammo_cycle: UiElement | null;
+  readout: UiElement[];
+  /**
+   * Everything the expanded use-mode readouts drew along the bottom of the
+   * shared interface canvas: the `biofull` / `ammofull` backdrops, the
+   * `hpbar` / `psibar` bars, and the numbers and labels over them (images and
+   * bars are labeled with their art's stem; text carries no label). Empty
+   * outside use mode. Present in BOTH presentations - the VR cyber interface
+   * carries the same readouts the flat cursor clicks.
+   */
+  readout_elements: UiElement[];
+  /** Utility buttons and character/access panel contents, empty outside use mode. */
+  utilities: UiElement[];
   /**
    * Where the pointer last landed on the shared canvas: the mouse on flat, the
    * controller ray on the VR cyber-interface panel. null when nothing is
@@ -790,6 +1052,27 @@ export interface UiState {
    * when the debrief screen is not up.
    */
   debrief_text: string | null;
+  /** Actual rear lens in pawn space; emits along its local -Z. */
+  scanner_pose: { origin: Vec3; rotation: [number, number, number, number] } | null;
+  /**
+   * The HUD status-message lines showing right now, oldest first - the channel
+   * a `TrapMessage` writes its `P$UseMsg` text to. Each line clears five
+   * seconds after it was added.
+   */
+  messages: string[];
+  /**
+   * The station security alarm - present exactly while one is up, which is
+   * when the HUD shows its badge and countdown.
+   */
+  security_alarm: UiSecurityAlarm | null;
+}
+
+/** The station security alarm as the HUD presents it. */
+export interface UiSecurityAlarm {
+  /** Alarms raised since the last station stand-down. */
+  count: number;
+  /** Seconds left on the alarm's deadline, floored at zero. */
+  seconds_remaining: number;
 }
 
 /** One frame of pointing at the shared UI canvas. */
@@ -837,6 +1120,19 @@ export interface TransitionsResult {
 export interface SoundSourceEntity {
   name: string;
   template_id: number | null;
+}
+
+/** Real live repeating sinks, independent of the finite recent-play ring buffer. */
+export interface ActiveAudioLoopsResult {
+  loops: Array<{
+    handle: number;
+    sample: string;
+    owner: "scene" | "environmental" | "ambient_emitter";
+    /** Runtime entity ID for ambient emitters; discover again each launch. */
+    entity_id: number | null;
+    /** Wall-clock playback age; audio runs independently of simulation stepping. */
+    elapsed_secs: number;
+  }>;
 }
 
 /** One resolved-and-played sound (GET /v1/audio/recent). */
@@ -929,4 +1225,71 @@ export interface WaitForOptions {
   intervalMs?: number;
   /** Description used in the timeout error message. */
   description?: string;
+}
+
+/** Diagnostics from the same resolved pose used by gameplay and rendering. */
+export interface HandGrip {
+  /** Visible fitted mesh bounds in controller-local space, excluding the glove. */
+  item_bounds: [Vec3, Vec3] | null;
+  /** Manual Explorer override; solver contact samples do not validate this pose. */
+  authored: boolean;
+  hand: "left" | "right";
+  entity_id: number;
+  model: string;
+  source: "bake" | "prepared" | "missing_or_invalid";
+  solve_ms: number;
+  surface_hash: string;
+  kinematics_hash: string;
+  hints_hash: string;
+  solver_revision: number;
+  palm: {x:number;y:number;z:number};
+  palm_normal: {x:number;y:number;z:number};
+  grip: ResolvedGrip | null;
+  /** Raw analog input used for held finger animation, independent of action reservation. */
+  visual_trigger: number;
+  finger_curls: ResolvedGrip["curls"] | null;
+  /** Glove pose following a physical melee body; null uses raw tracked pose. */
+  glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
+  /** Optional support socket on this owned item; the support hand owns no entity. */
+  support: {
+    hand: "left" | "right";
+    attached: boolean;
+    blend: number;
+    tracked_palm: ResolvedGrip["offset"];
+    pressed: [boolean, boolean];
+    blocked: [boolean, boolean];
+    step_dt: number;
+    visual_trigger: number;
+    finger_curls: ResolvedGrip["curls"];
+    socket_position: ResolvedGrip["offset"];
+    controller_position: ResolvedGrip["offset"];
+    controller_rotation: ResolvedGrip["rotation"];
+    model_position: ResolvedGrip["offset"];
+    model_rotation: ResolvedGrip["rotation"];
+    primary_palm: ResolvedGrip["offset"];
+    /** Primary palm on the rendered, collision-resolved weapon. */
+    visible_primary_palm: ResolvedGrip["offset"];
+    /** Controller-driven pivot calibrated on support acquisition. */
+    control_primary_palm: ResolvedGrip["offset"];
+    primary_anchor: ResolvedGrip["offset"];
+    support_anchor: ResolvedGrip["offset"];
+    /** World-space segment endpoints, or null for a fixed socket. */
+    region_endpoints: [ResolvedGrip["offset"], ResolvedGrip["offset"]] | null;
+    grab_radius: number;
+    release_distance: number;
+    max_swing_degrees: number;
+  } | null;
+}
+
+export interface ResolvedGrip {
+  item_scale: number;
+  pose_family: string;
+  offset: {x:number;y:number;z:number};
+  rotation: {s:number;v:{x:number;y:number;z:number}};
+  curls: [number,number,number,number,number];
+  /** Optional pressed pose; omission preserves resting curls at any trigger value. */
+  trigger_curls?: [number,number,number,number,number];
+  contacts: (Vec3 | null)[];
+  anchor: Vec3;
+  score: number;
 }

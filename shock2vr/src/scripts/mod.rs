@@ -1,15 +1,21 @@
 pub mod ai;
 pub mod effect;
+pub(crate) mod proximity_grenade;
 pub mod speech_registry;
 pub mod speech_util;
+pub mod stasis;
+mod swarm;
 
 mod apparition;
 mod auto_install_soft;
 mod base_button;
+mod base_egg;
 mod base_elevator;
 mod base_light;
 mod base_monster;
 mod base_room;
+pub mod berserk;
+mod burst_fire;
 mod camera_alert;
 mod chemical;
 mod choose_mission;
@@ -19,14 +25,24 @@ mod core_room;
 mod create_sound;
 mod cs9;
 mod dead_power_cell;
+mod delay_grenade;
 mod destroy_all_by_name;
 mod die_shodan_die;
+pub mod earth_text;
+mod egg_goo_cloud;
 mod energy_station;
 mod energy_weapon;
 mod exp_cookie;
 mod frob_qb;
+mod goo_projectile;
 pub mod gui;
+mod hazard_objects;
 pub mod healing_item;
+mod homing;
+pub(crate) mod impact_sound;
+
+pub mod immolate;
+mod implant;
 mod internal_collision_type;
 mod internal_explosion;
 pub mod internal_fast_projectile;
@@ -35,9 +51,12 @@ mod internal_keycard_script;
 mod internal_nanites_script;
 pub(crate) mod internal_radiation_source;
 mod internal_simple_health;
-mod internal_switch_held_model;
+pub(crate) mod internal_switch_held_model;
+mod laser_shot;
 mod level_change_button;
+pub mod maintenance;
 mod many_ride;
+pub(crate) mod melee_charge;
 mod melee_weapon;
 mod obj_consume_button;
 mod once_room;
@@ -45,7 +64,10 @@ mod once_router;
 mod picture_swap;
 pub mod player_script;
 mod psi_amp_script;
+pub(crate) use psi_amp_script::{amp_aim_ray, player_psi_points};
 mod psi_kit;
+mod psi_mine;
+mod psi_sword;
 mod put_bomb_in_replicator;
 pub mod radiation;
 mod reduce_psi;
@@ -55,6 +77,7 @@ mod room_trigger;
 pub mod script_util;
 mod setup_initial_debrief;
 mod std_door;
+pub(crate) use std_door::player_door_frob_blocked;
 mod tool_consumable;
 mod transluce;
 mod trap_delay;
@@ -62,6 +85,7 @@ mod trap_destroyer;
 mod trap_email;
 mod trap_exp_once;
 mod trap_inverter;
+pub mod trap_message;
 mod trap_new_tripwire;
 mod trap_off_filter;
 mod trap_on_filter;
@@ -82,13 +106,13 @@ mod trap_unlock;
 mod trigger_collide;
 mod trigger_damage;
 mod trigger_destroy;
-mod trigger_ecology;
+pub(crate) mod trigger_ecology;
 mod trigger_multi;
 mod tweq_depressable;
 mod tweqable;
 mod use_sound;
 mod vaporize_inventory;
-mod weapon_script;
+pub(crate) mod weapon_script;
 use std::{
     collections::{HashMap, HashSet},
     fmt,
@@ -113,13 +137,16 @@ use self::chemical::ChemicalScript;
 use self::choose_mission::ChooseMissionScript;
 use self::choose_service::ChooseServiceScript;
 use self::comestible::Comestible;
+use self::delay_grenade::DelayGrenade;
+use self::earth_text::EarthText;
 /// Preloaded elevator floor labels (from MISC.STR) + current mission, added as
 /// a world unique at mission load so the (`AssetCache`-less) `ElevatorGui` can
 /// read them at draw time.
 pub use self::gui::ElevatorContext;
 use self::gui::{
     ComputerGui, ContainerGui, ElevatorGui, GamePigGui, HackableCrateGui, KeyPadGui, MapGui,
-    MediaGui, ReplicatorGui, ResearchGui, TrainerGui, TrainerMode, TraitGui,
+    MediaGui, PsiPowersGui, ReplicatorGui, ResearchGui, TrainerGui, TrainerMode, TraitGui,
+    WeaponSettingsGui,
 };
 use self::healing_item::{HealingItemKind, HealingItemScript};
 use self::internal_frob_move::InternalFrobMove;
@@ -127,15 +154,18 @@ use self::internal_switch_held_model::InternalSwitchHeldModelScript;
 use self::picture_swap::PictureSwap;
 use self::psi_amp_script::PsiAmpScript;
 use self::psi_kit::PsiKitScript;
+use self::psi_mine::PsiMine;
 use self::put_bomb_in_replicator::PutBombInReplicator;
 use self::radiation::RadPatchScript;
 use self::reduce_psi::ReducePsi;
 use self::reroute_elevator_button::RerouteElevatorButton;
 use self::researchable::ResearchableScript;
+use self::trap_message::TrapMessage;
 use self::trap_signal::TrapSignal;
 use self::{
     auto_install_soft::AutoInstallSoft,
     base_button::BaseButton,
+    base_egg::{BaseEgg, EggPayload},
     base_elevator::BaseElevator,
     base_light::BaseLight,
     base_monster::BaseMonster,
@@ -153,6 +183,8 @@ use self::{
     energy_weapon::EnergyWeapon,
     exp_cookie::ExpCookie,
     frob_qb::FrobQB,
+    goo_projectile::GooProjectile,
+    impact_sound::HeldItemImpactSound,
     internal_collision_type::InternalCollisionType,
     internal_explosion::InternalExplosion,
     internal_keycard_script::KeyCardScript,
@@ -161,7 +193,7 @@ use self::{
     internal_simple_health::InternalSimpleHealth,
     level_change_button::LevelChangeButton,
     many_ride::{ParalyzePlayers, SitDownRightNow, StandUpAgain, WhiteOut},
-    melee_weapon::{HeldMeleeWeapon, MeleeWeapon},
+    melee_weapon::HeldMeleeWeapon,
     obj_consume_button::ObjConsumeButton,
     once_room::OnceRoom,
     once_router::OnceRouter,
@@ -217,6 +249,14 @@ pub struct DamageImpact {
 
 #[derive(Clone, Debug)]
 pub enum MessagePayload {
+    BeginPsiSword,
+    StartHordeWave {
+        wave: u32,
+    },
+    Hazard {
+        toxin: bool,
+        amount: f32,
+    },
     Frob,
 
     /// This entity's MFD panel was opened. Frobbing used to be the only way in,
@@ -232,6 +272,10 @@ pub enum MessagePayload {
     SensorEndIntersect {
         with: EntityId,
     },
+    /// Native AI freeze reaction; negative duration is indefinite.
+    Freeze {
+        duration_seconds: f32,
+    },
     Collided {
         with: EntityId,
         /// Exact physical contact geometry when this came from Rapier. The
@@ -245,6 +289,52 @@ pub enum MessagePayload {
         motion_flags: MotionFlags,
     },
     AnimationCompleted,
+
+    /// A turn clip requested by `Effect::PlayTurnClip` started playing, with
+    /// the facing change it is authored to end on. The clip is chosen from
+    /// the creature's own schema, so only the applier knows it until it has
+    /// resolved one.
+    TurnClipStarted {
+        token: u64,
+        turn: cgmath::Deg<f32>,
+    },
+
+    /// The turn clip ran to its end. Only the applier knows which clip's
+    /// completion this is, so a completion belonging to anything else can
+    /// never be mistaken for the pivot's own.
+    TurnClipCompleted {
+        token: u64,
+    },
+
+    /// The requested turn clip is not playing (any more): either no affordable
+    /// clip covered the pivot, or something preempted the one that was
+    /// playing. Either way the authored facing change must NOT be taken - the
+    /// pose that would have turned the body is gone.
+    TurnClipCancelled {
+        token: u64,
+    },
+
+    /// The turn clip finished and the animation player has started the clip
+    /// that follows it. The turn clip's pose swings back to neutral across
+    /// that transition, so the entity takes its authored facing change over
+    /// it: across the fade (reported frame by frame as `TurnClipBlend`) when
+    /// `fades`, or in this one frame when the follow-up hard-cuts.
+    TurnClipHandoff {
+        token: u64,
+        fades: bool,
+    },
+
+    /// How much of the pose the clip following the pivot owns this frame,
+    /// straight from the animation player (`blend_alpha_now`). The entity's
+    /// facing takes exactly this fraction of the authored turn, so the facing
+    /// the pose gives up and the facing the entity takes cancel out frame for
+    /// frame. Reported every frame of the fade, ending on 1.0 - the script
+    /// keeps no clock of its own, because the script's clock and the player's
+    /// tick at different points in the frame.
+    TurnClipBlend {
+        token: u64,
+        alpha: f32,
+    },
 
     // Gameplay events
     Recharge,
@@ -268,6 +358,10 @@ pub enum MessagePayload {
     Signal {
         name: String,
     },
+
+    /// A metaproperty mutation changed authored AI configuration components;
+    /// rebuild the script's cached view after the effect applier updates ECS.
+    RefreshAIProperties,
 
     // Debug: force an AI's alertness level (clamped by its alert cap).
     // `pin` holds it against decay (and tracks the live player) until a
@@ -298,8 +392,9 @@ pub enum MessagePayload {
     },
 
     // VR Interactions
-    TriggerPull,    // player started pulling the trigger
-    TriggerRelease, // player stopped pulling the trigger
+    CancelPsiCharge, // selector takes trigger ownership without casting
+    TriggerPull,     // player started pulling the trigger
+    TriggerRelease,  // player stopped pulling the trigger
     Hold,
     Drop,
 
@@ -309,6 +404,9 @@ pub enum MessagePayload {
     TurnOff {
         from: EntityId,
     },
+    /// Complete a temporary scripted seat and restore the player's pre-seat
+    /// transform. Retail routes this to PlayerScript after `GotoSeat`.
+    StandUp,
     /// A security device has raised an alarm; the linked ecology switches to
     /// its alert-column population profile.
     Alarm {
@@ -524,6 +622,11 @@ pub trait Script {
         _msg: &MessagePayload,
     ) -> Effect {
         Effect::NoEffect
+    }
+
+    /// Read-only view of native AI stasis, shared by animation/physics gates.
+    fn stasis(&self) -> Option<&stasis::StasisState> {
+        None
     }
 
     /// Stable opt-in identity for private runtime state. Entity properties and
@@ -836,21 +939,39 @@ pub struct ScriptWorld {
     entity_has_initialized: HashMap<EntityId, bool>,
     entity_to_scripts: HashMap<EntityId, Vec<ScriptInstance>>,
     message_queue: Vec<Message>,
+    /// Floating damage readouts earned by the messages dispatched here, drawn
+    /// by the mission's render pass. Owned by the script world so they die
+    /// with their scene - a readout is a world point in one level.
+    damage_popups: Vec<crate::damage_overlay::DamagePopup>,
 }
 
 impl ScriptWorld {
+    /// The floating damage readouts recorded so far, for the render pass to
+    /// draw and age out.
+    pub(crate) fn damage_popups(&mut self) -> &mut Vec<crate::damage_overlay::DamagePopup> {
+        &mut self.damage_popups
+    }
+
     pub fn new() -> ScriptWorld {
         ScriptWorld {
             entity_has_initialized: HashMap::new(),
             entity_to_scripts: HashMap::new(),
             message_queue: Vec::new(),
+            damage_popups: Vec::new(),
         }
     }
 
     fn create_script(script_name: String) -> Box<dyn Script> {
+        if script_name.eq_ignore_ascii_case("EarthHorde") {
+            return Box::new(crate::mission::earth_horde::HordeDirector::default());
+        }
         match script_name.to_ascii_lowercase().as_str() {
             // PROJECTILE stuff
-            "lasershot" => Box::new(NoopScript::new()),
+            "lasershot" => Box::new(laser_shot::LaserShot::new()),
+            "homing" => Box::new(homing::Homing::default()),
+            "proxgrenade" => Box::new(proximity_grenade::ProximityGrenade::new(false)),
+            "contactproxgrenade" => Box::new(proximity_grenade::ProximityGrenade::new(true)),
+            "proxgrenadetrigger" => Box::new(proximity_grenade::ProximityTrigger::default()),
             "timedgrenade" => Box::new(NoopScript::new()),
             "transluceinoutprop" => Box::new(NoopScript::new()),
 
@@ -870,9 +991,11 @@ impl ScriptWorld {
 
             // AI stuff
             "trapsignal" => Box::new(TrapSignal::new()),
-            "gooegg" => Box::new(Tweqable::new()),
-            "grubegg" => Box::new(Tweqable::new()),
-            "swarmeregg" => Box::new(Tweqable::new()),
+            "gooegg" => Box::new(BaseEgg::new(EggPayload::Goo)),
+            "grubegg" => Box::new(BaseEgg::new(EggPayload::Grub)),
+            "swarmeregg" => Box::new(BaseEgg::new(EggPayload::Swarmer)),
+            "gooprojectile" => Box::new(GooProjectile::new()),
+            "swarm" => Box::new(swarm::Swarm::new()),
             "containerscript" => gui_script(Box::new(ContainerGui::loot_container())),
 
             "lootable" => Box::new(NoopScript::new()),
@@ -892,13 +1015,19 @@ impl ScriptWorld {
                 Box::new(HeldMeleeWeapon::new()),
                 Box::new(InternalSwitchHeldModelScript::new()),
             ])),
+            // Attached by entity_creator to every PropPlayerGun. Under
+            // `physical_held_items` a wielded gun is held as an inert body
+            // stopped by a shape cast, and this turns that block into the
+            // noise of a gun meeting a bulkhead - the one thing a gun's
+            // collision should produce. Inert in every other state.
+            "internal_held_item_impact_sound" => Box::new(HeldItemImpactSound::new()),
             "pistolmodify" => Box::new(NoopScript::new()),
 
             // TODO: Necessary
             "changeinterface" => Box::new(NoopScript::new()),
             "reducehp" => Box::new(NoopScript::new()),
-            "engineremoverad" => Box::new(NoopScript::new()),
-            "radroom" => Box::new(NoopScript::new()),
+            "engineremoverad" => Box::new(hazard_objects::HazardObject::EngineCleanup),
+            "radroom" => Box::new(hazard_objects::HazardObject::Room),
             // SHODAN's ordinary creature/base-monster scripts own combat and
             // death state. Keep the retail finale hook inert until its ending
             // sequence is implemented; TrapSpawn must still be able to create
@@ -919,8 +1048,8 @@ impl ScriptWorld {
             "triggerdamage" => Box::new(TriggerDamage::new()),
             // many.micontain
             "brain" => Box::new(NoopScript::new()),
-            "wormheartimplant" => Box::new(NoopScript::new()),
-            "wormskin" => Box::new(NoopScript::new()),
+            "wormheartimplant" => Box::new(implant::Implant::default()),
+            "wormskin" => Box::new(hazard_objects::HazardObject::Armor),
             // shodan.mis
             "toggleshodantexture" => Box::new(NoopScript::new()),
             "changedelay" => Box::new(NoopScript::new()), //?
@@ -931,10 +1060,11 @@ impl ScriptWorld {
             "teleportpath" => Box::new(NoopScript::new()), // end cutscene!
             "translucebydamage" => Box::new(NoopScript::new()), // end cutscene!
 
+            "earthtext" => Box::new(EarthText::new()),
+
             // TODO: Should these actually be implemented?
-            "earthtext" => Box::new(NoopScript::new()),
             "trapgravity" => Box::new(NoopScript {}), // medsci1 - vent that falls
-            "trapmessage" => Box::new(NoopScript {}), // eng2 - installing override. What prop for message? Where to load string?
+            "trapmessage" => Box::new(TrapMessage::new()),
             "charmable" => Box::new(NoopScript::new()),
             "transientcorpse" => Box::new(NoopScript::new()),
             "whiteout" => Box::new(WhiteOut::new()),
@@ -945,8 +1075,11 @@ impl ScriptWorld {
             "internal_inventory" => gui_script(Box::new(ContainerGui::inv_container())),
             "internal_map" => gui_script(Box::new(MapGui)),
             "internal_media" => gui_script(Box::new(MediaGui)),
+            "internal_weapon_settings" => gui_script(Box::new(WeaponSettingsGui)),
+            "internal_psi_powers" => gui_script(Box::new(PsiPowersGui)),
             // "internal_inventory" => Box::new(PanicOnLoadScript::new("internal_inventory")),
             "internal_explosion" => Box::new(InternalExplosion::new()),
+            "internal_egg_goo_cloud" => Box::new(egg_goo_cloud::EggGooCloud::default()),
             "internal_radiation_source" => Box::new(InternalRadiationSource),
             "internal_frob_move" => Box::new(InternalFrobMove::new()),
             "internal_keycard" => Box::new(KeyCardScript::new()),
@@ -974,7 +1107,7 @@ impl ScriptWorld {
             "trapteleportplayer" => Box::new(TrapTeleportPlayer::new()),
             "traprouter" => Box::new(TrapRouter::new()),
             "trapsound" => Box::new(TrapSound::new()),
-            "trapsoundamb" => Box::new(TrapSound::new()),
+            "trapsoundamb" => Box::new(TrapSound::ambient()),
             "trapteleport" => Box::new(TrapTeleport::new()),
             "traptriplevel" => Box::new(TrapTripLevel::new()),
             "triggermulti" => Box::new(TriggerMulti::new()), // nacelle control
@@ -1024,7 +1157,9 @@ impl ScriptWorld {
             "freezefx" => Box::new(UnimplementedScript::new(&script_name)), // command1
             "torpedolift" => Box::new(UnimplementedScript::new(&script_name)), // rick1
             "torpedohack" => Box::new(UnimplementedScript::new(&script_name)), // rick1
-            "eraseradiation" => Box::new(UnimplementedScript::new(&script_name)), // rick1
+            "flushradiation" | "eraseradiation" => {
+                Box::new(hazard_objects::HazardObject::Environment)
+            } // rick1
 
             // station:
             "oldstylebaseelevator" => Box::new(UnimplementedScript::new(&script_name)),
@@ -1039,31 +1174,38 @@ impl ScriptWorld {
             // partially implemented:
             "keypadunhackable" => gui_script(Box::new(KeyPadGui)),
             "keypad" => gui_script(Box::new(KeyPadGui)),
-            "securitycomputer" => Box::new(UnimplementedScript::new(&script_name)),
-            "resurrectmachine" => Box::new(BaseButton {}),
+            "securitycomputer" => gui_script(Box::new(ComputerGui { security: true })),
+            "resurrectmachine" => Box::new(BaseButton::new()),
             "twostatebutton" => Box::new(BaseButton::new()),
 
             // weapons:
-            "delaygrenade" => Box::new(UnimplementedScript::new(&script_name)),
-            "annelidmodify" => Box::new(UnimplementedScript::new(&script_name)),
+            "delaygrenade" => Box::new(DelayGrenade::new()),
+            "annelidmodify" => Box::new(NoopScript::new()), // applied by weapon_modification
             "empmodify" => Box::new(NoopScript::new()),
             "lasermodify" => Box::new(NoopScript::new()),
             "fusionmodify" => Box::new(NoopScript::new()),
             "riflemodify" => Box::new(NoopScript::new()),
             "stasismodify" => Box::new(NoopScript::new()),
             "shotgunmodify" => Box::new(NoopScript::new()),
+            // The shotgun a hybrid drops (`Hybrid_Shotgun`, gamesys -4073).
+            // Its archetype already authors `PropGunState { condition: 0.0 }`,
+            // so the trashed weapon needs no runtime behavior - only a script
+            // that exists, now that a dead grunt actually drops one.
+            "trashedshotgun" => Box::new(NoopScript::new()),
             "energyweapon" => Box::new(EnergyWeapon::new()),
             "grenademodify" => Box::new(NoopScript::new()),
             "weapontrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Weapons))),
-            "wrench" => Box::new(CompositeScript::new(vec![
-                Box::new(MeleeWeapon::new()),
-                Box::new(InternalSwitchHeldModelScript::new()),
-            ])),
+            // The maintenance tool (gamesys -2949 - not the melee wrench,
+            // which is an ordinary `WeaponScript`). It carries no behavior of
+            // its own: the weapon it is applied to claims it off the tool
+            // channel (see `scripts::maintenance`).
+            "wrench" => Box::new(NoopScript::new()),
             "psiampscript" => Box::new(CompositeScript::new(vec![
                 Box::new(PsiAmpScript::new()),
+                Box::new(psi_sword::PsiSwordController::default()),
                 Box::new(InternalSwitchHeldModelScript::new()),
             ])),
-            "viralmodify" => Box::new(UnimplementedScript::new(&script_name)),
+            "viralmodify" => Box::new(NoopScript::new()), // applied by weapon_modification
 
             //goodies:
             "expcookie" => Box::new(ExpCookie::new()), // cyber modules
@@ -1073,10 +1215,11 @@ impl ScriptWorld {
             "autoinstallsoft" => Box::new(AutoInstallSoft::new()), // auto install software
             "strboost" => Box::new(UnimplementedScript::new(&script_name)), // strength boost
             "intboost" => Box::new(UnimplementedScript::new(&script_name)),
-            "statboostimplant" => Box::new(UnimplementedScript::new(&script_name)),
+            "statboostimplant" => Box::new(implant::Implant::default()),
 
             // earth:
-            "comestible" => Box::new(Comestible::new()),
+            "comestible" => Box::new(Comestible::new(1)),
+            "cheeseborger" => Box::new(Comestible::new(15)),
             "liquor" => Box::new(NoopScript::new()),
 
             // Not implemented - new medsci1 ones:
@@ -1087,14 +1230,15 @@ impl ScriptWorld {
             "ectoplasm" => Box::new(UnimplementedScript::new(&script_name)),
             "medpatchscript" => Box::new(HealingItemScript::new(HealingItemKind::MedPatch)),
             "psikitscript" => Box::new(PsiKitScript::new()),
-            "computer" => gui_script(Box::new(ComputerGui)),
+            "psimine" => Box::new(PsiMine::new()),
+            "computer" => gui_script(Box::new(ComputerGui::default())),
             "lightsoundon" => Box::new(NoopScript::new()),
             "hackablecrate" => gui_script(Box::new(HackableCrateGui::new())),
             "turret" => Box::new(UnimplementedScript::new(&script_name)),
             "triggerdestroy" => Box::new(TriggerDestroy::new()),
 
             // skill point machines
-            "psitrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Psi))),
+            "psitrainer" => gui_script(Box::new(gui::PsiTrainerGui)),
             "techtrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Tech))),
             "statstrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Stats))),
             "traitmachine" => gui_script(Box::new(TraitGui)),
@@ -1105,8 +1249,9 @@ impl ScriptWorld {
             "minigamecart" => Box::new(NoopScript::new()),
             "forcedoor" => Box::new(UnimplementedScript::new(&script_name)),
             "wormpilescript" => Box::new(UnimplementedScript::new(&script_name)),
-            "trapradcleanse" => Box::new(UnimplementedScript::new(&script_name)),
-            "armorscript" => Box::new(NoopScript::new()),
+            "traptoxincleanse" => Box::new(hazard_objects::HazardObject::Cleanse(true)),
+            "trapradcleanse" => Box::new(hazard_objects::HazardObject::Cleanse(false)),
+            "armorscript" => Box::new(hazard_objects::HazardObject::Armor),
             "battery" => Box::new(UnimplementedScript::new(&script_name)),
             "healingstation" => Box::new(UnimplementedScript::new(&script_name)),
             "brokenhealingstation" => Box::new(UnimplementedScript::new(&script_name)),
@@ -1149,7 +1294,7 @@ impl ScriptWorld {
             // elevator buttons
             "elevatorbutton" => gui_script(Box::new(ElevatorGui)),
             "pictureswap" => Box::new(PictureSwap::new()),
-            "testimplant" => Box::new(UnimplementedScript::new(&script_name)),
+            "testimplant" => Box::new(implant::Implant::default()),
 
             // ric2:
             "shakeyourbooty" => Box::new(UnimplementedScript::new(&script_name)), // what does this one do?
@@ -1192,13 +1337,9 @@ impl ScriptWorld {
             "setupinitialdebrief" => {
                 Box::new(setup_initial_debrief::SetupInitialDebriefScript::new())
             }
-            "toxinpatch" => Box::new(UnimplementedScript::new(&script_name)),
+            "toxinpatch" => Box::new(hazard_objects::HazardObject::ToxinPatch),
             "triggerecology" => Box::new(TriggerEcology::new()),
-            // Retail's difficulty variant applies shock.cfg/difficulty
-            // population adjustments before entering this same state machine.
-            // The port has neither setting yet, so its authored baseline is
-            // identical to TriggerEcology.
-            "triggerecologydiff" => Box::new(TriggerEcology::new()),
+            "triggerecologydiff" => Box::new(TriggerEcology::new_diff()),
             "unhackhack" => Box::new(UnimplementedScript::new(&script_name)),
             _ => Box::new(PanicOnLoadScript { name: script_name }),
         }
@@ -1307,6 +1448,15 @@ impl ScriptWorld {
         Ok(())
     }
 
+    pub fn stasis(&self, entity: EntityId, world: &World) -> Option<&stasis::StasisState> {
+        let stasis = self
+            .entity_to_scripts
+            .get(&entity)?
+            .iter()
+            .find_map(|s| s.script.stasis())?;
+        (!crate::scripts::ai::ai_util::is_killed(entity, world)).then_some(stasis)
+    }
+
     pub fn update(&mut self, world: &World, physics: &PhysicsWorld, time: &Time) -> Vec<Effect> {
         let mut produced_effects = Vec::new();
 
@@ -1332,6 +1482,9 @@ impl ScriptWorld {
 
         // Process any incoming messages
         let mut slayed_entities: HashSet<EntityId> = HashSet::new();
+        // Collected here and appended after the loop: the queue is borrowed
+        // for the duration of it.
+        let mut new_damage_popups = Vec::new();
         let span = span!(Level::INFO, "messages");
         let _ = span.enter();
         for msg in &self.message_queue {
@@ -1350,6 +1503,17 @@ impl ScriptWorld {
                 to_entity_id,
                 &msg.payload,
             );
+            // Same choke point feeds the floating damage readouts, so they see
+            // every damage path (melee contact, projectiles, hitbox-forwarded
+            // hits, script injection) rather than one of them.
+            if let Some(popup) = crate::damage_overlay::popup_for(
+                world,
+                time.total.as_secs_f64(),
+                to_entity_id,
+                &msg.payload,
+            ) {
+                new_damage_popups.push(popup);
+            }
 
             let mut is_turn_on = false;
             match msg.payload {
@@ -1387,6 +1551,8 @@ impl ScriptWorld {
         }
 
         self.message_queue.clear();
+        self.damage_popups.extend(new_damage_popups);
+        crate::damage_overlay::trim(&mut self.damage_popups);
 
         for (entity_id, scripts) in self.entity_to_scripts.iter_mut() {
             for instance in scripts.iter_mut() {

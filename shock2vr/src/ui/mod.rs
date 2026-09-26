@@ -31,21 +31,26 @@ use shipyard::EntityId;
 
 use crate::vr_config::Handedness;
 
+pub mod canvas_viewport;
+pub mod cheats_panel;
+pub mod dev_params_navigation;
 pub mod dev_params_panel;
 pub mod entry_ramp;
 mod frontend_menu;
 mod frontend_pointer;
 mod frontend_presentation;
 mod frontend_sfx;
+pub mod horde_report;
 pub mod list_scroll;
 mod panel_anchor;
 mod pointer_visual;
+mod ui_anim;
 pub mod world_dim;
 #[cfg(test)]
 pub use frontend_menu::resolve_flat_click;
 pub use frontend_menu::{
-    FrontendMenu, FrontendMenuItem, flat_pointer_state, hit_menu_item, resolve_click_at,
-    resolve_menu_label, resolve_menu_labels, resolve_menu_rects,
+    FrontendMenu, FrontendMenuItem, flat_pointer_state, hit_menu_item, label_lines,
+    resolve_click_at, resolve_menu_label, resolve_menu_labels, resolve_menu_rects,
 };
 #[cfg(test)]
 pub use frontend_pointer::test_support;
@@ -57,6 +62,7 @@ pub use frontend_presentation::FrontendCanvasPresenter;
 pub use frontend_sfx::FrontendSfx;
 pub use panel_anchor::{FrontendPanelAnchor, PanelPlacement};
 pub use pointer_visual::{PointerVisuals, pointer_beams};
+pub use ui_anim::UiAnims;
 
 /// Font name that resolves to the engine's compiled-in font rather than a
 /// `.FON` asset.
@@ -67,13 +73,50 @@ pub use pointer_visual::{PointerVisuals, pointer_beams};
 /// font and is unaffected.
 pub const BUILTIN_FONT: &str = "@builtin";
 
+/// Retail MFDs use MAINAA with the cyan text palette (shkutils.cpp).
+pub const MFD_FONT: &str = "@shock-mfd";
+/// Bold cyan labels replacing the classic MFD art's baked stat headings.
+pub const MFD_LABEL_FONT: &str = "@shock-mfd-label";
+/// The engine's large overlay face (BLUEAA), for a title card.
+pub const TITLE_FONT: &str = "@shock-title";
+
+/// The tints below are FALLBACKS. An antialiased `.FON` carries its own colour
+/// per texel, as indices into `res/iface/fontpal.pcx`, and the font importer
+/// resolves them - so a tint only applies to a data install missing that
+/// palette. Each is the palette entry its font actually draws in, so the
+/// fallback lands close: BLUEAA's body is index 130 `(0,191,143)` (the colour
+/// 25AE's `vector_blueaa.fon` also declares), and MAINAA tops out at index 209
+/// `(0,255,191)`.
+const TITLE_TINT: [u8; 3] = [1, 194, 147];
+const MFD_TINT: [u8; 3] = [0, 255, 190];
+
 /// The font for a `UiElement::Text`, whichever kind it is.
 ///
 /// Both presentations and the layout pass go through here, so the two cannot
 /// disagree about which font measured the text and which font draws it.
-fn resolve_font(asset_cache: &mut AssetCache, font: &str) -> Rc<Box<dyn engine::Font>> {
+pub(crate) fn resolve_font(asset_cache: &mut AssetCache, font: &str) -> Rc<Box<dyn engine::Font>> {
     if font == BUILTIN_FONT {
         return engine::shared_builtin_font();
+    }
+    if font == TITLE_FONT {
+        return asset_cache.get_ext(
+            &dark::importers::TINTED_FONT_IMPORTER,
+            "blueaa.fon",
+            &TITLE_TINT,
+        );
+    }
+    if font == MFD_FONT || font == MFD_LABEL_FONT {
+        // Family mounts strip their prefix. The bare key resolves the canonical
+        // fonts family; "fonts/mainaa.fon" instead names iface's stripped copy.
+        return asset_cache.get_ext(
+            &dark::importers::TINTED_FONT_IMPORTER,
+            if font == MFD_LABEL_FONT {
+                "boldaa.fon"
+            } else {
+                "mainaa.fon"
+            },
+            &MFD_TINT,
+        );
     }
     asset_cache.get(&FONT_IMPORTER, font).clone()
 }
@@ -94,6 +137,14 @@ impl Rect {
 
     pub fn contains(&self, p: Vector2<f32>) -> bool {
         p.x >= self.x && p.y >= self.y && p.x <= self.x + self.w && p.y <= self.y + self.h
+    }
+
+    /// Half-open containment: a point on the far edge belongs to the *next*
+    /// rect, not to both. [`Rect::contains`] is inclusive on all four edges,
+    /// which makes abutting rects - a row of tabs, a grid of cells - overlap by
+    /// a pixel and pick two winners.
+    pub fn contains_half_open(&self, p: Vector2<f32>) -> bool {
+        p.x >= self.x && p.x < self.x + self.w && p.y >= self.y && p.y < self.y + self.h
     }
 
     pub fn center(&self) -> Vector2<f32> {
@@ -358,7 +409,7 @@ pub enum ButtonHoverBehavior {
 /// than their cell (the wrench is 22 wide) - and are blitted 1:1 into the
 /// slot, not stretched to it. They also key transparency on palette index 0,
 /// independent of that entry's RGB.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum ImageKind {
     /// Ordinary UI art: opaque, stretched to the element's rect.
     #[default]
@@ -373,11 +424,62 @@ pub enum ImageKind {
     /// without stretching or overlapping adjacent rows. Smaller art remains
     /// at its authored size.
     ObjectIconFit,
+    /// A holographic grid: the SHODAN family grid tile repeated `tiles_x` x
+    /// `tiles_y` times across the element's rect, with its black dropped and
+    /// its lines tinted (see [`HOLOGRAM_TINT`]). Sized like [`Self::Ui`].
+    Hologram { tiles_x: u8, tiles_y: u8 },
+    /// Untiled luminous art: dark pixels become transparent, bright pixels cyan.
+    HolographicIcon,
+    /// One sub-rectangle of the art, stretched to the element's rect - the
+    /// corners in normalized texture coordinates, `v` measured from the top of
+    /// the bitmap. Built by [`UiCanvas::cropped_image`]; lets a panel wear a
+    /// region of a shipped bitmap (a single row of the bio monitor, the ammo
+    /// gauge's well) without a second, hand-cut copy of the art.
+    Crop { u0: f32, v0: f32, u1: f32, v1: f32 },
 }
+
+/// The grid tile every hologram panel is drawn from (`shodan/s45.pcx`): a black
+/// cell bounded by a bright cross at row/column 64 (a 1px peak with a few
+/// texels of glow), with a faint dotted sub-grid and a DIM line along the wrap
+/// edge at row/column 0. Its size is fixed at the shipped asset's 128x128 - a
+/// mod that replaced it with a different resolution would need this updated.
+const HOLOGRAM_TILE_PX: f32 = 128.0;
+
+/// The hologram's line colour. The tile's own art is near-white; a cyan tint
+/// is what makes it read as SHODAN's projection rather than as white chrome.
+const HOLOGRAM_TINT: [u8; 3] = [90, 226, 255];
+
+/// The tile bitmap for [`ImageKind::Hologram`].
+pub const HOLOGRAM_TILE_TEXTURE: &str = "shodan/s45.pcx";
 
 impl ImageKind {
     pub(crate) fn transparent_index_0(self) -> bool {
         matches!(self, Self::ObjectIcon | Self::ObjectIconFit)
+    }
+
+    /// The texture rectangle this art samples, in texture units, or `None` for
+    /// the whole texture. Both presentations ask this one question, so a
+    /// hologram cannot tile differently on a flat panel than on a VR quad.
+    ///
+    /// A hologram spans exactly `tiles` whole tiles, starting at the CENTER of
+    /// the tile's bright cross. Every cell border therefore lands on that
+    /// bright line - the outer edges included - at the same sub-texel phase, so
+    /// the separators are evenly bright and the cells line up exactly with the
+    /// item grid's pitch. (A span that is not a whole number of tiles drifts:
+    /// the borders creep off the item grid and each one samples the line at a
+    /// different point, which renders them at visibly different brightness.)
+    pub(crate) fn uv_rect(self) -> Option<(Vector2<f32>, Vector2<f32>)> {
+        match self {
+            Self::Hologram { tiles_x, tiles_y } => {
+                let first = (HOLOGRAM_TILE_PX / 2.0 + 0.5) / HOLOGRAM_TILE_PX;
+                Some((
+                    vec2(first, first),
+                    vec2(first + tiles_x as f32, first + tiles_y as f32),
+                ))
+            }
+            Self::Crop { u0, v0, u1, v1 } => Some((vec2(u0, v0), vec2(u1, v1))),
+            _ => None,
+        }
     }
 }
 
@@ -391,6 +493,8 @@ impl ImageKind {
 /// rectangle into its own space.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlacedElement {
+    /// Resolved canvas rotation, shared by both presenters.
+    pub turns: u8,
     pub rect: Rect,
     pub alpha: f32,
     pub content: PlacedContent,
@@ -414,6 +518,10 @@ pub enum PlacedContent {
     Text {
         text: String,
         font: String,
+    },
+    /// A flat colour over the whole rect. `color` is sRGB 0..255.
+    Fill {
+        color: [u8; 3],
     },
 }
 
@@ -470,9 +578,18 @@ where
         v: VAlign,
         alpha: f32,
         /// When set, text wider than its rect is shortened with a trailing
-        /// ellipsis instead of spilling over neighbouring widgets. Only the
-        /// screen-space path honours this (see [`UiCanvas::text_native_fit`]).
+        /// ellipsis instead of spilling over neighbouring widgets. Applied in
+        /// the shared layout pass, so every presentation shortens the same
+        /// text the same way (see [`UiCanvas::text_native_fit`]).
         fit_to_rect: bool,
+    },
+    /// A flat colour rectangle - no art. The plate a banner's text sits on,
+    /// a divider, a scrim. `color` is sRGB 0..255; `alpha` blends it.
+    Fill {
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        color: [u8; 3],
+        alpha: f32,
     },
 }
 
@@ -485,7 +602,8 @@ where
             Self::Image { position, size, .. }
             | Self::Bar { position, size, .. }
             | Self::Button { position, size, .. }
-            | Self::Text { position, size, .. } => (*position, *size),
+            | Self::Text { position, size, .. }
+            | Self::Fill { position, size, .. } => (*position, *size),
         };
         Rect::new(position.x, position.y, size.x, size.y)
     }
@@ -520,6 +638,7 @@ where
 {
     size: Vector2<f32>,
     elements: Vec<UiElement<TEvent>>,
+    projections: Vec<(UiCanvas<TEvent>, Vec<canvas_viewport::CanvasViewport>)>,
 }
 
 impl<TEvent> UiCanvas<TEvent>
@@ -530,11 +649,22 @@ where
         Self {
             size,
             elements: Vec::new(),
+            projections: Vec::new(),
         }
     }
 
     pub fn from_elements(size: Vector2<f32>, elements: Vec<UiElement<TEvent>>) -> Self {
-        Self { size, elements }
+        Self {
+            size,
+            elements,
+            projections: Vec::new(),
+        }
+    }
+
+    /// Project a shared canvas after layout. Both presenters consume the same
+    /// resolved rectangles, including text metrics and cropped artwork.
+    pub fn project(&mut self, canvas: Self, viewports: Vec<canvas_viewport::CanvasViewport>) {
+        self.projections.push((canvas, viewports));
     }
 
     pub fn size(&self) -> Vector2<f32> {
@@ -567,9 +697,22 @@ where
                 UiElement::Image { alpha, .. }
                 | UiElement::Bar { alpha, .. }
                 | UiElement::Button { alpha, .. }
-                | UiElement::Text { alpha, .. } => *alpha = o,
+                | UiElement::Text { alpha, .. }
+                | UiElement::Fill { alpha, .. } => *alpha = o,
             }
         }
+        self
+    }
+
+    /// A flat colour rectangle covering `rect`, opaque. Chain
+    /// [`opacity`](Self::opacity) to blend it.
+    pub fn fill(&mut self, rect: Rect, color: [u8; 3]) -> &mut Self {
+        self.elements.push(UiElement::Fill {
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
+            color,
+            alpha: 1.0,
+        });
         self
     }
 
@@ -580,6 +723,30 @@ where
             texture: texture.to_owned(),
             alpha: 1.0,
             kind: ImageKind::Ui,
+        });
+        self
+    }
+
+    /// Draw the `source` region of `texture` - in the art's own texels, with
+    /// `art_size` its authored pixel size - stretched to `rect`.
+    pub fn cropped_image(
+        &mut self,
+        rect: Rect,
+        texture: &str,
+        source: Rect,
+        art_size: Vector2<f32>,
+    ) -> &mut Self {
+        self.elements.push(UiElement::Image {
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
+            texture: texture.to_owned(),
+            alpha: 1.0,
+            kind: ImageKind::Crop {
+                u0: source.x / art_size.x,
+                v0: source.y / art_size.y,
+                u1: (source.x + source.w) / art_size.x,
+                v1: (source.y + source.h) / art_size.y,
+            },
         });
         self
     }
@@ -698,6 +865,19 @@ where
         self.push_text(rect, text, font, 0.0, h, v, true)
     }
 
+    /// Explicitly sized text, ellipsized by the shared layout pass to its rect.
+    pub fn text_fit(
+        &mut self,
+        rect: Rect,
+        text: &str,
+        font: &str,
+        size: f32,
+        h: HAlign,
+        v: VAlign,
+    ) -> &mut Self {
+        self.push_text(rect, text, font, size, h, v, true)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn push_text(
         &mut self,
@@ -779,12 +959,24 @@ where
                     fill,
                     alpha,
                 } => PlacedElement {
+                    turns: 0,
                     rect: Rect::new(position.x, position.y, size.x, size.y),
                     alpha: *alpha,
                     content: PlacedContent::Bar {
                         texture: texture.clone(),
                         fill: *fill,
                     },
+                },
+                UiElement::Fill {
+                    position,
+                    size,
+                    color,
+                    alpha,
+                } => PlacedElement {
+                    turns: 0,
+                    rect: Rect::new(position.x, position.y, size.x, size.y),
+                    alpha: *alpha,
+                    content: PlacedContent::Fill { color: *color },
                 },
                 UiElement::Text {
                     position,
@@ -811,6 +1003,13 @@ where
                     )
                 }
             });
+        }
+        for (canvas, viewports) in &self.projections {
+            let pointer = pointer.and_then(|p| canvas_viewport::target_to_canvas(viewports, p));
+            placed.extend(canvas_viewport::place_through(
+                &canvas.layout_with_pointer(asset_cache, pointer),
+                viewports,
+            ));
         }
         placed
     }
@@ -858,19 +1057,42 @@ where
     ) -> Vec<SceneObject> {
         let placed = self.layout_with_pointer(asset_cache, pointer);
         let mut objects = Vec::with_capacity(placed.len());
-        for (index, element) in placed.iter().enumerate() {
+        let layers = overlap_layers(placed.iter().map(|element| element.rect));
+        for (element, layer) in placed.iter().zip(layers) {
             let alpha = force_alpha.unwrap_or(element.alpha);
             let mut object = present_world(asset_cache, element, alpha, self.size);
-            // Panel-local +Z faces the viewer, so later (higher-layer)
-            // elements step toward them to sort in front of the backdrop.
+            // Only overlapping art needs separation. Stepping every element
+            // forward gave adjacent backdrop crops different perspective
+            // scales in VR, breaking borders that join exactly on screen.
             object.set_transform(
                 root_transform
-                    * Matrix4::from_translation(vec3(0.0, 0.0, component_z_step * index as f32)),
+                    * Matrix4::from_translation(vec3(0.0, 0.0, component_z_step * layer as f32)),
             );
             objects.push(object);
         }
         objects
     }
+}
+
+/// Preserve painter order where rectangles overlap, keeping adjoining pieces
+/// on the same plane. Input rectangles are the shared, fully resolved layout.
+fn overlap_layers(rects: impl IntoIterator<Item = Rect>) -> Vec<usize> {
+    let mut previous: Vec<(Rect, usize)> = Vec::new();
+    for rect in rects {
+        let layer = previous
+            .iter()
+            .filter(|(other, _)| {
+                rect.x < other.x + other.w
+                    && other.x < rect.x + rect.w
+                    && rect.y < other.y + other.h
+                    && other.y < rect.y + rect.h
+            })
+            .map(|(_, layer)| layer + 1)
+            .max()
+            .unwrap_or(0);
+        previous.push((rect, layer));
+    }
+    previous.into_iter().map(|(_, layer)| layer).collect()
 }
 
 impl UiCanvas<()> {
@@ -882,9 +1104,29 @@ impl UiCanvas<()> {
 /// How a `kind`'s art is sampled. Shared so layout and the presenters key the
 /// asset cache the same way.
 fn texture_options(kind: ImageKind) -> TextureOptions {
+    let hologram = matches!(kind, ImageKind::Hologram { .. });
+    let luminous = hologram || matches!(kind, ImageKind::HolographicIcon);
     TextureOptions {
-        wrap: false,
+        // A hologram repeats one tile across its cells, so it - and only it -
+        // needs the sampler to wrap.
+        wrap: hologram,
         transparent_index_0: kind.transparent_index_0(),
+        luminance_alpha_tint: luminous.then_some(HOLOGRAM_TINT),
+        // Retail psi icons use dim green (~44 luma) behind bright glyphs
+        // (~108 luma). Remove the plate without fading the glyph itself.
+        luminance_alpha_range: if matches!(kind, ImageKind::HolographicIcon) {
+            [52, 108]
+        } else {
+            [0, 255]
+        },
+        // The grid's lines are a texel wide and are drawn well under their
+        // authored size, at a distance the VR viewer changes at will; without
+        // mipmaps they alias into a swimming, unevenly-bright grid.
+        filter: if luminous {
+            engine::texture::TextureFilter::LinearMipmap
+        } else {
+            engine::texture::TextureFilter::Linear
+        },
         ..Default::default()
     }
 }
@@ -900,9 +1142,34 @@ fn place_image(
     alpha: f32,
     kind: ImageKind,
 ) -> PlacedElement {
-    let loaded = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options(kind));
-    let (position, size) = drawn_rect(position, size, texture_px(&loaded), kind);
+    // Upgrade object icons, whose art is self-contained. Ordinary UI bitmaps
+    // may contain baked labels that HD replacements omit (MAP/RESEARCH/etc.),
+    // so keep their requested encoding until their labels are drawn separately.
+    let texture = if kind.transparent_index_0() {
+        dark::util::resolve_object_icon_name(asset_cache, texture)
+            .unwrap_or_else(|| texture.to_owned())
+    } else {
+        texture.to_owned()
+    };
+    let loaded = asset_cache.get_ext(&TEXTURE_IMPORTER, &texture, &texture_options(kind));
+    // Replacement icons have more texels, not a larger inventory footprint.
+    // Keep the classic bitmap's authored size while drawing the upgraded art.
+    let authored = if matches!(kind, ImageKind::ObjectIcon | ImageKind::ObjectIconFit) {
+        let original = std::path::Path::new(&texture).with_extension("pcx");
+        asset_cache
+            .get_ext_opt(
+                &TEXTURE_IMPORTER,
+                original.to_str().unwrap(),
+                &texture_options(kind),
+            )
+            .map(|original| texture_px(&original))
+            .unwrap_or_else(|| texture_px(&loaded))
+    } else {
+        texture_px(&loaded)
+    };
+    let (position, size) = drawn_rect(position, size, authored, kind);
     PlacedElement {
+        turns: 0,
         rect: Rect::new(position.x, position.y, size.x, size.y),
         alpha,
         content: PlacedContent::Image {
@@ -939,8 +1206,7 @@ fn place_text(
         font.base_height()
     };
     // Ellipsizing and alignment are measured in canvas pixels, so they are
-    // resolution-independent and identical in every presentation (they used to
-    // run in screen pixels, which is why only the screen path could ellipsize).
+    // resolution-independent and identical in every presentation.
     let text = if fit_to_rect {
         ellipsize(font, text, font_size, rect.w)
     } else {
@@ -958,6 +1224,7 @@ fn place_text(
         VAlign::Bottom => rect.y + rect.h - font_size,
     };
     PlacedElement {
+        turns: 0,
         // The glyph box, not the authored widget box: its height IS the font
         // size and its width the measured text width, so "draw this text in
         // this rect" means the same thing to every presentation.
@@ -968,6 +1235,17 @@ fn place_text(
             font: font_name.to_owned(),
         },
     }
+}
+
+/// A [`PlacedContent::Fill`] colour as the screen-space material's tint:
+/// sRGB 0..255 to 0..1, with the element's alpha in the fourth channel.
+fn fill_color(color: [u8; 3], alpha: f32) -> cgmath::Vector4<f32> {
+    cgmath::vec4(
+        color[0] as f32 / 255.0,
+        color[1] as f32 / 255.0,
+        color[2] as f32 / 255.0,
+        alpha.clamp(0.0, 1.0),
+    )
 }
 
 /// Canvas rect -> screen pixels, under a canvas->screen `fit`.
@@ -987,15 +1265,36 @@ fn present_screen(
     element: &PlacedElement,
     rect: Rect,
 ) -> SceneObject {
-    match &element.content {
+    let center = rect.center();
+    let rect = if element.turns % 2 == 1 {
+        Rect::new(
+            center.x - rect.h * 0.5,
+            center.y - rect.w * 0.5,
+            rect.h,
+            rect.w,
+        )
+    } else {
+        rect
+    };
+    let mut object = match &element.content {
         PlacedContent::Image { texture, kind } => {
             let texture = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options(*kind));
-            SceneObject::screen_space_quad2(
-                texture.clone() as Rc<dyn TextureTrait>,
-                vec2(rect.x, rect.y),
-                vec2(rect.w, rect.h),
-                element.alpha,
-            )
+            match kind.uv_rect() {
+                Some((uv_min, uv_max)) => SceneObject::screen_space_quad_uv(
+                    texture.clone() as Rc<dyn TextureTrait>,
+                    vec2(rect.x, rect.y),
+                    vec2(rect.w, rect.h),
+                    element.alpha,
+                    uv_min,
+                    uv_max,
+                ),
+                None => SceneObject::screen_space_quad2(
+                    texture.clone() as Rc<dyn TextureTrait>,
+                    vec2(rect.x, rect.y),
+                    vec2(rect.w, rect.h),
+                    element.alpha,
+                ),
+            }
         }
         PlacedContent::Bar { texture, fill } => {
             let texture =
@@ -1007,6 +1306,11 @@ fn present_screen(
                 *fill,
             )
         }
+        PlacedContent::Fill { color } => SceneObject::screen_space_color_quad(
+            vec2(rect.x, rect.y),
+            vec2(rect.w, rect.h),
+            fill_color(*color, element.alpha),
+        ),
         PlacedContent::Text { text, font, .. } => {
             let font_obj = resolve_font(asset_cache, font);
             // `screen_space_text` anchors on the glyph box's top-left and takes
@@ -1017,7 +1321,15 @@ fn present_screen(
             // vertical factor only, since bitmap text has one size.
             SceneObject::screen_space_text(text, font_obj, rect.h, element.alpha, rect.x, rect.y)
         }
+    };
+    if element.turns != 0 {
+        object.set_transform(
+            Matrix4::from_translation(vec3(center.x, center.y, 0.0))
+                * Matrix4::from_angle_z(Deg(90.0 * f32::from(element.turns)))
+                * Matrix4::from_translation(vec3(-center.x, -center.y, 0.0)),
+        );
     }
+    object
 }
 
 /// World-space (panel) presentation of one placed element.
@@ -1040,12 +1352,18 @@ fn present_world(
             let texture = asset_cache
                 .get_ext(&TEXTURE_IMPORTER, texture, &texture_options(*kind))
                 .clone();
-            let material = engine::scene::basic_material::create(
+            let material = engine::scene::basic_material::create_with_fixed_ambient(
                 texture as Rc<dyn TextureTrait>,
                 1.0,
                 1.0 - alpha,
             );
-            SceneObject::new(material, Box::new(engine::scene::quad::create()))
+            match kind.uv_rect() {
+                Some((uv_min, uv_max)) => SceneObject::new(
+                    material,
+                    Box::new(engine::scene::quad::create_with_uv(uv_min, uv_max)),
+                ),
+                None => SceneObject::new(material, Box::new(engine::scene::quad::create())),
+            }
         }
         PlacedContent::Bar { texture, fill } => {
             let texture =
@@ -1056,17 +1374,46 @@ fn present_world(
             );
             SceneObject::new(material, Box::new(engine::scene::quad::create()))
         }
+        PlacedContent::Fill { color } => {
+            // The same conversion the screen presenter uses, so the two cannot
+            // disagree about a plate's colour.
+            let rgba = fill_color(*color, alpha);
+            let mut object = SceneObject::new(
+                engine::scene::color_material::create(vec3(rgba.x, rgba.y, rgba.z)),
+                Box::new(engine::scene::quad::create()),
+            );
+            // `color_material` authors itself opaque; a blended plate is a
+            // per-object override, as the image path's fixed ambient is.
+            object.set_transparency(Some((1.0 - alpha).clamp(0.0, 1.0)));
+            object
+        }
         PlacedContent::Text { text, font, .. } => {
             let font_obj = resolve_font(asset_cache, font);
             SceneObject::world_space_text(text, font_obj, (1.0 - alpha).clamp(0.0, 1.0))
         }
     };
-    object.set_local_transform(world_element_transform(
-        vec2(rect.x, rect.y),
-        vec2(rect.w, rect.h),
-        canvas_size,
-        0.0,
-    ));
+    let center = rect.center();
+    let (w, h) = if element.turns % 2 == 1 {
+        (rect.h, rect.w)
+    } else {
+        (rect.w, rect.h)
+    };
+    // Rotate in canvas pixels before normalization; rotating normalized panel
+    // coordinates would stretch a quarter-turned element on non-square panels.
+    let transform = if element.turns == 0 {
+        world_element_transform(vec2(rect.x, rect.y), vec2(rect.w, rect.h), canvas_size, 0.0)
+    } else {
+        Matrix4::from_angle_x(Deg(180.0))
+            * Matrix4::from_nonuniform_scale(1.0 / canvas_size.x, 1.0 / canvas_size.y, 1.0)
+            * Matrix4::from_translation(vec3(
+                center.x - canvas_size.x * 0.5,
+                center.y - canvas_size.y * 0.5,
+                0.0,
+            ))
+            * Matrix4::from_angle_z(Deg(90.0 * f32::from(element.turns)))
+            * Matrix4::from_nonuniform_scale(w, h, 1.0)
+    };
+    object.set_local_transform(transform);
     object
 }
 
@@ -1080,7 +1427,10 @@ pub(crate) fn drawn_rect(
     kind: ImageKind,
 ) -> (Vector2<f32>, Vector2<f32>) {
     match kind {
-        ImageKind::Ui => (position, size),
+        ImageKind::Ui
+        | ImageKind::Hologram { .. }
+        | ImageKind::HolographicIcon
+        | ImageKind::Crop { .. } => (position, size),
         ImageKind::ObjectIcon => (position + centered_offset(size, texture_px), texture_px),
         ImageKind::ObjectIconFit => {
             let scale = (size.x / texture_px.x).min(size.y / texture_px.y).min(1.0);
@@ -1134,6 +1484,50 @@ fn world_element_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adjacent_background_pieces_share_depth_but_overlays_keep_painter_order() {
+        let layers = overlap_layers([
+            Rect::new(0.0, 0.0, 100.0, 20.0),
+            Rect::new(100.0, 0.0, 20.0, 5.0),
+            Rect::new(100.0, 5.0, 20.0, 15.0),
+            Rect::new(10.0, 5.0, 20.0, 10.0),
+            Rect::new(12.0, 6.0, 5.0, 5.0),
+            Rect::new(105.0, 6.0, 5.0, 5.0),
+        ]);
+        assert_eq!(layers, [0, 0, 0, 1, 2, 1]);
+    }
+
+    #[test]
+    fn cropped_art_keeps_its_destination_rect_and_authored_texel_bounds() {
+        let mut canvas = UiCanvas::new(vec2(90.0, 44.0));
+        canvas.cropped_image(
+            Rect::new(0.0, 0.0, 90.0, 44.0),
+            "AMMOFULL.PCX",
+            Rect::new(168.0, 14.0, 90.0, 44.0),
+            vec2(260.0, 64.0),
+        );
+        let UiElement::Image {
+            position,
+            size,
+            kind,
+            ..
+        } = &canvas.elements()[0]
+        else {
+            panic!("expected image")
+        };
+        assert_eq!(
+            drawn_rect(*position, *size, vec2(260.0, 64.0), *kind),
+            (*position, *size)
+        );
+        assert_eq!(
+            kind.uv_rect(),
+            Some((
+                vec2(168.0 / 260.0, 14.0 / 64.0),
+                vec2(258.0 / 260.0, 58.0 / 64.0)
+            ))
+        );
+    }
 
     #[test]
     fn rect_contains() {
@@ -1277,6 +1671,91 @@ mod tests {
         assert_eq!(
             centered_offset(vec2(35.0, 34.0), vec2(66.0, 68.0)),
             vec2(0.0, 0.0)
+        );
+    }
+
+    /// One cell = one whole tile, bounded by the tile's bright cross - and
+    /// every border, outer edges included, samples that line at the SAME
+    /// sub-texel phase. A span that is not a whole number of tiles (an outward
+    /// margin, say) fails this: the phase drifts across the panel and the
+    /// separators render at visibly different brightness.
+    #[test]
+    fn a_hologram_puts_every_cell_border_on_the_bright_line() {
+        const TILES: u8 = 4;
+        let (uv_min, uv_max) = ImageKind::Hologram {
+            tiles_x: TILES,
+            tiles_y: TILES,
+        }
+        .uv_rect()
+        .expect("a hologram samples a sub-rectangle");
+
+        let bright_texel_center = 64.5 / 128.0;
+        for border in 0..=TILES {
+            let u = uv_min.x + (uv_max.x - uv_min.x) * (border as f32 / TILES as f32);
+            assert!(
+                (u.fract() - bright_texel_center).abs() < 1e-6,
+                "border {border} samples texel {} of its tile, not the bright cross",
+                u.fract() * 128.0
+            );
+        }
+        assert_eq!(uv_max.x - uv_min.x, TILES as f32, "a whole number of tiles");
+        assert_eq!(uv_min.x, uv_min.y, "square cells sample squarely");
+
+        assert_eq!(ImageKind::Ui.uv_rect(), None);
+        assert_eq!(ImageKind::ObjectIcon.uv_rect(), None);
+    }
+
+    /// A hologram tiles (so its sampler must wrap) and drops its black (so the
+    /// world shows through between the lines).
+    #[test]
+    fn hologram_art_tiles_and_drops_its_black() {
+        let options = texture_options(ImageKind::Hologram {
+            tiles_x: 4,
+            tiles_y: 4,
+        });
+        assert!(options.wrap);
+        assert_eq!(options.luminance_alpha_tint, Some(HOLOGRAM_TINT));
+        assert!(matches!(
+            options.filter,
+            engine::texture::TextureFilter::LinearMipmap
+        ));
+        assert!(!options.transparent_index_0);
+
+        let ui = texture_options(ImageKind::Ui);
+        assert!(!ui.wrap);
+        assert_eq!(ui.luminance_alpha_tint, None);
+    }
+
+    #[test]
+    fn holographic_icons_drop_dark_pixels_without_grid_tiling_or_uv_shift() {
+        let kind = ImageKind::HolographicIcon;
+        let options = texture_options(kind);
+        assert!(!options.wrap);
+        assert_eq!(options.luminance_alpha_tint, Some(HOLOGRAM_TINT));
+        assert_eq!(kind.uv_rect(), None);
+        assert_eq!(
+            drawn_rect(vec2(3.0, 4.0), vec2(42.0, 42.0), vec2(32.0, 32.0), kind),
+            (vec2(3.0, 4.0), vec2(42.0, 42.0))
+        );
+    }
+
+    /// A hologram fills its slot like ordinary UI art - the tile scales to the
+    /// cells, it is not blitted at its authored 128px.
+    #[test]
+    fn a_hologram_stretches_to_its_rect() {
+        let at = vec2(15.0, 8.0);
+        let size = vec2(140.0, 136.0);
+        assert_eq!(
+            drawn_rect(
+                at,
+                size,
+                vec2(128.0, 128.0),
+                ImageKind::Hologram {
+                    tiles_x: 4,
+                    tiles_y: 4
+                }
+            ),
+            (at, size)
         );
     }
 
@@ -1450,6 +1929,7 @@ mod tests {
                 assert_parity(
                     "image",
                     &PlacedElement {
+                        turns: 0,
                         rect,
                         alpha: 1.0,
                         content: PlacedContent::Image {
@@ -1461,6 +1941,7 @@ mod tests {
                 assert_parity(
                     "bar",
                     &PlacedElement {
+                        turns: 0,
                         rect,
                         alpha: 1.0,
                         content: PlacedContent::Bar {
@@ -1484,6 +1965,7 @@ mod tests {
                 false,
             );
             let image = PlacedElement {
+                turns: 0,
                 rect: placed.rect,
                 alpha: 1.0,
                 content: PlacedContent::Image {

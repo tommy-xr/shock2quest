@@ -7,18 +7,25 @@ use crate::{mission::mission_core::GlobalTemplateHierarchy, physics::PhysicsWorl
 
 use super::{
     Effect, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError,
-    script_util::{entity_class_template_id, send_to_all_switch_links},
+    script_util::{announce, entity_class_template_id, send_to_all_switch_links},
 };
 
 const PHYSICAL_TEMPLATE_ID: i32 = -11;
-const ECOLOGY_STATE_NORMAL: i32 = 0;
-const ECOLOGY_STATE_ALERT: i32 = 2;
+pub(crate) const ECOLOGY_STATE_NORMAL: i32 = 0;
+/// The alert column of `P$EcoState` - also what the security-alert HUD/audio
+/// feedback watches for (`crate::security_alarm`).
+pub(crate) const ECOLOGY_STATE_ALERT: i32 = 2;
 const SCRIPT_STATE_KEY: &str = "shock2vr.trigger_ecology";
+/// Xerxes: "Potential threat detected."
+const ALERT_SCHEMA: &str = "xer02";
+/// Xerxes: "Security alert terminated."
+const ALERT_OVER_SCHEMA: &str = "xer03";
 
 #[derive(Serialize, Deserialize)]
 struct TriggerEcologyState {
     seconds_until_poll: f32,
     recovery_seconds_remaining: Option<f32>,
+    alerted: bool,
 }
 
 /// Retail `TriggerEcology`: periodically count live physical objects carrying
@@ -26,15 +33,58 @@ struct TriggerEcologyState {
 /// A security `Alarm` switches to the alert-column population profile until
 /// the authored recovery window expires or a `Reset` arrives.
 pub struct TriggerEcology {
+    difficulty_aware: bool,
     seconds_until_poll: f32,
     recovery_seconds_remaining: Option<f32>,
+    /// Alert as of this script's last transition (seeded from `P$EcoState` at
+    /// initialize). `P$EcoState` only updates once the effect lands, so two
+    /// Alarms (or Resets) in one frame would both see the stale state and
+    /// announce twice.
+    alerted: bool,
 }
 
 impl TriggerEcology {
     pub fn new() -> Self {
         Self {
+            difficulty_aware: false,
             seconds_until_poll: 0.0,
             recovery_seconds_remaining: None,
+            alerted: false,
+        }
+    }
+
+    pub fn new_diff() -> Self {
+        Self {
+            difficulty_aware: true,
+            ..Self::new()
+        }
+    }
+
+    fn is_easy(&self, world: &World) -> bool {
+        self.difficulty_aware
+            && world
+                .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+                .ok()
+                .is_some_and(|q| q.difficulty() == dark::gamesys::Difficulty::Easy)
+    }
+    fn period(&self, world: &World, authored: f32) -> f32 {
+        authored.max(0.0) * if self.is_easy(world) { 2.0 } else { 1.0 }
+    }
+    fn population_params(
+        &self,
+        world: &World,
+        minimum: i32,
+        maximum: i32,
+        random: i32,
+    ) -> (i32, i32, i32) {
+        if self.is_easy(world) {
+            (
+                if minimum > 1 { minimum - 1 } else { minimum },
+                if maximum > 1 { maximum - 1 } else { maximum },
+                random.saturating_mul(2),
+            )
+        } else {
+            (minimum, maximum, random)
         }
     }
 
@@ -131,9 +181,12 @@ impl TriggerEcology {
             ECOLOGY_STATE_ALERT => ECOLOGY_STATE_ALERT as usize,
             _ => return Effect::NoEffect,
         };
-        let minimum = ecology.min_count[state_index];
-        let maximum = ecology.max_count[state_index];
-        let random_chance = ecology.random_chance[state_index];
+        let (minimum, maximum, random_chance) = self.population_params(
+            world,
+            ecology.min_count[state_index],
+            ecology.max_count[state_index],
+            ecology.random_chance[state_index],
+        );
         let population = Self::population(world, ecology_type.0) as i32;
         let random_hit = random_chance > 0 && rand::thread_rng().gen_range(0..random_chance) == 0;
         if Self::should_spawn(population, minimum, maximum, random_hit) {
@@ -149,7 +202,7 @@ impl Script for TriggerEcology {
         let ecologies = world.borrow::<View<PropEcology>>().unwrap();
         self.seconds_until_poll = ecologies
             .get(entity_id)
-            .map(|ecology| ecology.period_seconds.max(0.0))
+            .map(|ecology| self.period(world, ecology.period_seconds))
             .unwrap_or(0.0);
         drop(ecologies);
         // Legacy saves persist the alerted `P$EcoState` but carry no private
@@ -157,6 +210,7 @@ impl Script for TriggerEcology {
         // recovery window. Current saves hydrate the exact remaining timer
         // and skip this fresh initialization path.
         if Self::eco_state(world, entity_id) == ECOLOGY_STATE_ALERT {
+            self.alerted = true;
             self.recovery_seconds_remaining =
                 Self::authored_alert_recovery(world, entity_id).filter(|seconds| *seconds > 0.0);
         }
@@ -178,7 +232,7 @@ impl Script for TriggerEcology {
                 ecologies
                     .get(entity_id)
                     .ok()
-                    .map(|ecology| ecology.period_seconds.max(0.0))
+                    .map(|ecology| self.period(world, ecology.period_seconds))
             });
         let Some(period_seconds) = period_seconds else {
             return Effect::NoEffect;
@@ -195,6 +249,7 @@ impl Script for TriggerEcology {
             *remaining -= elapsed;
             if *remaining <= 0.0 {
                 self.recovery_seconds_remaining = None;
+                self.alerted = false;
                 state = ECOLOGY_STATE_NORMAL;
                 effects.push(Effect::SetEcologyState {
                     entity_id,
@@ -205,6 +260,7 @@ impl Script for TriggerEcology {
                     entity_id,
                     MessagePayload::Reset { from: entity_id },
                 ));
+                effects.push(announce(entity_id, ALERT_OVER_SCHEMA));
             }
         }
 
@@ -225,7 +281,7 @@ impl Script for TriggerEcology {
     ) -> Effect {
         match msg {
             MessagePayload::Alarm { .. } => {
-                if Self::eco_state(world, entity_id) != ECOLOGY_STATE_NORMAL {
+                if self.alerted || Self::eco_state(world, entity_id) != ECOLOGY_STATE_NORMAL {
                     // A repeated Alarm must not extend the retail recovery
                     // timer, and hacked ecologies ignore security alarms.
                     return Effect::NoEffect;
@@ -239,16 +295,21 @@ impl Script for TriggerEcology {
                     return Effect::NoEffect;
                 };
                 self.recovery_seconds_remaining = Some(recovery_seconds);
-                Effect::SetEcologyState {
-                    entity_id,
-                    state: ECOLOGY_STATE_ALERT,
-                }
+                self.alerted = true;
+                Effect::combine(vec![
+                    Effect::SetEcologyState {
+                        entity_id,
+                        state: ECOLOGY_STATE_ALERT,
+                    },
+                    announce(entity_id, ALERT_SCHEMA),
+                ])
             }
             MessagePayload::Reset { .. } => {
-                if Self::eco_state(world, entity_id) != ECOLOGY_STATE_ALERT {
+                if !self.alerted {
                     return Effect::NoEffect;
                 }
                 self.recovery_seconds_remaining = None;
+                self.alerted = false;
                 Effect::combine(vec![
                     Effect::SetEcologyState {
                         entity_id,
@@ -259,6 +320,7 @@ impl Script for TriggerEcology {
                         entity_id,
                         MessagePayload::Reset { from: entity_id },
                     ),
+                    announce(entity_id, ALERT_OVER_SCHEMA),
                 ])
             }
             _ => Effect::NoEffect,
@@ -275,6 +337,7 @@ impl Script for TriggerEcology {
             &TriggerEcologyState {
                 seconds_until_poll: self.seconds_until_poll,
                 recovery_seconds_remaining: self.recovery_seconds_remaining,
+                alerted: self.alerted,
             },
             SCRIPT_STATE_KEY,
         )
@@ -288,6 +351,7 @@ impl Script for TriggerEcology {
         let restored: TriggerEcologyState = state.decode(1, SCRIPT_STATE_KEY)?;
         self.seconds_until_poll = restored.seconds_until_poll;
         self.recovery_seconds_remaining = restored.recovery_seconds_remaining;
+        self.alerted = restored.alerted;
         Ok(())
     }
 }
@@ -300,6 +364,55 @@ mod tests {
 
     use super::*;
     use crate::runtime_props::RuntimePropCanonicalTemplateId;
+    use crate::scripts::script_util::announced;
+
+    #[test]
+    fn easy_diff_ecology_scales_derived_values_without_mutating_authored_data() {
+        for difficulty in dark::gamesys::Difficulty::ALL {
+            let world = World::new();
+            world.add_unique(crate::quest_info::QuestInfo::with_difficulty(difficulty));
+            let diff = TriggerEcology::new_diff();
+            let plain = TriggerEcology::new();
+            let easy = difficulty == dark::gamesys::Difficulty::Easy;
+            assert_eq!(diff.period(&world, 15.0), if easy { 30.0 } else { 15.0 });
+            assert_eq!(
+                diff.population_params(&world, 2, 4, 3),
+                if easy { (1, 3, 6) } else { (2, 4, 3) }
+            );
+            assert_eq!(diff.population_params(&world, 0, 1, 0), (0, 1, 0));
+            assert_eq!(plain.period(&world, 15.0), 15.0);
+            assert_eq!(plain.population_params(&world, 2, 4, 3), (2, 4, 3));
+        }
+    }
+    #[test]
+    fn easy_diff_ecology_initializes_and_rearms_with_doubled_period() {
+        let mut world = World::new();
+        world.add_unique(crate::quest_info::QuestInfo::with_difficulty(
+            dark::gamesys::Difficulty::Easy,
+        ));
+        let entity = world.add_entity((
+            ecology_props([0; 3], [0; 3], [0.0; 3], [0; 3]),
+            PropEcoType(1),
+        ));
+        let mut script = TriggerEcology::new_diff();
+        script.initialize(entity, &world);
+        assert_eq!(script.seconds_until_poll, 30.0);
+        step(&mut script, entity, &world, 15);
+        assert_eq!(script.seconds_until_poll, 15.0);
+        let saved = script.save_state().unwrap();
+        let mut restored = TriggerEcology::new_diff();
+        restored
+            .restore_state(&saved, &ScriptRestoreContext::new(&HashMap::new()))
+            .unwrap();
+        assert_eq!(
+            restored.seconds_until_poll, 15.0,
+            "restore retains the remaining time without rescaling"
+        );
+        assert!(restored.difficulty_aware);
+        script = restored;
+        step(&mut script, entity, &world, 15);
+        assert_eq!(script.seconds_until_poll, 30.0);
+    }
 
     fn ecology_props(
         min_count: [i32; 3],
@@ -332,6 +445,10 @@ mod tests {
         Effect::flatten(vec![effect])
             .into_iter()
             .any(|effect| matches!(effect, Effect::Send { msg } if msg.to == target))
+    }
+
+    fn announces(effect: &Effect, schema: &str) -> bool {
+        announced(effect).iter().any(|name| name == schema)
     }
 
     fn sets_state(effect: Effect, target: EntityId, expected: i32) -> bool {
@@ -457,6 +574,7 @@ mod tests {
             &MessagePayload::Alarm { from: camera },
         );
 
+        assert!(announces(&effect, ALERT_SCHEMA));
         assert!(sets_state(effect, ecology, ECOLOGY_STATE_ALERT));
         assert_eq!(script.recovery_seconds_remaining, Some(120.0));
 
@@ -549,6 +667,11 @@ mod tests {
 
         let effects = Effect::flatten(vec![step(&mut script, ecology, &world, 1)]);
 
+        assert!(
+            effects
+                .iter()
+                .any(|effect| announces(effect, ALERT_OVER_SCHEMA))
+        );
         assert!(effects.iter().any(|effect| {
             matches!(
                 effect,
@@ -564,6 +687,58 @@ mod tests {
                         && matches!(msg.payload, MessagePayload::Reset { from } if from == ecology)
             )
         }));
+    }
+
+    #[test]
+    fn reset_announces_stand_down_only_from_alert() {
+        let mut world = World::new();
+        world.add_unique(GlobalTemplateHierarchy(HashMap::new()));
+        let console = world.add_entity(());
+        let ecology = world.add_entity((
+            PropEcoType(2501),
+            PropEcoState(ECOLOGY_STATE_ALERT),
+            ecology_props([0, 0, 2], [0, 0, 2], [0.0, 0.0, 120.0], [0, 0, 0]),
+        ));
+        let mut script = TriggerEcology::new();
+        script.initialize(ecology, &world);
+        let reset = MessagePayload::Reset { from: console };
+
+        let effect = script.handle_message(ecology, &world, &PhysicsWorld::new(), &reset);
+        assert!(announces(&effect, ALERT_OVER_SCHEMA));
+
+        world.add_component(ecology, PropEcoState(ECOLOGY_STATE_NORMAL));
+        let effect = script.handle_message(ecology, &world, &PhysicsWorld::new(), &reset);
+        assert!(!announces(&effect, ALERT_OVER_SCHEMA));
+    }
+
+    #[test]
+    fn same_frame_duplicates_announce_once() {
+        let mut world = World::new();
+        world.add_unique(GlobalTemplateHierarchy(HashMap::new()));
+        let camera = world.add_entity(());
+        let ecology = world.add_entity((
+            PropEcoType(2501),
+            PropEcoState(ECOLOGY_STATE_NORMAL),
+            ecology_props([0, 0, 2], [0, 0, 2], [0.0, 0.0, 120.0], [0, 0, 0]),
+        ));
+        let mut script = TriggerEcology::new();
+        script.initialize(ecology, &world);
+        let physics = PhysicsWorld::new();
+        let alarm = MessagePayload::Alarm { from: camera };
+        let reset = MessagePayload::Reset { from: camera };
+
+        // Neither pair's first effect is applied before the second message,
+        // as when two cameras latch (or two stand-downs land) in one frame.
+        let first = script.handle_message(ecology, &world, &physics, &alarm);
+        let second = script.handle_message(ecology, &world, &physics, &alarm);
+        assert!(announces(&first, ALERT_SCHEMA));
+        assert!(matches!(second, Effect::NoEffect));
+
+        world.add_component(ecology, PropEcoState(ECOLOGY_STATE_ALERT));
+        let first = script.handle_message(ecology, &world, &physics, &reset);
+        let second = script.handle_message(ecology, &world, &physics, &reset);
+        assert!(announces(&first, ALERT_OVER_SCHEMA));
+        assert!(matches!(second, Effect::NoEffect));
     }
 
     #[test]
@@ -623,6 +798,7 @@ mod tests {
         let mut before_save = TriggerEcology::new();
         before_save.seconds_until_poll = 6.5;
         before_save.recovery_seconds_remaining = Some(91.25);
+        before_save.alerted = true;
 
         let state = before_save.save_state().unwrap();
         let mut after_load = TriggerEcology::new();
@@ -632,6 +808,7 @@ mod tests {
 
         assert_eq!(after_load.seconds_until_poll, 6.5);
         assert_eq!(after_load.recovery_seconds_remaining, Some(91.25));
+        assert!(after_load.alerted);
     }
 
     #[test]

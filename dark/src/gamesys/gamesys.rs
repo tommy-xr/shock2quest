@@ -16,10 +16,13 @@ pub struct Gamesys {
     /// Trainer upgrade cost tables (`STATCOST`/`WTECHCOST`/`WSKILLCOST`/
     /// `PSICOST` file-var chunks); `None` if the gamesys lacks them.
     trainer_costs: Option<TrainerCostTables>,
+    difficulty_params: Option<crate::gamesys::DifficultyParams>,
     /// HRM hacking/repair/modify tuning (`HRM` file-var chunk).
     hrm_params: Option<HrmParams>,
     /// Skill-system tuning (`SKILLPARAM` file-var chunk).
     skill_params: Option<SkillParams>,
+    player_pool_params: Option<crate::gamesys::PlayerPoolParams>,
+    hazard_params: Option<crate::gamesys::HazardParams>,
 }
 
 impl Gamesys {
@@ -65,8 +68,20 @@ impl Gamesys {
         self.trainer_costs.as_ref()
     }
 
+    pub fn difficulty_params(&self) -> Option<&crate::gamesys::DifficultyParams> {
+        self.difficulty_params.as_ref()
+    }
+
     pub fn hrm_params(&self) -> Option<&HrmParams> {
         self.hrm_params.as_ref()
+    }
+
+    pub fn player_pool_params(&self) -> Option<&crate::gamesys::PlayerPoolParams> {
+        self.player_pool_params.as_ref()
+    }
+
+    pub fn hazard_params(&self) -> Option<&crate::gamesys::HazardParams> {
+        self.hazard_params.as_ref()
     }
 
     pub fn skill_params(&self) -> Option<&SkillParams> {
@@ -94,9 +109,12 @@ pub fn read<T: io::Read + io::Seek>(
 
     let env_tag_map = EnvMap::read(&table_of_contents, reader);
     let speech_db = SpeechDB::read(&table_of_contents, reader);
+    let difficulty_params = crate::gamesys::DifficultyParams::read(&table_of_contents, reader);
     let trainer_costs = TrainerCostTables::read(&table_of_contents, reader);
     let hrm_params = HrmParams::read(&table_of_contents, reader);
     let skill_params = SkillParams::read(&table_of_contents, reader);
+    let player_pool_params = crate::gamesys::PlayerPoolParams::read(&table_of_contents, reader);
+    let hazard_params = crate::gamesys::HazardParams::read(&table_of_contents, reader);
 
     // Uncomment to output debug info for voices:
     // debug_print_voices(&sound_schema, &speech_db);
@@ -108,7 +126,10 @@ pub fn read<T: io::Read + io::Seek>(
         env_tag_map,
         speech_db,
         trainer_costs,
+        difficulty_params,
         hrm_params,
         skill_params,
+        hazard_params,
+        player_pool_params,
     }
 }

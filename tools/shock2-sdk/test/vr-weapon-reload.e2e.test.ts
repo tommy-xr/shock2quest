@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer } from "../src/index.js";
 import type { EntitySummary, PlayedSound, Vec3 } from "../src/index.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
@@ -22,7 +23,6 @@ import { fireOnce, cycleToWeapon } from "./helpers/weapon.js";
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8412);
 
 /** Pistol (first DebugCycleWeapon roster entry) and its standard clip. */
 const PISTOL = -17;
@@ -91,7 +91,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort,
+      port: e2ePort(),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -106,13 +106,20 @@ test(
     const capacity = ammoOf(await game.entities.detail(pistol.id));
     assert.ok(capacity > 0, "the debug pistol starts loaded");
     await emptyTheMagazine(game, pistol);
+    const emptySequence = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
+    await fireOnce(game);
+    const emptyCue = (await game.audio.recent()).sounds.find(sound =>
+      sound.sequence > emptySequence && tagValue(sound, "event") === "outofammo");
+    assert.equal(emptyCue?.sample, "out_pist", "an empty VR pull must play its authored click");
 
-    // Reserve rounds are what a reload consumes. Two standard clips so the
-    // reload has to drain the first and dip into the second.
+
+    // Reserve rounds are what a reload consumes. Two standard clips, which
+    // pool into one carried stack (they share the `StdClip` combine label),
+    // so the reserve holds more than a single clip's worth.
     const first = await game.player.spawnItem(STD_CLIP);
-    const second = await game.player.spawnItem(STD_CLIP);
-    const perClip = stackOf(await game.entities.detail(first.entity_id));
-    assert.ok(perClip > 0, "a spawned standard clip carries rounds");
+    await game.player.spawnItem(STD_CLIP);
+    const reserveBefore = await remainingRounds(game, first.entity_id);
+    assert.ok(reserveBefore > 0, "a spawned standard clip carries rounds");
 
     const before = await game.audio.recent();
     const lastSequence = before.sounds.at(-1)?.sequence ?? 0;
@@ -142,10 +149,7 @@ test(
     );
 
     // Reserve accounting: exactly `capacity` rounds left the backpack.
-    const drained =
-      2 * perClip -
-      ((await remainingRounds(game, first.entity_id)) +
-        (await remainingRounds(game, second.entity_id)));
+    const drained = reserveBefore - (await remainingRounds(game, first.entity_id));
     assert.equal(drained, capacity, "reserve stacks drain by exactly the rounds loaded");
 
     // A reload at capacity is a no-op, so the remainder is never minted away.
@@ -164,7 +168,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort + 1,
+      port: e2ePort(1),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });

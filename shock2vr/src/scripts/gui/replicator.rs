@@ -1,14 +1,14 @@
 use cgmath::{Vector2, Vector3, vec2, vec3};
 use dark::properties::{ObjectState, PropReplicatorContents, PropReplicatorHackedContents};
 use engine::audio::AudioHandle;
-use num_traits::ToPrimitive;
 
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
-    gui::{ButtonHoverBehavior, Gui, GuiComponent, GuiConfig, GuiCursor},
+    gui::{Gui, GuiComponent, GuiConfig, GuiCursor, PanelSidecar},
     mission::GlobalEntityMetadata,
     quest_info::QuestInfo,
+    ui::Rect,
     util::{get_position_from_transform, get_rotation_from_transform},
 };
 
@@ -17,8 +17,9 @@ use crate::gui;
 use crate::scripts::{Effect, script_util::*};
 
 use super::{
+    hrm_plug::{self, PlugKind, draw_plug, plug_sidecar},
     keypad::{
-        HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
+        HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_panel, hack_diff,
         handle_hack_msg, object_state,
     },
     traits::TRAIT_REPLICATOR_EXPERT,
@@ -35,7 +36,8 @@ enum ReplicatorPanel {
 
 #[derive(Clone, Debug, Default)]
 pub struct ReplicatorState {
-    message: Option<String>,
+    /// The last box clicked, framed with REPSEL like retail's selection.
+    selected: Option<usize>,
     panel: ReplicatorPanel,
     hack: HackState,
 }
@@ -83,22 +85,78 @@ fn active_inventory(world: &World, entity_id: EntityId) -> Option<ReplicatorInve
     }
 }
 
-fn can_hack(world: &World, entity_id: EntityId) -> bool {
-    !matches!(
-        object_state(world, entity_id),
-        ObjectState::Broken | ObjectState::Destroyed | ObjectState::Hacked
-    ) && hack_diff(world, entity_id).is_some()
+/// REPLIC.PCX's four item boxes, 142x62. Retail shows only the first four
+/// catalog slots.
+const BOXES: [Rect; 4] = [
+    Rect::new(10.0, 8.0, 142.0, 62.0),
+    Rect::new(10.0, 74.0, 142.0, 62.0),
+    Rect::new(10.0, 141.0, 142.0, 62.0),
+    Rect::new(10.0, 206.0, 142.0, 62.0),
+];
+/// Retail wraps an item's name from 37px into its box.
+const NAME_X: f32 = 37.0;
+/// REPSEL.PCX's authored size; one pixel taller than a box.
+const SELECT_SIZE: (f32, f32) = (142.0, 65.0);
+
+/// Retail's one refusal line for any purchase that fails.
+fn refusal(world: &World, entity_id: EntityId) -> Effect {
+    Effect::combine(vec![
+        Effect::ShowMessage {
+            text: super::PanelText::string(
+                world,
+                "misc",
+                "RepFail",
+                "Insufficient nanites to replicate.",
+            ),
+        },
+        Effect::PlaySound {
+            handle: AudioHandle::new(),
+            source: Some(entity_id),
+            name: "repfail".to_owned(),
+            spatial: false,
+        },
+    ])
+}
+
+/// Whether the replicator has a hacked catalog and the HRM data to reach it.
+fn hackable(world: &World, entity_id: EntityId) -> bool {
+    hack_diff(world, entity_id).is_some()
         && world
             .borrow::<View<PropReplicatorHackedContents>>()
             .ok()
             .is_some_and(|contents| contents.get(entity_id).is_ok())
 }
 
+/// Xerxes' replicator-hacked line.
+const REPLICATOR_HACKED_SCHEMA: &str = "xer07";
+
+fn can_hack(world: &World, entity_id: EntityId) -> bool {
+    !matches!(
+        object_state(world, entity_id),
+        ObjectState::Broken | ObjectState::Destroyed | ObjectState::Hacked
+    ) && hackable(world, entity_id)
+}
+
+/// Whether the catalog shows a plug: HACK while hackable, the inert repair
+/// plug once broken.
+fn shows_plug(world: &World, entity_id: EntityId) -> bool {
+    can_hack(world, entity_id) || object_state(world, entity_id) == ObjectState::Broken
+}
+
+/// Whether the canvas keeps room for a plug. Unlike `can_hack` this survives
+/// a hack's win or critical failure, so the VR quad never resizes while open.
+fn has_plug_room(world: &World, entity_id: EntityId) -> bool {
+    hackable(world, entity_id) || object_state(world, entity_id) == ObjectState::Broken
+}
+
 fn replicator_hack_success(entity_id: EntityId, _world: &World) -> Effect {
-    Effect::SetObjectState {
-        entity_id,
-        state: ObjectState::Hacked,
-    }
+    Effect::combine(vec![
+        Effect::SetObjectState {
+            entity_id,
+            state: ObjectState::Hacked,
+        },
+        announce(entity_id, REPLICATOR_HACKED_SCHEMA),
+    ])
 }
 
 fn replicator_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
@@ -132,49 +190,39 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
     ) -> Vec<GuiComponent<ReplicatorMsg>> {
         if state.panel == ReplicatorPanel::Hacking {
             if let Some(diff) = hack_diff(world, entity_id) {
-                return draw_hack_board(&state.hack, diff, ReplicatorMsg::Hack);
+                return draw_hack_panel(
+                    world,
+                    entity_id,
+                    &state.hack,
+                    diff,
+                    false,
+                    ReplicatorMsg::Hack,
+                );
             }
         }
 
-        let button_height = 60.0;
-        let initial_padding_y = 10.0;
-        let button_width = 188.0;
-        let button_padding = 4.0;
-        let replicator_contents = active_inventory(world, entity_id);
         let current_state = object_state(world, entity_id);
-        let has_sidecar = can_hack(world, entity_id) || current_state == ObjectState::Broken;
-        let main_x = if has_sidecar { 73.0 } else { 0.0 };
 
-        let replicator_icon = |icon: &str, position: f32| GuiComponent::Image {
-            position: vec2(
-                main_x + 10.0,
-                5.0 + initial_padding_y + (button_height + button_padding) * position,
-            ),
-            size: vec2(30.0, button_height - 10.0),
-            texture: icon.to_owned(),
-            alpha: 0.5,
-            // Replicator catalogs use the same PropObjIcon art as inventory,
-            // including palette-index-0 transparency. Unlike an inventory
-            // grid, this compact list has fixed 30x50 icon boxes, so uniformly
-            // fit oversized art rather than letting a tall icon overlap rows.
-            kind: crate::ui::ImageKind::ObjectIconFit,
+        // A broken replicator draws only BREPLIC.PCX's static.
+        let backdrop = if current_state == ObjectState::Broken {
+            "breplic.pcx"
+        } else {
+            "replic.pcx"
         };
-
         let mut components: Vec<GuiComponent<ReplicatorMsg>> = vec![
-            gui::image("replic.pcx")
-                .with_position(vec2(main_x, 0.0))
+            gui::image(backdrop)
+                .with_position(vec2(0.0, 0.0))
                 .with_size(vec2(188.0, 296.0)),
         ];
-        if let Some(replicator_contents) = replicator_contents {
+        if let Some(contents) = active_inventory(world, entity_id) {
             let entity_metadata = world.borrow::<UniqueView<GlobalEntityMetadata>>().unwrap();
-            for (i, (obj_name, authored_cost)) in replicator_contents
+            for (i, ((obj_name, authored_cost), rect)) in contents
                 .object_names
                 .iter()
-                .zip(replicator_contents.costs)
+                .zip(contents.costs)
+                .zip(BOXES)
                 .enumerate()
             {
-                let float_i = i.to_f32().unwrap();
-
                 if obj_name.is_empty() || authored_cost <= 0 {
                     continue;
                 }
@@ -182,90 +230,76 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                 if cost <= 0 {
                     continue;
                 }
-
                 let metadata = entity_metadata.0.get(obj_name).unwrap();
                 let obj_icon = metadata.obj_icon.as_ref().unwrap();
 
+                // Zero-alpha hit target over the box art, like the weapon
+                // settings rows.
                 components.push(
                     gui::button(ReplicatorMsg::SelectItem(i))
-                        .with_position(vec2(
-                            main_x,
-                            initial_padding_y + (button_height + button_padding) * float_i,
-                        ))
-                        .with_size(vec2(button_width, button_height))
-                        .with_image("key0.pcx")
+                        .with_rect(rect)
+                        .with_image("repsel.pcx")
+                        .with_alpha(0.0)
                         .with_label(&format!("buy:{obj_name}")),
                 );
-
-                components.push(replicator_icon(obj_icon, float_i));
-
-                if let Some(short_name) = metadata.obj_short_name.as_ref() {
-                    components.push(gui::text(short_name).with_position(vec2(
-                        main_x + 50.0,
-                        button_height / 2.0 + (button_height + button_padding) * float_i,
-                    )));
+                // Retail draws the icon at the box's corner; fit oversized art
+                // into the icon column, above the cost.
+                components.push(GuiComponent::Image {
+                    position: vec2(rect.x, rect.y),
+                    size: vec2(NAME_X, 47.0),
+                    texture: obj_icon.to_owned(),
+                    alpha: 1.0,
+                    kind: crate::ui::ImageKind::ObjectIconFit,
+                });
+                let short_name = metadata
+                    .obj_short_name
+                    .as_deref()
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or(obj_name);
+                components.extend(super::PanelText::paragraph(
+                    world,
+                    short_name,
+                    Rect::new(rect.x + NAME_X, rect.y + 4.0, rect.w - NAME_X, rect.h - 4.0),
+                ));
+                components.push(super::PanelText::text(
+                    &format!("{cost:03}"),
+                    Rect::new(
+                        rect.x + 9.0,
+                        rect.y + rect.h - 11.0,
+                        NAME_X - 9.0,
+                        super::PanelText::line_height(world),
+                    ),
+                ));
+                if state.selected == Some(i) {
+                    // Palette index 0 is REPSEL's transparent interior.
+                    components.push(
+                        gui::image("repsel.pcx")
+                            .with_object_icon()
+                            .with_rect(Rect::new(rect.x, rect.y, SELECT_SIZE.0, SELECT_SIZE.1)),
+                    );
                 }
-
-                // Retail draws the three-digit price beneath the item icon.
-                components.push(
-                    gui::text(&format!("{cost:03}"))
-                        .with_position(vec2(
-                            main_x + 19.0,
-                            47.0 + (button_height + button_padding) * float_i,
-                        ))
-                        .with_size(vec2(34.0, 12.0)),
-                );
             }
         }
 
         if can_hack(world, entity_id) {
-            // Retail raises this 73x194 companion beside the MFD, with its
-            // 52x74 PLUGH button at sidecar-local (16,114).
-            components.push(
-                gui::image("plughack.pcx")
-                    .with_position(vec2(0.0, 96.0))
-                    .with_size(vec2(73.0, 194.0)),
-            );
-            components.push(
-                gui::button(ReplicatorMsg::OpenHack)
-                    .with_position(vec2(16.0, 210.0))
-                    .with_size(vec2(52.0, 74.0))
-                    .with_image("plugh0.pcx")
-                    .with_hover(ButtonHoverBehavior::Texture("plugh1.pcx".to_owned()))
-                    .with_label("hack-replicator"),
-            );
+            components.extend(draw_plug(
+                PlugKind::Hack,
+                Some((ReplicatorMsg::OpenHack, "hack-replicator")),
+            ));
         } else if current_state == ObjectState::Broken {
             // Original raises the repair plug for a broken replicator. Repair
             // is not implemented yet, so expose the authored status art but
             // deliberately no clickable repair/hack/purchase path.
-            components.push(
-                gui::image("plugrep.pcx")
-                    .with_position(vec2(0.0, 96.0))
-                    .with_size(vec2(73.0, 194.0)),
-            );
+            components.extend(draw_plug(PlugKind::Repair, None));
+            return components;
         }
 
         // REPLIC.PCX supplies "YOUR NANITES:"; retail places a four-digit
         // live balance at (104, 274) beside it.
-        components.push(
-            gui::text(&format!("{:04}", player_nanite_total(world)))
-                .with_position(vec2(main_x + 104.0, 274.0))
-                .with_size(vec2(40.0, 14.0)),
-        );
-        let message = if current_state == ObjectState::Broken {
-            Some("Replicator broken; repair required")
-        } else if active_inventory(world, entity_id).is_none() {
-            Some("Replicator offline")
-        } else {
-            state.message.as_deref()
-        };
-        if let Some(message) = message {
-            components.push(
-                gui::text(message)
-                    .with_position(vec2(main_x + 10.0, 248.0))
-                    .with_size(vec2(168.0, 14.0)),
-            );
-        }
+        components.push(super::PanelText::text(
+            &format!("{:04}", player_nanite_total(world)),
+            Rect::new(104.0, 274.0, 48.0, super::PanelText::line_height(world)),
+        ));
 
         components
     }
@@ -281,15 +315,29 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         &self,
         entity_id: EntityId,
         world: &World,
-        state: &ReplicatorState,
+        _state: &ReplicatorState,
     ) -> GuiConfig {
-        let has_sidecar = state.panel == ReplicatorPanel::Inventory
-            && (can_hack(world, entity_id)
-                || object_state(world, entity_id) == ObjectState::Broken);
+        let width = if has_plug_room(world, entity_id) {
+            hrm_plug::CANVAS_W
+        } else {
+            188.0
+        };
         GuiConfig {
             world_offset: Vector3::new(0.0, 0.0, -1.0),
-            screen_size_in_pixels: Vector2::new(if has_sidecar { 261.0 } else { 188.0 }, 296.0),
+            screen_size_in_pixels: Vector2::new(width, 296.0),
         }
+    }
+
+    /// The plug shows beside the catalog, not the board.
+    fn sidecar(
+        &self,
+        entity_id: EntityId,
+        world: &World,
+        state: &ReplicatorState,
+    ) -> Option<PanelSidecar> {
+        has_plug_room(world, entity_id).then(|| {
+            plug_sidecar(state.panel == ReplicatorPanel::Inventory && shows_plug(world, entity_id))
+        })
     }
 
     fn prepare_state_on_frob(&self, state: &mut ReplicatorState) {
@@ -307,92 +355,41 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
     ) -> (ReplicatorState, Effect) {
         match msg {
             ReplicatorMsg::SelectItem(slot) => {
-                let Some(contents) = active_inventory(world, entity_id) else {
-                    return (
-                        ReplicatorState {
-                            message: Some("Replicator offline".to_owned()),
-                            ..state.clone()
-                        },
-                        Effect::NoEffect,
-                    );
+                // Retail frames the clicked box whether or not it vends.
+                let state = ReplicatorState {
+                    selected: Some(*slot),
+                    ..state.clone()
                 };
-                let Some((item, authored_cost)) = contents
-                    .object_names
-                    .get(*slot)
-                    .zip(contents.costs.get(*slot))
-                    .filter(|(item, cost)| !item.is_empty() && **cost > 0)
+                // Retail treats an empty slot, a post-discount cost of zero
+                // and an unaffordable one alike (`ShockReplicate`: cost != 0).
+                let Some((item, cost)) =
+                    replicator_quote(world, entity_id, *slot).filter(|(_, cost)| *cost > 0)
                 else {
-                    return (
-                        ReplicatorState {
-                            message: Some("Item unavailable".to_owned()),
-                            ..state.clone()
-                        },
-                        Effect::NoEffect,
-                    );
+                    return (state, refusal(world, entity_id));
                 };
-                let cost = effective_replicator_cost(world, *authored_cost);
-                // Retail treats a post-discount cost of zero as a failed
-                // selection, not a free vend (`ShockReplicate`: cost != 0).
-                if cost <= 0 {
-                    return (
-                        ReplicatorState {
-                            message: Some("Item unavailable".to_owned()),
-                            ..state.clone()
-                        },
-                        Effect::PlaySound {
-                            handle: AudioHandle::new(),
-                            source: Some(entity_id),
-                            name: "repfail".to_owned(),
-                            spatial: false,
-                        },
-                    );
-                }
                 if spend_player_nanites(world, cost).is_none() {
-                    return (
-                        ReplicatorState {
-                            message: Some("Insufficient nanites".to_owned()),
-                            ..state.clone()
-                        },
-                        Effect::PlaySound {
-                            handle: AudioHandle::new(),
-                            source: Some(entity_id),
-                            name: "repfail".to_owned(),
-                            spatial: false,
-                        },
-                    );
+                    return (state, refusal(world, entity_id));
                 }
                 let Some(link) =
                     get_first_link_of_type(world, entity_id, dark::properties::Link::Replicator)
                 else {
-                    return (
-                        ReplicatorState {
-                            message: Some("Replicator offline".to_owned()),
-                            ..state.clone()
-                        },
-                        Effect::NoEffect,
-                    );
+                    return (state, Effect::NoEffect);
                 };
-
                 let purchase = Effect::ReplicatorPurchase {
+                    replicator: entity_id,
+                    slot: *slot,
                     cost,
-                    template_name: item.clone(),
+                    template_name: item,
                     position: get_position_from_transform(world, link, vec3(0.0, 0.0, 0.0)),
                     orientation: get_rotation_from_transform(world, link),
                 };
-
-                (
-                    ReplicatorState {
-                        message: None,
-                        ..state.clone()
-                    },
-                    purchase,
-                )
+                (state, purchase)
             }
             ReplicatorMsg::OpenHack => {
                 if can_hack(world, entity_id) {
                     (
                         ReplicatorState {
-                            message: None,
+                            selected: None,
                             panel: ReplicatorPanel::Hacking,
                             hack: HackState::default(),
                         },
@@ -420,6 +417,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                     &state.hack,
                     hack_msg,
                     diff,
+                    false,
                     HackOutcomeEffects {
                         success: replicator_hack_success,
                         critical_failure: replicator_hack_critical_failure,
@@ -437,19 +435,36 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
     }
 }
 
-/// Retail's Replicator Expert trait applies an integer 20% discount. Resolve
-/// this from the persistent character sheet for both rendering and purchase
-/// handling so the quoted and charged prices cannot diverge.
-fn effective_replicator_cost(world: &World, authored_cost: i32) -> i32 {
-    let has_expert = world
-        .borrow::<UniqueView<QuestInfo>>()
-        .map(|quests| quests.player_stats().has_os_trait(TRAIT_REPLICATOR_EXPERT))
-        .unwrap_or(false);
-    if has_expert {
-        ((i64::from(authored_cost) * 8) / 10) as i32
-    } else {
-        authored_cost
+/// Requote the selected normal/hacked inventory at effect-application time.
+pub(crate) fn replicator_quote(
+    world: &World,
+    entity: EntityId,
+    slot: usize,
+) -> Option<(String, i32)> {
+    let contents = active_inventory(world, entity)?;
+    let name = contents.object_names.get(slot)?;
+    let base = *contents.costs.get(slot)?;
+    if name.is_empty() || base <= 0 {
+        return None;
     }
+    Some((name.clone(), effective_replicator_cost(world, base)))
+}
+
+/// Shared by display, click feedback and authoritative purchase validation.
+fn effective_replicator_cost(world: &World, authored_cost: i32) -> i32 {
+    let quests = world.borrow::<UniqueView<QuestInfo>>().ok();
+    let expert = quests
+        .as_ref()
+        .is_some_and(|q| q.player_stats().has_os_trait(TRAIT_REPLICATOR_EXPERT));
+    let difficulty = quests.as_ref().map(|q| q.difficulty()).unwrap_or_default();
+    let params = world
+        .borrow::<UniqueView<crate::difficulty::GlobalDifficultyParams>>()
+        .ok();
+    params
+        .as_deref()
+        .cloned()
+        .unwrap_or_default()
+        .replicator_cost(authored_cost, expert, difficulty)
 }
 
 #[cfg(test)]
@@ -578,6 +593,72 @@ mod tests {
         assert!(can_hack(&world, replicator));
     }
 
+    /// The HACK plug sits right of the MFD, as retail raises it, and winning
+    /// the hack hides it without resizing the canvas.
+    #[test]
+    fn the_hack_plug_sits_right_and_its_room_outlives_the_win() {
+        let mut world = World::new();
+        let names = || {
+            [
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ]
+        };
+        let replicator = world.add_entity((
+            PropHackDiff {
+                success_chance: 50,
+                critical_chance: 0,
+                cost: 3.0,
+            },
+            PropReplicatorContents {
+                costs: [0; 6],
+                object_names: names(),
+            },
+            PropReplicatorHackedContents {
+                costs: [0; 6],
+                object_names: names(),
+            },
+        ));
+        world.add_unique(GlobalEntityMetadata(HashMap::new()));
+        let state = ReplicatorState::default();
+        let width = |world: &World| {
+            ReplicatorGui
+                .get_config_for(replicator, world, &state)
+                .screen_size_in_pixels
+                .x
+        };
+        let plug_x = ReplicatorGui
+            .get_components(&None, replicator, &world, &state)
+            .into_iter()
+            .find_map(|c| match c {
+                GuiComponent::Button {
+                    label: Some(label),
+                    position,
+                    ..
+                } if label == "hack-replicator" => Some(position.x),
+                _ => None,
+            });
+        assert!(
+            plug_x.is_some_and(|x| x > 188.0),
+            "plug right of the body: {plug_x:?}"
+        );
+        assert_eq!(width(&world), hrm_plug::CANVAS_W);
+
+        world.add_component(replicator, PropObjState(ObjectState::Hacked));
+        assert_eq!(width(&world), hrm_plug::CANVAS_W);
+        assert_eq!(
+            ReplicatorGui
+                .sidecar(replicator, &world, &state)
+                .map(|s| s.rect),
+            Some(None),
+            "no plug to click once hacked"
+        );
+    }
+
     #[test]
     fn critical_hack_loss_persistently_breaks_and_disables_the_replicator() {
         let mut world = World::new();
@@ -654,6 +735,13 @@ mod tests {
             "broken state should expose the authored repair status sidecar"
         );
         assert!(
+            matches!(
+                reopened.first(),
+                Some(GuiComponent::Image { texture, .. }) if texture == "breplic.pcx"
+            ),
+            "broken state draws retail's static backdrop"
+        );
+        assert!(
             reopened
                 .iter()
                 .all(|component| !matches!(component, GuiComponent::Button { .. })),
@@ -716,12 +804,23 @@ mod tests {
             !creates_template(&zero_cost_effect),
             "a zero-cost replicator slot must not mint a free item: {zero_cost_effect:?}"
         );
+        // Both refusals put retail's RepFail line on the HUD.
+        for effect in [&effect, &zero_cost_effect] {
+            let Effect::Combined { effects } = effect else {
+                panic!("expected message + sound: {effect:?}");
+            };
+            assert!(
+                effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::ShowMessage { text } if text.contains("nanites")))
+            );
+        }
         let mut refused_state = ReplicatorState {
-            message: Some("Insufficient nanites".to_owned()),
+            selected: Some(0),
             ..ReplicatorState::default()
         };
         gui.prepare_state_on_frob(&mut refused_state);
-        assert_eq!(refused_state.message, None);
+        assert_eq!(refused_state.selected, None);
     }
 
     #[test]
@@ -866,6 +965,16 @@ mod tests {
             effective_replicator_cost(&world, i32::MAX),
             1_717_986_917,
             "the retail integer discount must not saturate before division"
+        );
+    }
+
+    #[test]
+    fn a_hacked_replicator_announces_itself() {
+        let mut world = World::new();
+        let replicator = world.add_entity(());
+        assert_eq!(
+            announced(&replicator_hack_success(replicator, &world)),
+            ["xer07"]
         );
     }
 }

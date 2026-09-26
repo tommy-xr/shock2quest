@@ -104,6 +104,10 @@ pub enum RuntimeCommand {
         request: shock2vr::game_scene::DebugPlayerStatsRequest,
         reply: oneshot::Sender<Result<shock2vr::player_stats::PlayerStats, String>>,
     },
+    ApplyStatModifier {
+        request: shock2vr::game_scene::StatModifierRequest,
+        reply: oneshot::Sender<Result<shock2vr::player_stats::PlayerStats, String>>,
+    },
 
     /// Get current player position
     GetPlayerPosition(oneshot::Sender<Vector3<f32>>),
@@ -111,6 +115,7 @@ pub enum RuntimeCommand {
     /// Get the free (debug) camera's state: detached, and the pose it is
     /// rendering from when it is.
     GetCameraState(oneshot::Sender<CameraStateSnapshot>),
+    GetAudioLoops(oneshot::Sender<serde_json::Value>),
 
     /// Place the free (debug) camera, or re-attach it to the player. Replies
     /// with the resulting state, so a caller can read back what it set in the
@@ -124,7 +129,12 @@ pub enum RuntimeCommand {
     PathfindingTest(String, oneshot::Sender<CommandResult>),
 
     /// Trigger a discrete input action (as if a bound key was pressed)
-    TriggerAction(InputAction, oneshot::Sender<CommandResult>),
+    /// Fire a discrete action. `hold` is the button's level: `None` presses
+    /// and releases it in one frame (the ordinary single-shot injection),
+    /// `Some(true)` presses and keeps it down, `Some(false)` releases it -
+    /// which is how a hold-to-activate button (the Menu button's long press)
+    /// is driven without a controller.
+    TriggerAction(InputAction, Option<bool>, oneshot::Sender<CommandResult>),
 
     /// Get the current pathfinding test status
     GetPathfindingTestStatus(oneshot::Sender<PathfindingTestStatusResult>),
@@ -135,6 +145,13 @@ pub enum RuntimeCommand {
 
     /// Get the latest path each AI computed (goal, waypoints, outcome)
     GetAiPaths(oneshot::Sender<Vec<shock2vr::game_scene::DebugAiPathEntry>>),
+
+    /// One-off walk-graph reachability query between two world positions
+    GetPathfindingRoute {
+        from: [f32; 3],
+        to: [f32; 3],
+        reply: oneshot::Sender<Option<shock2vr::game_scene::DebugPathRoute>>,
+    },
 
     /// List entities near the player
     ListEntities {
@@ -197,6 +214,14 @@ pub enum RuntimeCommand {
     /// List impulse + multibody joints with anchor separation + applied impulse
     ListPhysicsJoints {
         reply: oneshot::Sender<PhysicsJointsResult>,
+    },
+
+    /// Ask what a hand at a world point could grab (ladder face / ledge).
+    ClimbGrip {
+        point: [f32; 3],
+        radius: Option<f32>,
+        feet_y: Option<f32>,
+        reply: oneshot::Sender<ClimbGripResult>,
     },
 
     /// Apply a world-space impulse to a dynamic physics body (waking it) -
@@ -297,7 +322,7 @@ pub struct SceneListResult {
 }
 
 /// One scene object as submitted to the renderer
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SceneObjectSummary {
     pub entity_id: Option<u64>,
     pub name: Option<String>,
@@ -306,6 +331,8 @@ pub struct SceneObjectSummary {
     /// geometry (world, HUD, debug overlays).
     pub source: Option<String>,
     pub position: [f32; 3],
+    /// Magnitudes of the rendered world-transform axes (mesh-local transform excluded).
+    pub scale: [f32; 3],
     /// Transparency in effect for this draw (0.0 = opaque, 1.0 = invisible).
     pub transparency: Option<f32>,
     pub depth_write: bool,
@@ -319,6 +346,21 @@ pub struct SceneObjectSummary {
     pub clear_depth: bool,
     /// Front-face winding used for culling, or absent when double-sided.
     pub backface_culling: Option<String>,
+    /// Lights resolved for this object alone, when object lighting is on.
+    /// Absent for anything lit by the scene's own lights (world geometry, HUD).
+    pub lighting: Option<ObjectLightingSummary>,
+}
+
+/// What the object-lighting pass decided for one object.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ObjectLightingSummary {
+    /// How many lights were kept for it, out of the renderer's slots.
+    pub light_count: usize,
+    /// Total light arriving at its position, ignoring surface orientation -
+    /// the number to compare between objects to see who is lit and who is not.
+    pub received: f32,
+    /// The unlit floor this object is shaded over.
+    pub ambient: [f32; 3],
 }
 
 /// List of physics rigid bodies
@@ -367,6 +409,26 @@ pub struct RagdollMetricsEntry {
     pub min_y: f32,
     pub max_nonadjacent_overlap: f32,
     pub max_drift: f32,
+}
+
+/// What a hand at the queried point can hold onto - `grip` is null when
+/// nothing there is grabbable.
+#[derive(Debug, Serialize)]
+pub struct ClimbGripResult {
+    pub grip: Option<ClimbGripEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClimbGripEntry {
+    /// `"ladder"` (an authored climbable face) or `"ledge"` (a walkable top
+    /// above the player's feet).
+    pub kind: String,
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    /// World-space point on the gripped surface.
+    pub point: [f32; 3],
+    /// World-space surface normal, pointing out toward the hand.
+    pub normal: [f32; 3],
 }
 
 /// Joint diagnostics (ragdoll constraint health), impulse + multibody.
@@ -435,6 +497,9 @@ pub struct PhysicsBodyDetailResult {
     pub is_enabled: bool,
     pub is_sleeping: bool,
     pub contact_count: usize,
+    /// `body_id` of every body this one is touching. Level geometry has no
+    /// body behind it, so it raises `contact_count` without appearing here.
+    pub contacts: Vec<u32>,
 }
 
 /// Input channel modifications
@@ -459,6 +524,9 @@ pub struct InputState {
     /// Ordinary held jump request. The physics controller launches only on
     /// its rising edge and only while grounded.
     pub jump: bool,
+    /// Flat-only held lean request, -1 left to +1 right.
+    #[serde(default)]
+    pub lean: f32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -491,6 +559,7 @@ impl Default for InputState {
             pointer: None,
             crouch: false,
             jump: false,
+            lean: 0.0,
         }
     }
 }
@@ -597,12 +666,22 @@ pub struct UiStateResult {
     /// The top-docked inventory strip (Tab metagame mode); `Some` exactly in
     /// "use" mode.
     pub strip: Option<shock2vr::game_scene::DebugUiPanel>,
+    /// The inventory bar's mini-frame name line: the display name of whatever
+    /// the player is pointing at (a strip/panel item, the lifted item, or the
+    /// world object under the aim). `None` when the bar is down or nothing
+    /// named is under the point.
+    pub name_strip: Option<String>,
     /// The item held on the cursor mid-drag (cursor-is-the-item); `Some`
     /// between a lift and the place/throw that clears it.
     pub cursor: Option<shock2vr::game_scene::DebugUiCursor>,
-    /// The AMMOFULL ammo-cycle button (use mode + multi-ammo weapon); `Some`
-    /// when shown. Click it to cycle the wielded weapon's ammo type.
-    pub ammo_cycle: Option<shock2vr::game_scene::DebugUiElement>,
+    /// Every AMMOFULL readout control shown this frame (fire-mode SETTING,
+    /// RELOAD, the ammo-cycle arrow, the psi selector arrows), labeled by
+    /// meaning. Empty outside use mode.
+    pub readout: Vec<shock2vr::game_scene::DebugUiElement>,
+    /// Everything the expanded use-mode readouts drew along the bottom of the
+    /// shared interface canvas, in both presentations. Empty outside use mode.
+    pub readout_elements: Vec<shock2vr::game_scene::DebugUiElement>,
+    pub utilities: Vec<shock2vr::game_scene::DebugUiElement>,
     /// Where the pointer last landed on the shared canvas (flat: the mouse;
     /// VR: the controller ray on the cyber-interface panel).
     pub pointer: Option<shock2vr::game_scene::DebugUiPointer>,
@@ -613,6 +692,15 @@ pub struct UiStateResult {
     /// The character-creation debrief page currently on screen, verbatim;
     /// `None` when the debrief screen is not up.
     pub debrief_text: Option<String>,
+    pub scanner_pose: Option<shock2vr::game_scene::DebugScannerPose>,
+    /// The HUD status-message lines showing right now, oldest first.
+    pub messages: Vec<String>,
+    /// The centered interstitial banner showing right now, `\n`-separated
+    /// lines as authored, or `None` when none is up.
+    pub banner: Option<String>,
+    /// The station security alarm; `Some` exactly while one is up, which is
+    /// when the HUD shows its badge and countdown.
+    pub security_alarm: Option<shock2vr::game_scene::DebugSecurityAlarm>,
 }
 
 /// A single carried item.
@@ -692,6 +780,13 @@ pub struct EntityDetailResult {
     pub incoming_links: Vec<LinkInfo>,
     pub contained_by: Option<i32>,
     pub aim_points: Vec<AimPointInfo>,
+    /// World-space `[min, max]` of what the HUD highlight frames for this
+    /// entity: the union of its hitboxes where it has them, otherwise its own
+    /// collider.
+    pub selection_bounds: Option<[[f32; 3]; 2]>,
+    /// World-space centre of a gun's magazine zone (VR clip insert); None
+    /// when the entity takes no magazine.
+    pub magazine_anchor: Option<[f32; 3]>,
 }
 
 #[derive(Debug, Serialize)]
@@ -802,6 +897,7 @@ pub struct TimeInfo {
 /// Player information
 #[derive(Debug, Serialize, Clone)]
 pub struct PlayerInfo {
+    pub difficulty: Option<dark::gamesys::Difficulty>,
     pub entity_id: Option<i32>,
     pub inventory_entity_id: Option<i32>,
     pub position: [f32; 3],
@@ -823,6 +919,17 @@ pub struct PlayerInfo {
     /// The wielded weapon's selected ammo type (e.g. "std" / "he" / "ap"), or
     /// `null` when unarmed / melee. See `shock2vr::PlayerStateSnapshot`.
     pub wielded_ammo_type: Option<String>,
+    /// The wielded gun's fire setting (0 or 1) and its short header ("NORM" /
+    /// "BURST"), or `null` when nothing gun-like is wielded. Cycle with the
+    /// `CycleGunSetting` input action. See `shock2vr::PlayerStateSnapshot`.
+    pub wielded_gun_setting: Option<i32>,
+    pub wielded_gun_setting_header: Option<String>,
+    /// Milliseconds left of the wielded gun's between-shots wait (0 = ready to
+    /// fire, `null` = nothing wielded). Pulls during the wait are ignored.
+    pub wielded_gun_cooldown_ms: Option<i32>,
+    /// The wielded gun's condition, 0..100 (100 = pristine), or `null` when
+    /// nothing with a gun state is wielded. Falls with every shot fired.
+    pub wielded_gun_condition: Option<f32>,
     /// The player's current / maximum hit points, or `null` when the player
     /// has no health pool. See `shock2vr::PlayerStateSnapshot`.
     pub hit_points: Option<i32>,
@@ -833,6 +940,7 @@ pub struct PlayerInfo {
     pub max_psi_points: Option<i32>,
     /// Accumulated retail radiation level (0 when clear).
     pub radiation_level: f32,
+    pub toxin_level: f32,
     /// The gamesys name of the selected psi power (what the psi amp casts),
     /// e.g. "Cryokinesis". Cycle with the `CyclePsiPower` input action.
     pub selected_psi_power: Option<String>,
@@ -844,11 +952,14 @@ pub struct PlayerInfo {
     /// The gamesys names of the active sustained psi powers (e.g. "Inviso"),
     /// in activation order; empty when none. See `shock2vr::PlayerStateSnapshot`.
     pub active_psi_powers: Vec<String>,
+    pub radar_contacts: Vec<shock2vr::psi_sense::PsiSenseContact>,
+    pub seekersense_contacts: Vec<shock2vr::psi_sense::PsiSenseContact>,
     /// The player's persistent character sheet (primary stats, trained skills,
     /// mastered psi disciplines), accumulated from career + station training
     /// tours. `null` when the scene has no player. See
     /// `shock2vr::player_stats::PlayerStats`.
     pub stats: Option<shock2vr::player_stats::PlayerStats>,
+    pub effective_stats: Option<shock2vr::player_stats::PlayerStats>,
     /// The audio logs the player has collected (frobbed), in pickup order.
     /// Persisted in `QuestInfo`; survives level transitions and save/load. See
     /// `shock2vr::quest_info::CollectedLog`.
@@ -856,6 +967,11 @@ pub struct PlayerInfo {
     /// The automap locations explored in the current mission (ascending).
     /// Persisted per mission in `QuestInfo`; survives save/load.
     pub explored_map_locations: Vec<i32>,
+    /// Climb state: whether the player is on a ladder/hand hold at all, and
+    /// (VR) which hands hold what. See `shock2vr::vr_climb`.
+    pub climb: shock2vr::game_scene::DebugClimbState,
+    pub hand_feedback: serde_json::Value,
+    pub hand_grips: serde_json::Value,
 }
 
 /// Input state snapshot

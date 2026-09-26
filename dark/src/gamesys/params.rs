@@ -6,7 +6,7 @@
 //! `PSICOST` (5 tiers x 8 ints, first int of each tier row = the tier unlock
 //! cost, the remaining 7 = per-power costs within that tier). All values are
 //! little-endian `i32`, Normal difficulty (the per-difficulty multipliers live
-//! in `DIFFPARAM`, whose exact layout is unverified - Normal-only for now).
+//! in `DIFFPARAM`, parsed by `DifficultyParams`).
 //!
 //! Decoded from the shipped `shock2.gam` (projects/flat-ui-panels.md §3.2) and
 //! identical to the community-documented tables, so both sources corroborate.
@@ -15,7 +15,7 @@ use std::io;
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use crate::ss2_chunk_file_reader::ChunkFileTableOfContents;
+use crate::{ss2_chunk_file_reader::ChunkFileTableOfContents, ss2_common::DEGREES_PER_ANGLE_UNIT};
 
 /// The trainer upgrade cost tables (Normal difficulty), as authored in the
 /// gamesys. Each row is one stat/skill/tier; each column is the cost of buying
@@ -55,7 +55,9 @@ pub struct HrmParams {
 /// progress by `1 + research_factor * (skill - 1)^2`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillParams {
-    pub weapon_break_angle: i16,
+    /// Shot deviation per level of weapon skill missing, in degrees. The
+    /// shipped gamesys authors 0, so retail shots never deviate.
+    pub inaccuracy_degrees: f32,
     pub weapon_break_factor: f32,
     pub research_factor: f32,
     pub damage_modifier: f32,
@@ -156,7 +158,8 @@ impl SkillParams {
 
     fn read_record<T: io::Read>(reader: &mut T) -> Option<Self> {
         Some(Self {
-            weapon_break_angle: reader.read_i16::<LittleEndian>().ok()?,
+            inaccuracy_degrees: reader.read_u16::<LittleEndian>().ok()? as f32
+                * DEGREES_PER_ANGLE_UNIT,
             weapon_break_factor: reader.read_f32::<LittleEndian>().ok()?,
             research_factor: reader.read_f32::<LittleEndian>().ok()?,
             damage_modifier: reader.read_f32::<LittleEndian>().ok()?,
@@ -173,17 +176,85 @@ mod tests {
 
     #[test]
     fn parses_packed_retail_skill_params_layout() {
-        let mut bytes = 0_i16.to_le_bytes().to_vec();
+        // The shipped gamesys record: inaccuracy 0, then the four floats.
+        let mut bytes = 0_u16.to_le_bytes().to_vec();
         for value in [0.0_f32, 1.0, 0.15, 1.25] {
             bytes.extend(value.to_le_bytes());
         }
         assert_eq!(bytes.len(), 18);
 
         let parsed = SkillParams::read_record(&mut Cursor::new(bytes)).unwrap();
-        assert_eq!(parsed.weapon_break_angle, 0);
+        assert_eq!(parsed.inaccuracy_degrees, 0.0);
         assert_eq!(parsed.weapon_break_factor, 0.0);
         assert_eq!(parsed.research_factor, 1.0);
         assert!((parsed.damage_modifier - 0.15).abs() < f32::EPSILON);
         assert_eq!(parsed.organ_damage, 1.25);
+    }
+
+    /// The leading field is a 16-bit turn, not a raw count of degrees.
+    #[test]
+    fn inaccuracy_converts_from_sixteen_bit_turns() {
+        let mut bytes = 2048_u16.to_le_bytes().to_vec();
+        bytes.extend([0u8; 16]);
+
+        let parsed = SkillParams::read_record(&mut Cursor::new(bytes)).unwrap();
+
+        assert_eq!(parsed.inaccuracy_degrees, 11.25);
+    }
+}
+
+/// Endurance damage multipliers from STATPARAM (six header fields, eight floats).
+#[derive(Debug, Clone)]
+pub struct HazardParams(pub [f32; 8]);
+impl HazardParams {
+    pub fn read<T: io::Read + io::Seek>(
+        toc: &ChunkFileTableOfContents,
+        reader: &mut T,
+    ) -> Option<Self> {
+        let chunk = toc.get_chunk("STATPARAM".to_owned())?;
+        if chunk.length < 56 {
+            return None;
+        }
+        reader.seek(io::SeekFrom::Start(chunk.offset + 24)).ok()?;
+        let mut values = [0.0; 8];
+        for value in &mut values {
+            *value = reader.read_f32::<LittleEndian>().ok()?;
+            if !value.is_finite() || *value < 0.0 {
+                return None;
+            }
+        }
+        Some(Self(values))
+    }
+}
+
+#[cfg(test)]
+mod hazard_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn hazard_table_follows_six_stat_fields_and_respects_chunk_bounds() {
+        // Minimal chunk file. sStatParams is four ints, two floats, eight
+        // hazard floats; the extra 24 bytes here are NOT a chunk header.
+        let mut bytes = vec![0_u8; 512];
+        bytes[..4].copy_from_slice(&400_u32.to_le_bytes());
+        bytes[400..404].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[404..413].copy_from_slice(b"STATPARAM");
+        bytes[416..420].copy_from_slice(&280_u32.to_le_bytes());
+        bytes[420..424].copy_from_slice(&56_u32.to_le_bytes());
+        for (i, value) in [30_i32, 5, 20, 5, 0, 0].into_iter().enumerate() {
+            bytes[304 + 4 * i..308 + 4 * i].copy_from_slice(&value.to_le_bytes());
+        }
+        let expected = [1.0_f32, 0.94, 0.85, 0.73, 0.58, 0.4, 0.2, 0.01];
+        for (i, value) in expected.iter().enumerate() {
+            bytes[328 + 4 * i..332 + 4 * i].copy_from_slice(&value.to_le_bytes());
+        }
+        let mut reader = Cursor::new(bytes.clone());
+        let toc = crate::ss2_chunk_file_reader::read_table_of_contents(&mut reader);
+        assert_eq!(HazardParams::read(&toc, &mut reader).unwrap().0, expected);
+        bytes[420..424].copy_from_slice(&52_u32.to_le_bytes());
+        let mut reader = Cursor::new(bytes);
+        let toc = crate::ss2_chunk_file_reader::read_table_of_contents(&mut reader);
+        assert!(HazardParams::read(&toc, &mut reader).is_none());
     }
 }

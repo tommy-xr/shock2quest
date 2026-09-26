@@ -59,8 +59,14 @@ test(
     // hit-spangs eventually despawn, so we only assert it does not grow below).
     const hitsAtEmpty = bulletHits((await game.entities.list({ limit: 120 })).entities);
 
+    const soundSequence = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
+
     // Dry-fire: pulling on an empty clip must NOT spawn a projectile.
     for (let i = 0; i < 3; i++) await fireOnce(game);
+    const clicks = (await game.audio.recent()).sounds.filter(sound =>
+      sound.sequence > soundSequence && sound.sample === "out_pist" &&
+      sound.tags.some(([tag, value]) => tag === "event" && value === "outofammo"));
+    assert.equal(clicks.length, 3, "each empty pull must resolve the authored OutofAmmo sound");
     assert.equal(ammoOf(await game.entities.detail(pistolId)), 0, "ammo stays at 0");
     assert.ok(
       bulletHits((await game.entities.list({ limit: 120 })).entities) <= hitsAtEmpty,

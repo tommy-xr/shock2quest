@@ -34,13 +34,24 @@ use serde::{Deserialize, Serialize};
 use crate::career::Career;
 
 /// The five primary character statistics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Stat {
     Strength,
     Endurance,
     Agility,
     PsionicAbility,
     CyberAffinity,
+}
+
+/// A temporary contribution, keyed by source and stat. Reapplying that pair
+/// refreshes it; independent sources add together. Remaining time travels with saves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimedStatModifier {
+    pub source: String,
+    pub stat: Stat,
+    pub delta: i32,
+    pub remaining: std::time::Duration,
 }
 
 /// The nine trainable skills (weapon proficiencies + tech skills).
@@ -156,6 +167,8 @@ impl SoftwareVersions {
 /// re-fires). Serialized as part of `QuestInfo`; see the module docs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerStats {
+    #[serde(default)]
+    pub modifiers: Vec<TimedStatModifier>,
     pub strength: i32,
     pub endurance: i32,
     pub agility: i32,
@@ -182,6 +195,11 @@ pub struct PlayerStats {
     /// purchases are deferred (see `scripts::gui::trainer`).
     #[serde(default)]
     pub psi_tier: i32,
+    /// Individually purchased disciplines, by stable gamesys template id.
+    /// Kept on the persistent sheet so saves and mission transitions rebuild
+    /// the same learned set without charging for a power again.
+    #[serde(default)]
+    pub purchased_psi_powers: BTreeSet<i32>,
     /// O/S upgrade traits acquired at trait machines, by the original game's
     /// trait id (1..=16, the shipped `TRAITS.STR` `Trait1..16` order), in
     /// acquisition order. At most [`OS_TRAIT_SLOTS`]: the whole game has
@@ -208,12 +226,20 @@ pub struct PlayerStats {
 /// The player has four O/S trait slots (one per single-use machine in the game).
 pub const OS_TRAIT_SLOTS: usize = 4;
 
+/// Stats cap at 6 (start 1); skills cap at 6 (start 0); psi tiers cap at 5.
+pub const STAT_CAP: i32 = 6;
+/// Retail ShockPlayer::GetStat clamps modified stats to 1..=8.
+pub const EFFECTIVE_STAT_CAP: i32 = 8;
+pub const SKILL_CAP: i32 = 6;
+pub const PSI_TIER_CAP: i32 = 5;
+
 impl Default for PlayerStats {
     fn default() -> PlayerStats {
         // Baseline: every primary stat starts at the retail floor of 1, skills
         // untrained. Career-specific baselines are deferred (module docs), so
         // all careers currently share this baseline and diverge via their tours.
         PlayerStats {
+            modifiers: Vec::new(),
             strength: 1,
             endurance: 1,
             agility: 1,
@@ -224,6 +250,7 @@ impl Default for PlayerStats {
             granted_years: BTreeSet::new(),
             cyber_modules: 0,
             psi_tier: 0,
+            purchased_psi_powers: BTreeSet::new(),
             os_traits: Vec::new(),
             software: SoftwareVersions::default(),
             nanites: 0,
@@ -232,6 +259,36 @@ impl Default for PlayerStats {
 }
 
 impl PlayerStats {
+    /// Gameplay level, independent of the trained level used by purchases.
+    /// Matches retail GetStat: modified levels clamp to 1..=8.
+    pub fn effective(&self, stat: Stat) -> i32 {
+        let bonus: i64 = self
+            .modifiers
+            .iter()
+            .filter(|m| m.stat == stat && !m.remaining.is_zero())
+            .map(|m| i64::from(m.delta))
+            .sum();
+        (i64::from(self.stat_level(stat)) + bonus).clamp(1, i64::from(EFFECTIVE_STAT_CAP)) as i32
+    }
+
+    pub fn apply_modifier(&mut self, modifier: TimedStatModifier) {
+        self.modifiers
+            .retain(|m| m.source != modifier.source || m.stat != modifier.stat);
+        if !modifier.remaining.is_zero() && modifier.delta != 0 {
+            self.modifiers.push(modifier);
+        }
+    }
+
+    /// Returns true when at least one modifier expires.
+    pub fn tick_modifiers(&mut self, dt: std::time::Duration) -> bool {
+        let count = self.modifiers.len();
+        self.modifiers.retain_mut(|m| {
+            m.remaining = m.remaining.saturating_sub(dt);
+            !m.remaining.is_zero()
+        });
+        count != self.modifiers.len()
+    }
+
     pub fn new() -> PlayerStats {
         PlayerStats::default()
     }
@@ -306,6 +363,15 @@ impl PlayerStats {
             Skill::Maintenance => self.skills.maintenance,
             Skill::Research => self.skills.research,
         }
+    }
+
+    /// Per-shot deviation from the aim direction for a weapon fired at
+    /// `skill_level`, in degrees: the gamesys inaccuracy angle
+    /// (`SkillParams::inaccuracy_degrees`) scaled by how far the skill falls
+    /// short of [`SKILL_CAP`]. A maxed skill adds no weapon aim error; authored
+    /// pellet spread and recoil are separate. Stock gamesys inaccuracy is zero.
+    pub fn shot_deviation_degrees(inaccuracy_degrees: f32, skill_level: i32) -> f32 {
+        inaccuracy_degrees * (SKILL_CAP - skill_level).max(0) as f32
     }
 
     /// Raise a primary stat by one level (a trainer purchase).
@@ -558,6 +624,20 @@ mod tests {
     }
 
     #[test]
+    fn shot_deviation_falls_to_zero_at_max_skill() {
+        // 11.25 degrees is one gamesys angle step (0x0800) - the shipped
+        // gamesys authors 0, so this uses a non-zero angle to pin the scaling.
+        assert_eq!(PlayerStats::shot_deviation_degrees(11.25, 1), 56.25);
+        assert_eq!(PlayerStats::shot_deviation_degrees(11.25, 5), 11.25);
+        assert_eq!(PlayerStats::shot_deviation_degrees(11.25, SKILL_CAP), 0.0);
+        assert_eq!(
+            PlayerStats::shot_deviation_degrees(11.25, 9),
+            0.0,
+            "over max"
+        );
+    }
+
+    #[test]
     fn table_is_fully_populated_with_unique_text_keys() {
         let mut keys = BTreeSet::new();
         for career in Career::ALL {
@@ -782,5 +862,76 @@ mod tests {
                 "Psychogenic Agility".to_string()
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod timed_modifier_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn modifier(source: &str, stat: Stat, delta: i32, seconds: u64) -> TimedStatModifier {
+        TimedStatModifier {
+            source: source.into(),
+            stat,
+            delta,
+            remaining: Duration::from_secs(seconds),
+        }
+    }
+
+    #[test]
+    fn temporary_stats_refresh_stack_expire_and_preserve_training() {
+        let mut stats = PlayerStats {
+            strength: 6,
+            ..Default::default()
+        };
+        assert_eq!(stats.effective(Stat::Strength), 6);
+        stats.apply_modifier(modifier("psi:might", Stat::Strength, 2, 10));
+        assert_eq!(stats.stat_level(Stat::Strength), 6);
+        assert_eq!(stats.effective(Stat::Strength), 8);
+        stats.tick_modifiers(Duration::from_secs(9));
+        stats.apply_modifier(modifier("psi:might", Stat::Strength, 2, 10));
+        assert_eq!(
+            stats.effective(Stat::Strength),
+            8,
+            "same source refreshes, never accumulates"
+        );
+        stats.strength = 4;
+        stats.apply_modifier(modifier("implant", Stat::Strength, 1, 2));
+        stats.apply_modifier(modifier("psi:cyber", Stat::CyberAffinity, 2, 20));
+        assert_eq!(stats.effective(Stat::Strength), 7);
+        assert_eq!(stats.effective(Stat::CyberAffinity), 3);
+        assert!(stats.tick_modifiers(Duration::from_secs(2)));
+        assert_eq!(stats.effective(Stat::Strength), 6);
+        assert!(!stats.tick_modifiers(Duration::from_secs(7)));
+        assert!(stats.tick_modifiers(Duration::from_secs(1)));
+        assert_eq!(stats.effective(Stat::Strength), 4);
+        assert_eq!(stats.effective(Stat::CyberAffinity), 3);
+        stats.raise_stat(Stat::CyberAffinity);
+        assert_eq!(stats.stat_level(Stat::CyberAffinity), 2);
+        assert_eq!(stats.effective(Stat::CyberAffinity), 4);
+        stats.tick_modifiers(Duration::from_secs(10));
+        assert_eq!(stats.effective(Stat::CyberAffinity), 2);
+    }
+
+    #[test]
+    fn modifier_save_round_trip_preserves_remaining_time_and_removal() {
+        let mut stats = PlayerStats::default();
+        stats.apply_modifier(modifier("test", Stat::Strength, 2, 10));
+        stats.tick_modifiers(Duration::from_millis(1250));
+        let mut restored: PlayerStats =
+            serde_json::from_str(&serde_json::to_string(&stats).unwrap()).unwrap();
+        assert_eq!(restored, stats);
+        assert!(!restored.tick_modifiers(Duration::from_millis(8749)));
+        assert!(restored.tick_modifiers(Duration::from_millis(1)));
+        assert_eq!(restored.effective(Stat::Strength), 1);
+        restored.apply_modifier(modifier("penalty", Stat::Strength, -99, 5));
+        assert_eq!(restored.effective(Stat::Strength), 1);
+        restored.apply_modifier(modifier("penalty", Stat::Strength, -99, 0));
+        assert!(restored.modifiers.is_empty());
+        restored.apply_modifier(modifier("extreme", Stat::PsionicAbility, i32::MAX, 5));
+        assert_eq!(restored.effective(Stat::PsionicAbility), 8);
+        restored.apply_modifier(modifier("extreme", Stat::PsionicAbility, i32::MIN, 5));
+        assert_eq!(restored.effective(Stat::PsionicAbility), 1);
     }
 }

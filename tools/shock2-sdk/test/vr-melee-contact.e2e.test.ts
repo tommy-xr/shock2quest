@@ -42,6 +42,8 @@ const HAND_Y = 0.45;
 // body origin, clears the pane before the next contact edge.
 const HAND_REST: Vec3 = [0.7, HAND_Y, 0.3];
 const HAND_SWEEP_END: Vec3 = [0.05, HAND_Y, 3.4];
+// 3.2 units in one second: a 3.2 u/s swing, clear of the free-swing gate
+// (`melee_free_swing`, 2.0 world units/s).
 const HAND_SWEEP_FRAMES = 60;
 
 async function sweepHeldWrench(game: GameServer): Promise<void> {
@@ -67,7 +69,7 @@ async function paneStillExists(game: GameServer, runtimeId: number): Promise<boo
 }
 
 test(
-  "VR authored melee damages only during a trigger-gated physical contact window",
+  "a VR swing deals the Wrench's authored damage, and a dropped one does not",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -119,18 +121,17 @@ test(
     await game.input.set("right_hand.position", HAND_REST);
     await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
     await game.input.set("right_hand.squeeze", 1);
-    await game.input.set("right_hand.trigger", 0);
     await game.step({ frames: 30 });
 
-    // Negative first: physically sweep through the pane without pulling the
-    // trigger. Before the fix the authored Wrench had no collision damage at
-    // all; an always-hot workaround would incorrectly destroy it here.
+    // Swing the wrench through the pane. The blow is billed on the swing's
+    // own closing speed - there is no button to arm it - so what this proves
+    // is that the authored WeaponBash reaches a shipped one-HP pane at all.
+    // (That it is NOT billed for merely being carried into one is the walking
+    // regression below.)
+    const beforeAttack =
+      (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
     await sweepHeldWrench(game);
-    assert.equal(
-      await paneStillExists(game, pane.id),
-      true,
-      "idle held-Wrench contact must remain harmless",
-    );
+
     const sweptWrench = (await game.physics.bodies({ entityId: wrench.id }))
       .bodies[0];
     assert.ok(sweptWrench, "the held Wrench should retain its physics body");
@@ -138,8 +139,7 @@ test(
     // pane is an entity, and deliberately does not block: a swing has to
     // travel *into* what it is hitting, and a pane you are meant to smash
     // would otherwise stop the swing dead. So the weapon reaches its tracked
-    // target here - being harmless without the trigger is what the assertion
-    // above already proves.
+    // target here.
     //
     // An earlier revision drove a fully dynamic body and asserted the
     // opposite (that the pane held the weapon back). That drive spun the
@@ -149,22 +149,12 @@ test(
       `the swept Wrench should reach its tracked target through a non-world pane: ${JSON.stringify(sweptWrench)}`,
     );
 
-    // Leave contact, open the attack window with the production VR trigger,
-    // then make a fresh controller-driven physics contact.
-    await game.input.set("right_hand.position", HAND_REST);
-    await game.step({ frames: 30 });
-    const beforeAttack =
-      (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
-    await game.input.set("right_hand.trigger", 1);
-    await game.step({ frames: 2 });
-    await sweepHeldWrench(game);
-
     const attackMessages = (await game.messages.recent()).messages.filter(
       (message) => message.sequence > beforeAttack && message.to.entity_id === pane.id,
     );
     assert.ok(
       attackMessages.some((message) => message.payload === "Damage"),
-      `trigger + physical contact should damage the pane: ${JSON.stringify(attackMessages)}`,
+      `a swung physical contact should damage the pane: ${JSON.stringify(attackMessages)}`,
     );
     assert.ok(
       attackMessages.some((message) => message.payload === "Slay"),
@@ -173,7 +163,7 @@ test(
     assert.equal(
       await paneStillExists(game, pane.id),
       false,
-      "the armed wrench contact should remove the pane",
+      "the swung wrench contact should remove the pane",
     );
 
     // A drop closes the window and restores the Wrench's ordinary dynamic
@@ -184,8 +174,6 @@ test(
       "Window 2",
       DROP_PANE_MISSION_ID,
     );
-    await game.input.set("right_hand.trigger", 0);
-    await game.step({ frames: 2 });
     await game.player.teleport({
       x: dropPane.position[0] + 2,
       y: dropPane.position[1] - 1.6,
@@ -211,6 +199,82 @@ test(
       await paneStillExists(game, dropPane.id),
       true,
       "drop contact must remain harmless",
+    );
+  },
+);
+
+// Regression for the free-swing measurement: a held weapon rides the player, so
+// its world velocity is the player's own locomotion (measured at 10 units/s,
+// five times the swing gate). Walking a still hand into a shipped one-HP pane
+// therefore destroyed it - a free authored WeaponBash for walking down a
+// corridor with a wrench out.
+test(
+  "walking a held wrench into a pane is not a swing",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "command2.mis",
+      debugFlags: ["--vr"],
+      echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
+    });
+
+    const wrench = await byMissionId(game, "Wrench", WRENCH_MISSION_ID);
+    const pane = await byMissionId(game, "Window 2", BREAKABLE_PANE_MISSION_ID);
+
+    await game.player.teleport({
+      x: wrench.position[0],
+      y: wrench.position[1] - 1.4,
+      z: wrench.position[2] + 1.2,
+    });
+    await game.input.lookAtWorldPoint(wrench.position);
+    await game.input.set("right_hand.position", [0, 1.4, 0]);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 2 });
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      wrench.id,
+      "the real authored Wrench should be grabbed",
+    );
+
+    // Stand back from the pane with the wrench held out ahead, and hold the
+    // hand perfectly still for the rest of the run: every unit the weapon
+    // covers from here is the player walking, not the player swinging.
+    await game.player.teleport({
+      x: pane.position[0],
+      y: pane.position[1] - 1.04,
+      z: pane.position[2] - 5.0,
+    });
+    await game.input.lookAtWorldPoint(pane.position);
+    await game.input.set("right_hand.position", [0.05, HAND_Y, 1.2]);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.step({ frames: 30 });
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      wrench.id,
+      "the Wrench should still be held at the walk-in staging pose",
+    );
+
+    // Walk into it, then keep walking after the pane is reached - the frame
+    // the player is stopped by the wall behind it is the awkward one.
+    await game.input.set("right_hand.thumbstick", [0.0, 1.0]);
+    await game.step({ frames: 90 });
+
+    // The wrench must have been carried THROUGH the pane, or "nothing was
+    // billed" would be satisfied by never touching it.
+    const carriedWrench = (await game.physics.bodies({ entityId: wrench.id }))
+      .bodies[0];
+    assert.ok(carriedWrench, "the held Wrench should retain its physics body");
+    assert.ok(
+      carriedWrench.position[2] > pane.position[2],
+      `the walk should carry the Wrench past the pane plane: ${JSON.stringify(carriedWrench)}`,
+    );
+    assert.equal(
+      await paneStillExists(game, pane.id),
+      true,
+      "walking a still hand into the pane must not bill a swing",
     );
   },
 );

@@ -45,9 +45,23 @@ impl Script for InternalSimpleHealth {
                         entity_id,
                         delta: -damage,
                     },
-                    // Route death through the script queue before teardown so
-                    // authored death triggers (TriggerDestroy) can react.
-                    _ => Effect::Send {
+                    // Record the final HP loss before death, just as creature AI
+                    // does. This also gives hit feedback and battle totals the
+                    // actual bounded loss on a lethal prop/turret hit.
+                    Some(_) => Effect::Multiple(vec![
+                        Effect::AdjustHitPoints {
+                            entity_id,
+                            delta: -damage,
+                        },
+                        Effect::Send {
+                            msg: Message {
+                                to: entity_id,
+                                payload: MessagePayload::Slay,
+                            },
+                        },
+                    ]),
+                    // Missing HP still uses the ordinary authored death path.
+                    None => Effect::Send {
                         msg: Message {
                             to: entity_id,
                             payload: MessagePayload::Slay,
@@ -101,13 +115,13 @@ mod tests {
     }
 
     fn assert_requests_slay(effect: Effect, entity_id: EntityId) {
-        match effect {
-            Effect::Send { msg } => {
-                assert_eq!(msg.to, entity_id);
-                assert!(matches!(msg.payload, MessagePayload::Slay));
-            }
-            other => panic!("expected queued Slay message, got {other:?}"),
-        }
+        let effects = Effect::flatten(vec![effect]);
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Send { msg }
+            if msg.to == entity_id && matches!(msg.payload, MessagePayload::Slay)))
+        );
     }
 
     #[test]

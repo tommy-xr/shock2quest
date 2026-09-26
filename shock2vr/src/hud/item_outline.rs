@@ -1,18 +1,18 @@
-use std::collections::HashMap;
-
 use cgmath::{Matrix4, Vector2, point2, vec2, vec3};
 use collision::{Aabb2, Aabb3};
 use dark::{
-    importers::{FONT_IMPORTER, STRINGS_IMPORTER, TEXTURE_IMPORTER},
+    importers::{
+        FONT_IMPORTER, STRINGS_IMPORTER, TEXTURE_IMPORTER, resolve_localized_property_string,
+        resolve_symbolic_name,
+    },
     properties::{
-        ObjectNameType, PropGunState, PropHUDSelect, PropHitPoints, PropLog, PropMaxHitPoints,
-        PropObjName, PropObjectNameType, PropShowHP, PropStackCount, PropTemplateId,
+        ObjectNameType, ObjectState, PropHUDSelect, PropHitPoints, PropLog, PropMaxHitPoints,
+        PropObjName, PropObjShortName, PropObjectNameType, PropShowHP, PropStackCount, PropSymName,
+        PropTemplateId,
     },
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
 use shipyard::{EntityId, Get, View, World};
-
-use crate::physics::PhysicsWorld;
 
 /// Whether the highlight overlay (corner brackets + rollover name) may be
 /// drawn for `entity_id`.
@@ -43,27 +43,11 @@ const BRACKET_SIZE: f32 = 8.0;
 /// Line height of the rollover label, in screen pixels.
 const LABEL_HEIGHT: f32 = 10.0;
 
-fn resolve_localized_property_string(raw: &str, strings: &HashMap<String, String>) -> String {
-    let (key, fallback) = match raw.split_once(':') {
-        Some((key, remainder)) => {
-            let remainder = remainder.trim();
-            let fallback = match remainder.strip_prefix('"') {
-                Some(quoted) => quoted.split_once('"').map_or("", |(value, _)| value),
-                None => remainder,
-            };
-            (key.trim(), fallback)
-        }
-        None => (raw.trim(), ""),
-    };
+/// Screen inset for the hover label: the bracket it sits beside plus the line
+/// of text drawn above it.
+const LABEL_MARGIN: f32 = BRACKET_SIZE + LABEL_HEIGHT;
 
-    strings
-        .get(&key.to_ascii_lowercase())
-        .map(String::as_str)
-        .unwrap_or(fallback)
-        .to_owned()
-}
-
-fn format_stack_aware_item_name(item_name: &str, stack_count: Option<i32>) -> String {
+pub(crate) fn format_stack_aware_item_name(item_name: &str, stack_count: Option<i32>) -> String {
     match stack_count {
         Some(count) => item_name.replace("%d", &count.to_string()),
         None => item_name.to_owned(),
@@ -133,11 +117,10 @@ fn localized_log_title(
         .map(|name| format_inline_localized_text(name))
 }
 
+/// The WEAPON.STR key for a gun's condition word: `GunCondVal1..10`, one per
+/// tenth of the condition ("Terrible: 1" .. "Perfect: 10").
 fn weapon_condition_key(condition: f32) -> String {
-    // Looking Glass's GunGetConditionString truncates the 0..100 condition,
-    // divides it into ten buckets, and fetches GunCondVal1..10.
-    let bucket = ((condition as i32) / 10).clamp(0, 9) + 1;
-    format!("guncondval{bucket}")
+    format!("guncondval{}", super::gun_condition_bucket(condition))
 }
 
 fn localized_weapon_condition(
@@ -145,50 +128,126 @@ fn localized_weapon_condition(
     world: &World,
     entity_id: EntityId,
 ) -> Option<String> {
-    let condition = {
-        let gun_states = world.borrow::<View<PropGunState>>().ok()?;
-        gun_states.get(entity_id).ok()?.condition
-    };
+    let condition = crate::scripts::script_util::gun_condition(world, entity_id)?;
     asset_cache
         .get_opt(&STRINGS_IMPORTER, "weapon.str")?
         .get(&weapon_condition_key(condition))
         .cloned()
 }
 
-pub fn draw_item_name(
+/// The parenthetical an object's working order adds to its display name -
+/// "(broken)", "(destroyed)" - from MISC.STR's `ObjState<n>` keys, numbered by
+/// the state itself. `None` for a working object, and for the states the
+/// original leaves off the *name*: an unresearched object has its whole name
+/// replaced by the research interface's own wording rather than suffixed, and
+/// locked/hacked ones say nothing here.
+///
+/// The table's own values lead with a space; the strings importer trims its
+/// values, so the caller supplies the separator.
+pub(crate) fn object_state_suffix(
     asset_cache: &mut AssetCache,
-    physics: &PhysicsWorld,
-    entity_id: EntityId,
     world: &World,
-    //aabb: collision::Aabb3<f32>,
-    view: Matrix4<f32>,
-    projection: Matrix4<f32>,
-    screen_size: Vector2<f32>,
-    debug_show_ids: bool,
-) -> Vec<SceneObject> {
-    let maybe_bbox = physics.get_aabb2(entity_id);
+    entity_id: EntityId,
+) -> Option<String> {
+    let (key, fallback) =
+        object_state_suffix_strings(crate::scripts::gui::object_state(world, entity_id))?;
+    let strings = asset_cache.get_opt(&STRINGS_IMPORTER, "misc.str");
+    Some(crate::ui::resolve_menu_label(
+        strings.as_deref(),
+        key,
+        fallback,
+    ))
+}
 
-    if maybe_bbox.is_none() {
-        return vec![];
+/// The MISC.STR key naming `state`'s parenthetical - numbered by the state -
+/// and the English text that key ships with, for an install that lacks it.
+fn object_state_suffix_strings(state: ObjectState) -> Option<(&'static str, &'static str)> {
+    match state {
+        ObjectState::Broken => Some(("objstate1", "(broken)")),
+        ObjectState::Destroyed => Some(("objstate2", "(destroyed)")),
+        _ => None,
     }
+}
 
-    let v_prop_obj_name = world.borrow::<View<PropObjName>>().unwrap();
-    let maybe_prop_obj_name = v_prop_obj_name.get(entity_id);
+/// An object with no `P$ObjName` of its own (e.g. the Wrench, which inherits
+/// only a symbolic name) falls back to looking its `P$SymName` up in
+/// `objname.str` directly - no embedded fallback text, since there is no
+/// property to carry one.
+fn resolve_symname_fallback(
+    world: &World,
+    entity_id: EntityId,
+    object_name_strings: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let sym_name = world.borrow::<View<PropSymName>>().ok()?;
+    resolve_symbolic_name(&sym_name.get(entity_id).ok()?.0, object_name_strings)
+}
 
-    if maybe_prop_obj_name.is_err() {
-        return vec![];
+/// The player-facing display name of `entity_id`: its `P$ObjName` resolved
+/// through `objname.str`, falling back to its `P$SymName` when it has no
+/// `P$ObjName` of its own, and then through whatever substitution its
+/// `P$ObjectNameType` asks for (a stack count, a log's title, a gun's
+/// condition word), plus whatever its working order adds on the end. `None`
+/// when the object has no name to show.
+///
+/// The single name resolution the interface has: the rollover label beside the
+/// HUD brackets and the inventory bar's mini-frame name line both read it, so
+/// one object cannot be called two different things in two places.
+pub fn resolve_item_name(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+) -> Option<String> {
+    resolve_named_item(asset_cache, world, entity_id, false)
+}
+
+/// Query/research name plate: authored short name and substitutions, without
+/// the long rollover's appended working-order suffix (shkprop.cpp).
+pub(crate) fn resolve_item_short_name(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+) -> Option<String> {
+    resolve_named_item(asset_cache, world, entity_id, true)
+}
+
+fn resolve_named_item(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+    short: bool,
+) -> Option<String> {
+    // Own property present (even empty) vs. absent entirely - only the
+    // latter falls back to SymName, matching the original: an empty
+    // P$ObjName resolves to "" (caught by the emptiness check below) rather
+    // than borrowing a name from elsewhere.
+    let mut obj_name = world
+        .borrow::<View<PropObjName>>()
+        .ok()
+        .and_then(|v_prop_obj_name| v_prop_obj_name.get(entity_id).ok().map(|p| p.0.clone()));
+
+    let short_name = short
+        .then(|| {
+            world
+                .borrow::<View<PropObjShortName>>()
+                .ok()
+                .and_then(|v| v.get(entity_id).ok().map(|p| p.0.clone()))
+        })
+        .flatten();
+    let table = if short_name.is_some() {
+        "objshort.str"
+    } else {
+        "objname.str"
+    };
+    if short_name.is_some() {
+        obj_name = short_name;
     }
-
-    let prop_obj_name = maybe_prop_obj_name.unwrap();
-
-    if prop_obj_name.0.is_empty() {
-        return vec![];
-    }
-
-    let object_name_strings = asset_cache.get(&STRINGS_IMPORTER, "objname.str");
-    let localized_name = resolve_localized_property_string(&prop_obj_name.0, &object_name_strings);
+    let object_name_strings = asset_cache.get(&STRINGS_IMPORTER, table);
+    let localized_name = match &obj_name {
+        Some(obj_name) => resolve_localized_property_string(obj_name, &object_name_strings),
+        None => resolve_symname_fallback(world, entity_id, &object_name_strings)?,
+    };
     if localized_name.is_empty() {
-        return vec![];
+        return None;
     }
 
     let name_type = world
@@ -209,17 +268,53 @@ pub fn draw_item_name(
     let weapon_condition = (name_type == ObjectNameType::Weapon)
         .then(|| localized_weapon_condition(asset_cache, world, entity_id))
         .flatten();
-    let item_name = format_typed_item_name(
+    let named = format_typed_item_name(
         &localized_name,
         name_type,
         stack_count,
         log_title.as_deref(),
         weapon_condition.as_deref(),
     );
+    if short {
+        return Some(named);
+    }
+    Some(append_object_state(
+        named,
+        object_state_suffix(asset_cache, world, entity_id).as_deref(),
+    ))
+}
 
-    let aabb = maybe_bbox.unwrap();
+/// Put an object's working order on the end of its name, separated by the space
+/// the shipped table authors and the strings importer trims off.
+fn append_object_state(name: String, suffix: Option<&str>) -> String {
+    match suffix {
+        Some(suffix) => format!("{name} {suffix}"),
+        None => name,
+    }
+}
+
+pub fn draw_item_name(
+    asset_cache: &mut AssetCache,
+    bounds: Aabb3<f32>,
+    entity_id: EntityId,
+    world: &World,
+    view: Matrix4<f32>,
+    projection: Matrix4<f32>,
+    screen_size: Vector2<f32>,
+    debug_show_ids: bool,
+) -> Vec<SceneObject> {
+    let Some(item_name) = resolve_item_name(asset_cache, world, entity_id) else {
+        return vec![];
+    };
+
+    let aabb = bounds;
     let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
-    let extents = project_aabb3(&aabb, view, projection, screen_size);
+    // Clamped like the brackets, plus the line of text the label sits on.
+    let extents = clamp_extents_to_screen(
+        project_aabb3(&aabb, view, projection, screen_size),
+        screen_size,
+        LABEL_MARGIN,
+    );
 
     let v_prop_hitpoints = world.borrow::<View<PropHitPoints>>().unwrap();
     let hit_points = v_prop_hitpoints.get(entity_id).map(|hp| hp.hit_points).ok();
@@ -263,7 +358,60 @@ pub fn draw_item_name(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+
+    const SCREEN: Vector2<f32> = Vector2::new(800.0, 600.0);
+
+    fn extents(min: (f32, f32), max: (f32, f32)) -> Aabb2<f32> {
+        Aabb2 {
+            min: point2(min.0, min.1),
+            max: point2(max.0, max.1),
+        }
+    }
+
+    /// Negative-first: a corpse frobbed from arm's length projects past every
+    /// edge, and unclamped its brackets and name are drawn off-screen - the
+    /// object looks un-highlighted while the player is looting it.
+    #[test]
+    fn an_oversized_extent_is_pulled_back_onto_the_screen() {
+        let clamped =
+            clamp_extents_to_screen(extents((-400.0, -300.0), (1200.0, 900.0)), SCREEN, 8.0);
+
+        assert_eq!(clamped.min, point2(8.0, 8.0));
+        assert_eq!(clamped.max, point2(792.0, 592.0));
+    }
+
+    /// An extent already on screen is untouched: the clamp must not nudge the
+    /// brackets off the object they frame.
+    #[test]
+    fn an_onscreen_extent_is_left_alone() {
+        let original = extents((100.0, 120.0), (300.0, 260.0));
+
+        assert_eq!(
+            clamp_extents_to_screen(original, SCREEN, 8.0).min,
+            original.min
+        );
+        assert_eq!(
+            clamp_extents_to_screen(original, SCREEN, 8.0).max,
+            original.max
+        );
+    }
+
+    /// Something entirely off screen (behind the camera, or past its edge) is
+    /// left alone too - clamping it would pin a marker to the edge for an
+    /// object the player cannot see.
+    #[test]
+    fn a_fully_offscreen_extent_is_not_pinned_to_the_edge() {
+        let offscreen = extents((-500.0, -400.0), (-100.0, -50.0));
+
+        assert_eq!(
+            clamp_extents_to_screen(offscreen, SCREEN, 8.0).min,
+            offscreen.min
+        );
+    }
+
     use crate::flat_player_controller::is_frobbable;
     use dark::properties::{FrobFlag, ObjectNameType, PropFrobInfo};
 
@@ -316,40 +464,6 @@ mod tests {
 
         assert!(!is_frobbable(&world, id));
         assert!(!is_hud_selectable(&world, id));
-    }
-
-    #[test]
-    fn object_name_resource_reference_uses_localized_value() {
-        let strings = HashMap::from([(
-            "elevator_button".to_string(),
-            "Localized elevator button".to_string(),
-        )]);
-
-        assert_eq!(
-            resolve_localized_property_string(
-                r#"Elevator_Button: "A two-state button.""#,
-                &strings,
-            ),
-            "Localized elevator button",
-        );
-    }
-
-    #[test]
-    fn object_name_resource_reference_uses_embedded_fallback() {
-        assert_eq!(
-            resolve_localized_property_string(r#"HumanCorpses: "A corpse.""#, &HashMap::new(),),
-            "A corpse.",
-        );
-    }
-
-    #[test]
-    fn object_name_resource_key_without_fallback_uses_localized_value() {
-        let strings = HashMap::from([("basketball".to_string(), "A basketball.".to_string())]);
-
-        assert_eq!(
-            resolve_localized_property_string("Basketball", &strings),
-            "A basketball.",
-        );
     }
 
     #[test]
@@ -431,6 +545,45 @@ mod tests {
         assert_eq!(weapon_condition_key(10.0), "guncondval2");
         assert_eq!(weapon_condition_key(50.0), "guncondval6");
         assert_eq!(weapon_condition_key(100.0), "guncondval10");
+    }
+
+    /// A gun's name says its condition; its working order is a separate word
+    /// on the end, so "worn out" and "will not fire" read differently.
+    #[test]
+    fn only_a_broken_or_destroyed_object_names_its_state() {
+        assert_eq!(
+            object_state_suffix_strings(ObjectState::Broken),
+            Some(("objstate1", "(broken)"))
+        );
+        assert_eq!(
+            object_state_suffix_strings(ObjectState::Destroyed),
+            Some(("objstate2", "(destroyed)"))
+        );
+        // A working object says nothing extra, and neither do the states the
+        // original leaves off the name.
+        for quiet in [
+            ObjectState::Normal,
+            ObjectState::Unresearched,
+            ObjectState::Locked,
+            ObjectState::Hacked,
+        ] {
+            assert_eq!(object_state_suffix_strings(quiet), None, "{quiet:?}");
+        }
+    }
+
+    /// The state joins the name with a space of its own: the shipped strings
+    /// lead with one, but the strings importer trims every value, so a plain
+    /// concatenation would read "A Pistol. (Perfect: 10)(broken)".
+    #[test]
+    fn the_state_is_separated_from_the_name() {
+        assert_eq!(
+            append_object_state("A Pistol. (Perfect: 10)".to_owned(), Some("(broken)")),
+            "A Pistol. (Perfect: 10) (broken)"
+        );
+        assert_eq!(
+            append_object_state("A Pistol.".to_owned(), None),
+            "A Pistol."
+        );
     }
 
     #[test]
@@ -522,6 +675,49 @@ mod tests {
             r#"Nanites: "%d nanites.""#,
         );
     }
+
+    /// The Wrench inherits only `P$SymName`, never `P$ObjName`; without the
+    /// fallback, `resolve_symname_fallback` (and so `resolve_item_name`) has
+    /// nothing to key `objname.str` with.
+    #[test]
+    fn symname_only_entity_resolves_via_the_objname_table() {
+        let strings = HashMap::from([("wrench".to_string(), "A very solid wrench.".to_string())]);
+        let mut world = World::new();
+        let id = world.add_entity(PropSymName("Wrench".to_owned()));
+
+        assert_eq!(
+            resolve_symname_fallback(&world, id, &strings),
+            Some("A very solid wrench.".to_string()),
+        );
+    }
+
+    /// Multi-word symbolic names are keyed with underscores in the shipped
+    /// table ("Laser Pistol" -> "laser_pistol"), the same convention
+    /// `resolve_gun_setting_string` already uses for its own symbolic-name
+    /// fallback.
+    #[test]
+    fn multi_word_symname_falls_back_to_its_underscored_key() {
+        let strings = HashMap::from([("laser_pistol".to_string(), "A laser pistol.".to_string())]);
+        let mut world = World::new();
+        let id = world.add_entity(PropSymName("Laser Pistol".to_owned()));
+
+        assert_eq!(
+            resolve_symname_fallback(&world, id, &strings),
+            Some("A laser pistol.".to_string()),
+        );
+    }
+
+    /// A symbolic name absent from the table (an internal/abstract
+    /// archetype, not a player-facing object) still yields no name - the
+    /// fallback must not invent text the original wouldn't show either.
+    #[test]
+    fn unknown_symname_has_no_fallback() {
+        let strings = HashMap::new();
+        let mut world = World::new();
+        let id = world.add_entity(PropSymName("Ammo".to_owned()));
+
+        assert_eq!(resolve_symname_fallback(&world, id, &strings), None);
+    }
 }
 
 /// The original biases the health ratio by a couple of points at both ends, so
@@ -599,7 +795,7 @@ fn health_bar_fill(world: &World, entity_id: EntityId) -> Option<f32> {
 /// The enemy health bar, drawn flush on top of the selection brackets.
 pub fn draw_health_bar(
     asset_cache: &mut AssetCache,
-    physics: &PhysicsWorld,
+    bounds: Aabb3<f32>,
     entity_id: EntityId,
     world: &World,
     view: Matrix4<f32>,
@@ -610,10 +806,13 @@ pub fn draw_health_bar(
         return vec![];
     };
 
-    let Some(aabb) = physics.get_aabb2(entity_id) else {
-        return vec![];
-    };
-    let extents = project_aabb3(&aabb, view, projection, screen_size);
+    // The same resolved bounds the brackets and the label frame, so the bar
+    // cannot sit over a different volume than the outline it caps.
+    let extents = clamp_extents_to_screen(
+        project_aabb3(&bounds, view, projection, screen_size),
+        screen_size,
+        LABEL_MARGIN,
+    );
 
     // Nearest sampling, unlike the rest of the HUD: the remastered bar art is
     // several times the 80x14 it draws at and carries a pure colour-key border,
@@ -640,32 +839,31 @@ pub fn draw_health_bar(
 
 pub fn draw_item_outline(
     asset_cache: &mut AssetCache,
-    physics: &PhysicsWorld,
-    entity_id: EntityId,
-    //aabb: collision::Aabb3<f32>,
+    bounds: Aabb3<f32>,
     view: Matrix4<f32>,
     projection: Matrix4<f32>,
     screen_size: Vector2<f32>,
 ) -> Vec<SceneObject> {
-    let maybe_bbox = physics.get_aabb2(entity_id);
-
-    if maybe_bbox.is_none() {
-        return vec![];
-    }
-
     let options = TextureOptions {
         wrap: false,
         ..Default::default()
     };
 
-    let aabb = maybe_bbox.unwrap();
+    let aabb = bounds;
     let top_left_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK0.PCX", &options);
     let top_right_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK1.PCX", &options);
     let bottom_right_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK2.PCX", &options);
     let bottom_left_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK3.PCX", &options);
 
     let size = vec2(BRACKET_SIZE, BRACKET_SIZE);
-    let extents = project_aabb3(&aabb, view, projection, screen_size);
+    // A body-sized volume seen from arm's length projects past every edge of
+    // the screen; without the clamp all four brackets land off-view and the
+    // object reads as un-highlighted while it is being frobbed.
+    let extents = clamp_extents_to_screen(
+        project_aabb3(&aabb, view, projection, screen_size),
+        screen_size,
+        size.x,
+    );
     let top_left_brack_obj =
         SceneObject::screen_space_quad(top_left_brack, vec2(extents.min.x, extents.min.y), size);
     let top_right_brack_obj =
@@ -683,6 +881,36 @@ pub fn draw_item_outline(
         bottom_right_brack_obj,
         top_right_brack_obj,
     ]
+}
+
+/// Keep a projected extent on screen, so an object bigger than the view still
+/// shows where it is instead of throwing its brackets and label off-view. Every
+/// edge is inset by `margin` (the bracket size), and a fully off-screen extent
+/// is left alone - clamping that would pin a marker to the edge for something
+/// behind the camera.
+pub fn clamp_extents_to_screen(
+    extents: Aabb2<f32>,
+    screen_size: Vector2<f32>,
+    margin: f32,
+) -> Aabb2<f32> {
+    let (max_x, max_y) = (screen_size.x - margin, screen_size.y - margin);
+    if extents.max.x < margin
+        || extents.max.y < margin
+        || extents.min.x > max_x
+        || extents.min.y > max_y
+    {
+        return extents;
+    }
+    Aabb2 {
+        min: point2(
+            extents.min.x.clamp(margin, max_x),
+            extents.min.y.clamp(margin, max_y),
+        ),
+        max: point2(
+            extents.max.x.clamp(margin, max_x),
+            extents.max.y.clamp(margin, max_y),
+        ),
+    }
 }
 
 pub fn project_aabb3(

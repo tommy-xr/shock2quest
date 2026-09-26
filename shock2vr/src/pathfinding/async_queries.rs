@@ -29,7 +29,7 @@ pub struct PathQueryRequest {
     pub start: Vector3<f32>,
     pub goal: Vector3<f32>,
     pub movement_bits: MovementBits,
-    /// Mission time (seconds) at submit, for expiring the entity's
+    /// Mission time (seconds) at submit, for expiring the entity's own
     /// steering-reported blocked crossings (see
     /// `PathfindingService::report_blocked_link`)
     pub now_seconds: f32,
@@ -44,6 +44,14 @@ pub struct PathQueryResponse {
     pub outcome: AiPathOutcome,
     /// Route waypoints; empty when `outcome` is `Failed`
     pub waypoints: Vec<Vector3<f32>>,
+    /// For a query that did not reach its goal *only because* crossings on
+    /// its route were CUT (this AI stalled on each of them twice), the
+    /// mission time the last of those comes back into play at. A crossing
+    /// that is merely expensive can never be why a goal was unreachable, so
+    /// it is never a deadline. `None` when the goal is unreachable on
+    /// the raw mesh too - waiting cannot help. See
+    /// `PathfindingService::exclusion_expiry_for_unreached_goal`.
+    pub exclusion_expires_at: Option<f32>,
 }
 
 struct SharedState {
@@ -74,10 +82,14 @@ impl AsyncPathfinding {
             .spawn(move || {
                 while let Ok(request) = rx.recv() {
                     let mut outcome = AiPathOutcome::Full;
-                    // Crossings ANY AI's steering reported as physically
-                    // blocked (stall mid-route) are excluded, so re-paths -
-                    // including fresh arrivals' - route around the obstacle
-                    let avoid = service.blocked_links(request.now_seconds);
+                    // Crossings THIS AI's steering reported as physically
+                    // blocked (stall mid-route) are expensive in its own
+                    // search - impassable where it stalled twice - and cells
+                    // any AI is stalled in are expensive for everyone, so the
+                    // re-path prefers a way round the obstacle instead of
+                    // grinding on it, without cutting the crossing out from
+                    // under every other AI
+                    let avoid = service.avoidance(request.entity, request.now_seconds);
                     let path = service
                         .find_path_avoiding(
                             request.start,
@@ -101,6 +113,21 @@ impl AsyncPathfinding {
                             Vec::new()
                         }
                     };
+                    // Only a query that fell short can be waiting on one, and
+                    // only when the goal IS reachable once the exclusions are
+                    // lifted - otherwise this goal is simply off the graph
+                    let exclusion_expires_at = (outcome != AiPathOutcome::Full)
+                        .then(|| {
+                            service.exclusion_expiry_for_unreached_goal(
+                                request.entity,
+                                request.start,
+                                request.goal,
+                                request.movement_bits,
+                                &avoid,
+                                request.now_seconds,
+                            )
+                        })
+                        .flatten();
                     service.record_ai_path(
                         request.entity,
                         AiPathRecord {
@@ -116,6 +143,7 @@ impl AsyncPathfinding {
                                 goal: request.goal,
                                 outcome,
                                 waypoints,
+                                exclusion_expires_at,
                             },
                         );
                     }
@@ -238,16 +266,18 @@ mod tests {
 
     #[test]
     fn worker_applies_blocked_links() {
-        // Cell 0 -> goal in cell 2, but an AI reported the 1 -> 2 crossing
-        // blocked: the worker must return a PARTIAL route ending at cell 1
-        // instead of the full route through the obstacle - for EVERY AI,
-        // not just the reporter.
+        // Cell 0 -> goal in cell 2, but entity 11 reported the 1 -> 2
+        // crossing blocked: ITS query must come back with a PARTIAL route
+        // ending at cell 1 instead of the full route through the obstacle
+        // it could not walk - and every other AI's must be untouched.
         let service = Arc::new(PathfindingService::new(Arc::new(
             crate::pathfinding::tests::three_cell_db(
                 dark::mission::path_database::PathCellFlags::empty(),
             ),
         )));
-        service.report_blocked_link(1, 2, 0.0);
+        // Twice: one stall only prices a crossing, two cut it
+        service.report_blocked_link(11, 1, 2, 0.0);
+        service.report_blocked_link(11, 1, 2, 0.5);
         let async_pf = AsyncPathfinding::spawn(service.clone());
         assert!(async_pf.submit(PathQueryRequest {
             entity: 11,
@@ -264,7 +294,14 @@ mod tests {
             "partial route must end at cell 1's center, before the blockage"
         );
 
-        // The exclusion is shared: another entity's query avoids it too
+        assert_eq!(
+            response.exclusion_expires_at,
+            Some(0.5 + super::super::BLOCKED_LINK_CUT_SECONDS),
+            "the shortfall is the reporter's own exclusion, so it can wait it out"
+        );
+
+        // The exclusion belongs to the AI that stalled: another entity's
+        // query still crosses, and has nothing to wait for.
         assert!(async_pf.submit(PathQueryRequest {
             entity: 12,
             start: cgmath::vec3(1.0, 0.0, 1.0),
@@ -273,6 +310,87 @@ mod tests {
             now_seconds: 1.0,
         }));
         let response = wait_for_result(&async_pf, 12).expect("worker must respond");
-        assert_eq!(response.outcome, AiPathOutcome::Partial);
+        assert_eq!(
+            response.outcome,
+            AiPathOutcome::Full,
+            "one AI's stall must not cut the crossing out from under another"
+        );
+        assert_eq!(response.exclusion_expires_at, None);
+    }
+
+    #[test]
+    fn worker_reports_a_deadline_only_for_an_exclusion_caused_shortfall() {
+        // One service, two shortfalls: entity 31's goal sits on an island no
+        // route ever reached, entity 32's is cut off purely by the excluded
+        // crossings. Only the second is worth waiting out.
+        let service = Arc::new(PathfindingService::new(Arc::new(
+            crate::pathfinding::tests::island_db(),
+        )));
+        // Exclusions are per-AI, so both queriers must carry the same set
+        // for the two shortfalls to be comparable
+        for entity in [31, 32] {
+            for _ in 0..super::super::STALLS_BEFORE_CUT {
+                service.report_blocked_link(entity, 1, 2, 0.0);
+                service.report_blocked_link(entity, 0, 1, 2.0);
+                service.report_blocked_link(entity, 3, 2, 5.0);
+            }
+        }
+        let async_pf = AsyncPathfinding::spawn(service.clone());
+
+        assert!(async_pf.submit(PathQueryRequest {
+            entity: 31,
+            start: cgmath::vec3(1.0, 0.0, 1.0),
+            goal: cgmath::vec3(21.0, 0.0, 1.0),
+            movement_bits: MovementBits::WALK,
+            now_seconds: 0.0,
+        }));
+        let response = wait_for_result(&async_pf, 31).expect("worker must respond");
+        assert_ne!(response.outcome, AiPathOutcome::Full);
+        assert_eq!(
+            response.exclusion_expires_at, None,
+            "an island goal is unreachable with or without the exclusions"
+        );
+
+        assert!(async_pf.submit(PathQueryRequest {
+            entity: 32,
+            start: cgmath::vec3(1.0, 0.0, 1.0),
+            goal: cgmath::vec3(5.0, 0.0, 1.0),
+            movement_bits: MovementBits::WALK,
+            now_seconds: 0.0,
+        }));
+        let response = wait_for_result(&async_pf, 32).expect("worker must respond");
+        assert_ne!(response.outcome, AiPathOutcome::Full);
+        assert_eq!(
+            response.exclusion_expires_at,
+            Some(2.0 + crate::pathfinding::BLOCKED_LINK_CUT_SECONDS),
+            "wait for the LAST crossing on the route it becomes reachable by, \
+             neither the level's earliest nor its latest (the detour's)"
+        );
+    }
+
+    #[test]
+    fn worker_routes_a_second_ai_around_a_cell_somebody_is_stalled_in() {
+        // One AI is wedged in the middle cell. The next AI to ask for the
+        // same trip must be sent the long way round instead of inheriting
+        // the route into the pile-up.
+        let service = Arc::new(PathfindingService::new(Arc::new(
+            crate::pathfinding::tests::detour_db(),
+        )));
+        service.report_blocked_cell(1, 0.0);
+        let async_pf = AsyncPathfinding::spawn(service.clone());
+        assert!(async_pf.submit(PathQueryRequest {
+            entity: 21,
+            start: cgmath::vec3(1.0, 0.0, 1.0),
+            goal: cgmath::vec3(5.0, 0.0, 1.0),
+            movement_bits: MovementBits::WALK,
+            now_seconds: 1.0,
+        }));
+        let response = wait_for_result(&async_pf, 21).expect("worker must respond");
+        assert_eq!(response.outcome, AiPathOutcome::Full);
+        assert!(
+            crate::pathfinding::tests::took_the_detour(&response.waypoints),
+            "the second AI must take the detour: {:?}",
+            response.waypoints
+        );
     }
 }

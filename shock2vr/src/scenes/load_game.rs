@@ -29,7 +29,11 @@ use crate::{
     save_load::{SaveFile, all_saves},
     scripts::{Effect, GlobalEffect},
     time::Time,
-    ui::{FrontendMenu, HAlign, Rect, ScaleMode, UiCanvas, VAlign, resolve_menu_label},
+    ui::{
+        FrontendMenu, HAlign, Rect, ScaleMode, UiCanvas, VAlign,
+        list_scroll::{self, ListHit, ScrollHalf},
+        resolve_menu_label,
+    },
 };
 
 #[cfg(test)]
@@ -74,8 +78,7 @@ const FALLBACK_RECTS: [Rect; 4] = [
 /// The screen was authored around `METAFONT.FON`'s 20px cell, but save names
 /// draw in 11px [`LIST_FONT`], so a 20px pitch is mostly whitespace - and it
 /// costs a slot, because only 13 such rows clear [`FIELD_TOP_Y`]. 19px is the
-/// largest pitch that fits the shipped list's full 14, which matters while
-/// there is no scrolling: the last row is the last reachable save (#928).
+/// largest pitch that fits the shipped list's full 14.
 const ROW_HEIGHT: f32 = 19.0;
 
 /// Canvas y where `GAMELOD.PCX` starts painting a bordered field, decoded from
@@ -110,6 +113,8 @@ const ACTIVE_OPACITY: f32 = 1.0;
 /// `GAMELOD.STR` keys, with the shipped English text as a fallback.
 const HEADER_KEY: &str = "initial";
 const HEADER_FALLBACK: &str = "Select a file to load.";
+const FAILED_KEY: &str = "failed";
+const FAILED_FALLBACK: &str = "Load Failed";
 const EMPTY_KEY: &str = "unused";
 const EMPTY_FALLBACK: &str = "< EMPTY >";
 const LOAD_KEY: &str = "load";
@@ -121,10 +126,19 @@ const DONE_FALLBACK: &str = "Done";
 enum LoadGameAction {
     /// Highlight the save at this index in the visible list.
     Select(usize),
+    /// Move the save list by one row.
+    Scroll(ScrollHalf),
     /// Load the highlighted save.
     Load,
     /// Return to the main menu.
     Done,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LoadGameStatus {
+    #[default]
+    Initial,
+    Failed,
 }
 
 /// Resolve the screen's widget rects from `GAMELODR.BIN`, falling back to the
@@ -142,9 +156,18 @@ fn label(strings: Option<&HashMap<String, String>>, key: &str, fallback: &str) -
 
 /// How many save rows fit in the list rect, stopping at the backdrop's painted
 /// field (see [`FIELD_TOP_Y`]) when the rect runs past it.
+#[cfg(test)]
 fn visible_row_count(list: Rect) -> usize {
-    let usable = (list.y + list.h).min(FIELD_TOP_Y) - list.y;
-    (usable / ROW_HEIGHT).floor().max(0.0) as usize
+    list_scroll::rows_per_page(list, FIELD_TOP_Y, ROW_HEIGHT)
+}
+
+fn list_geometry(rects: &[Rect]) -> list_scroll::ListGeometry {
+    list_scroll::ListGeometry {
+        pane: rects[LIST_RECT_INDEX],
+        bottom_limit: FIELD_TOP_Y,
+        row_h: ROW_HEIGHT,
+        text_inset: LIST_TEXT_INSET,
+    }
 }
 
 /// The canvas rect of the `index`-th row of the list.
@@ -160,6 +183,7 @@ fn row_rect(list: Rect, index: usize) -> Rect {
 /// The rect a row's save name is drawn in: the row, inset on both sides so the
 /// name clears the panel edges. Hit-testing still uses the full [`row_rect`],
 /// so the inset never costs a click.
+#[cfg(test)]
 fn row_text_rect(list: Rect, index: usize) -> Rect {
     let row = row_rect(list, index);
     Rect::new(
@@ -182,7 +206,7 @@ fn resolve_click_at(
     has_selection: bool,
 ) -> (Option<LoadGameAction>, bool) {
     shell_resolve_click_at(point, pressed, last_pressed, |point| {
-        hit(point, rects, visible_saves, has_selection)
+        hit(point, rects, visible_saves, 0, has_selection)
     })
 }
 
@@ -204,7 +228,7 @@ fn resolve_click(
         screen_size,
         vec2(CANVAS_W, CANVAS_H),
         SCALE_MODE,
-        |point| hit(point, rects, visible_saves, has_selection),
+        |point| hit(point, rects, visible_saves, 0, has_selection),
     )
 }
 
@@ -213,7 +237,8 @@ fn resolve_click(
 fn hit(
     point: Vector2<f32>,
     rects: &[Rect],
-    visible_saves: usize,
+    saves_len: usize,
+    scroll: usize,
     has_selection: bool,
 ) -> Option<LoadGameAction> {
     if has_selection && rects[LOAD_RECT_INDEX].contains(point) {
@@ -222,10 +247,10 @@ fn hit(
     if rects[DONE_RECT_INDEX].contains(point) {
         return Some(LoadGameAction::Done);
     }
-    // Rows past the end of the save list are empty backdrop, not buttons.
-    (0..visible_saves)
-        .find(|index| row_rect(rects[LIST_RECT_INDEX], *index).contains(point))
-        .map(LoadGameAction::Select)
+    match list_geometry(rects).hit(saves_len, scroll, point)? {
+        ListHit::Row(index) => Some(LoadGameAction::Select(index)),
+        ListHit::Scroll(half) => Some(LoadGameAction::Scroll(half)),
+    }
 }
 
 pub struct LoadGameScene {
@@ -234,14 +259,22 @@ pub struct LoadGameScene {
     /// Saves offered by the list, resolved once when the screen opens so the
     /// rows and the click agree. Most recent first.
     saves: Vec<SaveFile>,
+    /// Index of the first save drawn in the list.
+    scroll: usize,
     /// Index into [`Self::saves`] of the highlighted row, if any.
     selected: Option<usize>,
+    /// Result of the latest load attempt. The header is the screen's authored
+    /// status line (`initial` / `failed` in `GAMELOD.STR`).
+    status: LoadGameStatus,
     menu: FrontendMenu<LoadGameAction>,
 }
 
 impl LoadGameScene {
     pub fn new() -> Self {
-        let saves = all_saves();
+        Self::from_saves(all_saves())
+    }
+
+    fn from_saves(saves: Vec<SaveFile>) -> Self {
         // Preselect the most recent save so "Load" is immediately meaningful,
         // matching the recovery the game-over screen offers.
         let selected = (!saves.is_empty()).then_some(0);
@@ -250,8 +283,58 @@ impl LoadGameScene {
             world: super::ui_scene_world(),
             scene_name: "load_game".to_owned(),
             saves,
+            scroll: 0,
             selected,
+            status: LoadGameStatus::Initial,
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
+        }
+    }
+
+    fn header_label(&self, strings: Option<&HashMap<String, String>>) -> String {
+        match self.status {
+            LoadGameStatus::Initial => label(strings, HEADER_KEY, HEADER_FALLBACK),
+            LoadGameStatus::Failed => label(strings, FAILED_KEY, FAILED_FALLBACK),
+        }
+    }
+
+    fn apply_action(
+        &mut self,
+        action: Option<LoadGameAction>,
+        geometry: list_scroll::ListGeometry,
+    ) -> Vec<Effect> {
+        match action {
+            Some(LoadGameAction::Select(index)) => {
+                self.selected = Some(index);
+                // The previous failure belonged to the old selection.
+                self.status = LoadGameStatus::Initial;
+                Vec::new()
+            }
+            Some(LoadGameAction::Scroll(half)) => {
+                list_scroll::apply(
+                    half,
+                    &mut self.scroll,
+                    geometry.max_scroll(self.saves.len()),
+                );
+                Vec::new()
+            }
+            Some(LoadGameAction::Load) => {
+                // Clear stale feedback while the retry is dispatched. A
+                // synchronous failure sets it again through `on_load_failed`;
+                // success replaces this scene.
+                self.status = LoadGameStatus::Initial;
+                self.selected
+                    .and_then(|index| self.saves.get(index))
+                    .map(|save| {
+                        vec![Effect::GlobalEffect(GlobalEffect::Load {
+                            file_name: save.path.to_string_lossy().into_owned(),
+                        })]
+                    })
+                    .unwrap_or_default()
+            }
+            Some(LoadGameAction::Done) => {
+                vec![Effect::GlobalEffect(GlobalEffect::ShowMainMenu)]
+            }
+            None => Vec::new(),
         }
     }
 }
@@ -277,13 +360,14 @@ impl LoadGameScene {
 
         canvas.text_native(
             rects[HEADER_RECT_INDEX],
-            &label(strings, HEADER_KEY, HEADER_FALLBACK),
+            &self.header_label(strings),
             MENU_FONT,
             HAlign::Center,
             VAlign::Middle,
         );
 
         let list = rects[LIST_RECT_INDEX];
+        let geometry = list_geometry(&rects);
         if self.saves.is_empty() {
             // Deliberately header-styled rather than row-styled: this is a
             // message about the list, not an entry in it, so it stays centered
@@ -298,14 +382,15 @@ impl LoadGameScene {
                 )
                 .opacity(DISABLED_OPACITY);
         } else {
-            let visible = self.saves.len().min(visible_row_count(list));
-            for (index, save) in self.saves.iter().take(visible).enumerate() {
+            let rows = geometry.visible_rows(self.saves.len(), self.scroll);
+            for (slot, index) in rows.clone().enumerate() {
+                let save = &self.saves[index];
                 canvas
                     // Save names are player-authored and unbounded, so they
                     // are ellipsized to the list width rather than spilling
                     // over the Load button.
                     .text_native_fit(
-                        row_text_rect(list, index),
+                        geometry.text_rect(self.saves.len(), slot),
                         &save.name,
                         LIST_FONT,
                         HAlign::Left,
@@ -316,6 +401,23 @@ impl LoadGameScene {
                     } else {
                         IDLE_OPACITY
                     });
+            }
+            if let Some(rocker) = geometry.rocker(self.saves.len()) {
+                let hovered = pointer_canvas.and_then(|point| {
+                    list_scroll::hit(
+                        &rocker,
+                        rows.start,
+                        geometry.max_scroll(self.saves.len()),
+                        point,
+                    )
+                });
+                list_scroll::draw(
+                    &mut canvas,
+                    &rocker,
+                    rows.start,
+                    geometry.max_scroll(self.saves.len()),
+                    hovered,
+                );
             }
         }
 
@@ -369,47 +471,31 @@ impl GameScene for LoadGameScene {
         }
 
         let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
-        let visible = self
-            .saves
-            .len()
-            .min(visible_row_count(rects[LIST_RECT_INDEX]));
+        let geometry = list_geometry(&rects);
+        let saves_len = self.saves.len();
+        let scroll = self.scroll;
 
-        // Only a save the player can actually see is loadable. The constructor
-        // preselects row 0 from `saves` alone, which a layout too short to show
-        // a single row would otherwise turn into a "Load" for an invisible one.
-        // Clamped on the field rather than into a local, so `build_canvas` draws
-        // "Load" disabled in exactly the cases the click rejects it.
-        self.selected = self.selected.filter(|index| *index < visible);
+        // A selected save stays loadable while another page is in view. A list
+        // too short to show any row cannot make the preselection actionable.
+        self.selected = self
+            .selected
+            .filter(|index| *index < saves_len && geometry.rows_per_page() > 0);
         let selected = self.selected;
 
         let action = self.menu.update(
             time.elapsed,
             input_context,
             game_options.presentation_mode,
-            |point| hit(point, &rects, visible, selected.is_some()),
+            |point| hit(point, &rects, saves_len, scroll, selected.is_some()),
             // Rows are deliberately silent: they highlight on selection
             // rather than hover, so only visible hover feedback makes noise.
-            |point| hit(point, &rects, 0, selected.is_some()),
+            |point| {
+                hit(point, &rects, saves_len, scroll, selected.is_some())
+                    .filter(|action| !matches!(action, LoadGameAction::Select(_)))
+            },
         );
 
-        match action {
-            Some(LoadGameAction::Select(index)) => {
-                self.selected = Some(index);
-                Vec::new()
-            }
-            Some(LoadGameAction::Load) => selected
-                .and_then(|index| self.saves.get(index))
-                .map(|save| {
-                    vec![Effect::GlobalEffect(GlobalEffect::Load {
-                        file_name: save.path.to_string_lossy().into_owned(),
-                    })]
-                })
-                .unwrap_or_default(),
-            Some(LoadGameAction::Done) => {
-                vec![Effect::GlobalEffect(GlobalEffect::ShowMainMenu)]
-            }
-            None => Vec::new(),
-        }
+        self.apply_action(action, geometry)
     }
 
     fn render(
@@ -459,6 +545,10 @@ impl GameScene for LoadGameScene {
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
         self.menu.stop_sfx(audio_context);
+    }
+
+    fn on_load_failed(&mut self) {
+        self.status = LoadGameStatus::Failed;
     }
 
     fn wants_pointer(&self) -> bool {
@@ -532,6 +622,62 @@ mod tests {
         // Only two saves exist, so the third row is bare backdrop.
         let list = FALLBACK_RECTS[LIST_RECT_INDEX];
         assert_eq!(click(at_canvas(row_rect(list, 2).center()), 2, false), None);
+    }
+
+    #[test]
+    fn a_fifteenth_save_exposes_a_scroll_arrow() {
+        let list = FALLBACK_RECTS[LIST_RECT_INDEX];
+        let arrow = crate::ui::list_scroll::rocker(list, FIELD_TOP_Y, true)
+            .expect("a longer save list needs a rocker");
+        assert_eq!(
+            click(at_canvas(arrow.down.center()), 15, true),
+            Some(LoadGameAction::Scroll(
+                crate::ui::list_scroll::ScrollHalf::Down
+            )),
+        );
+    }
+
+    #[test]
+    fn scrolling_selects_and_loads_the_fifteenth_save() {
+        let saves = (0..15)
+            .map(|index| SaveFile {
+                name: format!("save {index}"),
+                path: std::path::PathBuf::from(format!("save{index}.sav")),
+                modified: std::time::SystemTime::UNIX_EPOCH,
+            })
+            .collect();
+        let mut scene = LoadGameScene::from_saves(saves);
+        let geometry = list_geometry(&FALLBACK_RECTS);
+        let rocker = geometry.rocker(scene.saves.len()).unwrap();
+
+        assert_eq!(
+            hit(rocker.down.center(), &FALLBACK_RECTS, 15, 0, true),
+            Some(LoadGameAction::Scroll(ScrollHalf::Down)),
+        );
+        scene.apply_action(Some(LoadGameAction::Scroll(ScrollHalf::Down)), geometry);
+        assert_eq!(scene.scroll, 1);
+        assert_eq!(
+            hit(
+                geometry.row_rect(15, 13).center(),
+                &FALLBACK_RECTS,
+                15,
+                1,
+                true
+            ),
+            Some(LoadGameAction::Select(14)),
+        );
+        scene.apply_action(Some(LoadGameAction::Select(14)), geometry);
+        let effects = scene.apply_action(Some(LoadGameAction::Load), geometry);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::GlobalEffect(GlobalEffect::Load { file_name })]
+                if file_name == "save14.sav"
+        ));
+        assert_eq!(
+            hit(rocker.down.center(), &FALLBACK_RECTS, 15, 1, true),
+            None,
+            "the down arrow becomes inert at the end",
+        );
     }
 
     #[test]
@@ -737,6 +883,7 @@ mod tests {
 
         for (key, fallback) in [
             (HEADER_KEY, HEADER_FALLBACK),
+            (FAILED_KEY, FAILED_FALLBACK),
             (EMPTY_KEY, EMPTY_FALLBACK),
             (LOAD_KEY, LOAD_FALLBACK),
             (DONE_KEY, DONE_FALLBACK),
@@ -754,5 +901,59 @@ mod tests {
         // An empty shipped value must not blank the widget.
         let strings = HashMap::from([(DONE_KEY.to_owned(), String::new())]);
         assert_eq!(label(Some(&strings), DONE_KEY, DONE_FALLBACK), "Done");
+    }
+
+    fn scene_with_save() -> LoadGameScene {
+        LoadGameScene::from_saves(vec![SaveFile {
+            name: "corrupt".to_owned(),
+            path: std::path::PathBuf::from("corrupt.sav"),
+            modified: std::time::SystemTime::UNIX_EPOCH,
+        }])
+    }
+
+    #[test]
+    fn failed_load_uses_the_shipped_status_label() {
+        let lines: Vec<String> = SHIPPED_GAMELOD_STR.lines().map(str::to_owned).collect();
+        let strings = dark::importers::parse_strings(&lines);
+        let mut scene = scene_with_save();
+
+        assert_eq!(scene.header_label(Some(&strings)), HEADER_FALLBACK);
+        scene.on_load_failed();
+        assert_eq!(scene.header_label(Some(&strings)), FAILED_FALLBACK);
+    }
+
+    #[test]
+    fn failure_state_clears_for_selection_and_retry_and_is_fresh_on_reentry() {
+        let mut scene = scene_with_save();
+        scene.menu.set_last_pressed(true);
+
+        scene.on_load_failed();
+        assert_eq!(scene.status, LoadGameStatus::Failed);
+        assert!(
+            scene.menu.last_pressed(),
+            "load feedback must not rearm a held press"
+        );
+
+        scene.apply_action(
+            Some(LoadGameAction::Select(0)),
+            list_geometry(&FALLBACK_RECTS),
+        );
+        assert_eq!(scene.status, LoadGameStatus::Initial);
+
+        scene.on_load_failed();
+        let effects =
+            scene.apply_action(Some(LoadGameAction::Load), list_geometry(&FALLBACK_RECTS));
+        assert_eq!(scene.status, LoadGameStatus::Initial);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::GlobalEffect(GlobalEffect::Load { file_name })]
+                if file_name == "corrupt.sav"
+        ));
+
+        // A failed retry reports the same state again, while leaving and
+        // re-entering constructs a new prompt rather than preserving it.
+        scene.on_load_failed();
+        assert_eq!(scene.status, LoadGameStatus::Failed);
+        assert_eq!(scene_with_save().status, LoadGameStatus::Initial);
     }
 }

@@ -51,10 +51,22 @@ pub enum InputAction {
     EquipPsiAmp,
     /// Cycle an empty wielded weapon's ammo type (its next Projectile link).
     CycleAmmo,
+    /// Switch the wielded gun between its two fire modes (e.g. the pistol's
+    /// single shot and its 3-round burst).
+    CycleGunSetting,
     /// Reload the wielded weapon from compatible backpack reserve.
     Reload,
+    /// Eject the loaded magazine back to the backpack reserve, as clips of the
+    /// ammo type the rounds already are. Hand-agnostic here (it means the
+    /// wielded weapon); on Quest a gun hand's LOWER face button resolves to it
+    /// for the gun in THAT hand - see [`crate::hand_buttons`].
+    EjectClip,
     /// Select the next psi power (used when firing the psi amp).
     CyclePsiPower,
+    /// Open the psi power selection MFD. Hand-agnostic here (it means the
+    /// wielded amp); on Quest the psi-amp hand's LOWER face button resolves to
+    /// it - see [`crate::hand_buttons`].
+    SelectPsiPower,
     /// Reload the current level in place (debug). Exercises the level-transition path,
     /// including the experimental loading screen.
     DebugReloadLevel,
@@ -71,6 +83,8 @@ pub enum InputAction {
     /// monster keeps hunting the player's live position until DebugCalmAll.
     /// The demo cheat - "everything on the map converges on the player".
     DebugForceChase,
+    /// Begin the wave selected under Developer → Earth horde.
+    DebugStartHordeWave,
 
     /// Toggle the flat-mode "use" (metagame) mode: cursor-driven UI over the
     /// 3D view, as the original game does on Tab. Shooter mode is restored on
@@ -101,6 +115,32 @@ pub enum InputAction {
     /// `play_unread_log`), or replay the newest collected log once all are read.
     /// Collecting a disc only files it in the PDA, so this is how it is read.
     ReadLastUnreadLog,
+
+    /// A Touch face button, named by the hand that pressed it rather than by
+    /// what it does: the pair is contextual, so what a press means depends on
+    /// what that hand holds and whether the cyber interface is up. The
+    /// mapping - and the whole table - lives in [`crate::hand_buttons`];
+    /// the mission resolves it, because only the mission knows the hands.
+    ///
+    /// Lower is left X / right A, upper is left Y / right B.
+    LeftHandLowerButton,
+    LeftHandUpperButton,
+    RightHandLowerButton,
+    RightHandUpperButton,
+
+    /// Jump once. The ordinary jump is a *held* runtime channel
+    /// (`InputContext::jump`, edge-detected by the physics controller); this is
+    /// the discrete form a button resolution can produce, which is what a
+    /// Quest hand's LOWER face button means whatever that hand holds (see
+    /// [`crate::hand_buttons`]). It is bound raw there, so it carries no Quest
+    /// click path of its own.
+    Jump,
+
+    /// The left controller's Menu button, bound RAW like the face buttons:
+    /// a short press jacks into the cyber interface and a long one opens the
+    /// pause menu, which is a *hold* and so cannot be one action's edge. The
+    /// split lives in [`crate::input::MenuHold`].
+    MenuButton,
 }
 
 impl InputAction {
@@ -130,17 +170,27 @@ impl InputAction {
             InputAction::EquipWormLauncher,
             InputAction::EquipPsiAmp,
             InputAction::CycleAmmo,
+            InputAction::CycleGunSetting,
             InputAction::Reload,
+            InputAction::EjectClip,
             InputAction::CyclePsiPower,
+            InputAction::SelectPsiPower,
             InputAction::DebugReloadLevel,
             InputAction::DebugAlertAll,
             InputAction::DebugCalmAll,
             InputAction::DebugForceChase,
+            InputAction::DebugStartHordeWave,
             InputAction::ToggleUseMode,
             InputAction::ReadLastUnreadLog,
             InputAction::ToggleMap,
             InputAction::TogglePauseMenu,
             InputAction::ToggleFreeCamera,
+            InputAction::LeftHandLowerButton,
+            InputAction::LeftHandUpperButton,
+            InputAction::RightHandLowerButton,
+            InputAction::RightHandUpperButton,
+            InputAction::Jump,
+            InputAction::MenuButton,
         ]
     }
 
@@ -168,17 +218,27 @@ impl InputAction {
             InputAction::EquipWormLauncher => "EquipWormLauncher",
             InputAction::EquipPsiAmp => "EquipPsiAmp",
             InputAction::CycleAmmo => "CycleAmmo",
+            InputAction::CycleGunSetting => "CycleGunSetting",
             InputAction::Reload => "Reload",
+            InputAction::EjectClip => "EjectClip",
             InputAction::CyclePsiPower => "CyclePsiPower",
+            InputAction::SelectPsiPower => "SelectPsiPower",
             InputAction::DebugReloadLevel => "DebugReloadLevel",
             InputAction::DebugAlertAll => "DebugAlertAll",
             InputAction::DebugCalmAll => "DebugCalmAll",
             InputAction::DebugForceChase => "DebugForceChase",
+            InputAction::DebugStartHordeWave => "DebugStartHordeWave",
             InputAction::ToggleUseMode => "ToggleUseMode",
             InputAction::ReadLastUnreadLog => "ReadLastUnreadLog",
             InputAction::ToggleMap => "ToggleMap",
             InputAction::TogglePauseMenu => "TogglePauseMenu",
             InputAction::ToggleFreeCamera => "ToggleFreeCamera",
+            InputAction::LeftHandLowerButton => "LeftHandLowerButton",
+            InputAction::LeftHandUpperButton => "LeftHandUpperButton",
+            InputAction::RightHandLowerButton => "RightHandLowerButton",
+            InputAction::RightHandUpperButton => "RightHandUpperButton",
+            InputAction::Jump => "Jump",
+            InputAction::MenuButton => "MenuButton",
         }
     }
 
@@ -188,17 +248,31 @@ impl InputAction {
     /// mapping host-testable even though that runtime only compiles for Android.
     pub fn quest_touch_click_path(&self) -> Option<&'static str> {
         match self {
-            InputAction::ReadLastUnreadLog => Some("/user/hand/left/input/y/click"),
-            // Left X toggles the cyber interface (use mode) - the binding the
-            // removed world-quad backpack (MoveInventory) used to own.
-            InputAction::ToggleUseMode => Some("/user/hand/left/input/x/click"),
-            // The right controller's menu button is reserved by the Quest
-            // system UI; the left one is the app's.
-            InputAction::TogglePauseMenu => Some("/user/hand/left/input/menu/click"),
-            // The right controller holds the gun, so its two face buttons own
-            // the two gun-handling actions - A reloads, B swaps ammo type.
-            InputAction::Reload => Some("/user/hand/right/input/a/click"),
-            InputAction::CycleAmmo => Some("/user/hand/right/input/b/click"),
+            // The four face buttons are bound RAW, by hand and position: what
+            // a press means is decided later, against what that hand holds
+            // (`crate::hand_buttons`). `ToggleUseMode` and `ReadLastUnreadLog`
+            // are what a free hand's buttons usually resolve TO, so neither
+            // owns a Quest binding of its own any more.
+            InputAction::LeftHandLowerButton => Some("/user/hand/left/input/x/click"),
+            InputAction::LeftHandUpperButton => Some("/user/hand/left/input/y/click"),
+            InputAction::RightHandLowerButton => Some("/user/hand/right/input/a/click"),
+            InputAction::RightHandUpperButton => Some("/user/hand/right/input/b/click"),
+            // The left controller's Menu button, also raw: its press and its
+            // release mean different things, so the semantic actions it can
+            // resolve to (`ToggleUseMode`, `TogglePauseMenu`) own no Quest
+            // binding either. (The right controller's Menu is reserved by the
+            // Quest system UI, so it can never be the app's.)
+            InputAction::MenuButton => Some("/user/hand/left/input/menu/click"),
+            // `Reload`, `CycleAmmo`, `EjectClip`, `CycleGunSetting`,
+            // `CyclePsiPower`, `SelectPsiPower` and `Jump` deliberately have
+            // NO Quest binding of their own: in VR reloading is the physical
+            // clip-insert gesture, and the rest are reached through the raw
+            // face button of the hand actually holding the weapon - which
+            // names a hand, where a hand-agnostic binding could not say which
+            // weapon it meant. `EjectClip` and `CyclePsiPower` are reached in
+            // VR through the settings MFD's UNLOAD and the psi MFD's stick
+            // navigation instead of a button. All remain reachable everywhere
+            // else (flat keys, HTTP, the SDK).
             _ => None,
         }
     }
@@ -206,18 +280,18 @@ impl InputAction {
     /// Production Meta Quest Touch binding for actions reached by a two-button
     /// **chord** rather than a button of their own.
     ///
-    /// The Touch has no button left to give: `X`, `Y` and the left `Menu` are
-    /// taken, both thumbstick clicks are jump and crouch, right `A` and `B`
-    /// are reload and swap-ammo, and the right `Menu` belongs to the Quest
-    /// system UI. So a debug toggle *shares* a pair rather than owning one -
-    /// here right `A`+`B`, whose own actions only matter with a weapon in
-    /// hand. The pair's edge is resolved by [`InputActionState::sync_chord`].
+    /// The Touch has few buttons to give: every face button is a per-hand
+    /// contextual button, the left `Menu` is the interface/pause pair, the
+    /// left thumbstick click is crouch, and the right `Menu` belongs to the
+    /// Quest system UI. A debug toggle takes a *pair* rather than a scarce single
+    /// button - here right `A`+`B`. The pair's edge is resolved by
+    /// [`InputActionState::sync_chord`].
     ///
-    /// Sharing is safe because the chord is dead unless the free camera's
-    /// developer option is on. While it IS on, `oculus_runtime` suppresses
-    /// whichever button is pressed *second*, so completing the chord cannot
-    /// also swap your ammo; the first press still fires its own action, which
-    /// is why the harmless one (`Reload`) is the natural opener.
+    /// The halves are the right hand's own two buttons, and a chord is pressed
+    /// one button at a time - so while the free camera's dev option is on,
+    /// `Game::update` suppresses that hand's two contextual buttons entirely.
+    /// Arming the developer toggle costs the right hand its face buttons; the
+    /// left hand keeps its own.
     ///
     /// [`InputActionState::sync_chord`]: crate::input::InputActionState::sync_chord
     pub fn quest_touch_chord_paths(&self) -> Option<(&'static str, &'static str)> {
@@ -284,45 +358,77 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// The face buttons are bound raw and symmetrically: lower is left X /
+    /// right A, upper is left Y / right B.
     #[test]
-    fn quest_touch_assigns_x_to_use_mode_and_y_to_the_log_reader() {
+    fn quest_touch_binds_the_face_buttons_per_hand() {
         assert_eq!(
-            InputAction::ToggleUseMode.quest_touch_click_path(),
+            InputAction::LeftHandLowerButton.quest_touch_click_path(),
             Some("/user/hand/left/input/x/click")
         );
         assert_eq!(
-            InputAction::ReadLastUnreadLog.quest_touch_click_path(),
+            InputAction::LeftHandUpperButton.quest_touch_click_path(),
             Some("/user/hand/left/input/y/click")
         );
         assert_eq!(
-            InputAction::TogglePauseMenu.quest_touch_click_path(),
+            InputAction::RightHandLowerButton.quest_touch_click_path(),
+            Some("/user/hand/right/input/a/click")
+        );
+        assert_eq!(
+            InputAction::RightHandUpperButton.quest_touch_click_path(),
+            Some("/user/hand/right/input/b/click")
+        );
+        assert_eq!(
+            InputAction::MenuButton.quest_touch_click_path(),
             Some("/user/hand/left/input/menu/click")
         );
     }
 
-    /// The free camera is a chord, not a button, and must never quietly
-    /// become one: a single-path binding here would consume a face button the
-    /// Touch does not have to spare.
-    ///
-    /// Its two halves deliberately DO collide with `Reload` and `CycleAmmo`
-    /// (#1144) - there is no unbound button left - which is exactly why
-    /// `oculus_runtime` suppresses the second press while the developer
-    /// option is on. Pinning that here means a future rebinding of either gun
-    /// action has to come back and re-read the suppression rule rather than
-    /// silently making the chord fire both.
+    /// The panels are what a free hand's buttons RESOLVE to
+    /// (`crate::hand_buttons`), so neither may hold a Quest binding itself -
+    /// a direct one would fire whatever the hand was holding.
     #[test]
-    fn the_free_camera_chord_shares_the_two_gun_buttons() {
+    fn the_panel_actions_have_no_quest_binding_of_their_own() {
+        assert_eq!(InputAction::ToggleUseMode.quest_touch_click_path(), None);
+        assert_eq!(
+            InputAction::ReadLastUnreadLog.quest_touch_click_path(),
+            None
+        );
+        // The pause menu is the Menu button's LONG press, not its edge.
+        assert_eq!(InputAction::TogglePauseMenu.quest_touch_click_path(), None);
+        // Jump is what a lower face button resolves to, not a binding.
+        assert_eq!(InputAction::Jump.quest_touch_click_path(), None);
+    }
+
+    /// The free camera is a chord, not a button, and must never quietly
+    /// become one: a single-path binding here would take a face button away
+    /// from the hand it belongs to.
+    #[test]
+    fn the_free_camera_is_a_chord_of_the_right_face_buttons() {
         assert_eq!(InputAction::ToggleFreeCamera.quest_touch_click_path(), None);
         let (first, second) = InputAction::ToggleFreeCamera
             .quest_touch_chord_paths()
             .expect("free camera chord binding");
-        assert_eq!(first, InputAction::Reload.quest_touch_click_path().unwrap());
-        assert_eq!(
-            second,
-            InputAction::CycleAmmo.quest_touch_click_path().unwrap()
-        );
         assert_eq!(first, "/user/hand/right/input/a/click");
         assert_eq!(second, "/user/hand/right/input/b/click");
+    }
+
+    /// The chord IS the right hand's own two buttons - the oculus runtime
+    /// drives it from their states rather than binding a second pair of
+    /// OpenXR actions to the same paths, so the two spellings must agree.
+    #[test]
+    fn the_free_camera_chord_is_the_right_hands_two_buttons() {
+        assert_eq!(
+            InputAction::ToggleFreeCamera.quest_touch_chord_paths(),
+            Some((
+                InputAction::RightHandLowerButton
+                    .quest_touch_click_path()
+                    .unwrap(),
+                InputAction::RightHandUpperButton
+                    .quest_touch_click_path()
+                    .unwrap(),
+            ))
+        );
     }
 
     /// Every action is reachable by exactly one kind of binding, or none.
@@ -337,16 +443,20 @@ mod tests {
         }
     }
 
+    /// Gun handling is a GESTURE in VR, not a button. A face button lives on
+    /// one controller, so it cannot say which of two wielded guns it meant;
+    /// carrying a clip to a magazine always can. Both actions stay fully
+    /// drivable elsewhere - flat keys, HTTP, the SDK - which is what the e2e
+    /// coverage uses.
     #[test]
-    fn quest_touch_assigns_the_right_face_buttons_to_gun_handling() {
-        assert_eq!(
-            InputAction::Reload.quest_touch_click_path(),
-            Some("/user/hand/right/input/a/click")
-        );
-        assert_eq!(
-            InputAction::CycleAmmo.quest_touch_click_path(),
-            Some("/user/hand/right/input/b/click")
-        );
+    fn quest_touch_leaves_gun_handling_to_the_clip_insert_gesture() {
+        assert_eq!(InputAction::Reload.quest_touch_click_path(), None);
+        assert_eq!(InputAction::CycleAmmo.quest_touch_click_path(), None);
+        assert!(InputAction::Reload.quest_touch_chord_paths().is_none());
+        assert!(InputAction::CycleAmmo.quest_touch_chord_paths().is_none());
+        // Still first-class actions, just not Quest-bound ones.
+        assert!(InputAction::all().contains(&InputAction::Reload));
+        assert!(InputAction::all().contains(&InputAction::CycleAmmo));
     }
 
     #[test]

@@ -7,12 +7,16 @@ use shipyard::{EntityId, World};
 
 use crate::runtime_props::{
     RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropLaunchedProjectile,
-    RuntimePropSelectedAmmo,
+    RuntimePropMetaProperties, RuntimePropPlayerFiredProjectile, RuntimePropSelectedAmmo,
 };
 use crate::scripts::SavedScriptState;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct EntitySaveData {
+    /// Mission-local alarm bookkeeping; carried inventory never owns it.
+    #[serde(default)]
+    pub security_alarm: Option<crate::security_alarm::SecurityAlarmStatus>,
+    pub player_trail: Option<crate::mission::player_trail::PlayerTrail>,
     pub all_entities: Vec<u64>,
     pub template_id_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub properties:
@@ -25,11 +29,23 @@ pub struct EntitySaveData {
     /// the field and load with no generated terminal poses.
     #[serde(default)]
     pub death_poses: HashMap<u64, RuntimePropDeathPose>,
+    /// Equipped hazard armor/implant identities; remapped with carried entities.
+    #[serde(default)]
+    pub hazard_equipment: Vec<u64>,
+    pub implant_slots: HashMap<u64, crate::runtime_props::RuntimePropImplantSlot>,
+    /// Current/alternate power templates, owned and remapped with each amp.
+    #[serde(default)]
+    pub amp_selections: HashMap<u64, crate::psi_amp_selection::AmpSelection>,
     /// Selected projectile-link index for weapons whose ammo type has been
     /// changed. Persisted separately because runtime components are not part of
     /// the Dark property registry.
     #[serde(default)]
     pub selected_ammo: HashMap<u64 /* entity id */, usize>,
+    /// Exact weapon membership in right/left thigh slots.
+    #[serde(default)]
+    pub holstered: HashMap<u64, crate::runtime_props::RuntimePropHolstered>,
+    #[serde(default)]
+    pub shoulder_weapons: HashMap<u64, crate::runtime_props::RuntimePropShoulderWeapon>,
     /// Stable gamesys archetype for entities whose `PropTemplateId` is a
     /// positive, mission-local object ID.
     #[serde(default)]
@@ -39,6 +55,19 @@ pub struct EntitySaveData {
     /// from taking velocity ownership after load.
     #[serde(default)]
     pub launched_projectiles: Vec<u64 /* entity id */>,
+    /// Player-owned shots retain their shooter collision filter after load.
+    /// This is separate from launch provenance: enemy shots are launched too.
+    #[serde(default)]
+    pub player_fired_projectiles: Vec<u64 /* entity id */>,
+    #[serde(default)]
+    pub projectile_velocities: HashMap<u64, cgmath::Vector3<f32>>,
+    #[serde(default)]
+    pub thrown_props: HashMap<u64, crate::throwing::SavedThrow>,
+    /// Runtime Add/Remove metaproperty relation deltas. The resulting Dark
+    /// components are already in `properties`; this preserves enough relation
+    /// state for a later scripted metaproperty action to recompose correctly.
+    #[serde(default)]
+    pub meta_properties: HashMap<u64 /* entity id */, RuntimePropMetaProperties>,
     /// Opt-in private state owned by scripts on these entities. Registered ECS
     /// properties and links remain in their existing fields above; this is only
     /// for runtime modes, timers, latches, and similar script internals.
@@ -49,14 +78,25 @@ pub struct EntitySaveData {
 impl EntitySaveData {
     pub fn empty() -> EntitySaveData {
         EntitySaveData {
+            security_alarm: None,
+            player_trail: None,
             all_entities: Vec::new(),
             template_id_to_entity_id: HashMap::new(),
             properties: HashMap::new(),
             links: HashMap::new(),
             death_poses: HashMap::new(),
+            hazard_equipment: Vec::new(),
+            implant_slots: HashMap::new(),
+            amp_selections: HashMap::new(),
             selected_ammo: HashMap::new(),
+            holstered: HashMap::new(),
+            shoulder_weapons: HashMap::new(),
             canonical_template_ids: HashMap::new(),
             launched_projectiles: Vec::new(),
+            player_fired_projectiles: Vec::new(),
+            projectile_velocities: HashMap::new(),
+            thrown_props: HashMap::new(),
+            meta_properties: HashMap::new(),
             script_states: Vec::new(),
         }
     }
@@ -64,6 +104,12 @@ impl EntitySaveData {
         &self,
         world: &mut World,
     ) -> (HashMap<i32, WrappedEntityId>, HashMap<EntityId, EntityId>) {
+        if let Some(trail) = &self.player_trail {
+            world.add_unique(trail.clone());
+        }
+        if let Some(alarm) = self.security_alarm {
+            world.add_unique(alarm);
+        }
         let original_template_to_entity_id = self.template_id_to_entity_id.clone();
 
         let mut old_entity_id_to_new_entity_id = HashMap::new();
@@ -83,6 +129,24 @@ impl EntitySaveData {
 
         let (all_properties, _, _) = dark::properties::get::<File>();
 
+        for (old, saved) in &self.thrown_props {
+            if let Some(new) =
+                EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
+            {
+                world.add_component(*new, *saved);
+            }
+        }
+        for (old, velocity) in &self.projectile_velocities {
+            if let Some(new) =
+                EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
+            {
+                world.add_component(
+                    *new,
+                    crate::runtime_props::RuntimePropProjectileVelocity(*velocity),
+                );
+            }
+        }
+
         for prop in all_properties {
             let name = prop.name();
             if let Some(prop_info) = self.properties.get(&name) {
@@ -91,6 +155,20 @@ impl EntitySaveData {
             }
         }
 
+        for (id, slot) in &self.implant_slots {
+            if let Some(old) = EntityId::from_inner(*id) {
+                if let Some(new) = old_entity_id_to_new_entity_id.get(&old) {
+                    world.add_component(*new, *slot);
+                }
+            }
+        }
+        for id in &self.hazard_equipment {
+            if let Some(old) = EntityId::from_inner(*id) {
+                if let Some(new) = old_entity_id_to_new_entity_id.get(&old) {
+                    world.add_component(*new, crate::runtime_props::RuntimePropHazardEquipment);
+                }
+            }
+        }
         for (old_entity_id, death_pose) in &self.death_poses {
             let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
             if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
@@ -105,6 +183,27 @@ impl EntitySaveData {
             if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&entity_id) {
                 let links = Links::deserialize(link.clone(), &old_entity_id_to_new_entity_id);
                 world.add_component(*new_entity_id, links);
+            }
+        }
+        for (old, slot) in &self.shoulder_weapons {
+            if let Some(new) =
+                EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
+            {
+                world.add_component(*new, *slot);
+            }
+        }
+        for (old, slot) in &self.holstered {
+            if let Some(new) =
+                EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
+            {
+                world.add_component(*new, *slot);
+            }
+        }
+        for (old, selection) in &self.amp_selections {
+            if let Some(new) =
+                EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
+            {
+                world.add_component(*new, *selection);
             }
         }
         for (old_entity_id, selected_ammo) in &self.selected_ammo {
@@ -128,6 +227,18 @@ impl EntitySaveData {
                 world.add_component(*new_entity_id, RuntimePropLaunchedProjectile);
             }
         }
+        for old_entity_id in &self.player_fired_projectiles {
+            let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
+            if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
+                world.add_component(*new_entity_id, RuntimePropPlayerFiredProjectile);
+            }
+        }
+        for (old_entity_id, meta_properties) in &self.meta_properties {
+            let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
+            if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
+                world.add_component(*new_entity_id, meta_properties.clone());
+            }
+        }
         (template_to_entity_id, old_entity_id_to_new_entity_id)
     }
 }
@@ -140,18 +251,162 @@ mod tests {
     use shipyard::{Get, View};
 
     #[test]
+    fn player_projectile_ownership_round_trips_without_marking_enemy_shots() {
+        use crate::mission::{GlobalTemplateIdMap, PlayerInfo};
+        use crate::runtime_props::{RuntimePropDoNotSerialize, RuntimePropPlayerFiredProjectile};
+        let mut world = World::new();
+        let player = world.add_entity(RuntimePropDoNotSerialize);
+        let inventory = world.add_entity(());
+        let shot = world.add_entity((
+            RuntimePropPlayerFiredProjectile,
+            RuntimePropLaunchedProjectile,
+        ));
+        let held_shot = world.add_entity((
+            RuntimePropPlayerFiredProjectile,
+            RuntimePropLaunchedProjectile,
+        ));
+        let enemy_shot = world.add_entity(RuntimePropLaunchedProjectile);
+        let excluded =
+            world.add_entity((RuntimePropPlayerFiredProjectile, RuntimePropDoNotSerialize));
+        world.add_unique(GlobalTemplateIdMap(HashMap::new()));
+        world.add_unique(PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            inventory_entity_id: inventory,
+            left_hand_entity_id: Some(held_shot),
+            right_hand_entity_id: None,
+        });
+        let (saved, held) = crate::save_load::to_save_data(&world);
+        assert!(!saved.all_entities.contains(&excluded.inner()));
+        assert!(!saved.all_entities.contains(&held_shot.inner()));
+        for (data, expected) in [(saved, shot), (held.held_entities, held_shot)] {
+            let encoded = serde_json::to_string(&data).unwrap();
+            let decoded: EntitySaveData = serde_json::from_str(&encoded).unwrap();
+            let mut restored = World::new();
+            for _ in 0..20 {
+                restored.add_entity(());
+            }
+            let (_, remapped) = decoded.instantiate(&mut restored);
+            let markers = restored
+                .borrow::<View<RuntimePropPlayerFiredProjectile>>()
+                .unwrap();
+            assert_ne!(remapped[&expected], expected);
+            assert!(
+                markers.contains(remapped[&expected]),
+                "saved ownership must reach the remapped shot"
+            );
+            if let Some(enemy) = remapped.get(&enemy_shot) {
+                assert!(
+                    !markers.contains(*enemy),
+                    "enemy projectiles must still hit the player"
+                );
+                assert!(
+                    restored
+                        .borrow::<View<RuntimePropLaunchedProjectile>>()
+                        .unwrap()
+                        .contains(*enemy),
+                    "launch provenance must survive without granting player ownership"
+                );
+            }
+            assert!(!remapped.contains_key(&excluded));
+        }
+    }
+
+    #[test]
+    fn holster_membership_and_ammo_remap_to_the_same_saved_weapon() {
+        let mut source = World::new();
+        let weapon = source.add_entity(());
+        let mut data = EntitySaveData::empty();
+        data.all_entities.push(weapon.inner());
+        data.holstered.insert(
+            weapon.inner(),
+            crate::runtime_props::RuntimePropHolstered {
+                slot: 1,
+                held_extent: Some(0.3),
+            },
+        );
+        data.selected_ammo.insert(weapon.inner(), 2);
+        data.shoulder_weapons.insert(
+            weapon.inner(),
+            crate::runtime_props::RuntimePropShoulderWeapon(0),
+        );
+        let data: EntitySaveData =
+            serde_json::from_str(&serde_json::to_string(&data).unwrap()).unwrap();
+        let mut restored = World::new();
+        restored.add_entity(());
+        let (_, map) = data.instantiate(&mut restored);
+        let id = map[&weapon];
+        assert_eq!(
+            restored
+                .borrow::<View<crate::runtime_props::RuntimePropShoulderWeapon>>()
+                .unwrap()
+                .get(id)
+                .unwrap()
+                .0,
+            0
+        );
+        assert_eq!(
+            restored
+                .borrow::<View<crate::runtime_props::RuntimePropHolstered>>()
+                .unwrap()
+                .get(id)
+                .unwrap()
+                .slot,
+            1
+        );
+        assert_eq!(
+            restored
+                .borrow::<View<RuntimePropSelectedAmmo>>()
+                .unwrap()
+                .get(id)
+                .unwrap()
+                .0,
+            2
+        );
+    }
+
+    #[test]
     fn legacy_save_without_death_poses_defaults_to_empty() {
         let save: EntitySaveData = serde_json::from_str(
             r#"{
                 "all_entities": [],
                 "template_id_to_entity_id": {},
                 "properties": {},
+                "implant_slots": {},
                 "links": {}
             }"#,
         )
         .unwrap();
 
         assert!(save.death_poses.is_empty());
+        assert!(save.meta_properties.is_empty());
+    }
+
+    #[test]
+    fn instantiate_restores_runtime_metaproperty_relations() {
+        let old_entity = EntityId::new_from_index_and_gen(22, 1);
+        let mut data = EntitySaveData::empty();
+        data.all_entities.push(old_entity.inner());
+        data.meta_properties.insert(
+            old_entity.inner(),
+            RuntimePropMetaProperties {
+                added: vec![-40],
+                removed: vec![-1073],
+            },
+        );
+
+        let mut world = World::new();
+        let (_, remap) = data.instantiate(&mut world);
+        let restored = remap[&old_entity];
+        let states = world.borrow::<View<RuntimePropMetaProperties>>().unwrap();
+        assert_eq!(
+            states.get(restored).unwrap(),
+            &RuntimePropMetaProperties {
+                added: vec![-40],
+                removed: vec![-1073],
+            }
+        );
     }
 
     #[test]
@@ -200,6 +455,32 @@ mod tests {
     }
 
     #[test]
+    fn distinct_amp_pairs_round_trip_and_remap_with_their_entities() {
+        use crate::psi_amp_selection::AmpSelection;
+        let a = EntityId::new_from_index_and_gen(7, 3);
+        let b = EntityId::new_from_index_and_gen(9, 2);
+        let mut data = EntitySaveData::empty();
+        data.all_entities.extend([a.inner(), b.inner()]);
+        let pa = AmpSelection {
+            current: -10,
+            alternate: Some(-20),
+        };
+        let pb = AmpSelection {
+            current: -30,
+            alternate: Some(-40),
+        };
+        data.amp_selections.insert(a.inner(), pa);
+        data.amp_selections.insert(b.inner(), pb);
+        let restored: EntitySaveData =
+            serde_json::from_str(&serde_json::to_string(&data).unwrap()).unwrap();
+        let mut world = World::new();
+        let (_, map) = restored.instantiate(&mut world);
+        let selections = world.borrow::<View<AmpSelection>>().unwrap();
+        assert_eq!(*selections.get(map[&a]).unwrap(), pa);
+        assert_eq!(*selections.get(map[&b]).unwrap(), pb);
+    }
+
+    #[test]
     fn instantiate_restores_selected_ammo_on_the_remapped_entity() {
         let old_entity = EntityId::new_from_index_and_gen(7, 3);
         let mut data = EntitySaveData::empty();
@@ -214,12 +495,46 @@ mod tests {
         assert_eq!(selected.get(new_entity).unwrap().0, 2);
     }
 
+    /// A gun worn down by firing must load back worn: condition rides the
+    /// generic property save, so this covers the whole `P$GunState` chunk.
+    #[test]
+    fn a_degraded_weapon_condition_survives_a_save_and_load() {
+        let mut source_world = World::new();
+        let gun = source_world.add_entity((dark::properties::PropGunState {
+            ammo: 7,
+            condition: 93.0,
+            setting: 1,
+            modification: 0,
+            silence_value: 0.0,
+        },));
+
+        // The same generic property serialization `to_save_data` performs.
+        let (all_properties, _, _) = dark::properties::get::<File>();
+        let mut save = EntitySaveData::empty();
+        save.all_entities.push(gun.inner());
+        for prop in all_properties {
+            save.properties
+                .insert(prop.name(), prop.serialize(&source_world));
+        }
+
+        let mut loaded_world = World::new();
+        let (_, old_to_new) = save.instantiate(&mut loaded_world);
+
+        let states = loaded_world
+            .borrow::<View<dark::properties::PropGunState>>()
+            .unwrap();
+        let loaded = states.get(old_to_new[&gun]).unwrap();
+        assert_eq!(loaded.condition, 93.0);
+        assert_eq!(loaded.ammo, 7);
+    }
+
     #[test]
     fn selected_ammo_defaults_empty_for_older_saves() {
         let data: EntitySaveData = serde_json::from_value(serde_json::json!({
             "all_entities": [],
             "template_id_to_entity_id": {},
             "properties": {},
+            "implant_slots": {},
             "links": {}
         }))
         .unwrap();

@@ -2,7 +2,7 @@
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::{
-    PropBaseTechDesc, PropChemicalNeeded, PropObjLookString, PropResearchReport, PropResearchText,
+    PropBaseTechDesc, PropChemicalNeeded, PropObjIcon, PropObjShortName, PropResearchText,
     PropResearchTime,
 };
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -15,33 +15,47 @@ use crate::{
     scripts::{Effect, script_util::entity_class_template_id},
 };
 
+use super::PanelText;
+#[cfg(test)]
 use super::media::wrap_text;
 
 const PANEL_W: f32 = 188.0;
 const PANEL_H: f32 = 296.0;
 const TEXT_X: f32 = 15.0;
 const TEXT_TOP: f32 = 153.0;
-const TEXT_W: f32 = 138.0;
-const LINE_H: f32 = 11.0;
-// Seven lines stop above the authored report button at y=243. The adjacent
-// retail page gadgets expose the remainder instead of drawing underneath it.
-const PAGE_LINES: usize = 7;
-const WRAP_CHARS: usize = 27;
+// shkrsrch text_rect has right edge 138, so its width is 138 - 15.
+const TEXT_W: f32 = 123.0;
+// Stop at the report button; use the same measured line pitch as rendering.
+fn page_lines(world: &World) -> usize {
+    ((layout::REPORTS.y - TEXT_TOP) / PanelText::line_height(world))
+        .floor()
+        .max(1.0) as usize
+}
 const SCROLL_X: f32 = 159.0;
 const PGUP_Y: f32 = 174.0;
 const PGDN_Y: f32 = 203.0;
+
+/// Authored RESEARCH.PCX slots shared by the live item and journal views.
+pub(crate) mod layout {
+    use crate::ui::Rect;
+    pub const SPECIMEN: Rect = Rect::new(15.0, 14.0, 138.0, 109.0);
+    pub const TITLE: Rect = Rect::new(24.0, 133.0, 129.0, 12.0);
+    pub const PROGRESS: Rect = Rect::new(15.0, 267.0, 138.0, 17.0);
+    pub const PERCENT: Rect = Rect::new(15.0, 270.0, 138.0, 14.0);
+    pub const REPORTS: Rect = Rect::new(13.0, 243.0, 142.0, 22.0);
+}
 
 pub struct ResearchGui;
 
 #[derive(Clone, Debug, Default)]
 pub struct ResearchGuiState {
-    show_report: bool,
     scroll: usize,
 }
 
 #[derive(Clone)]
 pub enum ResearchGuiMsg {
     ToggleReport,
+    Suspend,
     PageUp,
     PageDown,
 }
@@ -65,16 +79,6 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
         };
         let chemicals_view = world.borrow::<View<PropChemicalNeeded>>().unwrap();
         let chemicals = chemicals_view.get(entity_id).ok();
-        let required_skill = world
-            .borrow::<View<PropBaseTechDesc>>()
-            .unwrap()
-            .get(entity_id)
-            .map(|required| required.0.research().max(1))
-            .unwrap_or(1);
-        let player_skill = world
-            .borrow::<UniqueView<QuestInfo>>()
-            .map(|quests| quests.player_stats().skill_level(Skill::Research))
-            .unwrap_or(0);
         let status = world
             .borrow::<UniqueView<QuestInfo>>()
             .map(|quests| quests.research().status(template_id, chemicals))
@@ -92,71 +96,81 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
             .unwrap_or(1.0);
         let fraction = (status.authored_seconds / total).clamp(0.0, 1.0);
 
-        // The original overlays RESPROG on this slot; cropping is unavailable
-        // in the generic GUI primitive, so retain the authored bar art and add
-        // an exact numeric percentage for unambiguous progress feedback.
-        components.push(
-            gui::image("iface/resprog.pcx")
-                .with_position(vec2(15.0, 131.0))
-                .with_size(vec2(138.0 * fraction.max(0.01), 17.0)),
-        );
-        components.push(
-            gui::text(&format!("Research: {:.0}%", fraction * 100.0))
-                .with_position(vec2(18.0, 134.0))
-                .with_size(vec2(132.0, LINE_H)),
-        );
-
-        let report_mask = world
-            .borrow::<View<PropResearchReport>>()
-            .unwrap()
-            .get(entity_id)
-            .map(|report| report.0)
-            .unwrap_or(0);
-        if status.complete && report_mask != 0 {
+        if let Ok(icon) = world.borrow::<View<PropObjIcon>>().unwrap().get(entity_id) {
             components.push(
-                gui::button(ResearchGuiMsg::ToggleReport)
-                    .with_image("iface/report0.pcx")
-                    .with_label("Research report")
-                    .with_position(vec2(13.0, 243.0))
-                    .with_size(vec2(142.0, 22.0)),
+                gui::image(&format!("{}.pcx", icon.0))
+                    .with_object_icon()
+                    .with_rect(layout::SPECIMEN),
+            );
+        }
+        let title = if status.complete {
+            world
+                .borrow::<View<PropObjShortName>>()
+                .ok()
+                .and_then(|names| {
+                    names.get(entity_id).ok().map(|name| {
+                        PanelText::string(
+                            world,
+                            "objshort",
+                            name.0.split(':').next().unwrap_or(&name.0).trim(),
+                            &localized_fallback(&name.0),
+                        )
+                    })
+                })
+                .unwrap_or_else(|| "Research complete".into())
+        } else {
+            PanelText::string(world, "research", "NameUnresearched", "Unresearched Object")
+        };
+        components.push(PanelText::text(&title, layout::TITLE));
+        // shkrsrch.cpp: progress well at (15,267), not the name at y=133.
+        // RESPROG is a solid fill, so sizing it preserves its authored pixels.
+        if fraction > 0.0 {
+            components.push(gui::image("iface/resprog.pcx").with_rect(crate::ui::Rect {
+                w: layout::PROGRESS.w * fraction,
+                ..layout::PROGRESS
+            }));
+        }
+        components.push(PanelText::centered(
+            &format!("{:.1} %", fraction * 100.0),
+            layout::PERCENT,
+        ));
+        components.push(
+            gui::button(ResearchGuiMsg::ToggleReport)
+                .with_image("iface/report0.pcx")
+                .with_hover(gui::ButtonHoverBehavior::Texture(
+                    "iface/report1.pcx".into(),
+                ))
+                .with_label("Research reports")
+                .with_rect(layout::REPORTS),
+        );
+        if status.active && !status.complete {
+            components.push(
+                gui::button(ResearchGuiMsg::Suspend)
+                    .with_image("iface/sus0.pcx")
+                    .with_hover(gui::ButtonHoverBehavior::Texture("iface/sus1.pcx".into()))
+                    .with_label("Suspend research")
+                    .with_position(vec2(157.0, 152.0))
+                    .with_size(vec2(18.0, 134.0)),
             );
         }
 
-        let body = if player_skill < required_skill && status.authored_seconds == 0.0 {
-            format!(
-                "This item requires a Research skill of {required_skill}. Use a Tech Upgrade Unit to train Research."
-            )
-        } else if let Some(chemical) = &status.needed_chemical {
-            format!(
-                "Research paused. Required chemical: {}.",
-                chemical_display_name(world, chemical)
-            )
-        } else if status.complete && state.show_report {
-            property_fallback(world, entity_id, true)
-        } else if status.complete {
-            "Research complete. The item is now ready for use. Select the report button to review your findings.".to_owned()
-        } else if status.active {
-            property_fallback(world, entity_id, false)
-        } else {
-            "Research suspended. Double-click this item to resume.".to_owned()
-        };
+        let body = research_text(world, entity_id);
 
-        let lines = wrap_text(&body, WRAP_CHARS);
-        let start = if status.complete && state.show_report {
-            state.scroll.min(lines.len())
-        } else {
-            0
-        };
-        for (index, line) in lines[start..].iter().take(PAGE_LINES).enumerate() {
+        let lines = PanelText::wrap(world, &body, TEXT_W);
+        let line_height = PanelText::line_height(world);
+        let start = state
+            .scroll
+            .min(lines.len().saturating_sub(page_lines(world)));
+        for (index, line) in lines[start..].iter().take(page_lines(world)).enumerate() {
             if !line.is_empty() {
                 components.push(
                     gui::text(line)
-                        .with_position(vec2(TEXT_X, TEXT_TOP + index as f32 * LINE_H))
-                        .with_size(vec2(TEXT_W, LINE_H)),
+                        .with_position(vec2(TEXT_X, TEXT_TOP + index as f32 * line_height))
+                        .with_size(vec2(TEXT_W, line_height)),
                 );
             }
         }
-        if status.complete && state.show_report && lines.len() > PAGE_LINES {
+        if !status.active && lines.len() > page_lines(world) {
             components.push(
                 gui::button(ResearchGuiMsg::PageUp)
                     .with_image("pgup0.pcx")
@@ -171,6 +185,20 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
                     .with_position(vec2(SCROLL_X, PGDN_Y))
                     .with_size(vec2(18.0, 26.0)),
             );
+        }
+        for component in &mut components {
+            match component {
+                GuiComponent::Text {
+                    font, fit_to_rect, ..
+                } => {
+                    *font = crate::ui::MFD_FONT.into();
+                    *fit_to_rect = true;
+                }
+                GuiComponent::Image { alpha, .. } | GuiComponent::Button { alpha, .. } => {
+                    *alpha = 1.0
+                }
+                _ => {}
+            }
         }
         components
     }
@@ -189,26 +217,27 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
         state: &ResearchGuiState,
         msg: &ResearchGuiMsg,
     ) -> (ResearchGuiState, Effect) {
-        let next_state = match msg {
-            ResearchGuiMsg::ToggleReport => ResearchGuiState {
-                show_report: !state.show_report,
-                scroll: 0,
-            },
-            ResearchGuiMsg::PageUp => ResearchGuiState {
-                show_report: state.show_report,
-                scroll: state.scroll.saturating_sub(PAGE_LINES),
-            },
-            ResearchGuiMsg::PageDown => {
-                let max_scroll = wrap_text(&property_fallback(world, entity_id, true), WRAP_CHARS)
-                    .len()
-                    .saturating_sub(PAGE_LINES);
+        match msg {
+            ResearchGuiMsg::ToggleReport => (state.clone(), Effect::OpenResearchReports),
+            ResearchGuiMsg::Suspend => (ResearchGuiState::default(), Effect::SuspendResearch),
+            ResearchGuiMsg::PageUp => (
                 ResearchGuiState {
-                    show_report: state.show_report,
-                    scroll: (state.scroll + PAGE_LINES).min(max_scroll),
-                }
+                    scroll: state.scroll.saturating_sub(page_lines(world)),
+                },
+                Effect::NoEffect,
+            ),
+            ResearchGuiMsg::PageDown => {
+                let max_scroll = PanelText::wrap(world, &research_text(world, entity_id), TEXT_W)
+                    .len()
+                    .saturating_sub(page_lines(world));
+                (
+                    ResearchGuiState {
+                        scroll: (state.scroll + page_lines(world)).min(max_scroll),
+                    },
+                    Effect::NoEffect,
+                )
             }
-        };
-        (next_state, Effect::NoEffect)
+        }
     }
 
     fn on_frob(&self, entity_id: EntityId, _world: &World) -> Effect {
@@ -217,31 +246,64 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
     }
 }
 
-fn property_fallback(world: &World, entity_id: EntityId, report: bool) -> String {
-    if report {
-        world
-            .borrow::<View<PropObjLookString>>()
-            .ok()
-            .and_then(|view| {
-                view.get(entity_id)
-                    .ok()
-                    .map(|text| localized_fallback(&text.0))
-            })
-            .unwrap_or_else(|| "Research report available.".to_owned())
+fn research_text(world: &World, entity_id: EntityId) -> String {
+    let template_id = entity_class_template_id(world, entity_id).unwrap_or(0);
+    let chemicals_view = world.borrow::<View<PropChemicalNeeded>>().unwrap();
+    let chemicals = chemicals_view.get(entity_id).ok();
+    let status = world
+        .borrow::<UniqueView<QuestInfo>>()
+        .map(|quests| quests.research().status(template_id, chemicals))
+        .unwrap_or_else(|_| crate::research::ResearchStatus {
+            authored_seconds: 0.0,
+            active: false,
+            complete: false,
+            needed_chemical: None,
+        });
+    let required_skill = world
+        .borrow::<View<PropBaseTechDesc>>()
+        .unwrap()
+        .get(entity_id)
+        .map(|required| required.0.research().max(1))
+        .unwrap_or(1);
+    let player_skill = crate::scripts::script_util::player_skill_level(world, Skill::Research);
+    if player_skill < required_skill && status.authored_seconds == 0.0 {
+        format!(
+            "This item requires a Research skill of {required_skill}. Use a Tech Upgrade Unit to train Research."
+        )
+    } else if let Some(chemical) = &status.needed_chemical {
+        format!(
+            "Research paused. Required chemical: {}.",
+            chemical_display_name(world, chemical)
+        )
+    } else if status.complete {
+        "Research complete. The item is now ready for use. Select the report button to review your findings.".to_owned()
+    } else if status.active {
+        property_fallback(world, entity_id)
     } else {
-        world
-            .borrow::<View<PropResearchText>>()
-            .ok()
-            .and_then(|view| {
-                view.get(entity_id)
-                    .ok()
-                    .map(|text| localized_fallback(&text.0))
-            })
-            .unwrap_or_else(|| "Research in progress.".to_owned())
+        "Research suspended. Double-click this item to resume.".to_owned()
     }
 }
 
-fn localized_fallback(value: &str) -> String {
+fn property_fallback(world: &World, entity_id: EntityId) -> String {
+    world
+        .borrow::<View<PropResearchText>>()
+        .ok()
+        .and_then(|view| {
+            view.get(entity_id).ok().map(|text| {
+                PanelText::string(
+                    world,
+                    "rsrchtxt",
+                    text.0.split(':').next().unwrap_or(&text.0).trim(),
+                    &localized_fallback(&text.0),
+                )
+            })
+        })
+        .unwrap_or_else(|| "Research in progress.".to_owned())
+}
+
+/// The English text out of an object string (`key: "text"`), for a data
+/// install whose string table does not resolve the key.
+pub(crate) fn localized_fallback(value: &str) -> String {
     value
         .split_once('"')
         .and_then(|(_, tail)| tail.rsplit_once('"').map(|(text, _)| text))
@@ -249,7 +311,7 @@ fn localized_fallback(value: &str) -> String {
         .replace("\\n", "\n")
 }
 
-fn chemical_display_name(world: &World, sym_name: &str) -> String {
+pub(crate) fn chemical_display_name(world: &World, sym_name: &str) -> String {
     let key = sym_name.to_ascii_lowercase();
     world
         .borrow::<UniqueView<GlobalEntityMetadata>>()

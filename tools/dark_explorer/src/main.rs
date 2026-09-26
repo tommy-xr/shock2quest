@@ -3,8 +3,13 @@ use engine::assets::asset_paths::AssetEntry;
 
 mod archetypes;
 mod archives;
+mod belt_card_editor;
 mod explorer;
+mod grip_editor;
+mod model_details;
 mod model_preview;
+mod song_preview;
+mod support_grip_editor;
 mod ui;
 
 use explorer::{family_entries, family_names, print_coverage_caveat, short_source};
@@ -44,9 +49,47 @@ enum Commands {
     },
     /// Open a windowed asset browser (tree + search + preview)
     Ui {
+        /// Edit the personal card's resting position and rotation on the battle belt
+        #[arg(long)]
+        belt_card: bool,
+        /// Card pose JSON to edit (defaults to assets/vr-belt-card.json)
+        #[arg(long)]
+        belt_card_library: Option<std::path::PathBuf>,
+        /// Open VR Grips with this prepared pickup model selected (e.g. mug)
+        #[arg(long)]
+        grip: Option<String>,
+        /// Edit the supporting hand while previewing both gloves
+        #[arg(long)]
+        grip_support: bool,
+        /// Support-pose JSON to edit (defaults to assets/vr-support-grips.json)
+        #[arg(long)]
+        support_grip_library: Option<std::path::PathBuf>,
+        /// Hand to inspect in VR Grips
+        #[arg(long, default_value = "right", value_parser = ["left", "right"])]
+        grip_hand: String,
+        /// Initial grip camera
+        #[arg(long, default_value = "oblique", value_parser = ["front", "back", "top", "oblique", "palm"])]
+        grip_view: String,
+        /// Prepared grip resource to edit (defaults to this checkout's assets)
+        #[arg(long)]
+        grip_library: Option<std::path::PathBuf>,
         /// Write a PNG of the first rendered frame to this path and exit
         #[arg(long)]
         screenshot: Option<std::path::PathBuf>,
+        /// Initial model-preview ambient level (0 to 1)
+        #[arg(long)]
+        model_ambient: Option<f32>,
+        /// Initial colored model-preview spotlights
+        #[arg(long, value_parser = ["off", "warm", "cool", "green", "all"])]
+        model_lights: Option<String>,
+
+        /// Start the selected song immediately (including its initial theme event)
+        #[arg(long)]
+        play_song: bool,
+
+        /// Seconds to wait before a screenshot, for capturing live song playback
+        #[arg(long, default_value_t = 0.0)]
+        screenshot_after: f32,
 
         /// Open with an asset selected, as "<family>/<key>" (e.g. "obj/txt16/arm.pcx")
         #[arg(long)]
@@ -220,7 +263,19 @@ fn main() {
         } => ls(family, filter, limit),
         Commands::Find { pattern, limit } => find(pattern, limit),
         Commands::Ui {
+            belt_card,
+            belt_card_library,
+            grip,
+            grip_hand,
+            grip_support,
+            support_grip_library,
+            grip_view,
+            grip_library,
             screenshot,
+            model_ambient,
+            model_lights,
+            play_song,
+            screenshot_after,
             select,
             search,
             grid,
@@ -233,7 +288,19 @@ fn main() {
             archives,
             select_entry,
         } => ui::run(ui::UiOptions {
+            belt_card,
+            belt_card_library,
+            grip,
+            grip_hand,
+            grip_support,
+            support_grip_library,
+            grip_view,
+            grip_library,
             screenshot,
+            model_ambient,
+            model_lights,
+            play_song,
+            screenshot_after,
             select,
             search,
             grid,

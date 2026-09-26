@@ -1,16 +1,18 @@
 
-# Line-tables-only debug info for our own crates: keeps file/line numbers in
-# backtraces and panics, but drops full DWARF (no local-variable inspection in
-# a debugger). Roughly halves the size of our workspace .rlib artifacts.
+# Optimized, so playtesting, tools, `cargo test` and `cargo check` all share
+# one build tree instead of rebuilding dependencies per profile. Our crates
+# keep debug assertions and overflow checks; no debug info keeps target/ small
+# (panic messages still carry file:line).
 [profile.dev]
-debug = 1
-
-[profile.dev.package.rapier3d]
 opt-level = 3
-
-# Strip debug info from all third-party dependencies to shrink target/.
-[profile.dev.package."*"]
 debug = false
+
+# Third-party crates build exactly as in release: no debug assertions or
+# overflow checks (they cost rapier real time) and release's codegen units.
+[profile.dev.package."*"]
+debug-assertions = false
+overflow-checks = false
+codegen-units = 16
 
 [workspace]
 resolver = "2"
@@ -25,6 +27,7 @@ members = [
     "tools/dark_viewer",
     "tools/dark_explorer",
     "tools/dark_query",
+    "tools/dark_vr_tool",
     "tools/debug_command",
     "tools/hitbox_analyzer",
     "tools/bench",

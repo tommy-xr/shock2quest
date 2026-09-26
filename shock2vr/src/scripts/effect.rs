@@ -9,6 +9,7 @@ use dark::{
 };
 use engine::audio::AudioHandle;
 use shipyard::EntityId;
+use std::time::Duration;
 
 use crate::{
     gui::{GuiComponentRenderInfo, GuiHandle},
@@ -32,6 +33,9 @@ pub enum PlayerVitalsTransition {
 
 #[derive(Clone, Debug)]
 pub enum GlobalEffect {
+    PlayerRadiationHit {
+        damage: f32,
+    },
     // Save the game state to the given file_name
     Save {
         file_name: String,
@@ -62,6 +66,25 @@ pub enum GlobalEffect {
 
     /// Return to the main menu, replacing whatever scene is active.
     ShowMainMenu,
+
+    /// Begin a fresh campaign with a fixed difficulty, clearing the previous ledger.
+    StartNewCampaign {
+        difficulty: dark::gamesys::Difficulty,
+    },
+
+    /// Begin a fresh horde run with its own difficulty and campaign state.
+    StartNewHorde {
+        difficulty: dark::gamesys::Difficulty,
+    },
+
+    /// Open the pause menu over the active scene. The scene cannot open it
+    /// itself - the overlay is `Game`'s, and a paused scene is not updated at
+    /// all - so the cyber interface's system button asks for it this way.
+    OpenPauseMenu,
+    ShowHordeReport {
+        wave: u32,
+        stats: crate::horde_stats::HordeBattleStats,
+    },
 
     /// Open the Developer screen (live-tunable runtime parameters), replacing
     /// whatever scene is active. Reached from the main menu; the pause menu
@@ -194,7 +217,51 @@ pub enum AIPropertyUpdate {
 
 #[derive(Clone, Debug)]
 pub enum Effect {
+    SetPsiSword {
+        amp: EntityId,
+        enabled: bool,
+    },
     NoEffect,
+    /// Cheat: add stored contamination directly, regardless of protection.
+    AddPlayerHazard {
+        toxin: bool,
+        amount: f32,
+    },
+    ApplyHazard {
+        entity_id: EntityId,
+        toxin: bool,
+        amount: f32,
+    },
+    RadiationRoom {
+        entity_id: EntityId,
+        entered: bool,
+    },
+    ClearHazard {
+        toxin: bool,
+    },
+    ClearEnvironmentalRadiation,
+    UseToxinPatch {
+        entity_id: EntityId,
+        amount: f32,
+    },
+    ToggleHazardArmor {
+        entity_id: EntityId,
+    },
+    ModifyWeapon {
+        entity_id: EntityId,
+        expected_level: i32,
+    },
+    ToggleImplant {
+        entity_id: EntityId,
+    },
+    UnequipImplant {
+        entity_id: EntityId,
+    },
+    AdjustImplantEnergy {
+        entity_id: EntityId,
+        amount: f32,
+        recharge: bool,
+    },
 
     AwardXP {
         amount: i32,
@@ -235,6 +302,22 @@ pub enum Effect {
         delta: i32,
     },
 
+    /// Move a gun's condition (`PropGunState.condition`, a 0..100 percentage)
+    /// by `delta`, clamped to that range: negative for the wear a shot costs,
+    /// positive for the points the maintenance tool restores. No-op for
+    /// entities without a gun state.
+    AdjustWeaponCondition {
+        entity_id: EntityId,
+        delta: f32,
+    },
+
+    /// Start the wait a gun's fire setting imposes between shots
+    /// (`RuntimePropShotCooldown`), in seconds. Pulls during it do nothing.
+    BeginShotCooldown {
+        entity_id: EntityId,
+        seconds: f32,
+    },
+
     /// Raise an energy weapon's charge to at least its authored capacity.
     /// Applied against the live gun state so duplicate recharge messages in one
     /// tick remain idempotent. No-op for entities without a gun state.
@@ -243,10 +326,47 @@ pub enum Effect {
         capacity: i32,
     },
 
-    /// Cycle the player's wielded weapon to its next ammo type (the next
+    /// Cycle the explicit held weapon (or the preferred gun when None) to its
+    /// next ammo type (the next
     /// `Projectile` link). No-op when no weapon is wielded or it has fewer than
     /// two projectile links, or while its magazine still has loaded rounds.
-    CycleAmmo,
+    CycleAmmo {
+        weapon: Option<EntityId>,
+    },
+
+    /// Switch `entity_id`'s gun to fire setting `setting`, remapping its
+    /// selected ammo type by `ProjectileOptions.order` so the same ammo stays
+    /// chosen across the switch. No-op for a gun with no second fire mode.
+    SetGunSetting {
+        entity_id: EntityId,
+        setting: i32,
+    },
+
+    /// Switch a gun to its other fire setting.
+    ///
+    /// `hand` names the gun, as [`Effect::EjectClip`] does: `Some(hand)` is the
+    /// gun in that hand - what a per-hand face button means, so a dual-wielding
+    /// player switches the one they pressed - and `None` is the hand-agnostic
+    /// `InputAction::CycleGunSetting`, meaning whichever weapon is wielded.
+    ///
+    /// No-op when that hand holds no weapon, or the gun has no second mode
+    /// (turrets, the psi amp).
+    CycleGunSetting {
+        hand: Option<Handedness>,
+    },
+
+    /// Open settings for the explicit held weapon, or the preferred gun when
+    /// None. An explicit target that was put away never falls back.
+    OpenWeaponSettings {
+        weapon: Option<EntityId>,
+    },
+
+    /// Eject `entity_id`'s magazine back to the backpack, as clips of the ammo
+    /// type the rounds already are. No-op for an empty gun, or one whose
+    /// projectile has no clip archetype to return to.
+    UnloadWeapon {
+        entity_id: EntityId,
+    },
 
     /// Equip a weapon of this gamesys class from the player's carried items.
     /// The handler resolves the live entity through the template hierarchy and
@@ -282,6 +402,11 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    /// Read the collected research journal without requiring a live specimen.
+    OpenResearchReports,
+    /// Explicit research MFD suspend control.
+    SuspendResearch,
+
     /// Offer one carried chemical to the active research project. The handler
     /// consumes it only when it matches the currently authored gate.
     UseResearchChemical {
@@ -303,11 +428,47 @@ pub enum Effect {
     /// once all are read. Opens the localized player-owned reader before
     /// marking it read and playing its `LOG<dd><nn>` audio. No-op only when the
     /// collection is empty or the authored transcript is unavailable.
-    ReadLastUnreadLog {
-        /// Head rotation at the input edge. VR uses it to place the
-        /// player-owned reader comfortably in the player's current gaze;
-        /// flat presentation ignores it.
-        head_rotation: Quaternion<f32>,
+    /// Carries no payload: both presentations place the reader from state
+    /// they already own - flat's MFD slot, and VR's head-anchored cyber-
+    /// interface anchor, which tracks the live head pose rather than a
+    /// rotation sampled at the input edge.
+    ReadLastUnreadLog,
+
+    /// Apply a completed tap/hold only while this exact gun remains in this hand.
+    PsiAmpButton {
+        hand: crate::Handedness,
+        amp: EntityId,
+        long_press: bool,
+        epoch: u64,
+    },
+    HeldGunButton {
+        hand: Handedness,
+        weapon: EntityId,
+        long_press: bool,
+    },
+
+    /// Return a gun's loaded magazine to the backpack reserve, as clips of the
+    /// ammo type the rounds already are (`reload::unload_to_reserve`). No
+    /// physical clip is dropped into the world.
+    ///
+    /// `hand` names the gun: `Some(hand)` is the gun in that hand, which is
+    /// what a per-hand face button means and what makes the eject dual-wield
+    /// safe; `None` is the hand-agnostic `InputAction::EjectClip` and means
+    /// whichever weapon is wielded.
+    ///
+    /// No-op with nothing loaded, and on a weapon whose ammo has no clip
+    /// archetype to return to (an energy weapon).
+    EjectClip {
+        hand: Option<Handedness>,
+    },
+
+    /// A face button was pressed on one hand, before anything decided what it
+    /// means. The mission resolves it against what that hand holds and
+    /// whether the cyber interface is up - see [`crate::hand_buttons`] - and
+    /// emits the resolved effect, if any.
+    HandButton {
+        hand: Handedness,
+        button: crate::hand_buttons::HandButton,
     },
 
     /// Toggle the flat-mode automap panel (the original's BIOFULL MAP button /
@@ -324,15 +485,52 @@ pub enum Effect {
         location: i32,
     },
 
-    /// Select the player's next *trained* psi power (advances
-    /// `PsiPowerSelection` through the `GlobalPsiPowers` registry, wrapping,
-    /// skipping powers not in `PlayerPsiKnownPowers`).
-    CyclePsiPower,
+    /// Step the psi selection one place along an axis, skipping powers not in
+    /// `PlayerPsiKnownPowers` and wrapping. `Any` is the single-key cycle
+    /// (`InputAction::CyclePsiPower`); `Tier`/`Power` are the AMMOFULL
+    /// readout's four arrows. See [`crate::psi::step_selection`].
+    StepPsiSelection {
+        axis: crate::psi::PsiSelectionAxis,
+        forward: bool,
+    },
+
+    /// Select the psi power with this **power id** outright, rather than
+    /// stepping to it - a click on the selection MFD's grid. Ignored unless
+    /// the player is trained in that power, so the guard holds for every way
+    /// in (a click, HTTP) exactly as it does for a step.
+    SelectPsiPower {
+        power_id: i32,
+    },
+
+    /// Page the psi selection MFD to a tier (`crate::psi::PsiPanelTier`).
+    /// Browsing only: the power the amp will cast is untouched.
+    SetPsiBrowsedTier {
+        tier: i32,
+    },
+
+    /// Open the psi power selection MFD in the presentation's panel slot.
+    /// No-op unless the psi amp is wielded. In VR it also brings up the cyber
+    /// interface around the panel (the slot is only presented there), and a
+    /// second press is its own inverse - see `Effect::ReadLastUnreadLog`.
+    OpenPsiPowers,
+
+    /// Jump once, as [`crate::input::InputAction::Jump`] means it: a Quest
+    /// hand's lower face button, or an injected `Jump` action. The ordinary
+    /// jump is the held `InputContext::jump` channel every runtime provides;
+    /// this latches one frame of it, so the physics controller sees exactly
+    /// one rising edge whichever way the request arrived.
+    Jump,
 
     /// Train the player in a psi power (insert its template id into
     /// `PlayerPsiKnownPowers`), making it selectable and castable - for
     /// trainers and debug tooling. No-op if already trained.
     GrantPsiPower {
+        template_id: i32,
+    },
+
+    /// Validate the unlocked tier, learned set and authored module price,
+    /// then purchase one discipline atomically.
+    PurchasePsiPower {
         template_id: i32,
     },
 
@@ -357,9 +555,9 @@ pub enum Effect {
         amount: i32,
     },
 
-    /// Atomically apply a retail food/drink use against the live player and
-    /// consume the source object. Comestibles always disappear, including at
-    /// full health; the hit-point increase is clamped to the authored maximum.
+    /// Atomically use one food/drink or diagnostic module against the live
+    /// player, decrementing a stack or destroying its final item. Even full
+    /// health consumes one; healing is clamped to the authored maximum.
     UseComestible {
         entity_id: EntityId,
         hit_points: i32,
@@ -395,6 +593,11 @@ pub enum Effect {
         level: i32,
     },
 
+    /// End one sustained power while preserving the others.
+    DeactivatePsiPower {
+        template_id: i32,
+    },
+
     /// Activate (or refresh) a sustained psi power on the player for
     /// `duration_secs` (`ActivePsiPowers` unique). Emitted by the psi amp
     /// when a sustained (activation type 1) power is cast; a per-frame tick
@@ -421,11 +624,13 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
-    /// Reload the player's wielded weapon from compatible backpack reserve,
-    /// up to its magazine capacity (`PropBaseGunDesc.clip`). No-op when no
+    /// Reload the explicit held weapon (or preferred gun when None) from compatible backpack reserve,
+    /// up to the magazine capacity of its selected fire setting. No-op when no
     /// weapon is wielded, it has no gun state / clip, or no matching reserve is
     /// carried.
-    ReloadWeapon,
+    ReloadWeapon {
+        weapon: Option<EntityId>,
+    },
 
     ApplyForce {
         entity_id: EntityId,
@@ -439,6 +644,7 @@ pub enum Effect {
     /// shoved outward. Emitted once by `internal_explosion` from the entity's
     /// arSrcDesc data.
     RadiusBlast {
+        source_entity_id: EntityId,
         center: Vector3<f32>,
         radius: f32,
         intensity: f32,
@@ -449,17 +655,19 @@ pub enum Effect {
     /// Radiation sources refresh this every frame while their player is in
     /// range; the player status integrates the ambient exposure separately.
     RadiusStim {
+        /// False for authored constant-intensity clouds; true for existing blasts/hazards.
+        linear_falloff: bool,
+        source_entity_id: Option<EntityId>,
         center: Vector3<f32>,
         radius: f32,
         intensity: f32,
         stim_template_id: i32,
     },
 
-    /// A noise (gunfire, etc.) at `origin`: every creature within `radius`
-    /// hears it, escalates alertness, and investigates the source - so
-    /// firing a weapon draws nearby AIs even with no line of sight. A plain
-    /// Euclidean radius for now (walls don't attenuate it yet).
+    /// A player-caused noise. Range is scaled by listener acuity and cover.
+    /// Source identity excludes the emitting collider from acoustic rays.
     RaiseNoise {
+        source: EntityId,
         origin: Vector3<f32>,
         radius: f32,
     },
@@ -476,20 +684,23 @@ pub enum Effect {
     ClearModel {
         entity_id: EntityId,
     },
-    /// Replace the entity's fire-point vhots with those of `model_name`
-    /// without changing the rendered model. Used by the VR held-weapon path:
-    /// the world model stays rendered (#352), but its mesh has no vhots -
-    /// the muzzle points live in the _h viewmodel.
-    SetVhotsFromModel {
-        entity_id: EntityId,
-        model_name: String,
-    },
     CreateEntityByTemplateName {
         source_entity_id: EntityId,
         template_name: String,
         position: Point3<f32>,
         orientation: Quaternion<f32>,
         initial_velocity: Vector3<f32>,
+        /// How the fresh entity is built. A Tweq emitter passes
+        /// `launch_projectile` because Dark hands its emissions to
+        /// `launchProjectile`; a payload that is a creature must not, or the
+        /// authored projectile sphere replaces its selection collider (the
+        /// Swarm's is zero-radius, leaving nothing to shoot at).
+        options: CreateEntityOptions,
+    },
+
+    /// Deploy the authored proximity sensor and link its lifetime to the mine.
+    ArmProximityGrenade {
+        entity_id: EntityId,
     },
 
     CreateEntity {
@@ -498,6 +709,26 @@ pub enum Effect {
         orientation: Quaternion<f32>,
         root_transform: Matrix4<f32>,
         options: CreateEntityOptions,
+    },
+
+    /// Fill `entity_id`'s corpse from its authored loot table (`P$LootInfo`),
+    /// the moment it dies. The roll needs the gamesys archetype names, the
+    /// campaign difficulty and the player's O/S upgrades, none of which a
+    /// script can reach, so the whole generation lives in the applier.
+    GenerateLoot {
+        entity_id: EntityId,
+    },
+
+    /// Create `template_id` directly inside `container_entity_id`'s grid - the
+    /// script cannot do this itself, because the fresh entity's id only exists
+    /// once creation has run. The deposit follows the ordinary container rules
+    /// (stack merge, then first cell that fits the item's footprint), so loot
+    /// added this way reconciles with whatever the container already holds. A
+    /// container with no room refuses it and the fresh entity is destroyed
+    /// rather than left lying in the world.
+    CreateEntityInContainer {
+        template_id: i32,
+        container_entity_id: EntityId,
     },
 
     /// `TrapSpawn` creation with the Dark ecology bookkeeping that cannot be
@@ -509,6 +740,21 @@ pub enum Effect {
         goto_player: bool,
     },
 
+    HealingPulse {
+        amp: EntityId,
+    },
+
+    /// Revalidate and acquire an aimed world item before spending psi.
+    PsiPull {
+        amp: EntityId,
+        cost: i32,
+    },
+
+    PsiDrainVisual {
+        from: Vector3<f32>,
+        to: Vector3<f32>,
+    },
+
     DrawDebugLines {
         lines: Vec<(Point3<f32>, Point3<f32>, Vector4<f32>)>,
     },
@@ -517,6 +763,13 @@ pub enum Effect {
     /// wielded melee weapon). Emitted by the melee attack; a no-op in VR.
     FlatMeleeSwing {
         entity_id: EntityId,
+        bonus_damage: f32,
+    },
+
+    SetMeleeCharge {
+        entity_id: EntityId,
+        fraction: Option<f32>,
+        held_seconds: Option<f32>,
     },
 
     DestroyEntity {
@@ -525,6 +778,10 @@ pub enum Effect {
     DropEntityInfo {
         parent_entity_id: EntityId,
         dropped_entity_id: EntityId,
+    },
+    WithdrawPouchAmmo {
+        weapon: EntityId,
+        hand: Handedness,
     },
     GrabEntity {
         entity_id: EntityId,
@@ -567,9 +824,31 @@ pub enum Effect {
         motion_queries: Vec<Vec<MotionQueryItem>>,
     },
 
+    /// Pivot in place with the creature's own authored turn clip: the applier
+    /// picks the stand-schema clip whose authored facing change is nearest
+    /// `delta` and plays it, reporting back with `TurnClipStarted`. No clip
+    /// covers a small pivot, and a creature without turn clips gets none -
+    /// then nothing plays and the applier answers `TurnClipCancelled`.
+    ///
+    /// Every answer echoes `token`, so a report belonging to a pivot the
+    /// requester has already abandoned is recognisable and ignorable.
+    PlayTurnClip {
+        entity_id: EntityId,
+        /// This request's identity, echoed by every report about it.
+        token: u64,
+        delta: cgmath::Deg<f32>,
+        /// The longest turn the creature can afford to stand still for.
+        max_seconds: f32,
+    },
+
     ReplaceEntity {
         entity_id: EntityId,
         template_id: i32,
+    },
+
+    ContinueHorde,
+    StartHordeWave {
+        wave: u32,
     },
 
     Send {
@@ -579,6 +858,12 @@ pub enum Effect {
         deck: u32,
         email: u32,
         force: bool,
+    },
+    /// One-shot controller feedback. Gameplay describes it; only the runtime
+    /// talks to hardware. Transient output is never serialized into saves.
+    HandHaptic {
+        hand: crate::Handedness,
+        pulse: crate::haptics::HapticPulse,
     },
     PlaySound {
         handle: AudioHandle,
@@ -594,23 +879,71 @@ pub enum Effect {
         /// keeps this false even when it has a `source` for attribution.
         spatial: bool,
     },
+    /// Non-spatial [`Effect::PlaySound`] that repeats until `StopSound` when
+    /// the schema authors a seamless loop (`P$SchLoopPa`), else plays once.
+    /// Opt-in: many authored loops are also played as one-shots.
+    PlayLoopingSound {
+        handle: AudioHandle,
+        name: String,
+    },
     PlaySpeech {
         entity_id: EntityId,
         voice_index: usize,
         concept: String,
         tags: Vec<(String, String)>,
     },
+    /// Raise every stat, skill and psi tier to its cap (the "Max out stats"
+    /// cheat). Applied through the same provisioning path the debug HTTP API
+    /// uses, so capping, the backpack resize and the health/psi pool refresh
+    /// all behave exactly as a trainer purchase would.
+    MaxPlayerStats,
+    KickHeldGun {
+        entity_id: EntityId,
+        impulse: crate::weapon_recoil::RecoilImpulse,
+        one_hand: crate::weapon_recoil::RecoilImpulse,
+    },
     PlayEnvironmentalSound {
         audio_handle: AudioHandle,
         query: EnvSoundQuery,
         position: Vector3<f32>,
     },
+    /// Try the authored schema first, using a fallback only when none resolves.
+    PlayEnvironmentalSoundWithFallback {
+        audio_handle: AudioHandle,
+        query: EnvSoundQuery,
+        fallback: EnvSoundQuery,
+        position: Vector3<f32>,
+    },
+    /// A qualifying player impact: notify AI only if an authored or fallback
+    /// sample actually resolves and plays. Unresolved schemas stay silent.
+    PlayImpactSound {
+        audio_handle: AudioHandle,
+        query: EnvSoundQuery,
+        fallback: Option<EnvSoundQuery>,
+        position: Vector3<f32>,
+        source: EntityId,
+    },
     PositionInventory {
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
     },
+    /// Standalone-mode music: start the named song and repeat its initial
+    /// theme event at clip boundaries, or stop immediately with None.
+    SetBackgroundMusic {
+        song: Option<String>,
+    },
     StopSound {
         handle: AudioHandle,
+    },
+    /// Raise the station security alarm for `seconds` (the alarm is
+    /// refcounted, so overlapping alarms stack). See `security_alarm`.
+    RaiseSecurityAlarm {
+        seconds: f32,
+    },
+    /// Stand station security down: clear every outstanding alarm and reset
+    /// the alerted ecologies. `from` is the object that did it.
+    ClearSecurityAlarm {
+        from: EntityId,
     },
     SetPosition {
         entity_id: EntityId,
@@ -620,10 +953,20 @@ pub enum Effect {
         entity_id: EntityId,
         rotation: Quaternion<f32>,
     },
+    /// Set a physics-driven actor or projectile's velocity without changing its pose.
+    SetLinearVelocity {
+        entity_id: EntityId,
+        velocity: Vector3<f32>,
+    },
     SetPositionRotation {
         entity_id: EntityId,
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
+    },
+    /// LGMD parameter IDs, in degrees or Dark feet according to the model.
+    SetObjectParameters {
+        entity_id: EntityId,
+        parameters: Vec<(i32, f32)>,
     },
     SetJointTransform {
         entity_id: EntityId,
@@ -634,7 +977,7 @@ pub enum Effect {
         position: Vector3<f32>,
         is_teleport: bool,
         /// What repositioned the player. `ScriptedTrap` arrivals suppress
-        /// tripwire ENTER (#515); `Locomotion` (VR teleport) still fires it.
+        /// tripwire ENTER (#515); `Locomotion` (debug repositioning) still fires it.
         source: TeleportSource,
     },
 
@@ -659,6 +1002,12 @@ pub enum Effect {
     /// suppress a later walk-in to a *different* nearby tripwire (#515).
     ClearTeleportedMarker {
         entity_id: EntityId,
+    },
+
+    /// Transition an object's authored render mode, e.g. LaserShot's delayed reveal.
+    SetRenderType {
+        entity_id: EntityId,
+        render_type: dark::properties::RenderType,
     },
 
     /// Set an entity's render alpha (Renderer\Transparency (alpha): 1.0 =
@@ -775,6 +1124,8 @@ pub enum Effect {
     /// refusal text, but the effect handler is authoritative so two
     /// same-frame selections cannot both spend the same balance.
     ReplicatorPurchase {
+        replicator: EntityId,
+        slot: usize,
         cost: i32,
         template_name: String,
         position: Point3<f32>,
@@ -795,6 +1146,14 @@ pub enum Effect {
     SetAIProperty {
         entity_id: EntityId,
         update: AIPropertyUpdate,
+    },
+
+    /// Add or remove one named Dark metaproperty and recompose only the
+    /// component types contributed by that metaproperty's inheritance branch.
+    SetMetaProperty {
+        entity_id: EntityId,
+        name: String,
+        add: bool,
     },
 
     /// Replace Dark's runtime-only `AICurrentPatrol` relation for one AI.
@@ -830,6 +1189,26 @@ pub enum Effect {
         world_offset: Vector3<f32>,
         world_size: Vector2<f32>,
         components: Vec<GuiComponentRenderInfo>,
+        sidecar: Option<crate::gui::PanelSidecar>,
+    },
+
+    /// Put a line on the HUD's status-message channel, where it stays for the
+    /// original's five-second message time.
+    ShowMessage {
+        text: String,
+    },
+
+    /// Show a centered interstitial banner - the black title card the original
+    /// opens the Earth mission with. `text` may hold two `\n`-separated lines.
+    /// Replaces any banner already up.
+    ShowBanner {
+        text: String,
+        duration: Duration,
+    },
+
+    ShowWeaponSkillRequirement {
+        entity_id: EntityId,
+        requirement: crate::weapon_requirements::WeaponSkillRequirement,
     },
 
     Multiple(Vec<Effect>),
@@ -855,6 +1234,13 @@ pub enum Effect {
         auto_wield: bool,
     },
 
+    /// Developer cheat: rain a spread of template instances down around the
+    /// player, one per id, so they fall and settle as ordinary world pickups.
+    /// Player position is resolved by the effect handler.
+    RainItems {
+        template_ids: Vec<i32>,
+    },
+
     /// Debug: spawn the next player weapon in front of the player and wield it
     /// as the flat viewmodel (holstering the previously wielded one). Cycles
     /// the SS2 weapon roster for aim/viewmodel testing.
@@ -871,16 +1257,24 @@ pub(crate) fn recharge_ammo_to_capacity(gun_state: &mut PropGunState, capacity: 
     gun_state.ammo = gun_state.ammo.max(capacity.max(0));
 }
 
+/// Move a gun's condition by `delta` (negative wears it, positive restores
+/// it). Condition is a 0..100 percentage and stays inside it: a worn-out gun
+/// does not accumulate negative condition over the shots it keeps firing, and
+/// a maintained one never reads better than new.
+pub(crate) fn adjust_condition(gun_state: &mut PropGunState, delta: f32) {
+    gun_state.condition = (gun_state.condition + delta).clamp(0.0, 100.0);
+}
+
 #[cfg(test)]
 mod tests {
     use dark::properties::PropGunState;
 
-    use super::recharge_ammo_to_capacity;
+    use super::{adjust_condition, recharge_ammo_to_capacity};
 
     fn gun_state(ammo: i32) -> PropGunState {
         PropGunState {
             ammo,
-            condition: 0.75,
+            condition: 75.0,
             setting: 1,
             modification: 2,
             silence_value: 0.25,
@@ -895,10 +1289,44 @@ mod tests {
         recharge_ammo_to_capacity(&mut state, 100);
 
         assert_eq!(state.ammo, 100);
-        assert_eq!(state.condition, 0.75);
+        assert_eq!(state.condition, 75.0);
         assert_eq!(state.setting, 1);
         assert_eq!(state.modification, 2);
         assert_eq!(state.silence_value, 0.25);
+    }
+
+    #[test]
+    fn each_shot_costs_the_authored_condition_points() {
+        let mut state = gun_state(12);
+        state.condition = 100.0;
+
+        adjust_condition(&mut state, -1.0);
+        adjust_condition(&mut state, -1.0);
+        adjust_condition(&mut state, -1.0);
+
+        assert_eq!(state.condition, 97.0);
+        assert_eq!(state.ammo, 12);
+    }
+
+    #[test]
+    fn a_worn_out_gun_never_goes_below_zero_condition() {
+        let mut state = gun_state(12);
+        state.condition = 0.5;
+
+        adjust_condition(&mut state, -1.0);
+        adjust_condition(&mut state, -1.0);
+
+        assert_eq!(state.condition, 0.0);
+    }
+
+    #[test]
+    fn a_restored_gun_never_reads_better_than_new() {
+        let mut state = gun_state(12);
+        state.condition = 95.0;
+
+        adjust_condition(&mut state, 10.0);
+
+        assert_eq!(state.condition, 100.0);
     }
 
     #[test]

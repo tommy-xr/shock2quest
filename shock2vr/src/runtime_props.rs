@@ -12,6 +12,12 @@ use dark::ss2_bin_obj_loader::Vhot;
 use serde::{Deserialize, Deserializer, Serialize};
 use shipyard::Component;
 
+/// The current VR weapon mesh has had its authored hands removed successfully.
+#[derive(Component)]
+pub struct RuntimePropGloveWeapon {
+    pub item_scale: f32,
+}
+
 // RuntimePropGazeAmount - track how much the player is gazing at a prop
 #[derive(Component)]
 #[allow(dead_code)]
@@ -39,12 +45,32 @@ pub struct RuntimePropAITargetAwareness {
 
 // Horizontal locomotion speed scale for an AI, published by its steering
 // each frame: full speed when facing the travel direction, ramping down to
-// a floor of a third as heading error grows (never zero - see
-// locomotion_scale_for_heading_error). The animation velocity write
-// multiplies by this and consumes the component; absent = 1.0 (non-AI
-// animation players are unaffected).
+// a third by 60 degrees of heading error and to zero by 90, where the body
+// turns in place (see locomotion_scale_for_heading_error). The animation
+// velocity write multiplies by this and consumes the component; absent =
+// 1.0 (non-AI animation players are unaffected).
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropLocomotionScale(pub f32);
+
+/// Live creature capsule measured from the model at spawn. Rebuilt with the
+/// physics body after loading, so AI sensing uses the same vertical geometry.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropCreatureCapsule {
+    pub center_y: f32,
+    pub height: f32,
+}
+
+/// Runtime changes to an object's authored metaproperty relations.
+///
+/// The effective Dark properties themselves are saved through the ordinary
+/// property registry. This relation delta is persisted separately by
+/// `EntitySaveData` so a later scripted Add/Remove can still recompose only
+/// the affected component types after a load.
+#[derive(Component, Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RuntimePropMetaProperties {
+    pub added: Vec<i32>,
+    pub removed: Vec<i32>,
+}
 
 #[derive(Component)]
 pub struct RuntimePropJointTransforms(pub [Matrix4<f32>; 40]);
@@ -112,6 +138,11 @@ pub struct RuntimeBitmapAnimationFrameCount(pub u32);
 
 #[derive(Component, Debug)]
 pub struct RuntimePropVhots(pub Vec<Vhot>);
+
+#[derive(Component, Clone, Debug)]
+pub struct RuntimePropObjectArticulation(
+    pub std::sync::Arc<dark::object_articulation::ObjectArticulation>,
+);
 
 // RuntimePropDoNotSerialize - runtime prop to signal that this prop should not be serialized
 #[derive(Component)]
@@ -200,6 +231,57 @@ impl RuntimePropReloading {
     }
 }
 
+/// RuntimePropShotCooldown - the wait a gun's active fire setting imposes
+/// between shots (`shot_interval_ms`), counted down on the weapon while it is
+/// running. A trigger pull during the countdown is silently ignored, so the
+/// laser's overcharge really does take three seconds to come round again.
+///
+/// Set by the firing script through `Effect::BeginShotCooldown` and ticked by
+/// the mission loop, the same split as `RuntimePropReloading` above - and, like
+/// it, not serialized: a save taken mid-cooldown loads ready to fire.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropShotCooldown {
+    pub remaining: f32,
+}
+
+/// RuntimePropShotModifiers - the multipliers the firing gun's active fire
+/// setting applies to the projectile it just launched: `stim` scales the damage
+/// it deals (the EMP rifle's overcharge hits 3x), `speed` its launch velocity
+/// (the fusion cannon's DEATH lob travels at 0.4x). Stamped on the projectile
+/// at creation, since the shot outlives the pull that fired it.
+///
+/// Not serialized, like every runtime prop: a shot still in the air when the
+/// game is saved lands, after a load, at its own authored damage and speed.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropShotModifiers {
+    pub stim: f32,
+    pub speed: f32,
+}
+
+impl Default for RuntimePropShotModifiers {
+    fn default() -> Self {
+        RuntimePropShotModifiers {
+            stim: 1.0,
+            speed: 1.0,
+        }
+    }
+}
+
+impl RuntimePropShotModifiers {
+    /// The modifiers `entity_id` was launched with - the neutral ones for
+    /// anything not launched by a gun.
+    pub fn of(world: &shipyard::World, entity_id: shipyard::EntityId) -> Self {
+        world
+            .borrow::<shipyard::View<RuntimePropShotModifiers>>()
+            .ok()
+            .and_then(|v| {
+                use shipyard::Get;
+                v.get(entity_id).ok().copied()
+            })
+            .unwrap_or_default()
+    }
+}
+
 // RuntimePropSelectedAmmo - which of the wielded weapon's Projectile links is
 // selected (index into `ordered_projectile_links`). Many SS2 guns carry several
 // ammo types (e.g. the pistol: standard / HE / AP); firing uses the selected
@@ -247,6 +329,18 @@ pub struct RuntimePropPsiCharge {
     pub phase: PsiChargePhase,
 }
 
+/// Presentation state only; the charging script owns the transient attack.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropMeleeCharge {
+    pub fraction: f32,
+    /// None once released, even while READY remains armed for one strike.
+    pub held_seconds: Option<f32>,
+}
+
+/// Bonus belonging to the accepted flat animation, immune to trigger chatter.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropFlatMeleeBonus(pub f32);
+
 // RuntimePropFlatAim - the flatscreen camera/crosshair fire ray (world space),
 // set each frame on the player's wielded weapon. When present, weapon firing
 // spawns projectiles from `origin` along `forward` (camera-origin aim) instead
@@ -258,6 +352,16 @@ pub struct RuntimePropFlatAim {
     pub forward: Vector3<f32>,
 }
 
+/// Whether `entity` is the FLATSCREEN player's wielded weapon: the flat
+/// controller sets its crosshair aim ray on it every frame, and nothing else
+/// carries one. The shared answer to "is this the flat presentation's gun?".
+pub fn is_flat_aimed(world: &shipyard::World, entity: shipyard::EntityId) -> bool {
+    use shipyard::Get;
+    world
+        .borrow::<shipyard::View<RuntimePropFlatAim>>()
+        .is_ok_and(|aims| aims.get(entity).is_ok())
+}
+
 /// Camera-origin ray for a fast projectile fired through the flat crosshair.
 ///
 /// Flat projectiles still spawn ahead of the camera so slow physics projectiles
@@ -267,11 +371,44 @@ pub struct RuntimePropFlatAim {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropProjectileRayOrigin(pub Point3<f32>);
 
+/// Marks a fast projectile the *player* fired, so its collision ray skips the
+/// player's own capsule.
+///
+/// Rapier's solid raycast reports a shape containing the ray origin as a hit at
+/// distance 0, so a shot whose ray starts inside the player strikes the shooter
+/// before it can travel. Flat firing starts at the eye - always inside the
+/// capsule - and VR firing starts at the weapon's muzzle, which is inside it
+/// whenever the weapon is held in close to the body (a natural chest/hip hold).
+/// Both are the player shooting; neither may hit the player. AI and turret
+/// projectiles carry no marker and keep hitting the player normally.
+///
+/// The marker lasts the projectile's whole flight, not just the frames near the
+/// muzzle, so a player-fired body stays transparent to the shooter for its
+/// entire life: a grenade that rebounds off a wall passes through its thrower
+/// rather than detonating on contact with them. It still detonates on the
+/// surface it hits, and `radius_blast` finds the player by position rather than
+/// by collider, so splash damage reaches them normally. Being permanently
+/// transparent also hides these bodies from the player's own movement queries
+/// (`player_movement_filter`), so the player can walk through their own grenade
+/// at rest - preferred over the alternative of being able to shoot yourself.
+///
+/// Round-tripped separately in `EntitySaveData::player_fired_projectiles`,
+/// before physics reconstruction, so a saved shot does not become solid to its
+/// shooter after load. Launch provenance alone cannot restore ownership because
+/// enemy projectiles also carry `RuntimePropLaunchedProjectile`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropPlayerFiredProjectile;
+
 /// Marks an object created through Dark's `launchProjectile` path. Its
 /// authored physics model owns idle velocity; an empty skeletal animation
 /// must not zero the launch, and save/load must recreate it as a dynamic body.
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropLaunchedProjectile;
+
+/// Current world-space projectile velocity, synchronized from physics and saved
+/// so a steered or ricocheting shot resumes its flight instead of relaunching.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropProjectileVelocity(pub Vector3<f32>);
 
 // RuntimePropMapData - the automap page data for the current mission, attached
 // to the synthetic map-panel entity at mission init: the mission's level file
@@ -321,3 +458,31 @@ pub struct RuntimePropLogData {
 // first-person model is (re)applied, including on load.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropVrGripOffset(pub Vector3<f32>);
+
+/// Last successfully instantiated player projectile, retained on its firing
+/// weapon for debug inspection after an instantaneous ray has already expired.
+/// Diagnostic only: not saved and never consulted by firing logic.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropLastFiredProjectile(pub i32);
+
+/// A weapon owned by a thigh holster: 0 right, 1 left. Saved and carried
+/// independently of backpack cells; not a world pickup while present.
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct RuntimePropHolstered {
+    pub slot: u8,
+    /// Longest extent of the calibrated held mesh, in world units.
+    pub held_extent: Option<f32>,
+}
+
+/// Last weapon stored at a shoulder, still owned by the normal backpack.
+/// 0 is left, 1 is right. Inventory membership gates recall availability.
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct RuntimePropShoulderWeapon(pub u8);
+
+/// Explicitly worn armor; saved with its item and effective only while carried.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropHazardEquipment;
+
+/// Physical implant socket, independent of hands and thigh holsters.
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct RuntimePropImplantSlot(pub u8);

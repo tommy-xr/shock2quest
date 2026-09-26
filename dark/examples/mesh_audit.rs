@@ -50,7 +50,7 @@ fn main() {
         for v in &mesh.vhots {
             println!(
                 "  vhot {:?} ({:.3},{:.3},{:.3})",
-                v.vhot_type, v.point.x, v.point.y, v.point.z
+                v.id, v.point.x, v.point.y, v.point.z
             );
         }
         println!(

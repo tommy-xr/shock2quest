@@ -1,50 +1,61 @@
 //! Debug scene for psi amp / psi power work.
 //!
-//! The player spawns holding the psi amp on a floor facing a flat wall (same
-//! layout as `debug_weapons`), so each power's cast can be observed in
-//! isolation. Select a power with `CyclePsiPower` (`Y` on desktop /
+//! The player spawns holding the psi amp with a full psi pool and a maxed
+//! character sheet, facing a walled pen of creatures straight ahead with a
+//! flat wall behind it. Select a power with `CyclePsiPower` (`Y` on desktop /
 //! `POST /v1/input/action {"action":"CyclePsiPower"}`) and fire; projectile
-//! powers (Cryokinesis, Pyrokinesis, ...) land on the wall, and the psi bar
-//! on the HUD drains by the power's tier per cast.
+//! powers (Cryokinesis, Pyrokinesis, ...) hit the creatures or the wall, the
+//! pen keeps the targets at range so offensive powers can be measured against
+//! a live creature, and the psi bar on the HUD drains by the power's tier per
+//! cast.
 
-use cgmath::{Deg, Matrix4, Quaternion, Rotation3, vec3};
-use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    scene::{SceneObject, color_material, cube},
-};
-use rapier3d::prelude::{ColliderBuilder, Isometry, SharedShape};
-use shipyard::EntityId;
+use cgmath::{Deg, Point3, Quaternion, Rotation3, vec3};
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
+use shipyard::{EntityId, Get, UniqueView, ViewMut};
 
 use crate::{
     GameOptions,
     game_scene::GameScene,
-    mission::{GlobalContext, SpawnLocation},
+    mission::{
+        GlobalContext, SpawnLocation,
+        mission_core::{MissionCore, PlayerInfo},
+    },
+    scripts::Effect,
 };
 
 use super::debug_common::{
-    AutoEquipHooks, DebugSceneBuildOptions, DebugSceneBuilder, HookedDebugScene,
+    AutoEquipHooks, DebugBox, DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks,
+    boxes_to_geometry, max_player_stats, spawn_at,
 };
 
 /// The Psi Amp player weapon.
 const PSI_AMP_TEMPLATE_ID: i32 = -247;
 
-/// Distance (world units) from the player to the test wall, straight ahead
-/// (-X, the default-view forward).
-const WALL_DISTANCE: f32 = 12.0;
+/// The penned creature: -397 = grunt og-pipe (pipe hybrid), the same actor
+/// `debug_melee` and `debug_hitbox` use, so damage/AI observations line up
+/// across scenes.
+const TARGET_CREATURE: i32 = -397;
 
-fn cube_object(
-    color: cgmath::Vector3<f32>,
-    translation: cgmath::Vector3<f32>,
-    scale: cgmath::Vector3<f32>,
-) -> SceneObject {
-    let mut object = SceneObject::new(color_material::create(color), Box::new(cube::create()));
-    object.set_transform(
-        Matrix4::from_translation(translation)
-            * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z),
-    );
-    object
-}
+/// Where the creatures stand inside the pen, as (x, z): world units ahead of
+/// the player along -X, and across the firing line. The near one sits on the
+/// line so a straight cast lands without aiming; the far one is offset so the
+/// near one does not screen it.
+const TARGET_POSITIONS: &[(f32, f32)] = &[(9.0, 0.0), (11.0, 1.8)];
+
+/// The pen: a box closed on all four sides. Debug scenes have no nav mesh, so
+/// a loose creature would walk straight at the player and turn every
+/// measurement into a melee. The wall height is a measurement, not a rule:
+/// 1.2 was verified to hold an alerted pipe hybrid (~3.4 tall, no step over)
+/// while a level cast from the player's eye (~2.3) clears it onto the
+/// creature's torso. Re-check it if `TARGET_CREATURE` changes.
+const PEN_NEAR: f32 = 7.0;
+const PEN_FAR: f32 = 13.0;
+const PEN_HALF_WIDTH: f32 = 3.0;
+const PEN_WALL_HEIGHT: f32 = 1.2;
+
+/// Distance (world units) from the player to the backstop wall, straight
+/// ahead (-X, the default-view forward), behind the pen.
+const WALL_DISTANCE: f32 = 15.0;
 
 pub fn create_debug_psi_scene(
     global_context: &GlobalContext,
@@ -52,53 +63,135 @@ pub fn create_debug_psi_scene(
     asset_cache: &mut AssetCache,
     audio_context: &mut AudioContext<EntityId, String>,
 ) -> Box<dyn GameScene> {
-    // Same controlled environment as debug_weapons: a floor under the player
-    // and a vertical wall straight ahead to catch projectiles.
-    let floor = cube_object(
-        vec3(0.18, 0.18, 0.22),
-        vec3(0.0, -0.5, 0.0),
-        vec3(40.0, 1.0, 40.0),
-    );
-    let wall = cube_object(
-        vec3(0.45, 0.45, 0.5),
-        vec3(-WALL_DISTANCE, 5.0, 0.0),
-        vec3(1.0, 30.0, 30.0),
-    );
-
-    let collider = ColliderBuilder::compound(vec![
+    let pen_wall = vec3(0.55, 0.32, 0.28);
+    let pen_mid_x = -(PEN_NEAR + PEN_FAR) / 2.0;
+    let pen_len = PEN_FAR - PEN_NEAR;
+    let boxes: &[DebugBox] = &[
+        // floor
         (
-            Isometry::translation(0.0, -0.5, 0.0),
-            SharedShape::cuboid(20.0, 0.5, 20.0),
+            vec3(0.18, 0.18, 0.22),
+            vec3(0.0, -0.5, 0.0),
+            vec3(40.0, 1.0, 40.0),
+        ),
+        // backstop wall
+        (
+            vec3(0.45, 0.45, 0.5),
+            vec3(-WALL_DISTANCE, 5.0, 0.0),
+            vec3(1.0, 30.0, 30.0),
+        ),
+        // pen: front and back
+        (
+            pen_wall,
+            vec3(-PEN_NEAR, PEN_WALL_HEIGHT / 2.0, 0.0),
+            vec3(1.0, PEN_WALL_HEIGHT, 2.0 * PEN_HALF_WIDTH),
         ),
         (
-            Isometry::translation(-WALL_DISTANCE, 5.0, 0.0),
-            SharedShape::cuboid(0.5, 15.0, 15.0),
+            pen_wall,
+            vec3(-PEN_FAR, PEN_WALL_HEIGHT / 2.0, 0.0),
+            vec3(1.0, PEN_WALL_HEIGHT, 2.0 * PEN_HALF_WIDTH),
         ),
-    ])
-    .build();
+        // pen: sides
+        (
+            pen_wall,
+            vec3(pen_mid_x, PEN_WALL_HEIGHT / 2.0, -PEN_HALF_WIDTH),
+            vec3(pen_len, PEN_WALL_HEIGHT, 1.0),
+        ),
+        (
+            pen_wall,
+            vec3(pen_mid_x, PEN_WALL_HEIGHT / 2.0, PEN_HALF_WIDTH),
+            vec3(pen_len, PEN_WALL_HEIGHT, 1.0),
+        ),
+    ];
+    let (scene_objects, collider) = boxes_to_geometry(boxes);
 
-    let builder = DebugSceneBuilder::new("debug_psi")
+    let mut builder = DebugSceneBuilder::new("debug_psi")
         .with_spawn_location(SpawnLocation::PositionRotation(
             vec3(0.0, 2.0, 0.0),
             Quaternion::from_angle_y(Deg(0.0)),
         ))
-        .with_physics_geometry(collider)
-        .add_scene_object(floor)
-        .add_scene_object(wall);
+        .with_physics_geometry(collider);
+    for scene_object in scene_objects {
+        builder = builder.add_scene_object(scene_object);
+    }
 
-    let core = builder.build_core(DebugSceneBuildOptions {
-        global_context,
-        game_options,
-        asset_cache,
-        audio_context,
-    });
     println!(
-        "[debug_psi] Player is equipped with the Psi Amp.\n\
+        "[debug_psi] Player is equipped with the Psi Amp, psi pool full, every stat at cap.\n\
          Select a power with the `CyclePsiPower` input action (`Y` on desktop),\n\
-         then fire to cast it. Projectile powers land on the wall ahead."
+         then fire to cast it. Two pipe hybrids stand in the pen ahead."
     );
-    Box::new(HookedDebugScene::new(
-        core,
-        AutoEquipHooks::new(PSI_AMP_TEMPLATE_ID),
-    ))
+    builder.build_with_hooks(
+        DebugSceneBuildOptions {
+            global_context,
+            game_options,
+            asset_cache,
+            audio_context,
+        },
+        PsiHooks {
+            populated: false,
+            equip: AutoEquipHooks::new(PSI_AMP_TEMPLATE_ID),
+        },
+    )
+}
+
+struct PsiHooks {
+    populated: bool,
+    equip: AutoEquipHooks,
+}
+
+impl DebugSceneHooks for PsiHooks {
+    fn before_handle_effects(
+        &mut self,
+        core: &mut MissionCore,
+        effects: &mut Vec<Effect>,
+        global_context: &GlobalContext,
+        game_options: &GameOptions,
+        asset_cache: &mut AssetCache,
+        audio_context: &mut AudioContext<EntityId, String>,
+    ) {
+        if !self.populated {
+            self.populated = true;
+
+            // Provision every power and stat for deterministic psi scenarios.
+            max_player_stats(core, "debug_psi");
+            // The psi pool is what actually limits a test session: the player
+            // template seeds it short of its maximum. Start full.
+            core.world.run(
+                |player: UniqueView<PlayerInfo>,
+                 mut psi: ViewMut<dark::properties::PropPsiState>| {
+                    if let Ok(psi) = (&mut psi).get(player.entity_id) {
+                        psi.psi_points = psi.max_psi_points;
+                    }
+                },
+            );
+
+            let mut spawns: Vec<_> = TARGET_POSITIONS
+                .iter()
+                .map(|(x, z)| spawn_at(TARGET_CREATURE, Point3::new(-x, 1.0, *z)))
+                .collect();
+            // Sense-power fixtures: visible loot, hidden loot behind the backstop,
+            // and a far negative control. Stable templates allow discovery per run.
+            spawns.extend([
+                spawn_at(-52, Point3::new(-4.0, 1.0, 2.0)),
+                spawn_at(-941, Point3::new(-5.0, 1.0, 3.5)),
+                spawn_at(-1358, Point3::new(-4.0, 1.0, -2.0)),
+                spawn_at(-928, Point3::new(-18.0, 1.0, 0.0)),
+                spawn_at(-57, Point3::new(-45.0, 1.0, 0.0)),
+            ]);
+            core.handle_effects(
+                spawns,
+                global_context,
+                game_options,
+                asset_cache,
+                audio_context,
+            );
+        }
+        self.equip.before_handle_effects(
+            core,
+            effects,
+            global_context,
+            game_options,
+            asset_cache,
+            audio_context,
+        );
+    }
 }

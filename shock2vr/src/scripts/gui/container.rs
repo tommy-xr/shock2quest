@@ -1,6 +1,7 @@
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::{
-    FrobFlag, Link, PropFrobInfo, PropInventoryDimensions, PropObjIcon, ReceptronEffect,
+    FrobFlag, Link, ObjectState, PropFrobInfo, PropInventoryDimensions, PropObjBrokenIcon,
+    PropObjIcon, ReceptronEffect,
 };
 
 use shipyard::{EntityId, Get, View, World};
@@ -15,14 +16,96 @@ use crate::gui;
 
 use crate::scripts::{Effect, MessagePayload};
 
+/// What a panel draws behind its item cells.
+enum PanelBackdrop {
+    /// The original panel bitmap, filling the whole panel.
+    Art(&'static str),
+    /// A bare holographic grid over the item cells and nothing else - no
+    /// backdrop, no chrome (see [`ImageKind::Hologram`]).
+    HologramGrid,
+}
+
+impl PanelBackdrop {
+    /// The bitmap this backdrop draws from.
+    fn texture(&self) -> &str {
+        match self {
+            Self::Art(texture) => texture,
+            Self::HologramGrid => crate::ui::HOLOGRAM_TILE_TEXTURE,
+        }
+    }
+}
+
+/// Which panel this is. The backpack strip looks the same everywhere; a loot
+/// panel is the one thing here that is drawn differently per presentation
+/// (see [`PanelSpec::loot`]).
+enum PanelKind {
+    Backpack,
+    Loot,
+}
+
+/// A panel's drawn style and geometry, resolved once per call from the world.
+///
+/// Every consumer - the backdrop, the item grid, blocked cells, hit-testing
+/// and the panel's own canvas size - reads this one struct, so nothing
+/// downstream can make a second, disagreeing decision about the panel's shape.
+struct PanelSpec {
+    backdrop: PanelBackdrop,
+    size: Vector2<f32>,
+    grid_origin: Vector2<f32>,
+    slots: (usize, usize),
+}
+
+impl PanelSpec {
+    /// **The loot panel's one presentation divergence**, deliberately confined
+    /// to this function (AGENTS.md section 3: if a presentation must differ,
+    /// confine it to one named conversion at the boundary and test it).
+    ///
+    /// Flat keeps the original `contain.pcx` MFD: on a 2D HUD the panel is a
+    /// screen widget in a slot the retail art already fills, and its chrome
+    /// (logo, SEARCH tab, backdrop) is what the player expects to see there.
+    /// VR draws the bare hologram grid, because in VR the same canvas hangs in
+    /// the room as a physical object - an opaque bitmap slab beside the corpse
+    /// reads as a billboard, while the grid lets the world show through.
+    ///
+    /// Only the *drawing* differs. Cell pitch, slot count, take-on-click and
+    /// every behavior below are shared, and both presentations lay their items
+    /// out from this struct's `grid_origin`.
+    /// Both arms feed ONE struct literal, so a field added to `PanelSpec`
+    /// cannot be filled in for one presentation and forgotten for the other.
+    fn loot(is_vr: bool) -> PanelSpec {
+        let (backdrop, grid_origin, height) = if is_vr {
+            (
+                PanelBackdrop::HologramGrid,
+                HOLOGRAM_GRID_ORIGIN,
+                HOLOGRAM_GRID_ORIGIN.y + SLOT_PITCH.y * LOOT_SLOTS.1 as f32 + LOOT_GRID_MARGIN,
+            )
+        } else {
+            (
+                PanelBackdrop::Art("contain.pcx"),
+                LOOT_ART_GRID_ORIGIN,
+                LOOT_ART_HEIGHT,
+            )
+        };
+        PanelSpec {
+            backdrop,
+            size: Vector2::new(LOOT_PANEL_WIDTH, height),
+            grid_origin,
+            slots: LOOT_SLOTS,
+        }
+    }
+
+    fn backpack() -> PanelSpec {
+        PanelSpec {
+            backdrop: PanelBackdrop::Art("invback.pcx"),
+            size: Vector2::new(635.0, 120.0),
+            grid_origin: BACKPACK_GRID_ORIGIN,
+            slots: (15, 3),
+        }
+    }
+}
+
 pub struct ContainerGui {
-    background_image: String,
-    width: f32,
-    height: f32,
-    inv_offset_x: f32,
-    inv_offset_y: f32,
-    num_slots_x: usize,
-    num_slots_y: usize,
+    kind: PanelKind,
     /// Loot semantics: clicking an item takes it into the player's backpack
     /// ("left clicking on the contents picks them up", manual p.7). The
     /// player's own backpack keeps click = use-the-item (`Frob`) instead.
@@ -48,7 +131,7 @@ const STANDARD_IMPACT_STIM: i32 = -385;
 /// is read straight off the creature's own receptrons - an invulnerable NPC
 /// `Abort`s the basic weapon-impact stim, which no killable hostile ever does
 /// - so this predicate can never open a live threat's inventory.
-fn creature_is_lootable(world: &World, entity_id: EntityId) -> bool {
+pub(crate) fn creature_is_lootable(world: &World, entity_id: EntityId) -> bool {
     if crate::scripts::ai::ai_util::is_killed(entity_id, world) {
         return true;
     }
@@ -68,12 +151,38 @@ fn creature_is_lootable(world: &World, entity_id: EntityId) -> bool {
 /// 35px apart horizontally and 34px apart vertically.
 const SLOT_PITCH: Vector2<f32> = Vector2::new(35.0, 34.0);
 
-/// Top-left of the loot panel's 4x4 item grid, in `contain.pcx` pixels. Its
+/// Top-left of the VR hologram grid. That panel is nothing but the grid, so
+/// this is a plain margin: horizontally centered in the 188px width the flat
+/// MFD slot reserves, with [`LOOT_GRID_TOP_MARGIN`] above it.
+const HOLOGRAM_GRID_ORIGIN: Vector2<f32> = Vector2::new(
+    (LOOT_PANEL_WIDTH - SLOT_PITCH.x * LOOT_SLOTS.0 as f32) / 2.0,
+    LOOT_GRID_TOP_MARGIN,
+);
+
+/// Top-left of the flat panel's 4x4 item grid, in `contain.pcx` pixels. Its
 /// cell separators run at x = 13 + 35n and y = 150 + 34n; both are 2px wide,
 /// so this is flush with the first cell's interior horizontally and one row
-/// below it vertically. The two panels' insets differ - that asymmetry is the
-/// original's, not a rounding of ours.
-const LOOT_GRID_ORIGIN: Vector2<f32> = Vector2::new(15.0, 153.0);
+/// below it vertically. The asymmetry against the backpack's inset is the
+/// original art's, not a rounding of ours.
+const LOOT_ART_GRID_ORIGIN: Vector2<f32> = Vector2::new(15.0, 153.0);
+
+/// The authored height of `contain.pcx` - the retail MFD panel, chrome and all.
+const LOOT_ART_HEIGHT: f32 = 296.0;
+
+/// The loot panel keeps the 188px width of the flat MFD slot it docks into.
+const LOOT_PANEL_WIDTH: f32 = 188.0;
+
+/// Cells in the loot grid.
+const LOOT_SLOTS: (usize, usize) = (4, 4);
+
+/// Breathing room below the VR hologram grid, so its outer separators are not
+/// flush with the panel edge.
+const LOOT_GRID_MARGIN: f32 = 8.0;
+
+/// Clearance above the VR hologram grid: the panel's host draws a close button
+/// hugging the top-right corner (21px tall at y=8), and a grid tucked under it
+/// would hand that corner cell's clicks to the close button.
+const LOOT_GRID_TOP_MARGIN: f32 = 34.0;
 
 /// Top-left of the backpack strip's 15x3 item grid, in `invback.pcx` pixels:
 /// separators at x = 2 + 35n and y = 15 + 34n, so this sits 2px inside the
@@ -81,9 +190,62 @@ const LOOT_GRID_ORIGIN: Vector2<f32> = Vector2::new(15.0, 153.0);
 /// paperdoll owns everything right of x = 527.
 const BACKPACK_GRID_ORIGIN: Vector2<f32> = Vector2::new(4.0, 17.0);
 
+/// The same cell pitch and origin used by the backpack's item icons.
+pub fn backpack_footprint_rect(
+    cell: (usize, usize),
+    dimensions: (usize, usize),
+) -> crate::ui::Rect {
+    crate::ui::Rect::new(
+        BACKPACK_GRID_ORIGIN.x + SLOT_PITCH.x * cell.0 as f32,
+        BACKPACK_GRID_ORIGIN.y + SLOT_PITCH.y * cell.1 as f32,
+        SLOT_PITCH.x * dimensions.0 as f32,
+        SLOT_PITCH.y * dimensions.1 as f32,
+    )
+}
+
+/// Where a stack's count sits inside the item's footprint: the top-left
+/// corner. Decided here, once, in canvas pixels, so both presentations place
+/// it identically (AGENTS.md 3) - the panel and the flat strip render the
+/// same component list.
+pub fn stack_badge_rect(footprint: crate::ui::Rect) -> crate::ui::Rect {
+    crate::ui::Rect::new(
+        footprint.x + STACK_BADGE_INSET,
+        footprint.y + STACK_BADGE_INSET,
+        STACK_BADGE_SIZE.x,
+        STACK_BADGE_SIZE.y,
+    )
+}
+
+/// Room for three digits of `mainfont.fon`, which the badge draws at its
+/// native size, vertically centred in this rect.
+const STACK_BADGE_SIZE: Vector2<f32> = Vector2::new(22.0, 14.0);
+
+/// How far the badge sits inside its cell's top-left corner, so the glyphs
+/// clear the separators in the panel art rather than touching them.
+const STACK_BADGE_INSET: f32 = 1.0;
+
 /// `res/iface/BLOCK.PCX` is authored to cover one cell's 34x32 interior,
 /// leaving the separators in `INVBACK.PCX` visible around it.
 const BLOCK_SIZE: Vector2<f32> = Vector2::new(34.0, 32.0);
+
+/// An item's inventory art (`P$ObjIcon` basename, no extension). A Broken item
+/// shows its authored `P$ObjBroken` art instead (a pistol's `icn_pist` becomes
+/// `icn_pistb`), falling back to the normal icon when none is authored.
+pub fn inventory_icon(world: &World, entity_id: EntityId) -> Option<String> {
+    if super::object_state(world, entity_id) == ObjectState::Broken {
+        if let Some(icon) = world
+            .borrow::<View<PropObjBrokenIcon>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|icon| icon.0.clone()))
+        {
+            return Some(icon);
+        }
+    }
+    world
+        .borrow::<View<PropObjIcon>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|icon| icon.0.clone()))
+}
 
 /// The backpack grid cell a panel-local pixel position (in `invback.pcx`'s
 /// own 635x120 pixel space, the same space [`get_components`] lays items out
@@ -105,15 +267,40 @@ pub fn backpack_cell_at(panel_pos: Vector2<f32>, grid: (usize, usize)) -> Option
 impl ContainerGui {
     pub fn loot_container() -> ContainerGui {
         ContainerGui {
-            background_image: "contain.pcx".to_owned(),
-            width: 188.0,
-            height: 296.0,
-            inv_offset_x: LOOT_GRID_ORIGIN.x,
-            inv_offset_y: LOOT_GRID_ORIGIN.y,
-            num_slots_x: 4,
-            num_slots_y: 4,
+            kind: PanelKind::Loot,
             take_on_click: true,
             require_lootable_creature: false,
+        }
+    }
+
+    /// This panel's style and geometry for the running presentation.
+    /// Read off the world so the panel's style follows the running
+    /// presentation rather than whatever mode the script was constructed under.
+    fn spec(&self, world: &World) -> PanelSpec {
+        // The handheld screen owns the same retail canvas as the flat MFD.
+        // World-space loot panels retain their transparent grid.
+        self.spec_for(
+            crate::mission::presentation_is_vr(world)
+                && !crate::mission::mfd_device::screen_active(world),
+        )
+    }
+
+    fn spec_for(&self, is_vr: bool) -> PanelSpec {
+        match self.kind {
+            PanelKind::Backpack => PanelSpec::backpack(),
+            PanelKind::Loot => PanelSpec::loot(is_vr),
+        }
+    }
+
+    fn config_for_spec(&self, spec: &PanelSpec) -> GuiConfig {
+        GuiConfig {
+            // The player backpack canvas is presented by its host (today
+            // the use-mode strip / cyber-interface panel) at viewing height;
+            // applying the object-panel lift again would put it above the
+            // player's comfortable field of view. Loot panels remain lifted
+            // beside their physical host.
+            world_offset: Vector3::new(0.0, if self.take_on_click { 1.0 } else { 0.0 }, 0.0),
+            screen_size_in_pixels: spec.size,
         }
     }
 
@@ -130,13 +317,7 @@ impl ContainerGui {
 
     pub fn inv_container() -> ContainerGui {
         ContainerGui {
-            background_image: "invback.pcx".to_owned(),
-            width: 635.0,
-            height: 120.0,
-            inv_offset_x: BACKPACK_GRID_ORIGIN.x,
-            inv_offset_y: BACKPACK_GRID_ORIGIN.y,
-            num_slots_x: 15,
-            num_slots_y: 3,
+            kind: PanelKind::Backpack,
             take_on_click: false,
             require_lootable_creature: false,
         }
@@ -163,11 +344,26 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
         world: &World,
         _state: &ContainerGuiState,
     ) -> Vec<GuiComponent<ContainerGuiMsg>> {
-        let mut components: Vec<GuiComponent<ContainerGuiMsg>> = vec![
-            gui::image(self.background_image.as_str())
+        let spec = self.spec(world);
+        let mut components: Vec<GuiComponent<ContainerGuiMsg>> = vec![match &spec.backdrop {
+            PanelBackdrop::Art(_) => gui::image(spec.backdrop.texture())
                 .with_position(vec2(0.0, 0.0))
-                .with_size(vec2(self.width, self.height)),
-        ];
+                .with_size(spec.size),
+            // One hologram cell per item cell, drawn over the item grid only:
+            // the panel has no backdrop of its own, so the world shows through
+            // between the lines.
+            PanelBackdrop::HologramGrid => gui::image(spec.backdrop.texture())
+                .with_hologram(spec.slots.0 as u8, spec.slots.1 as u8)
+                // Fully opaque: the grid's own translucency is in its alpha,
+                // and `gui::image`'s 0.5 default would otherwise halve the
+                // lines in VR while the flat host draws them at full strength.
+                .with_alpha(1.0)
+                .with_position(spec.grid_origin)
+                .with_size(vec2(
+                    SLOT_PITCH.x * spec.slots.0 as f32,
+                    SLOT_PITCH.y * spec.slots.1 as f32,
+                )),
+        }];
 
         // Resolve the usable grid once in panel pixels. Both flat and VR
         // presentations consume this same component list, so blocked-cell and
@@ -177,13 +373,13 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             .borrow::<View<PlayerInventoryEntity>>()
             .is_ok_and(|backpacks| backpacks.get(entity_id).is_ok());
         if is_backpack {
-            for y in 0..self.num_slots_y {
-                for x in grid.0..self.num_slots_x {
+            for y in 0..spec.slots.1 {
+                for x in grid.0..spec.slots.0 {
                     components.push(
                         gui::image("iface/block.pcx")
                             .with_position(vec2(
-                                self.inv_offset_x + SLOT_PITCH.x * x as f32,
-                                self.inv_offset_y + SLOT_PITCH.y * y as f32,
+                                spec.grid_origin.x + SLOT_PITCH.x * x as f32,
+                                spec.grid_origin.y + SLOT_PITCH.y * y as f32,
                             ))
                             .with_size(BLOCK_SIZE),
                     );
@@ -199,29 +395,21 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
 
         let slot_pixel_width = SLOT_PITCH.x;
         let slot_pixel_height = SLOT_PITCH.y;
-        let initial_offset_y = self.inv_offset_y;
-        let initial_offset_x = self.inv_offset_x;
+        let initial_offset_y = spec.grid_origin.y;
+        let initial_offset_x = spec.grid_origin.x;
 
-        let v_obj_icon = world.borrow::<View<PropObjIcon>>().unwrap();
+        let v_stack_count = world
+            .borrow::<View<dark::properties::PropStackCount>>()
+            .unwrap();
         for contained_entity_info in inventory.all_items() {
             let ent = contained_entity_info.entity;
-            let maybe_obj_icon = v_obj_icon.get(ent);
-
-            if maybe_obj_icon.is_err() {
+            let Some(obj_icon) = inventory_icon(world, ent) else {
                 continue;
-            }
+            };
 
             let inv_dims = (contained_entity_info.width, contained_entity_info.height);
             let position_x = slot_pixel_width * contained_entity_info.x as f32;
             let position_y = slot_pixel_height * contained_entity_info.y as f32;
-
-            let obj_icon = &maybe_obj_icon.unwrap().0;
-
-            // TODO: Fix this issue:
-            // thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value: Custom { kind: InvalidInput, error: "pcx::Reader::next_row_paletted called on non-paletted image" }', engine/src/texture_format.rs:81:45
-            if obj_icon.contains("upgrade") {
-                continue;
-            }
 
             let on_click = if self.take_on_click {
                 ContainerGuiMsg::Take(ent)
@@ -245,20 +433,34 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                     slot_pixel_width * inv_dims.0 as f32,
                     slot_pixel_height * inv_dims.1 as f32,
                 )),
-            )
+            );
+
+            // A pooled stack reads its size off the icon, as the original
+            // does. One of something is just the item, so it stays bare.
+            if let Ok(stack) = v_stack_count.get(ent) {
+                if stack.0 > 1 {
+                    let footprint = crate::ui::Rect::new(
+                        initial_offset_x + position_x,
+                        initial_offset_y + position_y,
+                        slot_pixel_width * inv_dims.0 as f32,
+                        slot_pixel_height * inv_dims.1 as f32,
+                    );
+                    components.push(
+                        gui::text(&stack.0.to_string()).with_rect(stack_badge_rect(footprint)),
+                    );
+                }
+            }
         }
 
         if let Some(cursor) = maybe_cursor {
             if let Some(ent) = cursor.held_entity_id {
-                let maybe_obj_icon = v_obj_icon.get(ent);
-
-                if let Ok(obj_icon) = maybe_obj_icon {
+                if let Some(obj_icon) = inventory_icon(world, ent) {
                     let inv_dims = v_inv_dims
                         .get(ent)
                         .map(|dims| (dims.width, dims.height))
                         .unwrap_or((1, 1));
                     components.push(
-                        gui::image(&format!("{}.pcx", obj_icon.0))
+                        gui::image(&format!("{obj_icon}.pcx"))
                             .with_object_icon()
                             .with_position(vec2(cursor.position.x, cursor.position.y))
                             .with_size(vec2(
@@ -273,16 +475,23 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
         components
     }
 
+    /// The trait's world-less fallback, which can only answer **flat** - it
+    /// has no world to read the presentation from. Every runtime path resolves
+    /// through [`Gui::get_config_for`] instead (`gui::gui_script` calls only
+    /// that), so nothing in VR gets flat geometry this way; a new world-less
+    /// caller would, which is why anything needing a loot panel's real size
+    /// must take a `&World`.
     fn get_config(&self) -> GuiConfig {
-        GuiConfig {
-            // The player backpack canvas is presented by its host (today
-            // the use-mode strip / cyber-interface panel) at viewing height;
-            // applying the object-panel lift again would put it above the
-            // player's comfortable field of view. Loot panels remain lifted
-            // beside their physical host.
-            world_offset: Vector3::new(0.0, if self.take_on_click { 1.0 } else { 0.0 }, 0.0),
-            screen_size_in_pixels: Vector2::new(self.width, self.height),
-        }
+        self.config_for_spec(&self.spec_for(false))
+    }
+
+    fn get_config_for(
+        &self,
+        _entity_id: EntityId,
+        world: &World,
+        _state: &ContainerGuiState,
+    ) -> GuiConfig {
+        self.config_for_spec(&self.spec(world))
     }
 
     /// A creature's loot panel opens on frob only when it is lootable (corpse
@@ -329,31 +538,14 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             // (PropPlayerGun) or melee (PropLimbModel) - is wielded through
             // `GrabEntity` (flat: the first-person viewmodel wield path,
             // which also restores world refs and clears the Contains link;
-            // VR: a grab into the hand). Anything else gets its own Frob
-            // (use) action, e.g. a hypo consumes.
-            ContainerGuiMsg::Frob(ent) => {
-                let is_weapon = crate::virtual_hand::is_wieldable_weapon(world, *ent);
-                if is_weapon {
-                    (
-                        state.clone(),
-                        Effect::GrabEntity {
-                            entity_id: *ent,
-                            hand: crate::vr_config::Handedness::Right,
-                            current_parent_id: None,
-                        },
-                    )
-                } else {
-                    (
-                        state.clone(),
-                        Effect::Send {
-                            msg: Message {
-                                payload: MessagePayload::Frob,
-                                to: *ent,
-                            },
-                        },
-                    )
-                }
-            }
+            // VR: a grab into the hand). Anything else is used where it stands
+            // - a hypo consumes, a maintenance tool goes to the wielded
+            // weapon. Shared with the inventory strip's double-click, which is
+            // the same gesture (`maintenance::use_carried_item`).
+            ContainerGuiMsg::Frob(ent) => (
+                state.clone(),
+                crate::scripts::maintenance::use_carried_item(world, *ent),
+            ),
             // Transfer the clicked item's `Contains` link to the player's
             // backpack - the same `DropEntityInfo` path used when a VR hand
             // feeds an item into a container (drop_entity_into_container).
@@ -362,6 +554,10 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             // Use-only contained objects (notably corpse audio logs) still
             // need their normal Frob behavior when clicked; they are consumed
             // or recorded in place rather than moved into the backpack.
+            // Grabbable `MOVE | SCRIPT` loot needs both authored halves: Frob
+            // runs its scripted acquisition side effect, then DropEntityInfo
+            // performs the engine-owned MOVE. The immediate transfer removes
+            // the panel button, so one press cannot enqueue either half twice.
             ContainerGuiMsg::Take(ent) => {
                 // The always-collected categories are decided before anything
                 // physical is considered: a nanite pile is grabbable metadata-
@@ -380,17 +576,20 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                         },
                     );
                 }
-                if !crate::virtual_hand::can_grab_item(world, *ent) {
-                    let is_use_only = world
-                        .borrow::<View<PropFrobInfo>>()
-                        .map(|frob| {
-                            frob.get(*ent).is_ok_and(|frob| {
-                                frob.world_action.contains(FrobFlag::SCRIPT)
-                                    || frob.inventory_action.contains(FrobFlag::SCRIPT)
-                            })
+                let (world_frob_is_scripted, inventory_frob_is_scripted) = world
+                    .borrow::<View<PropFrobInfo>>()
+                    .ok()
+                    .and_then(|frob| {
+                        frob.get(*ent).ok().map(|frob| {
+                            (
+                                frob.world_action.contains(FrobFlag::SCRIPT),
+                                frob.inventory_action.contains(FrobFlag::SCRIPT),
+                            )
                         })
-                        .unwrap_or(false);
-                    return if is_use_only {
+                    })
+                    .unwrap_or((false, false));
+                if !crate::virtual_hand::can_grab_item(world, *ent) {
+                    return if world_frob_is_scripted || inventory_frob_is_scripted {
                         (
                             state.clone(),
                             Effect::Send {
@@ -413,13 +612,26 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                     .map(|player| player.inventory_entity_id)
                     .ok();
                 match inventory_entity {
-                    Some(inventory_entity) => (
-                        state.clone(),
-                        Effect::DropEntityInfo {
+                    Some(inventory_entity) => {
+                        let transfer = Effect::DropEntityInfo {
                             parent_entity_id: inventory_entity,
                             dropped_entity_id: *ent,
-                        },
-                    ),
+                        };
+                        let effect = if world_frob_is_scripted {
+                            Effect::combine(vec![
+                                Effect::Send {
+                                    msg: Message {
+                                        payload: MessagePayload::Frob,
+                                        to: *ent,
+                                    },
+                                },
+                                transfer,
+                            ])
+                        } else {
+                            transfer
+                        };
+                        (state.clone(), effect)
+                    }
                     None => (state.clone(), Effect::NoEffect),
                 }
             }
@@ -427,19 +639,16 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
     }
 }
 
-/// A squeeze over a panel normally retrieves the icon into that hand. The
-/// always-collected categories are the semantic exception: a keycard is an
-/// access credential, a pile is currency, a module is an upgrade and a disc is a
-/// PDA entry - none of them is an object you can hold. Every panel (corpse loot,
-/// the backpack, the cyber interface's strip) therefore routes the gesture
-/// through their collecting Frob instead of physically holding an unregistered
-/// object.
+/// A physical panel grip holds downloadable pickups until release. Logs still
+/// collect immediately; flat Take keeps its existing acquisition policy.
 fn panel_grab_effect(
     world: &World,
     entity_id: EntityId,
     hand: crate::vr_config::Handedness,
 ) -> Effect {
-    if crate::scripts::script_util::is_always_collected(world, entity_id) {
+    if crate::scripts::script_util::is_always_collected(world, entity_id)
+        && !crate::scripts::script_util::is_download_pickup(world, entity_id)
+    {
         Effect::Send {
             msg: Message {
                 payload: MessagePayload::Frob,
@@ -511,12 +720,12 @@ mod tests {
     /// A world with a loot container holding one iconed, grabbable item,
     /// plus the player-info unique the Take path resolves the backpack
     /// through.
-    fn loot_world() -> (World, EntityId, EntityId, EntityId) {
+    fn loot_world_with_action(world_action: FrobFlag) -> (World, EntityId, EntityId, EntityId) {
         let mut world = World::new();
         let item = world.add_entity((
             PropObjIcon("icn_psi".to_owned()),
             PropFrobInfo {
-                world_action: FrobFlag::MOVE,
+                world_action,
                 inventory_action: FrobFlag::empty(),
                 tool_action: FrobFlag::empty(),
             },
@@ -539,6 +748,74 @@ mod tests {
             inventory_entity_id: inventory,
         });
         (world, container, item, inventory)
+    }
+
+    fn loot_world() -> (World, EntityId, EntityId, EntityId) {
+        loot_world_with_action(FrobFlag::MOVE)
+    }
+
+    /// Present this world in VR. A world with no `GlobalPresentationMode`
+    /// reads as flat, which is what every other test here wants.
+    fn present_in_vr(world: &mut World) {
+        world.add_unique(crate::mission::GlobalPresentationMode(
+            crate::PresentationMode::Vr,
+        ));
+    }
+
+    /// A pooled stack shows its size on the icon; a single item does not.
+    /// The badge sits in the item's own footprint, so it tracks the icon
+    /// rather than being placed independently per presentation.
+    #[test]
+    fn a_pooled_stack_draws_its_count_in_the_item_footprint() {
+        let (mut world, container, item, _inventory) = loot_world();
+
+        let texts = |world: &World| -> Vec<(String, crate::ui::Rect)> {
+            ContainerGui::loot_container()
+                .get_components(&None, container, world, &ContainerGuiState::default())
+                .into_iter()
+                .filter_map(|component| match component {
+                    GuiComponent::Text {
+                        text,
+                        position,
+                        size,
+                        ..
+                    } => Some((
+                        text,
+                        crate::ui::Rect::new(position.x, position.y, size.x, size.y),
+                    )),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        assert!(
+            texts(&world).is_empty(),
+            "an item with no stack count draws no badge"
+        );
+
+        world.add_component(item, dark::properties::PropStackCount(1));
+        assert!(
+            texts(&world).is_empty(),
+            "one of something is just the item, not a stack"
+        );
+
+        world.add_component(item, dark::properties::PropStackCount(12));
+        let drawn = texts(&world);
+        assert_eq!(drawn.len(), 1, "a pooled stack draws exactly one badge");
+        assert_eq!(drawn[0].0, "12", "the badge reads the live stack count");
+
+        // The badge belongs to the icon's own cell, not to a fixed panel
+        // corner: it is `stack_badge_rect` of the footprint the item at cell
+        // (0,0) occupies.
+        let origin = ContainerGui::loot_container().spec(&world).grid_origin;
+        let expected = stack_badge_rect(crate::ui::Rect::new(
+            origin.x,
+            origin.y,
+            SLOT_PITCH.x,
+            SLOT_PITCH.y,
+        ));
+        assert_eq!(drawn[0].1.x, expected.x, "badge x tracks the icon's cell");
+        assert_eq!(drawn[0].1.y, expected.y, "badge y tracks the icon's cell");
     }
 
     fn mark_as_keycard(world: &mut World, item: EntityId) {
@@ -636,11 +913,10 @@ mod tests {
     }
 
     /// In VR a squeeze over either a corpse-loot or backpack icon normally
-    /// emits `GrabbedWith*`. Keycards are collected credentials, so that edge
-    /// must Frob them rather than putting an unregistered physical card in the
-    /// hand. Ordinary MOVE loot keeps the existing grab behavior.
+    /// emits `GrabbedWith*`. Downloadable credentials and ordinary MOVE loot
+    /// both enter the hand; credentials collect only when subsequently released.
     #[test]
-    fn vr_panel_grab_frobs_only_keycards() {
+    fn vr_panel_grab_holds_keycards_until_release() {
         let (mut world, container, keycard, _inventory) = loot_world();
         mark_as_keycard(&mut world, keycard);
         let ordinary = world.add_entity(PropFrobInfo {
@@ -659,14 +935,9 @@ mod tests {
             assert!(
                 matches!(
                     effect,
-                    Effect::Send {
-                        msg: Message {
-                            to,
-                            payload: MessagePayload::Frob,
-                        },
-                    } if to == keycard
+                    Effect::GrabEntity { entity_id, .. } if entity_id == keycard
                 ),
-                "VR keycard squeeze must collect instead of hold, got {effect:?}"
+                "VR keycard squeeze must hold until release, got {effect:?}"
             );
         }
 
@@ -689,13 +960,10 @@ mod tests {
         );
     }
 
-    /// Keycards, nanite piles, cyber modules and audio logs are collected, never
-    /// carried: neither of the panel's two acquisition gestures - the take
-    /// click and the VR squeeze - may put one in the backpack grid or in a hand.
-    /// Their scripts' Frob is the only thing that records the credential,
-    /// credits the nanites, awards the modules or files the log.
+    /// Take collects immediately. Physical grips hold downloads until release,
+    /// while logs still file immediately through Frob.
     #[test]
-    fn every_always_collected_category_frobs_from_a_panel() {
+    fn panel_take_collects_and_physical_grip_defers_downloads() {
         use crate::test_support::{CollectedKind, spawn_collected};
 
         for kind in CollectedKind::ALL {
@@ -710,6 +978,14 @@ mod tests {
             ] {
                 let (_state, effect) =
                     gui.handle_msg(container, &world, &ContainerGuiState {}, &message);
+                if !matches!(message, ContainerGuiMsg::Take(_))
+                    && crate::scripts::script_util::is_download_pickup(&world, pickup)
+                {
+                    assert!(
+                        matches!(effect, Effect::GrabEntity { entity_id, .. } if entity_id == pickup)
+                    );
+                    continue;
+                }
                 assert!(
                     matches!(
                         effect,
@@ -726,19 +1002,87 @@ mod tests {
         }
     }
 
-    /// Both panels' item grids must land on the cell separators authored into
-    /// their backdrops - `contain.pcx` (loot) and `invback.pcx` (backpack) -
-    /// stepping by the shared 35x34 cell pitch. A 1x1 item therefore occupies
-    /// exactly one cell at the grid origin.
+    /// Ops2 Chip A (mission object 554) is authored `MOVE | SCRIPT`: one
+    /// trigger-click must run BaseButton's reward side effect and perform the
+    /// ordinary container-to-backpack transfer, with neither half duplicated.
+    #[test]
+    fn loot_container_click_frobs_and_takes_a_scripted_pickup_once() {
+        let (world, container, item, inventory) =
+            loot_world_with_action(FrobFlag::MOVE | FrobFlag::SCRIPT);
+        let gui = ContainerGui::loot_container();
+
+        let (_state, effect) = gui.handle_msg(
+            container,
+            &world,
+            &ContainerGuiState {},
+            &ContainerGuiMsg::Take(item),
+        );
+        let effects = Effect::flatten(vec![effect]);
+
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| matches!(
+                    effect,
+                    Effect::Send {
+                        msg: Message {
+                            to,
+                            payload: MessagePayload::Frob,
+                        },
+                    } if *to == item
+                ))
+                .count(),
+            1,
+            "taking MOVE | SCRIPT loot must run its authored Frob exactly once: {effects:?}"
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| matches!(
+                    effect,
+                    Effect::DropEntityInfo {
+                        parent_entity_id,
+                        dropped_entity_id,
+                    } if *parent_entity_id == inventory && *dropped_entity_id == item
+                ))
+                .count(),
+            1,
+            "taking MOVE | SCRIPT loot must transfer it exactly once: {effects:?}"
+        );
+    }
+
+    /// Both panels' item grids must land on their cell separators - the loot
+    /// panel's hologram lines, the backpack's `invback.pcx` art - stepping by
+    /// the shared 35x34 cell pitch. A 1x1 item therefore occupies exactly one
+    /// cell at the grid origin.
     #[test]
     fn item_grids_sit_on_the_authored_backdrop_cells() {
         let (world, container, item, _inventory) = loot_world();
 
-        for (gui, expected_origin) in [
-            (ContainerGui::loot_container(), vec2(15.0, 153.0)),
-            (ContainerGui::inv_container(), vec2(4.0, 17.0)),
+        let (mut vr_world, vr_container, vr_item, _) = loot_world();
+        present_in_vr(&mut vr_world);
+
+        for (gui, scene, expected_origin) in [
+            // Flat keeps the retail `contain.pcx` grid inset.
+            (
+                ContainerGui::loot_container(),
+                (&world, container, item),
+                vec2(15.0, 153.0),
+            ),
+            // VR's hologram panel is nothing but the grid, centered.
+            (
+                ContainerGui::loot_container(),
+                (&vr_world, vr_container, vr_item),
+                vec2(24.0, 34.0),
+            ),
+            (
+                ContainerGui::inv_container(),
+                (&world, container, item),
+                vec2(4.0, 17.0),
+            ),
         ] {
-            let components = gui.get_components(&None, container, &world, &ContainerGuiState {});
+            let (world, container, item) = scene;
+            let components = gui.get_components(&None, container, world, &ContainerGuiState {});
             let (position, size) = components
                 .iter()
                 .find_map(|c| match c {
@@ -755,6 +1099,87 @@ mod tests {
             assert_eq!(position, expected_origin, "grid origin");
             assert_eq!(size, vec2(35.0, 34.0), "one cell of the shared pitch");
         }
+    }
+
+    /// The deliberate presentation divergence (AGENTS.md section 3): flat draws
+    /// the retail `contain.pcx` MFD, VR draws the bare hologram grid. Negative
+    /// half first - neither may draw the other's backdrop.
+    #[test]
+    fn a_loot_panel_keeps_the_retail_art_in_flat_and_the_hologram_in_vr() {
+        let (flat_world, flat_container, ..) = loot_world();
+        let (mut vr_world, vr_container, ..) = loot_world();
+        present_in_vr(&mut vr_world);
+
+        let backdrop = |world: &World, container| {
+            ContainerGui::loot_container()
+                .get_components(&None, container, world, &ContainerGuiState {})
+                .into_iter()
+                .find_map(|component| match component {
+                    GuiComponent::Image {
+                        texture, position, ..
+                    } if position == vec2(0.0, 0.0)
+                        || texture == crate::ui::HOLOGRAM_TILE_TEXTURE =>
+                    {
+                        Some(texture)
+                    }
+                    _ => None,
+                })
+                .expect("the panel draws a backdrop")
+        };
+
+        assert_eq!(backdrop(&flat_world, flat_container), "contain.pcx");
+        assert_eq!(
+            backdrop(&vr_world, vr_container),
+            crate::ui::HOLOGRAM_TILE_TEXTURE
+        );
+    }
+
+    /// The panel's canvas follows its style: flat is the full authored art,
+    /// VR is only as tall as the grid.
+    #[test]
+    fn a_loot_panels_canvas_matches_the_style_it_draws() {
+        let (flat_world, container, ..) = loot_world();
+        let (mut vr_world, vr_container, ..) = loot_world();
+        present_in_vr(&mut vr_world);
+        let gui = ContainerGui::loot_container();
+
+        let flat = gui.get_config_for(container, &flat_world, &ContainerGuiState {});
+        let vr = gui.get_config_for(vr_container, &vr_world, &ContainerGuiState {});
+
+        assert_eq!(flat.screen_size_in_pixels, vec2(188.0, 296.0));
+        assert_eq!(vr.screen_size_in_pixels.x, 188.0);
+        assert!(
+            vr.screen_size_in_pixels.y < flat.screen_size_in_pixels.y,
+            "the hologram panel is only as tall as its grid"
+        );
+        assert_eq!(
+            flat.world_offset, vr.world_offset,
+            "only the drawing differs - placement is shared"
+        );
+    }
+
+    #[test]
+    fn handheld_loot_uses_retail_art_and_hit_geometry_in_vr() {
+        let (mut world, container, ..) = loot_world();
+        present_in_vr(&mut world);
+        world.add_unique(crate::mission::mfd_device::ScreenActive(true));
+        let gui = ContainerGui::loot_container();
+        let spec = gui.spec(&world);
+        assert_eq!(spec.backdrop.texture(), "contain.pcx");
+        assert_eq!(spec.grid_origin, LOOT_ART_GRID_ORIGIN);
+        assert_eq!(
+            gui.get_config_for(container, &world, &ContainerGuiState {})
+                .screen_size_in_pixels,
+            vec2(188.0, 296.0)
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<crate::mission::mfd_device::ScreenActive>>()
+            .unwrap()
+            .0 = false;
+        assert_eq!(
+            gui.spec(&world).backdrop.texture(),
+            crate::ui::HOLOGRAM_TILE_TEXTURE
+        );
     }
 
     #[test]
@@ -823,14 +1248,14 @@ mod tests {
             ContainerGui::loot_container(),
             ContainerGui::inv_container(),
         ] {
-            let backdrop = gui.background_image.clone();
+            let backdrop = gui.spec(&world).backdrop.texture().to_owned();
             let components = gui.get_components(&cursor, container, &world, &ContainerGuiState {});
             let kinds: Vec<ImageKind> = components
                 .iter()
                 .filter_map(|c| match c {
                     GuiComponent::Button { kind, .. } => Some(*kind),
-                    // The panel's own backdrop is the only art that is not
-                    // an item icon.
+                    // The panel's own backdrop (art or hologram grid) is the
+                    // only image that is not an item icon.
                     GuiComponent::Image { kind, texture, .. } if *texture != backdrop => {
                         Some(*kind)
                     }
@@ -848,6 +1273,78 @@ mod tests {
                 kinds
             );
         }
+    }
+
+    #[test]
+    fn cyber_module_icons_remain_collectible_in_both_container_layouts() {
+        let (mut world, container, item, _inventory) = loot_world();
+        world.add_component(item, PropObjIcon("upgrade".to_owned()));
+
+        for gui in [
+            ContainerGui::loot_container(),
+            ContainerGui::inv_container(),
+        ] {
+            let components = gui.get_components(&None, container, &world, &ContainerGuiState {});
+            assert!(
+                components.iter().any(|component| matches!(
+                    component,
+                    GuiComponent::Button { texture, entity: Some(entity), kind, .. }
+                        if texture == "upgrade.pcx"
+                            && *entity == item
+                            && *kind == crate::ui::ImageKind::ObjectIcon
+                )),
+                "a contained cyber-module pile must emit its collectible object-icon button"
+            );
+        }
+    }
+
+    /// A Broken item draws its `P$ObjBroken` art in the grid and on the
+    /// cursor; any other state, or a Broken item with no broken art, keeps its
+    /// normal icon.
+    #[test]
+    fn a_broken_item_draws_its_broken_icon() {
+        use crate::gui::GuiCursor;
+        use dark::properties::PropObjState;
+
+        let (mut world, container, item, _inventory) = loot_world();
+        let cursor = Some(GuiCursor {
+            position: point2(10.0, 10.0),
+            held_entity_id: Some(item),
+        });
+        let drawn = |world: &World| -> Vec<Vec<String>> {
+            [
+                ContainerGui::loot_container(),
+                ContainerGui::inv_container(),
+            ]
+            .iter()
+            .map(|gui| {
+                gui.get_components(&cursor, container, world, &ContainerGuiState {})
+                    .into_iter()
+                    .filter_map(|component| match component {
+                        GuiComponent::Button { texture, .. } => Some(texture),
+                        GuiComponent::Image { texture, .. } if texture.starts_with("icn_") => {
+                            Some(texture)
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect()
+        };
+        let both = |icon: &str| vec![vec![icon.to_owned(); 2]; 2];
+
+        world.add_component(item, PropObjBrokenIcon("icn_psib".to_owned()));
+        assert_eq!(drawn(&world), both("icn_psi.pcx"), "a Normal item");
+
+        world.add_component(item, PropObjState(ObjectState::Broken));
+        assert_eq!(drawn(&world), both("icn_psib.pcx"), "a Broken item");
+
+        world.add_component(item, PropObjState(ObjectState::Destroyed));
+        assert_eq!(drawn(&world), both("icn_psi.pcx"), "only Broken swaps");
+
+        world.add_component(item, PropObjState(ObjectState::Broken));
+        world.delete_component::<PropObjBrokenIcon>(item);
+        assert_eq!(drawn(&world), both("icn_psi.pcx"), "no broken art");
     }
 
     /// Use-only objects can be contained too. Audio logs are the critical

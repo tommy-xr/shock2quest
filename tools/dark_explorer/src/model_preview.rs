@@ -12,13 +12,17 @@
 
 use std::ffi::CString;
 
-use cgmath::{Quaternion, Rad, Rotation3, vec2, vec3};
+use cgmath::{InnerSpace, Matrix4, One, Quaternion, Rad, Rotation3, vec2, vec3};
 use dark::importers::MODELS_IMPORTER;
 use dark::model::Model;
 use dark_viewer::scenes::{BinAiViewerScene, BinObjViewerScene, SkeletonViewerScene, ToolScene};
 use eframe::{egui, glow};
 use engine::Engine;
 use engine::assets::asset_cache::AssetCache;
+use shock2vr::{
+    GloveRenderer, Handedness,
+    vr_grip::{GripKinematics, GripSurface, ResolvedGrip, surface_fingerprint},
+};
 
 use crate::ui::quiet_catch;
 
@@ -41,6 +45,14 @@ pub fn init_raw_gl(cc: &eframe::CreationContext<'_>) {
 pub enum PreviewScene {
     /// The `.bin` model alone.
     Model,
+    BeltCard(shock2vr::vr_belt::BeltCardPose),
+    /// Authored VR weapon reference, retaining its integrated hand.
+    VrReference,
+    Grip(
+        Handedness,
+        ResolvedGrip,
+        Option<shock2vr::vr_support::SupportProfile>,
+    ),
     /// The `.bin` model animated by a motion clip (`<name>_.mc`).
     Clip(String),
     /// Bone lines only: the `.bin`'s skeleton posed by a motion clip.
@@ -50,7 +62,10 @@ pub enum PreviewScene {
 impl PreviewScene {
     fn clip(&self) -> Option<&str> {
         match self {
-            PreviewScene::Model => None,
+            PreviewScene::Model
+            | PreviewScene::VrReference
+            | PreviewScene::Grip(..)
+            | PreviewScene::BeltCard(..) => None,
             PreviewScene::Clip(clip) | PreviewScene::Skeleton(clip) => Some(clip),
         }
     }
@@ -69,6 +84,8 @@ struct OffscreenTarget {
 
 pub struct ModelPreview {
     engine: Box<dyn Engine>,
+    glove: Option<GloveRenderer>,
+    grip_bounds: Option<(cgmath::Vector3<f32>, f32)>,
     asset_cache: AssetCache,
     /// What the current scene (or error) was built for: (key, scene, skeletons,
     /// hitboxes, articulation). Guards against rebuilding — or re-panicking —
@@ -78,6 +95,9 @@ pub struct ModelPreview {
     /// The scene plays an animation clip, so it re-renders every frame.
     animated: bool,
     error: Option<String>,
+    /// Which geometry the last load drew: `None` for an LGMD object, which has
+    /// no high-detail alternative to choose between.
+    rendered_pmnm: Option<bool>,
     pub debug_skeletons: bool,
     pub debug_hit_boxes: bool,
     pub debug_articulation: bool,
@@ -88,6 +108,10 @@ pub struct ModelPreview {
     /// `advance()` is the only time source - `--screenshot` runs set this to
     /// capture a deterministic pose.
     pub paused: bool,
+    pub ambient: f32,
+    pub light_strengths: [f32; 3],
+    light_colors: [[f32; 3]; 3],
+    lighting_radius: f32,
     // Orbit camera around `target` (dark_viewer's parameterization: pitch 90
     // is horizontal, distance along the orbit radius).
     yaw: f32,
@@ -111,16 +135,23 @@ impl ModelPreview {
         let asset_cache = AssetCache::new(base_path, mounts);
         ModelPreview {
             engine,
+            glove: None,
+            grip_bounds: None,
             asset_cache,
             built_for: None,
             scene: None,
             animated: false,
             error: None,
+            rendered_pmnm: None,
             debug_skeletons: false,
             debug_hit_boxes: false,
             debug_articulation: false,
             articulation: None,
             paused: false,
+            ambient: 0.5,
+            light_strengths: [0.0; 3],
+            light_colors: [[1.0, 0.55, 0.25], [0.25, 0.55, 1.0], [0.35, 1.0, 0.45]],
+            lighting_radius: 1.0,
             yaw: 65.0,
             pitch: 75.0,
             distance: 10.0,
@@ -145,6 +176,13 @@ impl ModelPreview {
             ui.label(format!("Cannot render this model: {error}"));
             return;
         }
+        if let (PreviewScene::Model, Some(pmnm)) = (scene, self.rendered_pmnm) {
+            ui.label(if pmnm {
+                "Rendered geometry: PMNM high-detail mesh"
+            } else {
+                "Rendered geometry: classic LGMM mesh"
+            });
+        }
         if self.animated && !self.paused {
             // Tick the playing clip with real dt and keep frames coming.
             self.needs_render = true;
@@ -155,7 +193,13 @@ impl ModelPreview {
         // itself triggers that repaint). The overlays mean nothing in
         // skeleton-only mode, which draws bones and nothing else.
         ui.horizontal(|ui| {
-            if !matches!(scene, PreviewScene::Skeleton(_)) {
+            if !matches!(
+                scene,
+                PreviewScene::Skeleton(_)
+                    | PreviewScene::Grip(..)
+                    | PreviewScene::VrReference
+                    | PreviewScene::BeltCard(..)
+            ) {
                 ui.checkbox(&mut self.debug_skeletons, "Skeleton");
                 ui.checkbox(&mut self.debug_hit_boxes, "Hitboxes");
             }
@@ -166,6 +210,34 @@ impl ModelPreview {
             }
             ui.label("(drag to orbit, scroll to zoom)");
         });
+
+        egui::CollapsingHeader::new("Lighting")
+            .default_open(!shock2vr::tricorder::is_model(key))
+            .show(ui, |ui| {
+                self.needs_render |= ui
+                    .add(egui::Slider::new(&mut self.ambient, 0.0..=1.0).text("Ambient"))
+                    .changed();
+                for (index, label) in ["Warm key", "Cool fill", "Green rim"].iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        self.needs_render |= ui
+                            .add(
+                                egui::Slider::new(&mut self.light_strengths[index], 0.0..=3.0)
+                                    .text(*label),
+                            )
+                            .changed();
+                        self.needs_render |= ui
+                            .color_edit_button_rgb(&mut self.light_colors[index])
+                            .changed();
+                    });
+                }
+                if ui.button("Reset lighting").clicked() {
+                    self.ambient = 0.5;
+                    self.light_strengths = [0.0; 3];
+                    self.light_colors = [[1.0, 0.55, 0.25], [0.25, 0.55, 1.0], [0.35, 1.0, 0.45]];
+                    self.needs_render = true;
+                }
+                ui.label("Lights stay fixed while you orbit. Unlit materials ignore lighting.");
+            });
 
         let available = ui.available_size();
         let size = egui::vec2(available.x.max(1.0), available.y.max(1.0));
@@ -207,6 +279,26 @@ impl ModelPreview {
         }
     }
 
+    /// Both grip editing modes share model preparation and camera ordering.
+    pub fn show_grip(
+        &mut self,
+        ui: &mut egui::Ui,
+        frame: &mut eframe::Frame,
+        key: &str,
+        scene: &PreviewScene,
+        camera: Option<(&str, Handedness)>,
+    ) {
+        self.prepare(key, scene);
+        if let Some((view, hand)) = camera {
+            self.grip_camera(view, hand);
+        }
+        self.show(ui, frame, key, scene);
+    }
+
+    pub fn prepare(&mut self, key: &str, scene: &PreviewScene) {
+        self.ensure_scene(key, scene);
+    }
+
     /// (Re)build the scene when the key, clip, or a debug toggle changed,
     /// framing the camera from the model's bounds where they are known.
     fn ensure_scene(&mut self, key: &str, scene: &PreviewScene) {
@@ -225,23 +317,223 @@ impl ModelPreview {
         self.scene = None;
         self.animated = false;
         self.error = None;
+        self.rendered_pmnm = None;
         self.articulation = None;
         // Load the model eagerly under catch_unwind — the scene itself defers
         // loading to render, and Dark parsers panic on malformed input; a
         // failure becomes an error label instead of a crash. The key resolves
         // through the full game mount stack (obj outranks mesh; the two
         // families currently share no `.bin` basenames).
-        let model = match quiet_catch(|| self.asset_cache.get(&MODELS_IMPORTER, key)) {
+        let model = match quiet_catch(|| {
+            if shock2vr::tricorder::is_model(key) {
+                return std::rc::Rc::new(shock2vr::tricorder::model(&mut self.asset_cache));
+            }
+            if matches!(scene, PreviewScene::VrReference) {
+                return std::rc::Rc::new(
+                    self.asset_cache
+                        .get(&dark::importers::VR_HELD_MODELS_IMPORTER, key)
+                        .model
+                        .clone(),
+                );
+            }
+            if matches!(scene, PreviewScene::Grip(..))
+                && shock2vr::vr_weapon_grip::supports_model(key)
+            {
+                let source = self
+                    .asset_cache
+                    .get(&dark::importers::GLOVE_WEAPON_IMPORTER, key);
+                if let Some(source) = source.as_ref() {
+                    return std::rc::Rc::new(source.model.clone());
+                }
+            }
+            self.asset_cache.get(&MODELS_IMPORTER, key)
+        }) {
             Ok(model) => model,
             Err(msg) => {
                 self.error = Some(msg);
                 return;
             }
         };
+        self.rendered_pmnm = model.is_animated().then(|| model.bind_matrices().is_some());
         // Skeleton scenes frame on their posed joints; an AI mesh has no
         // bounding box for `frame_camera` to use.
         let mut pose_bounds = None;
         let built: Result<Box<dyn ToolScene>, String> = match scene {
+            PreviewScene::BeltCard(pose) => quiet_catch(|| {
+                use cgmath::EuclideanSpace;
+                let belt = self
+                    .asset_cache
+                    .get(&dark::importers::GLB_MODELS_IMPORTER, "astra-vr-belt.glb");
+                let pouch = self.asset_cache.get(
+                    &dark::importers::GLB_MODELS_IMPORTER,
+                    "astra-vr-ammo-pouch.glb",
+                );
+                let mut objects = Vec::new();
+                for (part, offset) in [(belt, vec3(0.0, 0.0, 0.0)), (pouch, vec3(0.0, 0.0, -0.35))]
+                {
+                    let root = Matrix4::from_translation(offset / shock2vr::METERS_PER_WORLD_UNIT)
+                        * Matrix4::from_scale(1.0 / shock2vr::METERS_PER_WORLD_UNIT);
+                    for mut object in part.clone_scene_objects() {
+                        object.set_transform(root);
+                        objects.push(object);
+                    }
+                }
+                let bounds = model.bounding_box().ok_or("Card model has no bounds")?;
+                let transform = pose.transform()
+                    * shock2vr::vr_belt::card_model_transform(
+                        bounds.min.to_vec(),
+                        bounds.max.to_vec(),
+                    );
+                for mut object in model.clone_scene_objects() {
+                    object.set_transform(transform);
+                    objects.push(object);
+                }
+                pose_bounds = Some((
+                    vec3(-0.08, 0.0, -0.30) / shock2vr::METERS_PER_WORLD_UNIT,
+                    0.35,
+                ));
+                Ok(
+                    Box::new(GripPreviewScene(engine::scene::Scene::from_objects(
+                        objects,
+                    ))) as Box<dyn ToolScene>,
+                )
+            })
+            .and_then(|r: Result<_, &str>| r.map_err(str::to_string)),
+            PreviewScene::VrReference => Ok(Box::new(GripPreviewScene(
+                engine::scene::Scene::from_objects(model.clone_scene_objects()),
+            ))),
+            PreviewScene::Grip(hand, grip, support) => quiet_catch(|| {
+                let model_mirror = self
+                    .grip_model_mirror(key)
+                    .map_err(|_| "Weapon mirror unavailable")?;
+                let mut model = model.as_ref().clone();
+                if shock2vr::vr_weapon_grip::supports_model(key) {
+                    let source = self
+                        .asset_cache
+                        .get(&dark::importers::GLOVE_WEAPON_IMPORTER, key);
+                    let source = source.as_ref().as_ref().ok_or("Weapon model unavailable")?;
+                    model.apply_local_transform(shock2vr::vr_weapon_grip::model_frame(
+                        source, *hand,
+                    ));
+                }
+                let grip_transform = Matrix4::from_translation(grip.offset)
+                    * Matrix4::from(grip.rotation)
+                    * Matrix4::from_scale(grip.item_scale);
+                let mut objects = if shock2vr::tricorder::is_model(key) {
+                    let mut objects = model.clone_scene_objects();
+                    for object in &mut objects {
+                        object.set_transform(grip_transform * object.get_transform());
+                    }
+                    objects
+                } else {
+                    Model::transform(&model, grip_transform).clone_scene_objects()
+                };
+                if self.glove.is_none() {
+                    self.glove = GloveRenderer::new(&mut self.asset_cache);
+                }
+                let glove = self.glove.as_mut().ok_or("Glove model unavailable")?;
+                objects.extend(glove.render_hand(
+                    vec3(0.0, 0.0, 0.0),
+                    Quaternion::one(),
+                    *hand,
+                    0.0,
+                    0.0,
+                    true,
+                    Some((grip.finger_amounts(), 1.0)),
+                    shock2vr::HandLight::Off,
+                    None,
+                ));
+                let mut support_points = Vec::new();
+                if let Some(support) = support {
+                    if support.region.is_some() {
+                        let [a, b] = support
+                            .region_in_frame(*hand, model_mirror)
+                            .map(|p| grip.offset + grip.rotation * (p * grip.item_scale));
+                        objects.push(support_region_overlay(a, b, support.grab_radius));
+                        for p in [a, b] {
+                            support_points.push(p - vec3(1.0, 1.0, 1.0) * support.grab_radius);
+                            support_points.push(p + vec3(1.0, 1.0, 1.0) * support.grab_radius);
+                        }
+                    }
+                    let other = if *hand == Handedness::Left {
+                        Handedness::Right
+                    } else {
+                        Handedness::Left
+                    };
+                    let rig = glove.grip_kinematics(other);
+                    let pose = support.glove_pose(
+                        *hand,
+                        shock2vr::vr_support::GripPose {
+                            position: grip.offset,
+                            rotation: grip.rotation,
+                        },
+                        grip,
+                        &rig,
+                        support.anchor_in_frame(*hand, model_mirror) * grip.item_scale,
+                    );
+                    let mut support_grip = grip.clone();
+                    support_grip.curls = support.curls;
+                    support_grip.trigger_curls = None; // Preview curls are already blended.
+                    objects.extend(glove.render_hand(
+                        pose.position,
+                        pose.rotation,
+                        other,
+                        0.0,
+                        0.0,
+                        false,
+                        Some((support_grip.finger_amounts(), 1.0)),
+                        shock2vr::HandLight::Off,
+                        None,
+                    ));
+                    support_points.extend(
+                        rig.fingers
+                            .iter()
+                            .flatten()
+                            .flatten()
+                            .map(|p| pose.point(*p)),
+                    );
+                }
+                let triangles = if shock2vr::tricorder::is_model(key) {
+                    shock2vr::tricorder::triangles()
+                } else if shock2vr::vr_weapon_grip::supports_model(key) {
+                    shock2vr::vr_weapon_grip::inputs(&mut self.asset_cache, key, *hand)
+                        .ok_or("Weapon grip geometry unavailable")?
+                        .0
+                } else {
+                    self.asset_cache
+                        .get(&dark::importers::GRIP_SURFACE_IMPORTER, key)
+                        .as_ref()
+                        .clone()
+                };
+                let transform = Matrix4::from_translation(grip.offset)
+                    * Matrix4::from(grip.rotation)
+                    * Matrix4::from_scale(grip.item_scale);
+                // Include the actual sampled glove arcs as well as the item, so
+                // a small prop cannot crop the wrist or a large one its far end.
+                let kinematics = glove.grip_kinematics(*hand);
+                let points = triangles
+                    .iter()
+                    .flatten()
+                    .map(|p| (transform * p.to_homogeneous()).truncate())
+                    .chain(kinematics.fingers.iter().flatten().flatten().copied())
+                    .chain(support_points);
+                let mut min = vec3(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+                let mut max = -min;
+                for p in points {
+                    for i in 0..3 {
+                        min[i] = min[i].min(p[i]);
+                        max[i] = max[i].max(p[i]);
+                    }
+                }
+                pose_bounds = Some(((min + max) * 0.5, (max - min).magnitude() * 0.5));
+                self.grip_bounds = pose_bounds;
+                Ok(
+                    Box::new(GripPreviewScene(engine::scene::Scene::from_objects(
+                        objects,
+                    ))) as Box<dyn ToolScene>,
+                )
+            })
+            .and_then(|r: Result<_, &str>| r.map_err(str::to_string)),
             PreviewScene::Model => BinObjViewerScene::from_model(
                 key.to_string(),
                 &self.asset_cache,
@@ -301,13 +593,122 @@ impl ModelPreview {
                 self.needs_render = true;
                 if reframe {
                     match pose_bounds {
-                        Some((center, radius)) => self.frame_bounds(center, radius, 1.0),
+                        Some((center, radius)) => self.frame_bounds(
+                            center,
+                            radius,
+                            if matches!(scene, PreviewScene::Grip(..)) {
+                                0.25
+                            } else {
+                                1.0
+                            },
+                        ),
                         None => self.frame_camera(&model),
                     }
                 }
             }
             Err(err) => self.error = Some(err),
         }
+    }
+
+    /// Reflection between the two rendered weapon frames. Ordinary pickups
+    /// retain their mesh, so X reflection supplies an approximate opposite-side fit.
+    pub fn grip_model_mirror(&mut self, key: &str) -> Result<Matrix4<f32>, String> {
+        if !shock2vr::vr_weapon_grip::supports_model(key) {
+            return Ok(Handedness::Left.mirror());
+        }
+        shock2vr::vr_weapon_grip::model_mirror(&mut self.asset_cache, key)
+            .ok_or_else(|| "Weapon mirror unavailable".into())
+    }
+
+    /// Shared game geometry and rig samples for validation and explicit auto-fit.
+    pub fn grip_inputs(
+        &mut self,
+        key: &str,
+        hand: Handedness,
+    ) -> Result<
+        (
+            GripSurface,
+            GripKinematics,
+            String,
+            Option<(Vec<[cgmath::Point3<f32>; 3]>, Vec<cgmath::Point3<f32>>)>,
+        ),
+        String,
+    > {
+        quiet_catch(|| {
+            let weapon = if shock2vr::vr_weapon_grip::supports_model(key) {
+                Some(
+                    shock2vr::vr_weapon_grip::inputs(&mut self.asset_cache, key, hand)
+                        .ok_or("Weapon grip geometry unavailable")?,
+                )
+            } else {
+                None
+            };
+            let (triangles, hash, guide) = if shock2vr::tricorder::is_model(key) {
+                let triangles = shock2vr::tricorder::triangles();
+                let hash = surface_fingerprint(&triangles);
+                (triangles, hash, None)
+            } else if let Some((triangles, arms, hash)) = weapon {
+                (triangles.clone(), hash, Some((triangles, arms)))
+            } else {
+                let triangles = self
+                    .asset_cache
+                    .get(&dark::importers::GRIP_SURFACE_IMPORTER, key);
+                (
+                    triangles.as_ref().clone(),
+                    surface_fingerprint(&triangles),
+                    None,
+                )
+            };
+            let surface = GripSurface::new(&triangles).ok_or("No usable pickup surface")?;
+            if self.glove.is_none() {
+                self.glove = GloveRenderer::new(&mut self.asset_cache);
+            }
+            let rig = self
+                .glove
+                .as_mut()
+                .ok_or("Glove model unavailable")?
+                .grip_kinematics(hand);
+            Ok((surface, rig, hash, guide))
+        })
+        .and_then(|r: Result<_, &str>| r.map_err(str::to_string))
+    }
+
+    /// Camera presets share the gallery's hand-local axes. Orbit remains free.
+    pub fn belt_camera(&mut self, view: &str) {
+        self.target = vec3(-0.08, 0.0, -0.30) / shock2vr::METERS_PER_WORLD_UNIT;
+        self.distance = 0.65;
+        (self.yaw, self.pitch) = match view {
+            "front" => (-90.0, 90.0),
+            "top" => (-90.0, 10.0),
+            "side" => (0.0, 90.0),
+            _ => (-125.0, 65.0),
+        };
+        self.needs_render = true;
+    }
+
+    pub fn grip_camera(&mut self, view: &str, hand: Handedness) {
+        if let Some((center, radius)) = self.grip_bounds {
+            self.frame_bounds(center, radius, 0.25);
+        }
+        (self.yaw, self.pitch) = match view {
+            "front" => (90.0, 90.0),
+            "back" => (-90.0, 90.0),
+            "top" => (90.0, 0.1),
+            "palm" => (
+                if hand == Handedness::Right {
+                    63.4
+                } else {
+                    -63.4
+                },
+                65.9,
+            ),
+            _ => (-45.0, 66.2),
+        };
+        if view == "palm" {
+            self.target = vec3(0.0, 0.0, -0.12);
+            self.distance = 0.5;
+        }
+        self.needs_render = true;
     }
 
     /// Step the playing scene forward by `seconds` of simulation time (in
@@ -356,6 +757,7 @@ impl ModelPreview {
                 self.pitch = 75.0;
                 self.target = vec3(0.0, 0.0, 0.0);
                 self.distance = 11.0;
+                self.lighting_radius = 3.0;
             }
         }
     }
@@ -366,6 +768,7 @@ impl ModelPreview {
         self.yaw = 65.0;
         self.pitch = 75.0;
         self.target = center;
+        self.lighting_radius = radius.max(0.8);
         self.distance = (radius * 2.9).clamp(min_distance, 150.0);
     }
 
@@ -383,7 +786,16 @@ impl ModelPreview {
         if response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
-                self.distance = (self.distance * (-scroll * 0.003).exp()).clamp(0.5, 300.0);
+                let minimum = if self
+                    .built_for
+                    .as_ref()
+                    .is_some_and(|(_, s, ..)| matches!(s, PreviewScene::Grip(..)))
+                {
+                    0.15
+                } else {
+                    0.5
+                };
+                self.distance = (self.distance * (-scroll * 0.003).exp()).clamp(minimum, 300.0);
                 moved = true;
             }
         }
@@ -490,7 +902,7 @@ impl ModelPreview {
         let Some(scene) = &self.scene else { return };
         // Belt-and-braces: the scene loads lazily through the asset cache at
         // render time too (its own model lookup, the grid texture).
-        let rendered = match quiet_catch(|| scene.render(&mut self.asset_cache)) {
+        let mut rendered = match quiet_catch(|| scene.render(&mut self.asset_cache)) {
             Ok(rendered) => rendered,
             Err(msg) => {
                 self.scene = None;
@@ -498,6 +910,37 @@ impl ModelPreview {
                 return;
             }
         };
+
+        // Use the same ambient, inverse-distance falloff and per-fragment cone
+        // evaluation as authored object lights. Keep this rig in model space,
+        // independent of the orbit camera and zoom, and scale it to the bounds.
+        let mut lights = engine::scene::light::LightArray::new()
+            .with_object_lighting(vec3(self.ambient, self.ambient, self.ambient), 0.0)
+            // The game's default `object_specular`.
+            .with_specular(1.5)
+            .with_veins(
+                shock2vr::object_lighting::growth_vein_tuning(),
+                shock2vr::object_lighting::weapon_vein_tuning(),
+            );
+        for (index, offset) in [
+            vec3(2.0, 2.0, 1.0),
+            vec3(-2.0, 1.0, 1.0),
+            vec3(0.0, 1.5, -2.0),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let position = self.target + offset * self.lighting_radius;
+            let mut light = engine::scene::SpotLight::new(
+                position,
+                self.target - position,
+                self.light_colors[index].into(),
+                self.light_strengths[index] * self.lighting_radius * offset.magnitude(),
+            );
+            light.range = self.lighting_radius * 8.0;
+            lights.add_light(light);
+        }
+        rendered.lights = lights;
 
         // dark_viewer's orbit: position on a sphere around `target`, oriented
         // to look back at it.
@@ -511,6 +954,8 @@ impl ModelPreview {
         let pitch_quat = Quaternion::from_angle_x(Rad(pitch_rad - 90.0f32.to_radians()));
         let yaw_quat = Quaternion::from_angle_y(Rad(-yaw_rad + 90.0f32.to_radians()));
         let render_context = engine::EngineRenderContext {
+            ambient_light_intensity: 1.0,
+            level_light_intensity: 1.0,
             time: 0.0,
             camera_offset: self.target + offset,
             camera_rotation: Quaternion {
@@ -522,7 +967,15 @@ impl ModelPreview {
             projection_matrix: cgmath::perspective(
                 cgmath::Deg(45.0),
                 size[0] as f32 / size[1] as f32,
-                0.1,
+                if self
+                    .built_for
+                    .as_ref()
+                    .is_some_and(|(_, s, ..)| matches!(s, PreviewScene::Grip(..)))
+                {
+                    0.01
+                } else {
+                    0.1
+                },
                 1000.0,
             ),
             screen_size: vec2(size[0] as f32, size[1] as f32),
@@ -549,4 +1002,30 @@ impl ModelPreview {
             );
         }
     }
+}
+
+struct GripPreviewScene(engine::scene::Scene);
+impl ToolScene for GripPreviewScene {
+    fn update(&mut self, _delta_time: f32) {}
+    fn render(&self, _asset_cache: &mut AssetCache) -> engine::scene::Scene {
+        self.0.clone()
+    }
+}
+
+/// Wire capsule in preview coordinates: the same world-unit radius used to grab.
+fn support_region_overlay(
+    a: cgmath::Vector3<f32>,
+    b: cgmath::Vector3<f32>,
+    radius: f32,
+) -> engine::scene::SceneObject {
+    use engine::scene::{SceneObject, VertexPosition, color_material, lines_mesh};
+    let mut vertices = vec![
+        VertexPosition { position: a },
+        VertexPosition { position: b },
+    ];
+    dark::hit_box::append_capsule_lines(&mut vertices, &Matrix4::one(), a, b, radius);
+    SceneObject::new(
+        color_material::create(vec3(0.1, 0.9, 0.8)),
+        Box::new(lines_mesh::create(vertices)),
+    )
 }

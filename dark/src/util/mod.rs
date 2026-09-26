@@ -1,3 +1,6 @@
+mod material_includes;
+mod material_overlays;
+pub(crate) use material_overlays::append_incidence_overlays;
 mod merge_maps;
 
 use cgmath::{InnerSpace, Point3, point3};
@@ -56,6 +59,30 @@ pub fn resolve_texture_name(asset_cache: &AssetCache, requested: &str) -> Option
     Some(resolved)
 }
 
+/// Resolve icon art without the model-texture `txt16/` search. Object icons
+/// prefer their family before considering legacy bare names (also used for
+/// report portraits). An explicitly qualified request stays in that family.
+/// Within a family, preserve mod precedence and prefer DDS/PNG over PCX.
+pub fn resolve_object_icon_name(asset_cache: &AssetCache, requested: &str) -> Option<String> {
+    let stem = Path::new(requested).with_extension("");
+    let stem = stem.to_str()?.to_ascii_lowercase();
+    let resolve = |stem: &str| {
+        let candidates = engine::texture_format::DECODABLE_EXTENSIONS
+            .iter()
+            .map(|ext| format!("{stem}.{ext}"))
+            .collect::<Vec<_>>();
+        asset_cache
+            .asset_paths()
+            .resolve_first(asset_cache.base_path().to_owned(), &candidates)
+    };
+    if !stem.contains('/') {
+        if let Some(name) = resolve(&format!("objicon/{stem}")) {
+            return Some(name);
+        }
+    }
+    resolve(&stem)
+}
+
 /// Resolve the diffuse texture used by a Dark LGMD object material.
 ///
 /// 25th Anniversary replacement models can attach a `.mtl` render-material
@@ -77,6 +104,15 @@ pub fn resolve_object_material_texture_name(
 }
 
 fn object_material_primary_texture(asset_cache: &AssetCache, requested: &str) -> Option<String> {
+    let script = object_material_script(asset_cache, requested)?;
+    let texture = primary_render_pass_texture(&script)?;
+    trace!("object material {requested} primary pass redirects to {texture}");
+    Some(texture)
+}
+
+/// Load a material with includes expanded in authored order. An incomplete or
+/// cyclic include tree falls back to the model's ordinary texture.
+pub fn object_material_script(asset_cache: &AssetCache, requested: &str) -> Option<String> {
     let stem = Path::new(requested).with_extension("");
     let stem = stem.to_str()?.to_ascii_lowercase();
     let candidates = [
@@ -90,9 +126,47 @@ fn object_material_primary_texture(asset_cache: &AssetCache, requested: &str) ->
     let reader = asset_cache.get_raw_reader(&script_name)?;
     let mut script = String::new();
     reader.borrow_mut().read_to_string(&mut script).ok()?;
-    let texture = primary_render_pass_texture(&script)?;
-    trace!("object material {requested} primary pass redirects to {texture}");
-    Some(texture)
+    // The object family mount strips `obj/`; include paths are authored
+    // relative to the full archive path, two levels above obj/txt16.
+    let qualified = script_name.starts_with("obj/") || script_name.starts_with("mesh/");
+    let root = if qualified {
+        script_name.clone()
+    } else {
+        format!("obj/{script_name}")
+    };
+    let expanded = material_includes::expand_material_includes(&root, &script, |path| {
+        let mounted = if qualified {
+            path
+        } else {
+            path.strip_prefix("obj/").unwrap_or(path)
+        };
+        let reader = asset_cache.get_raw_reader(mounted)?;
+        let mut source = String::new();
+        reader.borrow_mut().read_to_string(&mut source).ok()?;
+        Some(source)
+    });
+    if expanded.is_none() {
+        tracing::warn!(
+            "incomplete or cyclic material includes for {requested}; keeping ordinary material"
+        );
+    }
+    expanded
+}
+
+/// A sole unlit, additive pass using the authored texture (25AE gun flashes).
+/// Do not apply overlay blending to ordinary multi-pass weapon materials.
+pub fn object_material_is_additive_flash(asset_cache: &AssetCache, requested: &str) -> bool {
+    object_material_script(asset_cache, requested)
+        .is_some_and(|script| is_additive_flash_script(&script))
+}
+
+fn is_additive_flash_script(script: &str) -> bool {
+    let passes = render_passes(script);
+    passes.len() == 1
+        && passes[0].keeps_authored_texture
+        && passes[0].additive_color
+        && passes[0].unlit
+        && passes[0].texture.is_none()
 }
 
 /// Find the texture a render-material script substitutes for the model's own
@@ -100,12 +174,27 @@ fn object_material_primary_texture(asset_cache: &AssetCache, requested: &str) ->
 ///
 /// Only a *base* pass can supply the diffuse. 25AE materials routinely open
 /// with an additive shine or modulate overlay whose texture is a specular map,
-/// and reach their real diffuse through an `include` (not yet followed - see
-/// #912); treating such an overlay as the diffuse renders the object with its
+/// and reach their real diffuse through an `include`; treating such an
+/// overlay as the diffuse renders the object with its
 /// spec map and can make it disappear. Passes that cannot be a base pass are
 /// skipped, and `$TEXTURE` in a base pass means the model keeps its authored
 /// texture.
 fn primary_render_pass_texture(script: &str) -> Option<String> {
+    for pass in render_passes(script) {
+        if pass.blend_is_base.unwrap_or(true) && pass.incidence_ramp.is_none() {
+            if pass.keeps_authored_texture {
+                return None;
+            }
+            if let Some(texture) = pass.texture.as_deref() {
+                return normalize_material_texture_reference(texture);
+            }
+        }
+    }
+    None
+}
+
+fn render_passes(script: &str) -> Vec<RenderPassFields> {
+    let mut passes = Vec::new();
     let mut pass: Option<RenderPassFields> = None;
     let mut brace_depth = 0_i32;
     let mut saw_open_brace = false;
@@ -148,6 +237,37 @@ fn primary_render_pass_texture(script: &str) -> Option<String> {
                 let source = fields.next();
                 let destination = fields.next();
                 fields_so_far.blend_is_base = Some(blend_is_base(source, destination));
+                fields_so_far.additive_alpha = source
+                    .is_some_and(|s| s.eq_ignore_ascii_case("SRC_ALPHA"))
+                    && destination.is_some_and(|s| s.eq_ignore_ascii_case("ONE"));
+                fields_so_far.alpha_blend = source
+                    .is_some_and(|s| s.eq_ignore_ascii_case("SRC_ALPHA"))
+                    && destination.is_some_and(|s| s.eq_ignore_ascii_case("INV_SRC_ALPHA"));
+                fields_so_far.additive_color = source
+                    .is_some_and(|s| s.eq_ignore_ascii_case("SRC_COLOR"))
+                    && destination.is_some_and(|s| s.eq_ignore_ascii_case("ONE"));
+            } else if directive.eq_ignore_ascii_case("rgb") {
+                let values: Option<Vec<f32>> = fields
+                    .map(|v| v.trim_end_matches(',').parse().ok())
+                    .collect();
+                fields_so_far.tint = values
+                    .filter(|v| v.len() == 3 && v.iter().all(|x| x.is_finite()))
+                    .map(|v| cgmath::vec3(v[0], v[1], v[2]));
+            } else if directive.eq_ignore_ascii_case("alpha") {
+                let values: Vec<_> = fields.collect();
+                // The installed incidence passes use the unity parameter pair.
+                // Other alpha functions remain unsupported rather than guessed.
+                if values.len() == 5
+                    && values[0].eq_ignore_ascii_case("func")
+                    && values[1].eq_ignore_ascii_case("incidence")
+                    && values[2].parse::<f32>() == Ok(1.0)
+                    && values[3].parse::<f32>() == Ok(1.0)
+                {
+                    fields_so_far.incidence_ramp =
+                        Some(values[4].replace('\\', "/").to_ascii_lowercase());
+                }
+            } else if directive.eq_ignore_ascii_case("shaded") {
+                fields_so_far.unlit = fields.next() == Some("0");
             }
         }
 
@@ -159,22 +279,13 @@ fn primary_render_pass_texture(script: &str) -> Option<String> {
 
         if saw_open_brace && brace_depth <= 0 {
             if let Some(fields_so_far) = pass.take() {
-                // A pass with no `blend` directive draws normally.
-                if fields_so_far.blend_is_base.unwrap_or(true) {
-                    if fields_so_far.keeps_authored_texture {
-                        return None;
-                    }
-                    if let Some(texture) = fields_so_far.texture.as_deref() {
-                        return normalize_material_texture_reference(texture);
-                    }
-                }
-                // An overlay, or a base pass naming no texture: keep looking.
+                passes.push(fields_so_far);
             }
             saw_open_brace = false;
         }
     }
 
-    None
+    passes
 }
 
 /// The fields of one `render_pass` block that texture selection depends on.
@@ -186,6 +297,60 @@ struct RenderPassFields {
     keeps_authored_texture: bool,
     /// `None` when the pass carries no `blend` directive at all.
     blend_is_base: Option<bool>,
+    additive_color: bool,
+    additive_alpha: bool,
+    alpha_blend: bool,
+    tint: Option<cgmath::Vector3<f32>>,
+    incidence_ramp: Option<String>,
+    unlit: bool,
+}
+
+/// Supported lit or unlit incidence pass, in authored order. The bitmap and
+/// ramp are loaded separately; missing art simply omits this extra pass.
+#[derive(Debug, PartialEq)]
+pub struct MaterialIncidencePass {
+    pub blend_mode: engine::scene::scene_object::BlendMode,
+    pub texture: Option<String>,
+    pub ramp: String,
+    pub tint: cgmath::Vector3<f32>,
+    pub unlit: bool,
+}
+
+pub fn object_material_incidence_passes(
+    assets: &AssetCache,
+    name: &str,
+) -> Vec<MaterialIncidencePass> {
+    object_material_script(assets, name)
+        .map(|source| incidence_passes(&source))
+        .unwrap_or_default()
+}
+
+fn incidence_passes(source: &str) -> Vec<MaterialIncidencePass> {
+    render_passes(source)
+        .into_iter()
+        .filter_map(|pass| {
+            let blend_mode = if pass.additive_alpha {
+                engine::scene::scene_object::BlendMode::AdditiveAlpha
+            } else if pass.alpha_blend {
+                engine::scene::scene_object::BlendMode::AlphaOverlay
+            } else {
+                return None;
+            };
+            Some(MaterialIncidencePass {
+                blend_mode,
+                texture: if pass.keeps_authored_texture {
+                    None
+                } else {
+                    Some(normalize_material_texture_reference(
+                        pass.texture.as_deref()?,
+                    )?)
+                },
+                ramp: pass.incidence_ramp?,
+                tint: pass.tint.unwrap_or(cgmath::vec3(1.0, 1.0, 1.0)),
+                unlit: pass.unlit,
+            })
+        })
+        .collect()
 }
 
 /// Whether a `blend <source> <destination>` pair describes a base pass - one
@@ -381,6 +546,130 @@ mod tests {
             .map(|(name, bytes)| ((*name).to_owned(), bytes.to_vec()))
             .collect();
         AssetCache::new(String::new(), Box::new(FakeAssetPath(assets)))
+    }
+
+    #[test]
+    fn ui_icons_prefer_their_family_and_high_resolution_encoding() {
+        let assets = cache(&[
+            ("disc.dds", b"model texture"),
+            ("disc.pcx", b"model texture"),
+            ("objicon/disc.pcx", b"classic icon"),
+            ("objicon/disc.png", b"remastered icon"),
+            ("iface/frame.pcx", b"classic frame"),
+            ("iface/frame.dds", b"remastered frame"),
+            ("mport.pcx", b"legacy portrait"),
+        ]);
+        assert_eq!(
+            super::resolve_object_icon_name(&assets, "DISC.PCX").as_deref(),
+            Some("objicon/disc.png")
+        );
+        assert_eq!(
+            super::resolve_object_icon_name(&assets, "iface/frame.pcx").as_deref(),
+            Some("iface/frame.dds")
+        );
+        assert_eq!(
+            super::resolve_object_icon_name(&assets, "mport.pcx").as_deref(),
+            Some("mport.pcx")
+        );
+        assert_eq!(
+            super::resolve_object_icon_name(&assets, "iface/disc.pcx"),
+            None
+        );
+        let classic = cache(&[("objicon/disc.pcx", b"classic icon")]);
+        assert_eq!(
+            super::resolve_object_icon_name(&classic, "disc.png").as_deref(),
+            Some("objicon/disc.pcx")
+        );
+    }
+
+    #[test]
+    fn qualified_material_includes_stay_in_their_family() {
+        let assets = cache(&[
+            ("obj/txt16/example.mtl", b"include local.inc\n"),
+            ("obj/txt16/local.inc", b"object source"),
+            ("txt16/local.inc", b"wrong unqualified source"),
+            ("mesh/txt16/example.mtl", b"include local.inc\n"),
+            ("mesh/txt16/local.inc", b"mesh source"),
+        ]);
+        assert_eq!(
+            super::object_material_script(&assets, "obj/txt16/example")
+                .unwrap()
+                .trim(),
+            "object source"
+        );
+        assert_eq!(
+            super::object_material_script(&assets, "mesh/txt16/example")
+                .unwrap()
+                .trim(),
+            "mesh source"
+        );
+    }
+
+    #[test]
+    fn alpha_incidence_preserves_diffuse_and_authored_passes() {
+        let pass = "render_pass\n{\nblend SRC_ALPHA INV_SRC_ALPHA\ntexture mesh/txt16/specular\nalpha func INCIDENCE 1 1 MATERIALS/shine\nshaded 1\n}\n";
+        let assets = cache(&[
+            ("txt16/creature.mtl", pass.as_bytes()),
+            ("txt16/creature.dds", b"diffuse"),
+            ("mesh/txt16/specular.dds", b"mask"),
+        ]);
+        assert_eq!(
+            resolve_object_material_texture_name(&assets, "creature").as_deref(),
+            Some("txt16/creature.dds")
+        );
+        let passes = super::incidence_passes(&format!("{pass}{pass}"));
+        assert_eq!(passes.len(), 2);
+        assert_eq!(
+            passes[0].blend_mode,
+            engine::scene::scene_object::BlendMode::AlphaOverlay
+        );
+        assert_eq!(passes[0], passes[1]);
+    }
+
+    #[test]
+    fn incidence_passes_preserve_texture_tint_and_duplicates() {
+        let pass = "render_pass\n{\nblend SRC_ALPHA ONE\ntexture obj/txt16/wet_s\nRGB 0.2 0.3 0.4\nalpha func INCIDENCE 1 1 MATERIALS/shine\nshaded 1\n}\n";
+        let passes = super::incidence_passes(&format!("{pass}{pass}"));
+        assert_eq!(passes.len(), 2);
+        assert_eq!(passes[0], passes[1]);
+        assert_eq!(passes[0].texture.as_deref(), Some("wet_s"));
+        assert_eq!(passes[0].ramp, "materials/shine");
+        assert_eq!(passes[0].tint, cgmath::vec3(0.2, 0.3, 0.4));
+        assert!(!passes[0].unlit);
+        assert!(
+            super::incidence_passes(&pass.replace("1 1 MATERIALS", "2 1 MATERIALS")).is_empty()
+        );
+        assert!(super::incidence_passes(&pass.replace("SRC_ALPHA ONE", "ONE ZERO")).is_empty());
+        assert!(
+            super::incidence_passes(&pass.replace("alpha func INCIDENCE", "alpha func UNKNOWN"))
+                .is_empty()
+        );
+        let own = super::incidence_passes(&pass.replace("obj/txt16/wet_s", "$TEXTURE"));
+        assert_eq!(own[0].texture, None);
+    }
+
+    #[test]
+    fn object_material_resolves_included_base_before_local_overlays() {
+        let assets = cache(&[
+            ("txt16/example.mtl", b"include ../../materials/base.inc\nrender_pass\n{\nblend SRC_ALPHA ONE\ntexture obj/txt16/specular\n}\n"),
+            ("materials/base.inc", b"render_pass\n{\ntexture obj/txt16/diffuse\n}\n"),
+            ("txt16/diffuse.dds", b"diffuse"),
+            ("txt16/specular.dds", b"specular"),
+            ("txt16/example.dds", b"original"),
+        ]);
+        assert_eq!(
+            resolve_object_material_texture_name(&assets, "example"),
+            Some("txt16/diffuse.dds".to_owned())
+        );
+        let missing = cache(&[
+            ("txt16/example.mtl", b"include ../../materials/missing.inc\nrender_pass\n{\ntexture obj/txt16/incorrect\n}\n"),
+            ("txt16/example.dds", b"original"),
+            ("txt16/incorrect.dds", b"partial tree"),
+        ]);
+        assert_eq!(
+            resolve_object_material_texture_name(&missing, "example"),
+            Some("txt16/example.dds".to_owned())
+        );
     }
 
     #[test]
@@ -603,5 +892,26 @@ render_pass
             resolve_object_material_texture_name(&asset_cache, "PANEL.PCX"),
             Some("txt16/panel.dds".to_owned())
         );
+    }
+}
+
+#[cfg(test)]
+mod additive_tests {
+    use super::*;
+    #[test]
+    fn additive_flash_requires_one_authored_unlit_pass() {
+        let flash = "render_material_only 1\nrender_pass\n{\nblend SRC_COLOR ONE\ntexture $TEXTURE\nshaded 0\n}\n";
+        assert!(is_additive_flash_script(flash));
+        assert!(!is_additive_flash_script(
+            &flash.replace("shaded 0", "shaded 1")
+        ));
+        assert!(!is_additive_flash_script(
+            &flash.replace("SRC_COLOR ONE", "ONE ZERO")
+        ));
+        assert!(!is_additive_flash_script(
+            &flash.replace("$TEXTURE", "specular")
+        ));
+        assert!(!is_additive_flash_script(&format!("{flash}{flash}")));
+        assert!(!is_additive_flash_script(&flash.replace('}', "")));
     }
 }

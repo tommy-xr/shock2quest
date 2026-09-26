@@ -221,7 +221,9 @@ pub fn without_locomotion(input_context: &InputContext) -> InputContext {
     withheld.left_hand.thumbstick = cgmath::Vector2::new(0.0, 0.0);
     withheld.right_hand.thumbstick = cgmath::Vector2::new(0.0, 0.0);
     withheld.jump = false;
+    withheld.jump_button_held = false;
     withheld.crouch = false;
+    withheld.lean = 0.0;
     withheld
 }
 

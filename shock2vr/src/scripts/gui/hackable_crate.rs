@@ -26,6 +26,7 @@
 //! held item is released onto a target - via [`Gui::on_provide_for_consumption`],
 //! so the pick opens the crate instead of being deposited into it.
 
+use cgmath::Vector2;
 use dark::properties::ObjectState;
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, World};
@@ -35,7 +36,7 @@ use crate::scripts::Effect;
 
 use super::container::{ContainerGui, ContainerGuiMsg, ContainerGuiState};
 use super::keypad::{
-    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
+    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_panel, hack_diff,
     handle_hack_msg, object_state,
 };
 
@@ -52,6 +53,19 @@ impl HackableCrateGui {
     pub fn new() -> HackableCrateGui {
         HackableCrateGui {
             loot: ContainerGui::loot_container(),
+        }
+    }
+}
+
+impl HackableCrateGui {
+    /// The HRM board's own canvas: the retail 188x296 MFD art `draw_hack_board`
+    /// lays out, at the loot panel's world placement so the crate's two faces
+    /// appear in the same spot. The board art is the same in both
+    /// presentations, so only the placement is taken from the loot panel.
+    fn board_config(loot_placement: GuiConfig) -> GuiConfig {
+        GuiConfig {
+            screen_size_in_pixels: Vector2::new(188.0, 296.0),
+            ..loot_placement
         }
     }
 }
@@ -157,14 +171,33 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
         } else {
             state.hack.clone()
         };
-        draw_hack_board(&hack, diff, HackableCrateMsg::Hack)
+        draw_hack_panel(world, entity_id, &hack, diff, false, HackableCrateMsg::Hack)
     }
 
     fn get_config(&self) -> GuiConfig {
-        // The HRM board and the loot panel share the retail 188x296 MFD
-        // canvas, so the loot panel's own config covers both faces of the
-        // crate - and stays in step with it if that panel ever changes.
-        self.loot.get_config()
+        // A crate starts sealed, so the board is the default face.
+        Self::board_config(self.loot.get_config())
+    }
+
+    /// The crate's two faces have two canvases: the HRM board is the retail
+    /// 188x296 MFD art, while the hacked face is the loot panel, which is only
+    /// as tall as its grid. Sizing the board with the loot panel's config
+    /// would squash the board art and move every one of its buttons.
+    fn get_config_for(
+        &self,
+        entity_id: EntityId,
+        world: &World,
+        _state: &HackableCrateState,
+    ) -> GuiConfig {
+        if is_open(world, entity_id) {
+            self.loot
+                .get_config_for(entity_id, world, &Default::default())
+        } else {
+            Self::board_config(
+                self.loot
+                    .get_config_for(entity_id, world, &Default::default()),
+            )
+        }
     }
 
     /// A crate ruined by a critical failure is finished: frobbing it does
@@ -196,6 +229,7 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
                     &state.hack,
                     hack_msg,
                     diff,
+                    false,
                     HackOutcomeEffects {
                         success: crate_hack_success,
                         critical_failure: crate_hack_critical_failure,
@@ -357,6 +391,38 @@ mod tests {
 
     /// Once hacked, the crate is an ordinary loot container: the contained
     /// clip gets its own clickable slot.
+    /// The crate's two faces have two canvases: sealed, it is the retail
+    /// 188x296 HRM board; hacked, it is the loot panel, which is only as tall
+    /// as its grid. Sizing the board from the loot panel squashes the board
+    /// art and moves every one of its buttons (START included).
+    #[test]
+    fn the_board_keeps_its_own_canvas_when_the_loot_panel_shrinks() {
+        let (mut world, security_crate, _clip) = crate_world();
+        let gui = HackableCrateGui::new();
+        let state = HackableCrateState::default();
+
+        let sealed = gui.get_config_for(security_crate, &world, &state);
+        assert_eq!(sealed.screen_size_in_pixels, Vector2::new(188.0, 296.0));
+        assert_eq!(
+            gui.get_config().screen_size_in_pixels,
+            Vector2::new(188.0, 296.0)
+        );
+
+        world.add_component(security_crate, PropObjState(ObjectState::Hacked));
+        let hacked = gui.get_config_for(security_crate, &world, &state);
+        assert_eq!(
+            hacked.screen_size_in_pixels,
+            ContainerGui::loot_container()
+                .get_config()
+                .screen_size_in_pixels,
+            "a hacked crate is an ordinary loot panel"
+        );
+        assert_eq!(
+            sealed.world_offset, hacked.world_offset,
+            "both faces appear in the same place"
+        );
+    }
+
     #[test]
     fn hacked_crate_shows_its_contents_as_a_loot_panel() {
         let (mut world, security_crate, clip) = crate_world();
@@ -372,12 +438,33 @@ mod tests {
 
         assert!(
             has_texture(&components, "contain.pcx"),
-            "a hacked crate should draw the loot panel backdrop"
+            "a hacked crate should draw the flat loot panel's retail art"
         );
         assert!(
             button_for(&components, clip),
             "a hacked crate should expose its contained clip as a loot slot"
         );
+    }
+
+    /// The crate inherits the loot panel's presentation split: the same hacked
+    /// face is the hologram grid in VR.
+    #[test]
+    fn a_hacked_crate_draws_the_hologram_grid_in_vr() {
+        let (mut world, security_crate, _clip) = crate_world();
+        world.add_component(security_crate, PropObjState(ObjectState::Hacked));
+        world.add_unique(crate::mission::GlobalPresentationMode(
+            crate::PresentationMode::Vr,
+        ));
+
+        let components = HackableCrateGui::new().get_components(
+            &None,
+            security_crate,
+            &world,
+            &HackableCrateState::default(),
+        );
+
+        assert!(has_texture(&components, crate::ui::HOLOGRAM_TILE_TEXTURE));
+        assert!(!has_texture(&components, "contain.pcx"));
     }
 
     /// A live board with two nodes already lit, so lighting `target` decides

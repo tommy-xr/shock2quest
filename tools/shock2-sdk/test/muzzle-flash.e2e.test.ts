@@ -56,6 +56,13 @@ test(
     const flashA = posOf(listA, "Assault Flash");
     assert.ok(pistolA, "pistol present after firing");
     assert.ok(flashA, "muzzle flash should spawn on fire");
+    const flashEntity = listA.find((e) => e.name === "Assault Flash")!;
+    const draws = (await game.scene.objects({ entityId: flashEntity.id })).objects;
+    assert.ok(draws.length > 0, "flash reaches the viewmodel render pass");
+    for (const draw of draws) {
+      assert.equal(draw.depth_write, false);
+      assert.ok(Math.abs((draw.transparency ?? 0) - 0.2) < 0.001);
+    }
     const offsetA = dist(pistolA, flashA);
 
     // Turn the camera 30deg while the flash is still alive (it lives a couple of

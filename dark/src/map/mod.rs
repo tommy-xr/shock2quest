@@ -43,8 +43,11 @@ pub const PAGE_HEIGHT: f32 = 260.0;
 
 /// Path to a level's automap page art (`level` is the level file stem, e.g.
 /// "medsci1"; per-level art lives under `intrface/<LEVEL>/english/`).
-pub fn page_art_path(level: &str) -> String {
-    format!("{}/english/PAGE001.PCX", level.to_uppercase())
+/// Spatially Aware uses the retail fully mapped `PAGE001A` background;
+/// visited/current-room decals still overlay it normally.
+pub fn page_art_path(level: &str, spatially_aware: bool) -> String {
+    let suffix = if spatially_aware { "A" } else { "" };
+    format!("{}/english/PAGE001{suffix}.PCX", level.to_uppercase())
 }
 
 /// Bright "revealed" decal art for one map location (`P001R###.PCX`, indexed

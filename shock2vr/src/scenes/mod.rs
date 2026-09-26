@@ -22,21 +22,24 @@ use crate::{
 pub mod cutscene_player;
 pub mod cutscene_skip;
 pub mod debrief;
+pub mod debug_annelid;
 pub mod debug_camera;
 pub mod debug_common;
 pub mod debug_gloves;
 pub mod debug_hand_poses;
 pub mod debug_hitbox;
 pub mod debug_hud;
+pub mod debug_interactions;
 pub mod debug_joint_constraint;
+pub mod debug_ladder;
 pub mod debug_map;
 pub mod debug_melee;
 pub mod debug_minimal;
+pub mod debug_nd_materials;
 pub mod debug_particles;
 pub mod debug_protocol_droid;
 pub mod debug_psi;
 pub mod debug_ragdoll;
-pub mod debug_teleport;
 pub mod debug_turret;
 pub mod debug_weapons;
 pub mod developer;
@@ -48,12 +51,14 @@ pub mod no_assets;
 
 pub use cutscene_player::CutscenePlayerScene;
 pub use debrief::DebriefScene;
+pub use debug_annelid::create_debug_annelid_scene;
 pub use debug_camera::DebugCameraScene;
 pub use debug_gloves::DebugGlovesScene;
 pub use debug_hand_poses::DebugHandPosesScene;
 pub use debug_hitbox::DebugHitboxScene;
 pub use debug_hud::DebugHudScene;
 pub use debug_joint_constraint::DebugJointConstraintScene;
+pub use debug_ladder::create_debug_ladder_scene;
 pub use debug_map::DebugMapScene;
 pub use debug_melee::create_debug_melee_scene;
 pub use debug_minimal::DebugMinimalScene;
@@ -61,7 +66,6 @@ pub use debug_particles::DebugParticlesScene;
 pub use debug_protocol_droid::DebugProtocolDroidScene;
 pub use debug_psi::create_debug_psi_scene;
 pub use debug_ragdoll::DebugRagdollScene;
-pub use debug_teleport::DebugTeleportScene;
 pub use debug_turret::DebugTurretScene;
 pub use debug_weapons::create_debug_weapons_scene;
 pub use developer::DeveloperScene;
@@ -168,10 +172,13 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     }),
     ("debug_weapons", create_debug_weapons_scene),
     ("debug_melee", create_debug_melee_scene),
+    (
+        "debug_interactions",
+        debug_interactions::create_debug_interactions_scene,
+    ),
+    ("debug_ladder", create_debug_ladder_scene),
     ("debug_psi", create_debug_psi_scene),
-    ("debug_teleport", |global, options, assets, audio| {
-        Box::new(DebugTeleportScene::create(global, options, assets, audio))
-    }),
+    ("debug_annelid", create_debug_annelid_scene),
     ("debug_camera", DebugCameraScene::new),
     ("debug_protocol_droid", DebugProtocolDroidScene::new),
     ("debug_turret", DebugTurretScene::new),
@@ -179,6 +186,7 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
         Box::new(DebugHudScene::new())
     }),
     ("debug_gloves", DebugGlovesScene::new),
+    ("debug_psi_fit", DebugGlovesScene::psi_amp),
     ("debug_hand_poses", DebugHandPosesScene::new),
     ("debug_joint_constraint", DebugJointConstraintScene::new),
     ("debug_map", |_global, _options, _assets, _audio| {
@@ -186,6 +194,10 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     }),
     ("debug_ragdoll", DebugRagdollScene::new),
     ("debug_particles", DebugParticlesScene::new),
+    (
+        "debug_nd_materials",
+        debug_nd_materials::create_debug_nd_materials_scene,
+    ),
     ("debug_hitbox", DebugHitboxScene::new),
 ];
 
@@ -210,7 +222,19 @@ pub fn create_debug_scene(
     DEBUG_SCENES
         .iter()
         .find(|(scene_name, _)| name.eq_ignore_ascii_case(scene_name))
-        .map(|(_, create)| create(global_context, options, asset_cache, audio_context))
+        .map(|(_, create)| {
+            let scene = create(global_context, options, asset_cache, audio_context);
+            // Debug scenes are fresh campaigns, but retain their seeded test stats.
+            {
+                let mut quests = scene
+                    .world()
+                    .borrow::<shipyard::UniqueViewMut<QuestInfo>>()
+                    .unwrap();
+                *quests = quests.clone().for_debug_difficulty(options.difficulty);
+            }
+            crate::difficulty::refresh_player_pools(scene.world(), true);
+            scene
+        })
 }
 
 pub fn create_initial_scene(
@@ -254,7 +278,7 @@ pub fn create_initial_scene(
 
     if let Some(save_file_path) = &options.save_file {
         let mut file = OpenOptions::new().read(true).open(save_file_path).unwrap();
-        let save_data = SaveData::read(&mut file);
+        let save_data = SaveData::read(&mut file).unwrap();
         let (mission, mission_to_save_data) = load_mission_from_save_data(
             save_data,
             asset_cache,
@@ -275,8 +299,8 @@ pub fn create_initial_scene(
         audio_context,
         global_context,
         options.spawn_location.clone(),
-        QuestInfo::new(),
-        Box::new(MissionEntityPopulator::create()),
+        QuestInfo::with_difficulty(options.difficulty),
+        Box::new(MissionEntityPopulator::create(options.difficulty)),
         HeldItemSaveData::empty(),
         options,
     );
@@ -297,6 +321,7 @@ pub fn load_mission_from_save_data(
     let current_mission = save_data.global_data.active_mission.clone();
     let active_healing = save_data.global_data.active_healing.clone();
     let active_radiation = save_data.global_data.active_radiation.clone();
+    let active_psi = save_data.global_data.active_psi.clone();
 
     let populator: Box<dyn EntityPopulator> = {
         if let Some(save_data) = save_data
@@ -307,7 +332,9 @@ pub fn load_mission_from_save_data(
             let populator = SaveFileEntityPopulator::create(save_data_cloned);
             Box::new(populator)
         } else {
-            Box::new(MissionEntityPopulator::create())
+            Box::new(MissionEntityPopulator::create(
+                save_data.global_data.quest_info.difficulty(),
+            ))
         }
     };
 
@@ -344,6 +371,14 @@ pub fn load_mission_from_save_data(
         .borrow::<shipyard::UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
     {
         *radiation = active_radiation;
+    }
+
+    if let Ok(mut powers) = active_mission
+        .mission_core
+        .world
+        .borrow::<shipyard::UniqueViewMut<crate::psi::ActivePsiPowers>>()
+    {
+        *powers = active_psi;
     }
 
     // A loaded mission rebuilds Rapier from scratch. Mark the restored player
@@ -485,6 +520,43 @@ pub(crate) fn finale_follow_on(credits: Option<String>) -> GlobalEffect {
     }
 }
 
+/// Every cutscene the install ships, as bare names ready for
+/// [`resolve_cutscene_path`] (e.g. `cs1.avi`), sorted and deduplicated.
+///
+/// A 25th Anniversary install layers the same clip under `enhanced/`,
+/// `original/` and `kex/`, so the layers are folded into one entry per stem and
+/// the bare name lets the resolver pick its preferred layer at playback -
+/// exactly what an authored moment gets.
+pub(crate) fn cutscene_names() -> Vec<String> {
+    cutscene_names_from(&paths::data_root())
+}
+
+fn cutscene_names_from(data_root: &Path) -> Vec<String> {
+    let root = data_root.join("cutscenes");
+    let mut stems: Vec<String> = std::iter::once(root.clone())
+        .chain(
+            ANNIVERSARY_CUTSCENE_LAYERS
+                .iter()
+                .map(|layer| root.join(layer)),
+        )
+        .filter_map(|dir| dir.read_dir().ok())
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| is_cutscene_file(&entry.file_name().to_string_lossy()))
+        .filter_map(|entry| {
+            Path::new(&entry.file_name())
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().to_ascii_lowercase())
+        })
+        .collect();
+    stems.sort();
+    stems.dedup();
+    stems
+        .into_iter()
+        .map(|stem| format!("{stem}.avi"))
+        .collect()
+}
+
 fn first_present_cutscene(candidates: &[&str]) -> Option<String> {
     candidates
         .iter()
@@ -495,6 +567,32 @@ fn first_present_cutscene(candidates: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The launcher's list folds an Anniversary install's layers into one
+    /// entry per clip and hands back names the resolver understands - a name
+    /// per layer would offer the same movie three times.
+    #[test]
+    fn the_cutscene_list_folds_the_anniversary_layers_into_one_entry_each() {
+        let root = crate::test_support::TempDir::new("cutscenes");
+        let cutscenes = root.path().join("cutscenes");
+        for (layer, name) in [
+            ("enhanced", "cs1.ogv"),
+            ("original", "cs1.ogv"),
+            ("kex", "Kex.ogv"),
+            ("", "intro.avi"),
+            // Not a video: the list must not offer it.
+            ("", "notes.txt"),
+        ] {
+            let dir = cutscenes.join(layer);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(name), b"").unwrap();
+        }
+
+        assert_eq!(
+            cutscene_names_from(root.path()),
+            vec!["cs1.avi", "intro.avi", "kex.avi"]
+        );
+    }
 
     /// The finale always ends up at the menu, through the credits when the
     /// install has them and directly when it does not.
@@ -527,7 +625,12 @@ mod tests {
             );
         }
         // A few the docs promise by name, so a rename shows up here.
-        for expected in ["debug_ragdoll", "debug_hud", "debug_weapons"] {
+        for expected in [
+            "debug_ragdoll",
+            "debug_hud",
+            "debug_weapons",
+            "debug_nd_materials",
+        ] {
             assert!(names.contains(&expected), "'{expected}' is missing");
         }
         // Nothing else answers to a debug name: an unknown one is not a scene,

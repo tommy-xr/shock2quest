@@ -1,3 +1,4 @@
+use cgmath::InnerSpace;
 use std::{collections::HashMap, rc::Rc};
 
 use crate::{
@@ -13,7 +14,7 @@ use cgmath::{
     EuclideanSpace, Matrix4, Point3, Quaternion, SquareMatrix, Transform, Vector3, Zero,
     num_traits::abs, vec3,
 };
-use collision::Aabb3;
+use collision::{Aabb, Aabb3};
 use dark::{
     BitmapAnimation, SCALE_FACTOR,
     importers::{ANIMATION_CLIP_IMPORTER, BITMAP_ANIMATION_IMPORTER, MODELS_IMPORTER},
@@ -23,9 +24,10 @@ use dark::{
         FrobFlag, InternalPropOriginalModelName, Link, Links, PhysicsModelType, PoseType, PropAI,
         PropClassTag, PropCollisionType, PropCreature, PropCreaturePose, PropFrobInfo,
         PropHUDSelect, PropHasRefs, PropHitPoints, PropImmobile, PropKeySrc, PropLimbModel,
-        PropModelName, PropPhysAttr, PropPhysDimensions, PropPhysState, PropPhysType, PropPosition,
-        PropRenderType, PropScale, PropSymName, PropTemplateId, PropTranslatingDoor, PropTripFlags,
-        RenderType, StimPropagator, StimSourceOptions, TemplateLinks, WrappedEntityId,
+        PropModelName, PropPhysAttr, PropPhysDimensions, PropPhysState, PropPhysType,
+        PropPlayerGun, PropPosition, PropRenderType, PropScale, PropSymName, PropTemplateId,
+        PropTranslatingDoor, PropTripFlags, RenderType, StimPropagator, StimSourceOptions,
+        TemplateLinks, WrappedEntityId,
     },
     ss2_entity_info,
 };
@@ -56,6 +58,11 @@ fn needs_internal_simple_health(
     authored_scripts: &[String],
 ) -> bool {
     !is_creature
+        // Proximity scripts own the mine/sensor detonation as one transition.
+        && !authored_scripts.iter().any(|script| {
+            script.eq_ignore_ascii_case("ProxGrenade")
+                || script.eq_ignore_ascii_case("ContactProxGrenade")
+        })
         && (has_hit_points
             || authored_scripts
                 .iter()
@@ -106,6 +113,39 @@ pub fn create_entity_with_position(
     // Add props, based on inheritance
     initialize_entity_with_props(template_id, entity_info, world, entity_id, obj_name_map);
 
+    // Some archetypes (e.g. Magazines) leave the appearance to each mission
+    // instance. Resolve it before building visuals/physics, and preserve that
+    // instance model when a held item is dropped back into the world.
+    if let Some(model_name) = &additional_options.model_override {
+        world.add_component(entity_id, PropModelName(model_name.clone()));
+        world.add_component(entity_id, InternalPropOriginalModelName(model_name.clone()));
+    }
+
+    if let Some(name) = &additional_options.name_override {
+        world.add_component(
+            entity_id,
+            (
+                dark::properties::PropSymName(name.clone()),
+                dark::properties::PropObjName(format!("horde_object: \"{name}\"")),
+            ),
+        );
+    }
+    if let Some(hit_points) = additional_options.hit_points_override {
+        let hit_points = hit_points.max(1);
+        world.add_component(
+            entity_id,
+            (
+                dark::properties::PropHitPoints { hit_points },
+                dark::properties::PropMaxHitPoints {
+                    hit_points: hit_points as u32,
+                },
+            ),
+        );
+    }
+    if let Some(ecology_type) = additional_options.ecology_type {
+        world.add_component(entity_id, dark::properties::PropEcoType(ecology_type));
+    }
+
     if additional_options.force_visible {
         world.add_component(entity_id, PropHasRefs(true));
         world.add_component(entity_id, PropRenderType(RenderType::Normal));
@@ -130,6 +170,27 @@ pub fn create_entity_with_position(
     let _time_in_seconds = {
         let u_time = world.borrow::<UniqueView<Time>>().unwrap();
         u_time.total.as_secs_f32()
+    };
+
+    let root_transform = if let Some(origin) = additional_options.projectile_launch_origin {
+        // Enclose the authored projectile sphere, including its local offset.
+        let radius = world
+            .borrow::<View<PropPhysDimensions>>()
+            .unwrap()
+            .get(entity_id)
+            .map(|dims| dims.radius0.abs().max(dims.radius1.abs()) + dims.offset0.magnitude())
+            .unwrap_or(0.0);
+        let requested = root_transform.transform_point(position);
+        let clamped = crate::weapon_muzzle::clamp_projectile_spawn(
+            physics,
+            origin,
+            requested,
+            radius,
+            &|entity| !crate::wielded_weapon::held_in_hand(world, entity),
+        );
+        Matrix4::from_translation(clamped - requested) * root_transform
+    } else {
+        root_transform
     };
 
     let transformed_position = root_transform.transform_point(position);
@@ -177,16 +238,29 @@ pub fn create_entity_with_position(
         }
     }
 
-    if additional_options.transient_fx {
+    // A MissSpang can be a deployed gameplay object, not just disposable FX.
+    // Contact proximity mines must remain present in saves.
+    if additional_options.transient_fx
+        && !crate::scripts::script_util::entity_has_script(world, entity_id, "ContactProxGrenade")
+    {
         world.add_component(entity_id, crate::runtime_props::RuntimePropTransientFx);
+        world.add_component(entity_id, crate::runtime_props::RuntimePropDoNotSerialize);
     }
 
     if let Some(origin) = additional_options.projectile_raycast_origin {
         world.add_component(entity_id, RuntimePropProjectileRayOrigin(origin));
     }
 
+    if additional_options.player_fired_projectile {
+        world.add_component(entity_id, RuntimePropPlayerFiredProjectile);
+    }
+
     if additional_options.launch_projectile {
         world.add_component(entity_id, RuntimePropLaunchedProjectile);
+    }
+
+    if let Some(modifiers) = additional_options.shot_modifiers {
+        world.add_component(entity_id, modifiers);
     }
 
     create_entity_core(
@@ -332,21 +406,19 @@ pub fn create_entity_core(
         .unwrap();
 
     let mut processed_scripts = if let Ok(scripts) = v_scripts.get(entity_id) {
-        // Map TrapSoundAmb -> TrapSound
-        scripts
-            .scripts
-            .iter()
-            .map(|s| {
-                if s == "TrapSoundAmb" {
-                    "TrapSound".to_owned()
-                } else {
-                    s.to_owned()
-                }
-            })
-            .collect()
+        scripts.scripts.clone()
     } else {
         Vec::new()
     };
+    // An object running both flavours (earth's narration traps: their own
+    // TrapSoundAmb plus the archetype's TrapSound) keeps one play, at the trap,
+    // so a late montage segment stays distant rather than at the ears.
+    if processed_scripts
+        .iter()
+        .any(|script| script.eq_ignore_ascii_case("TrapSound"))
+    {
+        processed_scripts.retain(|script| !script.eq_ignore_ascii_case("TrapSoundAmb"));
+    }
 
     // Create any internal scripts to power some properties
 
@@ -401,6 +473,20 @@ pub fn create_entity_core(
     let v_limb_model = world.borrow::<View<PropLimbModel>>().unwrap();
     if needs_internal_triggered_melee(v_limb_model.get(entity_id).is_ok()) {
         processed_scripts.push("internal_triggered_melee_weapon".to_owned());
+    }
+
+    // A gun held under `physical_held_items` is stopped by the level but takes
+    // part in no collision, so the only report that it touched anything is the
+    // block its drive's sweep found (see `scripts::impact_sound`). Give every
+    // gun the handler that turns that into a sound; it is inert whenever the
+    // gun is not being held that way, and unlike the melee script above it
+    // never deals damage - a gun is not a club.
+    let is_player_gun = {
+        let v_player_gun = world.borrow::<View<PropPlayerGun>>().unwrap();
+        v_player_gun.get(entity_id).is_ok()
+    };
+    if is_player_gun && v_limb_model.get(entity_id).is_err() {
+        processed_scripts.push("internal_held_item_impact_sound".to_owned());
     }
 
     // `MOVE` is an engine frob action, not an object script. Ordinary goodies
@@ -484,6 +570,16 @@ pub fn create_entity_core(
         world.add_component(entity_id, RuntimePropDoNotSerialize);
     } else if has_radiation_source {
         processed_scripts.push("internal_radiation_source".to_owned());
+    }
+
+    // EggGooCloud (-438) has no authored object script: its single radius
+    // pulse and one-shot particle lifetime belong to Dark's engine services.
+    if crate::mission::mission_core::template_is_or_descends_from(
+        ss2_entity_info::get_hierarchy(entity_info),
+        template_id,
+        -438,
+    ) {
+        processed_scripts.push("internal_egg_goo_cloud".to_owned());
     }
 
     // ...and remove any duplicates!
@@ -640,6 +736,7 @@ fn create_model(
         _v_rendertype,
         v_scale,
         mut rv_vhots,
+        mut rv_muzzle,
     ) = world
         .borrow::<(
             EntitiesView,
@@ -651,6 +748,7 @@ fn create_model(
             View<PropRenderType>,
             View<PropScale>,
             ViewMut<RuntimePropVhots>,
+            ViewMut<crate::weapon_muzzle::MuzzleFallback>,
         )>()
         .unwrap();
 
@@ -663,8 +761,21 @@ fn create_model(
         let model = maybe_model.unwrap();
         let model_ref = model.as_ref();
 
+        let mut rv_articulation = world
+            .borrow::<ViewMut<RuntimePropObjectArticulation>>()
+            .unwrap();
+        if let Some(rig) = model.object_articulation() {
+            entities.add_component(
+                entity_id,
+                &mut rv_articulation,
+                RuntimePropObjectArticulation(rig.clone()),
+            );
+        }
         let vhots = model.vhots();
         entities.add_component(entity_id, &mut rv_vhots, RuntimePropVhots(vhots));
+        if let Some(muzzle) = crate::weapon_muzzle::load_fallback(asset_cache, &model_name) {
+            entities.add_component(entity_id, &mut rv_muzzle, muzzle);
+        }
 
         let qrotation = pos.rotation;
         let rotation = Matrix4::<f32>::from(qrotation);
@@ -738,6 +849,17 @@ fn create_model(
                 (transformed_model, None)
             }
         };
+
+        if world
+            .borrow::<View<PropAI>>()
+            .unwrap()
+            .get(entity_id)
+            .is_ok_and(|ai| ai.0.eq_ignore_ascii_case("grub"))
+        {
+            // Small forgiving margin around each animated segment, independent
+            // of the sphere that supports and moves the grub.
+            model.enable_object_joint_hit_boxes(0.025);
+        }
 
         // The raw, signed scale - matching `RuntimePropTransform`, which is what
         // the renderer composes the local offset with (note the model bake
@@ -978,6 +1100,28 @@ fn create_physics_representation_with_options(
         .unwrap()
         .contains(entity_id);
 
+    // Read alone: the borrow tuple below is already at shipyard's arity limit.
+    let model_scale = world
+        .borrow::<View<PropScale>>()
+        .unwrap()
+        .get(entity_id)
+        .map(|scale| scale.0)
+        .unwrap_or_else(|_| vec3(1.0, 1.0, 1.0));
+
+    // The membership every ordinary physical collider below uses. A projectile
+    // the player fired takes the variant that is transparent to the player's
+    // own capsule, so a shot leaving a weapon held in at the body is not
+    // consumed on the shooter - see `CollisionGroup::player_projectile`.
+    let is_player_fired = world
+        .borrow::<View<RuntimePropPlayerFiredProjectile>>()
+        .unwrap()
+        .contains(entity_id);
+    let entity_group = if is_player_fired {
+        CollisionGroup::player_projectile()
+    } else {
+        CollisionGroup::entity()
+    };
+
     let (
         v_pos,
         v_phys_attr,
@@ -1008,20 +1152,59 @@ fn create_physics_representation_with_options(
 
     let min_size = 0.5 / SCALE_FACTOR;
     let min_size_vec = vec3(min_size, min_size, min_size);
-    let dimensions = maybe_model
-        .as_ref()
-        .and_then(|model| model.bounding_box().map(|bbox| bbox.max - bbox.min))
+    // The render bakes the *absolute* value of `PropScale` (see `create_model`),
+    // so anything derived from the model's bounds follows the same.
+    let model_scale = vec3(
+        model_scale.x.abs(),
+        model_scale.y.abs(),
+        model_scale.z.abs(),
+    );
+    let model_bounds = maybe_model.as_ref().and_then(|model| model.bounding_box());
+    // Deliberately unscaled, as it always has been. Scaling the model-bounds
+    // *size* here resizes the selection volume of every scaled object in the
+    // game, and measurably moves what the crosshair picks (it took earth's
+    // Interrogation Room door pick with it), so it wants its own pass.
+    let dimensions = model_bounds
+        .map(|bbox| bbox.dim())
         .unwrap_or(default_size_vec);
     let abs_dimensions = vec3(
         dimensions.x.abs().max(min_size_vec.x),
         dimensions.y.abs().max(min_size_vec.y),
         dimensions.z.abs().max(min_size_vec.z),
     );
+    // Model bounds are not centred on the object's origin - a skinned corpse
+    // lies away from its root joint - so the selection box has to be carried to
+    // the bounds' centre, or it covers empty space beside the mesh. The centre
+    // *is* scaled: it says where the mesh is, and a scaled mesh is somewhere
+    // else.
+    let model_bounds_center = model_bounds
+        .map(|bbox| {
+            let center = bbox.center().to_vec();
+            vec3(
+                center.x * model_scale.x,
+                center.y * model_scale.y,
+                center.z * model_scale.z,
+            )
+        })
+        .unwrap_or_else(Vector3::zero);
 
     let dynamics_options = if let Ok(phys_attr) = v_phys_attr.get(entity_id) {
         DynamicPhysicsOptions {
             gravity_scale: phys_attr.gravity_scale,
-            restitution: dark_elasticity_to_restitution(phys_attr.elasticity),
+            // Dark phcore::BounceObject multiplies object elasticity by
+            // phconst::kTerrainBounce (0.1). The legacy 0.7 calibration makes
+            // ProxGrenade's elasticity=3 perfectly elastic, preventing sleep
+            // and therefore arming. Keep this correction scoped to the mine;
+            // general material/contact parity is a separate physics change.
+            restitution: if crate::scripts::script_util::entity_has_script(
+                world,
+                entity_id,
+                "ProxGrenade",
+            ) {
+                (phys_attr.elasticity * 0.1).clamp(0.0, 1.0)
+            } else {
+                dark_elasticity_to_restitution(phys_attr.elasticity)
+            },
             friction: dark_friction(phys_attr.friction),
         }
     } else {
@@ -1035,7 +1218,10 @@ fn create_physics_representation_with_options(
     // every load. Preserve the live creature's dynamic capsule geometry and
     // material, place it at the exact saved transform, then start it asleep.
     // The corpse group keeps it on the world and selectable for looting without
-    // leaving a player-blocking creature capsule behind.
+    // leaving a player-blocking creature capsule behind. This capsule is also
+    // why a death pose needs no model bounds: it is posed at draw time from an
+    // `AnimationPlayer`, which bakes no bounds, so it would otherwise fall
+    // through to the rest-pose box below.
     if v_death_pose.get(entity_id).is_ok() {
         if let (Ok(pos), Ok(creature_type)) = (v_pos.get(entity_id), v_creature.get(entity_id)) {
             let creature_def = get_creature_definition(creature_type.0).unwrap();
@@ -1061,10 +1247,78 @@ fn create_physics_representation_with_options(
         }
     }
 
+    // Retail swarms author a zero-radius point body and render a particle
+    // cloud. Give Rapier a finite core for collision/aiming, before inherited
+    // FrobInfo can turn the cloud into a stationary fixture.
+    if world
+        .borrow::<View<PropAI>>()
+        .unwrap()
+        .get(entity_id)
+        .is_ok_and(|ai| ai.0.eq_ignore_ascii_case("swarmer"))
+        && !launched_object_is_immobile
+    {
+        if let Ok(pos) = v_pos.get(entity_id) {
+            let body = physics.add_dynamic(
+                entity_id,
+                pos.position,
+                pos.rotation,
+                vec3(0.0, 0.0, 0.0),
+                PhysicsShape::Sphere(crate::scripts::ai::SWARM_CORE_RADIUS),
+                CollisionGroup::actor(),
+                false,
+                DynamicPhysicsOptions {
+                    gravity_scale: 0.0,
+                    restitution: 0.0,
+                    ..dynamics_options
+                },
+            );
+            physics.set_enabled_rotations(entity_id, false, false, false);
+            return Some(body);
+        }
+    }
+
     // Dark's Tweq emitter hands the fresh object to launchProjectile. Preserve
     // that explicit creation mode here: frobbable emitted objects (Ops4's Grub
     // is one) would otherwise take the selectable-fixture branch below and
     // replace their authored moving sphere with a kinematic model-bounds box.
+    // Grubs are object models, not skeletal PropCreature actors. FrobInfo
+    // would make a hatched grub a kinematic fixture, while the launch path
+    // would make an emitted one a freely tumbling prop. Both are live actors:
+    // use the authored sphere and let the AI, not contact torque, own facing.
+    let is_grub = world
+        .borrow::<View<PropAI>>()
+        .unwrap()
+        .get(entity_id)
+        .is_ok_and(|ai| ai.0.eq_ignore_ascii_case("grub"));
+    if is_grub && !launched_object_is_immobile {
+        if let (Ok(pos), Ok(dimensions)) = (v_pos.get(entity_id), v_phys_dimensions.get(entity_id))
+        {
+            let radius = dimensions.radius0.abs().max(dimensions.radius1.abs());
+            // The 25AE object model lies around its origin, while the legacy
+            // PhysDims centre is raised .36 above it. Match the sphere's
+            // support plane to the loaded art rather than burying the mesh.
+            let mut offset = dimensions.offset0;
+            if let Some(bounds) = maybe_model
+                .as_ref()
+                .and_then(|model| model.object_model_bounds())
+            {
+                offset.y = bounds.min.y * model_scale.y + radius;
+            }
+            let body = physics.add_dynamic(
+                entity_id,
+                pos.position,
+                pos.rotation,
+                offset,
+                PhysicsShape::Sphere(radius),
+                CollisionGroup::actor(),
+                false,
+                dynamics_options,
+            );
+            physics.set_enabled_rotations(entity_id, false, false, false);
+            return Some(body);
+        }
+    }
+
     let launched_projectile = launch_projectile
         || world
             .borrow::<View<RuntimePropLaunchedProjectile>>()
@@ -1092,7 +1346,7 @@ fn create_physics_representation_with_options(
                     pos.rotation,
                     dimensions.offset0,
                     shape,
-                    CollisionGroup::entity(),
+                    entity_group,
                     false,
                     dynamics_options,
                 ));
@@ -1160,10 +1414,13 @@ fn create_physics_representation_with_options(
             }
             _ => None,
         };
-        let mut frob_group = CollisionGroup::entity();
-        if v_hud_select
-            .get(entity_id)
-            .is_ok_and(|hud_select| hud_select.0)
+        // The pick bias is for fixtures: a player-fired shot keeps its
+        // shooter-transparent group even if it were HUD-selectable.
+        let mut frob_group = entity_group;
+        if !is_player_fired
+            && v_hud_select
+                .get(entity_id)
+                .is_ok_and(|hud_select| hud_select.0)
         {
             frob_group = CollisionGroup::selectable();
         }
@@ -1173,16 +1430,36 @@ fn create_physics_representation_with_options(
         if v_creature.get(entity_id).is_ok() && v_creature_pose.get(entity_id).is_err() {
             let creature_type = v_creature.get(entity_id).unwrap();
             let creature_def = get_creature_definition(creature_type.0).unwrap();
-            let creature_shape = live_creature_shape(
+            let model_height = model_bounds
+                .map(|bounds| bounds.dim().y * model_scale.y)
+                .filter(|height| height.is_finite() && *height > 0.0);
+            let center_y = model_height
+                .map(|_| model_bounds_center.y)
+                .filter(|center| center.is_finite())
+                .unwrap_or(-creature_def.physics_offset_height);
+            let creature_shape = live_creature_shape_for_height(
                 &creature_def,
+                model_height,
                 v_phys_type.get(entity_id).ok(),
                 v_phys_dimensions.get(entity_id).ok(),
+            );
+            let height = match creature_shape {
+                PhysicsShape::Capsule { height, radius } => height + 2.0 * radius,
+                _ => unreachable!("live creature shape is always a capsule"),
+            };
+            let (entities, mut capsules) = world
+                .borrow::<(EntitiesView, ViewMut<RuntimePropCreatureCapsule>)>()
+                .unwrap();
+            entities.add_component(
+                entity_id,
+                &mut capsules,
+                RuntimePropCreatureCapsule { center_y, height },
             );
             rigid_body_handle = physics.add_dynamic(
                 entity_id,
                 pos.position + vec3(0.0, SCALE_FACTOR / 6.0, 0.0) /* bump up so that character is not stuck in geometry */,
                 qrotation,
-                vec3(0.0, -creature_def.physics_offset_height, 0.0),
+                vec3(0.0, center_y, 0.0),
                 creature_shape,
                 // TODO: Kinematic experiment
                 //is_sensor,
@@ -1214,7 +1491,7 @@ fn create_physics_representation_with_options(
             physics.add_interaction_cuboid(
                 rigid_body_handle,
                 entity_id,
-                Vector3::zero(),
+                model_bounds_center,
                 abs_dimensions,
                 frob_group,
             );
@@ -1228,7 +1505,15 @@ fn create_physics_representation_with_options(
                 shape,
                 // TODO: Kinematic experiment
                 //is_sensor,
-                CollisionGroup::entity(),
+                // The player steps through a carryable item rather than
+                // colliding with it. Their capsule is kinematic, so Rapier
+                // solves a contact against this dynamic body as infinite mass
+                // against finite: brushing a mug launches it across the room
+                // instead of nudging it. Only the player is dropped -
+                // creatures are ordinary dynamic bodies that cannot kick, and
+                // the item stays solid to them so a *thrown* one still
+                // reports the contact it damages on.
+                entity_group.non_solid_to_player(),
                 false,
                 dynamics_options,
             );
@@ -1242,14 +1527,19 @@ fn create_physics_representation_with_options(
             // walk-in fixtures - the hydro2 Resurrection Station alcove is a
             // 2.2 x 4.0 x 2.5 box the player must stand inside - and wedges
             // the capsule against its faces with no way out (#801).
-            if v_phys_type.get(entity_id).is_err() {
+            //
+            // An authored corpse is the same story from the other side: it is
+            // a posed creature, so it *does* inherit a `PhysType`, but its box
+            // is now the whole body and a solid one would fence off the floor
+            // around it. Retail lets the player walk over a body.
+            if v_phys_type.get(entity_id).is_err() || v_creature_pose.get(entity_id).is_ok() {
                 frob_group = frob_group.non_solid_to_characters();
             }
             rigid_body_handle = physics.add_kinematic(
                 entity_id,
                 pos.position,
                 qrotation,
-                Vector3::zero(),
+                model_bounds_center,
                 abs_dimensions,
                 // TODO: Kinematic experiment
                 //is_sensor,
@@ -1283,17 +1573,19 @@ fn create_physics_representation_with_options(
         let immobile = v_immobile.get(entity_id).is_ok();
 
         // Climbable surfaces (ladders: PropPhysAttr.climbable != 0) carry an
-        // extra marker membership so player movement can detect contact.
-        // Simplifications: `climbable` is plausibly a per-face bitmask in
-        // the original engine (27 = the four vertical sides on ladders) -
-        // any non-zero value marks the whole collider climbable here. And
-        // only this (non-frobbable) creation branch checks it: all known
-        // ladders are plain terrain objects; a frobbable climbable would
-        // need the same treatment in the branch above.
-        let is_climbable = v_phys_attr
+        // extra marker membership so player movement can detect contact. The
+        // value is a per-face bitmask; contact detection ignores the faces
+        // (any non-zero value marks the whole collider climbable), while the
+        // bits go to physics for the hand grip query
+        // (`PhysicsWorld::climbable_grip_at`). Only this (non-frobbable)
+        // creation branch checks it: all known ladders are plain terrain
+        // objects; a frobbable climbable would need the same treatment in the
+        // branch above.
+        let climbable_sides = v_phys_attr
             .get(entity_id)
-            .map(|pa| pa.climbable != 0)
-            .unwrap_or(false);
+            .map(|pa| pa.climbable)
+            .unwrap_or(0);
+        let is_climbable = climbable_sides != 0;
 
         // `P$PhysDims` is an instantiated, non-inherited property in Dark. A
         // concrete object can therefore inherit a physics type without storing
@@ -1330,7 +1622,12 @@ fn create_physics_representation_with_options(
         if let (Ok(pos), Ok(phys_type)) = (v_pos.get(entity_id), v_phys_type.get(entity_id)) {
             let qrotation = pos.rotation;
 
-            let mut is_sensor = false;
+            // Proximity triggers author PhysDims/PhysAttr without TripFlags.
+            let mut is_sensor = crate::scripts::script_util::entity_has_script(
+                world,
+                entity_id,
+                "ProxGrenadeTrigger",
+            );
             // Model scale belongs to the rendered model. An explicit
             // P$PhysDims is already the independently authored collision
             // volume and must not be scaled again (Shodan's window strips
@@ -1422,7 +1719,7 @@ fn create_physics_representation_with_options(
             let group = if is_climbable {
                 CollisionGroup::climbable_entity()
             } else {
-                CollisionGroup::entity()
+                entity_group
             };
 
             // `SPHERE` is Dark's *moving* physics model - a simulated sphere
@@ -1495,6 +1792,11 @@ fn create_physics_representation_with_options(
                     is_sensor,
                 )
             };
+            if is_climbable {
+                // Contact detection only needs the CLIMBABLE membership above;
+                // the hand grip query needs the authored per-face bits.
+                physics.set_climbable_sides(entity_id, climbable_sides);
+            }
             Some(rigid_body_handle)
         } else {
             None
@@ -1502,18 +1804,34 @@ fn create_physics_representation_with_options(
     }
 }
 
-fn live_creature_shape(
+/// The collision shape a creature gets when no model bounds are available.
+/// Keep its authored sphere radii where they exist and its definition fallback.
+pub fn live_creature_shape(
     creature_def: &crate::creature::CreatureDefinition,
     phys_type: Option<&PropPhysType>,
     dimensions: Option<&PropPhysDimensions>,
 ) -> PhysicsShape {
+    live_creature_shape_for_height(creature_def, None, phys_type, dimensions)
+}
+
+fn live_creature_shape_for_height(
+    creature_def: &crate::creature::CreatureDefinition,
+    model_height: Option<f32>,
+    phys_type: Option<&PropPhysType>,
+    dimensions: Option<&PropPhysDimensions>,
+) -> PhysicsShape {
     let bbox = creature_def.bounding_size;
+    let full_height = model_height.unwrap_or(bbox.y);
     let fallback_radius = bbox.x.max(bbox.z) / 2.0;
     let fallback = || PhysicsShape::Capsule {
         // Preserve the established fallback for creatures without a complete
-        // authored sphere model. Small animation bounds can otherwise leave a
-        // zero-length capsule segment, which Rapier does not accept here.
-        height: fallback_radius.max(bbox.y - fallback_radius * 2.0),
+        // authored sphere model. A model shorter than the fixed fallback width
+        // still needs a positive segment for Rapier; keep that excess minimal.
+        height: if model_height.is_some() {
+            (full_height - fallback_radius * 2.0).max(0.01)
+        } else {
+            fallback_radius.max(full_height - fallback_radius * 2.0)
+        },
         radius: fallback_radius,
     };
 
@@ -1542,14 +1860,17 @@ fn live_creature_shape(
         return fallback();
     }
     let radius = declared_radii.iter().copied().fold(0.0, f32::max) * 2.0;
-    let segment_height = bbox.y - radius * 2.0;
-    if !radius.is_finite() || radius <= 0.0 || !segment_height.is_finite() || segment_height <= 0.0
-    {
+    let segment_height = full_height - radius * 2.0;
+    if !radius.is_finite() || radius <= 0.0 || !segment_height.is_finite() {
+        return fallback();
+    }
+
+    if segment_height <= 0.0 && model_height.is_none() {
         return fallback();
     }
 
     PhysicsShape::Capsule {
-        height: segment_height,
+        height: segment_height.max(0.01),
         radius,
     }
 }
@@ -1557,6 +1878,14 @@ fn live_creature_shape(
 #[derive(Clone, Debug)]
 pub struct CreateEntityOptions {
     pub force_visible: bool,
+    /// Instance-specific appearance, for archetypes whose model is assigned
+    /// by a mission rather than the gamesys. Applied before visuals/physics.
+    pub model_override: Option<String>,
+    /// Instance labels and durability, installed before scripts/physics initialize.
+    pub name_override: Option<String>,
+    pub hit_points_override: Option<i32>,
+    /// Population membership for children of an ecology-owned egg.
+    pub ecology_type: Option<i32>,
     /// Bolt the new entity to this parent's transform for its lifetime (see
     /// `RuntimePropAttachment`). The spawn-time relative pose is captured and the
     /// child then tracks the parent each frame - used so a weapon's muzzle flash
@@ -1564,16 +1893,31 @@ pub struct CreateEntityOptions {
     pub attach_to: Option<EntityId>,
     /// Mark the entity as a fire-and-forget effect (`RuntimePropTransientFx`):
     /// it is destroyed once its one-shot particle burst expires. Used for
-    /// impact spangs so they don't accumulate at every bullet hole.
+    /// impact spangs so they don't accumulate at every bullet hole. Cosmetic
+    /// transients are excluded from saves rather than replayed after loading.
     pub transient_fx: bool,
     /// Override the collision-ray origin when this entity resolves as a fast
     /// projectile. Flat firing supplies the camera origin while retaining the
     /// forward spawn clearance needed by slow physics projectiles.
     pub projectile_raycast_origin: Option<Point3<f32>>,
+    /// Starting side of a player-shot spawn offset (camera or held gun grip).
+    /// Checked against world geometry before applying the requested muzzle pose.
+    pub projectile_launch_origin: Option<Point3<f32>>,
+    /// VR weapon whose tracked palm supplies the launch clearance start.
+    pub projectile_weapon: Option<EntityId>,
+    /// The player fired this projectile, so its collision ray must skip the
+    /// player's own capsule (see `RuntimePropPlayerFiredProjectile`).
+    pub player_fired_projectile: bool,
     /// Create the authored physics model as a launched dynamic body. Dark's
     /// Tweq emitter calls `launchProjectile`; this keeps frobbable emitted
     /// archetypes from being reduced to kinematic selection colliders.
     pub launch_projectile: bool,
+    /// Preserve the full authored velocity for GunFlash-launched casings.
+    pub authored_velocity_frame: Option<Matrix4<f32>>,
+    /// The firing gun's per-shot multipliers, stamped on a launched projectile
+    /// as `RuntimePropShotModifiers` so its damage and speed follow the fire
+    /// mode that launched it. `None` for anything that is not a gun shot.
+    pub shot_modifiers: Option<crate::runtime_props::RuntimePropShotModifiers>,
     /// This entity was created as a Flinderize target. Keeping this separate
     /// from the general model-bounds fallback lets only launched debris turn a
     /// dimension-less moving sphere into a simulated body.
@@ -1584,10 +1928,19 @@ impl Default for CreateEntityOptions {
     fn default() -> Self {
         CreateEntityOptions {
             force_visible: false,
+            model_override: None,
+            name_override: None,
+            hit_points_override: None,
+            ecology_type: None,
             attach_to: None,
             transient_fx: false,
             projectile_raycast_origin: None,
+            projectile_launch_origin: None,
+            projectile_weapon: None,
+            player_fired_projectile: false,
             launch_projectile: false,
+            authored_velocity_frame: None,
+            shot_modifiers: None,
             flinderize_debris: false,
         }
     }
@@ -1821,8 +2174,8 @@ mod tests {
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: Vector3::zero(),
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
         ));
 
@@ -1850,6 +2203,121 @@ mod tests {
         assert!(body.collision_groups.iter().any(|group| group == "actor"));
     }
 
+    #[test]
+    fn live_creature_capsule_follows_model_vertical_bounds() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity = world.add_entity((
+            PropPosition {
+                position: vec3(0.0, 4.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropCreature(6),
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+            sphere_type(2),
+            sphere_dimensions(0.16, 0.2),
+        ));
+        let model = Model::from_glb(
+            vec![],
+            Aabb3::new(Point3::new(-0.5, -0.3, -0.5), Point3::new(0.5, 2.3, 0.5)),
+            None,
+        );
+        let handle =
+            create_physics_representation(&mut world, &mut physics, &Some(&model), entity).unwrap();
+        let (radius, segment) = physics.capsule_dimensions(handle).unwrap();
+        assert!(
+            (radius - 0.4).abs() < 0.001,
+            "authored sphere radius changed"
+        );
+        assert!((segment + 2.0 * radius - 2.6).abs() < 0.001);
+        let aabb = physics.get_aabb2(entity).unwrap();
+        assert!((aabb.min.y - (4.0 + SCALE_FACTOR / 6.0 - 0.3)).abs() < 0.01);
+    }
+
+    #[test]
+    fn model_height_does_not_turn_limb_span_into_fallback_capsule_width() {
+        for creature_type in [0, 4, 7, 6, 8] {
+            let creature = get_creature_definition(creature_type).unwrap();
+            let (radius, segment) = capsule(live_creature_shape_for_height(
+                &creature,
+                Some(3.0),
+                None,
+                None,
+            ));
+            let expected_radius = creature.bounding_size.x.max(creature.bounding_size.z) / 2.0;
+            assert!(
+                (radius - expected_radius).abs() < 0.001,
+                "type {creature_type}"
+            );
+            assert!(
+                (segment + radius * 2.0 - 3.0).abs() < 0.001,
+                "type {creature_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn short_model_keeps_authored_sphere_radius_with_minimal_capsule_segment() {
+        let baby = get_creature_definition(8).unwrap();
+        let (radius, segment) = capsule(live_creature_shape_for_height(
+            &baby,
+            Some(0.71),
+            Some(&sphere_type(2)),
+            Some(&sphere_dimensions(0.16, 0.2)),
+        ));
+        assert!((radius - 0.4).abs() < 0.001);
+        assert!((segment - 0.01).abs() < 0.001);
+    }
+
+    #[test]
+    fn hatched_and_emitted_grubs_use_the_same_live_actor_body() {
+        for launched in [false, true] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity = world.add_entity((
+                PropAI("grub".into()),
+                PropPosition {
+                    position: vec3(0.0, 2.0, 0.0),
+                    rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                    cell: 0,
+                },
+                PropFrobInfo {
+                    world_action: FrobFlag::SCRIPT,
+                    inventory_action: FrobFlag::empty(),
+                    tool_action: FrobFlag::empty(),
+                },
+                PropPhysDimensions {
+                    radius0: 0.2,
+                    radius1: 0.0,
+                    offset0: vec3(0.0, 0.36, 0.0),
+                    offset1: Vector3::zero(),
+                    size: Vector3::zero(),
+                    point_vs_terrain: 0,
+                    point_vs_not_special: 0,
+                },
+            ));
+            create_physics_representation_with_options(
+                &mut world,
+                &mut physics,
+                &None,
+                entity,
+                launched,
+                false,
+            )
+            .unwrap();
+            let body = physics.debug_list_bodies().remove(0);
+            assert_eq!(body.body_type, "dynamic");
+            assert!(body.blocks_actor && body.blocks_player);
+            assert!(body.collision_groups.iter().any(|g| g == "actor"));
+            assert_eq!(physics.actor_sphere(entity).unwrap().1, 0.2);
+        }
+    }
+
     fn capsule(shape: PhysicsShape) -> (f32, f32) {
         match shape {
             PhysicsShape::Capsule { height, radius } => (radius, height),
@@ -1873,8 +2341,8 @@ mod tests {
             offset0: vec3(9.0, 8.0, 7.0),
             offset1: vec3(-6.0, -5.0, -4.0),
             size: Vector3::zero(),
-            unk1: 0,
-            unk2: 0,
+            point_vs_terrain: 0,
+            point_vs_not_special: 0,
         }
     }
 
@@ -1943,6 +2411,30 @@ mod tests {
         }
     }
 
+    /// An arachnid's capsule bottom meets its leg tips - 0.2 (baby) / 0.38
+    /// (adult) below the origin - whether the capsule comes from the creature
+    /// bounds or from the shipped sphere model. Both must agree, since the
+    /// same offset serves debug spawns and missions.
+    #[test]
+    fn arachnid_capsules_stand_on_the_leg_tips() {
+        for (creature_type, imported, leg_tips) in [(6, [0.16, 0.2], -0.38), (8, [0.08, 0.1], -0.2)]
+        {
+            let creature = get_creature_definition(creature_type).unwrap();
+            let dimensions = sphere_dimensions(imported[0], imported[1]);
+            for shape in [
+                live_creature_shape(&creature, None, None),
+                live_creature_shape(&creature, Some(&sphere_type(2)), Some(&dimensions)),
+            ] {
+                let (radius, segment_height) = capsule(shape);
+                let bottom = -creature.physics_offset_height - (segment_height / 2.0 + radius);
+                assert!(
+                    (bottom - leg_tips).abs() < 0.01,
+                    "creature {creature_type}: capsule bottom {bottom} vs leg tips {leg_tips}"
+                );
+            }
+        }
+    }
+
     /// A wall fixture the player can frob but never pick up or move - a
     /// console, a card slot, the Resurrection Station casing. `phys_type` is
     /// `None` for the shipped case that has no `P$PhysType` in its chain.
@@ -1973,6 +2465,122 @@ mod tests {
             );
         }
         entity_id
+    }
+
+    /// A scaled mesh sits somewhere else, so the box follows `PropScale` to the
+    /// scaled bounds centre - by the scale's absolute value, which is what the
+    /// render bakes (a mirrored model must not have its box flipped to the
+    /// other side of the object). The box's *size* is deliberately left
+    /// unscaled: see the comment at the call site.
+    #[test]
+    fn a_frob_collider_takes_the_models_scale() {
+        for scale in [vec3(2.0, 2.0, 2.0), vec3(-2.0, 2.0, 2.0)] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity_id = add_wall_fixture(&mut world, None);
+            world.add_component(entity_id, PropScale(scale));
+            let model = Model::from_glb(
+                vec![],
+                Aabb3::new(Point3::new(2.0, -0.5, -0.5), Point3::new(4.0, 0.5, 0.5)),
+                None,
+            );
+
+            create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+                .expect("a frobbable fixture should always get a frob collider");
+
+            let aabb = physics
+                .get_aabb2(entity_id)
+                .expect("the frob collider has bounds");
+            let center = aabb.min + (aabb.max - aabb.min) / 2.0;
+            assert!(
+                (center.x - 6.0).abs() < 0.01,
+                "scale {scale:?}: the box should sit at the scaled bounds centre, got {center:?}"
+            );
+            assert!(
+                ((aabb.max.x - aabb.min.x) - 2.0).abs() < 0.01,
+                "scale {scale:?}: the box keeps the unscaled bounds size, got {aabb:?}"
+            );
+        }
+    }
+
+    /// An authored corpse is a posed creature: it inherits a `PhysType`, so the
+    /// #801 guard below does not fire, but its selection box is now the whole
+    /// body - solid, it would fence off the floor around every body in the
+    /// level. Retail lets the player walk over a corpse.
+    ///
+    /// Negative-first: with the body-sized box and no pose guard this blocks.
+    #[test]
+    fn a_posed_corpse_frob_box_does_not_block_characters() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = add_wall_fixture(&mut world, Some(PhysicsModelType::ORIENTED_BOUNDING_BOX));
+        world.add_component(
+            entity_id,
+            PropCreaturePose {
+                pose_type: PoseType::MOTION_NAME,
+                motion_or_tag_name: "humdie3c".to_owned(),
+                scale: 1.0,
+                ballistic: true,
+            },
+        );
+        let model = ladder_model();
+
+        let handle =
+            create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+                .expect("a posed corpse should still get its frob collider");
+
+        assert!(
+            !physics.collider_blocks_player(handle),
+            "a corpse's frob box must not block the player"
+        );
+        assert!(
+            !physics.collider_blocks_actor(handle),
+            "a corpse's frob box must not block actors"
+        );
+        let body = physics
+            .debug_list_bodies()
+            .into_iter()
+            .find(|body| body.entity_id == Some(entity_id.inner() as i32))
+            .expect("the corpse's body should be listed");
+        assert!(
+            body.collision_groups
+                .iter()
+                .any(|g| g == "entity" || g == "selectable"),
+            "the corpse must stay selectable, got {:?}",
+            body.collision_groups
+        );
+    }
+
+    /// The selection collider has to cover the *mesh*, wherever the mesh sits
+    /// relative to the object's origin. A skinned corpse's bounds lie a body
+    /// length away from its root joint, so an origin-centred box misses it.
+    ///
+    /// Negative-first: before the fix the collider was always centred on the
+    /// object's position.
+    #[test]
+    fn a_frob_collider_is_centred_on_the_model_bounds() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = add_wall_fixture(&mut world, None);
+        // Bounds offset 3 units along +x, as a lying corpse's are from its
+        // root joint.
+        let model = Model::from_glb(
+            vec![],
+            Aabb3::new(Point3::new(2.0, -0.5, -0.5), Point3::new(4.0, 0.5, 0.5)),
+            None,
+        );
+
+        create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+            .expect("a frobbable fixture should always get a frob collider");
+
+        let aabb = physics
+            .get_aabb2(entity_id)
+            .expect("the frob collider has bounds");
+        let center = aabb.min + (aabb.max - aabb.min) / 2.0;
+        assert!(
+            (center.x - 3.0).abs() < 0.01,
+            "collider should sit at the model bounds centre, got {center:?}"
+        );
     }
 
     /// A frobbable fixture's collider comes from its model bounding box, not
@@ -2092,8 +2700,8 @@ mod tests {
                 offset0: vec3(0.0, 0.36, 0.0),
                 offset1: Vector3::zero(),
                 size: Vector3::zero(),
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
         ));
 
@@ -2149,8 +2757,8 @@ mod tests {
                 offset0: offset,
                 offset1: Vector3::zero(),
                 size: Vector3::zero(),
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
         ));
 
@@ -2261,8 +2869,8 @@ mod tests {
                     offset0: offset,
                     offset1: Vector3::zero(),
                     size,
-                    unk1: 0,
-                    unk2: 0,
+                    point_vs_terrain: 0,
+                    point_vs_not_special: 0,
                 },
             ));
             if immobile {
@@ -2351,8 +2959,8 @@ mod tests {
                     offset0: Vector3::zero(),
                     offset1: Vector3::zero(),
                     size,
-                    unk1: 0,
-                    unk2: 0,
+                    point_vs_terrain: 0,
+                    point_vs_not_special: 0,
                 },
             ));
 
@@ -2509,6 +3117,64 @@ mod tests {
         }
     }
 
+    /// A carryable item - the Mug, a Soda Can, a wrench lying on the floor -
+    /// is a dynamic body, and the player capsule is kinematic. Solid to each
+    /// other, Rapier solves that contact as infinite mass against finite and
+    /// walking into the item launches it across the room. The player steps
+    /// through it instead.
+    ///
+    /// Creatures stay solid to it deliberately: they are dynamic bodies that
+    /// cannot kick, and a thrown item's damage is driven by the very contact
+    /// an ACTOR-passable group would suppress (`ThrownItems::launch` sets
+    /// velocity only, never the collision group).
+    ///
+    /// Negative-first: before the fix a MOVE item blocked the player.
+    #[test]
+    fn carryable_items_do_not_block_the_player_but_stay_solid_to_creatures() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = world.add_entity((
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE,
+                inventory_action: FrobFlag::SCRIPT,
+                tool_action: FrobFlag::empty(),
+            },
+            PropPhysType {
+                phys_type: PhysicsModelType::SPHERE,
+                num_submodels: 1,
+                remove_on_sleep: false,
+                is_special: false,
+            },
+        ));
+
+        let handle = create_physics_representation(
+            &mut world,
+            &mut physics,
+            &Some(&ladder_model()),
+            entity_id,
+        )
+        .expect("a carryable item should still get a body");
+
+        assert_eq!(
+            physics.debug_list_bodies()[0].body_type,
+            "dynamic",
+            "a carryable item keeps its dynamic model-bounds body"
+        );
+        assert!(
+            !physics.collider_blocks_player(handle),
+            "the player must step through a carryable item, not kick it"
+        );
+        assert!(
+            physics.collider_blocks_actor(handle),
+            "a carryable item must stay solid to creatures, or a thrown one deals no damage"
+        );
+    }
+
     /// Model scale is a render transform, while `P$PhysDims` is the separately
     /// authored collision volume. Shodan's long window strips make the
     /// distinction observable: applying their visual z-scale to the OBB grows
@@ -2536,8 +3202,8 @@ mod tests {
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: authored_size,
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
             PropScale(vec3(-0.888_888_9, 1.333_333_4, 16.0)),
             PropImmobile(true),
@@ -2678,8 +3344,8 @@ mod tests {
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: vec3(2.4, 0.4, 2.4),
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
         ));
         let child = world.add_entity((
@@ -2700,8 +3366,8 @@ mod tests {
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: Vector3::zero(),
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
             Links {
                 to_links: vec![ToLink {
@@ -2788,8 +3454,8 @@ mod tests {
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: vec3(2.4, 3.2, 0.2),
-                unk1: 0,
-                unk2: 0,
+                point_vs_terrain: 0,
+                point_vs_not_special: 0,
             },
             dark::properties::PropTranslatingDoor {
                 door_type: 1,

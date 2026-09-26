@@ -5,7 +5,7 @@ import { GameServer } from "../src/index.js";
 import type { EntitySummary, UiElement, Vec3 } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import { clickUiElement } from "./helpers/ui.js";
-import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
+import { LOOT_PANEL_SIZE_PX, add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
 
 // End-to-end regression for #668, reproducing the campaign's exact production
 // path before covering the sibling item and flat presentation:
@@ -28,7 +28,6 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const MEDSCI2_DESK_WITH_PATCH = 471;
 const MEDSCI2_PATCH = 1054;
 const PANEL_PIXEL_TO_WORLD = 1 / 250;
-const LOOT_PANEL_SIZE_PX: Vec3 = [188, 296, 0];
 const BACKPACK_PANEL_SIZE_PX: Vec3 = [635, 120, 0];
 const VR_BACKPACK_SCALE = 0.55;
 
@@ -155,11 +154,11 @@ test(
     await game.step({ frames: 5 });
 
     const initial = await game.info();
-    assert.equal(hp(initial), 30);
-    assert.equal(initial.player.max_hit_points, 30);
+    assert.equal(hp(initial), 35);
+    assert.equal(initial.player.max_hit_points, 35);
     const playerId = initial.player.entity_id;
     assert.notEqual(playerId, null, "medsci2 should have a live player");
-    await game.entities.sendMessage(playerId!, { type: "Damage", amount: 10 });
+    await game.entities.sendMessage(playerId!, { type: "Damage", amount: initial.player.max_hit_points! - 20 });
     await game.step({ frames: 2 });
     assert.equal(hp(await game.info()), 20);
 
@@ -369,7 +368,7 @@ test(
     assert.notEqual(playerId, null);
     const maxHp = initial.player.max_hit_points;
     const psi = initial.player.psi_points;
-    await game.entities.sendMessage(playerId!, { type: "Damage", amount: 29 });
+    await game.entities.sendMessage(playerId!, { type: "Damage", amount: maxHp! - 1 });
     await game.step({ frames: 2 });
     assert.equal(hp(await game.info()), 1);
 
@@ -406,7 +405,7 @@ test(
       11,
       "Medical Kit must continue in exact 5-HP pulses",
     );
-    await game.step({ frames: 405 });
+    await game.step({ frames: 600 }); // Allow enough pulses for the stat-derived maximum.
     const healed = await game.info();
     assert.equal(hp(healed), maxHp);
     assert.equal(healed.player.max_hit_points, maxHp);
@@ -455,7 +454,7 @@ test(
 
     const playerId = (await game.info()).player.entity_id;
     assert.notEqual(playerId, null);
-    await game.entities.sendMessage(playerId!, { type: "Damage", amount: 20 });
+    await game.entities.sendMessage(playerId!, { type: "Damage", amount: (await game.info()).player.max_hit_points! - 10 });
     await game.step({ frames: 2 });
     assert.equal(hp(await game.info()), 10);
     const patch = await game.player.spawnItem("Med Patch");

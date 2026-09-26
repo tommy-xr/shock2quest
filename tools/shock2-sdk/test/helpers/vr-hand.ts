@@ -1,7 +1,9 @@
+import assert from "node:assert/strict";
 import type { GameServer } from "../../src/index.js";
 import type { UiPanelPose, Vec3 } from "../../src/types.js";
 
 export type Quat = [number, number, number, number];
+export type Hand = "left" | "right";
 
 export const add = (a: Vec3, b: Vec3): Vec3 => [
   a[0] + b[0],
@@ -108,17 +110,19 @@ export async function aimVrHandAtCanvas(
   await game.input.set(`${hand}_hand.squeeze`, squeeze);
 }
 
-/** Aim the production VR hand ray at a world point without direct entity
+/** Aim one production VR hand's ray at a world point without direct entity
  * messages. Pass `squeeze = 1` to preserve an already-held item while aiming,
  * and `trigger = 1` to keep a pull in flight across the re-aim (releasing it
- * would end the gesture, which matters wherever a latch spans the movement). */
+ * would end the gesture, which matters wherever a latch spans the movement).
+ * Set `lookAtTarget: false` to reach without turning the head/body-slot frame. */
 export async function aimVrHandAt(
   game: GameServer,
   target: Vec3,
   standOff = 0.45,
   squeeze = 0,
   trigger = 0,
-): Promise<{ start: Vec3; target: Vec3 }> {
+  { hand = "right", lookAtTarget = true }: { hand?: Hand; lookAtTarget?: boolean } = {},
+): Promise<{ start: Vec3; target: Vec3; local: Vec3 }> {
   const snapshot = await game.info();
   const pawn = snapshot.player.position;
   const pawnRotation = snapshot.player.rotation;
@@ -135,22 +139,31 @@ export async function aimVrHandAt(
     quatMultiply(inversePawn, worldHandRotation),
   );
 
-  await game.input.lookAtWorldPoint(target, {
-    eyeHeight: snapshot.player.camera_offset[1],
-  });
-  await game.input.set("right_hand.position", localHand);
-  await game.input.set("right_hand.rotation", localHandRotation);
-  await game.input.set("right_hand.trigger", trigger);
-  await game.input.set("right_hand.squeeze", squeeze);
+  if (lookAtTarget) {
+    await game.input.lookAtWorldPoint(target, {
+      eyeHeight: snapshot.player.camera_offset[1],
+    });
+  }
+  await game.input.set(`${hand}_hand.position`, localHand);
+  await game.input.set(`${hand}_hand.rotation`, localHandRotation);
+  await game.input.set(`${hand}_hand.trigger`, trigger);
+  await game.input.set(`${hand}_hand.squeeze`, squeeze);
   await game.step({ frames: 3 });
-  return { start: worldHand, target };
+  return { start: worldHand, target, local: localHand };
 }
 
 /** One canvas pixel of a world panel in world units (`gui::GUI_PIXEL_TO_WORLD_SIZE`). */
 export const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
 
-/** The retail MFD canvas the loot panel is drawn on. */
-export const LOOT_PANEL_SIZE_PX: Vec3 = [188, 296, 0];
+/**
+ * The loot panel's canvas in panel pixels (`ContainerGui::loot_container`):
+ * the 188px width of the MFD slot it docks into, and just enough height for
+ * its 4x4 hologram grid plus margins.
+ */
+export const LOOT_PANEL_SIZE_PX: Vec3 = [188, 178, 0];
+
+/** Center of the loot panel's first 35x34 cell, in panel pixels. */
+export const LOOT_SLOT_CENTER_PX: Vec3 = [24 + 35 / 2, 34 + 34 / 2, 0];
 
 /**
  * Squeeze one element of an open world panel with the production VR hand.
@@ -198,4 +211,80 @@ export async function squeezeWorldPanelElement(
   await game.step({ frames: 4 });
   await game.input.set("right_hand.squeeze", 0);
   await game.step({ frames: 8 });
+}
+
+/** Draw the permanent card using the same calibrated palm contact as body slots. */
+export async function drawPersonalCard(game: GameServer, hand: Hand = "right") {
+  const i = hand === "left" ? 0 : 1;
+  await game.input.set(`${hand}_hand.squeeze`, 0);
+  await game.input.set(`${hand}_hand.trigger`, 0);
+  await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
+  await game.step({ frames: 3 });
+  let player = (await game.info()).player;
+  const center = player.hand_feedback?.body_gear?.personal_card.center;
+  if (!center) throw new Error("Personal card has no tracked belt anchor");
+  await game.input.set(`${hand}_hand.position`, center);
+  await game.step({ frames: 3 });
+  player = (await game.info()).player;
+  const palm = player.hand_feedback?.glove_contacts?.centers[i];
+  if (!palm) throw new Error("Personal card draw requires a calibrated palm");
+  const localPalm = quatRotate(quatConjugate(player.rotation), sub(palm, player.position));
+  const currentCenter = player.hand_feedback!.body_gear!.personal_card.center!;
+  await game.input.set(`${hand}_hand.position`, add(center, sub(currentCenter, localPalm)));
+  await game.step({ frames: 3 });
+  await game.input.set(`${hand}_hand.squeeze`, 1);
+  await game.step({ frames: 3 });
+  if ((await game.info()).player.hand_feedback?.body_gear?.personal_card.hand !== i) {
+    throw new Error(`Failed to draw personal card with ${hand} hand`);
+  }
+}
+
+/** Put `id` in the right hand: a VR squeeze-grab, or the flat equip action. */
+export async function equipRightHand(
+  game: GameServer,
+  vr: boolean,
+  id: number,
+  action: "EquipPistol" | "EquipPsiAmp",
+): Promise<void> {
+  if (vr) {
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 3 });
+    await aimVrHandAt(game, (await game.entities.detail(id)).position, 0.3);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 8 });
+    assert.equal((await game.info()).player.right_hand_entity_id, id);
+  } else {
+    await game.input.trigger(action);
+    await game.step({ frames: 10 });
+  }
+}
+
+/** Aim the device's rear lens, accounting for the authored grip and live tuning.
+ * Keep the head fixed: turning it would also move an item held in the other hand. */
+export async function aimMfdAt(
+  game: GameServer, target: Vec3, standOff = .45, squeeze = 1, trigger = 0,
+  { hand = "left" }: { hand?: Hand; lookAtTarget?: boolean } = {},
+): Promise<void> {
+  const reference: Vec3 = [0, .4, -.7];
+  await game.input.set(`${hand}_hand.position`, reference);
+  await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
+  await game.input.set(`${hand}_hand.trigger`, 0);
+  await game.input.set(`${hand}_hand.squeeze`, squeeze);
+  await game.step({ frames: 3 });
+  const mount = (await game.ui.state()).scanner_pose;
+  assert.ok(mount, "draw the device before aiming its lens");
+  const localOffset = sub(mount.origin, reference);
+  const { player } = await game.info();
+  const toward = normalize(sub(target, add(player.position, [0, player.camera_offset[1], 0])));
+  const inversePawn = quatConjugate(player.rotation);
+  const direction = quatRotate(inversePawn, toward);
+  const origin = quatRotate(inversePawn, sub(sub(target, scale(toward, standOff)), player.position));
+  const rotation = quatMultiply(quatFromTo([0, 0, -1], direction), quatConjugate(mount.rotation));
+  await game.input.set(`${hand}_hand.rotation`, rotation);
+  await game.input.set(`${hand}_hand.position`, sub(origin, quatRotate(rotation, localOffset)));
+  await game.input.set(`${hand}_hand.trigger`, trigger);
+  await game.step({ frames: 3 });
+  const actual = (await game.ui.state()).scanner_pose!;
+  assert.ok(Math.hypot(...sub(actual.origin, origin)) < .001, "scanner follows this frame's device pose");
+  assert.ok(dot(quatRotate(actual.rotation, [0, 0, -1]), direction) > .9999);
 }

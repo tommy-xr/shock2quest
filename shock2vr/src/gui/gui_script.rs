@@ -85,6 +85,7 @@ where
             world_offset: config.world_offset,
             world_size: config.screen_size_in_pixels * GUI_PIXEL_TO_WORLD_SIZE,
             components: render_components,
+            sidecar: self.gui.sidecar(entity_id, world, &self.state),
         }
     }
 

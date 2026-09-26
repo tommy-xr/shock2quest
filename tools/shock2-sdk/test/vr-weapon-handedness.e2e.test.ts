@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import { cycleToWeapon } from "./helpers/weapon.js";
+import { cycleToWeapon, fireOnce } from "./helpers/weapon.js";
 import type { SceneObjectSummary, Vec3 } from "../src/types.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
 
@@ -121,10 +121,10 @@ test(
     //    context by `hud::ammo_panel`'s unit tests).
     const loaded = ammoOf(await game.entities.detail(pistol.id));
     assert.ok(loaded > 3, "debug pistol starts loaded");
+    // fireOnce waits out the pistol's 500 ms between-shots interval - a pull
+    // inside it is ignored.
     for (let i = 0; i < 3; i++) {
-      await game.input.set("right_hand.trigger", 1.0);
-      await game.step({ frames: 1 });
-      await game.input.set("right_hand.trigger", 0.0);
+      await fireOnce(game);
       await game.step({ frames: 10 });
     }
     assert.equal(
@@ -156,9 +156,7 @@ test(
     // 5. CycleAmmo likewise. Cycling needs an empty magazine (a loaded one has
     //    an established projectile identity), so empty it first.
     for (let i = 0; i < loaded; i++) {
-      await game.input.set("right_hand.trigger", 1.0);
-      await game.step({ frames: 1 });
-      await game.input.set("right_hand.trigger", 0.0);
+      await fireOnce(game);
       await game.step({ frames: 10 });
     }
     assert.equal(ammoOf(await game.entities.detail(pistol.id)), 0, "magazine emptied");

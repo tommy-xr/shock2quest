@@ -65,6 +65,8 @@ impl EventHandler for PhysicsEvents {
                         .map(|(manifold, contact)| super::CollisionContact {
                             point: npoint_to_cgvec(contact.point),
                             normal: nvec_to_cgmath(manifold.data.normal),
+                            // The reader computes it from the live bodies.
+                            closing_speed: None,
                         });
                     self.queued_events.lock().unwrap().push(
                         super::CollisionEvent::CollisionStarted {

@@ -1,7 +1,6 @@
 extern crate gl;
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
-use crate::scene::light::Light;
 use crate::shader_program::ShaderProgram;
 use crate::texture::Texture;
 use crate::texture::TextureTrait;
@@ -58,6 +57,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform sampler2D texture1; // lightmap
         uniform sampler2D texture2; // diffuse texture
         uniform vec3 ambientColor;  // authored mission-wide minimum lighting
+        uniform float lightmapIntensity;
 
         // Spotlight array uniforms (up to 6 spotlights)
         uniform vec3 spotlightPos[6];
@@ -84,18 +84,21 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
 
             vec3 lightDir = normalize(lightVec);
 
-            // Cone attenuation for spotlight
-            float cosOuterCone = cos(spotlightOuterAngle[i]);
-            float cosInnerCone = cos(spotlightInnerAngle[i]);
-            float spotFactor = dot(-lightDir, normalize(spotlightDirection[i]));
-
-            if (spotFactor < cosOuterCone) {
-                return vec3(0.0);
-            }
-
+            // Cone attenuation. A negative inner angle marks a point light -
+            // it has no cone, so it lights every direction equally.
             float coneAttenuation = 1.0;
-            if (spotFactor < cosInnerCone) {
-                coneAttenuation = (spotFactor - cosOuterCone) / (cosInnerCone - cosOuterCone);
+            if (spotlightInnerAngle[i] >= 0.0) {
+                float cosOuterCone = cos(spotlightOuterAngle[i]);
+                float cosInnerCone = cos(spotlightInnerAngle[i]);
+                float spotFactor = dot(-lightDir, normalize(spotlightDirection[i]));
+
+                if (spotFactor < cosOuterCone) {
+                    return vec3(0.0);
+                }
+
+                if (spotFactor < cosInnerCone) {
+                    coneAttenuation = (spotFactor - cosOuterCone) / (cosInnerCone - cosOuterCone);
+                }
             }
 
             // Distance attenuation
@@ -120,7 +123,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             wrappedTexCoord.x = mod(lightMapTexCoord.x * width, width) + atlasCoord.x + half_pixel;
             wrappedTexCoord.y = mod(lightMapTexCoord.y * height, height) + atlasCoord.y + half_pixel;
 
-            vec4 lightmapColor = texture(texture1, wrappedTexCoord);
+            vec4 lightmapColor = texture(texture1, wrappedTexCoord) * lightmapIntensity;
             vec4 diffuseColor = texture(texture2, texCoord);
 
             // Dark's mission ambient is a minimum final intensity: preserve
@@ -147,6 +150,7 @@ struct UnifiedUniforms {
     texture1_loc: i32, // lightmap
     texture2_loc: i32, // diffuse
     ambient_color_loc: i32,
+    lightmap_intensity_loc: i32,
 
     // Spotlight array uniforms (6 spotlights)
     spotlight_pos_loc: [i32; 6],
@@ -208,19 +212,23 @@ impl LightmapMaterial {
             // Set texture samplers
             gl::Uniform1i(uniforms.texture1_loc, 0); // lightmap
             gl::Uniform1i(uniforms.texture2_loc, 1); // diffuse
+            gl::Uniform1f(
+                uniforms.lightmap_intensity_loc,
+                render_context.level_light_intensity,
+            );
             gl::Uniform3f(
                 uniforms.ambient_color_loc,
-                self.ambient_color.x,
-                self.ambient_color.y,
-                self.ambient_color.z,
+                self.ambient_color.x * render_context.ambient_light_intensity,
+                self.ambient_color.y * render_context.ambient_light_intensity,
+                self.ambient_color.z * render_context.ambient_light_intensity,
             );
 
             // Set spotlight array uniforms
             for i in 0..6 {
-                if let Some(spotlight) = lights.get_spotlight(i) {
-                    let pos = spotlight.position();
-                    let color_intensity = spotlight.color_intensity();
-                    let direction = spotlight.direction;
+                if let Some(light) = lights.get_light(i) {
+                    let pos = light.position();
+                    let color_intensity = light.color_intensity();
+                    let direction = light.direction();
 
                     gl::Uniform3f(uniforms.spotlight_pos_loc[i], pos.x, pos.y, pos.z);
                     gl::Uniform4f(
@@ -238,13 +246,13 @@ impl LightmapMaterial {
                     );
                     gl::Uniform1f(
                         uniforms.spotlight_inner_angle_loc[i],
-                        spotlight.inner_cone_angle,
+                        light.inner_cone_angle(),
                     );
                     gl::Uniform1f(
                         uniforms.spotlight_outer_angle_loc[i],
-                        spotlight.outer_cone_angle,
+                        light.outer_cone_angle(),
                     );
-                    gl::Uniform1f(uniforms.spotlight_range_loc[i], spotlight.range);
+                    gl::Uniform1f(uniforms.spotlight_range_loc[i], light.range());
                 } else {
                     // Disable this light slot by setting intensity to 0
                     gl::Uniform4f(
@@ -307,6 +315,10 @@ impl Material for LightmapMaterial {
                     ambient_color_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("ambientColor").as_ptr(),
+                    ),
+                    lightmap_intensity_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("lightmapIntensity").as_ptr(),
                     ),
 
                     // Spotlight array uniforms (6 spotlights)

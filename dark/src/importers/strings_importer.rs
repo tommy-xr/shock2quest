@@ -79,12 +79,204 @@ pub fn parse_strings(content: &[String]) -> HashMap<String, String> {
     map
 }
 
+/// Split a Dark object string (`key: "fallback text"`) into its lookup key and
+/// its inline fallback text.
+fn split_object_string(raw: &str) -> (&str, &str) {
+    match raw.split_once(':') {
+        Some((key, remainder)) => {
+            let remainder = remainder.trim();
+            let fallback = match remainder.strip_prefix('"') {
+                Some(quoted) => quoted.split_once('"').map_or("", |(value, _)| value),
+                None => remainder,
+            };
+            (key.trim(), fallback)
+        }
+        None => (raw.trim(), ""),
+    }
+}
+
+fn lookup(strings: &HashMap<String, String>, key: &str) -> Option<String> {
+    if key.is_empty() {
+        return None;
+    }
+    strings.get(&key.to_ascii_lowercase()).cloned()
+}
+
+/// Resolve an object string against a string table, falling back to the inline
+/// text the property carries.
+pub fn resolve_localized_property_string(raw: &str, strings: &HashMap<String, String>) -> String {
+    let (key, fallback) = split_object_string(raw);
+    lookup(strings, key).unwrap_or_else(|| fallback.to_owned())
+}
+
+/// Resolve a symbolic name (`P$SymName`) directly against a string table,
+/// underscoring spaces first - multi-word entries are keyed that way in the
+/// shipped tables (`Stasis_Field_Generator`, `laser_pistol`).
+pub fn resolve_symbolic_name(sym_name: &str, strings: &HashMap<String, String>) -> Option<String> {
+    lookup(strings, &sym_name.replace(' ', "_"))
+}
+
+/// Ordinary items reuse their ObjName key in OBJLOOKS unless ObjLookS
+/// overrides it. A short display name is never a description fallback.
+pub fn resolve_object_description(
+    look: Option<&str>,
+    name: Option<&str>,
+    sym_name: Option<&str>,
+    strings: &HashMap<String, String>,
+) -> Option<String> {
+    look.map(|raw| resolve_localized_property_string(raw, strings))
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| name.and_then(|raw| lookup(strings, split_object_string(raw).0)))
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| sym_name.and_then(|name| resolve_symbolic_name(name, strings)))
+        .filter(|text| !text.trim().is_empty())
+}
+
+/// Resolve a gun fire-setting string (`P$Sett1`/`P$SHead2`/...) against its
+/// `SETT*`/`SHEAD*` table.
+///
+/// Some guns author no setting property at all - the Stasis Field Generator,
+/// Worm Launcher and Viral Proliferator - yet the tables carry entries for
+/// them, keyed by their symbolic name. So the symbolic name is tried
+/// whenever the property is missing or its own key misses.
+pub fn resolve_gun_setting_string(
+    raw: Option<&str>,
+    sym_name: Option<&str>,
+    strings: &HashMap<String, String>,
+) -> Option<String> {
+    let (key, fallback) = raw.map_or(("", ""), split_object_string);
+    lookup(strings, key)
+        .or_else(|| sym_name.and_then(|name| resolve_symbolic_name(name, strings)))
+        .or_else(|| (!fallback.is_empty()).then(|| fallback.to_owned()))
+}
+
 pub static STRINGS_IMPORTER: Lazy<AssetImporter<Vec<String>, HashMap<String, String>, ()>> =
     Lazy::new(|| AssetImporter::define(import_strings, process_strings));
 
 #[cfg(test)]
 mod tests {
-    use super::parse_strings;
+    #[test]
+    fn empty_description_entries_allow_symbolic_fallback() {
+        let blank = std::collections::HashMap::from([
+            ("empty".into(), " ".into()),
+            ("symbol".into(), "Description".into()),
+        ]);
+        assert_eq!(
+            super::resolve_object_description(None, Some("empty"), Some("symbol"), &blank)
+                .as_deref(),
+            Some("Description")
+        );
+        assert_eq!(
+            super::resolve_object_description(None, Some("empty"), None, &blank),
+            None
+        );
+    }
+    #[test]
+    fn description_uses_name_key_but_not_name_fallback() {
+        let strings =
+            std::collections::HashMap::from([("med_patch".into(), "Medical description".into())]);
+        assert_eq!(
+            super::resolve_object_description(
+                None,
+                Some("Med_Patch: \"A medical hypo\""),
+                None,
+                &strings
+            )
+            .as_deref(),
+            Some("Medical description")
+        );
+        assert_eq!(
+            super::resolve_object_description(None, Some("missing: \"A name\""), None, &strings),
+            None
+        );
+        assert_eq!(
+            super::resolve_object_description(
+                Some("custom: \"An override\""),
+                Some("Med_Patch"),
+                None,
+                &strings
+            )
+            .as_deref(),
+            Some("An override")
+        );
+    }
+    use std::collections::HashMap;
+
+    use super::{parse_strings, resolve_gun_setting_string, resolve_localized_property_string};
+
+    fn table(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(key, value)| (key.to_ascii_lowercase(), (*value).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn object_string_resolves_its_key_against_the_table() {
+        let strings = table(&[("elevator_button", "Localized elevator button")]);
+
+        assert_eq!(
+            resolve_localized_property_string(
+                r#"Elevator_Button: "A two-state button.""#,
+                &strings
+            ),
+            "Localized elevator button"
+        );
+    }
+
+    #[test]
+    fn object_string_falls_back_to_its_embedded_text() {
+        assert_eq!(
+            resolve_localized_property_string(r#"HumanCorpses: "A corpse.""#, &table(&[])),
+            "A corpse."
+        );
+    }
+
+    #[test]
+    fn a_bare_key_with_no_embedded_text_still_resolves() {
+        let strings = table(&[("basketball", "A basketball.")]);
+
+        assert_eq!(
+            resolve_localized_property_string("Basketball", &strings),
+            "A basketball."
+        );
+    }
+
+    #[test]
+    fn setting_string_prefers_the_table_over_the_inline_fallback() {
+        let strings = table(&[("pistol", "BURST")]);
+
+        assert_eq!(
+            resolve_gun_setting_string(Some(r#"Pistol: "stale""#), Some("Pistol"), &strings),
+            Some("BURST".to_string())
+        );
+    }
+
+    #[test]
+    fn setting_string_falls_back_to_the_inline_text() {
+        assert_eq!(
+            resolve_gun_setting_string(Some(r#"Pistol: "BURST""#), Some("Pistol"), &table(&[])),
+            Some("BURST".to_string())
+        );
+    }
+
+    #[test]
+    fn setting_string_falls_back_to_the_underscored_symbolic_name() {
+        let strings = table(&[("stasis_field_generator", "AREA")]);
+
+        assert_eq!(
+            resolve_gun_setting_string(None, Some("Stasis Field Generator"), &strings),
+            Some("AREA".to_string())
+        );
+    }
+
+    #[test]
+    fn setting_string_is_absent_when_nothing_resolves() {
+        assert_eq!(
+            resolve_gun_setting_string(None, Some("Rick Turret Gun"), &table(&[])),
+            None
+        );
+    }
 
     #[test]
     fn accepts_whitespace_between_colon_and_opening_quote() {

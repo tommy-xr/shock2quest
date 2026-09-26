@@ -284,8 +284,8 @@ test(
     // Negative-first for #551: Earth Psionic Training gives us a production
     // path to non-default PSI and HP. The authored room entry sets PSI to 5,
     // then a real psi-amp burnout spends one point and deals three damage.
-    // Before the fix, the transition below resets 27/30 HP + 4/50 PSI to the
-    // destination's template defaults, and a fresh-process load does likewise.
+    // Before the fix, the transition resets the damaged/depleted pools to
+    // destination defaults, and a fresh-process load does likewise.
     const saveName = `player_vitals_e2e_${Date.now()}`;
     let expected: PlayerVitals;
 
@@ -304,6 +304,8 @@ test(
         amp.id,
         "normal world-use should wield the authored Psi Amp",
       );
+      const beforeBurnout = playerVitals(await game.info());
+      assert.equal(beforeBurnout.psiPoints, 5, "the training tripwire sets current PSI to five");
 
       await game.input.set("right_hand.trigger", 1);
       await game.step({ frames: 130 });
@@ -314,10 +316,9 @@ test(
       assert.deepEqual(
         expected,
         {
-          hitPoints: 27,
-          maxHitPoints: 30,
-          psiPoints: 4,
-          maxPsiPoints: 50,
+          ...beforeBurnout,
+          hitPoints: beforeBurnout.hitPoints - 3,
+          psiPoints: beforeBurnout.psiPoints - 1,
         },
         "the test setup should establish non-default current HP and PSI",
       );
