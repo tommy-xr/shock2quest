@@ -32,6 +32,9 @@ if a[0] == 'shell' and len(a) == 2:
     if script.startswith('am start'): print('Status: ok'); sys.exit(0)
     if script.startswith('am force-stop'): sys.exit(0)
     sys.exit(subprocess.call(['sh', '-c', script]))
+if a[0] == 'pull':
+    src = Path(a[1].replace('/sdcard/shock2quest', str(root / 'data')))
+    Path(a[2]).write_bytes(src.read_bytes()); sys.exit(0)
 if a[0] == 'install':
     assert a[1] == '-r' and Path(a[2]).is_file()
     print('Success'); sys.exit(0)
@@ -137,4 +140,27 @@ fn install_existing_apk_and_launch_stop_target_selected_device() {
         calls.contains("am start -S -W -n com.tommybuilds.shock2quest/android.app.NativeActivity")
     );
     assert!(calls.contains("am force-stop com.tommybuilds.shock2quest"));
+}
+#[test]
+fn recordings_list_newest_first_and_pull_with_their_save() {
+    let h = Harness::new();
+    let dir = h.dir.path().join("data/recordings");
+    fs::create_dir_all(&dir).unwrap();
+    for (name, frames) in [("rec-100", 2), ("rec-200", 3)] {
+        let header = format!(r#"{{"version":1,"scene":"medsci1.mis","save":"{name}.sav"}}"#);
+        fs::write(dir.join(format!("{name}.jsonl")), format!("{header}\n{}", "{}\n".repeat(frames))).unwrap();
+        fs::write(dir.join(format!("{name}.sav")), name).unwrap();
+    }
+    let listing = String::from_utf8(h.run(&["recordings"]).stdout).unwrap();
+    let names: Vec<_> = listing.lines().map(|l| l.split_whitespace().next().unwrap()).collect();
+    assert_eq!(names, ["rec-200", "rec-100"]);
+    assert!(listing.lines().next().unwrap().contains("3 frames  medsci1.mis"));
+
+    let out = h.dir.path().join("pulled");
+    h.run(&["pull-recording", "--out", out.to_str().unwrap()]);
+    assert!(out.join("rec-200.jsonl").is_file());
+    assert_eq!(fs::read_to_string(out.join("rec-200.sav")).unwrap(), "rec-200");
+    h.run(&["pull-recording", "rec-100", "--out", out.to_str().unwrap()]);
+    assert!(out.join("rec-100.sav").is_file());
+    assert!(!h.command(&["pull-recording", "rec-300"]).output().unwrap().status.success());
 }

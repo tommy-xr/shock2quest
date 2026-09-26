@@ -24,6 +24,9 @@ cargo dvr ls /sdcard/shock2quest/mods
 cargo dvr shell                     # interactive device shell
 cargo dvr shell 'df -h /sdcard'      # explicit remote shell syntax
 cargo dvr logs
+cargo dvr recordings               # input recordings, newest first
+cargo dvr pull-recording            # newest recording + its start save -> ./recordings
+cargo dvr pull-recording rec-1727390000000 --out /tmp/recs
 cargo dvr debug-port set 8171
 cargo dvr debug-port get
 cargo dvr debug-port unset
@@ -33,6 +36,11 @@ The dashboard refreshes every five seconds: **m** edits the mission, **l** launc
 **s** stops, **f** lists game files, **r** returns to status, and **q** quits.
 Press Enter on an empty mission field to delete the override; Escape cancels.
 ADB work runs off the UI thread, so a slow device does not block Quit.
+
+Input recordings (Developer > Camera & view > **Rec input R-stick**, then click the
+right stick) are stored in `/sdcard/shock2quest/recordings` as `rec-<ms>.jsonl` plus
+the `.sav` they start from. `pull-recording` copies both and prints the command that
+renders the recording to a GIF/MP4.
 
 Saved games are stored in `/sdcard/shock2quest/saves/*.sav`. The `saves`
 directory may not exist until a game has been saved.

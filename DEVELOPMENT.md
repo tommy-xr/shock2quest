@@ -302,8 +302,8 @@ resolution:
 1. Pause menu > Developer > Camera & view: turn on **Rec input R-stick** (`input_recording`).
 2. Click the right thumbstick to start; a message confirms. Play, then click
    again to stop. Pause first is refused: the pause menu is not saved.
-3. `adb pull /sdcard/shock2quest/recordings/` - each recording is a
-   `rec-<ms>.jsonl` plus the `rec-<ms>.sav` it starts from.
+3. `cargo dvr pull-recording` copies the newest recording (`rec-<ms>.jsonl`) and
+   the `rec-<ms>.sav` it starts from to `./recordings` (`cargo dvr recordings` lists them).
 4. `cd tools/shock2-sdk && npm run build && node scripts/hero-shots.mjs --replay <rec.jsonl> --name <gif>`
    renders it first-person to `screenshots/hero/<gif>.{gif,mp4}`
    (or `POST /v1/replay` on the debug runtime for custom capture).

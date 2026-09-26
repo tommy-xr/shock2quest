@@ -16,6 +16,7 @@ mod quest_config;
 const ROOT: &str = "/sdcard/shock2quest";
 const PACKAGE: &str = "com.tommybuilds.shock2quest";
 const DEBUG_PORT: &str = "/sdcard/shock2quest/debug-port.txt";
+const RECORDINGS: &str = "/sdcard/shock2quest/recordings";
 
 #[derive(Parser)]
 #[command(about = "Shock2Quest device dashboard and CLI", version)]
@@ -73,6 +74,15 @@ enum Action {
     },
     /// Follow application and crash logs
     Logs,
+    /// List input recordings on the headset, newest first
+    Recordings,
+    /// Copy a recording and the save it starts from (default: the newest)
+    PullRecording {
+        /// e.g. rec-1727390000000
+        name: Option<String>,
+        #[arg(long, default_value = "recordings")]
+        out: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -146,6 +156,15 @@ fn main() -> Result<()> {
                 "*:S",
             ]))?;
         }
+        Action::Recordings => {
+            for recording in device.recordings()? {
+                println!(
+                    "{}  {:>6} frames  {}",
+                    recording.name, recording.frames, recording.scene
+                );
+            }
+        }
+        Action::PullRecording { name, out } => device.pull_recording(name.as_deref(), &out)?,
         Action::Tui | Action::Devices => unreachable!(),
     }
     Ok(())
@@ -246,6 +265,42 @@ impl Device {
         self.shell(&script)?;
         Ok(())
     }
+    fn recordings(&self) -> Result<Vec<Recording>> {
+        // One round trip: each recording's line count, name and header line.
+        let dir = quote(RECORDINGS);
+        parse_recordings(&self.shell(&format!(
+            "for f in {dir}/rec-*.jsonl; do [ -e \"$f\" ] || continue; \
+             printf '%s\\t%s\\t' \"$(wc -l < \"$f\")\" \"$(basename \"$f\" .jsonl)\"; \
+             head -n 1 \"$f\"; echo; done"
+        ))?)
+    }
+    fn pull_recording(&self, name: Option<&str>, out: &std::path::Path) -> Result<()> {
+        let recordings = self.recordings()?;
+        let recording = match name {
+            Some(name) => recordings.iter().find(|r| r.name == name),
+            None => recordings.first(),
+        }
+        .with_context(|| match name {
+            Some(name) => format!("no recording {name}; run cargo dvr recordings"),
+            None => format!("no recordings in {RECORDINGS}"),
+        })?;
+        std::fs::create_dir_all(out)?;
+        for file in [format!("{}.jsonl", recording.name), recording.save.clone()] {
+            output(
+                self.adb()
+                    .arg("pull")
+                    .arg(format!("{RECORDINGS}/{file}"))
+                    .arg(out.join(&file)),
+            )?;
+        }
+        let path = std::fs::canonicalize(out.join(format!("{}.jsonl", recording.name)))?;
+        println!(
+            "{}\nRender: cd tools/shock2-sdk && node scripts/hero-shots.mjs --replay {} --name <clip>",
+            path.display(),
+            path.display()
+        );
+        Ok(())
+    }
     fn launch(&self) -> Result<()> {
         let result = self.shell(&format!(
             "am start -S -W -n {PACKAGE}/android.app.NativeActivity"
@@ -311,6 +366,45 @@ impl Device {
     }
 }
 
+struct Recording {
+    name: String,
+    scene: String,
+    /// The start save, beside the recording.
+    save: String,
+    frames: usize,
+}
+
+/// Parse `recordings`' listing (`<lines>\t<name>\t<header json>` per file),
+/// newest first. Names embed their start time in ms, so they sort by it; a
+/// header that names a save outside the directory is rejected.
+fn parse_recordings(listing: &str) -> Result<Vec<Recording>> {
+    let mut recordings = Vec::new();
+    for line in listing.lines().filter(|line| !line.trim().is_empty()) {
+        let mut fields = line.splitn(3, '\t');
+        let (Some(lines), Some(name), Some(header)) = (fields.next(), fields.next(), fields.next())
+        else {
+            bail!("unexpected recording listing: {line}")
+        };
+        let header: serde_json::Value = serde_json::from_str(header)
+            .with_context(|| format!("{name}: unreadable header"))?;
+        let save = header["save"].as_str().unwrap_or_default();
+        ensure!(
+            !save.is_empty() && !save.contains('/') && !save.starts_with('.'),
+            "{name}: bad save name {save:?}"
+        );
+        recordings.push(Recording {
+            name: name.into(),
+            scene: header["scene"].as_str().unwrap_or("?").into(),
+            save: save.into(),
+            // The header is the first line.
+            frames: lines.trim().parse::<usize>().unwrap_or(0).saturating_sub(1),
+        });
+    }
+    let started = |r: &Recording| r.name.trim_start_matches("rec-").parse::<u128>().unwrap_or(0);
+    recordings.sort_by_key(|r| std::cmp::Reverse(started(r)));
+    Ok(recordings)
+}
+
 fn validate_setting(value: &str, mission: bool) -> Result<Option<String>> {
     let value = value.trim();
     if value.is_empty() {
@@ -374,6 +468,23 @@ mod tests {
             validate_setting("8171", false).unwrap(),
             Some("8171".into())
         );
+    }
+    #[test]
+    fn recordings_sort_newest_first_and_reject_escaping_saves() {
+        let header = |save: &str| format!(r#"{{"version":1,"scene":"medsci1.mis","save":"{save}"}}"#);
+        let listing = format!(
+            "3\trec-9\t{}\n\n11\trec-10\t{}\n",
+            header("rec-9.sav"),
+            header("rec-10.sav")
+        );
+        let recordings = parse_recordings(&listing).unwrap();
+        assert_eq!(recordings[0].name, "rec-10");
+        assert_eq!(recordings[0].frames, 10);
+        assert_eq!(recordings[1].save, "rec-9.sav");
+        assert_eq!(recordings[1].scene, "medsci1.mis");
+        for save in ["../x.sav", "/etc/passwd", ""] {
+            assert!(parse_recordings(&format!("2\trec-1\t{}", header(save))).is_err());
+        }
     }
     #[test]
     fn shell_paths_are_literal() {
