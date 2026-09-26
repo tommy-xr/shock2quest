@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -31,6 +31,10 @@ const LOAD_GAME_ENTRY_CANVAS: [number, number] = [400 + 179 / 2, 96 + 60 / 2];
 const LOAD_BUTTON_CANVAS: [number, number] = [527 + 96 / 2, 161 + 62 / 2];
 const DONE_BUTTON_CANVAS: [number, number] = [527 + 95 / 2, 405 + 62 / 2];
 const FIRST_ROW_CANVAS: [number, number] = [261 + 202 / 2, 54 + 19 / 2];
+// The shared list rocker reserves a 32px gutter and puts its down arrow 6px
+// above the field at y=323. The last row stays just left of that gutter.
+const DOWN_ARROW_CANVAS: [number, number] = [261 + 202 - 16, 323 - 6 - 8];
+const LAST_ROW_WITH_GUTTER_CANVAS: [number, number] = [261 + (202 - 32) / 2, 54 + 13 * 19 + 19 / 2];
 const LOAD_GAME_ENTRY = norm(...LOAD_GAME_ENTRY_CANVAS);
 const LOAD_BUTTON = norm(...LOAD_BUTTON_CANVAS);
 const DONE_BUTTON = norm(...DONE_BUTTON_CANVAS);
@@ -130,6 +134,68 @@ test(
       (await entityCount(game)) > 100,
       "loading a save should bring up a populated mission",
     );
+  },
+);
+
+test(
+  "flat and VR can scroll to and load the fifteenth save",
+  { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async (t) => {
+    const assetRoot = process.env.DARK_ASSET_PATH;
+    assert.ok(assetRoot, "DARK_ASSET_PATH must explicitly select the 25AE root");
+    const savesDir = join(assetRoot, "saves");
+    mkdirSync(savesDir, { recursive: true });
+    const prefix = `i928_${process.pid}_${Date.now()}`;
+    const names = Array.from({ length: 15 }, (_, i) => `${prefix}_${String(i).padStart(2, "0")}`);
+    t.after(() => names.forEach((name) => rmSync(join(savesDir, `${name}.sav`), { force: true })));
+
+    // Fourteen recent MedSci saves fill the authored list. The older Earth
+    // save has a different mission, so a successful load proves which row was
+    // selected rather than merely that some save could load.
+    {
+      await using game = await GameServer.launch({ mission: "medsci1.mis" });
+      await game.step({ frames: 30 });
+      await game.save(names[0]);
+    }
+    for (let i = 1; i < 14; i++) {
+      copyFileSync(join(savesDir, `${names[0]}.sav`), join(savesDir, `${names[i]}.sav`));
+    }
+    {
+      await using game = await GameServer.launch({ mission: "earth.mis" });
+      await game.step({ frames: 30 });
+      await game.save(names[14]);
+    }
+    // Keep the fixture's order above any existing user saves without touching
+    // their files or depending on the host filesystem's mtime granularity.
+    const newest = Date.UTC(2100, 0, 1) / 1000;
+    names.forEach((name, index) => {
+      const timestamp = newest - index;
+      utimesSync(join(savesDir, `${name}.sav`), timestamp, timestamp);
+    });
+
+    for (const vr of [false, true]) {
+      await using game = await GameServer.launch({
+        mission: "main_menu",
+        ...(vr ? { debugFlags: ["--vr"] } : {}),
+      });
+      await game.step({ frames: 5 });
+      if (vr) {
+        await vrClick(game, LOAD_GAME_ENTRY_CANVAS);
+        await vrClick(game, DOWN_ARROW_CANVAS);
+        await vrClick(game, LAST_ROW_WITH_GUTTER_CANVAS);
+        await vrClick(game, LOAD_BUTTON_CANVAS);
+      } else {
+        await click(game, LOAD_GAME_ENTRY);
+        await click(game, norm(...DOWN_ARROW_CANVAS));
+        await click(game, norm(...LAST_ROW_WITH_GUTTER_CANVAS));
+        await click(game, LOAD_BUTTON);
+      }
+      assert.equal(
+        (await game.info()).mission,
+        "earth.mis",
+        `${vr ? "VR" : "flat"} should load the save beyond row 14`,
+      );
+    }
   },
 );
 
