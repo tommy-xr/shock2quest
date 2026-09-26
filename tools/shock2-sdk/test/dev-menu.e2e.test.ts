@@ -8,30 +8,26 @@ import {
   DEV_ACTION,
   DEV_DONE,
   clickCanvas as click,
-  menuEntry,
   norm,
   panelPoint,
   pauseEntry,
 } from "./helpers/frontend-menu.js";
 
 // The Developer screen: the shared dev-params row panel, hosted by a frontend
-// scene reached from the main menu's repurposed Options slot, and by a second
+// scene reached from the main menu's dedicated Developer button, and by a second
 // page of the pause overlay. These tests drive it exactly as a player would -
 // pointer clicks flat, a controller ray in VR - and assert against the
 // registry (`GET /v1/dev-params`) and the renderer (`/v1/scene`), so a click
 // on `>` is proven to move both the value and the live VR panel.
-//
-// Negative-first: against the PR1 build (registry + HTTP only, no screen),
-// the Options slot is inert - the first assertion of each test (the swap to
-// the "developer" scene / the page turn) fails.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-/** The repurposed Options slot, third of the six main-menu entries. */
-const DEVELOPER_ENTRY = menuEntry(2);
+/** The dedicated bottom-left Developer button. */
+const DEVELOPER_BUTTON: [number, number] = [88, 444];
+const DEVELOPER_ENTRY = norm(...DEVELOPER_BUTTON);
 
-// Camera & view is root category row 4. Its first parameter is
+// Camera & view is root category row 5. Its first parameter is
 // panel_distance. Compact single-line entries fit without a scroll gutter.
-const CAMERA_CATEGORY: [number, number] = [330, 54 + 4 * 28 + 12];
+const CAMERA_CATEGORY: [number, number] = [330, 54 + 5 * 28 + 12];
 const ROW0_INCREMENT: [number, number] = [449, 66];
 const ROW0_DECREMENT: [number, number] = [407, 66];
 
@@ -74,7 +70,7 @@ test(
     await using game = await GameServer.launch({ mission: "main_menu" });
     await game.step({ frames: 10 });
 
-    // The repurposed Options slot now swaps to the Developer scene.
+    // The dedicated Developer button opens the Developer scene.
     await game.input.set("pointer.position", DEVELOPER_ENTRY);
     await game.input.set("pointer.pressed", 1);
     await game.step({ frames: 2 });
@@ -156,7 +152,7 @@ test(
     await game.step({ frames: 10 });
 
     // Into the Developer screen via the controller ray.
-    await vrClick(game, [400 + 179 / 2, 20 + 2 * 76 + 30]);
+    await vrClick(game, DEVELOPER_BUTTON);
     assert.equal((await game.info()).mission, "developer");
     await game.step({ frames: 5 });
 
@@ -248,7 +244,7 @@ test(
   async () => {
     await using game = await GameServer.launch({ mission: "main_menu" });
     await game.step({ frames: 10 });
-    await click(game, [489, 202]);
+    await click(game, DEVELOPER_BUTTON);
     assert.equal((await game.info()).mission, "developer");
 
     // The upper framed button turns the page - it does not swap the scene.
@@ -289,7 +285,7 @@ test(
   async () => {
     await using game = await GameServer.launch({ mission: "main_menu" });
     await game.step({ frames: 10 });
-    await click(game, [489, 202]);
+    await click(game, DEVELOPER_BUTTON);
     assert.equal((await game.info()).mission, "developer");
 
     // The launcher opens on the Missions tab; tab over to Debug Scenes and
@@ -325,7 +321,7 @@ test(
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 10 });
-    await vrClick(game, [400 + 179 / 2, 20 + 2 * 76 + 30]);
+    await vrClick(game, DEVELOPER_BUTTON);
     assert.equal((await game.info()).mission, "developer");
 
     // The same canvas points as the flat run, reached by the ray.
@@ -359,7 +355,7 @@ for (const vr of [false, true]) {
         "vr_ammo_pouch_zones", "vr_holster_zones", "vr_support_grips", "clip_zone",
       ];
       await game.step({ frames: 10 });
-      await press([489, 202]);
+      await press(DEVELOPER_BUTTON);
       await press(category(0)); // Visualizations
       await press(category(1)); // Hands & zones (after the bulk row)
       await press([310, 74]); // All on
@@ -375,14 +371,14 @@ for (const vr of [false, true]) {
       assert.equal(await paramValue(game, "vr_backpack_zones"), 1);
       assert.equal(await paramValue(game, "melee_glove_overlay"), 0);
       await press(DEV_DONE);
-      await press([489, 202]);
+      await press(DEVELOPER_BUTTON);
       await press([449, 122]);
       assert.equal(await paramValue(game, "vr_backpack_zones"), 0);
       assert.equal(await paramValue(game, "melee_glove_overlay"), 0);
 
       await press(back);
       await press(back);
-      await press(category(7)); // Locked
+      await press(category(8)); // Locked
       await press(category(0)); // Hands & gloves
       const locked = (await game.devParams.list()).params.find(p => p.key === "glove_forward_cm");
       assert.equal(locked?.locked, true);

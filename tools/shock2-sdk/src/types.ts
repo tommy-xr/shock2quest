@@ -1047,6 +1047,8 @@ export interface UiState {
    * mapping it through this pose - see `test/helpers/vr-hand.ts`.
    */
   panel_pose: UiPanelPose | null;
+  /** Actual rear lens in pawn space; emits along its local -Z. */
+  scanner_pose: { origin: Vec3; rotation: [number, number, number, number] } | null;
   /**
    * The HUD status-message lines showing right now, oldest first - the channel
    * a `TrapMessage` writes its `P$UseMsg` text to. Each line clears five

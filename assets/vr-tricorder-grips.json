@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "solver_revision": 2,
+  "entries": [
+    {
+      "model": "tricorder",
+      "hand": "left",
+      "surface_hash": "b7fbbee0a429fa15",
+      "kinematics_hash": "fc822f2d8e6d2d89",
+      "hints_hash": "authored-phone-rear-support",
+      "grip": {
+        "item_scale": 1.0,
+        "pose_family": "broad",
+        "offset": {
+          "x": 0.06812701669342192,
+          "y": -0.033371373425762456,
+          "z": -0.15940383299887873
+        },
+        "rotation": {
+          "v": {
+            "x": -0.525514677389386,
+            "y": 0.5258692078431803,
+            "z": -0.4794908991118392
+          },
+          "s": 0.46624491166835746
+        },
+        "curls": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08333333333333333
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          -0.09186351706036747,
+          -0.03280839895013123,
+          -0.03937007874015748
+        ],
+        "score": 5.5
+      },
+      "authored": true
+    },
+    {
+      "model": "tricorder",
+      "hand": "right",
+      "surface_hash": "b7fbbee0a429fa15",
+      "kinematics_hash": "30ce474673f17dd7",
+      "hints_hash": "authored-phone-rear-support",
+      "grip": {
+        "item_scale": 1.0,
+        "pose_family": "broad",
+        "offset": {
+          "x": -0.06742976685539896,
+          "y": 0.011720030217686413,
+          "z": -0.15988097928427045
+        },
+        "rotation": {
+          "v": {
+            "x": -0.525514677389386,
+            "y": -0.5258692078431803,
+            "z": 0.4794908991118392
+          },
+          "s": 0.46624491166835746
+        },
+        "curls": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.041666666666666664
+        ],
+        "contacts": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "anchor": [
+          0.047988402887139105,
+          -0.03280839895013123,
+          -0.03937007874015748
+        ],
+        "score": 5.5
+      },
+      "authored": true
+    }
+  ]
+}

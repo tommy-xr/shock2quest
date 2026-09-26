@@ -5,7 +5,7 @@ returns to the authored belt anchor when released. Player balances, credentials,
 logs and research stay in their existing owners; the device is a transient
 presentation, not another inventory item or a second copy of player state.
 
-Enable **Pause → Developer → Body inventory → MFD device prototype** on Quest
+Enable **Pause → Developer → Tricorder → MFD device prototype** on Quest
 or any VR runtime. The session-only `vr_mfd_device` toggle defaults off and
 is also available through the debug API. For a repeatable desktop launch, run:
 
@@ -27,7 +27,7 @@ flag is supplied.
 ## Interaction
 
 1. Squeeze an empty hand at the belt buckle to draw the instrument.
-2. Point that hand at an object within two metres. A cyan beam/hit marker and
+2. Aim the green rear lens at an object within two metres. A cyan beam/hit marker and
    the idle screen's target name identify the object that will receive the scan.
 3. Hold the target steady for 0.4 seconds to scan automatically, including items
    held in the other hand. Each continuous focus scans once. Disable
@@ -53,19 +53,19 @@ character sheet, and RES the research overview.
 The default body is the original stepped frame with an 8 mm solid backing.
 `vr_mfd_body=3` selects it; 0, 1, and 2 retain the dark `scipass.bin`,
 `upgrade.bin`, and `magci.bin` comparisons. The full 268×376 face is 14 cm
-wide by default (`vr_mfd_width`). A 3.5 cm grip bezel (`vr_mfd_grip_margin`)
-keeps the authored card pinch clear of the screen and footer.
+wide by default (`vr_mfd_width`). The optional extra bezel
+(`vr_mfd_grip_margin`) defaults to zero with the phone-style side grip.
 
-**Developer → Hands & gloves → Tricorder grips** provides independent left/right
-edge selection and six-axis placement. Bottom, left, top and right grips pivot
-the device around the authored hand contact. Translation is controller-local;
-pitch/yaw/roll also pivot around the contact. On the stepped frame the grip
-bezel moves to the selected edge. The right grip sits outside the full HRM
-sidecar width, so the cuff cannot cover its controls. Alternate left grips add 2 cm of adjustable
-clearance for the longer fingertip reach; right grips default to no extra
-clearance. These are live developer presets for testing
-portrait/landscape holds; automatic edge acquisition is not implemented.
-Finger curls still use the card pinch. See DEVELOPMENT.md for the HTTP keys.
+The ss2ex grip editor has a **Tricorder** library, with independent left/right
+position, rotation and finger curls saved to `assets/vr-tricorder-grips.json`.
+It previews the same physical frame and rear lens used in the game. Restart the
+game after saving. **Developer → Tricorder → Hand grips** adds live
+six-axis offsets and alternate edge experiments on top of these saved poses;
+edge 0 preserves the authored grip. Automatic edge acquisition is not implemented.
+See DEVELOPMENT.md for commands and HTTP keys.
+
+The rear emissive lens is the actual scan origin, with a short outward guide
+when unfocused. The query hologram is hidden while any interactive panel is open.
 
 The native 188-pixel main screen reserves room for the original HRM plug.
 Only the AMMOFULL housing is mirrored, placing the balance wells and raised
@@ -174,7 +174,7 @@ wielding. Runtime captures completed a 20-nanite pistol modification and a
 ## Hologram placement comparison
 
 The default now hovers over the screen's upper image area. Disable
-**Developer → Body inventory → MFD hologram over screen**
+**Developer → Tricorder → MFD hologram over screen**
 (`vr_mfd_hologram_screen`) to compare the original top-edge placement. The
 hovering model's bounding sphere clears the glass by 8 mm, with the same model, size, rotation and transparency.
 The original 2D art stays visible underneath so this experiment can reveal

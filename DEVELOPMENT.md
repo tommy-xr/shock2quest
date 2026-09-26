@@ -910,7 +910,7 @@ below still operate on the items actually held in each hand.
 
 ### Experimental belt MFD device
 
-Enable **Developer → Body inventory → MFD device prototype** (`vr_mfd_device`,
+Enable **Developer → Tricorder → MFD device prototype** (`vr_mfd_device`,
 session-only, default off), or launch with the flag below.
 `cargo dbgr --mission earth.mis --vr --experimental mfd_device` replaces the
 belt card with a handheld MFD prototype. Draw with squeeze and focus on a target
@@ -926,9 +926,9 @@ The experimental body's live developer parameters are `vr_mfd_body`
 1 = `upgrade.bin`, 2 = `magci.bin`) and
 `vr_mfd_width` (full face width in metres, default 0.14).
 The stepped frame has an 8 mm solid backing. `vr_mfd_grip_margin` reserves a
-bezel on the selected grip edge (default 0.035 m). The three retail model
+extra bezel on the selected grip edge (default 0 m). The three retail model
 comparisons use their original geometry with a private dark blank texture,
-preserving the world items' materials. The enlarged body preserves the card's authored grip point in either hand; only an empty
+preserving the world items' materials. The body uses independent authored tricorder grips in either hand; only an empty
 opposite hand can click it or pull out loot. A held gun keeps firing and its
 face-button actions.
 
@@ -944,11 +944,11 @@ disable it to compare holding-hand trigger scanning. A stable target scans
 once; look away and reacquire to scan it again. Only empty hands operate the
 screen, so a held weapon keeps its trigger and face-button behavior.
 
-**Developer → Hands & gloves → Tricorder grips** adjusts this device independently
-of the access-card fit. Each hand has an edge selector (0 bottom, 1 left,
+**Developer → Tricorder → Hand grips** adjusts this device independently
+of the access-card fit. Each hand has an edge selector (0 authored, 1 left,
 2 top, 3 right), XYZ translation in controller-local metres, and pitch/yaw/roll
-in degrees. Left/right edges seat the device sideways; top/bottom seat it in
-portrait. Rotations pivot about the authored pinch contact. The stepped frame's
+in degrees. Edge 0 uses the saved phone pose; alternate edges reposition the
+frame for portrait/landscape experiments. Rotations pivot about the authored grip contact. The stepped frame's
 grip bezel follows the selected edge, and its screen, pointer and hologram share
 the resulting pose. These are live developer choices, not automatic regrabbing.
 
@@ -956,10 +956,54 @@ HTTP keys are `vr_mfd_left_grip_edge`, `vr_mfd_left_grip_x`,
 `vr_mfd_left_grip_y`, `vr_mfd_left_grip_z`, `vr_mfd_left_grip_pitch`,
 `vr_mfd_left_grip_yaw`, and `vr_mfd_left_grip_roll`; replace `left` with `right`
 for the other hand. Offsets and angles default to zero; both edges default to
-bottom. Reset those values to restore the initial fit. These controls adjust
-placement; finger curls still use the authored card pinch pose.
+authored. Reset those values to restore the saved fit. These live controls add
+to the saved ss2ex placement.
 
 `vr_mfd_left_grip_clearance` / `vr_mfd_right_grip_clearance` add bezel clearance
-for side/top grips (defaults 0.02 m left, 0 m right). This accommodates the
-left pinch's fingertip reach without changing the bottom grip. The physical
-frame extends with this clearance rather than separating from the fingers.
+for alternate grips (both default 0 m). The physical frame extends with this
+clearance rather than separating from the fingers.
+
+### Authoring the tricorder grip in ss2ex
+
+Run `cargo dx ui --grip tricorder --grip-hand left` (or `right`), or select
+**Tricorder** in the existing grip editor. Adjust each hand's position,
+rotation and finger curls against the same stepped body and rear scanner lens
+used in the game. Save writes `assets/vr-tricorder-grips.json`; restart the game
+to load it. These poses are separate from the access card and ordinary pickups.
+Reset the live Tricorder → Hand grips offsets/angles to zero and edge to **authored**
+when comparing the editor to the runtime. The shipped poses are an initial
+phone-style side hold; headset comfort still needs hands-on tuning.
+
+The bright green lens on the back marks the scan origin. Its ray points outward
+from the back, follows the complete device/grip transform, and has a short guide
+when no object is focused. Query pages alone show the hologram; replicator,
+loot, weapon, research and other interactive panels hide it.
+
+The ss2ex tricorder preview renders the real idle MFD canvas over the frame,
+including query chrome, instructions, resource wells and utility buttons.
+**Uniform item scale** scales the body, screen and scanner lens together while
+leaving the glove unchanged; each hand saves its own scale. The preview is
+read-only and uses zero balances.
+
+On the belt, the device stays upright at its original mount with a 1.5 cm
+magnetic standoff. The screen faces the player and shows live balances; the
+rear lens faces outward. Its rear
+lens passively queries named objects as the player moves: a target shows its
+query icon/name/description, and moving away restores the idle screen. This
+preview never activates readers, opens action panels, consumes chemicals or
+claims the UI pointer. Drawing removes the belt screen and enables the normal
+handheld interaction. The stowed device uses `vr_mfd_width`; per-hand scale
+applies once that hand draws it.
+
+**Developer → Tricorder → Belt vertical offset (m)** (`vr_mfd_belt_y`)
+raises/lowers the centered mount live, from -0.15 to +0.20 metres in 0.005 m
+steps. Zero is the default; positive moves up. The screen, rear lens and grab
+point move together, while the held hand poses stay unchanged. Tricorder device,
+scan, map, body and hologram settings live in this top-level category; per-hand
+placement controls are under its **Hand grips** subcategory. Existing HTTP keys
+are unchanged.
+
+**Belt yaw (deg)** (`vr_mfd_belt_yaw`, default +13°, range ±45°) matches the
+angled buckle face in `astra-vr-belt.glb`. Adjust it live under **Tricorder**;
+the display, rear scanner and magnetic standoff rotate together. It affects
+only the stowed mount, leaving the saved left/right hand grips unchanged.

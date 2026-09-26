@@ -3181,3 +3181,5 @@ mod app_tests {
         assert!(app.player_eye_cap_above_center() < PLAYER_EYE_HEIGHT);
     }
 }
+
+pub mod tricorder;

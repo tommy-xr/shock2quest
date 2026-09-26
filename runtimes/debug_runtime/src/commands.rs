@@ -689,6 +689,7 @@ pub struct UiStateResult {
     /// while the interface is up in VR. Aim a controller at a canvas rect by
     /// mapping it through this.
     pub panel_pose: Option<shock2vr::game_scene::DebugUiPanelPose>,
+    pub scanner_pose: Option<shock2vr::game_scene::DebugScannerPose>,
     /// The HUD status-message lines showing right now, oldest first.
     pub messages: Vec<String>,
     /// The centered interstitial banner showing right now, `\n`-separated

@@ -2,7 +2,7 @@
 //! native panels; glyph layout and widget geometry remain owned by the shared UI.
 use crate::ui::canvas_viewport::{CanvasViewport, target_to_canvas};
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign, WorldPanel};
-use cgmath::{Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
+use cgmath::{Deg, InnerSpace, Quaternion, Rotation, Rotation3, Vector2, Vector3, vec2, vec3};
 
 mod grip;
 
@@ -10,39 +10,13 @@ pub const SIZE: Vector2<f32> = Vector2::new(268.0, 376.0);
 pub const SCREEN: Rect = Rect::new(8.0, 8.0, 252.0, 296.0);
 
 pub fn panel(
-    assets: &mut engine::assets::asset_cache::AssetCache,
     position: Vector3<f32>,
     rotation: Quaternion<f32>,
     grip: Option<&crate::vr_grip::ResolvedGrip>,
     hand: usize,
 ) -> Option<WorldPanel> {
-    use cgmath::{Deg, EuclideanSpace, InnerSpace, Rotation3};
     let grip = grip?;
-    let card = assets
-        .get_opt::<_, dark::model::Model, _>(&dark::importers::MODELS_IMPORTER, "scipass.bin")?;
-    let bounds = card.bounding_box()?;
-    let extent = bounds.max - bounds.min;
-    let display = face_size();
-    let scale = (display.x / extent.x).max((display.y + grip_margin()) / extent.z) * 1.045;
-    let mut front = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
-    front.z -= grip_margin() * 0.5 / scale;
-    front.y = bounds.min.y - 0.0015 / crate::METERS_PER_WORLD_UNIT / scale;
-    let anchor = vec3(grip.anchor[0], grip.anchor[1], grip.anchor[2]);
-    // Scaling around the authored pinch point keeps it attached to the glove.
-    // Center-scaling the large display puts the fingers through its middle.
-    let front = scaled_grip_point(front, anchor, grip.item_scale, scale);
-    let base = WorldPanel {
-        center: position + rotation.rotate_vector(grip.offset + grip.rotation.rotate_vector(front)),
-        rotation: (rotation
-            * grip.rotation
-            * Quaternion::from_angle_x(Deg(90.0))
-            * Quaternion::from_angle_z(Deg(180.0)))
-        .normalize(),
-        size: display,
-    };
-    let contact = position
-        + rotation
-            .rotate_vector(grip.offset + grip.rotation.rotate_vector(anchor * grip.item_scale));
+    let (base, contact) = authored_panel(position, rotation, grip, face_size());
     Some(grip::place(
         base,
         contact,
@@ -50,6 +24,46 @@ pub fn panel(
         &grip::tuning(hand),
         grip::margin(hand),
     ))
+}
+
+fn authored_panel(
+    position: Vector3<f32>,
+    rotation: Quaternion<f32>,
+    grip: &crate::vr_grip::ResolvedGrip,
+    size: Vector2<f32>,
+) -> (WorldPanel, Vector3<f32>) {
+    let display = size * grip.item_scale;
+    let anchor = Vector3::from(grip.anchor);
+    let center = scaled_grip_point(
+        vec3(0.0, 0.0, 0.0),
+        anchor,
+        grip.item_scale,
+        display.x / crate::tricorder::width(),
+    );
+    let base = WorldPanel {
+        center: position
+            + rotation.rotate_vector(grip.offset + grip.rotation.rotate_vector(center)),
+        rotation: (rotation * grip.rotation).normalize(),
+        size: display,
+    };
+    let contact = position
+        + rotation
+            .rotate_vector(grip.offset + grip.rotation.rotate_vector(anchor * grip.item_scale));
+    (base, contact)
+}
+
+/// Upright at the belt: +Z screen faces the player, -Z lens faces outward.
+/// Follow body yaw plus the buckle angle; a glance down never tips the mount.
+pub(super) fn stowed_panel(
+    center: Vector3<f32>,
+    body_rotation: Quaternion<f32>,
+    mount_yaw: f32,
+) -> WorldPanel {
+    WorldPanel {
+        center,
+        rotation: body_rotation * Quaternion::from_angle_y(Deg(mount_yaw)),
+        size: face_size(),
+    }
 }
 
 fn scaled_grip_point(
@@ -340,6 +354,63 @@ pub fn compose(native: UiCanvas, screen: Option<Rect>, target: Option<&str>) -> 
 mod tests {
     use super::*;
     #[test]
+    fn belt_mount_stays_upright_with_the_lens_facing_outward() {
+        use cgmath::{Deg, Rotation3};
+        let center = vec3(0.2, 1.0, -0.4);
+        for yaw in [-150.0, 0.0, 90.0] {
+            let rotation = Quaternion::from_angle_y(Deg(yaw));
+            let panel = stowed_panel(center, rotation, 13.0);
+            assert_eq!(panel.center, center);
+            assert!((panel.rotation * Vector3::unit_y() - Vector3::unit_y()).magnitude() < 0.00001);
+            assert!(
+                (panel.rotation * -Vector3::unit_z()
+                    - rotation
+                        * vec3(
+                            -13.0_f32.to_radians().sin(),
+                            0.0,
+                            -13.0_f32.to_radians().cos()
+                        ))
+                .magnitude()
+                    < 0.00001
+            );
+        }
+    }
+
+    #[test]
+    fn saved_scale_matches_editor_body_screen_and_lens_in_both_hands() {
+        use cgmath::{Deg, Rotation3};
+        let library: crate::vr_grip::GripLibrary =
+            serde_json::from_str(include_str!("../../../assets/vr-tricorder-grips.json")).unwrap();
+        let position = vec3(0.2, 0.4, -0.7);
+        let hand_rotation = Quaternion::from_angle_y(Deg(37.0));
+        let size = vec2(
+            crate::tricorder::width(),
+            crate::tricorder::width() * SIZE.y / SIZE.x,
+        );
+        for hand in ["left", "right"] {
+            for scale in [0.5, 1.0, 1.5] {
+                let mut grip = library.lookup("tricorder", hand).unwrap().clone();
+                grip.item_scale = scale;
+                let (panel, _) = authored_panel(position, hand_rotation, &grip, size);
+                assert_eq!(panel.size, size * scale);
+                for point in [
+                    vec3(0.0, 0.0, 0.0),
+                    vec3(size.x / 2.0, size.y / 2.0, 0.0),
+                    crate::tricorder::lens(size.x),
+                ] {
+                    let runtime = panel.center + panel.rotation * (point * panel.size.x / size.x);
+                    let editor =
+                        position + hand_rotation * (grip.offset + grip.rotation * (point * scale));
+                    assert!(
+                        (runtime - editor).magnitude() < 0.00001,
+                        "{hand} scale {scale}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn landscape_modes_preserve_the_body_and_exclude_the_gap() {
         use cgmath::InnerSpace;
         let source = Some(Rect::new(2.0, 124.0, 636.0, 296.0));
@@ -595,25 +666,12 @@ pub fn body(
             hand.map(grip::margin).unwrap_or_else(grip_margin),
         );
     }
-    let name = match crate::dev_params::get(crate::dev_params::VR_MFD_BODY).round() as u8 {
-        1 => "upgrade.bin",
-        2 => "magci.bin",
-        _ => "scipass.bin",
-    };
-    let Some(model) =
-        assets.get_opt::<_, dark::model::Model, _>(&dark::importers::MODELS_IMPORTER, name)
-    else {
+    let Some((model, scale, name)) = retail_body(assets) else {
         return vec![];
     };
-    let Some(bounds) = model.bounding_box() else {
-        return vec![];
-    };
+    let bounds = model.bounding_box().unwrap();
     let size = bounds.max - bounds.min;
     let display = face_size();
-    // Cover the complete canvas with a small rim. Never stretch the asset.
-    let scale = (display.x / size.x.max(0.001))
-        .max((display.y + grip_margin()) / size.z.max(0.001))
-        * 1.045;
     let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
     let transform =
         face * Matrix4::from_translation(vec3(
@@ -637,7 +695,7 @@ pub fn body(
             0.0,
         )))
     });
-    model
+    let mut objects: Vec<_> = model
         .clone_scene_objects()
         .into_iter()
         .map(|mut object| {
@@ -651,7 +709,66 @@ pub fn body(
             })));
             object
         })
-        .collect()
+        .collect();
+    let root = face
+        * Matrix4::from_angle_z(Deg(180.0))
+        * Matrix4::from_translation(vec3(0.0, grip_margin() * 0.5, 0.0));
+    let extra = size.y * scale + 0.0015 / crate::METERS_PER_WORLD_UNIT
+        - crate::tricorder::DEPTH_M / crate::METERS_PER_WORLD_UNIT;
+    let mut lens = crate::tricorder::lens_objects(display.x);
+    for object in &mut lens {
+        object.set_transform(
+            root * Matrix4::from_translation(vec3(0.0, 0.0, -extra)) * object.get_transform(),
+        );
+    }
+    objects.extend(lens);
+    objects
+}
+
+fn retail_body(
+    assets: &mut engine::assets::asset_cache::AssetCache,
+) -> Option<(std::rc::Rc<dark::model::Model>, f32, &'static str)> {
+    let name = match crate::dev_params::get(crate::dev_params::VR_MFD_BODY).round() as u8 {
+        1 => "upgrade.bin",
+        2 => "magci.bin",
+        _ => "scipass.bin",
+    };
+    let model =
+        assets.get_opt::<_, dark::model::Model, _>(&dark::importers::MODELS_IMPORTER, name)?;
+    let Some(bounds) = model.bounding_box() else {
+        return None;
+    };
+    let size = bounds.max - bounds.min;
+    let display = face_size();
+    // Cover the complete canvas with a small rim. Never stretch the asset.
+    let scale = (display.x / size.x.max(0.001))
+        .max((display.y + grip_margin()) / size.z.max(0.001))
+        * 1.045;
+    Some((model, scale, name))
+}
+
+/// The rendered back lens and physics ray use this exact same local mount.
+pub fn scanner_pose(
+    assets: &mut engine::assets::asset_cache::AssetCache,
+    panel: WorldPanel,
+) -> (Vector3<f32>, Quaternion<f32>) {
+    let mut lens = crate::tricorder::lens(face_size().x);
+    if crate::dev_params::get(crate::dev_params::VR_MFD_BODY).round() as u8 != 3 {
+        if let Some((model, scale, _)) = retail_body(assets) {
+            let bounds = model.bounding_box().unwrap();
+            let extra = (bounds.max.y - bounds.min.y) * scale
+                + 0.0015 / crate::METERS_PER_WORLD_UNIT
+                - crate::tricorder::DEPTH_M / crate::METERS_PER_WORLD_UNIT;
+            lens.z -= extra;
+        }
+    }
+    (
+        panel.center
+            + panel
+                .rotation
+                .rotate_vector(lens * (panel.size.x / face_size().x)),
+        panel.rotation,
+    )
 }
 
 /// Original stepped outline with a solid eight-millimetre backing.
@@ -684,41 +801,38 @@ fn stepped_frame(
             304.0 * pixel,
         ),
     };
-    [
-        (-32.0 * pixel, 0.0, 204.0 * pixel, display.y),
-        (0.0, -152.0 * pixel, display.x, 72.0 * pixel),
-        extension,
-    ]
-    .into_iter()
-    .map(|(x, y, width, height)| {
+    let mut objects = crate::tricorder::frame_objects(display.x);
+    objects.extend(crate::tricorder::lens_objects(display.x));
+    if margin > 0.0 {
+        let (x, y, width, height) = extension;
         let mut object = SceneObject::new(
             color_material::create(vec3(0.035, 0.05, 0.06)),
             Box::new(cube::create()),
         );
         object.set_transform(
-            root * Matrix4::from_translation(vec3(
-                x,
-                y,
-                -depth * 0.5 - 0.001 / crate::METERS_PER_WORLD_UNIT,
-            )) * Matrix4::from_nonuniform_scale(width, height, depth),
+            Matrix4::from_translation(vec3(x, y, -depth * 0.5))
+                * Matrix4::from_nonuniform_scale(width, height, depth),
         );
         object.set_debug_tag(Some(std::rc::Rc::new(SceneObjectDebugTag {
             entity_id: None,
             name: None,
-            model: Some("tricorder_frame".into()),
+            model: Some("tricorder".into()),
             source: Some("mfd_body".into()),
         })));
-        object
-    })
-    .collect()
+        objects.push(object);
+    }
+    for object in &mut objects {
+        object.set_transform(root * object.get_transform());
+    }
+    objects
 }
 
 pub fn body_frame(panel: WorldPanel) -> cgmath::Matrix4<f32> {
-    // The UI is upside-down relative to the authored card, so its top-edge
-    // pinch becomes the bottom edge when held upright to read. Undo that turn
-    // for the physical backing to retain the original grip/model relationship.
+    // Retail comparison models retain their original upside-down XZ mapping.
+    // The stepped frame cancels that legacy turn before placing its XY parts.
     cgmath::Matrix4::from_translation(panel.center)
         * cgmath::Matrix4::from(panel.rotation)
+        * cgmath::Matrix4::from_scale(panel.size.x / face_size().x)
         * cgmath::Matrix4::from_translation(vec3(0.0, -grip_margin() * 0.5, 0.0))
         * cgmath::Matrix4::from_angle_z(cgmath::Deg(180.0))
 }

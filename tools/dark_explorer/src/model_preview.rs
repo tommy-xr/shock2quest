@@ -212,7 +212,7 @@ impl ModelPreview {
         });
 
         egui::CollapsingHeader::new("Lighting")
-            .default_open(true)
+            .default_open(!shock2vr::tricorder::is_model(key))
             .show(ui, |ui| {
                 self.needs_render |= ui
                     .add(egui::Slider::new(&mut self.ambient, 0.0..=1.0).text("Ambient"))
@@ -325,6 +325,9 @@ impl ModelPreview {
         // through the full game mount stack (obj outranks mesh; the two
         // families currently share no `.bin` basenames).
         let model = match quiet_catch(|| {
+            if shock2vr::tricorder::is_model(key) {
+                return std::rc::Rc::new(shock2vr::tricorder::model(&mut self.asset_cache));
+            }
             if matches!(scene, PreviewScene::VrReference) {
                 return std::rc::Rc::new(
                     self.asset_cache
@@ -413,13 +416,18 @@ impl ModelPreview {
                         source, *hand,
                     ));
                 }
-                let mut objects = Model::transform(
-                    &model,
-                    Matrix4::from_translation(grip.offset)
-                        * Matrix4::from(grip.rotation)
-                        * Matrix4::from_scale(grip.item_scale),
-                )
-                .clone_scene_objects();
+                let grip_transform = Matrix4::from_translation(grip.offset)
+                    * Matrix4::from(grip.rotation)
+                    * Matrix4::from_scale(grip.item_scale);
+                let mut objects = if shock2vr::tricorder::is_model(key) {
+                    let mut objects = model.clone_scene_objects();
+                    for object in &mut objects {
+                        object.set_transform(grip_transform * object.get_transform());
+                    }
+                    objects
+                } else {
+                    Model::transform(&model, grip_transform).clone_scene_objects()
+                };
                 if self.glove.is_none() {
                     self.glove = GloveRenderer::new(&mut self.asset_cache);
                 }
@@ -485,7 +493,9 @@ impl ModelPreview {
                             .map(|p| pose.point(*p)),
                     );
                 }
-                let triangles = if shock2vr::vr_weapon_grip::supports_model(key) {
+                let triangles = if shock2vr::tricorder::is_model(key) {
+                    shock2vr::tricorder::triangles()
+                } else if shock2vr::vr_weapon_grip::supports_model(key) {
                     shock2vr::vr_weapon_grip::inputs(&mut self.asset_cache, key, *hand)
                         .ok_or("Weapon grip geometry unavailable")?
                         .0
@@ -633,7 +643,11 @@ impl ModelPreview {
             } else {
                 None
             };
-            let (triangles, hash, guide) = if let Some((triangles, arms, hash)) = weapon {
+            let (triangles, hash, guide) = if shock2vr::tricorder::is_model(key) {
+                let triangles = shock2vr::tricorder::triangles();
+                let hash = surface_fingerprint(&triangles);
+                (triangles, hash, None)
+            } else if let Some((triangles, arms, hash)) = weapon {
                 (triangles.clone(), hash, Some((triangles, arms)))
             } else {
                 let triangles = self

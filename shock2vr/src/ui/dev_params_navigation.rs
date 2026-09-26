@@ -26,10 +26,19 @@ pub enum DevParamsRow {
     Bulk,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DevParamsNavigation {
     pub location: DevParamsLocation,
     scrolls: [usize; DevCategory::ALL.len() * 2],
+}
+
+impl Default for DevParamsNavigation {
+    fn default() -> Self {
+        Self {
+            location: DevParamsLocation::default(),
+            scrolls: [0; DevCategory::ALL.len() * 2],
+        }
+    }
 }
 
 /// Owned by Game's persistent pause menu; frontend scenes clone this handle.
