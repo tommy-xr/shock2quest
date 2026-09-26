@@ -3,8 +3,13 @@
 //!
 //! A recording is JSON lines: a [`RecordingHeader`], then one
 //! [`RecordedFrame`] per `Game::update` - the raw input, the discrete actions
-//! and the frame's dt. Starting a recording also saves the game beside it, so a
-//! replay begins from the same state.
+//! and the frame's time. Starting a recording also saves the game beside it, so
+//! a replay begins from (nearly) the same state.
+//!
+//! Replay is approximate: a save omits transient state (physics velocities, AI
+//! mid-path, latches), some systems use unseeded randomness and AI path
+//! queries land on a worker thread, so a replay slowly drifts from the session.
+//! Short clips stay close.
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
@@ -14,9 +19,13 @@ use serde::{Deserialize, Serialize};
 
 use super::{InputAction, InputActionState};
 use crate::input_context::InputContext;
-use crate::paths;
+use crate::time::Time;
+use crate::{PresentationMode, paths};
 
 pub const RECORDING_VERSION: u32 = 1;
+
+/// Flush this often (in frames) so a killed process keeps nearly everything.
+const FLUSH_INTERVAL_FRAMES: u32 = 60;
 
 /// Where recordings (and their start saves) are written.
 pub fn recordings_directory() -> PathBuf {
@@ -28,43 +37,57 @@ pub struct RecordingHeader {
     pub version: u32,
     /// Scene (mission file or debug scene) the recording started in.
     pub scene: String,
-    /// Save written at the first frame, relative to the recording's
-    /// directory; `None` when the scene could not be saved.
-    pub save: Option<String>,
+    /// Save written before the first frame, relative to the recording's
+    /// directory.
+    pub save: String,
+    /// Settings that change what `Game::update` makes of the same input; a
+    /// replay must run with the same ones.
+    pub presentation: PresentationMode,
+    pub experimental: Vec<String>,
+    pub glove_forward_cm: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordedFrame {
     pub dt: f32,
+    /// `Time::total` in seconds: the runtime's clock, which scenes read too.
+    pub total: f64,
     pub input: InputContext,
     pub triggered: Vec<InputAction>,
     pub held: Vec<InputAction>,
 }
 
 impl RecordedFrame {
-    /// Capture a frame; the recording toggle itself is left out so a replay
-    /// never starts or stops a recording.
-    pub fn capture(dt: f32, input: &InputContext, actions: &InputActionState) -> Self {
-        let keep = |action: &InputAction| *action != InputAction::ToggleInputRecording;
+    /// Capture a frame. The recording toggle and quick save/load are left out:
+    /// a replay must not start recordings or touch the player's quicksave.
+    pub fn capture(time: &Time, input: &InputContext, actions: &InputActionState) -> Self {
+        let keep = |action: &InputAction| {
+            !matches!(
+                action,
+                InputAction::ToggleInputRecording | InputAction::QuickSave | InputAction::QuickLoad
+            )
+        };
         RecordedFrame {
-            dt,
+            dt: time.elapsed.as_secs_f32(),
+            total: time.total.as_secs_f64(),
             input: input.clone(),
             triggered: actions.triggered().filter(keep).collect(),
             held: actions.held().filter(keep).collect(),
         }
     }
 
-    /// The frame's actions as the state `Game::update` consumes.
+    /// The frame's actions as the state `Game::update` consumes. Triggered and
+    /// held are independent: a tap can be triggered yet already released.
     pub fn actions(&self) -> InputActionState {
         let mut state = InputActionState::new();
-        for &action in &self.held {
+        for &action in self.triggered.iter().chain(&self.held) {
             state.trigger(action);
             if !self.triggered.contains(&action) {
                 state.consume_trigger(action);
             }
-        }
-        for &action in &self.triggered {
-            state.trigger(action);
+            if !self.held.contains(&action) {
+                state.release(action);
+            }
         }
         state
     }
@@ -73,6 +96,7 @@ impl RecordedFrame {
 pub struct InputRecorder {
     writer: BufWriter<File>,
     path: PathBuf,
+    frames: u32,
 }
 
 impl InputRecorder {
@@ -80,16 +104,23 @@ impl InputRecorder {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut writer = BufWriter::new(File::create(path)?);
+        // `create_new`: never truncate an earlier recording.
+        let mut writer = BufWriter::new(File::options().write(true).create_new(true).open(path)?);
         writeln!(writer, "{}", serde_json::to_string(header)?)?;
         Ok(InputRecorder {
             writer,
             path: path.to_path_buf(),
+            frames: 0,
         })
     }
 
     pub fn record(&mut self, frame: &RecordedFrame) -> io::Result<()> {
-        writeln!(self.writer, "{}", serde_json::to_string(frame)?)
+        writeln!(self.writer, "{}", serde_json::to_string(frame)?)?;
+        self.frames += 1;
+        if self.frames % FLUSH_INTERVAL_FRAMES == 0 {
+            self.writer.flush()?;
+        }
+        Ok(())
     }
 
     pub fn finish(mut self) -> io::Result<PathBuf> {
@@ -135,7 +166,10 @@ mod tests {
         let header = RecordingHeader {
             version: RECORDING_VERSION,
             scene: "medsci1.mis".into(),
-            save: Some("rec.sav".into()),
+            save: "rec.sav".into(),
+            presentation: PresentationMode::Vr,
+            experimental: vec!["ragdoll".into()],
+            glove_forward_cm: 4.0,
         };
         let mut input = InputContext::default();
         input.right_hand.position = vec3(0.1, 1.2, -0.4);
@@ -146,10 +180,18 @@ mod tests {
         actions.trigger(InputAction::LeftHandLowerButton);
         actions.clear_triggered();
         actions.trigger(InputAction::Reload);
+        // A tap: triggered this frame, already released.
+        actions.trigger(InputAction::QuickSave);
+        actions.trigger(InputAction::CycleAmmo);
+        actions.release(InputAction::CycleAmmo);
+        let time = Time {
+            elapsed: std::time::Duration::from_secs_f32(1.0 / 72.0),
+            total: std::time::Duration::from_secs(3),
+        };
 
         let mut recorder = InputRecorder::create(&path, &header).unwrap();
         recorder
-            .record(&RecordedFrame::capture(1.0 / 72.0, &input, &actions))
+            .record(&RecordedFrame::capture(&time, &input, &actions))
             .unwrap();
         recorder.finish().unwrap();
 
@@ -167,5 +209,9 @@ mod tests {
         assert!(replayed.is_held(InputAction::LeftHandLowerButton));
         assert!(!replayed.just_triggered(InputAction::LeftHandLowerButton));
         assert!(!replayed.is_held(InputAction::ToggleInputRecording));
+        assert!(!replayed.just_triggered(InputAction::QuickSave));
+        assert!(replayed.just_triggered(InputAction::CycleAmmo));
+        assert!(!replayed.is_held(InputAction::CycleAmmo));
+        assert_eq!(frames[0].total, 3.0);
     }
 }
