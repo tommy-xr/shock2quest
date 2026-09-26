@@ -74,6 +74,7 @@ mod throwing;
 pub mod ui;
 mod util;
 mod virtual_hand;
+pub mod vr_belt;
 mod vr_config;
 pub mod weapon_modification;
 mod weapon_muzzle;

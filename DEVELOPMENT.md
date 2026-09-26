@@ -473,6 +473,17 @@ Declarations use `Category::float(...)` / `Category::bool(...)`, or
 `float_locked(...)` / `bool_locked(...)`; locking only changes menu placement.
 `GET /v1/dev-params` also reports each parameter's category label and locked flag.
 
+To fit the VR battle belt, adjust **Belt below eyes (m)** (smaller raises it)
+and **Belt forward (m)** (larger brings it farther out). Both move the belt,
+personal card, ammo pouch and grab targets together; thigh holsters retain their
+separate controls. These developer values apply for the current session.
+
+For persistent card placement **relative to the belt**, use
+`cargo dx ui --belt-card` (VR Setup → Belt card). The editor previews the actual
+belt and lets you save position and rotation to `assets/vr-belt-card.json`.
+Restart the game after saving; include that asset in your next Quest deploy.
+Hand-held card poses remain in the Hand grips editor (`--grip scipass`).
+
 #### Material effects gallery (`debug_nd_materials`)
 
 Run `cargo dr --mission debug_nd_materials --vr` for a walkable gallery of
@@ -482,6 +493,9 @@ sit below their stations. Omit `--vr` for flatscreen, or use `cargo dbgr` for
 headless capture. These are preview effects using installed remaster art;
 campaign impacts and extra material passes are separate work. See
 [the gallery notes](projects/debug-nd-materials.md).
+
+
+
 
 #### Glove fit check (`debug_gloves`)
 

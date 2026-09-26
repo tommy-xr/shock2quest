@@ -5,12 +5,11 @@ use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3};
 use shipyard::EntityId;
 
 pub(super) const RADIUS: f32 = 0.10 / crate::METERS_PER_WORLD_UNIT;
-const BELOW: f32 = 0.55;
 const POUCH_OFFSET: f32 = 0.05;
 
 pub(super) fn center_for(body: BodyPose) -> Vector3<f32> {
     body.front(
-        BELOW,
+        crate::dev_params::get(crate::dev_params::VR_BELT_DROP),
         crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) + POUCH_OFFSET,
     )
 }

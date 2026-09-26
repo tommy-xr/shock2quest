@@ -70,6 +70,11 @@ However, you can play with a keyboard and a mouse, using the following hard-code
   bonus and helps with heavier objects. Fast impacts deal at most 2 damage to
   flesh targets or 1 to other materials, once per throw. Releasing a still hand
   drops the item normally.
+- Quest VR: grip nanites, cyber modules, software upgrades or found access cards
+  to hold them; release anywhere to download them, with sound and haptic feedback.
+  Draw your personal access card from the belt buckle to scan credential
+  readers and machines. Release it to return it to the belt. Scanning a shop or
+  trainer opens its interface; purchases still require an explicit selection.
 - Quest VR: reload by hand. Pull a clip out of the cyber interface's inventory
   strip with your free hand and bring it to the gun the other hand is holding -
   the clip goes in and the weapon is loaded. A clip of a different ammo type
