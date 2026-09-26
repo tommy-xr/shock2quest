@@ -21,4 +21,4 @@ export * from "./ai-reachability.js";
 export type * from "./types.js";
 export * from "./vr-pose.js";
 export * from "./motion.js";
-export { quatConjugate, quatMultiply, quatRotate } from "./vec.js";
+export { quatMultiply, quatRotate } from "./vec.js";

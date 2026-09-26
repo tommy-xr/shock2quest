@@ -16,13 +16,13 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
   aimHandsAt,
-  quatConjugate,
-  quatMultiply,
-  quatRotate,
   attachSupportHand,
   faceTarget,
   GameServer,
+  quatMultiply,
+  quatRotate,
   sampleTrack,
+  setHandWorldPose,
   sway,
 } from "../dist/src/index.js";
 
@@ -123,7 +123,7 @@ const { values } = parseArgs({
     only: { type: "string" },
     "max-width": { type: "string", default: "1280" },
     fov: { type: "string", default: "85" },
-    "gif-width": { type: "string", default: "480" },
+    "gif-width": { type: "string", default: "400" },
     "video-width": { type: "string", default: "960" },
     replay: { type: "string" },
     name: { type: "string", default: "replay" },
@@ -132,6 +132,12 @@ const { values } = parseArgs({
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const out = values.out ? resolve(values.out) : resolve(repoRoot, "screenshots/hero");
 await mkdir(out, { recursive: true });
+// The source revision, read before captures overwrite tracked media.
+const git = (...args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
+const source = {
+  revision: git("rev-parse", "HEAD"),
+  dirty: git("status", "--porcelain", "--untracked-files=no") !== "",
+};
 
 if (values.replay) {
   await renderRecording(resolve(values.replay), values.name);
@@ -270,6 +276,7 @@ async function spawnMonster(game, template) {
  * creature's torso would pitch the view into the floor), `hands` - offsets
  * from the eye - on its torso, all with seeded drift and tremor. View pitch is
  * capped so a creature in the face or falling at the feet doesn't swing it.
+ * Returns the pawn and eye it aimed from.
  */
 async function trackSubject(game, point, t, hands) {
   const drift = sway(1, t, 0.04);
@@ -287,6 +294,7 @@ async function trackSubject(game, point, t, hands) {
     }),
   );
   await aimHandsAt(game, look, trembling, body);
+  return { player, eye };
 }
 
 /**
@@ -296,8 +304,12 @@ async function trackSubject(game, point, t, hands) {
  * the fight goes differently fails instead of writing a misleading clip.
  */
 async function recordMelee(game, shot, subjectId, held) {
-  const property = async (id, name) =>
-    Number((await game.entities.detail(id)).properties.find((p) => p.name === name)?.value);
+  // A missing property is a broken setup, not a bad take: throw, don't assert.
+  const property = async (id, name) => {
+    const found = (await game.entities.detail(id)).properties.find((p) => p.name === name);
+    if (!found) throw new Error(`entity ${id} has no ${name}`);
+    return Number(found.value);
+  };
   const hp = () => property(subjectId, "HitPoints");
   const ammo = () => property(held.right, "Ammo");
   const initialHp = await hp();
@@ -347,6 +359,8 @@ async function recordMelee(game, shot, subjectId, held) {
       await hold(1 / 60, shot.hands);
     }
     await game.input.set("right_hand.thumbstick", [0, 0]);
+    const beforeSwingHp = await hp();
+    assert.ok(beforeSwingHp > 0, "it must still be alive for the wrench");
 
     // Overhead wrench swing: raise it over the shoulder, then chop down through
     // the torso. The wrench runs up the fist's +Y, its head ~0.75 out; pitching
@@ -358,9 +372,7 @@ async function recordMelee(game, shot, subjectId, held) {
     const total = windUp + chop + followThrough;
     for (let frame = 0; frame < total; frame++, t += 1 / 60) {
       point = await aimPoints(game, subjectId);
-      await trackSubject(game, point, t, { right: shot.hands.right });
-      const { player } = await game.info();
-      const eye = player.position.map((v, i) => v + (i === 1 ? player.camera_offset[1] : 0));
+      const { player, eye } = await trackSubject(game, point, t, { right: shot.hands.right });
       const torso = point("torso");
       const toward = torso.map((v, i) => v - eye[i]);
       const yaw = Math.atan2(-toward[0], -toward[2]);
@@ -389,16 +401,11 @@ async function recordMelee(game, shot, subjectId, held) {
       const radians = (pitch * Math.PI) / 180;
       const rotation = quatMultiply(yawQuat, [Math.sin(radians / 2), 0, 0, Math.cos(radians / 2)]);
       const hand = eye.map((v, i) => v + quatRotate(yawQuat, pivot)[i]);
-      const inversePawn = quatConjugate(player.rotation);
-      await game.input.set(
-        "left_hand.position",
-        quatRotate(inversePawn, hand.map((v, i) => v - player.position[i])),
-      );
-      await game.input.set("left_hand.rotation", quatMultiply(inversePawn, rotation));
+      await setHandWorldPose(game, player, "left", hand, rotation);
       await sink.step();
     }
     const afterMeleeHp = await hp();
-    assert.equal(afterMeleeHp, 0, `the wrench must finish it (${afterGunHp} -> ${afterMeleeHp})`);
+    assert.equal(afterMeleeHp, 0, `the wrench must finish it (${beforeSwingHp} -> ${afterMeleeHp})`);
 
     // Recover: lower both hands, eyes where it stood as it drops.
     await hold(1, { right: REST_RIGHT, left: REST_LEFT }, { still: true });
@@ -461,13 +468,7 @@ function writeMedia(dir, name, frames) {
 
 /** Write `<out>/<name>.json`: what was captured, from which revision. */
 async function writeProvenance(name, details) {
-  const git = (...args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
-  const provenance = {
-    revision: git("rev-parse", "HEAD"),
-    dirty: git("status", "--porcelain", "--untracked-files=no") !== "",
-    capturedAt: new Date().toISOString(),
-    ...details,
-  };
+  const provenance = { ...source, capturedAt: new Date().toISOString(), ...details };
   await writeFile(resolve(out, `${name}.json`), `${JSON.stringify(provenance, null, 2)}\n`);
 }
 
