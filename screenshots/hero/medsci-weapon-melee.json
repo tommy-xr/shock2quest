@@ -1,0 +1,62 @@
+{
+  "revision": "12c7aa99d0c130b1fb2a407633a2979151ef2518",
+  "mission": "medsci1.mis",
+  "presentation": "vr",
+  "kind": "staged loadout still",
+  "position": {
+    "x": 16,
+    "y": 1,
+    "z": 17
+  },
+  "settledPosition": [
+    15.99938,
+    -0.3560003,
+    17.000057
+  ],
+  "rotation": [
+    0,
+    0.7071067811865475,
+    0,
+    0.7071067811865475
+  ],
+  "hands": {
+    "left": {
+      "position": [
+        -0.8499999999999999,
+        0.75,
+        0.18
+      ],
+      "rotation": [
+        -0.15431164633626698,
+        0.6900637041643263,
+        0.15431164633626698,
+        0.6900637041643263
+      ]
+    },
+    "right": {
+      "position": [
+        -0.8499999999999999,
+        0.83,
+        -0.18
+      ],
+      "rotation": [
+        0,
+        0.7071067811865475,
+        0,
+        0.7071067811865475
+      ]
+    }
+  },
+  "simulationFrame": 295,
+  "capturedAt": "2026-09-26T16:08:21.861Z",
+  "timestepHz": 60,
+  "screenshot": {
+    "file": "medsci-weapon-melee.png",
+    "resolution": [
+      1600,
+      1200
+    ],
+    "size_bytes": 1024113
+  },
+  "note": "Actual VR pistol and wrench grips; debug-provisioned loadout, authored lighting. Not evidence of a combat encounter."
+}

@@ -1,0 +1,28 @@
+{
+  "name": "hydroponics",
+  "mission": "hydro1.mis",
+  "caption": "Hydroponics plant corridor and maintenance robot",
+  "position": [
+    19,
+    2.4,
+    38
+  ],
+  "lookAt": [
+    19,
+    1.5,
+    22
+  ],
+  "frames": 1,
+  "lighting": "Unmodified mission lighting",
+  "revision": "12c7aa99d0c130b1fb2a407633a2979151ef2518",
+  "capturedAt": "2026-09-26T16:08:34.523Z",
+  "presentation": "vr",
+  "camera": "detached",
+  "requestedMaxWidth": 1600,
+  "resolution": [
+    1600,
+    1200
+  ],
+  "timestepHz": 60,
+  "renderSettings": "Defaults except free_camera_cull=1"
+}

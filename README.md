@@ -16,17 +16,21 @@ Once installed, copy `sshock2.kpf` and the `mods/` folder from it - see [DEVELOP
 
 ## Screenshots
 
-- Hitboxes
+Current engine captures using the VR presentation and Remaster assets.
 
-<img src="screenshots/hitbox.png" alt="shock2quest: hitboxes" width="500"/>
+<img src="screenshots/hero/medsci-weapon-melee.png" alt="Pistol in the right hand and wrench in the left, with a wrist-mounted ammo display in MedSci" width="800"/>
 
-- Dual Wielding + Character Models
+*Independent VR hands — pistol and wrench on the Medical/Science deck.*
 
-<img src="screenshots/combat.png" alt="shock2quest: dual wielding" width="500"/>
+<img src="screenshots/hero/hydroponics.png" alt="A maintenance robot in a Hydroponics corridor lined with illuminated plant beds" width="800"/>
 
-- Floating Inventory for VR
+*Hydroponics — plant beds, a maintenance robot, and the ship's surveillance systems.*
 
-<img src="screenshots/floating-inventory.png" alt="shock2quest: floating inventory" width="500"/>
+<img src="screenshots/hero/recreation-pool.png" alt="The Recreation deck swimming pool, with rippling water, steam, and organic growth beside a bench" width="800"/>
+
+*Recreation — the swimming pool and signs of the infestation.*
+
+[Capture recipes and regeneration instructions](screenshots/hero/README.md).
 
 ## Running
 
