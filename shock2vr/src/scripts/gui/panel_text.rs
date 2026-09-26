@@ -11,7 +11,6 @@ use std::collections::HashMap;
 pub(crate) struct PanelText {
     advances: HashMap<char, f32>,
     pub height: f32,
-    strings: HashMap<String, HashMap<String, String>>,
 }
 
 impl PanelText {
@@ -24,24 +23,7 @@ impl PanelText {
             })
             .collect();
         let height = font.base_height();
-        let strings = [
-            "misc", "stathelp", "skilhelp", "research", "rsrchtxt", "objshort", "hrm", "jargon",
-            "modify1", "modify2", "hacktext",
-        ]
-        .into_iter()
-        .map(|name| {
-            let table = assets
-                .get_opt(&dark::importers::STRINGS_IMPORTER, &format!("{name}.str"))
-                .map(|table| (*table).clone())
-                .unwrap_or_default();
-            (name.to_owned(), table)
-        })
-        .collect();
-        Self {
-            advances,
-            height,
-            strings,
-        }
+        Self { advances, height }
     }
 
     pub fn wrap(world: &World, text: &str, width: f32) -> Vec<String> {
@@ -59,14 +41,9 @@ impl PanelText {
 
     pub fn string(world: &World, table: &str, key: &str, fallback: &str) -> String {
         world
-            .borrow::<UniqueView<Self>>()
+            .borrow::<UniqueView<crate::string_table::StringTable>>()
             .ok()
-            .and_then(|m| {
-                m.strings
-                    .get(table)
-                    .and_then(|t| t.get(&key.to_ascii_lowercase()))
-                    .cloned()
-            })
+            .and_then(|strings| strings.get(&format!("{table}.str"), key).cloned())
             .unwrap_or_else(|| fallback.to_owned())
     }
 
@@ -88,12 +65,12 @@ impl PanelText {
 
     /// Resolve an object string (`key: "fallback"`) against a loaded table.
     pub fn object_string(world: &World, table: &str, raw: &str) -> String {
-        let metrics = world.borrow::<UniqueView<Self>>();
+        let tables = world.borrow::<UniqueView<crate::string_table::StringTable>>();
         let empty = HashMap::new();
-        let strings = metrics
+        let strings = tables
             .as_ref()
             .ok()
-            .and_then(|m| m.strings.get(table))
+            .and_then(|tables| tables.table(&format!("{table}.str")))
             .unwrap_or(&empty);
         dark::importers::resolve_localized_property_string(raw, strings)
     }
@@ -163,12 +140,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn string_resolution_uses_shared_tables_without_font_metrics() {
+        let world = World::new();
+        world.add_unique(crate::string_table::StringTable::from_table(
+            "hacktext.str",
+            HashMap::from([("security".into(), "Localized instructions".into())]),
+        ));
+        assert_eq!(
+            PanelText::string(&world, "hacktext", "Security", "fallback"),
+            "Localized instructions"
+        );
+        assert_eq!(
+            PanelText::object_string(&world, "hacktext", "Security: \"fallback\""),
+            "Localized instructions"
+        );
+        assert_eq!(
+            PanelText::string(&world, "missing", "Security", "fallback"),
+            "fallback"
+        );
+        assert_eq!(
+            PanelText::object_string(&world, "missing", "Security: \"fallback\""),
+            "fallback"
+        );
+    }
+
+    #[test]
     fn long_help_fits_without_losing_the_last_words() {
         let world = World::new();
         world.add_unique(PanelText {
             advances: HashMap::from([('W', 12.0), (' ', 3.0)]),
             height: 12.0,
-            strings: HashMap::new(),
         });
         let components: Vec<GuiComponent<()>> =
             PanelText::paragraph(&world, "WW WW WW WW WW", Rect::new(0.0, 0.0, 60.0, 24.0));
@@ -190,7 +191,6 @@ mod tests {
         world.add_unique(PanelText {
             advances: HashMap::from([('W', 12.0), ('i', 2.0), (' ', 3.0)]),
             height: 12.0,
-            strings: HashMap::new(),
         });
         assert_eq!(PanelText::wrap(&world, "WW iiiiii", 24.0), ["WW", "iiiiii"]);
         assert_eq!(
