@@ -116,6 +116,9 @@ pub const ACTIVATION_TYPE_SUSTAINED: i32 = 1;
 /// land here.
 pub const ACTIVATION_TYPE_INSTANT: i32 = 2;
 
+/// Remote Electron Tampering: shorten the active security alarm.
+pub const CODEBREAKER_TEMPLATE_ID: i32 = -3154;
+
 /// `PsiHeal` - Cerebro-stimulated Regeneration (tier 2 instant power): heals
 /// the caster.
 pub const PSI_HEAL_TEMPLATE_ID: i32 = -1017;

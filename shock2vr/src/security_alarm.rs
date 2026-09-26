@@ -215,6 +215,20 @@ impl SecurityAlarm {
         stand_down(world, from)
     }
 
+    /// Shorten an active alarm without creating one or changing its count.
+    /// Crossing zero follows the same station stand-down as natural expiry.
+    pub fn reduce(&mut self, world: &World, seconds: f32) -> Vec<Effect> {
+        if self.count == 0 || !seconds.is_finite() || seconds <= 0.0 {
+            return Vec::new();
+        }
+        self.seconds_remaining = (self.seconds_remaining - seconds).max(0.0);
+        if self.seconds_remaining == 0.0 {
+            self.disable(world, None)
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Run the deadline down. The alarm ends when the window runs out - or as
     /// soon as the ecologies have stood themselves down, since they, not this
     /// countdown, are where the alert actually lives.
@@ -495,6 +509,43 @@ mod tests {
         );
         // ...and it stays down.
         assert!(alarm.update(&world, &time(1.0)).is_empty());
+    }
+
+    #[test]
+    fn tampering_reduces_the_saved_deadline_and_expiry_resets_ecologies() {
+        let (world, ecology_id, _) = ecology_world(ECOLOGY_STATE_ALERT);
+        let mut alarm = SecurityAlarm::restore(SecurityAlarmStatus {
+            count: 2,
+            seconds_remaining: 120.0,
+        });
+        assert!(alarm.reduce(&world, 35.0).is_empty());
+        assert_eq!(
+            alarm.status(),
+            SecurityAlarmStatus {
+                count: 2,
+                seconds_remaining: 85.0
+            }
+        );
+        let saved = serde_json::to_string(&alarm.status()).unwrap();
+        let mut restored = SecurityAlarm::restore(serde_json::from_str(&saved).unwrap());
+        assert_eq!(resets(&restored.reduce(&world, 90.0)), vec![ecology_id]);
+        assert_eq!(restored.status(), SecurityAlarmStatus::default());
+        assert!(restored.reduce(&world, 35.0).is_empty());
+        assert_eq!(restored.status(), SecurityAlarmStatus::default());
+    }
+
+    #[test]
+    fn tampering_rejects_invalid_reductions() {
+        let (world, _, _) = ecology_world(ECOLOGY_STATE_ALERT);
+        let original = SecurityAlarmStatus {
+            count: 1,
+            seconds_remaining: 120.0,
+        };
+        let mut alarm = SecurityAlarm::restore(original);
+        for seconds in [0.0, -5.0, f32::NAN, f32::INFINITY] {
+            assert!(alarm.reduce(&world, seconds).is_empty());
+            assert_eq!(alarm.status(), original);
+        }
     }
 
     #[test]

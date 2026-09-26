@@ -12068,6 +12068,10 @@ impl MissionCore {
                     }
                     self.security_alarm.publish(&self.world);
                 }
+                Effect::ReduceSecurityAlarm { seconds } => {
+                    effects.extend(self.security_alarm.reduce(&self.world, seconds));
+                    self.security_alarm.publish(&self.world);
+                }
                 Effect::ClearSecurityAlarm { from } => {
                     for effect in self.security_alarm.disable(&self.world, Some(from)) {
                         effects.push_back(effect);
