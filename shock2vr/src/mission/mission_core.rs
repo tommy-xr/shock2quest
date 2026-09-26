@@ -2907,6 +2907,13 @@ pub struct MissionCore {
     holsters: super::holsters::Holsters,
     ammo_pouch: super::ammo_pouch::AmmoPouch,
     personal_card: super::personal_card::PersonalCard,
+    device_panel: Option<crate::ui::WorldPanel>,
+    device_pointer_gate: super::mfd_device::PointerGate,
+    device_map_wide: bool,
+    device_inspect_only: bool,
+    device_scanner: super::mfd_device::Scanner,
+    device_beam: Option<(Vector3<f32>, Vector3<f32>)>,
+    device_hologram: Option<EntityId>,
     body_hand_contacts: [Option<Vector3<f32>>; 2],
     download_release_disarmed: [bool; 2],
 
@@ -3841,6 +3848,13 @@ impl MissionCore {
             holsters: Default::default(),
             ammo_pouch: Default::default(),
             personal_card: Default::default(),
+            device_panel: None,
+            device_pointer_gate: Default::default(),
+            device_map_wide: false,
+            device_inspect_only: false,
+            device_scanner: Default::default(),
+            device_beam: None,
+            device_hologram: None,
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
@@ -5039,6 +5053,62 @@ impl MissionCore {
         // lazy recenter and the comfort dim, resolve this frame's pointer, and
         // clear the weapon-safe latch once every trigger is released.
         self.vr_use_mode_pointer = None;
+        self.device_panel = None;
+        let device_enabled = game_options.experimental_features.contains("mfd_device")
+            || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE);
+        let device_hand = self.personal_card.hand.filter(|i| {
+            device_enabled
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled
+                && input_context
+                    .pose_tracking
+                    .is_none_or(|p| p.head && p.hands[*i])
+                && [&input_context.left_hand, &input_context.right_hand][*i].squeeze_value >= 0.5
+        });
+        let device_active = device_hand.is_some()
+            || (game_options.presentation_mode == crate::PresentationMode::Flat
+                && game_options
+                    .experimental_features
+                    .contains("mfd_device_preview"));
+        self.world
+            .add_unique(super::mfd_device::ScreenActive(false));
+        self.world
+            .borrow::<UniqueViewMut<super::mfd_device::ScreenActive>>()
+            .unwrap()
+            .0 = device_active;
+        if !device_active {
+            self.device_pointer_gate = Default::default();
+            self.device_scanner.trigger(false, false);
+        }
+        if self.flat_ui.device != device_active {
+            self.device_hologram = None;
+            self.flat_ui.close();
+            self.flat_ui.utilities = Default::default();
+            self.flat_ui.guard_held_press();
+            self.flat_ui.device = device_active;
+            if device_active {
+                self.gui.close_panel(
+                    &mut self.world,
+                    &mut self.physics,
+                    &mut self.script_world,
+                    &mut self.id_to_physics,
+                );
+            }
+        }
+        if let Some(i) = device_hand {
+            let hand = [&input_context.left_hand, &input_context.right_hand][i];
+            if hand.rotation.magnitude2() > 0.0001 {
+                self.device_panel = super::mfd_device::panel(
+                    asset_cache,
+                    hand.position,
+                    hand.rotation,
+                    self.personal_card.grip.as_ref(),
+                    i,
+                );
+            }
+        }
+
         // The dim is drawn (see `render`) for the trailing exit-ramp window
         // too, after `use_mode` has already gone false - it must keep
         // following the live head there as well, or a head turn during the
@@ -5086,6 +5156,36 @@ impl MissionCore {
                 // hand that is not already using its squeeze to hold something.
                 crate::ui::PointerEngagement::TriggerOrGrab { carrying },
             ));
+        }
+        if let Some(panel) = self.device_panel {
+            let wide = crate::dev_params::get_bool(crate::dev_params::VR_MFD_MAP_WIDE);
+            if wide != self.device_map_wide {
+                self.device_pointer_gate = Default::default();
+                self.flat_ui.guard_held_press();
+                self.device_map_wide = wide;
+            }
+            let layout = super::mfd_device::layout(self.flat_ui.device_screen_source());
+            let panel = layout.surface_panel(panel);
+            let mut pointer_input = input_context.clone();
+            // Only empty hands can operate the device. In particular, aiming a
+            // gun across the screen must neither hover a widget nor safe the gun.
+            let (left, right) = self.interaction.held_entities();
+            self.device_pointer_gate.filter(
+                &mut pointer_input,
+                device_hand,
+                [left.is_some(), right.is_some()],
+            );
+            self.vr_use_mode_pointer = Some(
+                crate::ui::vr_pointer_pass(
+                    &pointer_input,
+                    layout.size,
+                    &panel,
+                    crate::ui::PointerEngagement::TriggerOrGrab {
+                        carrying: [left.is_some(), right.is_some()],
+                    },
+                )
+                .remap_hits(|p| layout.contains_surface(p).then_some(p)),
+            );
         }
         if self.vr_trigger_swallow && !self.use_mode {
             let held = |hand: &crate::input_context::Hand| {
@@ -5141,7 +5241,10 @@ impl MissionCore {
             &mut self.vr_squeeze_swallow,
             squeezing,
             hand_empty,
-            [self.use_mode && on_panel[0], self.use_mode && on_panel[1]],
+            [
+                (self.use_mode || self.flat_ui.device) && on_panel[0],
+                (self.use_mode || self.flat_ui.device) && on_panel[1],
+            ],
         );
 
         // VR weapon-safe: while the cyber interface is up (and until a trigger
@@ -5167,7 +5270,7 @@ impl MissionCore {
             input_context.left_hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
             input_context.right_hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
         ];
-        if self.flat_ui.utilities.is_inspecting() {
+        if self.flat_ui.utilities.is_inspecting() && !self.flat_ui.device {
             // Selection owns both triggers even off-panel. Upgrade an ongoing
             // pull to safe and retain that decision until physical release,
             // so cancelling inspection cannot consume a held hypo mid-pull.
@@ -5176,7 +5279,11 @@ impl MissionCore {
         let mut trigger_safe = latch_trigger_safe(
             &mut self.vr_trigger_safe_latch,
             pressed,
-            trigger_safe_mask(self.use_mode, on_panel, holds_weapon),
+            if self.flat_ui.device {
+                on_panel
+            } else {
+                trigger_safe_mask(self.use_mode, on_panel, holds_weapon)
+            },
         );
         for safe in trigger_safe.iter_mut() {
             *safe |= self.vr_trigger_swallow;
@@ -5778,36 +5885,183 @@ impl MissionCore {
             // Use the hand's aim to identify the reader, then require the card
             // itself within contact reach. Starting a parallel ray at a pinch
             // offset misses narrow card slots even when held against them.
-            let target = self
-                .personal_card
-                .held_pose
-                .and_then(|(aim_origin, rotation)| {
-                    let position = self
+            self.device_beam = None;
+            self.flat_ui.scan_label = None;
+            let hit = self.personal_card.held_pose.and_then(|(origin, rotation)| {
+                use cgmath::{SquareMatrix, Transform};
+                use collision::{Continuous, Ray3};
+                let forward = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+                let world_hit = crate::virtual_hand::interaction_ray_cast(
+                    &self.physics,
+                    &self.world,
+                    vec3_to_point3(origin),
+                    forward,
+                    None,
+                );
+                let reach = 2.0 / crate::METERS_PER_WORLD_UNIT;
+                let mut nearest = world_hit.as_ref().map_or(reach, |hit| {
+                    (hit.hit_point - vec3_to_point3(origin))
+                        .magnitude()
+                        .min(reach)
+                });
+                let (left, right) = self.interaction.held_entities();
+                let mut target = world_hit.and_then(|hit| {
+                    let entity = hit.maybe_entity_id?;
+                    // Held items use their visible bounds below.
+                    (!self.flat_ui.device || ![left, right].contains(&Some(entity)))
+                        .then_some((entity, hit.hit_point.to_vec()))
+                });
+                if self.flat_ui.device {
+                    // Held objects no longer participate in ordinary world rays.
+                    // Test the actual transformed model bounds for held items,
+                    // retaining nearer world geometry as an occluder.
+                    let transforms = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+                    for entity in [left, right].into_iter().flatten() {
+                        let Some(bounds) =
+                            self.id_to_model.get(&entity).and_then(|m| m.bounding_box())
+                        else {
+                            continue;
+                        };
+                        let Ok(transform) = transforms.get(entity).map(|t| t.0) else {
+                            continue;
+                        };
+                        let Some(inverse) = transform.invert() else {
+                            continue;
+                        };
+                        let ray = Ray3::new(
+                            inverse.transform_point(vec3_to_point3(origin)),
+                            inverse.transform_vector(forward),
+                        );
+                        let Some(local_hit) = bounds.intersection(&ray) else {
+                            continue;
+                        };
+                        let point = transform.transform_point(local_hit).to_vec();
+                        let distance = (point - origin).magnitude();
+                        if distance <= nearest {
+                            nearest = distance;
+                            target = Some((entity, point));
+                        }
+                    }
+                }
+                let (entity, point) = target?;
+                let distance = (point - origin).magnitude();
+                (distance <= reach).then_some((entity, origin, point, distance))
+            });
+            let device_trigger = self.personal_card.hand.is_some_and(|i| {
+                [&input_context.left_hand, &input_context.right_hand][i].trigger_value > 0.5
+            });
+            let trigger_edge = self.device_scanner.trigger(
+                self.flat_ui.device && self.device_panel.is_some(),
+                device_trigger,
+            );
+            if self.flat_ui.device
+                && let Some((entity, start, end, _)) = hit
+            {
+                self.device_beam = Some((start, end));
+                self.flat_ui.scan_label =
+                    crate::hud::resolve_item_name(asset_cache, &self.world, entity);
+            }
+            let near_reader = hit.and_then(|(entity, _, end, distance)| {
+                // Keep the card's original contact origin outside the experiment.
+                let distance = if self.flat_ui.device {
+                    distance
+                } else {
+                    (end - self
                         .personal_card
                         .transform(player_pos, player_rot)?
                         .w
-                        .truncate();
-                    let hit = crate::virtual_hand::interaction_ray_cast(
-                        &self.physics,
-                        &self.world,
-                        vec3_to_point3(aim_origin),
-                        rotation.rotate_vector(vec3(0.0, 0.0, -1.0)),
-                        None,
-                    )?;
-                    let entity = hit.maybe_entity_id?;
-                    ((hit.hit_point - vec3_to_point3(position)).magnitude()
-                        <= 0.20 / crate::METERS_PER_WORLD_UNIT
-                        && super::personal_card::is_reader(&self.world, entity))
-                    .then_some(entity)
-                });
-            if let Some(entity) = self.personal_card.scan(target, time.elapsed.as_secs_f32()) {
+                        .truncate())
+                    .magnitude()
+                };
+                (distance <= 0.20 / crate::METERS_PER_WORLD_UNIT
+                    && super::personal_card::is_reader(&self.world, entity)
+                    && (!self.flat_ui.device
+                        || self
+                            .world
+                            .borrow::<View<dark::properties::PropKeyDst>>()
+                            .is_ok_and(|v| v.get(entity).is_ok())))
+                .then_some(entity)
+            });
+            let focus_mode = crate::dev_params::get_bool(crate::dev_params::VR_MFD_FOCUS_SCAN);
+            let focused = self.device_scanner.focus(
+                (self.flat_ui.device && focus_mode)
+                    .then(|| hit.map(|(entity, ..)| entity))
+                    .flatten(),
+                time.elapsed.as_secs_f32(),
+            );
+            let requested = if focus_mode {
+                focused
+            } else if trigger_edge {
+                hit.map(|(entity, ..)| entity)
+            } else {
+                None
+            };
+            let scan = if self.flat_ui.device && requested.is_some() {
+                requested.map(|entity| {
+                    self.personal_card.scans += 1;
+                    self.personal_card.last_scan = Some(entity);
+                    entity
+                })
+            } else {
+                self.personal_card
+                    .scan(near_reader, time.elapsed.as_secs_f32())
+            };
+            if let Some(entity) = scan {
                 let denied = crate::scripts::script_util::is_entity_locked(&self.world, entity);
-                self.script_world.dispatch(Message {
-                    to: entity,
-                    payload: MessagePayload::Frob,
-                });
+                if self.flat_ui.device {
+                    self.device_hologram = Some(entity);
+                    self.flat_ui.close();
+                    self.flat_ui.utilities = Default::default();
+                    let inspect_only = self.device_inspect_only;
+                    self.device_inspect_only = false;
+                    let has_script = |name| {
+                        crate::scripts::script_util::entity_has_script(&self.world, entity, name)
+                    };
+                    if !inspect_only && has_script("Chemical") {
+                        self.flat_ui.utilities.open_research(None);
+                        effects.push(Effect::UseResearchChemical { entity_id: entity });
+                    } else if !inspect_only && has_script("ResearchableScript") {
+                        let template = crate::scripts::script_util::entity_class_template_id(
+                            &self.world,
+                            entity,
+                        );
+                        self.flat_ui.utilities.open_research(template);
+                        if crate::scripts::script_util::player_carried_items(&self.world)
+                            .contains(&entity)
+                        {
+                            effects.push(Effect::BeginResearch { entity_id: entity });
+                        } else {
+                            effects.push(Effect::ShowMessage {
+                                text: "Hold the specimen to begin research".into(),
+                            });
+                        }
+                    } else if !inspect_only && super::mfd_device::opens_panel(&self.world, entity) {
+                        self.script_world.dispatch(Message {
+                            to: entity,
+                            payload: MessagePayload::Frob,
+                        });
+                    } else if !inspect_only
+                        && self
+                            .world
+                            .borrow::<View<dark::properties::PropBaseGunDesc>>()
+                            .is_ok_and(|v| v.get(entity).is_ok())
+                    {
+                        effects.push(Effect::OpenWeaponSettings {
+                            weapon: Some(entity),
+                        });
+                    } else {
+                        self.flat_ui.utilities.inspect_entity(entity);
+                    }
+                } else {
+                    self.script_world.dispatch(Message {
+                        to: entity,
+                        payload: MessagePayload::Frob,
+                    });
+                }
                 effects.push(Effect::ShowMessage {
-                    text: if denied {
+                    text: if self.flat_ui.device {
+                        "Scan complete"
+                    } else if denied {
                         "Access denied"
                     } else {
                         "Access authorized"
@@ -5973,7 +6227,7 @@ impl MissionCore {
                 crate::wielded_weapon::held_in_hand(&self.world, opened_for).then_some(opened_for),
                 self.entity_exists(opened_for),
             );
-            if put_away {
+            if put_away && !self.flat_ui.device {
                 if ours_is_docked {
                     self.flat_ui.close();
                 }
@@ -6026,9 +6280,16 @@ impl MissionCore {
             // bound in VR, and running its walk-away / bare-view logic against
             // a pointer that does not exist would be a trap for whatever opens
             // a host slot in VR next.
-            crate::PresentationMode::Vr if self.use_mode => {
+            crate::PresentationMode::Vr if self.use_mode || self.flat_ui.device => {
                 let pointer = self.vr_use_mode_pointer.as_ref().map(|pass| {
-                    crate::mission::flat_ui_host::vr_canvas_pointer(pass, input_context)
+                    let mut pointer =
+                        crate::mission::flat_ui_host::vr_canvas_pointer(pass, input_context);
+                    if self.flat_ui.device {
+                        pointer.canvas_pos = pointer.canvas_pos.and_then(|point| {
+                            super::mfd_device::to_native(point, self.flat_ui.device_screen_source())
+                        });
+                    }
+                    pointer
                 });
                 self.flat_ui.update_canvas(&self.world, pointer)
             }
@@ -6043,6 +6304,7 @@ impl MissionCore {
             }
             self.script_world.dispatch(msg);
         }
+        self.device_inspect_only = self.flat_ui.device && self.flat_ui.utilities.is_inspecting();
         for action in ui_drag_actions {
             // Flattened: an action can answer with a composite (using a
             // maintenance tool is a restore plus a consume plus a sound), and
@@ -6111,13 +6373,15 @@ impl MissionCore {
         self.flat_ui
             .set_placement_preview(&self.world, placement_preview);
         self.refresh_readouts();
-        if self.weapon_settings_gun.is_some_and(|gun| {
-            crate::scripts::gui::should_close_settings_panel(
-                gun,
-                self.flat_ui.ammo_selection().0,
-                self.entity_exists(gun),
-            )
-        }) {
+        if !self.flat_ui.device
+            && self.weapon_settings_gun.is_some_and(|gun| {
+                crate::scripts::gui::should_close_settings_panel(
+                    gun,
+                    self.flat_ui.ammo_selection().0,
+                    self.entity_exists(gun),
+                )
+            })
+        {
             let panel = self
                 .world
                 .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
@@ -8706,7 +8970,7 @@ impl MissionCore {
     fn refresh_readouts(&mut self) {
         let (weapon, _) = self.flat_ui.ammo_selection();
         self.flat_ui.set_readouts(
-            self.use_mode
+            (self.use_mode || self.flat_ui.device)
                 .then(|| crate::hud::readouts::UseModeReadouts::from_world(&self.world, weapon)),
         );
     }
@@ -9384,11 +9648,14 @@ impl MissionCore {
                     // ever press the button that emits this.
                     let slot_is_presented = game_options.presentation_mode
                         == crate::PresentationMode::Flat
-                        || self.use_mode;
-                    if let Some(weapon) =
+                        || self.use_mode
+                        || self.flat_ui.device;
+                    let target = if self.flat_ui.device {
+                        weapon
+                    } else {
                         crate::wielded_weapon::resolve_weapon_target(&self.world, weapon)
-                            .filter(|_| slot_is_presented)
-                    {
+                    };
+                    if let Some(weapon) = target.filter(|_| slot_is_presented) {
                         let panel = self
                             .world
                             .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
@@ -9399,7 +9666,17 @@ impl MissionCore {
                                 payload: MessagePayload::PanelOpened,
                             });
                             self.flat_ui.open_unbound(panel);
-                            crate::scripts::gui::WeaponSettingsTarget::select(&self.world, weapon);
+                            if self.flat_ui.device {
+                                crate::scripts::gui::WeaponSettingsTarget::select_scanned(
+                                    &self.world,
+                                    weapon,
+                                );
+                            } else {
+                                crate::scripts::gui::WeaponSettingsTarget::select(
+                                    &self.world,
+                                    weapon,
+                                );
+                            }
                             self.weapon_settings_gun = Some(weapon);
                         }
                     }
@@ -9628,6 +9905,17 @@ impl MissionCore {
                     // quad beside the object.
                     match game_options.presentation_mode {
                         crate::PresentationMode::Flat => self.flat_ui.open(entity),
+                        crate::PresentationMode::Vr if self.flat_ui.device => {
+                            // Hand frobs and scans share one panel owner, even
+                            // if an old world quad was opened earlier this frame.
+                            self.gui.close_panel(
+                                &mut self.world,
+                                &mut self.physics,
+                                &mut self.script_world,
+                                &mut self.id_to_physics,
+                            );
+                            self.flat_ui.open(entity)
+                        }
                         crate::PresentationMode::Vr => {
                             // The other half of "one UI at a time": a world
                             // panel replaces an open log reader, exactly as the
@@ -9695,7 +9983,20 @@ impl MissionCore {
                 }
 
                 Effect::UseResearchChemical { entity_id } => {
-                    if apply_research_chemical(&self.world, entity_id) {
+                    let scanned = self.flat_ui.device
+                        && self.personal_card.last_scan == Some(entity_id)
+                        && self
+                            .world
+                            .borrow::<View<PropPosition>>()
+                            .is_ok_and(|positions| {
+                                positions.get(entity_id).is_ok_and(|position| {
+                                    let player =
+                                        self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                                    (position.position - player.pos).magnitude()
+                                        <= 3.0 / crate::METERS_PER_WORLD_UNIT
+                                })
+                            });
+                    if apply_research_chemical(&self.world, entity_id, scanned) {
                         let stack = self
                             .world
                             .borrow::<View<dark::properties::PropStackCount>>()
@@ -9850,7 +10151,7 @@ impl MissionCore {
                             &mut self.script_world,
                             &mut self.id_to_physics,
                         );
-                        if !self.use_mode {
+                        if !self.use_mode && !self.flat_ui.device {
                             // Y is a shortcut into the interface, not a second
                             // interface: enter the one mode, with a lighter
                             // ramp than the deliberate open (see
@@ -9881,6 +10182,7 @@ impl MissionCore {
                     // VR uses this host while the cyber interface is active.
                     if game_options.presentation_mode == crate::PresentationMode::Flat
                         || self.use_mode
+                        || self.flat_ui.device
                     {
                         if let Ok(map) = self.world.borrow::<UniqueView<MapPanelEntity>>() {
                             let entity = map.0;
@@ -14317,10 +14619,26 @@ impl MissionCore {
         ));
 
         if options.presentation_mode == crate::PresentationMode::Vr {
-            scene.extend(
-                self.personal_card
-                    .render(asset_cache, player.pos, player.rotation),
-            );
+            if options.experimental_features.contains("mfd_device")
+                || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE)
+            {
+                if self.personal_card.hand.is_none() {
+                    if let Some(transform) =
+                        self.personal_card.transform(player.pos, player.rotation)
+                    {
+                        scene.extend(super::mfd_device::body(
+                            asset_cache,
+                            transform * Matrix4::from_angle_x(cgmath::Deg(90.0)),
+                            None,
+                        ));
+                    }
+                }
+            } else {
+                scene.extend(
+                    self.personal_card
+                        .render(asset_cache, player.pos, player.rotation),
+                );
+            }
             scene.extend(
                 self.holsters
                     .render(&self.world, player.pos, player.rotation),
@@ -14657,6 +14975,50 @@ impl MissionCore {
         // VR renders only the gameplay panel opened by frobbing its object.
         if options.presentation_mode == crate::PresentationMode::Vr {
             scene.extend(self.gui.render_active(asset_cache, &self.world));
+        }
+
+        if let Some(panel) = self.device_panel.filter(|_| self.flat_ui.device) {
+            let pawn_to_world =
+                Matrix4::from_translation(player.pos) * Matrix4::from(player.rotation);
+            let mut objects = super::mfd_device::body(
+                asset_cache,
+                super::mfd_device::body_frame(panel),
+                self.personal_card.hand,
+            );
+            if let Some(model) = self
+                .device_hologram
+                .filter(|_| {
+                    self.flat_ui
+                        .device_screen_source()
+                        .is_none_or(|r| r.w <= super::mfd_device::SCREEN.w)
+                })
+                .and_then(|entity| self.id_to_model.get(&entity))
+            {
+                let seconds = self
+                    .world
+                    .borrow::<UniqueView<Time>>()
+                    .map(|time| time.total.as_secs_f32())
+                    .unwrap_or_default();
+                objects.extend(super::mfd_device::hologram(model, panel, seconds));
+            }
+            let layout = super::mfd_device::layout(self.flat_ui.device_screen_source());
+            let panel = layout.surface_panel(panel);
+            objects.extend(self.flat_ui.render_world_space(asset_cache, &panel));
+            if let Some(pass) = &self.vr_use_mode_pointer {
+                objects.extend(crate::ui::pointer_beams(
+                    pass,
+                    layout.size,
+                    &panel,
+                    objects.len(),
+                ));
+            }
+            for object in &mut objects {
+                object.set_transform(pawn_to_world * object.get_transform());
+            }
+            scene.extend(objects);
+            if let Some((start, end)) = self.device_beam {
+                scene.push(super::mfd_device::beam(start, end));
+            }
         }
 
         // The VR cyber interface (use mode): the flat use-mode canvas on the
@@ -15701,8 +16063,10 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
     effects
 }
 
-fn apply_research_chemical(world: &World, chemical_entity: EntityId) -> bool {
-    if !crate::scripts::script_util::player_carried_items(world).contains(&chemical_entity) {
+fn apply_research_chemical(world: &World, chemical_entity: EntityId, scanned: bool) -> bool {
+    if !scanned
+        && !crate::scripts::script_util::player_carried_items(world).contains(&chemical_entity)
+    {
         return false;
     }
     let chemical_name = world
@@ -16854,7 +17218,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     "hand": self.personal_card.hand,
                     "center": self.personal_card.center.map(|v| [v.x, v.y, v.z]),
                     "scans": self.personal_card.scans,
-                    "last_scan": self.personal_card.last_scan.map(|e| e.inner()),
+                    "last_scan": self.personal_card.last_scan.map(|e| e.inner() as i32),
                 },
                 "shoulder_weapons": self.world.borrow::<UniqueView<PlayerInfo>>().ok().map(|player| super::shoulder_backpack::weapons(&self.world, player.inventory_entity_id).map(|item| item.map(|id| id.inner() as i32))),
                 "pouch": self.body_pouch_readout(),
@@ -17244,7 +17608,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 elements: self.flat_ui.strip_debug_elements(&self.world),
             }
         });
-        crate::game_scene::DebugUiState {
+        let mut state = crate::game_scene::DebugUiState {
             mode: if self.use_mode {
                 "use".to_string()
             } else {
@@ -17262,7 +17626,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             // the anchor that placed it - so a test cannot aim at a placement
             // the interface does not use.
             panel_pose: self.vr_use_mode_pointer.is_some().then(|| {
-                let panel = self.vr_use_mode_anchor.panel();
+                let panel = self
+                    .device_panel
+                    .map(|p| {
+                        super::mfd_device::layout(self.flat_ui.device_screen_source())
+                            .surface_panel(p)
+                    })
+                    .unwrap_or_else(|| self.vr_use_mode_anchor.panel());
                 crate::game_scene::DebugUiPanelPose {
                     center: [panel.center.x, panel.center.y, panel.center.z],
                     rotation: [
@@ -17272,10 +17642,15 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         panel.rotation.s,
                     ],
                     size: [panel.size.x, panel.size.y],
-                    canvas: [
-                        crate::mission::flat_ui_host::CANVAS_SIZE.x,
-                        crate::mission::flat_ui_host::CANVAS_SIZE.y,
-                    ],
+                    canvas: if self.flat_ui.device {
+                        {
+                            let size =
+                                super::mfd_device::layout(self.flat_ui.device_screen_source()).size;
+                            [size.x, size.y]
+                        }
+                    } else {
+                        [640.0, 480.0]
+                    },
                 }
             }),
             messages: self.hud_messages(),
@@ -17289,7 +17664,34 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         seconds_remaining: seconds,
                     })
             },
+        };
+        if self.flat_ui.device {
+            state.mode = "device".into();
+            if let Some(panel) = &mut state.active_panel {
+                panel.elements = self
+                    .flat_ui
+                    .device_debug_elements(std::mem::take(&mut panel.elements));
+            }
+            state.readout = self.flat_ui.device_debug_elements(state.readout);
+            state.readout_elements.clear();
+            state.utilities = self.flat_ui.device_debug_elements(state.utilities);
+            if let Some(pointer) = &mut state.pointer {
+                pointer.canvas = if let Some(pass) = &self.vr_use_mode_pointer {
+                    pass.point().map(|p| [p.x, p.y])
+                } else {
+                    pointer
+                        .canvas
+                        .and_then(|[x, y]| {
+                            super::mfd_device::point_from_native(
+                                cgmath::vec2(x, y),
+                                self.flat_ui.device_screen_source(),
+                            )
+                        })
+                        .map(|p| [p.x, p.y])
+                };
+            }
         }
+        state
     }
 
     fn quest_bits(&self) -> Vec<crate::game_scene::DebugQuestBit> {

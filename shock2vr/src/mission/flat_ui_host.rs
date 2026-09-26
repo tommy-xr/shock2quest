@@ -224,6 +224,8 @@ struct CursorItem {
 /// open, the panel's latest components (from `Effect::SetUI`), and the
 /// cursor/pointer bookkeeping needed to render and hit-test them.
 pub struct FlatUiHost {
+    pub(crate) device: bool,
+    pub(crate) scan_label: Option<String>,
     active_panel: Option<EntityId>,
     /// Panel size in panel-local pixels (from `SetUI.world_size`); `None`
     /// until the panel's first `SetUI` arrives (the frame after opening).
@@ -337,6 +339,8 @@ struct PlacementPreview {
 impl FlatUiHost {
     pub fn new() -> FlatUiHost {
         FlatUiHost {
+            device: false,
+            scan_label: None,
             active_panel: None,
             panel_size_px: None,
             panel_sidecar: None,
@@ -680,7 +684,7 @@ impl FlatUiHost {
 
     /// Utility geometry uses the same viewport mapping as the readouts.
     pub fn utility_elements_debug(&self) -> Vec<crate::game_scene::DebugUiElement> {
-        if self.strip.is_none() {
+        if self.strip.is_none() && !self.device {
             return Vec::new();
         }
         self.utilities
@@ -928,6 +932,10 @@ impl FlatUiHost {
         self.panel_size_px.map(panel_canvas_rect)
     }
 
+    pub(crate) fn device_screen_source(&self) -> Option<Rect> {
+        self.panel_rect().or_else(|| self.utilities.panel_rect())
+    }
+
     /// The host close button, on the panel body's corner rather than the
     /// canvas's, so a companion beside the body cannot carry it off the MFD.
     fn close_rect(&self, panel: Rect) -> Rect {
@@ -982,11 +990,22 @@ impl FlatUiHost {
         // themselves live in the shared core below.
         let pointer = pointer.map(|pointer| CanvasPointer {
             canvas_pos: pointer_to_canvas(
-                CANVAS_SIZE,
+                if self.device {
+                    super::mfd_device::layout(self.device_screen_source()).size
+                } else {
+                    CANVAS_SIZE
+                },
                 pointer.position,
                 self.screen_size,
                 ScaleMode::PreserveAspect,
-            ),
+            )
+            .and_then(|point| {
+                if self.device {
+                    super::mfd_device::to_native(point, self.device_screen_source())
+                } else {
+                    Some(point)
+                }
+            }),
             pressed: pointer.pressed,
             grabbing: false,
             grabbing_hands: [false; 2],
@@ -1068,7 +1087,7 @@ impl FlatUiHost {
             }
         }
 
-        if self.active_panel.is_none() && self.strip.is_none() {
+        if self.active_panel.is_none() && self.strip.is_none() && !self.device {
             self.cursor_canvas = None;
             return (Vec::new(), Vec::new());
         }
@@ -1106,7 +1125,7 @@ impl FlatUiHost {
             .and_then(|s| s.size_px)
             .map(strip_canvas_rect);
         let over_strip = strip_rect.map(|r| r.contains(canvas_pos)).unwrap_or(false);
-        if let Some(rect) = strip_rect {
+        if let Some(rect) = strip_rect.or(self.device.then_some(Rect::new(0.0, 0.0, 0.0, 0.0))) {
             let holster_item = holster_readout_rects(rect)
                 .iter()
                 .position(|r| r.contains(canvas_pos))
@@ -1126,9 +1145,13 @@ impl FlatUiHost {
                 }
                 self.hover_close = false;
                 if self.utilities.is_open()
-                    && self
+                    && (self
                         .panel_rect()
                         .is_some_and(|rect| rect.x + rect.w > 450.0)
+                        || (self.device
+                            && self
+                                .panel_size_px
+                                .is_some_and(|size| size.x > super::mfd_device::SCREEN.w)))
                 {
                     // A wide map and the right utility reader share space.
                     // Switching utilities must not leave an opaque map over it.
@@ -1405,7 +1428,7 @@ impl FlatUiHost {
     fn build_canvas(&self) -> Option<UiCanvas> {
         let strip_rect = self.strip_rect();
         let panel_rect = self.panel_rect();
-        if strip_rect.is_none() && panel_rect.is_none() && self.readouts.is_none() {
+        if strip_rect.is_none() && panel_rect.is_none() && self.readouts.is_none() && !self.device {
             return None;
         }
         let mut canvas = UiCanvas::new(CANVAS_SIZE);
@@ -1414,6 +1437,9 @@ impl FlatUiHost {
         // drew them under this canvas.
         if let Some(readouts) = self.readouts.as_ref() {
             readouts::emit_use_mode(&mut canvas, readouts);
+        }
+        if self.device {
+            self.utilities.draw(&mut canvas);
         }
         if let (Some(strip), Some(rect)) = (self.strip.as_ref(), strip_rect) {
             self.utilities.draw(&mut canvas);
@@ -1573,7 +1599,15 @@ impl FlatUiHost {
                 ),
             };
         }
-        Some(canvas)
+        Some(if self.device {
+            super::mfd_device::compose(
+                canvas,
+                self.device_screen_source(),
+                self.scan_label.as_deref(),
+            )
+        } else {
+            canvas
+        })
     }
 
     /// Screen-space presentation (flat): the canvas letterboxed onto the
@@ -1723,6 +1757,34 @@ impl FlatUiHost {
             }
             _ => Vec::new(),
         }
+    }
+
+    pub(super) fn device_debug_elements(
+        &self,
+        elements: Vec<crate::game_scene::DebugUiElement>,
+    ) -> Vec<crate::game_scene::DebugUiElement> {
+        if !self.device {
+            return elements;
+        }
+        elements
+            .into_iter()
+            .filter_map(|mut element| {
+                let [x, y, w, h] = element.rect;
+                let rect = super::mfd_device::from_native(
+                    Rect::new(x, y, w, h),
+                    self.device_screen_source(),
+                )?;
+                element.rect = [rect.x, rect.y, rect.w, rect.h];
+                let screen = crate::ui::canvas_rect_to_screen(
+                    rect,
+                    super::mfd_device::layout(self.device_screen_source()).size,
+                    self.screen_size,
+                    ScaleMode::PreserveAspect,
+                );
+                element.screen_rect = [screen.x, screen.y, screen.w, screen.h];
+                Some(element)
+            })
+            .collect()
     }
 
     fn to_screen_rect(&self, r: Rect) -> [f32; 4] {
@@ -2086,6 +2148,23 @@ fn is_gui_cursor(info: &GuiComponentRenderInfo) -> bool {
 mod tests {
     use super::*;
     use cgmath::vec2;
+
+    #[test]
+    fn device_fits_the_entire_wide_map_and_its_close_button() {
+        let mut host = FlatUiHost::new();
+        host.device = true;
+        host.panel_size_px = Some(Vector2::new(636.0, 296.0));
+        let rect = host.panel_rect().unwrap();
+        assert!((rect.w / rect.h - 636.0 / 296.0).abs() < 0.001);
+        let mapped = super::super::mfd_device::from_native(rect, Some(rect)).unwrap();
+        assert!((mapped.h - super::super::mfd_device::SCREEN.h).abs() < 0.001);
+        assert!(mapped.y >= super::super::mfd_device::SCREEN.y);
+        assert!(
+            mapped.y + mapped.h
+                <= super::super::mfd_device::SCREEN.y + super::super::mfd_device::SCREEN.h
+        );
+        assert!(super::super::mfd_device::from_native(host.close_rect(rect), Some(rect)).is_some());
+    }
 
     #[test]
     fn panel_anchors_at_the_original_left_mfd_slot() {

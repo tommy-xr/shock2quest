@@ -92,16 +92,58 @@ const ROW_LABELS: [&str; 2] = ["setting_0", "setting_1"];
 const UNLOAD_LABEL: &str = "unload";
 
 #[derive(shipyard::Unique, Clone, Copy, Default)]
-pub(crate) struct WeaponSettingsTarget(pub Option<EntityId>);
+pub(crate) struct WeaponSettingsTarget {
+    entity: Option<EntityId>,
+    scanned: bool,
+}
 
 impl WeaponSettingsTarget {
     pub(crate) fn select(world: &World, weapon: EntityId) {
         world.add_unique(Self::default());
-        world.borrow::<shipyard::UniqueViewMut<Self>>().unwrap().0 = Some(weapon);
+        *world.borrow::<shipyard::UniqueViewMut<Self>>().unwrap() = Self {
+            entity: Some(weapon),
+            scanned: false,
+        };
+    }
+
+    pub(crate) fn select_scanned(world: &World, weapon: EntityId) {
+        Self::select(world, weapon);
+        world
+            .borrow::<shipyard::UniqueViewMut<Self>>()
+            .unwrap()
+            .scanned = true;
+    }
+
+    /// Only the active device's explicitly scanned, still-nearby gun may
+    /// bypass wielding. Skill, condition, cost and HRM outcome checks still run.
+    pub(crate) fn permits_device_job(world: &World, weapon: EntityId) -> bool {
+        world
+            .borrow::<shipyard::UniqueView<Self>>()
+            .is_ok_and(|selection| selection.scanned)
+            && Self::resolve(world) == Some(weapon)
     }
 
     fn resolve(world: &World) -> Option<EntityId> {
-        let target = world.borrow::<shipyard::UniqueView<Self>>().ok()?.0?;
+        let selection = *world.borrow::<shipyard::UniqueView<Self>>().ok()?;
+        let target = selection.entity?;
+        if selection.scanned {
+            if !crate::mission::mfd_device::screen_active(world) {
+                return None;
+            }
+            use cgmath::InnerSpace;
+            let player = world
+                .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
+                .ok()?;
+            let positions = world
+                .borrow::<shipyard::View<dark::properties::PropPosition>>()
+                .ok()?;
+            let position = positions.get(target).ok()?.position;
+            return (world
+                .borrow::<shipyard::View<dark::properties::PropBaseGunDesc>>()
+                .is_ok_and(|v| v.get(target).is_ok())
+                && (position - player.pos).magnitude() <= 3.0 / crate::METERS_PER_WORLD_UNIT)
+                .then_some(target);
+        }
         crate::wielded_weapon::resolve_weapon_target(world, Some(target))
     }
 }
@@ -649,6 +691,52 @@ mod tests {
     /// The pistol as the bench hands it out: loaded.
     fn pistol_world(setting: i32) -> (World, EntityId) {
         pistol_world_with_ammo(setting, 6)
+    }
+
+    #[test]
+    fn scanned_jobs_require_the_active_device_exact_target_and_reach() {
+        use dark::properties::{PropBaseGunDesc, PropPosition};
+        let (mut world, gun) = pistol_world(0);
+        world.add_component(
+            gun,
+            (
+                PropBaseGunDesc {
+                    settings: Default::default(),
+                },
+                PropPosition {
+                    position: vec3(0.0, 0.0, 1.0),
+                    cell: 0,
+                    rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                },
+            ),
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .right_hand_entity_id = None;
+        world.add_unique(crate::mission::mfd_device::ScreenActive(true));
+        assert!(
+            !WeaponSettingsTarget::permits_device_job(&world, gun),
+            "an ordinary selection cannot authorize a world gun"
+        );
+        WeaponSettingsTarget::select_scanned(&world, gun);
+        assert!(WeaponSettingsTarget::permits_device_job(&world, gun));
+        let other = world.add_entity(());
+        assert!(!WeaponSettingsTarget::permits_device_job(&world, other));
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .pos = vec3(0.0, 0.0, 10.0);
+        assert!(!WeaponSettingsTarget::permits_device_job(&world, gun));
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .pos = vec3(0.0, 0.0, 0.0);
+        world
+            .borrow::<shipyard::UniqueViewMut<crate::mission::mfd_device::ScreenActive>>()
+            .unwrap()
+            .0 = false;
+        assert!(!WeaponSettingsTarget::permits_device_job(&world, gun));
     }
 
     /// A Broken gun raises the repair plug in the modify plug's place, and
