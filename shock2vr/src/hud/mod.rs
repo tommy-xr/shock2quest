@@ -26,6 +26,9 @@ pub(crate) use debug_overlay::*;
 mod flat_hud;
 pub(crate) use flat_hud::*;
 
+mod recording_badge;
+pub(crate) use recording_badge::RecordingBadge;
+
 /// Which tenth of its condition a gun is in, 1 (worn out) to 10 (pristine).
 ///
 /// The original truncates the 0..100 condition and divides it into ten
