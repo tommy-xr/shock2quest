@@ -20,6 +20,10 @@ pub enum InputAction {
     /// Load the game from the quick-save slot
     QuickLoad,
 
+    /// Start/stop recording per-frame input for desktop replay
+    /// (`input::recording`); starting also saves the game to replay from.
+    ToggleInputRecording,
+
     /// Spawn a debug item in front of the player
     SpawnDebugItem,
 
@@ -151,6 +155,7 @@ impl InputAction {
             InputAction::PathfindingTestCycle,
             InputAction::QuickSave,
             InputAction::QuickLoad,
+            InputAction::ToggleInputRecording,
             InputAction::SpawnDebugItem,
             InputAction::SpawnDebugMonster,
             InputAction::DebugHitboxCyclePose,
@@ -199,6 +204,7 @@ impl InputAction {
             InputAction::PathfindingTestCycle => "PathfindingTestCycle",
             InputAction::QuickSave => "QuickSave",
             InputAction::QuickLoad => "QuickLoad",
+            InputAction::ToggleInputRecording => "ToggleInputRecording",
             InputAction::SpawnDebugItem => "SpawnDebugItem",
             InputAction::SpawnDebugMonster => "SpawnDebugMonster",
             InputAction::DebugHitboxCyclePose => "DebugHitboxCyclePose",
