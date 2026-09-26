@@ -414,6 +414,7 @@ impl ThrownItems {
     pub fn impact_sound(
         &mut self,
         world: &World,
+        physics: &PhysicsWorld,
         item: EntityId,
         target: EntityId,
         contact: Option<CollisionContact>,
@@ -446,7 +447,13 @@ impl ThrownItems {
         {
             return Effect::NoEffect;
         }
-        crate::scripts::impact_sound::impact_sound_effect(item, target, world)
+        crate::scripts::impact_sound::impact_sound_effect(
+            item,
+            target,
+            world,
+            physics,
+            Some(contact),
+        )
     }
 
     fn contact_speed(
@@ -624,6 +631,7 @@ mod tests {
             point: Vector3::zero(),
             normal: Vector3::unit_x(),
             closing_speed: None,
+            surface_material: None,
         };
         (world, throws, item, target, contact)
     }
@@ -645,12 +653,13 @@ mod tests {
         throws.active.get_mut(&item).unwrap().armed = false;
         throws.before_step.get_mut(&item).unwrap().linear = vec3(0.01, 0.0, 0.0);
         assert!(matches!(
-            throws.impact_sound(&world, item, target, Some(contact)),
+            throws.impact_sound(&world, &PhysicsWorld::new(), item, target, Some(contact)),
             Effect::NoEffect
         ));
         throws.before_step.get_mut(&item).unwrap().linear = vec3(6.0, 0.0, 0.0);
         let effects = Effect::flatten(vec![throws.impact_sound(
             &world,
+            &PhysicsWorld::new(),
             item,
             target,
             Some(contact),
@@ -684,7 +693,7 @@ mod tests {
             1
         );
         assert!(matches!(
-            throws.impact_sound(&world, item, target, Some(contact)),
+            throws.impact_sound(&world, &PhysicsWorld::new(), item, target, Some(contact)),
             Effect::NoEffect
         ));
         throws.sound_guards.get_mut(&item).unwrap().tick(0.2);
@@ -695,7 +704,7 @@ mod tests {
             },
         );
         assert!(matches!(
-            throws.impact_sound(&world, item, target, Some(contact)),
+            throws.impact_sound(&world, &PhysicsWorld::new(), item, target, Some(contact)),
             Effect::NoEffect
         ));
     }
@@ -717,6 +726,7 @@ mod tests {
             projectile,
             wall,
             Vector3::zero(),
+            None,
         )]);
         assert_eq!(effects.len(), 1, "enemy impact plays audio only");
         assert!(matches!(effects[0], Effect::PlayEnvironmentalSound { .. }));
@@ -726,6 +736,7 @@ mod tests {
             projectile,
             wall,
             Vector3::zero(),
+            None,
         )]);
         assert!(
             effects
