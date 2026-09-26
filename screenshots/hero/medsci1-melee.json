@@ -1,7 +1,7 @@
 {
-  "revision": "83e46240974ae3419897281e91178bff012b1b72",
+  "revision": "ed2f8bf1cb962beccd9a59d11067ac691211c9f2",
   "dirty": false,
-  "capturedAt": "2026-09-26T23:20:42.453Z",
+  "capturedAt": "2026-09-26T23:40:39.817Z",
   "mission": "medsci1.mis",
   "player": [
     16,
@@ -12,11 +12,6 @@
   "loadout": {
     "right": "Pistol",
     "left": "Wrench"
-  },
-  "stats": {
-    "skills": {
-      "standard_weapons": 1
-    }
   },
   "fovDeg": 85,
   "still": {
@@ -31,16 +26,11 @@
       "medsci1-melee.gif",
       "medsci1-melee.mp4"
     ],
-    "frames": 54,
+    "frames": 38,
     "fps": 15,
     "hp": [
       12,
-      5,
-      0
-    ],
-    "ammo": [
-      12,
-      10
+      1
     ]
   }
 }
