@@ -12,6 +12,11 @@ test("tracks hold their ends and ease through the middle", () => {
   assert.ok(sampleTrack(keys, 1.2) < 1);
 });
 
+test("out-of-order keyframes are rejected", () => {
+  const keys = [{ t: 1, value: 10 }, { t: 0, value: 0 }];
+  assert.throws(() => sampleTrack(keys, 0.5), /strictly increase/);
+});
+
 test("vector tracks interpolate per component", () => {
   const keys: { t: number; value: Vec3 }[] = [
     { t: 0, value: [0, 0, 0] },

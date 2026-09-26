@@ -11,11 +11,15 @@ export interface Keyframe<T> {
 /** Ease-in-out: zero velocity at each keyframe. */
 const ease = (x: number) => x * x * (3 - 2 * x);
 
-/** Sample a track at `t`, easing between neighbouring keyframes. */
+/** Sample a track (keyframes in strictly increasing `t`) at `t`, easing
+ * between neighbouring keyframes. */
 export function sampleTrack(keys: Keyframe<number>[], t: number): number;
 export function sampleTrack(keys: Keyframe<Vec3>[], t: number): Vec3;
 export function sampleTrack(keys: Keyframe<number | Vec3>[], t: number): number | Vec3 {
   if (keys.length === 0) throw new Error("a track needs at least one keyframe");
+  if (keys.some((k, i) => i > 0 && k.t <= keys[i - 1].t)) {
+    throw new Error("keyframe times must strictly increase");
+  }
   const next = keys.findIndex((k) => k.t > t);
   if (next === 0) return keys[0].value;
   if (next === -1) return keys[keys.length - 1].value;

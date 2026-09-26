@@ -2,7 +2,7 @@
 //   npm run build && node scripts/hero-shots.mjs [--only hydro1] [--out <dir>]
 // Each shot boots its mission fresh in VR presentation (no screen-space HUD),
 // stands the player at `player` with a loadout in hand, aimed at the nearest
-// entity matching `target` - a first-person VR view - and, for shots with a
+// entity matching `subject` - a first-person VR view - and, for shots with a
 // `clip`, records it as a GIF. AI wanders, so framing is only coarsely
 // reproducible.
 import { execFileSync } from "node:child_process";
@@ -32,7 +32,7 @@ const SHOTS = [
     name: "hydro1",
     mission: "hydro1.mis",
     player: [38.3, 0.9, -16.4],
-    target: { filter: "OG-Shotgun", height: 0.9 },
+    subject: "OG-Shotgun",
     loadout: { right: "Shotgun" },
     hands: { right: [0.12, -0.2, -0.36] },
     twoHanded: "right",
@@ -42,7 +42,7 @@ const SHOTS = [
     name: "medsci1",
     mission: "medsci1.mis",
     player: [6.8, 0.7, -35.7],
-    target: { filter: "OG-Pipe", height: 0.9 },
+    subject: "OG-Pipe",
     loadout: { right: "Pistol", left: "Wrench" },
     hands: { right: AIM_RIGHT, left: AIM_LEFT },
   },
@@ -51,16 +51,16 @@ const SHOTS = [
     name: "ops2",
     mission: "ops2.mis",
     player: [65.5, -7.3, 137.5],
-    target: { filter: "Protocol Droid", height: 1.0 },
+    subject: "Protocol Droid",
     loadout: { right: "Laser Pistol", left: -247 },
-    hands: { right: AIM_RIGHT, left: AIM_LEFT },
+    hands: { right: [0.2, -0.2, -0.5], left: [-0.14, -0.22, -0.5] },
   },
   {
     // Single weapon.
     name: "rec1",
     mission: "rec1.mis",
     player: [-10.6, -2.9, -101.0],
-    target: { filter: "Red Monkey", height: 0.5 },
+    subject: "Red Monkey",
     loadout: { right: "Pistol" },
     hands: { right: AIM_RIGHT, left: REST_LEFT },
     // Raise the pistol from the hip, settle, fire twice.
@@ -101,10 +101,10 @@ for (const shot of shots) {
     repoRoot,
   });
   try {
-    const { entities } = await game.entities.list({ filter: shot.target.filter, limit: 50 });
+    const { entities } = await game.entities.list({ filter: shot.subject, limit: 50 });
     const dist = (e) => Math.hypot(...e.position.map((v, i) => v - shot.player[i]));
     const subject = entities.sort((a, b) => dist(a) - dist(b))[0];
-    if (!subject) throw new Error(`${shot.name}: no '${shot.target.filter}' in ${shot.mission}`);
+    if (!subject) throw new Error(`${shot.name}: no '${shot.subject}' in ${shot.mission}`);
     const heading = subject.position.map((v, i) => v - shot.player[i]);
 
     // Square up at the spawn point, out of the subject's sight, along the
@@ -115,8 +115,7 @@ for (const shot of shots) {
     await game.player.teleport({ x, y, z });
     await game.step({ frames: 5 });
     // Aim where the subject is now; it may have moved while we squared up.
-    const [nx, ny, nz] = (await game.entities.detail(subject.id)).position;
-    const target = [nx, ny + shot.target.height, nz];
+    const target = await torso(game, subject.id);
     await aimHandsAt(game, target, shot.hands);
     await game.step({ frames: 2 });
     // Hold the grips: a VR hand releases whatever it holds when it lets go.
@@ -143,6 +142,13 @@ for (const shot of shots) {
   }
 }
 
+/** The subject's live torso aim point: an entity's origin can sit well off
+ * its body (a monkey's is above its back). */
+async function torso(game, id) {
+  const detail = await game.entities.detail(id);
+  return detail.aim_points?.find((p) => p.classification === "torso")?.position ?? detail.position;
+}
+
 /**
  * Play `shot.clip` one 60 Hz frame at a time - eased hand tracks plus seeded
  * sway, aimed at the (moving) subject, trigger pulls at the listed times -
@@ -155,14 +161,14 @@ async function recordClip(game, shot, subjectId) {
   try {
     for (let frame = 0; frame < frames; frame++) {
       const t = frame / 60;
-      // Track the subject; the head drifts a few centimetres around it.
-      const [x, y, z] = (await game.entities.detail(subjectId)).position;
-      const look = [x, y + shot.target.height, z].map((v, i) => v + sway(1, t, 0.04)[i]);
+      // Track the subject; the aim point drifts a few centimetres around it.
+      const drift = sway(1, t, 0.04);
+      const look = (await torso(game, subjectId)).map((v, i) => v + drift[i]);
       const hands = Object.fromEntries(
-        Object.entries(clip.hands).map(([hand, keys], k) => [
-          hand,
-          sampleTrack(keys, t).map((v, i) => v + sway(k + 2, t, 0.008, 0.6)[i]),
-        ]),
+        Object.entries(clip.hands).map(([hand, keys]) => {
+          const tremor = sway(hand === "right" ? 2 : 3, t, 0.008, 0.6);
+          return [hand, sampleTrack(keys, t).map((v, i) => v + tremor[i])];
+        }),
       );
       await aimHandsAt(game, look, hands);
       for (const [hand, pulls] of Object.entries(clip.trigger ?? {})) {
