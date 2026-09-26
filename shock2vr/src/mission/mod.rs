@@ -478,9 +478,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         &mut self,
         asset_cache: &mut AssetCache,
         template: &crate::game_scene::DebugItemTemplate,
+        hand: Option<crate::Handedness>,
     ) -> Result<crate::game_scene::DebugSpawnedItem, String> {
         self.mission_core
-            .spawn_item_for_player(asset_cache, template)
+            .spawn_item_for_player(asset_cache, template, hand)
     }
 
     fn apply_stat_modifier(

@@ -328,13 +328,17 @@ export class PlayerApi {
    *
    * Only genuine pickup items are accepted; a creature or door template throws
    * (400) and nothing is left in the world. Wielding a provisioned weapon is a
-   * separate step (double-click it in the use-mode inventory strip).
+   * separate step (double-click it in the use-mode inventory strip), unless
+   * `hand` is given: then the next step grabs it into that VR hand.
    */
-  async spawnItem(template: string | number): Promise<SpawnedItem> {
-    return this.client.post<SpawnedItem>(
-      "/v1/player/spawn-item",
-      typeof template === "number" ? { template_id: template } : { template },
-    );
+  async spawnItem(
+    template: string | number,
+    options?: { hand?: "left" | "right" },
+  ): Promise<SpawnedItem> {
+    return this.client.post<SpawnedItem>("/v1/player/spawn-item", {
+      ...(typeof template === "number" ? { template_id: template } : { template }),
+      hand: options?.hand,
+    });
   }
 
   /** Add or refresh a timed stat contribution; zero duration removes it. */

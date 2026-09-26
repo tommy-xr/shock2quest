@@ -502,7 +502,7 @@ async fn start_http_server(
     info!("  GET  /v1/player/inventory - Snapshot the player's carried items");
     info!("  POST /v1/player/give      - Put an existing entity in the inventory {{entity_id}}");
     info!(
-        "  POST /v1/player/spawn-item - Provision a fresh item into the inventory {{template|template_id}}"
+        "  POST /v1/player/spawn-item - Provision a fresh item into the inventory {{template|template_id, hand?}}"
     );
     info!(
         "  POST /v1/player/stats     - Provision the character sheet {{skills, stats, psi_tier, cyber_modules}}"
@@ -1539,10 +1539,14 @@ fn process_command(
                 }
             }
         }
-        RuntimeCommand::SpawnItem { template, reply } => {
+        RuntimeCommand::SpawnItem {
+            template,
+            hand,
+            reply,
+        } => {
             // Goes through `Game` (not the debuggable scene directly) because
             // instantiating the item needs the game-owned asset cache.
-            let result = game.debug_spawn_item(&template);
+            let result = game.debug_spawn_item(&template, hand);
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send spawn-item result - receiver dropped");
             }
@@ -3385,6 +3389,9 @@ async fn give_item(
 struct SpawnItemRequest {
     template: Option<String>,
     template_id: Option<i32>,
+    /// `"left"` / `"right"`: also grab the item into that VR hand on the next
+    /// step, for staging captures without a reach gesture.
+    hand: Option<String>,
 }
 
 /// HTTP handler for debug provisioning of an item: instantiate a template and
@@ -3406,10 +3413,23 @@ async fn spawn_item(
         }
     };
 
+    let hand = match request.hand.as_deref() {
+        None => None,
+        Some("left") => Some(shock2vr::Handedness::Left),
+        Some("right") => Some(shock2vr::Handedness::Right),
+        Some(other) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("'hand' must be \"left\" or \"right\", got {other:?}"),
+            ));
+        }
+    };
+
     let (reply_tx, reply_rx) = oneshot::channel();
     if command_tx
         .send(RuntimeCommand::SpawnItem {
             template,
+            hand,
             reply: reply_tx,
         })
         .is_err()
