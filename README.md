@@ -21,6 +21,20 @@ Once installed, copy `sshock2.kpf` and the `mods/` folder from it - see [DEVELOP
 
 Regenerate with `node scripts/hero-shots.mjs` from `tools/shock2-sdk` (after `npm run build`).
 
+Older feature captures, until scripted replacements land:
+
+- Hitboxes
+
+<img src="screenshots/hitbox.png" alt="shock2quest: hitboxes" width="500"/>
+
+- Dual Wielding + Character Models
+
+<img src="screenshots/combat.png" alt="shock2quest: dual wielding" width="500"/>
+
+- Floating Inventory for VR
+
+<img src="screenshots/floating-inventory.png" alt="shock2quest: floating inventory" width="500"/>
+
 ## Running
 
 Download the signed Quest APK from the [latest release](https://github.com/tommy-xr/shock2quest/releases/latest),
