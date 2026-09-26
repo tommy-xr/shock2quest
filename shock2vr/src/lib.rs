@@ -1931,6 +1931,16 @@ impl Game {
     }
 
     fn save_to_file(&self, file_name: String) -> Result<(), SaveGameError> {
+        let scene_name = self.active_game_scene.scene_name();
+        if scenes::debug_scene_names().any(|name| name.eq_ignore_ascii_case(scene_name)) {
+            return Err(SaveGameError {
+                error_code: "unsupported_scene",
+                reason: format!(
+                    "Cannot save debug scene '{scene_name}': generated scenes have no mission file to reload"
+                ),
+                player_pose: None,
+            });
+        }
         let save_data = self.build_save_data()?;
         // Saves live in `<data_root>/saves`, which may not exist yet on a fresh
         // install - a quicksave must create it rather than fail (and a failure
@@ -1962,6 +1972,15 @@ impl Game {
 
     fn load_from_file(&mut self, file_name: String) -> io::Result<()> {
         let save_data = read_save_file(Path::new(&file_name))?;
+        let scene_name = &save_data.global_data.active_mission;
+        if scenes::debug_scene_names().any(|name| name.eq_ignore_ascii_case(scene_name)) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Cannot load debug scene '{scene_name}': generated scenes have no mission file"
+                ),
+            ));
+        }
         let was_crouched = save_data.global_data.is_crouched;
         let (mut mission, level_map) = Self::load_from_save_data(
             save_data,
