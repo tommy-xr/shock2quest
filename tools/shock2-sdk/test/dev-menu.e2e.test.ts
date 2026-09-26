@@ -4,13 +4,12 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { SceneObjectSummary } from "../src/types.js";
 import {
-  AIM_AT_PANEL,
   DEV_ACTION,
   DEV_DONE,
   clickCanvas as click,
   norm,
-  panelPoint,
   pauseEntry,
+  vrClickCanvasPoint,
 } from "./helpers/frontend-menu.js";
 
 // The Developer screen: the shared dev-params row panel, hosted by a frontend
@@ -127,19 +126,7 @@ function panelDepth(objects: SceneObjectSummary[]): number {
 }
 
 /** Pull the trigger over a canvas point on the VR panel, as a rising edge. */
-async function vrClick(game: GameServer, [x, y]: [number, number]): Promise<void> {
-  const [, py, pz] = panelPoint(norm(x, y));
-  await game.input.set("right_hand.rotation", AIM_AT_PANEL);
-  // Aimed straight down -X: the ray meets the panel at the same canvas point
-  // whatever distance the panel is currently tuned to.
-  await game.input.set("right_hand.position", [0, py, pz]);
-  await game.input.set("right_hand.trigger", 0);
-  await game.step({ frames: 3 });
-  await game.input.set("right_hand.trigger", 1);
-  await game.step({ frames: 3 });
-  await game.input.set("right_hand.trigger", 0);
-  await game.step({ frames: 3 });
-}
+
 
 test(
   "the VR Developer screen's > visibly moves the live panel",
@@ -152,11 +139,11 @@ test(
     await game.step({ frames: 10 });
 
     // Into the Developer screen via the controller ray.
-    await vrClick(game, DEVELOPER_BUTTON);
+    await vrClickCanvasPoint(game, DEVELOPER_BUTTON);
     assert.equal((await game.info()).mission, "developer");
     await game.step({ frames: 5 });
 
-    await vrClick(game, CAMERA_CATEGORY);
+    await vrClickCanvasPoint(game, CAMERA_CATEGORY);
 
     const before = panelDepth((await game.scene.objects()).objects);
     assert.ok(
@@ -167,7 +154,7 @@ test(
 
     // One click on panel_distance's `>`: the registry moves AND the very
     // panel being pointed at re-renders farther away.
-    await vrClick(game, ROW0_INCREMENT);
+    await vrClickCanvasPoint(game, ROW0_INCREMENT);
     assert.ok(Math.abs((await paramValue(game, "panel_distance")) - 2.1) < 1e-4);
     await game.step({ frames: 2 });
     const after = panelDepth((await game.scene.objects()).objects);
@@ -177,13 +164,13 @@ test(
     );
 
     // Step back down; the panel comes home.
-    await vrClick(game, ROW0_DECREMENT);
+    await vrClickCanvasPoint(game, ROW0_DECREMENT);
     await game.step({ frames: 2 });
     const restored = panelDepth((await game.scene.objects()).objects);
     assert.ok(Math.abs(restored - 2.0) < 0.05, `expected 2.0, got ${restored}`);
 
     // Done returns to the main menu.
-    await vrClick(game, DEV_DONE);
+    await vrClickCanvasPoint(game, DEV_DONE);
     assert.equal((await game.info()).mission, "main_menu");
   },
 );
@@ -321,18 +308,18 @@ test(
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 10 });
-    await vrClick(game, DEVELOPER_BUTTON);
+    await vrClickCanvasPoint(game, DEVELOPER_BUTTON);
     assert.equal((await game.info()).mission, "developer");
 
     // The same canvas points as the flat run, reached by the ray.
-    await vrClick(game, DEV_ACTION);
+    await vrClickCanvasPoint(game, DEV_ACTION);
     assert.equal((await game.info()).mission, "developer");
     await game.step({ frames: 5 });
     await game.screenshot("dev-scenes-vr.png");
 
-    await vrClick(game, TAB_DEBUG_SCENES);
-    await vrClick(game, sceneRow(DEBUG_MINIMAL_ROW));
-    await vrClick(game, DEV_ACTION);
+    await vrClickCanvasPoint(game, TAB_DEBUG_SCENES);
+    await vrClickCanvasPoint(game, sceneRow(DEBUG_MINIMAL_ROW));
+    await vrClickCanvasPoint(game, DEV_ACTION);
     assert.equal((await game.info()).mission, "debug_minimal");
   },
 );
@@ -347,7 +334,7 @@ for (const vr of [false, true]) {
         debugFlags: vr ? ["--vr"] : [],
       });
       const press = (point: [number, number]) =>
-        vr ? vrClick(game, point) : click(game, point);
+        vr ? vrClickCanvasPoint(game, point) : click(game, point);
       const category = (index: number): [number, number] => [330, 54 + index * 28 + 12];
       const back: [number, number] = [309, 436];
       const zoneKeys = [

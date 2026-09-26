@@ -21,6 +21,7 @@ use crate::{
 
 pub mod cutscene_player;
 pub mod cutscene_skip;
+pub mod debrief;
 pub mod debug_annelid;
 pub mod debug_camera;
 pub mod debug_common;
@@ -49,6 +50,7 @@ pub mod main_menu;
 pub mod no_assets;
 
 pub use cutscene_player::CutscenePlayerScene;
+pub use debrief::DebriefScene;
 pub use debug_annelid::create_debug_annelid_scene;
 pub use debug_camera::DebugCameraScene;
 pub use debug_gloves::DebugGlovesScene;

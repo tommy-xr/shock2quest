@@ -1352,6 +1352,9 @@ fn process_command(
             }
         }
         RuntimeCommand::GetUiState { reply } => {
+            // Game-level, so it is reported whether or not the active scene
+            // exposes debug UI state.
+            let debrief_text = game.active_debrief_text().map(str::to_owned);
             let result = game
                 .debug_scene()
                 .map(|scene| {
@@ -1367,6 +1370,7 @@ fn process_command(
                         utilities: ui.utilities,
                         pointer: ui.pointer,
                         panel_pose: ui.panel_pose,
+                        debrief_text: debrief_text.clone(),
                         scanner_pose: ui.scanner_pose,
                         messages: ui.messages,
                         banner: ui.banner,
@@ -1384,6 +1388,7 @@ fn process_command(
                     utilities: Vec::new(),
                     pointer: None,
                     panel_pose: None,
+                    debrief_text,
                     scanner_pose: None,
                     messages: Vec::new(),
                     banner: None,

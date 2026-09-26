@@ -1047,6 +1047,11 @@ export interface UiState {
    * mapping it through this pose - see `test/helpers/vr-hand.ts`.
    */
   panel_pose: UiPanelPose | null;
+  /**
+   * The character-creation debrief page on screen right now, verbatim; null
+   * when the debrief screen is not up.
+   */
+  debrief_text: string | null;
   /** Actual rear lens in pawn space; emits along its local -Z. */
   scanner_pose: { origin: Vec3; rotation: [number, number, number, number] } | null;
   /**
