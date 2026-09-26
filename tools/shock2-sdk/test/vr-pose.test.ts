@@ -27,6 +27,18 @@ test("offsets are in the head's yaw frame toward the target", () => {
   assert.ok(Math.abs(fromEye[2] + 0.2) < 1e-6, `right ${fromEye}`);
 });
 
+test("a separate aim point turns the hand without moving it", () => {
+  const target: Vec3 = [4, 1, 5];
+  const aim: Vec3 = [4, 3, 6];
+  const offset: Vec3 = [0.15, -0.2, -0.4];
+  const plain = handPoseAimedAt(pawn, pawnRotation, eyeHeight, target, offset);
+  const aimed = handPoseAimedAt(pawn, pawnRotation, eyeHeight, target, offset, aim);
+  assert.deepEqual(aimed.position, plain.position);
+  const world = add(pawn, quatRotate(pawnRotation, aimed.position));
+  const ray = quatRotate(pawnRotation, quatRotate(aimed.rotation, [0, 0, -1]));
+  assert.ok(dot(ray, normalize(sub(aim, world))) > 0.9999);
+});
+
 test("the posed hand stays upright aiming along world +Z", () => {
   // Shortest-arc rotations from -Z flip ~180 degrees of roll here.
   const unturned: Quat = [0, 0, 0, 1];

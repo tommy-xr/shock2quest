@@ -16,7 +16,7 @@ export type Hand = "left" | "right";
 /**
  * Pawn-local controller pose (the space `<hand>_hand.position/rotation` take)
  * for a hand at `offset` from the eye - x right, y up, -z toward `target`,
- * horizontally - whose -Z ray points at `target`.
+ * horizontally - whose -Z ray points at `aim` (default `target`).
  */
 export function handPoseAimedAt(
   pawnPosition: Vec3,
@@ -24,6 +24,7 @@ export function handPoseAimedAt(
   eyeHeight: number,
   target: Vec3,
   offset: Vec3,
+  aim: Vec3 = target,
 ): { position: Vec3; rotation: Quat } {
   const eye = add(pawnPosition, [0, eyeHeight, 0]);
   const toward = sub(target, eye);
@@ -32,7 +33,7 @@ export function handPoseAimedAt(
   const world = add(eye, quatRotate(yawRotation, offset));
   // lookQuat, not a shortest arc from -Z: that picks an arbitrary roll (a
   // gun aimed along +Z comes out upside down).
-  const worldRotation = lookQuat(sub(target, world));
+  const worldRotation = lookQuat(sub(aim, world));
   const inversePawn = quatConjugate(pawnRotation);
   return {
     position: quatRotate(inversePawn, sub(world, pawnPosition)),
@@ -89,11 +90,15 @@ export async function faceTarget(game: Game, target: Vec3): Promise<void> {
   await game.step({ frames: 60 });
 }
 
-/** Turn the head to `target`, then aim each given hand at it from its offset. */
+/**
+ * Turn the head to `target`, then aim each given hand from its offset at
+ * `aim` (default `target`) - e.g. eyes on a head, guns on the torso.
+ */
 export async function aimHandsAt(
   game: Game,
   target: Vec3,
   hands: Partial<Record<Hand, Vec3>>,
+  aim: Vec3 = target,
 ): Promise<void> {
   await game.input.lookAtWorldPoint(target);
   const { player } = await game.info();
@@ -104,6 +109,7 @@ export async function aimHandsAt(
       player.camera_offset[1],
       target,
       offset,
+      aim,
     );
     await game.input.set(`${hand}_hand.position`, pose.position);
     await game.input.set(`${hand}_hand.rotation`, pose.rotation);
