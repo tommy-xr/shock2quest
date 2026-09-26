@@ -3374,7 +3374,7 @@ mod tests {
                     to_template_id: 0,
                     to_entity_id: Some(WrappedEntityId(parent)),
                     link: Link::PhysAttach(dark::properties::PhysAttachOptions {
-                        offset: vec3(0.0, 1.0, 0.0),
+                        offset: Some(vec3(0.0, 1.0, 0.0)),
                     }),
                 }],
             },

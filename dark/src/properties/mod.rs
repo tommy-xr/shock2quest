@@ -803,7 +803,7 @@ impl AIProjectileOptions {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TPathData {
     pub speed: f32,
 }
@@ -832,7 +832,7 @@ impl ProjectileOptions {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CorpseOptions {
     propagate_scale: bool,
 }
@@ -843,7 +843,7 @@ impl CorpseOptions {
         CorpseOptions { propagate_scale }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ParticleAttachOptions {
     /// 0 = object, 1 = vhot, 2 = joint, 3 = submodel.
     pub attach_type: u32,
@@ -852,15 +852,16 @@ pub struct ParticleAttachOptions {
     pub submodel: i32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PhysAttachOptions {
-    pub offset: Vector3<f32>,
+    /// None means the LD$ record is absent: preserve the authored relative placement.
+    pub offset: Option<Vector3<f32>>,
 }
 
 impl PhysAttachOptions {
     pub fn read(reader: &mut Box<dyn ReadAndSeek>, _len: u32) -> PhysAttachOptions {
         PhysAttachOptions {
-            offset: read_vec3(reader) / SCALE_FACTOR,
+            offset: Some(read_vec3(reader) / SCALE_FACTOR),
         }
     }
 }
@@ -1356,13 +1357,13 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             |reader, _len| read_i32(reader),
             Link::HitSpang,
         ),
-        define_link_with_data(
+        define_link_with_optional_data(
             "L$ParticleA",
             "LD$Particle",
             ParticleAttachOptions::read,
             Link::ParticleAttachement,
         ),
-        define_link_with_data(
+        define_link_with_optional_data(
             "L$PhysAttac",
             "LD$PhysAtta",
             PhysAttachOptions::read,
@@ -1374,7 +1375,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             AIProjectileOptions::read,
             Link::AIProjectile,
         ),
-        define_link_with_data("L$TPath", "LD$TPath", TPathData::read, Link::TPath),
+        define_link_with_optional_data("L$TPath", "LD$TPath", TPathData::read, Link::TPath),
         define_link_with_data(
             "L$Flinderiz",
             "LD$Flinderi",
@@ -2709,12 +2710,10 @@ pub trait LinkDefinitionWithData: Send + Sync {
     fn link_data_chunk_name(&self) -> String;
     fn link_data_framing(&self) -> LinkDataFraming;
 
-    /// Whether a link of this flavor with no LD$ record of its own keeps the
-    /// link with a zero-filled record, instead of being dropped. Opt-in: it is
-    /// only correct where the reader parses all-zeroes as "unspecified", which
-    /// is per-flavor - a zeroed `LD$PhysAtta` offset means "welded to the
-    /// parent's origin", not "no offset authored".
+    /// Sparse flavors opt into a typed default. In particular, an absent
+    /// PhysAttach offset differs from an explicitly authored zero offset.
     fn defaults_missing_records(&self) -> bool;
+    fn default_link(&self, link: ToTemplateLinkInfo) -> Option<ToTemplateLink>;
 
     fn convert(&self, data: Vec<u8>, prop_len: u32, link: ToTemplateLinkInfo) -> ToTemplateLink;
 }
@@ -2723,7 +2722,7 @@ struct LinkDefinitionWithDataStruct<TData> {
     link_name: String,
     link_data_name: String,
     framing: LinkDataFraming,
-    defaults_missing_records: bool,
+    default_data: Option<fn() -> TData>,
     converter: Converter<TData, Link>,
     reader: Reader<Box<dyn ReadAndSeek>, TData>,
 }
@@ -2745,7 +2744,14 @@ impl<TData> LinkDefinitionWithData for LinkDefinitionWithDataStruct<TData> {
     }
 
     fn defaults_missing_records(&self) -> bool {
-        self.defaults_missing_records
+        self.default_data.is_some()
+    }
+
+    fn default_link(&self, link_info: ToTemplateLinkInfo) -> Option<ToTemplateLink> {
+        self.default_data.map(|default| ToTemplateLink {
+            to_template_id: link_info.dest_template_id,
+            link: (self.converter)(default()),
+        })
     }
 
     fn convert(
@@ -2891,17 +2897,18 @@ pub fn define_link_with_data<TData: 'static + fmt::Debug + Send + Sync + Clone>(
         link_name: link_name.to_string(),
         link_data_name: link_data_name.to_string(),
         framing: LinkDataFraming::HeaderDeclared,
-        defaults_missing_records: false,
+        default_data: None,
         reader,
         converter,
     })
 }
 
-/// Like `define_link_with_data`, but for a flavor whose LD$ chunk is sparse and
-/// whose reader parses all-zeroes as "unspecified": a link with no record of
-/// its own keeps the link with a zero-filled record instead of being dropped.
-/// Check the reader before using this - see `defaults_missing_records`.
-pub fn define_link_with_optional_data<TData: 'static + fmt::Debug + Send + Sync + Clone>(
+/// Like `define_link_with_data`, but absent records use the flavor's typed
+/// default. Never synthesize byte records: zero bytes can mean an explicitly
+/// authored value rather than "unspecified" (notably physical offsets).
+pub fn define_link_with_optional_data<
+    TData: 'static + fmt::Debug + Send + Sync + Clone + Default,
+>(
     link_name: &str,
     link_data_name: &str,
     reader: Reader<Box<dyn ReadAndSeek>, TData>,
@@ -2911,7 +2918,7 @@ pub fn define_link_with_optional_data<TData: 'static + fmt::Debug + Send + Sync 
         link_name: link_name.to_string(),
         link_data_name: link_data_name.to_string(),
         framing: LinkDataFraming::HeaderDeclared,
-        defaults_missing_records: true,
+        default_data: Some(TData::default),
         reader,
         converter,
     })
@@ -2929,7 +2936,7 @@ pub fn define_link_with_versioned_data<TData: 'static + fmt::Debug + Send + Sync
         link_name: link_name.to_string(),
         link_data_name: link_data_name.to_string(),
         framing: LinkDataFraming::VersionHeader,
-        defaults_missing_records: false,
+        default_data: None,
         reader,
         converter,
     })
@@ -2972,6 +2979,21 @@ mod tests {
     }
 
     #[test]
+    fn sparse_attachment_and_path_links_preserve_missing_records() {
+        let (_, _, definitions) = get::<Cursor<Vec<u8>>>();
+        for name in ["L$PhysAttac", "L$ParticleA", "L$TPath"] {
+            let definition = definitions
+                .iter()
+                .find(|d| d.link_chunk_name() == name)
+                .unwrap();
+            assert!(
+                definition.defaults_missing_records(),
+                "{name} drops missing records"
+            );
+        }
+    }
+
+    #[test]
     fn phys_attach_offset_uses_world_axes_and_scale() {
         // command1 Tram Front -> Tram stores the Dark-space vector
         // (-10, -0.1875, -0.5), which read_vec3 maps to world
@@ -2983,7 +3005,7 @@ mod tests {
         let mut cursor: Box<dyn ReadAndSeek> = Box::new(Cursor::new(bytes));
         let options = PhysAttachOptions::read(&mut cursor, 12);
 
-        assert_eq!(options.offset, vec3(4.0, -0.2, -0.075));
+        assert_eq!(options.offset, Some(vec3(4.0, -0.2, -0.075)));
     }
 
     /// The eng2 "Message Trap" P$UseMsg chunk: a leading u32 the readers
