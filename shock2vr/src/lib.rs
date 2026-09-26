@@ -684,6 +684,11 @@ pub struct Game {
     /// asked of the scene because `render` has no input context.
     head_pose: (Vector3<f32>, Quaternion<f32>),
 
+    /// Active per-frame input recording (`ToggleInputRecording`).
+    input_recorder: Option<input::recording::InputRecorder>,
+    /// Recording start/stop notices, shown with the next frame's effects.
+    pending_messages: Vec<String>,
+
     /// How far the host's picture reaches from the view axis on each axis,
     /// taken from the projection it last handed `render_per_eye`. The hit tint
     /// is a *rim* effect, so it has to know where the picture ends - and only
@@ -1482,6 +1487,8 @@ impl Game {
                 vec3(0.0, input_context::DEFAULT_HEAD_HEIGHT, 0.0),
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
             ),
+            input_recorder: None,
+            pending_messages: Vec::new(),
             view_extents: hit_feedback::DEFAULT_VIEW_EXTENTS,
             free_camera: free_camera::FreeCamera::new(),
             free_camera_view_fixup: None,
@@ -1494,6 +1501,22 @@ impl Game {
         input_context: &input_context::InputContext,
         actions: &mut input::InputActionState,
     ) {
+        // Record the raw input first, ahead of every early return, so a
+        // replay feeds `update` exactly what the runtime did.
+        if actions.just_triggered(input::InputAction::ToggleInputRecording) {
+            self.toggle_input_recording();
+        }
+        if let Some(recorder) = &mut self.input_recorder {
+            let frame = input::recording::RecordedFrame::capture(
+                time.elapsed.as_secs_f32(),
+                input_context,
+                actions,
+            );
+            if let Err(error) = recorder.record(&frame) {
+                warn!("input recording stopped: {error}");
+                self.input_recorder = None;
+            }
+        }
         let calibrated_input = glove_fit::calibrated_input(
             input_context,
             self.options.presentation_mode,
@@ -1607,6 +1630,11 @@ impl Game {
             free_camera::FreeCamera::is_enabled(),
         );
         action_effects.extend(input::ActionDispatcher::dispatch(actions, input_context));
+        action_effects.extend(
+            self.pending_messages
+                .drain(..)
+                .map(|text| Effect::ShowMessage { text }),
+        );
         actions.clear_triggered();
         let jump_button_held = actions.is_held(input::InputAction::LeftHandLowerButton)
             || actions.is_held(input::InputAction::RightHandLowerButton);
@@ -1929,6 +1957,50 @@ impl Game {
         for effect in global_effects {
             self.handle_global_effect(effect);
         }
+    }
+
+    /// Start a recording (saving the game beside it to replay from), or
+    /// finish the active one.
+    fn toggle_input_recording(&mut self) {
+        use input::recording::{
+            InputRecorder, RECORDING_VERSION, RecordingHeader, recordings_directory,
+        };
+        let message = match self.input_recorder.take() {
+            Some(recorder) => match recorder.finish() {
+                Ok(path) => format!("Recording saved: {}", path.display()),
+                Err(error) => format!("Recording failed: {error}"),
+            },
+            None => {
+                let seconds = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                let name = format!("rec-{seconds}");
+                let directory = recordings_directory();
+                let save_name = format!("{name}.sav");
+                let save_path = directory.join(&save_name).to_string_lossy().into_owned();
+                let save = match self.save_to_file(save_path) {
+                    Ok(()) => Some(save_name),
+                    Err(error) => {
+                        warn!("recording without a start save: {error}");
+                        None
+                    }
+                };
+                let header = RecordingHeader {
+                    version: RECORDING_VERSION,
+                    scene: self.active_game_scene.scene_name().to_owned(),
+                    save,
+                };
+                match InputRecorder::create(&directory.join(format!("{name}.jsonl")), &header) {
+                    Ok(recorder) => {
+                        self.input_recorder = Some(recorder);
+                        "Recording input".to_owned()
+                    }
+                    Err(error) => format!("Recording failed: {error}"),
+                }
+            }
+        };
+        info!("{message}");
+        self.pending_messages.push(message);
     }
 
     fn save_to_file(&self, file_name: String) -> Result<(), SaveGameError> {

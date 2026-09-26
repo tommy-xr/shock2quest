@@ -2,7 +2,7 @@
 //! must lower the hands by the same amount, preserving physical reach and IPD.
 use cgmath::{Vector3, vec3};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TrackingTransform {
     translation: Vector3<f32>,
     head_stage_y: f32,
