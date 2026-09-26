@@ -356,6 +356,8 @@ For debugging visual/rendering changes without a full interactive session:
    # The window is HIDDEN by default (offscreen render) so the runtime never
    # steals focus or pops to the foreground - `/v1/screenshot` still works.
    # Pass `--visible` to watch the game in a real window.
+   # `--window-size 1920x1080` renders (and screenshots) at that size;
+   # the default is 800x600.
    cargo dbgr --mission medsci1.mis --port 8080
 
    # With no --mission it boots the main menu (same entry point as the flat

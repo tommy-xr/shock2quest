@@ -50,9 +50,17 @@ use remote_input::{apply_input_patch, head_rotation_from_yaw_pitch};
 use dark::properties::{PropModelName, PropPosition, PropSymName, PropTemplateId};
 use shipyard::{Get, IntoIter, IntoWithId, View};
 
-// Screen dimensions for the debug window
-const SCR_WIDTH: u32 = 800;
-const SCR_HEIGHT: u32 = 600;
+/// Parse `--window-size` as `WIDTHxHEIGHT`, e.g. `1920x1080`.
+fn parse_window_size(s: &str) -> Result<(u32, u32), String> {
+    let (w, h) = s
+        .split_once('x')
+        .ok_or_else(|| format!("expected WIDTHxHEIGHT, got '{s}'"))?;
+    let parse = |v: &str| v.parse::<u32>().ok().filter(|n| *n > 0);
+    match (parse(w), parse(h)) {
+        (Some(w), Some(h)) => Ok((w, h)),
+        _ => Err(format!("expected positive WIDTHxHEIGHT, got '{s}'")),
+    }
+}
 
 /// A request-body extractor that parses JSON **regardless of the `Content-Type`
 /// header**, unlike axum's `Json`. This debug/test API is driven by ad-hoc
@@ -159,6 +167,11 @@ struct Args {
     /// watch the game interactively.
     #[arg(long)]
     visible: bool,
+
+    /// Logical window size as `WIDTHxHEIGHT`. Sets the render aspect and the
+    /// default screenshot size - e.g. `1920x1080` for README/website captures.
+    #[arg(long, default_value = "800x600", value_parser = parse_window_size)]
+    window_size: (u32, u32),
 
     /// Keep level transitions deferred behind the loading screen, the way the
     /// shipping runtimes present them. By default this runtime drives a
@@ -553,10 +566,11 @@ fn run_game_blocking(
 
     // Create window
     info!("Step 2: Creating GLFW window...");
+    let (scr_width, scr_height) = args.window_size;
     let (mut window, events) = glfw
         .create_window(
-            SCR_WIDTH,
-            SCR_HEIGHT,
+            scr_width,
+            scr_height,
             "Debug Runtime - Game View",
             glfw::WindowMode::Windowed,
         )
@@ -944,11 +958,11 @@ fn run_game_blocking(
         };
 
         // Render the game
-        let ratio = SCR_WIDTH as f32 / SCR_HEIGHT as f32;
+        let ratio = scr_width as f32 / scr_height as f32;
         let projection_matrix: cgmath::Matrix4<f32> =
             cgmath::perspective(cgmath::Deg(game.desired_fov_deg()), ratio, 0.1, 1000.0);
 
-        let screen_size = vec2(SCR_WIDTH as f32, SCR_HEIGHT as f32);
+        let screen_size = vec2(scr_width as f32, scr_height as f32);
 
         let (mut scene, pawn_offset, pawn_rotation) = profile!("game.render", game.render());
 
@@ -1004,7 +1018,7 @@ fn run_game_blocking(
         // back buffer (before the swap, so we read the just-rendered contents).
         if !pending_screenshots.is_empty() {
             for (spec, reply) in pending_screenshots.drain(..) {
-                let result = capture_screenshot_to_result(spec);
+                let result = capture_screenshot_to_result(spec, scr_width, scr_height);
                 if reply.send(result).is_err() {
                     tracing::warn!("Failed to send screenshot result - receiver dropped");
                 }
@@ -3824,7 +3838,7 @@ async fn audit_colliders(
 struct ScreenshotRequest {
     filename: Option<String>,
     /// Cap the saved PNG's width (aspect-preserving, never upscales). Omitted,
-    /// the capture is downscaled to the declared logical size (`SCR_WIDTH`), so
+    /// the capture is downscaled to the declared logical size (`--window-size`), so
     /// a HiDPI framebuffer doesn't quadruple the pixel count.
     max_width: Option<u32>,
 }
@@ -3870,7 +3884,7 @@ async fn take_screenshot(
 /// Resolve a screenshot spec to a file path, capture the freshly-rendered frame,
 /// and build the result. Called from the game loop after `finish_render` (before
 /// the buffer swap) so it reads a complete frame.
-fn capture_screenshot_to_result(spec: ScreenshotSpec) -> ScreenshotResult {
+fn capture_screenshot_to_result(spec: ScreenshotSpec, width: u32, height: u32) -> ScreenshotResult {
     let filename = spec.filename.unwrap_or_else(|| {
         format!(
             "screenshot_{}.png",
@@ -3884,7 +3898,7 @@ fn capture_screenshot_to_result(spec: ScreenshotSpec) -> ScreenshotResult {
     });
     let full_path = screenshots_dir.join(&filename);
 
-    match capture_screenshot(&full_path, SCR_WIDTH, SCR_HEIGHT, spec.max_width) {
+    match capture_screenshot(&full_path, width, height, spec.max_width) {
         Ok((size_bytes, resolution)) => {
             tracing::info!("Screenshot saved to: {}", full_path.display());
             ScreenshotResult {
@@ -4470,6 +4484,23 @@ async fn shutdown_signal(command_tx: mpsc::UnboundedSender<RuntimeCommand>) {
 fn request_game_loop_shutdown(command_tx: &mpsc::UnboundedSender<RuntimeCommand>) {
     if command_tx.send(RuntimeCommand::Shutdown).is_err() {
         info!("Game loop already stopped while handling shutdown signal");
+    }
+}
+
+#[cfg(test)]
+mod window_size_tests {
+    use super::parse_window_size;
+
+    #[test]
+    fn parses_width_by_height() {
+        assert_eq!(parse_window_size("1920x1080"), Ok((1920, 1080)));
+    }
+
+    #[test]
+    fn rejects_malformed_or_zero() {
+        for bad in ["1920", "0x600", "800x", "axb", "800x600x2"] {
+            assert!(parse_window_size(bad).is_err(), "{bad}");
+        }
     }
 }
 
