@@ -1,6 +1,7 @@
 mod actions;
 mod dispatcher;
 mod menu_hold;
+pub mod recording;
 pub mod remote;
 mod state;
 

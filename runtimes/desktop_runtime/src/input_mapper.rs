@@ -157,6 +157,11 @@ impl DesktopInputMapper {
                 action: InputAction::QuickLoad,
             },
             Binding {
+                key: Key::R,
+                modifier: Modifier::Alt,
+                action: InputAction::ToggleInputRecording,
+            },
+            Binding {
                 key: Key::Tab,
                 modifier: Modifier::None,
                 action: InputAction::ToggleUseMode,

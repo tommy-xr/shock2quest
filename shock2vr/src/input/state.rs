@@ -37,6 +37,16 @@ impl InputActionState {
         self.held.insert(action);
     }
 
+    /// Actions triggered this frame, in no particular order.
+    pub fn triggered(&self) -> impl Iterator<Item = InputAction> + '_ {
+        self.triggered.iter().copied()
+    }
+
+    /// Actions currently held, in no particular order.
+    pub fn held(&self) -> impl Iterator<Item = InputAction> + '_ {
+        self.held.iter().copied()
+    }
+
     /// Clear triggered actions (call at end of frame)
     pub fn clear_triggered(&mut self) {
         self.triggered.clear();

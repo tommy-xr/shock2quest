@@ -218,6 +218,7 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 | `Space` | `Jump` | the flat key is the held jump channel, not this action; Quest: either *lower* face button |
 | `Esc` | `TogglePauseMenu` | Quest: left `Menu` held ~0.5 s, or the interface's MENU button |
 | `Alt+S` / `Alt+L` | `QuickSave` / `QuickLoad` | |
+| `Alt+R` | `ToggleInputRecording` | Records per-frame input to `<data>/recordings/rec-*.jsonl` (plus a start save) for debug-runtime replay |
 | `Alt+G` | `DebugForceChase` | every monster hunts the player, pinned |
 | `Alt+C` | `DebugCalmAll` | clears the pin |
 | `Alt+V` | `ToggleFreeCamera` | requires the **Free camera** developer option; Quest: right `A`+`B` together |

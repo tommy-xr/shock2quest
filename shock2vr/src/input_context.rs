@@ -4,8 +4,9 @@
 // For desktop / PC runtime, the mapping is a bit more interesting..
 
 use cgmath::{Quaternion, Vector2, Vector3, Zero};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputContext {
     // Information about the head position
     pub head: Head,
@@ -43,7 +44,7 @@ pub struct InputContext {
     pub pose_tracking: Option<PoseTracking>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PoseTracking {
     pub head: bool,
     pub hands: [bool; 2],
@@ -101,13 +102,13 @@ fn suppress_hand_controls(hand: &mut Hand, holds_item: bool) {
 /// A 2D screen-space pointer for flatscreen UI. Position is normalized to
 /// `[0, 1]` on each axis with the origin at the top-left, so it is
 /// resolution-independent; scenes scale it to their own canvas.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Pointer2D {
     pub position: Vector2<f32>,
     pub pressed: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Head {
     /// Where the head is, in pawn space (the same space the hands use), so a
     /// world-anchored panel can be placed from the player's actual eye rather
@@ -134,7 +135,7 @@ impl Head {
 }
 
 // Context for an individual hand (motion controller)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hand {
     pub position: Vector3<f32>,
     pub rotation: Quaternion<f32>,
