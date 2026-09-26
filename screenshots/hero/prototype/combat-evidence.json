@@ -1,0 +1,19 @@
+{
+  "kind": "Staged debug opponent; normal VR inputs cause gun and wrench damage",
+  "revision": "4d1923e82c3308259c0497bb2372bf12651c0ee7",
+  "mission": "medsci1.mis",
+  "presentation": "vr",
+  "timestepHz": 60,
+  "capturedAt": "2026-09-26T16:10:45.133Z",
+  "template": -397,
+  "initialHp": 12,
+  "afterGun": 5,
+  "afterMelee": 0,
+  "initialAmmo": 12,
+  "afterAmmo": 10,
+  "standardWeaponsSkill": 1,
+  "frames": 90,
+  "fps": 20,
+  "fovOverrideDegrees": 80,
+  "note": "Prototype motion; hard cut to opening frame when looping. No damage messages injected."
+}

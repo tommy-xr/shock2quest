@@ -28,3 +28,16 @@ The requested width is a cap, never an upscale: a native HiDPI framebuffer
 produces 1600×1200; a standard-density display may produce less. Fixed stepping
 makes the setup repeatable, but AI scheduling, physics and GPU differences mean
 exact pixel equality is not guaranteed.
+
+## Combat prototype
+
+With `ffmpeg` installed, add `--video` to the weapon recipe:
+
+```sh
+node scripts/hero/weapon-melee.mjs --video --output /tmp/shock2quest-hero
+```
+
+It records two pistol shots and a tracked wrench strike against a staged hybrid,
+asserts ammo use and separate damage phases, and exports a silent MP4 and looping
+GIF at 20 fps. Raw frames stay in a fresh temporary directory printed at the end.
+The motion and loop cut are prototypes; the still remains the primary hero image.
