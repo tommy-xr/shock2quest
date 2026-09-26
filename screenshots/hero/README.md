@@ -44,6 +44,29 @@ HiDPI framebuffer. A standard-density display may produce smaller files. The
 screenshot API never upscales. True selectable output resolution/aspect ratio
 is a future renderer change.
 
+## Weapon + melee motion prototype
+
+[Looping GIF](prototype/weapon-melee.gif) · [MP4](prototype/weapon-melee.mp4) ·
+[Combat evidence](prototype/combat-evidence.json)
+
+The prototype is 4.5 seconds at 20 fps: two pistol shots, an approaching hybrid,
+a tracked wrench strike, and recovery. The script checks ammunition consumption,
+damage after each phase, the target's defeat, and that the player survives with
+both weapons retained. The opponent is debug-provisioned; damage comes from
+normal VR inputs. It sets Standard Weapons to level 1 and uses an 80-degree
+capture field of view. The primary README still keeps the default projection.
+
+With `ffmpeg` installed, run from `tools/shock2-sdk`:
+
+```sh
+node scripts/hero/weapon-melee.mjs --video --output /tmp/shock2quest-hero
+```
+
+This also generates the loadout still. Raw PNG frames are retained in a fresh
+temporary directory printed by the script, and GIF/MP4 exports go to the chosen
+output directory. The MP4 has no audio. The hand recovery and loop cut are still
+abrupt, so this is a motion prototype rather than the README's primary hero.
+
 ## Choosing and refreshing media
 
 Regenerate to a temporary directory and inspect the images before replacing the
@@ -51,7 +74,6 @@ README versions. Check that both hands and their items fit in frame, the camera
 is clear of geometry, lighting is readable, and no debug-spawned clutter or
 story spoilers appear. Keep the JSON alongside the selected PNG.
 
-Future motion takes can build on these setups with timed head/hand poses and
-input edges, capturing at a fixed simulation cadence. Verify ammunition use and
-target damage when a clip demonstrates combat. Headset pose/input recordings
-can later replace scripted motion without replacing setup and export.
+Future takes can build on the prototype's setup, timed head/hand poses, input
+edges, and fixed capture cadence. A headset pose/input recording can later
+replace the scripted motion without replacing the setup or export workflow.
