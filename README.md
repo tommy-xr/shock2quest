@@ -16,6 +16,13 @@ Once installed, copy `sshock2.kpf` and the `mods/` folder from it - see [DEVELOP
 
 ## Screenshots
 
+<img src="screenshots/hero/hydro1.png" alt="Hydroponics: a hybrid beside an annelid egg" width="400"/> <img src="screenshots/hero/medsci1.png" alt="Med/Sci: a hybrid before a XERXES terminal" width="400"/>
+<img src="screenshots/hero/ops2.png" alt="Operations: a protocol droid" width="400"/> <img src="screenshots/hero/rec1.png" alt="Recreation: a monkey in medical analysis" width="400"/>
+
+Regenerate with `node scripts/hero-shots.mjs` from `tools/shock2-sdk` (after `npm run build`).
+
+Older feature captures, until scripted replacements land:
+
 - Hitboxes
 
 <img src="screenshots/hitbox.png" alt="shock2quest: hitboxes" width="500"/>
