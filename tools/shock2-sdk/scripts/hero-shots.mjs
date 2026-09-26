@@ -133,7 +133,7 @@ for (const shot of shots) {
     await game.player.teleport({ x, y, z });
     await game.step({ frames: 5 });
     // Aim where the subject is now; it may have moved while we squared up.
-    const target = await aimPoint(game, subject.id, "torso");
+    const target = (await aimPoints(game, subject.id))("torso");
     await aimHandsAt(game, target, shot.hands);
     await game.step({ frames: 2 });
     // Hold the grips: a VR hand releases whatever it holds when it lets go.
@@ -160,12 +160,13 @@ for (const shot of shots) {
   }
 }
 
-/** The subject's live aim point of a class (falling back to its origin, which
- * can sit well off its body - a monkey's is above its back). */
-async function aimPoint(game, id, classification) {
+/** Look up the subject's live aim points by class, falling back to the torso,
+ * then its origin (which can sit well off its body - a monkey's is above its
+ * back). */
+async function aimPoints(game, id) {
   const detail = await game.entities.detail(id);
-  const point = (c) => detail.aim_points?.find((p) => p.classification === c)?.position;
-  return point(classification) ?? point("torso") ?? detail.position;
+  const find = (c) => detail.aim_points?.find((p) => p.classification === c)?.position;
+  return (classification) => find(classification) ?? find("torso") ?? detail.position;
 }
 
 /**
@@ -183,16 +184,16 @@ async function recordClip(game, shot, subjectId) {
       // Track the subject: eyes on its head (a charging creature's torso would
       // pitch the view into the floor), hands on its torso, both drifting.
       const drift = sway(1, t, 0.04);
-      const look = (await aimPoint(game, subjectId, "head")).map((v, i) => v + drift[i]);
-      const body = (await aimPoint(game, subjectId, "torso")).map((v, i) => v + drift[i]);
+      const point = await aimPoints(game, subjectId);
+      const look = point("head").map((v, i) => v + drift[i]);
+      const body = point("torso").map((v, i) => v + drift[i]);
       const hands = Object.fromEntries(
         Object.entries(clip.hands).map(([hand, keys]) => {
           const tremor = sway(hand === "right" ? 2 : 3, t, 0.008, 0.6);
           return [hand, sampleTrack(keys, t).map((v, i) => v + tremor[i])];
         }),
       );
-      const aims = Object.fromEntries(Object.keys(clip.hands).map((hand) => [hand, body]));
-      await aimHandsAt(game, look, hands, aims);
+      await aimHandsAt(game, look, hands, body);
       for (const [hand, pulls] of Object.entries(clip.trigger ?? {})) {
         const pulled = pulls.some((at) => t >= at && t < at + 0.12);
         await game.input.set(`${hand}_hand.trigger`, pulled ? 1 : 0);

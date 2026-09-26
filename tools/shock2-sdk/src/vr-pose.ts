@@ -92,14 +92,13 @@ export async function faceTarget(game: Game, target: Vec3): Promise<void> {
 
 /**
  * Turn the head to `target`, then aim each given hand from its offset at
- * `aims[hand]` if given (a melee swing pointing its tip elsewhere), else at
- * `target`.
+ * `aim` (default `target`) - e.g. eyes on a head, guns on the torso.
  */
 export async function aimHandsAt(
   game: Game,
   target: Vec3,
   hands: Partial<Record<Hand, Vec3>>,
-  aims: Partial<Record<Hand, Vec3>> = {},
+  aim: Vec3 = target,
 ): Promise<void> {
   await game.input.lookAtWorldPoint(target);
   const { player } = await game.info();
@@ -110,7 +109,7 @@ export async function aimHandsAt(
       player.camera_offset[1],
       target,
       offset,
-      aims[hand],
+      aim,
     );
     await game.input.set(`${hand}_hand.position`, pose.position);
     await game.input.set(`${hand}_hand.rotation`, pose.rotation);
