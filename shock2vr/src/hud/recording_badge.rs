@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use cgmath::{Matrix4, Vector3, vec2};
+use cgmath::{Matrix4, Quaternion, Rotation, Vector3, vec2, vec3};
 use engine::{
     assets::asset_cache::AssetCache,
     scene::{RenderLayer, SceneObject, basic_material},
@@ -32,18 +32,21 @@ pub struct RecordingBadge {
 }
 
 impl RecordingBadge {
-    /// The badge for an eye at `eye` looking along `forward` with `up`/`right`
-    /// its view axes, all in pawn space; `pawn_to_world` maps it out.
+    /// The badge for an eye at `eye` with rotation `view` (looking down -Z),
+    /// in pawn space; `pawn_to_world` maps it out. Placed and oriented from
+    /// `view` alone, so it rolls and pitches with the head as one piece.
     pub fn render(
         &mut self,
         asset_cache: &mut AssetCache,
         pawn_to_world: Matrix4<f32>,
         eye: Vector3<f32>,
-        forward: Vector3<f32>,
-        up: Vector3<f32>,
-        right: Vector3<f32>,
+        view: Quaternion<f32>,
     ) -> Vec<SceneObject> {
-        let rotation = util::get_rotation_from_forward_vector(-forward);
+        let forward = view.rotate_vector(vec3(0.0, 0.0, -1.0));
+        let up = view.rotate_vector(vec3(0.0, 1.0, 0.0));
+        let right = view.rotate_vector(vec3(1.0, 0.0, 0.0));
+        // Quads face +Z, which `view` turns back toward the eye.
+        let rotation = view;
         let anchor = eye + forward * DISTANCE + (up * UP - right * LEFT) * DISTANCE;
 
         // The label starts just right of the dot.

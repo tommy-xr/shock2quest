@@ -2626,8 +2626,8 @@ impl Game {
             scene.push(ring);
         }
 
-        // While input recording runs, a view-locked badge says so - in the
-        // pause menu too, since recording carries on behind it.
+        // While input recording runs, a view-locked badge says so. An
+        // untracked head falls back to identity, as `eye_pose` does.
         if self.input_recorder.is_some() {
             let view = util::tracked_rotation(rendered_eye.head_rotation)
                 .unwrap_or(Quaternion::new(1.0, 0.0, 0.0, 0.0));
@@ -2635,9 +2635,7 @@ impl Game {
                 &mut self.asset_cache,
                 pawn_to_world,
                 eye_position,
-                eye_forward,
-                view.rotate_vector(vec3(0.0, 1.0, 0.0)),
-                view.rotate_vector(vec3(1.0, 0.0, 0.0)),
+                view,
             ));
         }
 
