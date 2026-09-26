@@ -52,6 +52,14 @@ pub struct RuntimePropAITargetAwareness {
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropLocomotionScale(pub f32);
 
+/// Live creature capsule measured from the model at spawn. Rebuilt with the
+/// physics body after loading, so AI sensing uses the same vertical geometry.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropCreatureCapsule {
+    pub center_y: f32,
+    pub height: f32,
+}
+
 /// Runtime changes to an object's authored metaproperty relations.
 ///
 /// The effective Dark properties themselves are saved through the ordinary
