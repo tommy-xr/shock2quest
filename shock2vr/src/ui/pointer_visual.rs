@@ -1,4 +1,4 @@
-//! The visible half of the VR frontend pointer: a gloved hand at each tracked
+//! The visible half of the VR frontend pointer: an authored hand at each tracked
 //! controller, a beam along its aim, and a dot where the menu is being pointed.
 //!
 //! Without this a VR menu gives no feedback until an entry happens to light up,
@@ -9,14 +9,23 @@
 //! hit-tested, on the controller the menu is listening to, and the two cannot
 //! drift apart.
 
-use cgmath::{InnerSpace, Matrix4, Quaternion, Vector2, Vector3, vec3};
+use std::sync::Arc;
+
+use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Vector2, Vector3, vec3};
+#[cfg(not(test))]
+use engine::texture::{self, Texture};
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{FrontFaceWinding, SceneObject, color_material, cube},
+    scene::{BillboardMaterial, FrontFaceWinding, SceneObject, color_material, cube, quad},
+    texture::TextureTrait,
+    texture_format::{PixelFormat, RawTextureData},
 };
+#[cfg(not(test))]
+use once_cell::sync::Lazy;
 
 use crate::{
     hand_glove::{GloveRenderer, StaticHandPose},
+    hand_pose_library::{self, HandPose, LoadedPose},
     ui::{
         FrontendPointerPass, FrontendRay, VR_COMPONENT_Z_STEP, WorldPanel, canvas_to_panel_world,
     },
@@ -25,8 +34,6 @@ use crate::{
 /// How far a beam that misses the panel reaches into space. Long enough to read
 /// as "pointing somewhere", short enough not to spear the whole room.
 pub const POINTER_BEAM_MISS_LENGTH: f32 = 2.0;
-/// Beam cross-section, in metres.
-const POINTER_BEAM_THICKNESS: f32 = 0.006;
 /// Edge length of the hit dot, in metres.
 const POINTER_DOT_SIZE: f32 = 0.03;
 /// Clear air between the panel's frontmost canvas layer and the dot.
@@ -43,15 +50,14 @@ const CONTROLLER_PROXY_SIZE: Vector3<f32> = Vector3 {
     z: 0.09,
 };
 
-/// How many pieces the beam is cut into to fade along its length. Enough for
-/// the falloff to read as smoke rather than as stripes, few enough that a menu
-/// frame stays cheap on a Quest (each piece is a draw, per hand, per eye).
-pub const BEAM_SEGMENTS: usize = 6;
+/// A few soft, camera-facing wisps along the ray. Each is one transparent draw;
+/// the count is bounded for two hands and two Quest eyes.
+pub const BEAM_SEGMENTS: usize = 12;
 /// Transparency (0 = opaque) of the beam where it leaves the hand...
 const BEAM_NEAR_TRANSPARENCY: f32 = 0.35;
 /// ...and at its far end, just short of invisible.
 const BEAM_FAR_TRANSPARENCY: f32 = 0.95;
-/// Clear space left at the hand end, so the beam emerges from the glove's
+/// Clear space left at the hand end, so the beam emerges from the hand's
 /// fingertips instead of starting inside the palm. Roughly a hand's length.
 const BEAM_HAND_CLEARANCE: f32 = 0.25;
 
@@ -60,6 +66,61 @@ const BEAM_COLOR: Vector3<f32> = Vector3 {
     y: 0.8,
     z: 1.0,
 };
+
+/// A soft uneven alpha mask made once after the render context exists. The
+/// authored pointer geometry stays in [`FrontendPointerPass`]; this texture
+/// changes only its appearance, with no random per-frame particle motion.
+#[cfg(not(test))]
+static WISP_TEXTURE: Lazy<Arc<Texture>> =
+    Lazy::new(|| Arc::new(texture::init_from_memory(wisp_mask())));
+
+#[cfg(not(test))]
+fn wisp_texture() -> Arc<dyn TextureTrait> {
+    (*WISP_TEXTURE).clone()
+}
+
+// Geometry unit tests run without an OpenGL context. The mask itself is tested
+// below; this stand-in lets the same beam placement code run headlessly.
+#[cfg(test)]
+struct TestTexture;
+
+#[cfg(test)]
+impl TextureTrait for TestTexture {
+    fn bind0(&self, _: &engine::EngineRenderContext) {}
+    fn bind1(&self, _: &engine::EngineRenderContext) {}
+    fn bind_to(&self, _: &engine::EngineRenderContext, _: u32) {}
+}
+
+#[cfg(test)]
+fn wisp_texture() -> Arc<dyn TextureTrait> {
+    Arc::new(TestTexture)
+}
+
+fn wisp_mask() -> RawTextureData {
+    const SIZE: usize = 64;
+    let mut bytes = vec![0; SIZE * SIZE * 4];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let px = (x as f32 + 0.5) / SIZE as f32 * 2.0 - 1.0;
+            let py = (y as f32 + 0.5) / SIZE as f32 * 2.0 - 1.0;
+            let radius = (px * px + py * py).sqrt();
+            let softness = (1.0 - radius).max(0.0).powi(2);
+            // Low-frequency irregularity breaks the perfect round glow into a
+            // cloud. The transparent rim stays continuous, so wisps blend.
+            let cloud =
+                0.7 + 0.18 * (px * 12.0 + py * 7.0).sin() + 0.12 * (px * 19.0 - py * 13.0).sin();
+            let offset = (y * SIZE + x) * 4;
+            bytes[offset..offset + 3].copy_from_slice(&[255, 255, 255]);
+            bytes[offset + 3] = (255.0 * softness * cloud.clamp(0.0, 1.0)) as u8;
+        }
+    }
+    RawTextureData {
+        bytes,
+        width: SIZE as u32,
+        height: SIZE as u32,
+        format: PixelFormat::RGBA,
+    }
+}
 const DOT_COLOR: Vector3<f32> = Vector3 {
     x: 1.0,
     y: 1.0,
@@ -172,18 +233,11 @@ fn box_object(
     object
 }
 
-/// The faded beam for one ray, hand end first: [`BEAM_SEGMENTS`] pieces whose
-/// alpha falls off along the length.
-///
-/// Each piece draws in the engine's transparent pass (which masks depth writes
-/// for the whole pass), so the segments blend with each other and with the
-/// panel behind rather than occluding one another with their own boxes. They
-/// also cull backfaces: a double-sided box blends *twice* per pixel, which
-/// turns the authored alpha `a` into `1 - (1 - a)^2` and would make the far end
-/// read as a solid rod instead of fading out.
+/// A trail of textured wisps, brightest at the hand and thinning toward the
+/// hit. Unlike the old square boxes, their soft edges have no segment seams.
 fn beam_objects(start: Vector3<f32>, along: Vector3<f32>, length: f32) -> Vec<SceneObject> {
     // The hand fills the first stretch of the ray. A beam no longer than that
-    // would be entirely inside the glove, so there is nothing to draw - the
+    // would be entirely inside the hand, so there is nothing to draw - the
     // hand is already touching what it points at.
     if length <= BEAM_HAND_CLEARANCE {
         return Vec::new();
@@ -191,36 +245,42 @@ fn beam_objects(start: Vector3<f32>, along: Vector3<f32>, length: f32) -> Vec<Sc
     let direction = along / length;
     let drawn = length - BEAM_HAND_CLEARANCE;
     let step = drawn / BEAM_SEGMENTS as f32;
-    // `from_arc` is fine at the antiparallel extreme: cgmath falls back to an
-    // arbitrary perpendicular axis, and the beam is square in cross-section, so
-    // the free roll is invisible.
-    let aim = Quaternion::from_arc(vec3(0.0, 0.0, 1.0), direction, None);
+    let texture = wisp_texture();
+    let side = direction.cross(vec3(0.0, 1.0, 0.0));
+    let side = if side.magnitude2() < 1e-4 {
+        vec3(1.0, 0.0, 0.0)
+    } else {
+        side.normalize()
+    };
 
     (0..BEAM_SEGMENTS)
         .map(|index| {
-            let center = start + direction * (BEAM_HAND_CLEARANCE + step * (index as f32 + 0.5));
-            let mut object = box_object(
-                center,
-                vec3(POINTER_BEAM_THICKNESS, POINTER_BEAM_THICKNESS, step),
-                aim,
-                BEAM_COLOR,
-            );
-            object.set_transparency(Some(beam_segment_transparency(index, BEAM_SEGMENTS)));
-            // The cube's outward faces are clockwise as seen from outside.
-            object.set_backface_culling(Some(FrontFaceWinding::Clockwise));
+            let t = (index as f32 + 0.5) / BEAM_SEGMENTS as f32;
+            let drift = (index as f32 * 2.31).sin() * 0.012 * (1.0 - t);
+            let center = start
+                + direction * (BEAM_HAND_CLEARANCE + step * (index as f32 + 0.5))
+                + side * drift;
+            let size = 0.11 * (1.0 - t) + 0.045 * t;
+            let transparency = beam_segment_transparency(index, BEAM_SEGMENTS);
+            let material =
+                BillboardMaterial::create(texture.clone(), BEAM_COLOR, 0.4, transparency, size);
+            let mut object = SceneObject::new(material, Box::new(quad::create()));
+            object.set_transform(Matrix4::from_translation(center));
+            object.set_transparency(Some(transparency));
             object
         })
         .collect()
 }
 
-/// The visible half of the frontend pointer, including the glove model it draws
-/// the hands with.
+/// The visible half of the frontend pointer, including its authored hand poses.
 ///
-/// The glove is loaded lazily on first render (it needs the asset cache) and
-/// the outcome is kept either way, so a missing model costs one cache miss
-/// rather than one per frame - the same shape `VrInteraction` uses in game.
+/// Poses load once on first render; the skinned glove is a compatibility
+/// fallback for asset sets without the remaster's two required hand poses.
 #[derive(Default)]
 pub struct PointerVisuals {
+    /// The remaster's authored hands. An empty list means this asset set has
+    /// none, in which case the skinned glove remains a compatibility fallback.
+    hands: Option<Vec<LoadedPose>>,
     /// `None` = not tried yet; `Some(None)` = tried and the model is missing.
     glove: Option<Option<GloveRenderer>>,
     pub(crate) glove_fit: Option<crate::glove_fit::GloveFit>,
@@ -247,11 +307,21 @@ impl PointerVisuals {
         panel: &WorldPanel,
         panel_layers: usize,
     ) -> Vec<SceneObject> {
-        let glove = self
-            .glove
-            .get_or_insert_with(|| GloveRenderer::new(asset_cache))
-            .as_mut();
-        let mut objects = render_pointer_rays(
+        let hands = self
+            .hands
+            .get_or_insert_with(|| hand_pose_library::load(asset_cache));
+        let has_pointer_poses = [HandPose::Rest, HandPose::SemiClosed]
+            .into_iter()
+            .all(|pose| hands.iter().any(|hand| hand.pose == pose));
+        let glove = if !has_pointer_poses {
+            self.glove
+                .get_or_insert_with(|| GloveRenderer::new(asset_cache))
+                .as_mut()
+        } else {
+            None
+        };
+        let mut objects = render_pointer_rays_with_hands(
+            hands,
             glove,
             true,
             pass,
@@ -293,6 +363,28 @@ pub fn pointer_beams(
 /// `draw_hand` draws the fallback proxy, exactly as a missing model does at
 /// runtime; `draw_hand: false` draws no hand at all - see [`pointer_beams`]).
 fn render_pointer_rays(
+    glove: Option<&mut GloveRenderer>,
+    draw_hand: bool,
+    pass: &FrontendPointerPass,
+    canvas_size: Vector2<f32>,
+    panel: &WorldPanel,
+    panel_layers: usize,
+    glove_fit: Option<crate::glove_fit::GloveFit>,
+) -> Vec<SceneObject> {
+    render_pointer_rays_with_hands(
+        &[],
+        glove,
+        draw_hand,
+        pass,
+        canvas_size,
+        panel,
+        panel_layers,
+        glove_fit,
+    )
+}
+
+fn render_pointer_rays_with_hands(
+    hands: &[LoadedPose],
     mut glove: Option<&mut GloveRenderer>,
     draw_hand: bool,
     pass: &FrontendPointerPass,
@@ -312,27 +404,78 @@ fn render_pointer_rays(
         // no orientation to speak of, so skip the beam rather than build a NaN
         // transform - but still draw the hand and mark the hit, neither of
         // which needs one.
-        if length >= 1e-4 {
+        // A missed panel has no interaction target. The old thin boxes were
+        // nearly invisible there, but bright smoke would float over menu
+        // entries despite the relaxed hand and no hover feedback.
+        if ray.canvas_hit.is_some() && length >= 1e-4 {
             objects.extend(beam_objects(geometry.start, along, length));
         }
 
         let hand_start = objects.len();
-        match glove.as_deref_mut().filter(|_| draw_hand) {
-            Some(glove) => objects.extend(glove.render_static_hand(
-                geometry.start,
-                ray.rotation,
-                ray.handedness,
-                pointer_hand_pose(pass, index),
-            )),
-            // No glove model: keep a proxy so the player can still see where
-            // the controller is, rather than a beam growing out of nothing.
-            None if draw_hand && length >= 1e-4 => objects.push(box_object(
-                geometry.start,
-                CONTROLLER_PROXY_SIZE,
-                Quaternion::from_arc(vec3(0.0, 0.0, 1.0), along / length, None),
-                CONTROLLER_COLOR,
-            )),
-            None => {}
+        let authored_pose = match pointer_hand_pose(pass, index) {
+            StaticHandPose::Relaxed => HandPose::Rest,
+            // ATEK_H's trigger hand has an extended index and curled other
+            // fingers; it is the remaster's authored pointing silhouette.
+            StaticHandPose::Pointing => HandPose::SemiClosed,
+        };
+        if let Some(hand) = hands
+            .iter()
+            .find(|hand| hand.pose == authored_pose)
+            .filter(|_| draw_hand)
+        {
+            // The pistol's authored index points across its trigger guard,
+            // about 30 degrees left of the hand-frame axis. Turn the mesh into
+            // the ray without turning the ray itself: hover, click and dot all
+            // stay on the tracked pose from the shared pointer pass.
+            let point_yaw = if authored_pose == HandPose::SemiClosed {
+                match ray.handedness {
+                    crate::vr_config::Handedness::Right => -30.0,
+                    crate::vr_config::Handedness::Left => 30.0,
+                }
+            } else {
+                0.0
+            };
+            let anchor_x = match ray.handedness {
+                crate::vr_config::Handedness::Right => 0.04,
+                crate::vr_config::Handedness::Left => 0.09,
+            };
+            let mut hand_objects = hand.at(Matrix4::from_translation(geometry.start)
+                * Matrix4::from(ray.rotation)
+                // The remaster's weapon-hand origin lands behind and above
+                // its pointing fingertip. Seat that fingertip at the first
+                // wisp while leaving the tracked aim ray and hit dot alone.
+                * Matrix4::from_translation(vec3(anchor_x, -0.06, 0.0))
+                * Matrix4::from_angle_y(Deg(point_yaw))
+                * ray.handedness.mirror());
+            if ray.handedness == crate::vr_config::Handedness::Left {
+                // The reflected 25AE mesh reverses triangle winding.
+                for object in &mut hand_objects {
+                    let flipped = object.backface_culling().map(|winding| match winding {
+                        FrontFaceWinding::Clockwise => FrontFaceWinding::CounterClockwise,
+                        FrontFaceWinding::CounterClockwise => FrontFaceWinding::Clockwise,
+                    });
+                    object.set_backface_culling(flipped);
+                }
+            }
+            objects.extend(hand_objects);
+        } else {
+            match glove.as_deref_mut().filter(|_| draw_hand) {
+                Some(glove) => objects.extend(glove.render_static_hand(
+                    geometry.start,
+                    ray.rotation,
+                    ray.handedness,
+                    pointer_hand_pose(pass, index),
+                )),
+                // No glove model: keep a proxy so the player can still see where
+                // the controller is, rather than a beam growing out of nothing.
+                None if draw_hand && length >= 1e-4 => objects.push(box_object(
+                    geometry.start,
+                    CONTROLLER_PROXY_SIZE,
+                    Quaternion::from_arc(vec3(0.0, 0.0, 1.0), along / length, None),
+                    CONTROLLER_COLOR,
+                )),
+                None => {}
+            }
         }
 
         if let Some(fit) = glove_fit {
@@ -430,12 +573,18 @@ mod tests {
     }
 
     #[test]
-    fn a_beam_that_misses_the_panel_floats_free() {
+    fn a_missed_panel_keeps_aim_geometry_without_floating_smoke() {
         let pass = pass(hand_aimed_away(0.0), hand_aimed_away(0.0));
         let geometry = geometry(&pass, 0);
         assert_eq!(geometry.dot, None, "an off-panel ray must show no hit dot");
         assert!(
             ((geometry.end - geometry.start).magnitude() - POINTER_BEAM_MISS_LENGTH).abs() < 1e-3
+        );
+        let objects = render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS, None);
+        assert!(
+            objects
+                .iter()
+                .all(|object| object.effective_transparency().is_none())
         );
     }
 
@@ -546,11 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn every_beam_segment_is_translucent_and_single_sided() {
-        // A double-sided box blends twice per pixel, turning alpha `a` into
-        // `1 - (1 - a)^2` - the far end would read as a solid rod rather than
-        // fading out, so the authored ramp only means what it says with the
-        // inner faces culled.
+    fn every_beam_wisp_is_translucent_and_the_hit_dot_is_opaque() {
         let pass = pass(
             hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
             hand_aimed_away(0.0),
@@ -560,15 +705,25 @@ mod tests {
             .iter()
             .filter(|object| object.effective_transparency().is_some_and(|t| t > 0.0))
             .collect();
-        assert_eq!(translucent.len(), 2 * BEAM_SEGMENTS);
+        assert_eq!(translucent.len(), BEAM_SEGMENTS);
         assert!(
             translucent
                 .iter()
-                .all(|object| object.backface_culling().is_some())
+                .all(|object| object.backface_culling().is_none())
         );
         // The dot stays opaque - it is the focus point.
         let dot = objects.last().expect("a dot must be drawn");
         assert_eq!(dot.effective_transparency(), None);
+    }
+
+    #[test]
+    fn wisp_mask_has_soft_uneven_edges() {
+        let mask = wisp_mask();
+        let alpha = |x: usize, y: usize| mask.bytes[(y * 64 + x) * 4 + 3];
+        assert_eq!(alpha(0, 0), 0);
+        assert!(alpha(32, 32) > alpha(32, 8));
+        assert!(alpha(32, 8) > 0);
+        assert_ne!(alpha(20, 32), alpha(32, 20));
     }
 
     #[test]

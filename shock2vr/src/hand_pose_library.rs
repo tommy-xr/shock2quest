@@ -91,17 +91,23 @@ struct PoseSource {
 /// `VirtualHand`).
 pub struct LoadedPose {
     pub pose: HandPose,
+    pub source_model: &'static str,
     objects: Vec<SceneObject>,
 }
 
 impl LoadedPose {
     /// The pose's scene objects at a hand's world transform.
     pub fn at(&self, world: Matrix4<f32>) -> Vec<SceneObject> {
+        let tag = std::rc::Rc::new(engine::scene::SceneObjectDebugTag {
+            model: Some(self.source_model.to_owned()),
+            ..Default::default()
+        });
         self.objects
             .iter()
             .map(|object| {
                 let mut clone = object.clone();
                 clone.set_transform(world * object.get_transform());
+                clone.set_debug_tag(Some(tag.clone()));
                 clone
             })
             .collect()
@@ -136,7 +142,11 @@ fn load_pose(asset_cache: &mut AssetCache, pose: HandPose) -> Option<LoadedPose>
         })
         .collect();
 
-    Some(LoadedPose { pose, objects })
+    Some(LoadedPose {
+        pose,
+        source_model: source.model,
+        objects,
+    })
 }
 
 /// Maps a hand's authored frame onto the hand origin.
