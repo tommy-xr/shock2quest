@@ -39,6 +39,14 @@ pub const INVISO_TEMPLATE_ID: i32 = -3157;
 /// their health (see `scripts::berserk`).
 pub const BERSERK_TEMPLATE_ID: i32 = -3155;
 
+/// `Might` - Psychogenic Strength (tier 2 sustained power): grants the
+/// authored `P$PsiPower.data[0]` Strength bonus until the power expires.
+pub const MIGHT_TEMPLATE_ID: i32 = -1162;
+
+/// Source key shared by activation and explicit deactivation. The stat model
+/// replaces a modifier with the same source on re-cast rather than stacking it.
+pub const MIGHT_MODIFIER_SOURCE: &str = "psi:might";
+
 /// `Stability` - Anti-entropic Field (tier 2 sustained power): while active,
 /// the player's guns neither wear nor break (see `scripts::weapon_script`).
 pub const STABILITY_TEMPLATE_ID: i32 = -3148;
