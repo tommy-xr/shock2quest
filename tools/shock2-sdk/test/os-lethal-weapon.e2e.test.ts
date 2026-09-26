@@ -30,11 +30,14 @@ test("classic Lethal Weapon acquired at a machine increases melee damage after a
     return before - after;
   }
   const baseline = await shoot();
-  assert.equal(baseline, 6);
+  // The droid halves authored Wrench WeaponBash (9) before integer HP loss.
+  assert.equal(baseline, Math.round(9 * 0.5));
   await game.transitionLevel("medsci2.mis");
   await acquireOsUpgrade(game, "Lethal Weapon");
   await game.transitionLevel("earth.mis");
   const upgraded = await shoot();
-  assert.equal(upgraded, Math.round(baseline * 1.35), JSON.stringify({ baseline, upgraded }));
+  // Lethal Weapon scales the authored stim before the droid's reduction and
+  // rounding, rather than scaling the already-rounded baseline HP loss.
+  assert.equal(upgraded, Math.round(9 * 1.35 * 0.5), JSON.stringify({ baseline, upgraded }));
   assert.ok(upgraded > baseline);
 });

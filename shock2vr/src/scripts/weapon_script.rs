@@ -40,8 +40,6 @@ const FLAT_MUZZLE_CLEARANCE: f32 = SCALE_FACTOR;
 /// (`P$Melee Typ` is a type index), so borrow the one distance that IS
 /// retail-derived: if the player can frob it, the swing can reach it.
 const MELEE_RANGE: f32 = crate::virtual_hand::FROB_REACH;
-/// Damage dealt by a flat melee hit. TODO: derive from the weapon's `Melee Typ`.
-const MELEE_DAMAGE: f32 = 6.0;
 
 /// How far a gunshot carries to alert AIs (50 Dark feet). One value for all
 /// guns for now; per-weapon loudness is a follow-up.
@@ -744,24 +742,26 @@ pub(super) fn flat_melee_hit(
         // contacts; the flat path resolves its hit by raycast, so it has to
         // say so itself.
         let sound = play_impact_sound(world, weapon_id, target, hit_point.to_vec());
+        let amount = if crate::psi_sword::active(world, weapon_id) {
+            crate::mission::stim_response::contact_stim_damage_with_bonus(
+                world,
+                crate::psi_sword::WEAPON,
+                target,
+                crate::scripts::melee_weapon::player_melee_damage_scale(world),
+                bonus,
+            )
+        } else {
+            crate::scripts::melee_weapon::authored_contact_damage(world, weapon_id, target, bonus)
+                .unwrap_or(0.0)
+        };
+        if amount <= 0.0 {
+            return sound;
+        }
         let damage = Effect::Send {
             msg: Message {
                 to: target,
                 payload: MessagePayload::Damage {
-                    // Adrenaline Overproduction scales the player's melee
-                    // damage while it is active (1.0 otherwise).
-                    amount: if crate::psi_sword::active(world, weapon_id) {
-                        crate::mission::stim_response::contact_stim_damage_with_bonus(
-                            world,
-                            crate::psi_sword::WEAPON,
-                            target,
-                            crate::scripts::melee_weapon::player_melee_damage_scale(world),
-                            bonus,
-                        )
-                    } else {
-                        (MELEE_DAMAGE + bonus)
-                            * crate::scripts::melee_weapon::player_melee_damage_scale(world)
-                    },
+                    amount,
                     // Swing direction + contact point seed the victim's
                     // death-ragdoll reaction. No bone: melee resolves a hitbox
                     // proxy to its parent BEFORE sending (so HitBoxScript
@@ -1090,7 +1090,10 @@ mod tests {
     }
 
     use cgmath::{Quaternion, point3, vec3};
-    use dark::{motion::MotionFlags, properties::Links};
+    use dark::{
+        motion::MotionFlags,
+        properties::{Link, Links, PropTemplateId, ReceptronEffect, ReceptronOptions, ToLink},
+    };
 
     use crate::physics::{CollisionGroup, PhysicsWorld};
 
@@ -1138,6 +1141,7 @@ mod tests {
             physics.create_player(vec3(10.0, 10.0, 10.0), EntityId::from_inner(1000).unwrap());
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
         let weapon = world.add_entity(());
+        add_authored_melee_response(&mut world, weapon, grub);
         let strike = |x, y| {
             flat_melee_hit(
                 &physics,
@@ -1153,6 +1157,29 @@ mod tests {
         assert!(includes_damage_to(strike(0.4, 0.0), grub));
     }
 
+    fn add_authored_melee_response(world: &mut World, weapon: EntityId, target: EntityId) {
+        world.add_unique(crate::mission::stim_response::GlobalContactStims(
+            std::collections::HashMap::from([(-928, vec![(-3058, 9.0)])]),
+        ));
+        world.add_component(weapon, PropTemplateId { template_id: -928 });
+        world.add_component(
+            target,
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: -3058,
+                    to_entity_id: None,
+                    link: Link::Receptron(ReceptronOptions {
+                        order: 16,
+                        effect: ReceptronEffect::Damage {
+                            multiplier: 1.0,
+                            use_intensity: true,
+                        },
+                    }),
+                }],
+            },
+        );
+    }
+
     fn flat_melee_fixture() -> (World, PhysicsWorld, EntityId, EntityId) {
         let mut world = World::new();
         let weapon = world.add_entity((
@@ -1163,6 +1190,7 @@ mod tests {
             },
         ));
         let target = world.add_entity(());
+        add_authored_melee_response(&mut world, weapon, target);
 
         let mut physics = PhysicsWorld::new();
         physics.add_kinematic(
@@ -1197,6 +1225,28 @@ mod tests {
         );
 
         (world, physics, weapon, target)
+    }
+
+    #[test]
+    fn flat_melee_does_not_damage_a_grate_without_weapon_bash_receptrons() {
+        let (mut world, physics, weapon, grate) = flat_melee_fixture();
+        world.add_component(grate, Links::empty());
+        world.add_component(grate, PropTemplateId { template_id: -1328 });
+        assert!(
+            !includes_damage_to(
+                flat_melee_hit(
+                    &physics,
+                    RuntimePropFlatAim {
+                        origin: point3(0.0, 0.0, 0.0),
+                        forward: vec3(0.0, 0.0, 1.0),
+                    },
+                    &world,
+                    weapon,
+                ),
+                grate,
+            ),
+            "a grate with no WeaponBash receptron must survive a flat wrench swing"
+        );
     }
 
     /// A flat melee swing that lands must be audible: the weapon's collision
@@ -1561,9 +1611,7 @@ mod tests {
                 _ => None,
             }
         }
-        assert!(
-            (damage(&effect, target).expect("swing hit") - MELEE_DAMAGE * 1.35).abs() < 0.00001
-        );
+        assert!((damage(&effect, target).expect("swing hit") - 9.0 * 1.35).abs() < 0.00001);
     }
 
     #[test]
@@ -1886,6 +1934,7 @@ mod tests {
 
         let near = world.add_entity(PropWeaponType(0));
         let weapon = world.add_entity(());
+        add_authored_melee_response(&mut world, weapon, near);
         physics.add_kinematic(
             near,
             vec3(0.0, 0.0, -MELEE_RANGE / 2.0),
