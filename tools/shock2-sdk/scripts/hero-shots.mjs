@@ -54,6 +54,23 @@ const SHOTS = [
     subject: "Protocol Droid",
     loadout: { right: "Laser Pistol", left: -247 },
     hands: { right: [0.2, -0.2, -0.5], left: [-0.14, -0.22, -0.5] },
+    // Psi needs a psionic character; the amp casts Cryokinesis on release.
+    stats: { psionic_ability: 6, psi_tier: 5 },
+    // Cast from the amp, then fire the laser pistol twice.
+    clip: {
+      seconds: 2.2,
+      hands: {
+        left: [
+          { t: 0, value: [-0.2, -0.35, -0.4] },
+          { t: 0.5, value: [-0.14, -0.22, -0.5] },
+        ],
+        right: [
+          { t: 0, value: REST_RIGHT },
+          { t: 0.9, value: [0.2, -0.2, -0.5] },
+        ],
+      },
+      trigger: { left: [0.7], right: [1.3, 1.7] },
+    },
   },
   {
     // Single weapon.
@@ -101,6 +118,7 @@ for (const shot of shots) {
     repoRoot,
   });
   try {
+    if (shot.stats) await game.player.setStats(shot.stats);
     const { entities } = await game.entities.list({ filter: shot.subject, limit: 50 });
     const dist = (e) => Math.hypot(...e.position.map((v, i) => v - shot.player[i]));
     const subject = entities.sort((a, b) => dist(a) - dist(b))[0];
@@ -115,7 +133,7 @@ for (const shot of shots) {
     await game.player.teleport({ x, y, z });
     await game.step({ frames: 5 });
     // Aim where the subject is now; it may have moved while we squared up.
-    const target = await torso(game, subject.id);
+    const target = await aimPoint(game, subject.id, "torso");
     await aimHandsAt(game, target, shot.hands);
     await game.step({ frames: 2 });
     // Hold the grips: a VR hand releases whatever it holds when it lets go.
@@ -142,11 +160,12 @@ for (const shot of shots) {
   }
 }
 
-/** The subject's live torso aim point: an entity's origin can sit well off
- * its body (a monkey's is above its back). */
-async function torso(game, id) {
+/** The subject's live aim point of a class (falling back to its origin, which
+ * can sit well off its body - a monkey's is above its back). */
+async function aimPoint(game, id, classification) {
   const detail = await game.entities.detail(id);
-  return detail.aim_points?.find((p) => p.classification === "torso")?.position ?? detail.position;
+  const point = (c) => detail.aim_points?.find((p) => p.classification === c)?.position;
+  return point(classification) ?? point("torso") ?? detail.position;
 }
 
 /**
@@ -161,16 +180,19 @@ async function recordClip(game, shot, subjectId) {
   try {
     for (let frame = 0; frame < frames; frame++) {
       const t = frame / 60;
-      // Track the subject; the aim point drifts a few centimetres around it.
+      // Track the subject: eyes on its head (a charging creature's torso would
+      // pitch the view into the floor), hands on its torso, both drifting.
       const drift = sway(1, t, 0.04);
-      const look = (await torso(game, subjectId)).map((v, i) => v + drift[i]);
+      const look = (await aimPoint(game, subjectId, "head")).map((v, i) => v + drift[i]);
+      const body = (await aimPoint(game, subjectId, "torso")).map((v, i) => v + drift[i]);
       const hands = Object.fromEntries(
         Object.entries(clip.hands).map(([hand, keys]) => {
           const tremor = sway(hand === "right" ? 2 : 3, t, 0.008, 0.6);
           return [hand, sampleTrack(keys, t).map((v, i) => v + tremor[i])];
         }),
       );
-      await aimHandsAt(game, look, hands);
+      const aims = Object.fromEntries(Object.keys(clip.hands).map((hand) => [hand, body]));
+      await aimHandsAt(game, look, hands, aims);
       for (const [hand, pulls] of Object.entries(clip.trigger ?? {})) {
         const pulled = pulls.some((at) => t >= at && t < at + 0.12);
         await game.input.set(`${hand}_hand.trigger`, pulled ? 1 : 0);

@@ -19,7 +19,7 @@ Once installed, copy `sshock2.kpf` and the `mods/` folder from it - see [DEVELOP
 <img src="screenshots/hero/hydro1.png" alt="Hydroponics: shotgun on a hybrid" width="400"/> <img src="screenshots/hero/medsci1.png" alt="Med/Sci: wrench and pistol against a hybrid" width="400"/>
 <img src="screenshots/hero/ops2.png" alt="Operations: psi amp and laser pistol against a protocol droid" width="400"/> <img src="screenshots/hero/rec1.png" alt="Recreation: pistol on a monkey" width="400"/>
 
-<img src="screenshots/hero/rec1.gif" alt="Recreation: raising a pistol and firing at a charging monkey" width="400"/>
+<img src="screenshots/hero/rec1.gif" alt="Recreation: raising a pistol and firing at a charging monkey" width="400"/> <img src="screenshots/hero/ops2.gif" alt="Operations: casting cryokinesis from the psi amp, then firing the laser pistol" width="400"/>
 
 Regenerate with `node scripts/hero-shots.mjs` from `tools/shock2-sdk` (after `npm run build`).
 
