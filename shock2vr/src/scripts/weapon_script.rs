@@ -737,6 +737,7 @@ pub(super) fn flat_melee_hit(
     if let Some(RayCastResult {
         maybe_entity_id: Some(target),
         hit_point,
+        surface_material,
         ..
     }) = hit
     {
@@ -746,7 +747,13 @@ pub(super) fn flat_melee_hit(
         // `hwrefle*`). The VR physical path already does this from real
         // contacts; the flat path resolves its hit by raycast, so it has to
         // say so itself.
-        let sound = play_impact_sound(world, weapon_id, target, hit_point.to_vec());
+        let sound = play_impact_sound(
+            world,
+            weapon_id,
+            target,
+            hit_point.to_vec(),
+            surface_material.and_then(|material| physics.surface_material_name(material)),
+        );
         let amount = if crate::psi_sword::active(world, weapon_id) {
             crate::mission::stim_response::contact_stim_damage_with_bonus(
                 world,

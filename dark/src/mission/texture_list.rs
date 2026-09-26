@@ -1,5 +1,5 @@
 use crate::Gamesys;
-use crate::properties::{AnimTexFlags, PropAnimTex, PropRenderType, RenderType};
+use crate::properties::{AnimTexFlags, PropAnimTex, PropMaterial, PropRenderType, RenderType};
 use crate::ss2_chunk_file_reader::ChunkFileTableOfContents;
 use crate::ss2_entity_info::{self, SystemShock2EntityInfo};
 use byteorder::ReadBytesExt;
@@ -24,6 +24,19 @@ pub struct SystemShock2Texture {
     pub texture_filename: String,
     pub render_type: RenderType,
     pub animation_info: Option<TextureAnimationInfo>,
+    /// Sound-schema material tag for this surface ("metal", "fabric", ...),
+    /// from the texture archetype's inherited `PropMaterial`. `None` when the
+    /// texture has no archetype entry, or its material has no tag.
+    pub material: Option<String>,
+}
+
+/// What a texture's `t_fam/<family>/<name>` archetype contributes to the
+/// texture entry it names.
+#[derive(Clone, Debug)]
+struct TextureArchetypeInfo {
+    render_type: RenderType,
+    animation_info: Option<TextureAnimationInfo>,
+    material: Option<String>,
 }
 
 pub struct TextureList(pub Vec<SystemShock2Texture>);
@@ -49,7 +62,7 @@ impl TextureList {
 fn read_txlist_chunk<T: io::Read + io::Seek>(
     table_of_contents: &ChunkFileTableOfContents,
     reader: &mut T,
-    name_to_info: HashMap<String, (RenderType, Option<TextureAnimationInfo>)>,
+    name_to_info: HashMap<String, TextureArchetypeInfo>,
 ) -> TextureList {
     let txlist = table_of_contents
         .get_chunk("TXLIST".to_string())
@@ -84,13 +97,17 @@ fn read_txlist_chunk<T: io::Read + io::Seek>(
 
         let entity_name = format!("t_fam/{}/{}", family, name);
 
-        let (render_type, maybe_animation_info) = {
+        let (render_type, maybe_animation_info, material) = {
             if let Some(info) = name_to_info.get(&entity_name) {
                 info!("texture info for: {} is {:?}", entity_name, info);
-                (info.0.clone(), info.1.clone())
+                (
+                    info.render_type.clone(),
+                    info.animation_info.clone(),
+                    info.material.clone(),
+                )
             } else {
                 warn!("no texture info for: {}", entity_name);
-                (RenderType::Normal, None)
+                (RenderType::Normal, None, None)
             }
         };
 
@@ -99,6 +116,7 @@ fn read_txlist_chunk<T: io::Read + io::Seek>(
             texture_filename: name,
             render_type,
             animation_info: maybe_animation_info,
+            material,
         })
     }
     TextureList(textures)
@@ -108,7 +126,7 @@ fn read_texture_archetypes(
     obj_texture_families: Vec<(String, i32)>,
     entity_info: &SystemShock2EntityInfo,
     gamesys: &Gamesys,
-) -> HashMap<String, (RenderType, Option<TextureAnimationInfo>)> {
+) -> HashMap<String, TextureArchetypeInfo> {
     let mut world = World::new();
     let name_map_override = HashMap::new();
 
@@ -129,6 +147,7 @@ fn read_texture_archetypes(
     for (family_name, id) in &obj_texture_families {
         let v_render_type = world.borrow::<View<PropRenderType>>().unwrap();
         let v_anim_tex = world.borrow::<View<PropAnimTex>>().unwrap();
+        let v_material = world.borrow::<View<PropMaterial>>().unwrap();
 
         let maybe_entity_id = template_to_entity_id.get(id);
         if let Some(entity_id) = maybe_entity_id {
@@ -152,9 +171,21 @@ fn read_texture_archetypes(
                     None
                 }
             };
+            // The hydrated entity carries the *resolved* material: props are
+            // applied most-distant-ancestor first, so a `MatMetal`-style
+            // metaproperty overwrites the `Texture` base archetype's default.
+            let material = v_material
+                .get(*entity_id)
+                .ok()
+                .and_then(|prop_material| prop_material.tag());
+
             name_to_info.insert(
                 family_name.clone(),
-                (render_type, maybe_texture_animation_info),
+                TextureArchetypeInfo {
+                    render_type,
+                    animation_info: maybe_texture_animation_info,
+                    material,
+                },
             );
 
             // if let Ok(anim_tex) = maybe_anim_tex {

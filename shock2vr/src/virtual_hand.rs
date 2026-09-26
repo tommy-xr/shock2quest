@@ -482,6 +482,7 @@ impl VirtualHand {
                 hit_normal: _,
                 maybe_entity_id: Some(to_entity_id),
                 maybe_rigid_body_handle: _,
+                surface_material: _,
                 is_sensor: _,
             }) => effs.push(VirtualHandEffect::OutMessage {
                 message: Message {
@@ -625,6 +626,7 @@ fn handle_empty_hand_state(
             hit_normal: _,
             maybe_entity_id: Some(entity),
             maybe_rigid_body_handle: _,
+            surface_material: _,
             is_sensor: _,
         }) = result
         {
@@ -661,6 +663,7 @@ fn handle_empty_hand_state(
             hit_normal: _,
             maybe_entity_id: Some(entity_id),
             maybe_rigid_body_handle: Some(_),
+            surface_material: _,
             is_sensor: _,
         }) = result
         {

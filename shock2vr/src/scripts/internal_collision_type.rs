@@ -158,7 +158,15 @@ pub(super) fn terminal_impact_effects(
     // Impact sound (material-tagged collision schema); whether it plays at all
     // is the caller's decision.
     if play_sound {
-        effects.push(play_impact_sound(world, entity_id, with, position.to_vec()));
+        effects.push(play_impact_sound(
+            world,
+            entity_id,
+            with,
+            position.to_vec(),
+            contact
+                .and_then(|contact| contact.surface_material)
+                .and_then(|material| physics.surface_material_name(material)),
+        ));
     }
 
     Effect::Multiple(effects)
