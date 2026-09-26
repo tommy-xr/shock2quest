@@ -1,17 +1,9 @@
 use dark::properties::PropStackCount;
-use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
 
 use super::{Effect, MessagePayload, Script};
-
-/// Retail's fallback "linebeep" cue reused as the nanite pickup sound. There
-/// is no dedicated retail nanite-pickup cue identified in this port's sound
-/// data yet, so this mirrors the `LOG_PICKUP_SOUND` fallback used by
-/// `scripts::gui::media` for the same reason - see that module for the
-/// precedent.
-const NANITE_PICKUP_SOUND: &str = "linebeep";
 
 /// Derived script attached to every world nanite pickup (see
 /// `mission::entity_creator` for the identification), mirroring
@@ -59,12 +51,6 @@ impl Script for InternalNanitesScript {
                 Effect::Combined {
                     effects: vec![
                         Effect::AwardNanites { amount },
-                        Effect::PlaySound {
-                            handle: AudioHandle::new(),
-                            source: Some(entity_id),
-                            name: NANITE_PICKUP_SOUND.to_owned(),
-                            spatial: false,
-                        },
                         Effect::DestroyEntity { entity_id },
                     ],
                 }
@@ -80,7 +66,7 @@ mod tests {
     use dark::properties::PropStackCount;
 
     #[test]
-    fn frob_awards_nanites_plays_a_sound_and_destroys_the_pickup() {
+    fn frob_awards_nanites_and_destroys_the_pickup() {
         let mut world = World::new();
         let entity = world.add_entity(PropStackCount(20));
 
@@ -99,9 +85,6 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Effect::AwardNanites { amount } if *amount == 20))
         );
-        assert!(effects.iter().any(
-            |e| matches!(e, Effect::PlaySound { source: Some(source), .. } if *source == entity)
-        ));
         assert!(
             effects
                 .iter()

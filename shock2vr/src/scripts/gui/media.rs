@@ -10,7 +10,6 @@
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::PropLog;
-use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use super::PanelText;
@@ -19,22 +18,6 @@ use crate::quest_info::QuestInfo;
 use crate::runtime_props::RuntimePropLogData;
 use crate::ui::Rect;
 
-/// Acknowledgement cue played when a disc is collected.
-///
-/// This is the original's generic **HUD-message beep**, not a log or pickup
-/// sound. Retail posts an on-screen "Picked up log: <name>" line, and the
-/// overlay-text system plays `linebeep` unconditionally for every message it
-/// posts; that beep is the only audio a log pickup produces. The port has no
-/// overlay-text facility yet, so the cue is fired here as a stand-in.
-///
-/// When that facility lands (#916), this moves with it: `linebeep` belongs to
-/// posting a message, not to collecting a log. Note the original does *not*
-/// play its item-pickup cue (`pickup_item`) for discs - that fires only on the
-/// frob path that moves an object into the inventory, and `Audio Log` (-76)
-/// overrides `FrobInfo` to `world_action: SCRIPT`, dropping the `MOVE` bit it
-/// would inherit from `Goodies` (-49). Compare `cargo dq templates 76` with
-/// `cargo dq templates 49`.
-const LOG_PICKUP_SOUND: &str = "linebeep";
 use crate::scripts::{
     Effect, MessagePayload,
     script_util::{send_to_all_switch_links, set_quest_bit_effect},
@@ -292,13 +275,6 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         // transcript audio (`LOG{deck}{log}`) belongs to playback, which the
         // player triggers explicitly via `InputAction::ReadLastUnreadLog` - in
         // the original the call that would play it on pickup is commented out.
-        // See `LOG_PICKUP_SOUND` for why the cue here is a deviation.
-        let audio = Effect::PlaySound {
-            handle: AudioHandle::new(),
-            source: Some(entity_id),
-            name: LOG_PICKUP_SOUND.to_owned(),
-            spatial: false,
-        };
         let collect = Effect::CollectLog {
             entity_id,
             deck,
@@ -323,7 +299,7 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         let quest_bit = set_quest_bit_effect(world, entity_id)
             .filter(|effect| !is_downgrade(world, effect))
             .unwrap_or(Effect::NoEffect);
-        Effect::combine(vec![collect, audio, switchlinks, quest_bit])
+        Effect::combine(vec![collect, switchlinks, quest_bit])
     }
 
     /// Collecting a log never opens the reader. The original files the entry

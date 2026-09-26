@@ -101,6 +101,12 @@ pub enum VirtualHandEffect {
     HoldItem {
         entity_id: EntityId,
     },
+    /// A successful world-to-player take. Emitted after HoldItem/StoreItem so
+    /// the mission can show the pickup line and sounds only once possession
+    /// actually changed; equipping or re-storing a carried item never emits it.
+    ReportWorldPickup {
+        entity_id: EntityId,
+    },
     /// Move an item into the player's backpack - a flat world pickup of
     /// ordinary loot, the weapon a wield swap displaced, or a VR hand opened
     /// over the cyber interface's inventory strip. VR's ordinary release is
@@ -667,6 +673,7 @@ fn handle_empty_hand_state(
             let needs_scripted_frob = target.scripted;
             if Some(entity_id) != held_by_other_hand && target.grabbable {
                 msgs.push(VirtualHandEffect::HoldItem { entity_id });
+                msgs.push(VirtualHandEffect::ReportWorldPickup { entity_id });
 
                 next_hand_state = HandState::Grabbing { entity_id };
             } else if Some(entity_id) != held_by_other_hand
