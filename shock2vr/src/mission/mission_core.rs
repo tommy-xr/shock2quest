@@ -3139,6 +3139,9 @@ impl MissionCore {
         world.add_unique(
             crate::mission::stim_response::GlobalContactStims::from_entity_info(&entity_info_rc),
         );
+        world.add_unique(crate::psi::PsychoReflectiveScreenFactor::from_entity_info(
+            &entity_info_rc,
+        ));
         world.add_unique(crate::scripts::immolate::ImmolateAura::from_entity_info(
             &entity_info_rc,
         ));
