@@ -469,6 +469,14 @@ mod tests {
     }
 
     #[test]
+    fn quest_input_recording_is_the_right_stick_click() {
+        assert_eq!(
+            InputAction::ToggleInputRecording.quest_touch_click_path(),
+            Some("/user/hand/right/input/thumbstick/click")
+        );
+    }
+
+    #[test]
     fn quest_touch_click_paths_are_unique() {
         let mut paths: Vec<&'static str> = InputAction::all()
             .iter()
