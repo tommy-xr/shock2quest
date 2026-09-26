@@ -5798,6 +5798,15 @@ impl MissionCore {
 
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
+        let reserved_releases: Vec<_> = store
+            .iter()
+            .map(|(entity, _)| *entity)
+            .chain(collect.iter().copied())
+            .chain(holster_actions.iter().filter_map(|action| match action {
+                Some(super::holsters::Action::Store { entity, .. }) => Some(*entity),
+                _ => None,
+            }))
+            .collect();
         let mut interaction_msgs = self.interaction.update(&InteractionContext {
             physics: &self.physics,
             world: &self.world,
@@ -5809,6 +5818,7 @@ impl MissionCore {
             player_pos,
             player_rotation: player_rot,
             flat_eye: self.flat_eye.unwrap_or(neutral_eye),
+            reserved_releases: &reserved_releases,
         });
         self.interaction.fit_held_items(
             &self.world,
@@ -18594,6 +18604,7 @@ mod held_item_restore_tests {
                 flat_eye: death_camera::EyePose::flat(1.04, Quaternion::new(1.0, 0.0, 0.0, 0.0)),
                 step_dt: 1.0 / 60.0,
                 support_enabled: false,
+                reserved_releases: &[],
             });
             assert_eq!(interaction.held_entities(), (Some(left), Some(right)));
             assert!(
@@ -18614,6 +18625,7 @@ mod held_item_restore_tests {
                 flat_eye: death_camera::EyePose::flat(1.04, Quaternion::new(1.0, 0.0, 0.0, 0.0)),
                 step_dt: 1.0 / 60.0,
                 support_enabled: false,
+                reserved_releases: &[],
             });
             assert_eq!(
                 effects

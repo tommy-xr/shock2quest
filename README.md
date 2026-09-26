@@ -75,6 +75,9 @@ However, you can play with a keyboard and a mouse, using the following hard-code
   Draw your personal access card from the belt buckle to scan credential
   readers and machines. Release it to return it to the belt. Scanning a shop or
   trainer opens its interface; purchases still require an explicit selection.
+- Quest VR: pass an object between hands by holding grip with the empty hand
+  within about 30 cm of the other hand, then releasing the hand carrying it.
+  The receiving hand can already be squeezed; no second squeeze is needed.
 - Quest VR: reload by hand. Pull a clip out of the cyber interface's inventory
   strip with your free hand and bring it to the gun the other hand is holding -
   the clip goes in and the weapon is loaded. A clip of a different ammo type

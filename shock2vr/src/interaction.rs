@@ -41,6 +41,8 @@ pub struct InteractionContext<'a> {
     pub flat_eye: crate::death_camera::EyePose,
     pub step_dt: f32,
     pub support_enabled: bool,
+    /// Releases already claimed by inventory or body storage cannot be handed off.
+    pub reserved_releases: &'a [EntityId],
 }
 
 /// Read-only per-frame inputs for the VR hand-climb resolve. Separate from
@@ -388,6 +390,91 @@ impl Default for VrInteraction {
 }
 
 impl VrInteraction {
+    /// Resolve a deliberate nearby catch before either hand can drop or ray-grab.
+    fn try_handoff(&mut self, ctx: &InteractionContext) -> Option<Vec<VirtualHandEffect>> {
+        // Match the nearby tool-use reach. Use this frame's controller poses,
+        // not last frame's hands or a weapon displaced by world collision.
+        const HANDOFF_REACH: f32 = 0.3;
+        if ctx
+            .input
+            .pose_tracking
+            .is_some_and(|p| !p.head || !p.hands[0] || !p.hands[1])
+        {
+            return None;
+        }
+        let inputs = [&ctx.input.left_hand, &ctx.input.right_hand];
+        let poses = inputs.map(|input| GripPose {
+            position: hand_world_position(ctx.player_pos, ctx.player_rotation, input.position),
+            rotation: ctx.player_rotation * input.rotation,
+        });
+        if poses.iter().any(|pose| !pose.is_tracked())
+            || (poses[0].position - poses[1].position).magnitude() > HANDOFF_REACH
+        {
+            return None;
+        }
+        let hands = [&self.left_hand, &self.right_hand];
+        let giver = (0..2).find(|&i| {
+            hands[i].released_entity(inputs[i]).is_some_and(|entity| {
+                !ctx.reserved_releases.contains(&entity)
+                    && hands[1 - i].get_held_entity().is_none()
+                    && inputs[1 - i].squeeze_value > 0.5
+                    && !self
+                        .hand_climb
+                        .grips()
+                        .any(|(hand, _)| crate::vr_config::hand_slot(hand) == 1 - i)
+            })
+        })?;
+        let receiver = 1 - giver;
+        let entity = hands[giver].get_held_entity()?;
+        // Refresh both inputs without world interactions: an already-held
+        // trigger must not fire/frob the newly received object. Reset motion so
+        // a later throw belongs to the receiving hand, not its approach.
+        let emptied = hands[giver].destroy_entity(entity).update_suppressed(
+            ctx.player_pos,
+            ctx.player_rotation,
+            inputs[giver],
+        );
+        let received = hands[receiver]
+            .update_suppressed(ctx.player_pos, ctx.player_rotation, inputs[receiver])
+            .grab_entity(ctx.world, entity);
+        let (received, mut pose_effects) = VirtualHand::update(
+            &received,
+            ctx.physics,
+            ctx.world,
+            ctx.player_pos,
+            ctx.player_rotation,
+            inputs[receiver],
+            None,
+            poses[giver].position,
+            ctx.step_dt,
+        );
+        if giver == 0 {
+            self.left_hand = emptied;
+            self.right_hand = received;
+        } else {
+            self.right_hand = emptied;
+            self.left_hand = received;
+        }
+        self.support = None;
+        self.support_preview = None;
+        self.support_blocked = [false; 2];
+        self.visual_hands = [None, None];
+
+        // Keep script release/acquisition semantics, but never create a loose
+        // body, seed a throw, or offer this object for consumption elsewhere.
+        let mut effects = vec![
+            VirtualHandEffect::OutMessage {
+                message: crate::scripts::Message {
+                    to: entity,
+                    payload: crate::scripts::MessagePayload::Drop,
+                },
+            },
+            VirtualHandEffect::HoldItem { entity_id: entity },
+        ];
+        effects.append(&mut pose_effects);
+        Some(effects)
+    }
+
     fn hand_poses(&self) -> [GripPose; 2] {
         [&self.left_hand, &self.right_hand].map(|hand| GripPose {
             position: hand.get_position(),
@@ -1179,6 +1266,9 @@ impl PlayerInteraction for VrInteraction {
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
         self.update_support(ctx);
+        if let Some(effects) = self.try_handoff(ctx) {
+            return effects;
+        }
         for (i, hand) in [&mut self.left_hand, &mut self.right_hand]
             .into_iter()
             .enumerate()
@@ -1769,6 +1859,7 @@ mod tests {
             flat_eye: crate::death_camera::EyePose::flat(1.04, identity()),
             step_dt: 1.0 / 60.0,
             support_enabled: true,
+            reserved_releases: &[],
         }
     }
 
@@ -2113,7 +2204,10 @@ mod tests {
         // The release may be rewritten into a backpack deposit by the caller.
         // Until effects remove its body, the left hand must not steal it.
         input.right_hand.squeeze_value = 0.0;
-        let effects = interaction.update(&context(&world, &physics, &input));
+        let reserved = [item];
+        let mut ctx = context(&world, &physics, &input);
+        ctx.reserved_releases = &reserved;
+        let effects = interaction.update(&ctx);
         assert_eq!(interaction.held_entities(), (None, None));
         assert!(effects.iter().any(|effect| matches!(
             effect, VirtualHandEffect::DropItem { entity_id, .. } if *entity_id == item
@@ -2121,6 +2215,175 @@ mod tests {
         assert!(!effects.iter().any(|effect| matches!(
             effect, VirtualHandEffect::HoldItem { entity_id } if *entity_id == item
         )));
+    }
+
+    #[test]
+    fn nearby_squeezed_hand_receives_the_same_item_on_release_in_either_direction() {
+        for giver in [Handedness::Left, Handedness::Right] {
+            let mut world = World::new();
+            let item = grabbable(&mut world);
+            let physics = PhysicsWorld::new(); // No collider or pointing ray required.
+            let mut interaction = VrInteraction::new();
+            interaction.grab(&world, item, giver);
+            let mut input = InputContext::default();
+            input.left_hand.position = vec3(0.2, 0.0, 0.0);
+            input.left_hand.squeeze_value = 1.0;
+            input.right_hand.squeeze_value = 1.0;
+            // An already-held trigger must not use/fire the receiving item.
+            input.left_hand.trigger_value = 1.0;
+            input.right_hand.trigger_value = 1.0;
+            interaction.update(&context(&world, &physics, &input));
+            assert_eq!(interaction.holding_hand(item), Some(giver));
+            let receiver = if giver == Handedness::Left {
+                input.left_hand.squeeze_value = 0.0;
+                Handedness::Right
+            } else {
+                input.right_hand.squeeze_value = 0.0;
+                Handedness::Left
+            };
+            let effects = interaction.update(&context(&world, &physics, &input));
+            assert_eq!(interaction.holding_hand(item), Some(receiver));
+            assert_eq!(
+                interaction.held_entities(),
+                if receiver == Handedness::Left {
+                    (Some(item), None)
+                } else {
+                    (None, Some(item))
+                }
+            );
+            assert!(
+                matches!(effects.as_slice(), [
+                VirtualHandEffect::OutMessage { message: crate::scripts::Message { to, payload: MessagePayload::Drop } },
+                VirtualHandEffect::HoldItem { entity_id },
+                VirtualHandEffect::SetPositionRotation { entity_id: moved, .. },
+            ] if *to == item && *entity_id == item && *moved == item),
+                "{effects:?}"
+            );
+            let effects = interaction.update(&context(&world, &physics, &input));
+            assert!(effects.iter().all(|e| !matches!(
+                e,
+                VirtualHandEffect::HoldItem { .. } | VirtualHandEffect::DropItem { .. }
+            )));
+            // The recipient still drops normally when it opens its own grip.
+            input.left_hand.squeeze_value = 0.0;
+            input.right_hand.squeeze_value = 0.0;
+            let effects = interaction.update(&context(&world, &physics, &input));
+            assert_eq!(interaction.held_entities(), (None, None));
+            assert!(effects.iter().any(
+                |e| matches!(e, VirtualHandEffect::DropItem { entity_id, .. } if *entity_id == item)
+            ));
+        }
+    }
+
+    #[test]
+    fn handoff_requires_a_nearby_free_tracked_hand_and_an_unclaimed_real_release() {
+        for case in [
+            "far",
+            "open",
+            "occupied",
+            "still_held",
+            "reserved",
+            "head_untracked",
+            "giver_untracked",
+            "receiver_untracked",
+            "invalid_pose",
+            "restored",
+            "climbing",
+        ] {
+            let mut world = World::new();
+            let item = grabbable(&mut world);
+            let physics = PhysicsWorld::new();
+            let mut interaction = VrInteraction::new();
+            interaction.grab(&world, item, Handedness::Right);
+            let mut input = InputContext::default();
+            input.left_hand.position = vec3(0.2, 0.0, 0.0);
+            input.left_hand.squeeze_value = 1.0;
+            let mut reserved = Vec::new();
+            match case {
+                "far" => input.left_hand.position.x = 0.31,
+                "open" => input.left_hand.squeeze_value = 0.0,
+                "occupied" => {
+                    let other = grabbable(&mut world);
+                    interaction.grab(&world, other, Handedness::Left);
+                }
+                "still_held" => input.right_hand.squeeze_value = 1.0,
+                "reserved" => reserved.push(item),
+                "head_untracked" | "giver_untracked" | "receiver_untracked" => {
+                    input.pose_tracking = Some(crate::input_context::PoseTracking {
+                        head: case != "head_untracked",
+                        hands: [case != "receiver_untracked", case != "giver_untracked"],
+                    })
+                }
+                "invalid_pose" => input.left_hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0),
+                "restored" => interaction.right_hand.preserve_restored_grip(),
+                "climbing" => {
+                    for squeeze in [0.0, 1.0] {
+                        interaction.hand_climb.update(
+                            vec3(0.0, 0.0, 0.0),
+                            identity(),
+                            1.0 / 60.0,
+                            [
+                                crate::vr_climb::ClimbHandInput {
+                                    local_position: input.left_hand.position,
+                                    squeeze,
+                                    is_empty: true,
+                                },
+                                crate::vr_climb::ClimbHandInput {
+                                    local_position: input.right_hand.position,
+                                    squeeze: 1.0,
+                                    is_empty: false,
+                                },
+                            ],
+                            |point, _| {
+                                Some(crate::physics::ClimbGrip {
+                                    kind: crate::physics::ClimbGripKind::Ladder,
+                                    entity_id: None,
+                                    point,
+                                    normal: vec3(1.0, 0.0, 0.0),
+                                })
+                            },
+                            |_| true,
+                        );
+                    }
+                    assert_eq!(interaction.hand_climb.grips().count(), 1);
+                }
+                _ => unreachable!(),
+            }
+            let mut ctx = context(&world, &physics, &input);
+            ctx.reserved_releases = &reserved;
+            let effects = interaction.update(&ctx);
+            assert_ne!(
+                interaction.holding_hand(item),
+                Some(Handedness::Left),
+                "{case}"
+            );
+            assert!(
+                !effects.iter().any(
+                    |e| matches!(e, VirtualHandEffect::HoldItem { entity_id } if *entity_id == item)
+                ),
+                "{case}: {effects:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn supporting_hand_can_receive_a_nearby_release_without_regripping() {
+        let (world, item, physics, mut interaction, mut input) = wrench_support_fixture();
+        interaction.update_support(&context(&world, &physics, &input));
+        input.left_hand.squeeze_value = 1.0;
+        interaction.update(&context(&world, &physics, &input));
+        assert!(interaction.is_supported(item));
+        assert!(interaction.support_blocked[0]);
+        input.right_hand.squeeze_value = 0.0;
+        let effects = interaction.update(&context(&world, &physics, &input));
+        assert_eq!(interaction.held_entities(), (Some(item), None));
+        assert!(!interaction.is_supported(item));
+        assert!(!interaction.support_blocked[0]);
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, VirtualHandEffect::DropItem { .. }))
+        );
     }
 
     #[test]

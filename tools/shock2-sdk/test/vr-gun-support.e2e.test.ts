@@ -101,11 +101,31 @@ for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as 
       await game.input.set(`${other}_hand.squeeze`,1);
       await game.step({frames:15});
       assert.equal((await grip()).support!.attached,true);
+      // Bring the still-squeezed support hand near the primary before release.
+      await game.input.set(`${other}_hand.position`,[.2,1,-.5]);
+      await game.input.set(`${other}_hand.rotation`,[0,0,0,1]);
+      await game.step({frames:1});
+      if (model === "ar15_h") {
+        // End an active AUTO pull at handoff; neither held trigger may carry
+        // firing across to the newly owning hand.
+        const ammoBeforePull = ammoOf(await game.entities.detail(weapon.id));
+        await game.input.set(`${primary}_hand.trigger`,1);
+        await game.input.set(`${other}_hand.trigger`,1);
+        await game.step({frames:1});
+        assert.equal(ammoOf(await game.entities.detail(weapon.id)),ammoBeforePull-1);
+      }
+      const beforeHandoff = await game.entities.detail(weapon.id);
       await game.input.set(`${primary}_hand.squeeze`,0);
-      await game.step({frames:5});
+      await game.step({frames:1});
       const released = (await game.info()).player;
       assert.equal(released[owner],null);
-      assert.equal(released[empty],null,"primary release drops instead of transferring ownership");
+      assert.equal(released[empty],weapon.id,"primary release transfers the same weapon immediately");
+      assert.equal(ammoOf(await game.entities.detail(weapon.id)),ammoOf(beforeHandoff));
+      const bodies = (await game.physics.bodies({entityId:weapon.id})).bodies;
+      assert.ok(bodies.every(body=>body.body_type === "kinematic"),"handoff never creates a loose weapon body");
+      await game.step({frames:30});
+      assert.equal((await game.info()).player[empty],weapon.id,"recipient need not re-grip");
+      assert.equal(ammoOf(await game.entities.detail(weapon.id)),ammoOf(beforeHandoff),"handoff ends the old trigger pull");
     });
   }
 }
