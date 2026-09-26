@@ -6373,13 +6373,15 @@ impl MissionCore {
         self.flat_ui
             .set_placement_preview(&self.world, placement_preview);
         self.refresh_readouts();
-        if !self.flat_ui.device && self.weapon_settings_gun.is_some_and(|gun| {
-            crate::scripts::gui::should_close_settings_panel(
-                gun,
-                self.flat_ui.ammo_selection().0,
-                self.entity_exists(gun),
-            )
-        }) {
+        if !self.flat_ui.device
+            && self.weapon_settings_gun.is_some_and(|gun| {
+                crate::scripts::gui::should_close_settings_panel(
+                    gun,
+                    self.flat_ui.ammo_selection().0,
+                    self.entity_exists(gun),
+                )
+            })
+        {
             let panel = self
                 .world
                 .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
