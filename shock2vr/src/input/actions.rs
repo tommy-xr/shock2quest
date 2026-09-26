@@ -269,6 +269,9 @@ impl InputAction {
             // binding either. (The right controller's Menu is reserved by the
             // Quest system UI, so it can never be the app's.)
             InputAction::MenuButton => Some("/user/hand/left/input/menu/click"),
+            // Unused by locomotion; the runtime reads it only while the
+            // `input_recording` dev option is on.
+            InputAction::ToggleInputRecording => Some("/user/hand/right/input/thumbstick/click"),
             // `Reload`, `CycleAmmo`, `EjectClip`, `CycleGunSetting`,
             // `CyclePsiPower`, `SelectPsiPower` and `Jump` deliberately have
             // NO Quest binding of their own: in VR reloading is the physical
