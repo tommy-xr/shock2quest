@@ -1,0 +1,36 @@
+{
+  "revision": "ed2f8bf1cb962beccd9a59d11067ac691211c9f2",
+  "dirty": false,
+  "capturedAt": "2026-09-26T23:40:39.817Z",
+  "mission": "medsci1.mis",
+  "player": [
+    16,
+    1,
+    17
+  ],
+  "subject": "template -397",
+  "loadout": {
+    "right": "Pistol",
+    "left": "Wrench"
+  },
+  "fovDeg": 85,
+  "still": {
+    "file": "medsci1-melee.png",
+    "resolution": [
+      1280,
+      720
+    ]
+  },
+  "melee": {
+    "files": [
+      "medsci1-melee.gif",
+      "medsci1-melee.mp4"
+    ],
+    "frames": 38,
+    "fps": 15,
+    "hp": [
+      12,
+      1
+    ]
+  }
+}

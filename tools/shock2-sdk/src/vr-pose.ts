@@ -116,6 +116,19 @@ export async function aimHandsAt(
   }
 }
 
+/** Pose a controller in world space, given the pawn (`info().player`). */
+export async function setHandWorldPose(
+  game: Game,
+  pawn: { position: Vec3; rotation: Quat },
+  hand: Hand,
+  position: Vec3,
+  rotation: Quat,
+): Promise<void> {
+  const inversePawn = quatConjugate(pawn.rotation);
+  await game.input.set(`${hand}_hand.position`, quatRotate(inversePawn, sub(position, pawn.position)));
+  await game.input.set(`${hand}_hand.rotation`, quatMultiply(inversePawn, rotation));
+}
+
 /**
  * Put the `support` hand on the two-handed grip of the gun `primary` holds,
  * and squeeze to attach it. Steps a few frames.
@@ -128,15 +141,7 @@ export async function attachSupportHand(game: Game, primary: Hand): Promise<void
   if (!socket) throw new Error(`the ${primary} hand holds nothing with a support grip`);
   const p = socket.controller_position;
   const q = socket.controller_rotation;
-  const inversePawn = quatConjugate(player.rotation);
-  await game.input.set(
-    `${support}_hand.position`,
-    quatRotate(inversePawn, sub([p.x, p.y, p.z], player.position)),
-  );
-  await game.input.set(
-    `${support}_hand.rotation`,
-    quatMultiply(inversePawn, [q.v.x, q.v.y, q.v.z, q.s]),
-  );
+  await setHandWorldPose(game, player, support, [p.x, p.y, p.z], [q.v.x, q.v.y, q.v.z, q.s]);
   await game.input.set(`${support}_hand.squeeze`, 1);
   await game.step({ frames: 10 });
   const attached = (await game.info()).player.hand_grips.find((g) => g.hand === primary)
