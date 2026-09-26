@@ -27,6 +27,7 @@ members = [
     "tools/dark_viewer",
     "tools/dark_explorer",
     "tools/dark_query",
+    "tools/dark_vr_tool",
     "tools/debug_command",
     "tools/hitbox_analyzer",
     "tools/bench",

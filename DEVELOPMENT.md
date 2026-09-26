@@ -761,7 +761,18 @@ one-impact rule stay fixed.
 - `source ./set_up_android_sdk.sh`
 - `cargo apk run --release`
 
-**Note**: Cargo aliases (dr, dq, dv) work for desktop development but not for Android builds, which require the full cargo apk commands.
+Or use the host-side Quest tool, which sources the setup script for you:
+
+```sh
+cargo dvr                         # live device dashboard
+cargo dvr mission set medsci1.mis  # startup override on the headset
+cargo dvr mission unset           # return to main menu on next launch
+cargo dvr run                     # release build, install and launch
+cargo dvr deploy                  # release build and install only
+```
+
+See [dark_vr_tool](tools/dark_vr_tool/README.md) for device selection, filesystem
+access, debug-port configuration, and the `ss2vr` shell alias.
 
 ##### Launcher icon
 
