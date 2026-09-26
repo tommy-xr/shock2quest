@@ -57,7 +57,8 @@ pub enum RuntimeCommand {
     /// Load a recording's start save (if any) and queue its frames, which
     /// the following `/v1/step` frames then play instead of control input.
     Replay {
-        save: Option<std::path::PathBuf>,
+        header: shock2vr::input::recording::RecordingHeader,
+        save: std::path::PathBuf,
         frames: Vec<shock2vr::input::recording::RecordedFrame>,
         reply: oneshot::Sender<Result<String, String>>,
     },

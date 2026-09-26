@@ -605,6 +605,9 @@ fn run_game_blocking(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .collect();
+    // A replay must run with the settings it was recorded under.
+    let mut sorted_experimental: Vec<String> = experimental_features.iter().cloned().collect();
+    sorted_experimental.sort();
 
     let (mission, spawn_location) = parse_mission(&args.mission);
     info!("Mission parsed: {} with spawn location", mission);
@@ -793,13 +796,27 @@ fn run_game_blocking(
                     tracing::info!("Shutdown requested via API");
                 }
                 RuntimeCommand::Replay {
+                    header,
                     save,
                     frames,
                     reply,
                 } => {
-                    let loaded = match &save {
-                        Some(path) => game.load_game_at(path).map_err(|e| e.to_string()),
-                        None => Ok(game.scene_name().to_string()),
+                    let loaded = if header.presentation != presentation_mode
+                        || header.experimental != sorted_experimental
+                    {
+                        Err(format!(
+                            "recorded as {:?} with experimental {:?}; this runtime is {:?} with {:?}",
+                            header.presentation,
+                            header.experimental,
+                            presentation_mode,
+                            sorted_experimental
+                        ))
+                    } else {
+                        shock2vr::dev_params::set(
+                            shock2vr::dev_params::GLOVE_FORWARD_CM,
+                            header.glove_forward_cm,
+                        );
+                        game.load_game_at(&save).map_err(|e| e.to_string())
                     };
                     if loaded.is_ok() {
                         tracing::info!("Replaying {} recorded frames", frames.len());
@@ -869,18 +886,17 @@ fn run_game_blocking(
             } else {
                 None
             };
-            let step_dt = match &replay_frame {
-                Some(frame) => {
-                    current_input = frame.input.clone();
-                    action_state = frame.actions();
-                    frame.dt
-                }
-                None => FIXED_STEP_DT,
-            };
-            let game_time = if step_requested {
+            let game_time = if let Some(frame) = &replay_frame {
+                current_input = frame.input.clone();
+                action_state = frame.actions();
                 Time {
-                    elapsed: Duration::from_secs_f32(step_dt),
-                    total: Duration::from_secs_f32(accumulated_time + step_dt),
+                    elapsed: Duration::from_secs_f32(frame.dt),
+                    total: Duration::from_secs_f64(frame.total),
+                }
+            } else if step_requested {
+                Time {
+                    elapsed: Duration::from_secs_f32(FIXED_STEP_DT),
+                    total: Duration::from_secs_f32(accumulated_time + FIXED_STEP_DT),
                 }
             } else {
                 game_time.clone()
@@ -3281,15 +3297,15 @@ async fn replay_recording(
     let path = std::path::PathBuf::from(&request.path);
     let (header, frames) = shock2vr::input::recording::read_recording(&path)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("{}: {e}", request.path)))?;
-    let save = header.save.map(|save| {
-        path.parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join(save)
-    });
+    let save = path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join(&header.save);
     let count = frames.len();
     let (reply, result) = oneshot::channel();
     command_tx
         .send(RuntimeCommand::Replay {
+            header,
             save,
             frames,
             reply,
