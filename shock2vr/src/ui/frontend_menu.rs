@@ -86,7 +86,7 @@ pub fn resolve_menu_label(
 ) -> String {
     strings
         // The strings importer lowercases its keys.
-        .and_then(|table| table.get(key))
+        .and_then(|table| crate::string_table::StringTable::lookup(table, key))
         .filter(|value| !value.is_empty())
         .cloned()
         .unwrap_or_else(|| fallback.to_owned())
@@ -393,6 +393,16 @@ mod tests {
     use cgmath::vec2;
 
     use crate::ui::{FrontendCanvasPresenter, VR_COMPONENT_Z_STEP};
+
+    #[test]
+    fn menu_label_accepts_mixed_case_keys() {
+        let strings =
+            std::collections::HashMap::from([("newgame".into(), "Localized start".into())]);
+        assert_eq!(
+            super::resolve_menu_label(Some(&strings), "NewGame", "fallback"),
+            "Localized start"
+        );
+    }
 
     #[test]
     fn frontend_presenter_selects_one_target_and_keeps_geometry_policy() {

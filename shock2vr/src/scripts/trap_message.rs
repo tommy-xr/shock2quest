@@ -1,29 +1,10 @@
-use std::collections::HashMap;
-
 use dark::{importers::resolve_localized_property_string, properties::PropUseMsg};
-use engine::assets::asset_cache::AssetCache;
-use shipyard::{EntityId, Get, Unique, UniqueView, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::physics::PhysicsWorld;
+use crate::string_table::StringTable;
 
 use super::{Effect, MessagePayload, Script};
-
-/// USEMSG.STR, the table a `P$UseMsg` key resolves against. Held as a world
-/// `Unique` because scripts have no `AssetCache` when a message arrives (the
-/// `HudStrings` pattern).
-#[derive(Unique, Clone, Debug, Default)]
-pub struct UseMessageStrings(pub HashMap<String, String>);
-
-impl UseMessageStrings {
-    pub fn load(asset_cache: &mut AssetCache) -> UseMessageStrings {
-        UseMessageStrings(
-            asset_cache
-                .get_opt(&dark::importers::STRINGS_IMPORTER, "usemsg.str")
-                .map(|strings| (*strings).clone())
-                .unwrap_or_default(),
-        )
-    }
-}
 
 /// Resolve an entity's `P$UseMsg` to the text the player is shown: a key into
 /// USEMSG.STR, or the quoted text the property carries when the key misses.
@@ -31,8 +12,9 @@ fn message_text(world: &World, entity_id: EntityId) -> Option<String> {
     let v_use_msg = world.borrow::<View<PropUseMsg>>().ok()?;
     let raw = v_use_msg.get(entity_id).ok()?;
     let strings = world
-        .borrow::<UniqueView<UseMessageStrings>>()
-        .map(|strings| strings.0.clone())
+        .borrow::<UniqueView<StringTable>>()
+        .ok()
+        .and_then(|strings| strings.table("usemsg.str").cloned())
         .unwrap_or_default();
     let text = resolve_localized_property_string(&raw.0, &strings);
     (!text.is_empty()).then_some(text)
@@ -71,11 +53,13 @@ impl Script for TrapMessage {
 mod tests {
     use super::*;
     use crate::physics::PhysicsWorld;
+    use crate::string_table::StringTable;
 
     fn world_with(raw: &str, strings: &[(&str, &str)]) -> (World, EntityId) {
         let mut world = World::new();
         let entity_id = world.add_entity((PropUseMsg(raw.to_string()),));
-        world.add_unique(UseMessageStrings(
+        world.add_unique(StringTable::from_table(
+            "usemsg.str",
             strings
                 .iter()
                 .map(|(key, value)| (key.to_string(), value.to_string()))

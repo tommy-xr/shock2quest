@@ -63,6 +63,7 @@ pub mod research;
 mod runtime_props;
 mod scripts;
 mod security_alarm;
+pub mod string_table;
 mod systems;
 #[cfg(test)]
 mod test_support;

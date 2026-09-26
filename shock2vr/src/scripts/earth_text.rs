@@ -1,10 +1,11 @@
+#[cfg(test)]
 use std::collections::HashMap;
 use std::time::Duration;
 
-use engine::assets::asset_cache::AssetCache;
 use serde::{Deserialize, Serialize};
-use shipyard::{EntityId, Unique, UniqueView, World};
+use shipyard::{EntityId, UniqueView, World};
 
+use crate::string_table::StringTable;
 use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{Effect, Script, ScriptRestoreContext, ScriptState, ScriptStateError};
@@ -24,27 +25,6 @@ const SHOW_DELAY: Duration = Duration::from_millis(100);
 const REMOVE_AT: Duration = Duration::from_millis(7000);
 
 const SCRIPT_STATE_KEY: &str = "shock2vr.earth_text";
-
-/// CHARGEN.STR, held as a world `Unique` because a script has no `AssetCache`
-/// when it runs (the `UseMessageStrings` pattern).
-#[derive(Unique, Clone, Debug, Default)]
-pub struct CharGenStrings(pub HashMap<String, String>);
-
-impl CharGenStrings {
-    pub fn load(asset_cache: &mut AssetCache) -> CharGenStrings {
-        CharGenStrings(
-            asset_cache
-                .get_opt(&dark::importers::STRINGS_IMPORTER, "chargen.str")
-                .map(|strings| (*strings).clone())
-                .unwrap_or_default(),
-        )
-    }
-
-    /// The Earth mission's title card.
-    fn card(&self) -> String {
-        crate::ui::resolve_menu_label(Some(&self.0), CARD_KEY, FALLBACK_CARD)
-    }
-}
 
 #[derive(Serialize, Deserialize)]
 struct EarthTextState {
@@ -102,8 +82,14 @@ impl Script for EarthText {
         };
         Effect::ShowBanner {
             text: world
-                .borrow::<UniqueView<CharGenStrings>>()
-                .map(|strings| strings.card())
+                .borrow::<UniqueView<StringTable>>()
+                .map(|strings| {
+                    crate::ui::resolve_menu_label(
+                        strings.table("chargen.str"),
+                        CARD_KEY,
+                        FALLBACK_CARD,
+                    )
+                })
                 .unwrap_or_else(|_| FALLBACK_CARD.to_owned()),
             duration,
         }
@@ -157,7 +143,7 @@ mod tests {
         if let Some(card) = card {
             table.insert(CARD_KEY.to_owned(), card.to_owned());
         }
-        world.add_unique(CharGenStrings(table));
+        world.add_unique(StringTable::from_table("chargen.str", table));
         world
     }
 
