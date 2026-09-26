@@ -691,6 +691,7 @@ pub struct Game {
 
     /// Active per-frame input recording (`ToggleInputRecording`).
     input_recorder: Option<input::recording::InputRecorder>,
+    recording_badge: hud::RecordingBadge,
 
     /// How far the host's picture reaches from the view axis on each axis,
     /// taken from the projection it last handed `render_per_eye`. The hit tint
@@ -1496,6 +1497,7 @@ impl Game {
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
             ),
             input_recorder: None,
+            recording_badge: hud::RecordingBadge::default(),
             view_extents: hit_feedback::DEFAULT_VIEW_EXTENTS,
             free_camera: free_camera::FreeCamera::new(),
             free_camera_view_fixup: None,
@@ -2700,6 +2702,19 @@ impl Game {
                 util::render_source::MENU_HOLD_RING,
             )));
             scene.push(ring);
+        }
+
+        // While input recording runs, a view-locked badge says so. An
+        // untracked head falls back to identity, as `eye_pose` does.
+        if self.input_recorder.is_some() {
+            let view = util::tracked_rotation(rendered_eye.head_rotation)
+                .unwrap_or(Quaternion::new(1.0, 0.0, 0.0, 0.0));
+            scene.extend(self.recording_badge.render(
+                &mut self.asset_cache,
+                pawn_to_world,
+                eye_position,
+                view,
+            ));
         }
 
         let mut pause_objects = self.pause_menu.render(

@@ -364,6 +364,8 @@ pub mod render_source {
     pub const DAMAGE_NUMBERS: &str = "damage_numbers";
     /// The Menu button's hold-progress ring, promising the pause menu.
     pub const MENU_HOLD_RING: &str = "menu_hold_ring";
+    /// The red dot and "Recording" shown while input recording runs.
+    pub const RECORDING_BADGE: &str = "recording_badge";
     /// The `show_position` readout's VR panel. Labelled so the pause/death
     /// filters drop it exactly as they drop the flat readout with the rest of
     /// the per-eye scene - a debug overlay must not float in front of the
