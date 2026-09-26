@@ -332,22 +332,31 @@ pub fn get_entity_creature(world: &World, entity_id: EntityId) -> Option<Arc<Cre
 }
 
 /// Where a creature senses from, relative to its origin. A creature whose
-/// collider is raised above the origin (the arachnids: a negative
-/// `physics_offset_height`) looks, feels for door sensors and whiskers from
-/// the collider's centre, not from ankle height where a ray meets the floor
-/// within a stride. A collider hung below the origin (humanoids) leaves the
-/// origin alone: there it is already the higher point, roughly the chest.
+/// collider is raised above the origin looks, feels for door sensors and
+/// whiskers from the collider's centre, not from ankle height where a ray
+/// meets the floor within a stride. A collider hung below the origin
+/// (humanoids) leaves the origin alone: it is already the higher point.
 pub fn sense_offset(world: &World, entity_id: EntityId) -> Vector3<f32> {
+    if let Ok(capsules) = world.borrow::<View<crate::runtime_props::RuntimePropCreatureCapsule>>() {
+        if let Ok(capsule) = capsules.get(entity_id) {
+            return vec3(0.0, capsule.center_y.max(0.0), 0.0);
+        }
+    }
     let lift = get_entity_creature(world, entity_id)
         .map(|creature| (-creature.physics_offset_height).max(0.0))
         .unwrap_or(0.0);
     vec3(0.0, lift, 0.0)
 }
 
-/// How far the sense point sits above the bottom of the creature's collider -
-/// its height above the floor when standing. Both creature shapes total
-/// `bounding_size.y` tall, centred `physics_offset_height` below the origin.
+/// How far the sense point sits above the bottom of the creature's collider:
+/// its height above the floor when standing. Live bodies use measured model
+/// geometry; missing-model test entities retain the creature definition.
 pub fn sense_height(world: &World, entity_id: EntityId) -> Option<f32> {
+    if let Ok(capsules) = world.borrow::<View<crate::runtime_props::RuntimePropCreatureCapsule>>() {
+        if let Ok(capsule) = capsules.get(entity_id) {
+            return Some(capsule.height / 2.0 - capsule.center_y + capsule.center_y.max(0.0));
+        }
+    }
     let creature = get_entity_creature(world, entity_id)?;
     Some(
         creature.physics_offset_height
@@ -432,5 +441,24 @@ mod tests {
         // Standing heights of the sense point: human origin, spider collider centre.
         assert!((sense_height(&world, human).unwrap() - 4.25 / SCALE_FACTOR).abs() < 1e-5);
         assert!((sense_height(&world, baby).unwrap() - 1.5 / SCALE_FACTOR).abs() < 1e-5);
+
+        world.add_component(
+            human,
+            crate::runtime_props::RuntimePropCreatureCapsule {
+                center_y: -0.5,
+                height: 2.6,
+            },
+        );
+        world.add_component(
+            arachnid,
+            crate::runtime_props::RuntimePropCreatureCapsule {
+                center_y: 1.0,
+                height: 2.6,
+            },
+        );
+        assert_eq!(sense_offset(&world, human).y, 0.0);
+        assert!((sense_height(&world, human).unwrap() - 1.8).abs() < 1e-5);
+        assert_eq!(sense_offset(&world, arachnid).y, 1.0);
+        assert!((sense_height(&world, arachnid).unwrap() - 1.3).abs() < 1e-5);
     }
 }

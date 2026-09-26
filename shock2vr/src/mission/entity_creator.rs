@@ -1430,16 +1430,36 @@ fn create_physics_representation_with_options(
         if v_creature.get(entity_id).is_ok() && v_creature_pose.get(entity_id).is_err() {
             let creature_type = v_creature.get(entity_id).unwrap();
             let creature_def = get_creature_definition(creature_type.0).unwrap();
-            let creature_shape = live_creature_shape(
+            let model_height = model_bounds
+                .map(|bounds| bounds.dim().y * model_scale.y)
+                .filter(|height| height.is_finite() && *height > 0.0);
+            let center_y = model_height
+                .map(|_| model_bounds_center.y)
+                .filter(|center| center.is_finite())
+                .unwrap_or(-creature_def.physics_offset_height);
+            let creature_shape = live_creature_shape_for_height(
                 &creature_def,
+                model_height,
                 v_phys_type.get(entity_id).ok(),
                 v_phys_dimensions.get(entity_id).ok(),
+            );
+            let height = match creature_shape {
+                PhysicsShape::Capsule { height, radius } => height + 2.0 * radius,
+                _ => unreachable!("live creature shape is always a capsule"),
+            };
+            let (entities, mut capsules) = world
+                .borrow::<(EntitiesView, ViewMut<RuntimePropCreatureCapsule>)>()
+                .unwrap();
+            entities.add_component(
+                entity_id,
+                &mut capsules,
+                RuntimePropCreatureCapsule { center_y, height },
             );
             rigid_body_handle = physics.add_dynamic(
                 entity_id,
                 pos.position + vec3(0.0, SCALE_FACTOR / 6.0, 0.0) /* bump up so that character is not stuck in geometry */,
                 qrotation,
-                vec3(0.0, -creature_def.physics_offset_height, 0.0),
+                vec3(0.0, center_y, 0.0),
                 creature_shape,
                 // TODO: Kinematic experiment
                 //is_sensor,
@@ -1784,20 +1804,34 @@ fn create_physics_representation_with_options(
     }
 }
 
-/// The collision shape a live creature is given: its authored sphere
-/// submodel radii where they exist, and the animation bounding box otherwise.
+/// The collision shape a creature gets when no model bounds are available.
+/// Keep its authored sphere radii where they exist and its definition fallback.
 pub fn live_creature_shape(
     creature_def: &crate::creature::CreatureDefinition,
     phys_type: Option<&PropPhysType>,
     dimensions: Option<&PropPhysDimensions>,
 ) -> PhysicsShape {
+    live_creature_shape_for_height(creature_def, None, phys_type, dimensions)
+}
+
+fn live_creature_shape_for_height(
+    creature_def: &crate::creature::CreatureDefinition,
+    model_height: Option<f32>,
+    phys_type: Option<&PropPhysType>,
+    dimensions: Option<&PropPhysDimensions>,
+) -> PhysicsShape {
     let bbox = creature_def.bounding_size;
+    let full_height = model_height.unwrap_or(bbox.y);
     let fallback_radius = bbox.x.max(bbox.z) / 2.0;
     let fallback = || PhysicsShape::Capsule {
         // Preserve the established fallback for creatures without a complete
-        // authored sphere model. Small animation bounds can otherwise leave a
-        // zero-length capsule segment, which Rapier does not accept here.
-        height: fallback_radius.max(bbox.y - fallback_radius * 2.0),
+        // authored sphere model. A model shorter than the fixed fallback width
+        // still needs a positive segment for Rapier; keep that excess minimal.
+        height: if model_height.is_some() {
+            (full_height - fallback_radius * 2.0).max(0.01)
+        } else {
+            fallback_radius.max(full_height - fallback_radius * 2.0)
+        },
         radius: fallback_radius,
     };
 
@@ -1826,14 +1860,17 @@ pub fn live_creature_shape(
         return fallback();
     }
     let radius = declared_radii.iter().copied().fold(0.0, f32::max) * 2.0;
-    let segment_height = bbox.y - radius * 2.0;
-    if !radius.is_finite() || radius <= 0.0 || !segment_height.is_finite() || segment_height <= 0.0
-    {
+    let segment_height = full_height - radius * 2.0;
+    if !radius.is_finite() || radius <= 0.0 || !segment_height.is_finite() {
+        return fallback();
+    }
+
+    if segment_height <= 0.0 && model_height.is_none() {
         return fallback();
     }
 
     PhysicsShape::Capsule {
-        height: segment_height,
+        height: segment_height.max(0.01),
         radius,
     }
 }
@@ -2164,6 +2201,77 @@ mod tests {
         assert_eq!(body.body_type, "dynamic");
         assert!(body.blocks_player && body.blocks_actor);
         assert!(body.collision_groups.iter().any(|group| group == "actor"));
+    }
+
+    #[test]
+    fn live_creature_capsule_follows_model_vertical_bounds() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity = world.add_entity((
+            PropPosition {
+                position: vec3(0.0, 4.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropCreature(6),
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+            sphere_type(2),
+            sphere_dimensions(0.16, 0.2),
+        ));
+        let model = Model::from_glb(
+            vec![],
+            Aabb3::new(Point3::new(-0.5, -0.3, -0.5), Point3::new(0.5, 2.3, 0.5)),
+            None,
+        );
+        let handle =
+            create_physics_representation(&mut world, &mut physics, &Some(&model), entity).unwrap();
+        let (radius, segment) = physics.capsule_dimensions(handle).unwrap();
+        assert!(
+            (radius - 0.4).abs() < 0.001,
+            "authored sphere radius changed"
+        );
+        assert!((segment + 2.0 * radius - 2.6).abs() < 0.001);
+        let aabb = physics.get_aabb2(entity).unwrap();
+        assert!((aabb.min.y - (4.0 + SCALE_FACTOR / 6.0 - 0.3)).abs() < 0.01);
+    }
+
+    #[test]
+    fn model_height_does_not_turn_limb_span_into_fallback_capsule_width() {
+        for creature_type in [0, 4, 7, 6, 8] {
+            let creature = get_creature_definition(creature_type).unwrap();
+            let (radius, segment) = capsule(live_creature_shape_for_height(
+                &creature,
+                Some(3.0),
+                None,
+                None,
+            ));
+            let expected_radius = creature.bounding_size.x.max(creature.bounding_size.z) / 2.0;
+            assert!(
+                (radius - expected_radius).abs() < 0.001,
+                "type {creature_type}"
+            );
+            assert!(
+                (segment + radius * 2.0 - 3.0).abs() < 0.001,
+                "type {creature_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn short_model_keeps_authored_sphere_radius_with_minimal_capsule_segment() {
+        let baby = get_creature_definition(8).unwrap();
+        let (radius, segment) = capsule(live_creature_shape_for_height(
+            &baby,
+            Some(0.71),
+            Some(&sphere_type(2)),
+            Some(&sphere_dimensions(0.16, 0.2)),
+        ));
+        assert!((radius - 0.4).abs() < 0.001);
+        assert!((segment - 0.01).abs() < 0.001);
     }
 
     #[test]
