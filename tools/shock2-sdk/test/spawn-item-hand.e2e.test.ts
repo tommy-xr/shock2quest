@@ -15,5 +15,6 @@ test("spawn-item with a hand grabs the item into that VR hand", { skip: !enabled
   await game.step({ frames: 2 });
   const { player } = await game.info();
   assert.equal(player.right_hand_entity_id, pistol.entity_id);
+  // In VR, wielded_entity_id is the left hand's slot.
   assert.equal(player.wielded_entity_id, amp.entity_id);
 });

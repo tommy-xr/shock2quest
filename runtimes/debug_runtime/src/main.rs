@@ -3390,7 +3390,9 @@ struct SpawnItemRequest {
     template: Option<String>,
     template_id: Option<i32>,
     /// `"left"` / `"right"`: also grab the item into that VR hand on the next
-    /// step, for staging captures without a reach gesture.
+    /// step, for staging captures without a reach gesture. The hand must be
+    /// empty and squeezing, or the grab silently does nothing; a stackable
+    /// item grabs the whole stack it merged into. Flat mode just wields it.
     hand: Option<String>,
 }
 

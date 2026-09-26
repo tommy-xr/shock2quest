@@ -329,7 +329,8 @@ export class PlayerApi {
    * Only genuine pickup items are accepted; a creature or door template throws
    * (400) and nothing is left in the world. Wielding a provisioned weapon is a
    * separate step (double-click it in the use-mode inventory strip), unless
-   * `hand` is given: then the next step grabs it into that VR hand.
+   * `hand` is given: then the next step grabs it into that VR hand, which must
+   * be empty and squeezing (otherwise nothing happens and nothing reports it).
    */
   async spawnItem(
     template: string | number,
