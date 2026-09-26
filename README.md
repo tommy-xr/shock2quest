@@ -16,17 +16,10 @@ Once installed, copy `sshock2.kpf` and the `mods/` folder from it - see [DEVELOP
 
 ## Screenshots
 
-- Hitboxes
+<img src="screenshots/hero/hydro1.png" alt="Hydroponics: a hybrid beside an annelid egg" width="400"/> <img src="screenshots/hero/medsci1.png" alt="Med/Sci: a hybrid before a XERXES terminal" width="400"/>
+<img src="screenshots/hero/ops2.png" alt="Operations: a protocol droid" width="400"/> <img src="screenshots/hero/rec1.png" alt="Recreation: a monkey in medical analysis" width="400"/>
 
-<img src="screenshots/hitbox.png" alt="shock2quest: hitboxes" width="500"/>
-
-- Dual Wielding + Character Models
-
-<img src="screenshots/combat.png" alt="shock2quest: dual wielding" width="500"/>
-
-- Floating Inventory for VR
-
-<img src="screenshots/floating-inventory.png" alt="shock2quest: floating inventory" width="500"/>
+Regenerate with `node scripts/hero-shots.mjs` from `tools/shock2-sdk` (after `npm run build`).
 
 ## Running
 
