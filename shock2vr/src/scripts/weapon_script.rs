@@ -476,7 +476,12 @@ impl Script for WeaponScript {
             {
                 crate::scripts::maintenance::apply(world, *entity, Some(entity_id))
             }
-            MessagePayload::Drop => self.melee_charge.cancel(entity_id),
+            MessagePayload::Drop => {
+                // A handoff stays held throughout the frame, so update's
+                // unheld check cannot cancel the previous owner's burst.
+                self.burst = None;
+                self.melee_charge.cancel(entity_id)
+            }
             MessagePayload::TriggerRelease => {
                 if let Some(effect) = self.melee_charge.release(entity_id, false) {
                     return effect;
@@ -1465,6 +1470,30 @@ mod tests {
             ammo_usage,
             shot_interval_ms,
             ..GunSettingDesc::default()
+        }
+    }
+
+    #[test]
+    fn dropping_cancels_a_burst_even_when_the_weapon_is_immediately_received() {
+        for burst in [-1, 3] {
+            let mut world = World::new();
+            let weapon = world.add_entity(());
+            let physics = PhysicsWorld::new();
+            let setting = GunSettingDesc {
+                burst,
+                ..Default::default()
+            };
+            let mut script = WeaponScript::new();
+            script.burst = Some(ActiveBurst {
+                state: BurstState::begin(&setting).unwrap(),
+                setting,
+            });
+            script.handle_message(weapon, &world, &physics, &MessagePayload::Drop);
+            script.handle_message(weapon, &world, &physics, &MessagePayload::Hold);
+            assert!(
+                script.burst.is_none(),
+                "the receiving hand must start its own trigger pull"
+            );
         }
     }
 

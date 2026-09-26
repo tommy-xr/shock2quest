@@ -95,12 +95,20 @@ for (const primary of ["right", "left"] as const) {
       await game.input.set(`${other}_hand.squeeze`,1);
       await game.step({frames:10});
       assert.equal((await grip()).support!.attached,true);
+      await game.input.set(`${other}_hand.position`,[.2,1,-.5]);
+      await game.input.set(`${other}_hand.rotation`,[0,0,0,1]);
+      await game.step({frames:1});
       await game.input.set(`${primary}_hand.squeeze`,0);
-      await game.step({frames:5});
+      await game.step({frames:1});
       const released = (await game.info()).player;
       assert.equal(released[owned],null);
-      assert.equal(released[empty],null,"primary release never hands the wrench to the supporting hand");
-      assert.equal(released.hand_grips.length,0);
+      assert.equal(released[empty],wrench.id,"nearby squeezed support hand receives the same wrench");
+      assert.equal(released.hand_grips.length,1);
+      const bodies = (await game.physics.bodies({entityId:wrench.id})).bodies;
+      assert.ok(bodies.length > 0);
+      assert.ok(bodies.every(body=>body.body_type === "kinematic"),"wrench stays held through handoff");
+      await game.step({frames:5});
+      assert.equal((await game.info()).player[empty],wrench.id);
     });
 }
 

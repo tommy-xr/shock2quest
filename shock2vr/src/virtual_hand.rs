@@ -200,6 +200,11 @@ impl VirtualHand {
         }
     }
 
+    pub(crate) fn released_entity(&self, input: &Hand) -> Option<EntityId> {
+        self.get_held_entity()
+            .filter(|_| input.squeeze_value < 0.5 && !self.restored_grip_pending)
+    }
+
     pub fn get_raytraced_entity(&self) -> Option<EntityId> {
         match &self.raytrace_hit {
             None => None,
@@ -323,7 +328,7 @@ impl VirtualHand {
                 let mut msgs = Vec::new();
 
                 // If we're holding onto something, but not grabbing, we can drop it
-                if input_hand.squeeze_value < 0.5 && !prev.restored_grip_pending {
+                if prev.released_entity(input_hand).is_some() {
                     let mut msgs = vec![VirtualHandEffect::DropItem {
                         entity_id,
                         motion: release,
