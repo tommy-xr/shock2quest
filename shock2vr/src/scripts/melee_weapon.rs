@@ -21,7 +21,21 @@ pub(super) fn player_melee_damage_scale(world: &World) -> f32 {
                 .player_stats()
                 .has_os_trait(crate::scripts::gui::TRAIT_LETHAL_WEAPON)
         });
-    crate::scripts::berserk::melee_damage_multiplier(world) * if lethal { 1.35 } else { 1.0 }
+    // Let temporary Strength (Might or an implant) increase both flat and VR
+    // damage. Keep the port's existing authored damage at the trained level;
+    // the retail manual specifies that STR raises melee damage but not its
+    // numerical curve, so this modest per-level scale is port tuning.
+    let trained_strength = world
+        .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
+        .map(|quests| quests.player_stats().strength)
+        .unwrap_or(1);
+    let effective_strength = crate::implants::effective_stats(world)
+        .map(|stats| stats.strength)
+        .unwrap_or(trained_strength);
+    let strength_scale = 1.0 + 0.1 * (effective_strength - trained_strength) as f32;
+    strength_scale
+        * crate::scripts::berserk::melee_damage_multiplier(world)
+        * if lethal { 1.35 } else { 1.0 }
 }
 
 /// Contact damage for the player's authored melee weapons (`PropLimbModel`).

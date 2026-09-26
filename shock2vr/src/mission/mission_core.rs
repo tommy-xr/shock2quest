@@ -10765,6 +10765,15 @@ impl MissionCore {
                         .unwrap()
                         .0
                         .retain(|p| p.template_id != template_id);
+                    if template_id == crate::psi::MIGHT_TEMPLATE_ID {
+                        self.world
+                            .borrow::<UniqueViewMut<QuestInfo>>()
+                            .unwrap()
+                            .player_stats_mut()
+                            .modifiers
+                            .retain(|m| m.source != crate::psi::MIGHT_MODIFIER_SOURCE);
+                        self.refresh_implant_effects();
+                    }
                 }
                 Effect::ActivatePsiPower {
                     template_id,
@@ -10787,6 +10796,29 @@ impl MissionCore {
                             remaining_secs: duration_secs,
                         });
                         game_log!(INFO, "Psi power active: {} ({}s)", name, duration_secs);
+                    }
+                    drop(active);
+                    if template_id == crate::psi::MIGHT_TEMPLATE_ID {
+                        let delta = self
+                            .world
+                            .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
+                            .unwrap()
+                            .0
+                            .iter()
+                            .find(|power| power.template_id == template_id)
+                            .map(|power| power.power.data[0] as i32)
+                            .unwrap_or(0);
+                        self.world
+                            .borrow::<UniqueViewMut<QuestInfo>>()
+                            .unwrap()
+                            .player_stats_mut()
+                            .apply_modifier(crate::player_stats::TimedStatModifier {
+                                source: crate::psi::MIGHT_MODIFIER_SOURCE.to_owned(),
+                                stat: crate::player_stats::Stat::Strength,
+                                delta,
+                                remaining: std::time::Duration::from_secs_f32(duration_secs),
+                            });
+                        self.refresh_implant_effects();
                     }
                 }
 
