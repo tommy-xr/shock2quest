@@ -3941,7 +3941,7 @@ fn screenshot_target_size(
 
     // Scale factor that fits the framebuffer into the requested bounds. Without
     // `max_width` that's the declared box, so a window resized to a different
-    // aspect still lands inside 800x600 rather than only under 800 wide.
+    // aspect still lands inside `--window-size` rather than only under its width.
     let scale = match max_width.filter(|w| *w > 0) {
         Some(max_width) => max_width as f64 / fb_width as f64,
         None => {
@@ -4004,6 +4004,9 @@ fn capture_screenshot(
 
         // Read pixels from the framebuffer using actual viewport size
         let mut pixels: Vec<u8> = vec![0; (actual_width * actual_height * 3) as usize];
+        // Tightly packed rows: the default 4-byte alignment pads RGB rows whose
+        // width isn't a multiple of 4 (e.g. `--window-size 801x600`), overrunning `pixels`.
+        gl::PixelStorei(gl::PACK_ALIGNMENT, 1);
         gl::ReadPixels(
             0,
             0,
