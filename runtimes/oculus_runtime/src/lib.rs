@@ -378,6 +378,9 @@ fn main() {
     let menu_action = action_set
         .create_action::<bool>("menu", "Interface / Pause Menu", &[])
         .unwrap();
+    let record_action = action_set
+        .create_action::<bool>("record_input", "Toggle Input Recording", &[])
+        .unwrap();
 
     // Bind our actions to input devices using the given profile
     // If you want to access inputs specific to a particular device you may specify a different
@@ -460,9 +463,9 @@ fn main() {
                         .string_to_path("/user/hand/right/input/thumbstick")
                         .unwrap(),
                 ),
-                // The RIGHT thumbstick click is deliberately unbound: jump
-                // moved to the lower face buttons, where it is reachable
-                // whatever the hands hold.
+                // The RIGHT thumbstick click is not jump (that moved to the
+                // lower face buttons); it toggles input recording below,
+                // gated by the `input_recording` dev option.
                 xr::Binding::new(
                     &crouch_action,
                     xr_instance
@@ -516,6 +519,16 @@ fn main() {
                             shock2vr::input::InputAction::MenuButton
                                 .quest_touch_click_path()
                                 .expect("Quest menu-button binding"),
+                        )
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &record_action,
+                    xr_instance
+                        .string_to_path(
+                            shock2vr::input::InputAction::ToggleInputRecording
+                                .quest_touch_click_path()
+                                .expect("Quest input-recording binding"),
                         )
                         .unwrap(),
                 ),
@@ -926,6 +939,17 @@ fn main() {
             menu_state.changed_since_last_sync,
             menu_state.current_state,
         );
+        // Right stick click records input for desktop replay, but only while
+        // its dev option is on (see `dev_params::INPUT_RECORDING`).
+        if shock2vr::dev_params::get_bool(shock2vr::dev_params::INPUT_RECORDING) {
+            let record_state = record_action.state(&session, xr::Path::NULL).unwrap();
+            action_state.sync_discrete_button(
+                shock2vr::input::InputAction::ToggleInputRecording,
+                record_state.is_active,
+                record_state.changed_since_last_sync,
+                record_state.current_state,
+            );
+        }
         // The free camera is right A+B together - the same two buttons the
         // right hand carries singly, so while its dev option is on `Game`
         // suppresses that hand's contextual buttons and the pair is the chord

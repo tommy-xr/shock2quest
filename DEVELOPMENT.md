@@ -294,6 +294,23 @@ Flat and VR use the same canvas, selection logic, and text bounds. Debug UI labe
 include `inspect`, `query_title`, `query_line_up`, `query_line_down`,
 `utility_previous`, `utility_next`, and `utility_close`.
 
+#### Recording a session in the headset
+
+Record real VR play (organic hand motion) to replay on desktop at any
+resolution:
+
+1. Pause menu > Developer > Camera & view: turn on **Rec input R-stick** (`input_recording`).
+2. Click the right thumbstick to start; a message confirms. Play, then click
+   again to stop. Pause first is refused: the pause menu is not saved.
+3. `adb pull /sdcard/shock2quest/recordings/` - each recording is a
+   `rec-<ms>.jsonl` plus the `rec-<ms>.sav` it starts from.
+4. `cd tools/shock2-sdk && npm run build && node scripts/hero-shots.mjs --replay <rec.jsonl> --name <gif>`
+   renders it first-person to `screenshots/hero/<gif>.gif`
+   (or `POST /v1/replay` on the debug runtime for custom capture).
+
+Replay is approximate (a save omits transient state; some systems are
+unseeded), so short clips track best. A replay stops at a level transition.
+
 #### Quest face buttons are per-hand and contextual
 
 The four face buttons are bound raw, by hand and position - lower is left `X` /
