@@ -55,7 +55,15 @@ impl HudMessages {
     /// dropped here rather than on a timer (the `DamageFlash` pattern).
     pub fn active(&mut self, now: Duration) -> Vec<String> {
         self.lines.retain(|(expiry, _)| *expiry > now);
-        self.lines.iter().map(|(_, text)| text.clone()).collect()
+        let mut visible = self
+            .lines
+            .iter()
+            .flat_map(|(_, text)| text.lines().map(str::to_owned))
+            .collect::<Vec<_>>();
+        if visible.len() > MAX_LINES {
+            visible.drain(..visible.len() - MAX_LINES);
+        }
+        visible
     }
 }
 
@@ -121,19 +129,47 @@ mod tests {
         assert_eq!(active.last().unwrap(), "line 6");
     }
 
-    /// Flat and VR emit the same lines at the same offsets; only the block's
-    /// origin differs, so a line cannot land differently between them.
     #[test]
-    fn the_panel_canvas_holds_one_element_per_line_stacked_by_line_height() {
-        let canvas = build_message_canvas(&["one".to_string(), "two".to_string()]);
+    fn one_post_with_two_visual_lines_keeps_one_lifetime() {
+        let mut messages = HudMessages::default();
+        messages.push(
+            "Research completed!\nClick Reports to read it.".into(),
+            secs(10),
+        );
+        assert_eq!(
+            messages.active(secs(14)),
+            vec!["Research completed!", "Click Reports to read it."]
+        );
+        assert!(messages.active(secs(15)).is_empty());
+    }
 
-        let rects: Vec<Rect> = canvas
+    /// `render_vr_messages` is the one presentation boundary that lifts the
+    /// complete block above gaze. Every glyph and line inside that block must
+    /// retain its flat HUD pixel layout.
+    #[test]
+    fn flat_and_vr_message_blocks_have_identical_relative_layout() {
+        let lines = ["one".to_string(), "two".to_string()];
+        let mut flat = UiCanvas::new(vec2(640.0, 480.0));
+        emit(&mut flat, flat_origin(), &lines);
+        let panel = build_message_canvas(&lines);
+
+        let flat_rects: Vec<Rect> = flat
             .elements()
             .iter()
             .map(|element| element.rect())
             .collect();
-        assert_eq!(rects.len(), 2);
-        assert_eq!(rects[0].y, 0.0);
-        assert_eq!(rects[1].y, LINE_HEIGHT);
+        let panel_rects: Vec<Rect> = panel
+            .elements()
+            .iter()
+            .map(|element| element.rect())
+            .collect();
+        assert_eq!(flat_rects.len(), panel_rects.len());
+        for (flat, panel) in flat_rects.iter().zip(panel_rects.iter()) {
+            assert_eq!(flat.x - flat_origin().x, panel.x);
+            assert_eq!(flat.y - flat_origin().y, panel.y);
+            assert_eq!(flat.w, panel.w);
+            assert_eq!(flat.h, panel.h);
+        }
+        assert_eq!(panel_rects[1].y - panel_rects[0].y, LINE_HEIGHT);
     }
 }

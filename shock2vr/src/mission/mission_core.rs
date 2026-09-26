@@ -428,6 +428,39 @@ fn inventory_transfer_sound(world: &World, item: EntityId) -> &'static str {
     }
 }
 
+/// Retail's ordinary MOVE pickup has two cues in this order: posting its
+/// localized status line (which beeps centrally) and the distinct item sound.
+/// A SCRIPT-only log never enters this path.
+fn world_pickup_feedback(
+    world: &World,
+    asset_cache: &mut AssetCache,
+    entity_id: EntityId,
+) -> Vec<Effect> {
+    let moves_on_world_frob = world
+        .borrow::<View<dark::properties::PropFrobInfo>>()
+        .ok()
+        .and_then(|frob| frob.get(entity_id).ok().map(|info| info.world_action))
+        .is_some_and(|action| action.contains(dark::properties::FrobFlag::MOVE));
+    if !moves_on_world_frob {
+        return Vec::new();
+    }
+    let name = crate::hud::resolve_item_short_name(asset_cache, world, entity_id)
+        .unwrap_or_else(|| "Item".to_owned());
+    let format =
+        crate::scripts::gui::PanelText::string(world, "misc", "PickupString", "%s picked up.");
+    vec![
+        Effect::ShowMessage {
+            text: format.replace("%s", &name),
+        },
+        Effect::PlaySound {
+            handle: AudioHandle::new(),
+            name: "pickup_item".to_owned(),
+            source: None,
+            spatial: false,
+        },
+    ]
+}
+
 /// Whether the player's backpack can actually take `dropped_entity_id` right
 /// now.
 ///
@@ -10894,6 +10927,20 @@ impl MissionCore {
                         let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                         quests.collect_log(deck, log);
                     }
+                    let name = crate::hud::localized_log_title(asset_cache, &self.world, entity_id)
+                        .or_else(|| {
+                            crate::hud::resolve_item_short_name(asset_cache, &self.world, entity_id)
+                        })
+                        .unwrap_or_else(|| "Audio log".to_owned());
+                    let format = crate::scripts::gui::PanelText::string(
+                        &self.world,
+                        "misc",
+                        "LogPickup",
+                        "Log %s added to PDA.",
+                    );
+                    effects.push_back(Effect::ShowMessage {
+                        text: format.replace("%s", &name),
+                    });
                     // Retail copies the entry into the PDA and destroys the
                     // pickup. Retire it from rendered, physical and container
                     // presence; the player-owned reader carries presentation.
@@ -11616,6 +11663,17 @@ impl MissionCore {
                     let balance = quests.player_stats_mut().award_cyber_modules(amount);
                     if amount > 0 {
                         info!("Awarded {} cyber modules (balance now {})", amount, balance);
+                        effects.push_back(Effect::ShowMessage {
+                            text: crate::scripts::gui::PanelText::format(
+                                &crate::scripts::gui::PanelText::string(
+                                    &self.world,
+                                    "misc",
+                                    "AddExp",
+                                    "%d cyber modules received.",
+                                ),
+                                &[amount],
+                            ),
+                        });
                     }
                 }
 
@@ -11624,6 +11682,9 @@ impl MissionCore {
                     let balance = quests.player_stats_mut().award_nanites(amount);
                     if amount > 0 {
                         info!("Awarded {} nanites (stat balance now {})", amount, balance);
+                        effects.push_back(Effect::ShowMessage {
+                            text: format!("{amount} nanites picked up."),
+                        });
                     }
                 }
 
@@ -11983,14 +12044,24 @@ impl MissionCore {
                         .borrow::<View<PlayerInventoryEntity>>()
                         .is_ok_and(|inventories| inventories.get(parent_entity_id).is_ok());
                     let sound = inventory_transfer_sound(&self.world, dropped_entity_id);
+                    let feedback = if player_inventory && sound == "pickup_item" {
+                        world_pickup_feedback(&self.world, asset_cache, dropped_entity_id)
+                    } else {
+                        Vec::new()
+                    };
                     let stored = self
                         .drop_entity_into_container(parent_entity_id, dropped_entity_id)
                         .is_some();
                     if stored && player_inventory {
-                        effects.push_front(crate::scripts::script_util::announce(
-                            parent_entity_id,
-                            sound,
-                        ));
+                        // A MOVE pickup's feedback already carries the item cue.
+                        if feedback.is_empty() {
+                            effects.push_front(crate::scripts::script_util::announce(
+                                parent_entity_id,
+                                sound,
+                            ));
+                        } else {
+                            effects.extend(feedback);
+                        }
                     } else if !stored && player_inventory {
                         effects.push_front(backpack_full_feedback(dropped_entity_id));
                     }
@@ -13368,6 +13439,20 @@ impl MissionCore {
                         .borrow::<UniqueViewMut<crate::hud::HudMessages>>()
                         .unwrap()
                         .push(text, now);
+                    // Every posted line has its own cue, including multiple
+                    // lines in one frame. Do not replace a previous linebeep
+                    // through `listener_sounds`: retail does not coalesce them.
+                    play_schema_sound(
+                        &self.world,
+                        global_context,
+                        asset_cache,
+                        audio_context,
+                        AudioHandle::new(),
+                        "linebeep",
+                        None,
+                        false,
+                        false,
+                    );
                 }
 
                 Effect::ShowBanner { text, duration } => {
@@ -17033,6 +17118,14 @@ impl MissionCore {
                         to: entity_id,
                     });
                 }
+                VirtualHandEffect::ReportWorldPickup { entity_id } => {
+                    let acquired = self.interaction.is_holding(entity_id)
+                        || crate::scripts::script_util::player_carried_items(&self.world)
+                            .contains(&entity_id);
+                    if acquired {
+                        deferred.extend(world_pickup_feedback(&self.world, asset_cache, entity_id));
+                    }
+                }
                 VirtualHandEffect::HolsterItem { entity_id, slot } => {
                     self.detach_from_containers(entity_id);
                     self.make_un_physical(entity_id);
@@ -17667,15 +17760,26 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
     let canonical = world
         .borrow::<View<crate::runtime_props::RuntimePropCanonicalTemplateId>>()
         .unwrap();
-    let mut effects = (&canonical)
-        .iter()
-        .with_id()
-        .filter(|(_, canonical)| canonical.0 == template_id)
-        .map(|(entity_id, _)| Effect::SetObjectState {
-            entity_id,
-            state: dark::properties::ObjectState::Normal,
-        })
-        .collect::<Vec<_>>();
+    let mut effects = vec![Effect::ShowMessage {
+        text: crate::scripts::gui::PanelText::string(
+            world,
+            "misc",
+            "ResearchDone",
+            "Research completed! Click the reports button to see the results.",
+        )
+        .replace("\\n", "\n"),
+    }];
+    effects.extend(
+        (&canonical)
+            .iter()
+            .with_id()
+            .filter(|(_, canonical)| canonical.0 == template_id)
+            .map(|(entity_id, _)| Effect::SetObjectState {
+                entity_id,
+                state: dark::properties::ObjectState::Normal,
+            })
+            .collect::<Vec<_>>(),
+    );
     effects.push(crate::scripts::script_util::announce(entity_id, "bb06"));
     if let Some(quest_bit) = crate::scripts::script_util::set_quest_bit_effect(world, entity_id) {
         effects.push(quest_bit);
