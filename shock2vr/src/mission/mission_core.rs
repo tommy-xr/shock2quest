@@ -13758,9 +13758,8 @@ impl MissionCore {
         // The interaction layer reports what the reticle / hand rays picked;
         // whether that pick may be *highlighted* is a separate, data-driven
         // question (`P$HUDSelect`), answered once here so the flat and VR
-        // presentations cannot give different answers. (Flat additionally
-        // narrows its own pick to frobbable entities, upstream in
-        // `FlatPlayerController`; that is the frob target, not the highlight.)
+        // presentations cannot give different answers. Flat keeps its bounded
+        // frob target separate from this unrestricted HUD pick.
         // `debug_show_ids` piggybacks on the rollover label to read out an
         // object's runtime entity id, which has no other in-world readout and
         // is most needed for exactly the fixtures the gate excludes - so the
