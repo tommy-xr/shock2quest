@@ -2,18 +2,29 @@
 //   npm run build && node scripts/hero-shots.mjs [--only hydro1] [--out <dir>]
 // Each shot boots its mission fresh in VR presentation (no screen-space HUD),
 // stands the player at `player` with a loadout in hand, aimed at the nearest
-// entity matching `target` - a first-person VR view. AI wanders, so framing is
-// only coarsely reproducible.
-import { mkdir } from "node:fs/promises";
+// entity matching `target` - a first-person VR view - and, for shots with a
+// `clip`, records it as a GIF. AI wanders, so framing is only coarsely
+// reproducible.
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { aimHandsAt, attachSupportHand, faceTarget, GameServer } from "../dist/src/index.js";
+import {
+  aimHandsAt,
+  attachSupportHand,
+  faceTarget,
+  GameServer,
+  sampleTrack,
+  sway,
+} from "../dist/src/index.js";
 
 // Hand offsets from the eye: x right, y up, -z toward the target.
 const AIM_RIGHT = [0.1, -0.18, -0.55];
 const AIM_LEFT = [-0.1, -0.2, -0.52];
 const REST_LEFT = [-0.18, -0.35, -0.4];
+const REST_RIGHT = [0.18, -0.4, -0.35];
 
 const SHOTS = [
   {
@@ -52,6 +63,18 @@ const SHOTS = [
     target: { filter: "Red Monkey", height: 0.5 },
     loadout: { right: "Pistol" },
     hands: { right: AIM_RIGHT, left: REST_LEFT },
+    // Raise the pistol from the hip, settle, fire twice.
+    clip: {
+      seconds: 2.0,
+      hands: {
+        right: [
+          { t: 0, value: REST_RIGHT },
+          { t: 0.6, value: AIM_RIGHT },
+        ],
+        left: [{ t: 0, value: REST_LEFT }],
+      },
+      trigger: { right: [1.0, 1.5] },
+    },
   },
 ];
 
@@ -61,6 +84,7 @@ const { values } = parseArgs({
     only: { type: "string" },
     "max-width": { type: "string", default: "1280" },
     fov: { type: "string", default: "85" },
+    "gif-width": { type: "string", default: "480" },
   },
 });
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -113,7 +137,52 @@ for (const shot of shots) {
     const path = resolve(out, `${shot.name}.png`);
     const result = await game.screenshot(path, Number(values["max-width"]));
     console.log(`${shot.name}: ${result.full_path} ${result.resolution.join("x")}`);
+    if (shot.clip) await recordClip(game, shot, subject.id);
   } finally {
     await game.shutdown();
+  }
+}
+
+/**
+ * Play `shot.clip` one 60 Hz frame at a time - eased hand tracks plus seeded
+ * sway, aimed at the (moving) subject, trigger pulls at the listed times -
+ * capturing every 4th frame (15 fps) into `<name>.gif`.
+ */
+async function recordClip(game, shot, subjectId) {
+  const { clip } = shot;
+  const frames = Math.round(clip.seconds * 60);
+  const dir = await mkdtemp(resolve(tmpdir(), `hero-${shot.name}-`));
+  try {
+    for (let frame = 0; frame < frames; frame++) {
+      const t = frame / 60;
+      // Track the subject; the head drifts a few centimetres around it.
+      const [x, y, z] = (await game.entities.detail(subjectId)).position;
+      const look = [x, y + shot.target.height, z].map((v, i) => v + sway(1, t, 0.04)[i]);
+      const hands = Object.fromEntries(
+        Object.entries(clip.hands).map(([hand, keys], k) => [
+          hand,
+          sampleTrack(keys, t).map((v, i) => v + sway(k + 2, t, 0.008, 0.6)[i]),
+        ]),
+      );
+      await aimHandsAt(game, look, hands);
+      for (const [hand, pulls] of Object.entries(clip.trigger ?? {})) {
+        const pulled = pulls.some((at) => t >= at && t < at + 0.12);
+        await game.input.set(`${hand}_hand.trigger`, pulled ? 1 : 0);
+      }
+      await game.step({ frames: 1 });
+      if (frame % 4 === 0) {
+        const name = String(frame / 4).padStart(4, "0");
+        await game.screenshot(resolve(dir, `${name}.png`), Number(values["gif-width"]));
+      }
+    }
+    const gif = resolve(out, `${shot.name}.gif`);
+    execFileSync("ffmpeg", [
+      "-y", "-loglevel", "error", "-framerate", "15", "-i", resolve(dir, "%04d.png"),
+      "-vf", "split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
+      gif,
+    ]);
+    console.log(`${shot.name}: ${gif}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 }
