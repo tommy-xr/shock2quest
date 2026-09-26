@@ -1,0 +1,23 @@
+{
+  "revision": "83e46240974ae3419897281e91178bff012b1b72",
+  "dirty": false,
+  "capturedAt": "2026-09-26T23:20:09.588Z",
+  "mission": "hydro1.mis",
+  "player": [
+    38.3,
+    0.9,
+    -16.4
+  ],
+  "subject": "OG-Shotgun",
+  "loadout": {
+    "right": "Shotgun"
+  },
+  "fovDeg": 85,
+  "still": {
+    "file": "hydro1.png",
+    "resolution": [
+      1280,
+      720
+    ]
+  }
+}

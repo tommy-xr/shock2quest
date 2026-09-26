@@ -1,0 +1,36 @@
+{
+  "revision": "83e46240974ae3419897281e91178bff012b1b72",
+  "dirty": false,
+  "capturedAt": "2026-09-26T23:20:24.297Z",
+  "mission": "ops2.mis",
+  "player": [
+    65.5,
+    -7.3,
+    137.5
+  ],
+  "subject": "Protocol Droid",
+  "loadout": {
+    "right": "Laser Pistol",
+    "left": -247
+  },
+  "stats": {
+    "psionic_ability": 6,
+    "psi_tier": 5
+  },
+  "fovDeg": 85,
+  "still": {
+    "file": "ops2.png",
+    "resolution": [
+      1280,
+      720
+    ]
+  },
+  "clip": {
+    "files": [
+      "ops2.gif",
+      "ops2.mp4"
+    ],
+    "frames": 33,
+    "fps": 15
+  }
+}
