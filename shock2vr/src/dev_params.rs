@@ -544,6 +544,10 @@ dev_params! {
     /// something. Inert while the camera is attached (the two poses are the
     /// same pose).
     FREE_CAMERA_CULL_FROM_CAMERA = Camera::bool("free_camera_cull", "Cull from cam", false),
+    /// Gate for the Quest's input-recording button (right thumbstick click,
+    /// `ToggleInputRecording`): off, a stray stick press mid-locomotion cannot
+    /// start a recording. Desktop and HTTP triggers are not gated.
+    INPUT_RECORDING = Camera::bool("input_recording", "Rec input R-stick", false),
     /// Draw the player's world position (X/Y/Z) as a text readout over the
     /// game. Laid out once on the shared HUD canvas; flat draws that canvas in
     /// screen space, VR presents it on a head-anchored panel. The coordinates a
