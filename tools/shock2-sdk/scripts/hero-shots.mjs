@@ -1,5 +1,5 @@
 // Reproducible README/website hero stills. Built SDK; run from tools/shock2-sdk:
-//   npm run build && node scripts/hero-shots.mjs [--only hydro1] [--out ../../screenshots]
+//   npm run build && node scripts/hero-shots.mjs [--only hydro1] [--out <dir>]
 // Each shot boots its mission fresh in VR presentation (no screen-space HUD),
 // steps a fixed frame count so wandering AI lands in roughly the same place,
 // then frames a free camera. Positions are world coordinates found by scouting.
@@ -34,14 +34,14 @@ const SHOTS = [
 
 const { values } = parseArgs({
   options: {
-    out: { type: "string", default: "../../screenshots/hero" },
+    out: { type: "string" },
     only: { type: "string" },
     "max-width": { type: "string", default: "1280" },
     frames: { type: "string", default: "120" },
   },
 });
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const out = resolve(values.out);
+const out = values.out ? resolve(values.out) : resolve(repoRoot, "screenshots/hero");
 await mkdir(out, { recursive: true });
 
 const shots = values.only ? SHOTS.filter((s) => s.name === values.only) : SHOTS;
