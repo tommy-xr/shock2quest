@@ -143,8 +143,12 @@ test(
     await game.player.aimAt(south, { hitbox: "torso", visibility: "required" });
     await game.step({ frames: 3 });
     await fireOnce(game);
-    // leftswing's authored MF_TRIGGER1 is frame 20 at 30 fps (sim frame 41).
-    await game.step({ frames: 45 });
+    // The Baby Arachnid can move during leftswing's 40-frame windup after
+    // hearing the pistol. Track its live torso just before MF_TRIGGER1 so the
+    // aimed ray tests melee damage rather than empty floor.
+    await game.step({ frames: 37 });
+    await game.player.aimAt(south.id, { hitbox: "torso", visibility: "required" });
+    await game.step({ frames: 8 });
     assert.ok(
       hitPoints(await game.entities.detail(south.id)) < wrenchBefore,
       "an aimed wrench swing should damage the Baby Arachnid",

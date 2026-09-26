@@ -308,10 +308,9 @@ fn closing_speed(
 /// Wrench (-928) authors WeaponBash at 6/9, so a VR swing now costs what the
 /// gamesys says it costs instead of a flat placeholder.
 ///
-/// `None` means "this contact does no authored damage" (a wall, a victim with
-/// no receptron for the stim): the caller emits nothing at all, so a swing at
-/// scenery is silent rather than a free 1-point tap.
-fn authored_contact_damage(
+/// `None` means "this contact does no authored damage" (a wall, or a victim
+/// with no receptron for the stim). Callers still play the impact sound.
+pub(super) fn authored_contact_damage(
     world: &World,
     weapon: EntityId,
     victim: EntityId,

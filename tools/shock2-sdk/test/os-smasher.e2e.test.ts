@@ -4,7 +4,7 @@ import { GameServer } from "../src/index.js";
 import { acquireOsUpgrade } from "./helpers/os-upgrade.js";
 import { aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
-test("Smasher waits for release and adds six base damage after its retail charge time", {
+test("Smasher waits for release and adds six base damage before target armor", {
   skip: process.env.SHOCK2_E2E !== "1", timeout: 300_000,
 }, async () => {
   await using game = await GameServer.launch({ mission: "medsci2.mis" });
@@ -21,7 +21,9 @@ test("Smasher waits for release and adds six base damage after its retail charge
   await game.player.aimAt(droid, { hitbox: "torso", visibility: "required" });
   await game.step({ frames: 3 });
   const hp = async () => Number((await game.entities.detail(droid.id)).properties.find(p => p.name === "HitPoints")!.value);
-  for (const [hold, expected] of [[6, 6], [80, 12]]) {
+  // The droid's WeaponBash receptron halves the Wrench's authored 9 damage.
+  // A charged strike adds six before that reduction, then rounds HP loss.
+  for (const [hold, expected] of [[6, 5], [80, 8]]) {
     const before = await hp();
     await game.input.set("right_hand.trigger", 1);
     await game.step({ frames: hold });

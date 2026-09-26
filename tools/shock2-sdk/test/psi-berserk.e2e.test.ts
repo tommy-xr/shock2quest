@@ -118,8 +118,8 @@ test(
         ["Berserk"],
         "Berserk should still be running when the blow lands",
       );
-      // Hit points are integers, so the +13% shows up as the rounded blow:
-      // 6 -> 7 for the Wrench. The load-bearing assertion is that it is bigger.
+      // Hit points are integers, so the authored Wrench blow and its +13%
+      // modifier are compared after rounding. It should also grow strictly.
       assert.ok(
         buffed > baseline,
         `a berserk swing should hurt more than ${baseline}; got ${buffed}`,
