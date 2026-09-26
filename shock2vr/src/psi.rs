@@ -11,10 +11,10 @@ use std::collections::HashSet;
 
 use dark::properties::{
     Link, ProjectileOptions, PropPsiPower, PropPsiPowerLearned, PropPsiPowerLearned2,
-    PropPsiShield, PropSymName,
+    PropPsiShield, PropSymName, ReceptronEffect,
 };
 use dark::ss2_entity_info::{self, SystemShock2EntityInfo};
-use shipyard::Unique;
+use shipyard::{Unique, UniqueView, World};
 
 use crate::scripts::script_util::hydrate_template_component;
 
@@ -33,6 +33,55 @@ const PSI_POWERS_ROOT_TEMPLATE_ID: i32 = -962;
 /// `Inviso` - Photonic Redirection (tier 4 sustained power): while active,
 /// the player is invisible to AI and security devices.
 pub const INVISO_TEMPLATE_ID: i32 = -3157;
+
+/// `Low Grav` in the gamesys: Psycho-reflective Screen grants the player the
+/// same damage reduction on every authored damage stimulus.
+pub const PSYCHO_REFLECTIVE_SCREEN_TEMPLATE_ID: i32 = -963;
+
+/// The screen's uniform Amplify factor, read from its gamesys receptrons.
+/// Damage messages already contain the resolved stimulus damage, so the
+/// player applies this final factor once to both stim hits and direct hits.
+#[derive(Unique)]
+pub struct PsychoReflectiveScreenFactor(pub f32);
+
+impl PsychoReflectiveScreenFactor {
+    pub fn from_entity_info(entity_info: &SystemShock2EntityInfo) -> Self {
+        let factors: Vec<f32> = entity_info
+            .template_to_links
+            .get(&PSYCHO_REFLECTIVE_SCREEN_TEMPLATE_ID)
+            .into_iter()
+            .flat_map(|links| &links.to_links)
+            .filter_map(|link| match &link.link {
+                Link::Receptron(options) => match &options.effect {
+                    ReceptronEffect::Amplify { factor } => Some(*factor),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        // The shipped screen authors the same x0.85 factor for all eleven
+        // damage types. A nonuniform set cannot scale an untyped Damage message.
+        let factor = factors
+            .first()
+            .copied()
+            .filter(|first| factors.iter().all(|factor| factor == first))
+            .unwrap_or(1.0);
+        Self(factor)
+    }
+}
+
+pub fn screen_damage_factor(world: &World) -> f32 {
+    let active = world
+        .borrow::<UniqueView<ActivePsiPowers>>()
+        .is_ok_and(|powers| powers.is_active(PSYCHO_REFLECTIVE_SCREEN_TEMPLATE_ID));
+    if !active {
+        return 1.0;
+    }
+    world
+        .borrow::<UniqueView<PsychoReflectiveScreenFactor>>()
+        .map(|factor| factor.0)
+        .unwrap_or(1.0)
+}
 
 /// `Berserk` - Adrenaline Overproduction (tier 2 sustained power): while
 /// active, the player's melee hits do more damage and the adrenaline drains
