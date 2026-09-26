@@ -1,12 +1,10 @@
 // Stage VR hands for captures: place each controller at an offset from the
 // eye (in the head's yaw frame) and aim it at a world point.
-import type { Game } from "./game.js";
+import { type Game, lookQuat } from "./game.js";
 import type { Quat, Vec3 } from "./types.js";
 import {
   add,
-  normalize,
   quatConjugate,
-  quatFromTo,
   quatMultiply,
   quatNormalize,
   quatRotate,
@@ -32,7 +30,9 @@ export function handPoseAimedAt(
   const yaw = Math.atan2(-toward[0], -toward[2]);
   const yawRotation: Quat = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
   const world = add(eye, quatRotate(yawRotation, offset));
-  const worldRotation = quatFromTo([0, 0, -1], normalize(sub(target, world)));
+  // lookQuat, not a shortest arc from -Z: that picks an arbitrary roll (a
+  // gun aimed along +Z comes out upside down).
+  const worldRotation = lookQuat(sub(target, world));
   const inversePawn = quatConjugate(pawnRotation);
   return {
     position: quatRotate(inversePawn, sub(world, pawnPosition)),
@@ -85,8 +85,7 @@ export async function faceTarget(game: Game, target: Vec3): Promise<void> {
   }
   await turnPawnToward(game, target);
   await game.input.lookAtWorldPoint(target);
-  // The body yaw eases toward the head with a 0.5 s time constant; 1 s
-  // closes ~86% of the turn, well inside the zones' tolerance.
+  // Let the zones' eased (0.5 s time constant) yaw catch up with the head.
   await game.step({ frames: 60 });
 }
 

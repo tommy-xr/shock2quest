@@ -26,3 +26,12 @@ test("offsets are in the head's yaw frame toward the target", () => {
   assert.ok(Math.abs(fromEye[0] + 0.5) < 1e-6, `forward ${fromEye}`);
   assert.ok(Math.abs(fromEye[2] + 0.2) < 1e-6, `right ${fromEye}`);
 });
+
+test("the posed hand stays upright aiming along world +Z", () => {
+  // Shortest-arc rotations from -Z flip ~180 degrees of roll here.
+  const unturned: Quat = [0, 0, 0, 1];
+  const target: Vec3 = [10, 1.2, 12];
+  const pose = handPoseAimedAt(pawn, unturned, eyeHeight, target, [0.1, -0.2, -0.5]);
+  const up = quatRotate(pose.rotation, [0, 1, 0]);
+  assert.ok(up[1] > 0.9, `hand up ${up}`);
+});

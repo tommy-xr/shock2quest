@@ -1,9 +1,9 @@
 // Reproducible README/website hero stills. Built SDK; run from tools/shock2-sdk:
 //   npm run build && node scripts/hero-shots.mjs [--only hydro1] [--out <dir>]
 // Each shot boots its mission fresh in VR presentation (no screen-space HUD),
-// steps a fixed frame count so wandering AI lands in roughly the same place,
-// then stands the player at `player` with a loadout in hand, aimed at the
-// nearest entity matching `target` - a first-person VR view.
+// stands the player at `player` with a loadout in hand, aimed at the nearest
+// entity matching `target` - a first-person VR view. AI wanders, so framing is
+// only coarsely reproducible.
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,8 +23,8 @@ const SHOTS = [
     player: [38.3, 0.9, -16.4],
     target: { filter: "OG-Shotgun", height: 0.9 },
     loadout: { right: "Shotgun" },
-    hands: { right: [0.15, -0.28, -0.45] },
-    support: "right",
+    hands: { right: [0.12, -0.2, -0.36] },
+    twoHanded: "right",
   },
   {
     // Weapon + melee.
@@ -60,7 +60,6 @@ const { values } = parseArgs({
     out: { type: "string" },
     only: { type: "string" },
     "max-width": { type: "string", default: "1280" },
-    frames: { type: "string", default: "0" },
     fov: { type: "string", default: "85" },
   },
 });
@@ -78,21 +77,22 @@ for (const shot of shots) {
     repoRoot,
   });
   try {
-    await game.step({ frames: Number(values.frames) });
     const { entities } = await game.entities.list({ filter: shot.target.filter, limit: 50 });
     const dist = (e) => Math.hypot(...e.position.map((v, i) => v - shot.player[i]));
     const subject = entities.sort((a, b) => dist(a) - dist(b))[0];
     if (!subject) throw new Error(`${shot.name}: no '${shot.target.filter}' in ${shot.mission}`);
-    const [sx, sy, sz] = subject.position;
-    const target = [sx, sy + shot.target.height, sz];
+    const heading = subject.position.map((v, i) => v - shot.player[i]);
 
     // Square up at the spawn point, out of the subject's sight, along the
     // shot's heading (settling takes seconds - long enough to draw an attack).
     const spawn = (await game.info()).player.position;
-    await faceTarget(game, target.map((v, i) => spawn[i] + v - shot.player[i]));
+    await faceTarget(game, spawn.map((v, i) => v + heading[i]));
     const [x, y, z] = shot.player;
     await game.player.teleport({ x, y, z });
     await game.step({ frames: 5 });
+    // Aim where the subject is now; it may have moved while we squared up.
+    const [nx, ny, nz] = (await game.entities.detail(subject.id)).position;
+    const target = [nx, ny + shot.target.height, nz];
     await aimHandsAt(game, target, shot.hands);
     await game.step({ frames: 2 });
     // Hold the grips: a VR hand releases whatever it holds when it lets go.
@@ -106,7 +106,7 @@ for (const shot of shots) {
     for (const hand of Object.keys(shot.loadout)) {
       if (held[hand] == null) throw new Error(`${shot.name}: ${hand} hand holds nothing`);
     }
-    if (shot.support) await attachSupportHand(game, shot.support);
+    if (shot.twoHanded) await attachSupportHand(game, shot.twoHanded);
 
     await game.devParams.set("fov_override_deg", Number(values.fov));
     await game.step({ frames: 2 });

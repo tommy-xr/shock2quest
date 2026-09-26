@@ -4,7 +4,8 @@ import type { UiPanelPose, Vec3 } from "../../src/types.js";
 import { add, dot, normalize, quatConjugate, quatFromTo, quatMultiply, quatNormalize, quatRotate, scale, sub } from "../../src/vec.js";
 
 export * from "../../src/vec.js";
-export type Hand = "left" | "right";
+import type { Hand } from "../../src/vr-pose.js";
+export type { Hand };
 
 /**
  * Aim a controller at a point on the VR cyber-interface panel's canvas.
