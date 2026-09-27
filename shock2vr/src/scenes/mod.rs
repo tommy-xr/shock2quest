@@ -357,6 +357,12 @@ pub fn load_mission_from_save_data(
         &active_mission.mission_core.world,
         save_data.global_data.player_vitals,
     );
+    if let Some(state) = save_data.global_data.player_fall_state {
+        active_mission
+            .mission_core
+            .player_handle
+            .restore_fall_state(state);
+    }
     if let Ok(mut healing) = active_mission
         .mission_core
         .world

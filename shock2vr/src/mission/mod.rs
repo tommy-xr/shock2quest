@@ -303,6 +303,10 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.player_is_crouched()
     }
 
+    fn player_fall_state(&self) -> Option<crate::physics::FatalFallTracker> {
+        Some(self.mission_core.player_handle.fall_state())
+    }
+
     fn player_tracking_is_crouched(&self) -> bool {
         self.mission_core.player_tracking_is_crouched()
     }

@@ -179,6 +179,10 @@ pub trait GameScene {
         false
     }
 
+    fn player_fall_state(&self) -> Option<crate::physics::FatalFallTracker> {
+        None
+    }
+
     /// Physical stance for VR tracking; a hanging capsule can shrink independently.
     fn player_tracking_is_crouched(&self) -> bool {
         self.player_is_crouched()
