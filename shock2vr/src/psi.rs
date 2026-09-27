@@ -96,6 +96,20 @@ pub const MIGHT_TEMPLATE_ID: i32 = -1162;
 /// replaces a modifier with the same source on re-cast rather than stacking it.
 pub const MIGHT_MODIFIER_SOURCE: &str = "psi:might";
 
+/// `PsiImage` - Recursive Psionic Amplification: grants the authored
+/// `P$PsiPower.data[0]` PSI bonus to subsequent casts while active.
+pub const PSI_IMAGE_TEMPLATE_ID: i32 = -3150;
+
+/// Identity of a sustained stat bonus, shared by activation and removal.
+pub fn stat_modifier(template_id: i32) -> Option<(&'static str, crate::player_stats::Stat)> {
+    use crate::player_stats::Stat;
+    match template_id {
+        MIGHT_TEMPLATE_ID => Some((MIGHT_MODIFIER_SOURCE, Stat::Strength)),
+        PSI_IMAGE_TEMPLATE_ID => Some(("psi:image", Stat::PsionicAbility)),
+        _ => None,
+    }
+}
+
 /// `Stability` - Anti-entropic Field (tier 2 sustained power): while active,
 /// the player's guns neither wear nor break (see `scripts::weapon_script`).
 pub const STABILITY_TEMPLATE_ID: i32 = -3148;
