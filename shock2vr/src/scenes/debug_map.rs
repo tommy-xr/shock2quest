@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{InnerSpace, Matrix3, Matrix4, Quaternion, Vector3, vec2, vec3};
+use cgmath::{Matrix4, Quaternion, Vector3, vec2, vec3};
 use dark::properties::{PropMapRef, PropPosition};
 use engine::{
     assets::asset_cache::AssetCache,
@@ -20,7 +20,7 @@ use crate::{
     scripts::Effect,
     scripts::gui::{MapGui, MapGuiState},
     time::Time,
-    ui::UiCanvas,
+    ui::{FrontendPanelAnchor, UiCanvas},
 };
 
 /// Debug scene constants. The mission string doubles as the `QuestInfo`
@@ -55,7 +55,7 @@ pub struct DebugMapScene {
     world: World,
     player_position: Vector3<f32>,
     player_rotation: Quaternion<f32>,
-    head_rotation: Quaternion<f32>,
+    panel_anchor: FrontendPanelAnchor,
     scene_name: String,
     /// The synthetic panel entity carrying `RuntimePropMapData` (attached on
     /// the first update, once the asset cache is available).
@@ -72,10 +72,6 @@ impl DebugMapScene {
             player_info.pos = self.player_position;
             player_info.rotation = self.player_rotation;
         }
-    }
-
-    fn head_base(&self) -> Vector3<f32> {
-        self.player_position + vec3(0.0, 1.5, 0.0) // 1.5m head height
     }
 
     pub fn new() -> Self {
@@ -128,7 +124,7 @@ impl DebugMapScene {
             world,
             player_position: vec3(0.0, 0.0, 0.0),
             player_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            panel_anchor: FrontendPanelAnchor::new(),
             scene_name: "Debug Map".to_string(),
             map_entity,
             map_data_loaded: false,
@@ -159,8 +155,13 @@ impl GameScene for DebugMapScene {
             *world_time = time.clone();
         }
 
-        // Update player head position from input
-        self.head_rotation = input_context.head.rotation;
+        // Use the same tracked eye and gravity-aligned, world-locked placement
+        // as the frontend panels, including their distance and lazy recenter.
+        self.panel_anchor.update(
+            self.player_position + self.player_rotation * input_context.head.position,
+            self.player_rotation * input_context.head.rotation,
+            time.elapsed,
+        );
         self.update_player_info();
 
         // Attach the level's page data to the panel entity on first update -
@@ -210,29 +211,7 @@ impl GameScene for DebugMapScene {
         asset_cache: &mut AssetCache,
         _options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        // Position the panel in front of the player's head, facing the camera.
-        let forward = self.head_rotation * vec3(0.0, 0.0, -1.0);
-        let head_position = self.head_base();
-        let map_world_position = head_position + forward * 1.5; // 1.5 meters in front
-
-        let mut look_dir = head_position - map_world_position;
-        if look_dir.magnitude2() < 1e-6 {
-            look_dir = vec3(0.0, 0.0, 1.0);
-        } else {
-            look_dir = look_dir.normalize();
-        }
-
-        // Honest basis, same as `ui::PanelPlacement::panel`: local +x the viewer's
-        // right, +y up, +Z at the viewer.
-        let mut up = vec3(0.0, 1.0, 0.0);
-        let mut right = up.cross(look_dir);
-        if right.magnitude2() < 1e-6 {
-            up = vec3(0.0, 0.0, 1.0);
-            right = up.cross(look_dir);
-        }
-        right = right.normalize();
-        let true_up = look_dir.cross(right).normalize();
-        let rotation_matrix = Matrix3::from_cols(right, true_up, look_dir);
+        let panel = self.panel_anchor.panel();
 
         // Compose the panel through MapGui - the automap's composition path -
         // and present the shared UiCanvas in world space, anchored at the
@@ -242,8 +221,8 @@ impl GameScene for DebugMapScene {
             map_gui.get_components(&None, self.map_entity, &self.world, &MapGuiState::default());
         let screen_size = map_gui.get_config().screen_size_in_pixels;
         let world_size = screen_size * GUI_PIXEL_TO_WORLD_SIZE * PANEL_WORLD_SCALE;
-        let root_transform = Matrix4::from_translation(map_world_position)
-            * Matrix4::from(Quaternion::from(rotation_matrix))
+        let root_transform = Matrix4::from_translation(panel.center)
+            * Matrix4::from(panel.rotation)
             * Matrix4::from_nonuniform_scale(world_size.x, world_size.y, 1.0);
 
         // Draw opaque, like the flat host does ("the original MFD art is
