@@ -1569,12 +1569,17 @@ impl PlayerInteraction for VrInteraction {
             ];
             let tracked = self.hand_poses();
             let visible = std::array::from_fn(|i| self.visual_hands[i].unwrap_or(tracked[i]));
+            let mut supported = [None, None];
+            if let Some(s) = self.support.as_ref().filter(|s| s.active) {
+                supported[1 - s.primary] = Some(s.entity);
+            }
             objs.append(&mut create_wrist_hud_panels(
                 asset_cache,
                 world,
                 use_mode,
                 visible,
                 frames,
+                supported,
             ));
         }
         objs

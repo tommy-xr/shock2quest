@@ -226,6 +226,7 @@ impl GameScene for DebugHudScene {
                 },
             ],
             frames,
+            [None, None],
         );
 
         (hud_panels, self.player_position, self.player_rotation)
