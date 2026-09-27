@@ -60,7 +60,9 @@ test(
     const item = await game.player.spawnItem(NAMED_ITEM);
     let ui = await openUseMode(game);
     assert.equal(ui.mode, "use");
-    assert.equal(ui.name_strip, null, "an idle pointer over nothing names nothing");
+    // The initial reticle sees the far duct: world selection is independent
+    // of frob reach. Hovering the inventory below must override that fallback.
+    assert.equal(ui.name_strip, "A duct", "the distant world pick supplies the fallback");
 
     // The mouse over the item's slot: the readout names it.
     const [sx, sy, sw, sh] = slotFor(ui, item.entity_id).screen_rect;
