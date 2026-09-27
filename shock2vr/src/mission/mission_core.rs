@@ -17324,6 +17324,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .and_then(|_| self.magazine_anchor_world(id))
                     .map(|anchor| [anchor.x, anchor.y, anchor.z]);
                 Some(DebugEntityDetail {
+                    has_refs: has_refs.unwrap_or(true),
                     entity_id: id.inner() as i32,
                     name,
                     template_id,

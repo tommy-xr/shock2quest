@@ -1807,6 +1807,7 @@ fn process_command(
                     .resolve_entity_id(id)
                     .and_then(|entity_id| debug_scene.entity_detail(entity_id))
                     .map(|detail| EntityDetailResult {
+                        has_refs: detail.has_refs,
                         entity_id: detail.entity_id,
                         name: detail.name,
                         template_id: detail.template_id,

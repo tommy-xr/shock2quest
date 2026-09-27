@@ -63,6 +63,8 @@ const detail = await game.entities.detail(doors.entities[0].id);
 // Link details expose both directions. `target_*` names the opposite endpoint:
 // destination in `outgoing_links`, source in `incoming_links`. A contained
 // entity also reports its container's runtime id directly.
+// Effective world presence: false for suppressed/contained items, true by default.
+const hasWorldReferences = detail.has_refs;
 const containerId = detail.contained_by; // number, null, or undefined on an older runtime
 
 // Inject a script message into an entity (damage, frob, AI signal)

@@ -199,6 +199,9 @@ export interface LinkInfo {
 }
 
 export interface EntityDetailResult {
+  /** Effective world-presence flag; true when P$HasRefs is absent.
+   * Omitted only by runtimes predating this diagnostic field. */
+  has_refs?: boolean;
   entity_id: number;
   name: string;
   template_id: number;

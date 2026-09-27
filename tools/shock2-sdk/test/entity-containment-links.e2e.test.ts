@@ -13,7 +13,7 @@ const HYDRO_CARD_A = 934;
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 test(
-  "entity detail reports both endpoints of authored containment",
+  "entity detail reports world references and both containment endpoints",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -37,6 +37,30 @@ test(
     assert.equal(outgoingContains[0].target_name, card.name);
 
     const cardDetail = await game.entities.detail(card.id);
+    assert.equal(
+      cardDetail.properties.find((property) => property.name === "HasRefs")?.value,
+      "false",
+    );
+    assert.equal(
+      cardDetail.has_refs,
+      false,
+      "contained card must explicitly report no world references",
+    );
+    const candidates = (await game.entities.list()).entities;
+    let defaultChecked = false;
+    for (const entity of candidates) {
+      const detail = await game.entities.detail(entity.id);
+      if (!detail.properties.some((property) => property.name === "HasRefs")) {
+        assert.equal(
+          detail.has_refs,
+          true,
+          "absent HasRefs must default to world references enabled",
+        );
+        defaultChecked = true;
+        break;
+      }
+    }
+    assert.ok(defaultChecked, "mission must contain an entity without authored HasRefs");
     const incomingContains = cardDetail.incoming_links.filter((link) =>
       link.link_type.startsWith("Contains"),
     );
