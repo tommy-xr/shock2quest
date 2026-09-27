@@ -36,14 +36,15 @@ const READY_LEFT = [-0.16, -0.24, -0.45];
 
 const SHOTS = [
   {
-    // Two-handed long gun.
+    // Two-handed assault rifle, at the start by the egg pods.
     name: "hydro1",
     mission: "hydro1.mis",
-    player: [38.3, 0.9, -16.4],
-    subject: "OG-Shotgun",
-    loadout: { right: "Shotgun" },
-    hands: { right: [0.12, -0.2, -0.36] },
+    player: [15.8, 0.84, 52.4],
+    subject: "Floor Pod",
+    loadout: { right: -18 },
+    hands: { right: [0.16, -0.12, -0.34] },
     twoHanded: "right",
+    stats: { strength: 5, skills: { standard_weapons: 6 } },
   },
   {
     // Weapon + melee.
