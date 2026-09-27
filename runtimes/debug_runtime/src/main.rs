@@ -1048,8 +1048,12 @@ fn run_game_blocking(
 
         // Render the game
         let ratio = scr_width as f32 / scr_height as f32;
-        let projection_matrix: cgmath::Matrix4<f32> =
-            cgmath::perspective(cgmath::Deg(game.desired_fov_deg()), ratio, 0.1, 1000.0);
+        let projection_matrix: cgmath::Matrix4<f32> = cgmath::perspective(
+            cgmath::Deg(game.desired_fov_deg()),
+            ratio,
+            shock2vr::NEAR_PLANE,
+            shock2vr::FAR_PLANE,
+        );
 
         let screen_size = vec2(scr_width as f32, scr_height as f32);
 

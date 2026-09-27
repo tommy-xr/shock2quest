@@ -140,6 +140,13 @@ pub const PLAYER_CROUCH_EYE_HEIGHT: f32 = 1.2;
 /// FOVs must be used as-is.
 pub const DEFAULT_FOV_DEG: f32 = 45.0;
 
+/// Near and far clip planes, in world units, for every runtime's projection.
+/// Near is ~2.5 cm: a shouldered rifle's stock or a hand brought to the face
+/// sits closer than a centimetre-scale plane allows, and the 24-bit depth
+/// buffer still resolves ~0.02 units at 100 units away.
+pub const NEAR_PLANE: f32 = 0.03;
+pub const FAR_PLANE: f32 = 1000.0;
+
 /// Resolves `base` against `dev_params::FOV_OVERRIDE_DEG`: `0` (its default)
 /// means "no override - use `base`"; any positive value forces that FOV
 /// instead. Shared by `Game::desired_fov_deg` and the `App::MissingAssets`
