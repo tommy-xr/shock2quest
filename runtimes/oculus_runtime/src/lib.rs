@@ -1870,7 +1870,7 @@ fn render_swapchain(
         view.pose.orientation.y,
         view.pose.orientation.z,
     );
-    let projection_matrix = create_projection_matrix(&view.fov, 0.1, 1000.);
+    let projection_matrix = create_projection_matrix(&view.fov, shock2vr::NEAR_PLANE, shock2vr::FAR_PLANE);
     let screen_size = vec2(width as f32, height as f32);
     // Routed through `resolve_camera` rather than used directly: while the
     // player is dying the game blends this tracked pose toward the fallen death
