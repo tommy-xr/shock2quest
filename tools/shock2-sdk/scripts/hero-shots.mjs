@@ -31,19 +31,31 @@ const AIM_RIGHT = [0.1, -0.18, -0.55];
 const AIM_LEFT = [-0.1, -0.2, -0.52];
 const REST_LEFT = [-0.18, -0.35, -0.4];
 const REST_RIGHT = [0.18, -0.4, -0.35];
+// A rifle at low ready: the support hand sits under the handguard, in view.
+const RIFLE_RIGHT = [0.18, -0.3, -0.3];
 // A melee weapon held up and ready, in frame.
 const READY_LEFT = [-0.16, -0.24, -0.45];
 
 const SHOTS = [
   {
-    // Two-handed long gun.
+    // Two-handed assault rifle, at the start by the egg pods.
     name: "hydro1",
     mission: "hydro1.mis",
-    player: [38.3, 0.9, -16.4],
-    subject: "OG-Shotgun",
-    loadout: { right: "Shotgun" },
-    hands: { right: [0.12, -0.2, -0.36] },
+    player: [15.8, 0.84, 52.4],
+    subject: "Floor Pod",
+    loadout: { right: -18 },
+    hands: { right: RIFLE_RIGHT },
     twoHanded: "right",
+    stats: { strength: 5, skills: { standard_weapons: 6 } },
+    // Shots burst the pod; the clip ends before its gas reaches the player.
+    // Its aim points jump as it bursts, so the aim stays where it stood.
+    clip: {
+      seconds: 0.95,
+      hands: { right: [{ t: 0, value: RIFLE_RIGHT }] },
+      trigger: { right: [0.3, 0.55, 0.8] },
+      fixedAim: true,
+      destroysSubject: true,
+    },
   },
   {
     // Weapon + melee.
@@ -185,7 +197,9 @@ async function captureShot(shot) {
     await game.step({ frames: 5 });
     if (shot.spawnMonster) subject = await spawnMonster(game, shot.spawnMonster);
     // Aim where the subject is now; it may have moved while we squared up.
-    const target = (await aimPoints(game, subject.id))("torso");
+    const points = await aimPoints(game, subject.id);
+    assert.ok(points, `${shot.name}: the subject vanished while squaring up`);
+    const target = points("torso");
     await aimHandsAt(game, target, shot.hands);
     await game.step({ frames: 2 });
     // Hold the grips: a VR hand releases whatever it holds when it lets go.
@@ -225,9 +239,10 @@ async function captureShot(shot) {
 
 /** Look up the subject's live aim points by class, falling back to the torso,
  * then its origin (which can sit well off its body - a monkey's is above its
- * back). */
+ * back). Null once the subject is gone. */
 async function aimPoints(game, id) {
   const detail = await game.entities.detail(id);
+  if (!detail) return null;
   const find = (c) => detail.aim_points?.find((p) => p.classification === c)?.position;
   return (classification) => find(classification) ?? find("torso") ?? detail.position;
 }
@@ -241,18 +256,33 @@ async function recordClip(game, shot, subjectId) {
   const { clip } = shot;
   const frames = Math.round(clip.seconds * 60);
   const sink = await frameSink(game, shot.name);
+  let point;
   try {
     for (let frame = 0; frame < frames; frame++) {
       const t = frame / 60;
       const hands = Object.fromEntries(
         Object.entries(clip.hands).map(([hand, keys]) => [hand, sampleTrack(keys, t)]),
       );
-      await trackSubject(game, await aimPoints(game, subjectId), t, hands);
+      // A destroyed subject keeps its last aim.
+      if (!clip.fixedAim || !point) point = (await aimPoints(game, subjectId)) ?? point;
+      await trackSubject(game, point, t, hands);
       for (const [hand, pulls] of Object.entries(clip.trigger ?? {})) {
         const pulled = pulls.some((at) => t >= at && t < at + 0.12);
         await game.input.set(`${hand}_hand.trigger`, pulled ? 1 : 0);
       }
       await sink.step();
+    }
+    // Checked, so a take that went differently fails rather than misleads.
+    if (shot.twoHanded) {
+      const { player } = await game.info();
+      const grip = player.hand_grips.find((g) => g.hand === shot.twoHanded);
+      assert.ok(grip?.support?.attached, `${shot.name}: the support hand let go`);
+    }
+    if (clip.destroysSubject) {
+      // A burst pod lingers as scenery, without hit points.
+      const detail = await game.entities.detail(subjectId);
+      const hp = Number(detail?.properties.find((p) => p.name === "HitPoints")?.value ?? 0);
+      assert.ok(hp <= 0, `${shot.name}: the subject survived (${hp} hp)`);
     }
     return sink.finish();
   } finally {
@@ -316,7 +346,7 @@ async function recordMelee(game, shot, subjectId, held) {
   // Track the subject for `seconds`.
   const hold = async (seconds, hands) => {
     for (const end = t + seconds; t < end; t += 1 / 60) {
-      point = await aimPoints(game, subjectId);
+      point = (await aimPoints(game, subjectId)) ?? point;
       await trackSubject(game, point, t, hands);
       await sink.step();
     }
@@ -350,7 +380,7 @@ async function recordMelee(game, shot, subjectId, held) {
     const followThrough = 12;
     const total = windUp + chop + followThrough;
     for (let frame = 0; frame < total; frame++, t += 1 / 60) {
-      point = await aimPoints(game, subjectId);
+      point = (await aimPoints(game, subjectId)) ?? point;
       const { player, eye } = await trackSubject(game, point, t, { right: shot.hands.right });
       const torso = point("torso");
       const toward = torso.map((v, i) => v - eye[i]);

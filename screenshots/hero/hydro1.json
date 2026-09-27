@@ -1,16 +1,22 @@
 {
-  "revision": "83e46240974ae3419897281e91178bff012b1b72",
+  "revision": "ae0538733c805df746416eb82e9b1cedbc41ead4",
   "dirty": false,
-  "capturedAt": "2026-09-26T23:20:09.588Z",
+  "capturedAt": "2026-09-27T00:53:13.140Z",
   "mission": "hydro1.mis",
   "player": [
-    38.3,
-    0.9,
-    -16.4
+    15.8,
+    0.84,
+    52.4
   ],
-  "subject": "OG-Shotgun",
+  "subject": "Floor Pod",
   "loadout": {
-    "right": "Shotgun"
+    "right": -18
+  },
+  "stats": {
+    "strength": 5,
+    "skills": {
+      "standard_weapons": 6
+    }
   },
   "fovDeg": 85,
   "still": {
@@ -19,5 +25,13 @@
       1280,
       720
     ]
+  },
+  "clip": {
+    "files": [
+      "hydro1.gif",
+      "hydro1.mp4"
+    ],
+    "frames": 15,
+    "fps": 15
   }
 }
