@@ -62,8 +62,7 @@ use engine::{
         BillboardMaterial, ParticleSystem, RenderLayer, SceneObject, VertexPosition,
         light::SpotLight, quad,
     },
-    texture::{TextureOptions, TextureTrait, init_from_memory2},
-    texture_format::{PixelFormat, RawTextureData},
+    texture::TextureTrait,
 };
 use physics::PhysicsWorld;
 use rand::{
@@ -2932,7 +2931,6 @@ pub struct MissionCore {
 
     /// White transition cover shared by both flat and per-eye VR rendering.
     screen_fade_alpha: f32,
-    screen_fade_texture: Rc<dyn TextureTrait>,
 
     /// The tracked head rotation this frame. The death camera needs the gaze
     /// the player died with, and a death arriving through `handle_effects` sees
@@ -3062,18 +3060,6 @@ impl MissionCore {
         engine::platform::service_events();
 
         let speech_registry = SpeechVoiceRegistry::from_entity_info(&entity_info_rc);
-        let screen_fade_texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
-            RawTextureData {
-                width: 1,
-                height: 1,
-                bytes: vec![255, 255, 255, 255],
-                format: PixelFormat::RGBA,
-            },
-            &TextureOptions {
-                wrap: false,
-                ..Default::default()
-            },
-        ));
 
         let mut id_to_model = HashMap::new();
         let mut id_to_animation_player = HashMap::new();
@@ -3885,7 +3871,6 @@ impl MissionCore {
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
-            screen_fade_texture,
             last_head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             last_head_position: vec3(0.0, 0.0, 0.0),
             show_position_anchor: crate::ui::FrontendPanelAnchor::new(),
@@ -14125,11 +14110,10 @@ impl MissionCore {
         // WhiteOut is a view transition, so it covers the world, viewmodel,
         // HUD, and flat UI and is rendered once per eye in VR.
         if self.screen_fade_alpha > 0.0 {
-            let mut fade = SceneObject::screen_space_quad2(
-                self.screen_fade_texture.clone(),
+            let mut fade = SceneObject::screen_space_color_quad(
                 vec2(0.0, 0.0),
                 screen_size,
-                self.screen_fade_alpha,
+                cgmath::vec4(1.0, 1.0, 1.0, self.screen_fade_alpha),
             );
             // A final system layer covers scene UI in both hosts. Its depth is
             // cleared once by the renderer at the explicit group boundary.
