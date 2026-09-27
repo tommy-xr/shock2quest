@@ -455,6 +455,7 @@ mod tests {
         ToTemplateLink {
             to_template_id,
             link: Link::StimSource(StimSourceOptions {
+                lifecycle: Default::default(),
                 intensity,
                 propagator,
             }),

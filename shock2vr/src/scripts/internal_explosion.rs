@@ -58,6 +58,7 @@ impl Script for InternalExplosion {
             StimSourceOptions {
                 intensity,
                 propagator,
+                ..
             },
         ) in radius_sources
         {

@@ -17,8 +17,8 @@ use crate::{mission::PlayerInfo, psi::ActivePsiPowers, psi::IMMOLATE_TEMPLATE_ID
 use super::Effect;
 
 /// How often the aura stimulates what stands in it. The shipped
-/// `sStimSourceDesc` carries the source's period, but the port parses only the
-/// propagator and intensity, so this is an **assumption**: one pulse per
+/// This player-aura implementation uses a fixed period rather than the
+/// source's parsed lifecycle, so this is an **assumption**: one pulse per
 /// second, which reads the authored intensity 5 as 5 damage per second at the
 /// player (linear falloff to 0 at the 4-unit edge) and burns a 12-HP pipe
 /// hybrid down in a few seconds of contact.
@@ -196,6 +196,7 @@ mod tests {
                     ToTemplateLink {
                         to_template_id: INCENDIARY,
                         link: Link::StimSource(StimSourceOptions {
+                            lifecycle: Default::default(),
                             intensity: 5.0,
                             propagator: StimPropagator::Radius { radius: 4.0 },
                         }),

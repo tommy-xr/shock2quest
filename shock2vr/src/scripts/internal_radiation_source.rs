@@ -86,6 +86,7 @@ mod tests {
                     to_template_id: RADIATION_STIM_TEMPLATE_ID,
                     to_entity_id: None,
                     link: Link::StimSource(StimSourceOptions {
+                        lifecycle: Default::default(),
                         intensity: 8.0,
                         propagator: StimPropagator::Radius { radius: 6.0 },
                     }),
