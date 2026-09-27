@@ -10,7 +10,8 @@
 //! See `projects/flatscreen-and-vr-architecture.md` (Slices 5-6).
 
 use cgmath::{
-    Deg, Matrix4, Point3, Quaternion, Rotation, Rotation3, Vector2, Vector3, point3, vec2, vec3,
+    Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3, Vector2, Vector3, point3,
+    vec2, vec3,
 };
 use shipyard::{EntityId, Get, View, World};
 
@@ -222,18 +223,18 @@ impl FlatPlayerController {
         // weapon (or nothing) is wielded and thaw on the next gun frame.
         let kick = self.recoil.step(step_dt);
 
-        // Crosshair raycast: the frobbable entity under the reticle (resolving
-        // hitbox proxies to their parent, and ignoring the weapon we hold).
+        // The first visible surface is the HUD pick, irrespective of frob reach
+        // or eligibility. HUDSelect is applied centrally by render_per_eye.
         let forward = look.rotate_vector(vec3(0.0, 0.0, -1.0));
         self.last_aim = Some((point3(camera_pos.x, camera_pos.y, camera_pos.z), forward));
         // Melee and empty hands keep this unbent ray, so they must also start
         // with no bias. Gun recoil below updates the ray and bias together.
         self.last_aim_bias = vec2(0.0, 0.0);
-        let highlighted = physics
+        let pick = physics
             .ray_cast2(
                 point3(camera_pos.x, camera_pos.y, camera_pos.z),
                 forward,
-                FROB_REACH,
+                f32::MAX,
                 InternalCollisionGroups::ENTITIES
                     | InternalCollisionGroups::SELECTABLE
                     | InternalCollisionGroups::WORLD
@@ -242,9 +243,24 @@ impl FlatPlayerController {
                 None,
                 true,
             )
-            .and_then(|r| r.maybe_entity_id)
-            .map(|e| resolve_proxy_entity(world, e))
-            .filter(|e| Some(*e) != self.wielded_entity && is_frobbable(world, *e));
+            .and_then(|hit| {
+                hit.maybe_entity_id.map(|entity| {
+                    (
+                        resolve_proxy_entity(world, entity),
+                        (hit.hit_point - point3(camera_pos.x, camera_pos.y, camera_pos.z))
+                            .magnitude2(),
+                    )
+                })
+            })
+            .filter(|(entity, _)| Some(*entity) != self.wielded_entity);
+        let highlighted = pick.map(|(entity, _)| entity);
+        // Reuse the same occluded pick for interaction, retaining retail's
+        // surface-distance bound without imposing it on the HUD.
+        let frob_target = pick
+            .filter(|(entity, distance_squared)| {
+                *distance_squared <= FROB_REACH * FROB_REACH && is_frobbable(world, *entity)
+            })
+            .map(|(entity, _)| entity);
 
         // Place the viewmodel + fire on the trigger edge.
         if let Some(entity_id) = self.wielded_entity {
@@ -344,7 +360,7 @@ impl FlatPlayerController {
         // Use / frob / pickup on the use-button (squeeze) rising edge.
         let use_pressed = input.squeeze_value > 0.5;
         if use_pressed && !self.last_use_pressed {
-            if let Some(target) = highlighted {
+            if let Some(target) = frob_target {
                 if can_grab_item(world, target) {
                     // Weapons become the flat viewmodel; ordinary loot goes
                     // into the backpack without displacing that viewmodel.
@@ -848,15 +864,28 @@ mod tests {
 
     /// Retail `GAMEPARAM` authors `Frob Dist = 50`, which the original picker
     /// treats as squared SS2 units. After this engine's 2.5 world-scale divide,
-    /// a surface farther than `sqrt(50) / 2.5` must not highlight or frob.
+    /// a surface farther than `sqrt(50) / 2.5` may highlight but must not frob.
     #[test]
     fn crosshair_does_not_frob_a_visible_entity_beyond_retail_reach() {
+        assert_highlight_without_frob(4.0, Some(FrobFlag::SCRIPT));
+    }
+
+    #[test]
+    fn crosshair_highlights_non_frobbable_objects_near_and_far() {
+        assert_highlight_without_frob(1.0, None);
+        assert_highlight_without_frob(150.0, None);
+    }
+
+    fn assert_highlight_without_frob(distance: f32, frob: Option<FrobFlag>) {
         let mut world = World::new();
-        let target = world.add_entity(frob_info(FrobFlag::SCRIPT));
+        let target = world.add_entity(());
+        if let Some(frob) = frob {
+            world.add_component(target, frob_info(frob));
+        }
         let mut physics = PhysicsWorld::new();
         physics.add_kinematic(
             target,
-            vec3(0.0, 0.0, -4.0),
+            vec3(0.0, 0.0, -distance),
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             vec3(0.0, 0.0, 0.0),
             vec3(0.2, 0.2, 0.2),
@@ -870,10 +899,13 @@ mod tests {
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
 
         let ray_hit = physics
-            .ray_cast(
+            .ray_cast2(
                 point3(0.0, 0.0, 0.0),
                 vec3(0.0, 0.0, -1.0),
+                f32::MAX,
                 InternalCollisionGroups::SELECTABLE,
+                None,
+                true,
             )
             .expect("the fixture target must remain visible to an unbounded ray");
         assert_eq!(ray_hit.maybe_entity_id, Some(target));
@@ -891,10 +923,14 @@ mod tests {
             &physics,
         );
 
-        assert_eq!(highlighted, None, "out-of-reach objects must not highlight");
+        assert_eq!(
+            highlighted,
+            Some(target),
+            "visible objects may highlight regardless of frob eligibility"
+        );
         assert!(
             effects.is_empty(),
-            "out-of-reach use must emit no frob effects, got {effects:?}"
+            "ineligible use must emit no frob effects, got {effects:?}"
         );
     }
 }
