@@ -78,9 +78,17 @@ impl<'a> ObjectLighting<'a> {
     }
 }
 
-/// `lights` with every ambient channel raised to at least `floor`.
+/// `lights` with its ambient brightened until its strongest channel reaches
+/// `floor`, keeping the room's tint; a black ambient becomes grey.
 fn with_ambient_floor(mut lights: LightArray, floor: f32) -> LightArray {
-    lights.ambient = lights.ambient.map(|channel| channel.max(floor));
+    let strongest = lights.ambient.x.max(lights.ambient.y).max(lights.ambient.z);
+    if strongest < floor {
+        lights.ambient = if strongest > 1e-4 {
+            lights.ambient * (floor / strongest)
+        } else {
+            vec3(floor, floor, floor)
+        };
+    }
     lights
 }
 
@@ -306,10 +314,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_held_floor_lifts_dark_ambient_and_keeps_bright_ambient() {
-        let lights = LightArray::new().with_object_lighting(vec3(0.078, 0.5, 0.078), 0.0);
-        let floored = with_ambient_floor(lights, 0.3);
-        assert_eq!(floored.ambient, vec3(0.3, 0.5, 0.3));
+    fn the_held_floor_brightens_dark_ambient_and_keeps_its_tint() {
+        let ambient = |value| {
+            with_ambient_floor(LightArray::new().with_object_lighting(value, 0.0), 0.6).ambient
+        };
+        assert_eq!(ambient(vec3(0.05, 0.1, 0.05)), vec3(0.3, 0.6, 0.3));
+        assert_eq!(ambient(vec3(0.2, 0.8, 0.2)), vec3(0.2, 0.8, 0.2));
+        assert_eq!(ambient(vec3(0.0, 0.0, 0.0)), vec3(0.6, 0.6, 0.6));
     }
 
     fn omni(position: Vector3<f32>, brightness: f32, radius: f32) -> WorldLight {
