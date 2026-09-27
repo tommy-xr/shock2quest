@@ -48,12 +48,13 @@ const SHOTS = [
     twoHanded: "right",
     stats: { strength: 5, skills: { standard_weapons: 6 } },
     // Shots burst the pod; the clip ends before its gas reaches the player.
-    // The pod does not move, so the aim stays put as it bursts.
+    // Its aim points jump as it bursts, so the aim stays where it stood.
     clip: {
       seconds: 0.95,
       hands: { right: [{ t: 0, value: RIFLE_RIGHT }] },
       trigger: { right: [0.3, 0.55, 0.8] },
       fixedAim: true,
+      destroysSubject: true,
     },
   },
   {
@@ -196,7 +197,9 @@ async function captureShot(shot) {
     await game.step({ frames: 5 });
     if (shot.spawnMonster) subject = await spawnMonster(game, shot.spawnMonster);
     // Aim where the subject is now; it may have moved while we squared up.
-    const target = (await aimPoints(game, subject.id))("torso");
+    const points = await aimPoints(game, subject.id);
+    assert.ok(points, `${shot.name}: the subject vanished while squaring up`);
+    const target = points("torso");
     await aimHandsAt(game, target, shot.hands);
     await game.step({ frames: 2 });
     // Hold the grips: a VR hand releases whatever it holds when it lets go.
@@ -269,6 +272,15 @@ async function recordClip(game, shot, subjectId) {
       }
       await sink.step();
     }
+    // Checked, so a take that went differently fails rather than misleads.
+    if (shot.twoHanded) {
+      const { player } = await game.info();
+      const grip = player.hand_grips.find((g) => g.hand === shot.twoHanded);
+      assert.ok(grip?.support?.attached, `${shot.name}: the support hand let go`);
+    }
+    if (clip.destroysSubject) {
+      assert.equal(await aimPoints(game, subjectId), null, `${shot.name}: the subject survived`);
+    }
     return sink.finish();
   } finally {
     await sink.dispose();
@@ -331,7 +343,7 @@ async function recordMelee(game, shot, subjectId, held) {
   // Track the subject for `seconds`.
   const hold = async (seconds, hands) => {
     for (const end = t + seconds; t < end; t += 1 / 60) {
-      point = await aimPoints(game, subjectId);
+      point = (await aimPoints(game, subjectId)) ?? point;
       await trackSubject(game, point, t, hands);
       await sink.step();
     }
@@ -365,7 +377,7 @@ async function recordMelee(game, shot, subjectId, held) {
     const followThrough = 12;
     const total = windUp + chop + followThrough;
     for (let frame = 0; frame < total; frame++, t += 1 / 60) {
-      point = await aimPoints(game, subjectId);
+      point = (await aimPoints(game, subjectId)) ?? point;
       const { player, eye } = await trackSubject(game, point, t, { right: shot.hands.right });
       const torso = point("torso");
       const toward = torso.map((v, i) => v - eye[i]);
