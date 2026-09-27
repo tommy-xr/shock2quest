@@ -8,7 +8,7 @@ use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
     scene::{SceneObject, basic_material, light::SpotLight},
-    texture::{TextureOptions, TextureTrait, init_from_memory2},
+    texture::TextureTrait,
 };
 use shipyard::{EntityId, UniqueViewMut, World};
 
@@ -32,8 +32,8 @@ use super::cutscene_skip::{RingArt, SkipHold};
 #[cfg(feature = "ffmpeg")]
 use engine_ffmpeg::{AudioPlayer, VideoPlayer};
 
-#[cfg(not(feature = "ffmpeg"))]
-use engine::texture_format::{PixelFormat, RawTextureData};
+#[cfg(feature = "ffmpeg")]
+use engine::texture::{TextureOptions, init_from_memory2};
 
 /// Displays a flat panel in front of the player and plays back a video file.
 pub struct CutscenePlayerScene {
@@ -355,24 +355,7 @@ impl CutscenePlayerScene {
 
         #[cfg(not(feature = "ffmpeg"))]
         {
-            let white_pixel = vec![255u8, 255u8, 255u8, 255u8];
-            let aspect_ratio = 16.0 / 9.0;
-            let texture_data = RawTextureData {
-                width: 1,
-                height: 1,
-                bytes: white_pixel,
-                format: PixelFormat::RGBA,
-            };
-            (
-                Rc::new(init_from_memory2(
-                    texture_data,
-                    &TextureOptions {
-                        wrap: false,
-                        ..Default::default()
-                    },
-                )),
-                aspect_ratio,
-            )
+            (engine::texture::shared_white_pixel(), 16.0 / 9.0)
         }
     }
 
