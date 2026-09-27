@@ -377,7 +377,7 @@ dev_params! {
     /// swing peaks at **4.07** and ordinary walking carries the weapon at
     /// **1.80**. 2.0 was then tuned in-headset from that measurement.
     MELEE_FREE_SWING_SPEED = Melee::float_locked("melee_free_swing", "Free swing", 2.0, 0.5, 20.0, 0.5),
-    MELEE_ONE_HAND_SCALE = Melee::float_locked("melee_one_hand_scale", "One-hand wrench damage", 0.7, 0.0, 1.0, 0.05),
+    MELEE_ONE_HAND_SCALE = Melee::float_locked("melee_one_hand_scale", "One-hand melee damage", 0.5, 0.0, 1.0, 0.05),
     /// Draw the tracked-hand glove *in addition to* a wielded weapon's own
     /// first-person model, instead of letting the weapon model stand in for the
     /// hand. `0` off, `1` on.

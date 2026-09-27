@@ -83,7 +83,7 @@ for (const mode of ["one hand", "two hands", "late support", "released support"]
       assert.ok(hits[0]!.impact?.bone != null);
       const point = (await game.entities.detail(target.id)).aim_points?.find(p => p.joint_id === hits[0]!.impact!.bone);
       assert.equal(point?.classification, "limb", "the fixture must strike the same class of hitbox");
-      assert.equal(before - await health(), Math.round(9 * 0.75 * (supported ? 1 : 0.7)),
+      assert.equal(before - await health(), Math.round(9 * 0.75 * (supported ? 1 : 0.5)),
         "the one-hand factor composes with the authored blow and existing limb multiplier before HP rounding");
     });
 }

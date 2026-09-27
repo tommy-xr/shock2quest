@@ -752,13 +752,17 @@ mod tests {
     #[test]
     fn wrench_contact_damage_uses_the_swing_latch_and_current_release() {
         for (model, support, released, scale) in [
-            ("wrench_h", vec![false], false, 0.7),
+            ("wrench_h", vec![false], false, 0.5),
             ("wrench_h", vec![true], false, 1.0),
-            ("wrench_h", vec![false, true], false, 0.7),
-            ("wrench_h", vec![true, false], false, 0.7),
-            ("wrench_h", vec![true], true, 0.7),
+            ("wrench_h", vec![false, true], false, 0.5),
+            ("wrench_h", vec![true, false], false, 0.5),
+            ("wrench_h", vec![true], true, 0.5),
             ("wrench_w", vec![false], false, 1.0),
+            // No support socket yet (#1768), so no way to avoid the penalty.
             ("rapier_h", vec![false], false, 1.0),
+            ("shard_h", vec![false], false, 1.0),
+            // One-handed by design.
+            ("psword_h", vec![false], false, 1.0),
         ] {
             let (mut world, weapon, target) = test_world(PresentationMode::Vr);
             world.add_component(weapon, dark::properties::PropModelName(model.to_owned()));

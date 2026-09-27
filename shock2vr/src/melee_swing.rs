@@ -67,9 +67,10 @@ pub(crate) fn damage_scale(world: &shipyard::World, weapon: EntityId) -> f32 {
         .ok()
         .and_then(|models| {
             models.get(weapon).ok().map(|model| {
-                // Only the wrench has this proposed gameplay penalty. A classic
-                // model without a runtime support socket must not be penalized.
-                model.0 == "wrench_h" && crate::vr_support::supports_model(&model.0)
+                // Two-handed melee weapons, once they have a support socket.
+                // The psi sword is one-handed by design.
+                matches!(model.0.as_str(), "wrench_h" | "rapier_h" | "shard_h")
+                    && crate::vr_support::supports_model(&model.0)
             })
         })
         .unwrap_or(false);
