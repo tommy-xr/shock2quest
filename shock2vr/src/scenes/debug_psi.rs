@@ -25,7 +25,7 @@ use crate::{
 
 use super::debug_common::{
     AutoEquipHooks, DebugBox, DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks,
-    boxes_to_geometry, max_player_stats, spawn_at,
+    boxes_to_geometry, max_player_stats, spawn_at, spawn_at_oriented,
 };
 
 /// The Psi Amp player weapon.
@@ -101,6 +101,22 @@ pub fn create_debug_psi_scene(
             vec3(pen_mid_x, PEN_WALL_HEIGHT / 2.0, PEN_HALF_WIDTH),
             vec3(pen_len, PEN_WALL_HEIGHT, 1.0),
         ),
+        // Separate defense stations keep live ranged attackers out of the
+        // original offensive-power pen. Teleport to (0, 1.244, 40/80).
+        (
+            vec3(0.2, 0.3, 0.5),
+            vec3(-5.0, -0.5, 40.0),
+            vec3(30.0, 1.0, 16.0),
+        ),
+        (
+            vec3(0.3, 0.3, 0.3),
+            vec3(-5.0, -0.5, 80.0),
+            vec3(30.0, 1.0, 16.0),
+        ),
+        (pen_wall, vec3(-5.0, 4.0, 32.0), vec3(30.0, 8.0, 1.0)),
+        (pen_wall, vec3(-5.0, 4.0, 48.0), vec3(30.0, 8.0, 1.0)),
+        (pen_wall, vec3(-5.0, 4.0, 72.0), vec3(30.0, 8.0, 1.0)),
+        (pen_wall, vec3(-5.0, 4.0, 88.0), vec3(30.0, 8.0, 1.0)),
     ];
     let (scene_objects, collider) = boxes_to_geometry(boxes);
 
@@ -176,6 +192,19 @@ impl DebugSceneHooks for PsiHooks {
                 spawn_at(-1358, Point3::new(-4.0, 1.0, -2.0)),
                 spawn_at(-928, Point3::new(-18.0, 1.0, 0.0)),
                 spawn_at(-57, Point3::new(-45.0, 1.0, 0.0)),
+                // Blue Monkey's authored shot explodes into Cold, not Psi
+                // Stim: Energy Reflection halves this attack, never aborts it.
+                spawn_at_oriented(
+                    -1431,
+                    Point3::new(-12.0, 1.0, 40.0),
+                    Quaternion::from_angle_y(Deg(180.0)),
+                ),
+                // Laser Turret -> Turret Laser Bolt -> Energy Stim.
+                spawn_at_oriented(
+                    -168,
+                    Point3::new(-12.0, 0.8, 80.0),
+                    Quaternion::from_angle_y(Deg(180.0)),
+                ),
             ]);
             core.handle_effects(
                 spawns,
