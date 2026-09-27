@@ -4957,19 +4957,37 @@ impl MissionCore {
         }
 
         // Tick the player's sustained psi powers down and expire them.
-        self.world
-            .run(|mut active: UniqueViewMut<crate::psi::ActivePsiPowers>| {
-                let dt = time.elapsed.as_secs_f32();
-                active.0.retain_mut(|power| {
-                    power.remaining_secs -= dt;
-                    if power.remaining_secs <= 0.0 {
-                        game_log!(INFO, "Psi power expired: {}", power.name);
-                        false
-                    } else {
-                        true
-                    }
+        let expired_sources =
+            self.world
+                .run(|mut active: UniqueViewMut<crate::psi::ActivePsiPowers>| {
+                    let dt = time.elapsed.as_secs_f32();
+                    let mut expired_sources = Vec::new();
+                    active.0.retain_mut(|power| {
+                        power.remaining_secs -= dt;
+                        if power.remaining_secs <= 0.0 {
+                            game_log!(INFO, "Psi power expired: {}", power.name);
+                            if let Some((source, _)) = crate::psi::stat_modifier(power.template_id)
+                            {
+                                expired_sources.push(source);
+                            }
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                    expired_sources
                 });
-            });
+        if !expired_sources.is_empty() {
+            // Powers use an f32 clock, modifiers use Duration. Remove the
+            // source here too so rounding cannot leave a bonus after expiry.
+            self.world
+                .borrow::<UniqueViewMut<QuestInfo>>()
+                .unwrap()
+                .player_stats_mut()
+                .modifiers
+                .retain(|m| !expired_sources.contains(&m.source.as_str()));
+            self.refresh_implant_effects();
+        }
 
         // Expire first: a queued pulse must not outlive its caster immunity.
         if let Some(aura) =
@@ -10800,13 +10818,13 @@ impl MissionCore {
                         .unwrap()
                         .0
                         .retain(|p| p.template_id != template_id);
-                    if template_id == crate::psi::MIGHT_TEMPLATE_ID {
+                    if let Some((source, _)) = crate::psi::stat_modifier(template_id) {
                         self.world
                             .borrow::<UniqueViewMut<QuestInfo>>()
                             .unwrap()
                             .player_stats_mut()
                             .modifiers
-                            .retain(|m| m.source != crate::psi::MIGHT_MODIFIER_SOURCE);
+                            .retain(|m| m.source != source);
                         self.refresh_implant_effects();
                     }
                 }
@@ -10833,7 +10851,7 @@ impl MissionCore {
                         game_log!(INFO, "Psi power active: {} ({}s)", name, duration_secs);
                     }
                     drop(active);
-                    if template_id == crate::psi::MIGHT_TEMPLATE_ID {
+                    if let Some((source, stat)) = crate::psi::stat_modifier(template_id) {
                         let delta = self
                             .world
                             .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
@@ -10848,8 +10866,8 @@ impl MissionCore {
                             .unwrap()
                             .player_stats_mut()
                             .apply_modifier(crate::player_stats::TimedStatModifier {
-                                source: crate::psi::MIGHT_MODIFIER_SOURCE.to_owned(),
-                                stat: crate::player_stats::Stat::Strength,
+                                source: source.to_owned(),
+                                stat,
                                 delta,
                                 remaining: std::time::Duration::from_secs_f32(duration_secs),
                             });
