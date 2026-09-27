@@ -4919,6 +4919,15 @@ impl MissionCore {
                         },
                     });
                 }
+                physics::CollisionEvent::FatalFall { entity_id } => {
+                    self.script_world.dispatch(Message {
+                        to: entity_id,
+                        payload: MessagePayload::Damage {
+                            amount: 10_000.0,
+                            impact: None,
+                        },
+                    });
+                }
             }
         }
 

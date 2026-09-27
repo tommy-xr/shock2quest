@@ -128,6 +128,8 @@ pub struct GlobalData {
     /// saves that predate crouch.
     #[serde(default)]
     pub is_crouched: bool,
+    /// Preserve the measured descent when saving during an unsupported fall.
+    pub player_fall_state: Option<crate::physics::FatalFallTracker>,
 }
 
 #[cfg(test)]
@@ -148,6 +150,7 @@ mod tests {
             active_psi: Default::default(),
             active_mission: "earth.mis".to_owned(),
             is_crouched: false,
+            player_fall_state: None,
         }
     }
 

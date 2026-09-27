@@ -2201,6 +2201,7 @@ impl Game {
                 .unwrap_or_default(),
             active_mission: self.active_game_scene.scene_name().to_string(),
             is_crouched,
+            player_fall_state: self.active_game_scene.player_fall_state(),
         };
 
         Ok(SaveData {

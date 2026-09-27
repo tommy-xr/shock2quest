@@ -296,6 +296,7 @@ test(
       await game.step({ frames: 5 });
 
       await crossEarthTrainingTripwire(game, 320, 325);
+      const roomPosition = await game.player.position();
       const [amp] = await game.entities.byTemplate(290);
       assert.ok(amp, "Earth Psionic Training should contain its authored Psi Amp");
       await earthWorldUse(game, amp);
@@ -304,6 +305,10 @@ test(
         amp.id,
         "normal world-use should wield the authored Psi Amp",
       );
+      // The close item-use staging places the body below the booth floor.
+      // Return to the room before waiting through burnout: this scenario is
+      // testing vitals persistence, not an unsupported fall beneath the level.
+      await game.player.teleport(roomPosition);
       const beforeBurnout = playerVitals(await game.info());
       assert.equal(beforeBurnout.psiPoints, 5, "the training tripwire sets current PSI to five");
 
