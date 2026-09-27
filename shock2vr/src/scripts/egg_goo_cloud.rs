@@ -120,6 +120,7 @@ mod tests {
                     to_template_id: -387,
                     to_entity_id: None,
                     link: Link::StimSource(StimSourceOptions {
+                        lifecycle: Default::default(),
                         intensity: 2.0,
                         propagator: StimPropagator::Radius { radius: 4.0 },
                     }),

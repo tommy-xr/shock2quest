@@ -49,6 +49,7 @@ pub mod internal_fast_projectile;
 mod internal_frob_move;
 mod internal_keycard_script;
 mod internal_nanites_script;
+mod internal_periodic_stim;
 pub(crate) mod internal_radiation_source;
 mod internal_simple_health;
 pub(crate) mod internal_switch_held_model;
@@ -189,6 +190,7 @@ use self::{
     internal_explosion::InternalExplosion,
     internal_keycard_script::KeyCardScript,
     internal_nanites_script::InternalNanitesScript,
+    internal_periodic_stim::InternalPeriodicStim,
     internal_radiation_source::InternalRadiationSource,
     internal_simple_health::InternalSimpleHealth,
     level_change_button::LevelChangeButton,
@@ -1084,6 +1086,7 @@ impl ScriptWorld {
             "internal_frob_move" => Box::new(InternalFrobMove::new()),
             "internal_keycard" => Box::new(KeyCardScript::new()),
             "internal_nanites" => Box::new(InternalNanitesScript::new()),
+            "internal_periodic_stim" => Box::new(InternalPeriodicStim::new()),
             "internal_room_trigger" => Box::new(RoomTrigger::new()),
             "internal_simple_health" => Box::new(InternalSimpleHealth::new()),
             // Implemented

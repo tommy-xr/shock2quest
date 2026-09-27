@@ -509,29 +509,31 @@ pub fn create_entity_core(
         processed_scripts.push("internal_frob_move".to_owned());
     }
 
-    // Explosion SFX templates (class tag "explosiontype", e.g. HE / Incendiary
-    // Explosion) with radius stim sources (arSrcDesc) blast once on spawn.
-    // Radius sources WITHOUT the tag (electrical sparks, Swarm, Rad Burst) are
-    // periodic emitters in the original engine - not one-shot blasts - and are
-    // not handled yet.
-    let is_explosion = {
+    // Radius stim sources with an "explosiontype" class tag blast once on
+    // spawn. Other radius sources (electrical sparks, Swarm, Rad Burst) use
+    // their authored periodic lifecycle.
+    let (is_explosion, is_periodic_stim_emitter) = {
         let v_class_tag = world.borrow::<View<PropClassTag>>().unwrap();
         let v_links = world.borrow::<View<Links>>().unwrap();
-        v_class_tag
+        let has_explosion_tag = v_class_tag
             .get(entity_id)
             .map(|tag| tag.class_tags().iter().any(|(k, _)| *k == "explosiontype"))
-            .unwrap_or(false)
-            && v_links.get(entity_id).is_ok_and(|links| {
-                links.to_links.iter().any(|l| {
-                    matches!(
-                        l.link,
-                        Link::StimSource(StimSourceOptions {
-                            propagator: StimPropagator::Radius { .. },
-                            ..
-                        })
-                    )
-                })
+            .unwrap_or(false);
+        let has_radius_source = v_links.get(entity_id).is_ok_and(|links| {
+            links.to_links.iter().any(|l| {
+                matches!(
+                    l.link,
+                    Link::StimSource(StimSourceOptions {
+                        propagator: StimPropagator::Radius { .. },
+                        ..
+                    })
+                )
             })
+        });
+        (
+            has_explosion_tag && has_radius_source,
+            !has_explosion_tag && has_radius_source,
+        )
     };
     // `Rad Burst` is the persistent corpse effect spawned by a destroyed
     // radioactive barrel. Its radius source is ambient (no explosion push),
@@ -580,6 +582,14 @@ pub fn create_entity_core(
         -438,
     ) {
         processed_scripts.push("internal_egg_goo_cloud".to_owned());
+    }
+    if is_periodic_stim_emitter
+        && !has_radiation_source
+        && !processed_scripts
+            .iter()
+            .any(|name| name == "internal_egg_goo_cloud")
+    {
+        processed_scripts.push("internal_periodic_stim".to_owned());
     }
 
     // ...and remove any duplicates!
