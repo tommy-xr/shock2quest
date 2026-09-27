@@ -1151,6 +1151,21 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
                 ],
                 transparency: obj.effective_transparency(),
                 depth_write: obj.depth_write,
+                material_passes: obj
+                    .material_stack
+                    .as_ref()
+                    .map(|stack| {
+                        stack
+                            .passes
+                            .iter()
+                            .map(|pass| format!("{:?}", pass.blend))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                material_only: obj
+                    .material_stack
+                    .as_ref()
+                    .is_some_and(|stack| stack.material_only),
                 depth_bias: obj.depth_bias(),
                 render_layer: render_layer.as_str().to_owned(),
                 clear_depth: render_layer.clears_depth() && first_in_layer,
