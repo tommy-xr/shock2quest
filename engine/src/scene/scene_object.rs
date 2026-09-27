@@ -40,6 +40,11 @@ pub enum BlendMode {
     AdditiveAlpha,
     /// Standard alpha composition at the base mesh depth.
     AlphaOverlay,
+    /// Authored source/destination factors, applied only around this pass.
+    Authored(
+        super::render_pass::BlendFactor,
+        super::render_pass::BlendFactor,
+    ),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,9 +108,34 @@ pub struct SceneObjectDebugTag {
     pub source: Option<String>,
 }
 
+/// One pass shares its owning object's geometry and per-instance state.
+#[derive(Clone)]
+pub struct MaterialPass {
+    pub material: Rc<RefCell<Box<dyn Material>>>,
+    pub blend: BlendMode,
+    pub writes_depth: bool,
+    pub replaces_alpha: bool,
+}
+#[derive(Clone)]
+pub struct MaterialStack {
+    pub material_only: bool,
+    pub passes: Vec<MaterialPass>,
+}
+
+impl MaterialStack {
+    /// Replacement-pass visibility and phase do not depend on preparing the
+    /// discarded base shader. In particular replace_alpha can survive invisibility.
+    pub fn opaque(&self, opacity: f32) -> bool {
+        self.passes
+            .iter()
+            .any(|pass| pass.writes_depth && (pass.replaces_alpha || opacity >= 0.99))
+    }
+}
+
 #[derive(Clone)]
 pub struct SceneObject {
     pub material: Rc<RefCell<Box<dyn Material>>>,
+    pub material_stack: Option<Rc<MaterialStack>>,
     pub geometry: Rc<Box<dyn Geometry>>,
     pub transform: Matrix4<f32>,
     pub local_transform: Matrix4<f32>, //hack...
@@ -367,6 +397,7 @@ impl SceneObject {
         let transform: Matrix4<f32> = Matrix4::identity();
         SceneObject {
             material: Rc::new(material),
+            material_stack: None,
             geometry,
             transform,
             local_transform: Matrix4::identity(),
@@ -413,6 +444,16 @@ impl SceneObject {
             ..*render_context
         };
         let xform = self.transform * self.local_transform;
+        if let Some(stack) = self
+            .material_stack
+            .as_ref()
+            .filter(|stack| stack.material_only)
+        {
+            if stack.opaque(1.0 - self.effective_transparency().unwrap_or(0.0)) {
+                self.draw_material_stack(engine_context, &render_context, view, lights, true);
+            }
+            return;
+        }
         if !self.depth_write {
             unsafe { gl::DepthMask(gl::FALSE) };
         }
@@ -429,7 +470,14 @@ impl SceneObject {
             &self.skinning_data,
             lights,
         ) {
-            self.draw_geometry(true);
+            if self
+                .material_stack
+                .as_ref()
+                .is_none_or(|stack| !stack.material_only)
+            {
+                self.draw_geometry(true);
+            }
+            self.draw_material_stack(engine_context, &render_context, view, lights, true);
         }
         if self.transparency_override.is_some() {
             self.material.borrow_mut().set_transparency_override(None);
@@ -441,7 +489,7 @@ impl SceneObject {
     }
     pub fn draw_transparent(
         &self,
-        _engine_context: &OpenGLEngine,
+        engine_context: &OpenGLEngine,
         render_context: &EngineRenderContext,
         view: &Matrix4<f32>,
         lights: &crate::scene::light::LightArray,
@@ -452,23 +500,80 @@ impl SceneObject {
                 .unwrap_or(render_context.projection_matrix),
             ..*render_context
         };
+        if let Some(stack) = self
+            .material_stack
+            .as_ref()
+            .filter(|stack| stack.material_only)
+        {
+            if !stack.opaque(1.0 - self.effective_transparency().unwrap_or(0.0)) {
+                self.draw_material_stack(engine_context, &render_context, view, lights, false);
+            }
+            return;
+        }
         let xform = self.transform * self.local_transform;
         if let Some(t) = self.transparency_override {
             self.material
                 .borrow_mut()
                 .set_transparency_override(Some(t));
         }
-        if self.material.borrow().draw_transparent(
+        let prepared = self.material.borrow().draw_transparent(
             &render_context,
             view,
             &xform,
             &self.skinning_data,
             lights,
-        ) {
-            self.draw_geometry(false);
+        );
+        if prepared {
+            if self
+                .material_stack
+                .as_ref()
+                .is_none_or(|stack| !stack.material_only)
+            {
+                self.draw_geometry(false);
+            }
+            self.draw_material_stack(engine_context, &render_context, view, lights, false);
         }
         if self.transparency_override.is_some() {
             self.material.borrow_mut().set_transparency_override(None);
+        }
+    }
+
+    fn draw_material_stack(
+        &self,
+        engine: &OpenGLEngine,
+        context: &EngineRenderContext,
+        view: &Matrix4<f32>,
+        lights: &crate::scene::light::LightArray,
+        opaque_phase: bool,
+    ) {
+        let Some(stack) = &self.material_stack else {
+            return;
+        };
+        for pass in &stack.passes {
+            let mut material = pass.material.borrow_mut();
+            if !material.has_initialized() {
+                material.initialize(engine.is_opengl_es);
+            }
+            material.set_transparency_override(self.effective_transparency());
+            let xform = self.transform * self.local_transform;
+            let prepared = material.draw_opaque(context, view, &xform, &self.skinning_data, lights)
+                || material.draw_transparent(context, view, &xform, &self.skinning_data, lights);
+            if prepared {
+                unsafe {
+                    gl::DepthMask(if opaque_phase && self.depth_write && pass.writes_depth {
+                        gl::TRUE
+                    } else {
+                        gl::FALSE
+                    });
+                }
+                self.draw_geometry_with_blend(true, pass.blend);
+            }
+            material.set_transparency_override(None);
+        }
+        unsafe {
+            // Restore the renderer's phase state, not this object's override.
+            // Replacement stacks return directly without the ordinary base's cleanup.
+            gl::DepthMask(if opaque_phase { gl::TRUE } else { gl::FALSE });
         }
     }
 
@@ -519,6 +624,7 @@ impl SceneObject {
     pub fn new(material: Box<dyn Material>, geometry: Box<dyn Geometry>) -> SceneObject {
         SceneObject {
             material: Rc::new(RefCell::new(material)),
+            material_stack: None,
             geometry: Rc::new(geometry),
             transform: Matrix4::identity(),
             local_transform: Matrix4::identity(),
@@ -539,6 +645,7 @@ impl SceneObject {
         SceneObject {
             lights: self.lights.clone(),
             material: self.material.clone(),
+            material_stack: self.material_stack.clone(),
             geometry: self.geometry.clone(),
             transform: self.transform,
             local_transform: self.local_transform,
@@ -552,6 +659,11 @@ impl SceneObject {
             backface_culling: self.backface_culling,
             depth_bias: self.depth_bias,
         }
+    }
+
+    pub fn replace_material(&mut self, material: Rc<RefCell<Box<dyn Material>>>) {
+        self.material = material;
+        self.material_stack = None;
     }
 
     pub fn set_depth_write(&mut self, enabled: bool) {
@@ -609,10 +721,13 @@ impl SceneObject {
     /// the depth test against the very surface they are meant to enhance.
     /// Other translucent flats keep their existing unbiased presentation.
     fn draw_geometry(&self, apply_depth_bias: bool) {
+        self.draw_geometry_with_blend(apply_depth_bias, self.blend_mode);
+    }
+    fn draw_geometry_with_blend(&self, apply_depth_bias: bool, blend: BlendMode) {
         let depth_bias = (apply_depth_bias
             || matches!(
-                self.blend_mode,
-                BlendMode::AdditiveAlpha | BlendMode::AlphaOverlay
+                blend,
+                BlendMode::AdditiveAlpha | BlendMode::AlphaOverlay | BlendMode::Authored(_, _)
             ))
             && self.depth_bias;
         if depth_bias {
@@ -633,8 +748,12 @@ impl SceneObject {
         }
 
         unsafe {
-            match self.blend_mode {
+            match blend {
                 BlendMode::Alpha => {}
+                BlendMode::Authored(source, destination) => {
+                    gl::BlendFunc(source.gl(), destination.gl());
+                    gl::DepthFunc(gl::LEQUAL);
+                }
                 BlendMode::AlphaOverlay => gl::DepthFunc(gl::LEQUAL),
                 BlendMode::AdditiveColor => gl::BlendFunc(gl::SRC_COLOR, gl::ONE),
                 BlendMode::AdditiveAlpha => {
@@ -645,14 +764,14 @@ impl SceneObject {
         }
         self.geometry.draw();
         if matches!(
-            self.blend_mode,
-            BlendMode::AdditiveAlpha | BlendMode::AlphaOverlay
+            blend,
+            BlendMode::AdditiveAlpha | BlendMode::AlphaOverlay | BlendMode::Authored(_, _)
         ) {
             unsafe {
                 gl::DepthFunc(gl::LESS);
             }
         }
-        if self.blend_mode != BlendMode::Alpha {
+        if blend != BlendMode::Alpha {
             unsafe {
                 gl::BlendFuncSeparate(
                     gl::SRC_ALPHA,
@@ -705,6 +824,50 @@ impl SceneObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_stack_phase_uses_its_passes_even_when_original_is_invisible() {
+        let material = Rc::new(RefCell::new(super::super::color_material::create(vec3(
+            1.0, 1.0, 1.0,
+        ))));
+        let mut stack = MaterialStack {
+            material_only: true,
+            passes: vec![MaterialPass {
+                material,
+                blend: BlendMode::Alpha,
+                writes_depth: true,
+                replaces_alpha: false,
+            }],
+        };
+        assert!(stack.opaque(1.0));
+        assert!(!stack.opaque(0.0));
+        stack.passes[0].replaces_alpha = true;
+        assert!(stack.opaque(0.0));
+        stack.passes[0].writes_depth = false;
+        assert!(!stack.opaque(1.0));
+    }
+
+    #[test]
+    fn material_layers_survive_pose_cloning_but_not_whole_material_replacement() {
+        let mut object = SceneObject::new(
+            super::super::color_material::create(vec3(1.0, 1.0, 1.0)),
+            Box::new(super::super::geometry::EmptyMesh),
+        );
+        object.material_stack = Some(Rc::new(MaterialStack {
+            material_only: true,
+            passes: vec![],
+        }));
+        let mut copy = object.duplicate();
+        assert!(Rc::ptr_eq(
+            object.material_stack.as_ref().unwrap(),
+            copy.material_stack.as_ref().unwrap()
+        ));
+        copy.replace_material(Rc::new(RefCell::new(super::super::color_material::create(
+            vec3(0.0, 1.0, 1.0),
+        ))));
+        assert!(copy.material_stack.is_none());
+        assert!(object.material_stack.is_some());
+    }
 
     #[test]
     fn ordinary_scene_objects_are_double_sided_by_default() {

@@ -65,9 +65,9 @@ pub fn render(world: &World, cache: &mut AssetCache, amp: EntityId) -> Vec<Scene
         * Matrix4::from_translation(-base);
     let mut object = source.object.clone();
     object.set_transform(frame * local);
-    object.material = std::rc::Rc::new(std::cell::RefCell::new(
+    object.replace_material(std::rc::Rc::new(std::cell::RefCell::new(
         engine::scene::color_material::create(vec3(0.12, 0.8, 1.0)),
-    ));
+    )));
     object.set_depth_write(false);
     object.set_transparency(Some(0.15));
     crate::psi_invisibility::apply(&mut object, crate::psi_invisibility::transparency(world));

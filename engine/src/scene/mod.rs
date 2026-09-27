@@ -1,4 +1,5 @@
 pub mod incidence;
+pub mod render_pass;
 pub mod scene;
 pub mod veins;
 pub use scene::{LegacyScene, Scene};

@@ -469,6 +469,9 @@ export interface SceneObjectSummary {
   /** Transparency in effect for this draw (0 = opaque, 1 = invisible). */
   transparency: number | null;
   depth_write: boolean;
+  /** Authored material passes in draw order. */
+  material_passes?: string[];
+  material_only?: boolean;
   /** Explicit renderer composition layer. */
   render_layer: "world" | "scene_overlay" | "scene_ui" | "system_overlay";
   /** True only for the first submitted object in a depth-cleared layer. */

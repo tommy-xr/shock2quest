@@ -50,6 +50,17 @@ pub trait Material: Any {
     /// materials without transparency support.
     fn set_transparency_override(&mut self, _transparency: Option<f32>) {}
 
+    /// Self-illumination inherited by shaded authored layers.
+    fn emissivity(&self) -> f32 {
+        0.0
+    }
+
+    /// Replace diffuse only after a complete material plan has loaded.
+    fn set_diffuse_texture(&mut self, _texture: std::rc::Rc<dyn crate::texture::TextureTrait>) {}
+
+    /// Configure an authored render pass; other material types keep their own path.
+    fn set_render_pass(&mut self, _pass: crate::scene::render_pass::RenderPass) {}
+
     /// Composite an authored shine over this material in the same draw.
     /// Default is a no-op for materials that do not light a diffuse.
     fn set_shine(&mut self, _shine: crate::scene::shine::Shine) {}

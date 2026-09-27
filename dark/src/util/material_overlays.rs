@@ -23,6 +23,14 @@ enum Profile {
     OrganicWeapon,
 }
 
+fn material_name(name: &str, skinned: bool) -> String {
+    if name.starts_with("obj/") || name.starts_with("mesh/") || !skinned {
+        name.to_owned()
+    } else {
+        format!("mesh/txt16/{name}")
+    }
+}
+
 fn profile(name: &str) -> Option<Profile> {
     match Path::new(name)
         .file_stem()?
@@ -53,6 +61,10 @@ pub(crate) fn append_incidence_overlays(
     skinned: bool,
 ) {
     let Some(profile) = profile(name) else {
+        let qualified = material_name(name, skinned);
+        if let Some(object) = objects.last_mut() {
+            super::render_material::apply(object, assets, &qualified, skinned);
+        }
         return;
     };
     // Mounted goo's flat underside lies on the floor and z-fights it.
@@ -63,11 +75,7 @@ pub(crate) fn append_incidence_overlays(
     }
     // Mesh materials can share a basename with incomplete obj-family stubs.
     // Preserve the family through script includes and mask texture lookup.
-    let material_name = if skinned {
-        format!("mesh/txt16/{name}")
-    } else {
-        name.to_owned()
-    };
+    let material_name = material_name(name, skinned);
     let passes = if matches!(profile, Profile::WetGrowth | Profile::OrganicWeapon) {
         // Project-owned adaptation of the Nightdive incidence technique. Reuse
         // this surface's diffuse/alpha rather than another model's UV mask, and
@@ -207,6 +215,22 @@ fn load_incidence_ramp(assets: &mut AssetCache, name: &str) -> Option<Rc<dyn Tex
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shader_skinning_does_not_change_an_explicit_asset_family() {
+        assert_eq!(
+            material_name("obj/txt16/ND-atek.psd", true),
+            "obj/txt16/ND-atek.psd"
+        );
+        assert_eq!(
+            material_name("ND-grunt.psd", true),
+            "mesh/txt16/ND-grunt.psd"
+        );
+        assert_eq!(
+            material_name("mesh/txt16/ND-grunt.psd", true),
+            "mesh/txt16/ND-grunt.psd"
+        );
+    }
+
     #[test]
     fn growth_profile_is_limited_to_the_mounted_worm_goo_textures() {
         for name in ["GOT2_.PCX", "got3_.dds", "got4_.pcx"] {

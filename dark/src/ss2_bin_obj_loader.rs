@@ -236,7 +236,7 @@ pub fn to_scene_objects(
             let mut objects = vec![so];
             if !debug_normals_enabled {
                 crate::util::append_incidence_overlays(
-                    &mut objects, asset_cache, &tex_path, texture, is_skinned,
+                    &mut objects, asset_cache, &format!("obj/txt16/{tex_path}"), texture, is_skinned,
                 );
             }
             Some(objects)
