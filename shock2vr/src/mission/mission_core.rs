@@ -3118,6 +3118,7 @@ impl MissionCore {
 
         world.add_unique(GlobalEntityMetadata(template_name_to_template_id.clone()));
         world.add_unique(Time::default());
+        world.add_unique(crate::melee_swing::MeleeSwings::default());
         world.add_unique(speech_registry);
         world.add_unique(DebugOptions {
             debug_ai: game_options.debug_ai,
@@ -4851,6 +4852,33 @@ impl MissionCore {
         player_info.right_hand_entity_id = right_hand_entity_id;
         drop(player_info);
 
+        // Sample the attachment that drove this physics step. Input is resolved
+        // later below; a same-frame release can still downgrade before dispatch.
+        if game_options.presentation_mode == crate::PresentationMode::Vr && !time.elapsed.is_zero()
+        {
+            let mut swings = self
+                .world
+                .borrow::<UniqueViewMut<crate::melee_swing::MeleeSwings>>()
+                .unwrap();
+            for (latch, weapon) in swings
+                .0
+                .iter_mut()
+                .zip([left_hand_entity_id, right_hand_entity_id])
+            {
+                let hot = weapon
+                    .and_then(|entity| self.physics.held_melee_head_velocity(entity))
+                    .is_some_and(|velocity| {
+                        (velocity - self.physics.player_velocity()).magnitude()
+                            >= crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED)
+                    });
+                latch.update(
+                    weapon,
+                    hot,
+                    weapon.is_some_and(|entity| self.interaction.is_supported(entity)),
+                );
+            }
+        }
+
         // Handle collision events
         for ce in collision_events {
             info!("event: {:?}", ce);
@@ -6564,6 +6592,11 @@ impl MissionCore {
                 (self.player_handle.is_grounded() && !player_health_depleted)
                     .then_some(self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos),
             );
+
+        self.world
+            .borrow::<UniqueViewMut<crate::melee_swing::MeleeSwings>>()
+            .unwrap()
+            .release_unsupported(|entity| self.interaction.is_supported(entity));
 
         // Update scripts
         let mut script_effects = profile!(

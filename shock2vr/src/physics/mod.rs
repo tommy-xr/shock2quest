@@ -4728,6 +4728,13 @@ impl PhysicsWorld {
         self.body_velocity_at_point(drive.target, point)
     }
 
+    /// Controller-target velocity at the held melee body's head origin.
+    /// Reuses the contact gate's recovery guard rather than body catch-up speed.
+    pub(crate) fn held_melee_head_velocity(&self, entity: EntityId) -> Option<Vector3<f32>> {
+        let position = self.get_position(*self.entity_id_to_body.get(&entity)?)?;
+        self.held_melee_target_velocity_at_point(entity, position)
+    }
+
     fn body_velocity_at_point(
         &self,
         handle: RigidBodyHandle,
