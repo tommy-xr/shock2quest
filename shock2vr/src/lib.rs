@@ -14,6 +14,7 @@ pub mod input_context;
 pub mod install;
 pub mod inventory;
 mod melee_charge_visual;
+mod melee_swing;
 pub mod message_trace;
 pub mod object_lighting;
 pub mod particle_effects;

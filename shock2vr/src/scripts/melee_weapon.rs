@@ -179,7 +179,11 @@ impl Script for HeldMeleeWeapon {
                     effects.push(crate::psi_invisibility::attack_effect(world, entity_id));
                     // Addressed to the hitbox, not the creature: forwarding it
                     // is what stamps the struck joint onto the blow.
-                    effects.push(contact_damage_effect(*with, amount, *contact));
+                    effects.push(contact_damage_effect(
+                        *with,
+                        amount * crate::melee_swing::damage_scale(world, entity_id),
+                        *contact,
+                    ));
                 }
                 // A blow that lands is always audible, as it always was. The
                 // operator is a bitwise `|`, not `||`, so the guard still runs
@@ -743,6 +747,52 @@ mod tests {
         let mut script = HeldMeleeWeapon::new();
         let effect = collide(&mut script, &world, weapon, target);
         assert_eq!(damage_count(&effect), 0);
+    }
+
+    #[test]
+    fn wrench_contact_damage_uses_the_swing_latch_and_current_release() {
+        for (model, support, released, scale) in [
+            ("wrench_h", vec![false], false, 0.5),
+            ("wrench_h", vec![true], false, 1.0),
+            ("wrench_h", vec![false, true], false, 0.5),
+            ("wrench_h", vec![true, false], false, 0.5),
+            ("wrench_h", vec![true], true, 0.5),
+            ("wrench_w", vec![false], false, 1.0),
+            // No support socket yet (#1768), so no way to avoid the penalty.
+            ("rapier_h", vec![false], false, 1.0),
+            ("shard_h", vec![false], false, 1.0),
+            // One-handed by design.
+            ("psword_h", vec![false], false, 1.0),
+        ] {
+            let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+            world.add_component(weapon, dark::properties::PropModelName(model.to_owned()));
+            let mut swings = crate::melee_swing::MeleeSwings::default();
+            for supported in support {
+                swings.0[0].update(Some(weapon), true, supported);
+            }
+            if released {
+                swings.release_unsupported(|_| false);
+            }
+            world.add_unique(swings);
+            let mut script = HeldMeleeWeapon::new();
+            let Effect::Multiple(effects) = collide(&mut script, &world, weapon, target) else {
+                panic!("expected contact effects");
+            };
+            let amount = effects
+                .iter()
+                .find_map(|effect| match effect {
+                    Effect::Send { msg } if msg.to == target => match msg.payload {
+                        MessagePayload::Damage { amount, .. } => Some(amount),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .expect("the physical contact must cause damage");
+            assert!(
+                (amount - WEAPON_BASH_INTENSITY * scale).abs() < 1e-4,
+                "{model}: expected scale {scale}, got damage {amount}"
+            );
+        }
     }
 
     /// The regression behind the damage fix: a landed VR swing must cost the
