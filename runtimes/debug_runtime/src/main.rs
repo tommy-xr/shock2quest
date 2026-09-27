@@ -697,8 +697,10 @@ fn run_game_blocking(
         std::collections::VecDeque::new();
     let mut frames_advanced_this_step = 0u32;
     let mut time_advanced_this_step = 0.0f32;
-    let mut pending_screenshots: Vec<(ScreenshotSpec, oneshot::Sender<ScreenshotResult>)> =
-        Vec::new();
+    let mut pending_screenshots: Vec<(
+        ScreenshotSpec,
+        oneshot::Sender<Result<ScreenshotResult, String>>,
+    )> = Vec::new();
 
     info!("Starting main game loop...");
     info!("Game is PAUSED by default - use /v1/step to advance frames");
@@ -4029,44 +4031,30 @@ struct ScreenshotRequest {
 async fn take_screenshot(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
     LenientJson(request): LenientJson<ScreenshotRequest>,
-) -> Json<ScreenshotResult> {
+) -> Result<Json<ScreenshotResult>, (StatusCode, String)> {
     let (reply_tx, reply_rx) = oneshot::channel();
-
     let spec = ScreenshotSpec {
         filename: request.filename,
         max_width: request.max_width,
     };
-
-    // Send screenshot command to game loop
-    if let Err(_) = command_tx.send(RuntimeCommand::Screenshot(spec, reply_tx)) {
-        tracing::error!("Failed to send Screenshot command - game loop receiver dropped");
-        return Json(ScreenshotResult {
-            filename: "error.png".to_string(),
-            full_path: "/tmp/error.png".to_string(),
-            resolution: [0, 0],
-            size_bytes: 0,
-        });
-    }
-
-    // Wait for response
-    match reply_rx.await {
-        Ok(result) => Json(result),
-        Err(_) => {
-            tracing::error!("Failed to receive screenshot result - sender dropped");
-            Json(ScreenshotResult {
-                filename: "error.png".to_string(),
-                full_path: "/tmp/error.png".to_string(),
-                resolution: [0, 0],
-                size_bytes: 0,
-            })
-        }
-    }
+    command_tx
+        .send(RuntimeCommand::Screenshot(spec, reply_tx))
+        .map_err(|_| game_loop_unavailable())?;
+    reply_rx
+        .await
+        .map_err(|_| game_loop_unavailable())?
+        .map(Json)
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))
 }
 
 /// Resolve a screenshot spec to a file path, capture the freshly-rendered frame,
 /// and build the result. Called from the game loop after `finish_render` (before
 /// the buffer swap) so it reads a complete frame.
-fn capture_screenshot_to_result(spec: ScreenshotSpec, width: u32, height: u32) -> ScreenshotResult {
+fn capture_screenshot_to_result(
+    spec: ScreenshotSpec,
+    width: u32,
+    height: u32,
+) -> Result<ScreenshotResult, String> {
     let filename = spec.filename.unwrap_or_else(|| {
         format!(
             "screenshot_{}.png",
@@ -4080,26 +4068,20 @@ fn capture_screenshot_to_result(spec: ScreenshotSpec, width: u32, height: u32) -
     });
     let full_path = screenshots_dir.join(&filename);
 
-    match capture_screenshot(&full_path, width, height, spec.max_width) {
-        Ok((size_bytes, resolution)) => {
-            tracing::info!("Screenshot saved to: {}", full_path.display());
-            ScreenshotResult {
-                filename,
-                full_path: full_path.to_string_lossy().to_string(),
-                resolution,
-                size_bytes,
-            }
-        }
-        Err(e) => {
-            tracing::error!("Failed to capture screenshot: {}", e);
-            ScreenshotResult {
-                filename,
-                full_path: full_path.to_string_lossy().to_string(),
-                resolution: [0, 0],
-                size_bytes: 0,
-            }
-        }
-    }
+    let (size_bytes, resolution) = capture_screenshot(&full_path, width, height, spec.max_width)
+        .map_err(|error| {
+            format!(
+                "failed to write screenshot to {}: {error}",
+                full_path.display()
+            )
+        })?;
+    tracing::info!("Screenshot saved to: {}", full_path.display());
+    Ok(ScreenshotResult {
+        filename,
+        full_path: full_path.to_string_lossy().to_string(),
+        resolution,
+        size_bytes,
+    })
 }
 
 /// Pick the dimensions the saved PNG should have.
@@ -4237,11 +4219,113 @@ fn capture_screenshot(
             )
         };
 
-        img.save(path)?;
+        let file = write_png_verified(&img, std::fs::File::create(path)?)?;
+        file.sync_all()?;
 
         // Calculate file size
         let metadata = std::fs::metadata(path)?;
         Ok((metadata.len(), [target_width, target_height]))
+    }
+}
+
+/// Encode `img` as PNG into `writer` (buffered), flush it, and hand the
+/// underlying writer back. Propagates the encoder's error if the encode
+/// itself fails, or the flush's error if the buffered write did not actually
+/// go through.
+///
+/// This exists because `image::RgbImage::save` returning `Ok` is not proof
+/// the PNG reached disk: a filesystem with delayed block allocation can
+/// accept the encoder's writes into a buffer while the volume is full and
+/// only report `ENOSPC` once that buffer is flushed. Without this check,
+/// `POST /v1/screenshot` returned 200 while writing a truncated stub PNG
+/// (issue #781). Handing back the writer lets the caller additionally
+/// `sync_all` the underlying file, which this flush alone does not
+/// guarantee.
+fn write_png_verified<W: std::io::Write + std::io::Seek>(
+    img: &image::RgbImage,
+    writer: W,
+) -> Result<W, Box<dyn std::error::Error>> {
+    let mut buffered = std::io::BufWriter::new(writer);
+    img.write_to(&mut buffered, image::ImageFormat::Png)?;
+    std::io::Write::flush(&mut buffered)?;
+    buffered
+        .into_inner()
+        .map_err(|error| error.into_error().into())
+}
+
+#[cfg(test)]
+mod screenshot_tests {
+    use super::*;
+    use std::io;
+
+    /// A writer that accepts every `write`/`seek` (as a real buffered/
+    /// delayed-alloc filesystem would while the volume still has apparent
+    /// room) but fails `flush` - reproducing the ENOSPC-on-flush shape of
+    /// issue #781 without needing to actually fill a disk.
+    struct FailingWriter;
+
+    impl io::Write for FailingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("ENOSPC (simulated)"))
+        }
+    }
+
+    impl io::Seek for FailingWriter {
+        fn seek(&mut self, _pos: io::SeekFrom) -> io::Result<u64> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn screenshot_write_failure_is_an_http_error() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let request = take_screenshot(
+            State(tx),
+            LenientJson(ScreenshotRequest {
+                filename: Some("failed.png".into()),
+                max_width: None,
+            }),
+        );
+        let respond = async {
+            let Some(RuntimeCommand::Screenshot(_, reply)) = rx.recv().await else {
+                panic!("expected screenshot")
+            };
+            reply.send(Err("disk full".into())).unwrap();
+        };
+        let (result, ()) = tokio::join!(request, respond);
+        let (status, message) = result
+            .err()
+            .expect("write failure must not return HTTP 200");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(message, "disk full");
+    }
+
+    fn tiny_image() -> image::RgbImage {
+        image::RgbImage::from_vec(2, 2, vec![0u8; 2 * 2 * 3]).unwrap()
+    }
+
+    // Negative first: a writer whose flush fails must surface as an Err, not
+    // be swallowed the way `image::RgbImage::save` swallowed it in #781.
+    #[test]
+    fn write_png_verified_reports_a_failed_flush() {
+        let result = write_png_verified(&tiny_image(), FailingWriter);
+        assert!(
+            result.is_err(),
+            "a writer that fails on flush must be reported as an error"
+        );
+    }
+
+    #[test]
+    fn write_png_verified_succeeds_for_a_healthy_writer() {
+        let cursor = write_png_verified(&tiny_image(), io::Cursor::new(Vec::new()))
+            .expect("healthy writer must succeed");
+        assert!(
+            !cursor.into_inner().is_empty(),
+            "a successful encode must produce bytes"
+        );
     }
 }
 
