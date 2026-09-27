@@ -264,7 +264,8 @@ impl Script for TurretAI {
         // helper uses +Z and negates its heading argument; convert only here.
         // This is a coordinate-system boundary, not a correction to a bone.
         let heading = Deg(90.0 - self.pose.facing);
-        let visible = ai_util::is_player_visible_in_fov(entity_id, world, physics, heading, 30.0);
+        let visible = crate::security_alarm::security_devices_can_detect_player(world)
+            && ai_util::is_player_visible_in_fov(entity_id, world, physics, heading, 30.0);
         let target = ai_util::chase_target(world, entity_id)
             .and_then(|target| {
                 let transforms = world.borrow::<View<RuntimePropTransform>>().ok()?;

@@ -24,6 +24,15 @@ use crate::scripts::trigger_ecology::{ECOLOGY_STATE_ALERT, ECOLOGY_STATE_NORMAL}
 use crate::scripts::{Effect, Message, MessagePayload};
 use crate::time::Time;
 
+/// Security suppression masks the player from camera-class devices. Creatures
+/// retain ordinary perception; a new alarm cancels this player-wide window.
+pub(crate) fn security_devices_can_detect_player(world: &World) -> bool {
+    world
+        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+        .map(|quests| !quests.security_hack_active())
+        .unwrap_or(true)
+}
+
 /// `recovery_seconds` / `min_count` / ... are indexed by ecology tier.
 const ALERT_TIER: usize = ECOLOGY_STATE_ALERT as usize;
 

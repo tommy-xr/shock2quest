@@ -34,6 +34,8 @@ pub struct QuestInfo {
     /// Fixed at campaign creation. A typed field keeps invalid quest-bit values
     /// and generic quest mutations from changing the campaign rules.
     difficulty: dark::gamesys::Difficulty,
+    /// Player-wide suppression window, retained across saves and deck changes.
+    security_hack_seconds_remaining: f32,
     quest_bit_values: HashMap<String, QuestBitValue>,
     played_emails: HashSet<String>,
     key_cards: Vec<KeyCard>,
@@ -68,6 +70,7 @@ impl QuestInfo {
     pub fn with_difficulty(difficulty: dark::gamesys::Difficulty) -> Self {
         QuestInfo {
             difficulty,
+            security_hack_seconds_remaining: 0.0,
             quest_bit_values: HashMap::new(),
             played_emails: HashSet::new(),
             key_cards: Vec::new(),
@@ -88,6 +91,25 @@ impl QuestInfo {
 
     pub fn difficulty(&self) -> dark::gamesys::Difficulty {
         self.difficulty
+    }
+
+    pub fn activate_security_hack(&mut self, seconds: f32) {
+        self.security_hack_seconds_remaining = if seconds.is_finite() {
+            seconds.max(0.0)
+        } else {
+            0.0
+        };
+    }
+
+    pub fn advance_security_hack(&mut self, seconds: f32) {
+        if seconds.is_finite() {
+            self.security_hack_seconds_remaining =
+                (self.security_hack_seconds_remaining - seconds.max(0.0)).max(0.0);
+        }
+    }
+
+    pub fn security_hack_active(&self) -> bool {
+        self.security_hack_seconds_remaining > 0.0
     }
 
     pub fn research(&self) -> &ResearchState {
@@ -391,5 +413,35 @@ mod difficulty_tests {
         let mut value = serde_json::to_value(QuestInfo::new()).unwrap();
         value["difficulty"] = serde_json::json!("multiplayer");
         assert!(serde_json::from_value::<QuestInfo>(value).is_err());
+    }
+}
+
+#[cfg(test)]
+mod security_hack_tests {
+    use super::*;
+
+    #[test]
+    fn saved_suppression_resumes_its_remaining_window() {
+        let mut quests = QuestInfo::new();
+        quests.activate_security_hack(30.0);
+        quests.advance_security_hack(12.0);
+        let mut restored: QuestInfo =
+            serde_json::from_str(&serde_json::to_string(&quests).unwrap()).unwrap();
+        restored.advance_security_hack(17.0);
+        assert!(restored.security_hack_active());
+        restored.advance_security_hack(1.0);
+        assert!(!restored.security_hack_active());
+    }
+
+    #[test]
+    fn another_hack_replaces_the_window_and_an_alarm_can_cancel_it() {
+        let mut quests = QuestInfo::new();
+        quests.activate_security_hack(100.0);
+        quests.activate_security_hack(10.0);
+        quests.advance_security_hack(10.0);
+        assert!(!quests.security_hack_active());
+        quests.activate_security_hack(30.0);
+        quests.activate_security_hack(0.0);
+        assert!(!quests.security_hack_active());
     }
 }

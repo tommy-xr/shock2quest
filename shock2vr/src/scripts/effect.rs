@@ -935,6 +935,10 @@ pub enum Effect {
     StopSound {
         handle: AudioHandle,
     },
+    /// Start the player-wide security suppression window.
+    ActivateSecurityHack {
+        duration_seconds: f32,
+    },
     /// Raise the station security alarm for `seconds` (the alarm is
     /// refcounted, so overlapping alarms stack). See `security_alarm`.
     RaiseSecurityAlarm {

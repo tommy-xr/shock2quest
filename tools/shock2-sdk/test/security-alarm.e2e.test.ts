@@ -168,7 +168,13 @@ test(
     const close = (await game.ui.state()).active_panel?.elements.find((e) => e.label === "close");
     if (close) await clickUiElement(game, close);
     await game.player.teleport({ x: scanPosition[0], y: scanPosition[1], z: scanPosition[2] });
-    // The camera re-arms: seeing the player again raises a fresh alarm.
+    // The paid hack masks the player for the authored 120s times Cyber (6).
+    await game.step({ frames: 20 * 60 });
+    assert.equal(await alarm(game), null, "a hacked camera must stay suppressed while the player is visible");
+    for (let interval = 0; interval < 7; interval++) {
+      await game.step({ frames: 100 * 60 });
+    }
+    // After the suppression window expires, the camera can identify us again.
     for (
       let attempt = 0;
       attempt < 20 && (await alarm(game)) === null;
