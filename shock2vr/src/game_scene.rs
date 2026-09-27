@@ -288,6 +288,8 @@ pub struct DebugEntitySummary {
 /// Detailed information about an entity for debug inspection
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugEntityDetail {
+    /// Effective world-presence flag; absent P$HasRefs defaults to true.
+    pub has_refs: bool,
     pub entity_id: i32,
     pub name: String,
     pub template_id: i32,

@@ -782,6 +782,7 @@ pub struct EntitySummary {
 /// Detailed information about an entity
 #[derive(Debug, Serialize)]
 pub struct EntityDetailResult {
+    pub has_refs: bool,
     pub entity_id: i32,
     pub name: String,
     pub template_id: i32,
