@@ -972,6 +972,9 @@ impl ScriptWorld {
             "proxgrenade" => Box::new(proximity_grenade::ProximityGrenade::new(false)),
             "contactproxgrenade" => Box::new(proximity_grenade::ProximityGrenade::new(true)),
             "proxgrenadetrigger" => Box::new(proximity_grenade::ProximityTrigger::default()),
+            // The marker's EndLevel cleanup belongs to the mission transition
+            // boundary, before the outgoing mission snapshot is taken.
+            "teleportmarker" => Box::new(NoopScript::new()),
             "timedgrenade" => Box::new(NoopScript::new()),
             "transluceinoutprop" => Box::new(NoopScript::new()),
 

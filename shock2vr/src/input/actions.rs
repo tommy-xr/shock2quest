@@ -71,6 +71,8 @@ pub enum InputAction {
     /// wielded amp); on Quest the psi-amp hand's LOWER face button resolves to
     /// it - see [`crate::hand_buttons`].
     SelectPsiPower,
+    /// Delete the current level's Quantum Relocation marker, without spending psi.
+    ClearPsiTeleport,
     /// Reload the current level in place (debug). Exercises the level-transition path,
     /// including the experimental loading screen.
     DebugReloadLevel,
@@ -180,6 +182,7 @@ impl InputAction {
             InputAction::EjectClip,
             InputAction::CyclePsiPower,
             InputAction::SelectPsiPower,
+            InputAction::ClearPsiTeleport,
             InputAction::DebugReloadLevel,
             InputAction::DebugAlertAll,
             InputAction::DebugCalmAll,
@@ -229,6 +232,7 @@ impl InputAction {
             InputAction::EjectClip => "EjectClip",
             InputAction::CyclePsiPower => "CyclePsiPower",
             InputAction::SelectPsiPower => "SelectPsiPower",
+            InputAction::ClearPsiTeleport => "ClearPsiTeleport",
             InputAction::DebugReloadLevel => "DebugReloadLevel",
             InputAction::DebugAlertAll => "DebugAlertAll",
             InputAction::DebugCalmAll => "DebugCalmAll",

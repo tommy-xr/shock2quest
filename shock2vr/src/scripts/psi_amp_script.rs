@@ -366,6 +366,13 @@ fn cast_selected_power(
         return Effect::NoEffect;
     }
 
+    if power.template_id == crate::psi_teleport::POWER {
+        return Effect::PsiTeleport {
+            amp: amp_entity,
+            cost: power.power.psi_cost,
+        };
+    }
+
     // Pull is authored as sustained but is a one-shot interaction with no shield duration.
     if power.template_id == crate::psi_pull::POWER {
         return crate::psi_pull::resolve(world, physics, amp_entity)

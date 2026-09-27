@@ -3896,6 +3896,22 @@ impl MissionCore {
         mission_core
             .thrown_items
             .restore(&mission_core.world, &mut mission_core.physics);
+        // Cosmetic riders are excluded from saves. A persistent teleport
+        // marker must rebuild its authored particles on same-level load;
+        // otherwise its saved destination silently becomes invisible.
+        if let Some((marker, position)) = crate::psi_teleport::marker(&mission_core.world) {
+            mission_core.instantiate_particle_riders(
+                asset_cache,
+                marker,
+                crate::psi_teleport::MARKER,
+                Point3::new(position.x, position.y, position.z),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                Matrix4::identity(),
+                false,
+                0,
+                None,
+            );
+        }
         for (index, entity_id) in backpack_load_remap.overflow.into_iter().enumerate() {
             mission_core.spill_backpack_overflow(entity_id, index);
         }
@@ -8596,6 +8612,34 @@ impl MissionCore {
             root_transform
         };
 
+        self.instantiate_particle_riders(
+            asset_cache,
+            info.entity_id,
+            template_id,
+            position,
+            orientation,
+            root_transform,
+            transient_fx,
+            rider_depth,
+            exclude_template,
+        );
+
+        info
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn instantiate_particle_riders(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        host: EntityId,
+        template_id: i32,
+        position: Point3<f32>,
+        orientation: Quaternion<f32>,
+        root_transform: Matrix4<f32>,
+        transient_fx: bool,
+        rider_depth: u32,
+        exclude_template: Option<i32>,
+    ) {
         // Instantiate the particle groups authored to ride this archetype
         // (`ParticleAttachement` links from particle archetypes to this
         // template or an ancestor) - projectile trails, psi bolt visuals.
@@ -8605,7 +8649,7 @@ impl MissionCore {
         // depth cap bounds authored cycles (shipped data nests 2 deep).
         const MAX_RIDER_DEPTH: u32 = 3;
         if rider_depth >= MAX_RIDER_DEPTH {
-            return info;
+            return;
         }
         let riders: Vec<i32> = {
             let hierarchy = ss2_entity_info::get_hierarchy(&self.entity_info);
@@ -8666,7 +8710,7 @@ impl MissionCore {
                 orientation,
                 root_transform,
                 CreateEntityOptions {
-                    attach_to: Some(info.entity_id),
+                    attach_to: Some(host),
                     transient_fx,
                     ..CreateEntityOptions::default()
                 },
@@ -8687,8 +8731,6 @@ impl MissionCore {
             self.world
                 .add_component(rider.entity_id, RuntimePropDoNotSerialize {});
         }
-
-        info
     }
 
     /// Launch speed (Dark units/s) above which a projectile is resolved by
@@ -10886,6 +10928,63 @@ impl MissionCore {
 
                 Effect::HealingPulse { amp } => {
                     self.healing_pulses.insert(amp, 0.0);
+                }
+                Effect::ClearPsiTeleport => {
+                    if let Some((marker, _)) = crate::psi_teleport::marker(&self.world) {
+                        self.remove_entity(marker);
+                        effects.push_back(Effect::ShowMessage {
+                            text: "Teleport marker cleared".into(),
+                        });
+                    }
+                }
+                Effect::PsiTeleport { amp, cost } => {
+                    if cost < 0 || crate::scripts::player_psi_points(&self.world) < cost {
+                        continue;
+                    }
+                    let message;
+                    if let Some((marker, position)) = crate::psi_teleport::marker(&self.world) {
+                        // A door or actor may have occupied the saved spot. Refuse
+                        // without spending/consuming, using the movement capsule's
+                        // existing clearance filter rather than inventing a range.
+                        if !self
+                            .physics
+                            .player_pose_is_clear(position, &self.player_handle)
+                        {
+                            effects.push_back(Effect::ShowMessage {
+                                text: "Teleport destination blocked".into(),
+                            });
+                            continue;
+                        }
+                        self.remove_entity(marker);
+                        effects.push_back(Effect::SetPlayerPosition {
+                            position,
+                            is_teleport: true,
+                            source: dark::properties::TeleportSource::Locomotion,
+                        });
+                        message = "Returned to teleport marker";
+                    } else {
+                        let position = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
+                        self.create_entity_with_position(
+                            asset_cache,
+                            crate::psi_teleport::MARKER,
+                            Point3::new(position.x, position.y, position.z),
+                            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                            Matrix4::identity(),
+                            CreateEntityOptions::default(),
+                        );
+                        message = "Teleport marker set";
+                    }
+                    update_player_psi_points(&self.world, |current| current.saturating_sub(cost));
+                    effects.push_back(Effect::ShowMessage {
+                        text: message.into(),
+                    });
+                    effects.push_back(crate::scripts::script_util::play_environmental_sound(
+                        &self.world,
+                        amp,
+                        "shoot",
+                        vec![],
+                        engine::audio::AudioHandle::new(),
+                    ));
                 }
                 Effect::PsiPull { amp, cost } => {
                     if self.psi_pull.is_some()
@@ -20028,6 +20127,12 @@ fn wildcard_match(text: &str, pattern: &str) -> bool {
 }
 
 impl crate::game_scene::GameScene for MissionCore {
+    fn end_level(&mut self) {
+        if let Some((marker, _)) = crate::psi_teleport::marker(&self.world) {
+            self.remove_entity(marker);
+        }
+    }
+
     fn cancel_transient_input(&mut self) {
         self.dismiss_amp_carousel();
     }

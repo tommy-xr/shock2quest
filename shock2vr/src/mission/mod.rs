@@ -210,6 +210,10 @@ impl Mission {
 
 // Implementation of GameScene trait for Mission
 impl crate::game_scene::GameScene for Mission {
+    fn end_level(&mut self) {
+        self.mission_core.end_level();
+    }
+
     fn cancel_transient_input(&mut self) {
         self.mission_core.cancel_transient_input();
     }

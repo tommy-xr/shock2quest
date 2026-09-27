@@ -4083,7 +4083,11 @@ impl PhysicsWorld {
     /// Whether the player's *current* capsule - crouched or standing, since
     /// nothing uncrouches them on the way to a respawn - fits at `position`
     /// without overlapping blocking geometry (their own body excluded).
-    fn player_pose_is_clear(&self, position: Vector3<f32>, player_handle: &PlayerHandle) -> bool {
+    pub(crate) fn player_pose_is_clear(
+        &self,
+        position: Vector3<f32>,
+        player_handle: &PlayerHandle,
+    ) -> bool {
         let capsule = if player_handle.is_crouched {
             crouched_player_capsule()
         } else {

@@ -23,7 +23,7 @@ pub struct PropPsiPower {
     /// How the power activates. Observed values 0..4: 0 = projectile shot
     /// (Cryokinesis, Pyrokinesis, Terror, PsiCharm, PsiMines, Electro
     /// Dampen), 1 = sustained/timed self effect (duration from
-    /// [`PropPsiShield`]), 3 = world-targeted (Teleport), 4 = inventory
+    /// [`PropPsiShield`]), 3 = marker/recall (Teleport; original kPsiTypeSustained), 4 = inventory
     /// item-targeted (Fabricate, ElectroPsi, Alchemy). 2 covers the
     /// remaining instant/special powers (heals, CyberHack, SomaDrain,
     /// ForceWall); the per-value semantics firm up as powers get

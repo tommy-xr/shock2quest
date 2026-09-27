@@ -211,6 +211,7 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 | `Alt+X` | `EjectClip` | magazine back to the backpack reserve; no Quest button - in VR it is the settings MFD's UNLOAD |
 | `B` (or `T`) / `Y` | `CycleAmmo` / `CyclePsiPower` | no Quest binding: a clip is inserted by hand; the amp selector uses its hand's stick |
 | - | `SelectPsiPower` | opens the lightweight amp selector in VR world mode; flat and the cyber interface retain the power MFD |
+| `Alt+T` | `ClearPsiTeleport` | clears the Quantum Relocation marker for free; also CLEAR MARKER in the shared flat/VR psi MFD |
 | `F` | `CycleGunSetting` | switch the wielded gun's fire mode (e.g. NORM / BURST); Quest: the gun hand's *upper* face button |
 | `U` | `ReadLastUnreadLog` | on Quest a free hand's *upper* face button resolves to this - see below |
 | `M` | `ToggleMap` | flat only |

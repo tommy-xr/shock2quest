@@ -57,6 +57,7 @@ pub mod psi_radar;
 pub mod psi_seekersense;
 pub mod psi_sense;
 mod psi_sword;
+mod psi_teleport;
 mod psi_visuals;
 pub mod quest_info;
 pub mod research;
@@ -989,6 +990,7 @@ impl Game {
     /// and return the context the new mission needs. Must run while the outgoing scene
     /// is still active.
     fn save_active_scene(&mut self) -> PreservedSceneState {
+        self.active_game_scene.end_level();
         let current_quest_info = self
             .active_game_scene
             .world()
