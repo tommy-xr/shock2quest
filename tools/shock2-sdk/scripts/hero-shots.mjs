@@ -31,6 +31,8 @@ const AIM_RIGHT = [0.1, -0.18, -0.55];
 const AIM_LEFT = [-0.1, -0.2, -0.52];
 const REST_LEFT = [-0.18, -0.35, -0.4];
 const REST_RIGHT = [0.18, -0.4, -0.35];
+// A rifle at low ready: the support hand sits under the handguard, in view.
+const RIFLE_RIGHT = [0.18, -0.3, -0.3];
 // A melee weapon held up and ready, in frame.
 const READY_LEFT = [-0.16, -0.24, -0.45];
 
@@ -42,9 +44,17 @@ const SHOTS = [
     player: [15.8, 0.84, 52.4],
     subject: "Floor Pod",
     loadout: { right: -18 },
-    hands: { right: [0.16, -0.12, -0.34] },
+    hands: { right: RIFLE_RIGHT },
     twoHanded: "right",
     stats: { strength: 5, skills: { standard_weapons: 6 } },
+    // Shots burst the pod; the clip ends before its gas reaches the player.
+    // The pod does not move, so the aim stays put as it bursts.
+    clip: {
+      seconds: 0.95,
+      hands: { right: [{ t: 0, value: RIFLE_RIGHT }] },
+      trigger: { right: [0.3, 0.55, 0.8] },
+      fixedAim: true,
+    },
   },
   {
     // Weapon + melee.
@@ -226,9 +236,10 @@ async function captureShot(shot) {
 
 /** Look up the subject's live aim points by class, falling back to the torso,
  * then its origin (which can sit well off its body - a monkey's is above its
- * back). */
+ * back). Null once the subject is gone. */
 async function aimPoints(game, id) {
   const detail = await game.entities.detail(id);
+  if (!detail) return null;
   const find = (c) => detail.aim_points?.find((p) => p.classification === c)?.position;
   return (classification) => find(classification) ?? find("torso") ?? detail.position;
 }
@@ -242,13 +253,16 @@ async function recordClip(game, shot, subjectId) {
   const { clip } = shot;
   const frames = Math.round(clip.seconds * 60);
   const sink = await frameSink(game, shot.name);
+  let point;
   try {
     for (let frame = 0; frame < frames; frame++) {
       const t = frame / 60;
       const hands = Object.fromEntries(
         Object.entries(clip.hands).map(([hand, keys]) => [hand, sampleTrack(keys, t)]),
       );
-      await trackSubject(game, await aimPoints(game, subjectId), t, hands);
+      // A destroyed subject keeps its last aim.
+      if (!clip.fixedAim || !point) point = (await aimPoints(game, subjectId)) ?? point;
+      await trackSubject(game, point, t, hands);
       for (const [hand, pulls] of Object.entries(clip.trigger ?? {})) {
         const pulled = pulls.some((at) => t >= at && t < at + 0.12);
         await game.input.set(`${hand}_hand.trigger`, pulled ? 1 : 0);
