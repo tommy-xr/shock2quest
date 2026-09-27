@@ -3148,6 +3148,8 @@ impl PlayerHandle {
 const HELD_ITEM_SKIN: f32 = 0.01;
 
 pub struct PhysicsWorld {
+    #[cfg(test)]
+    pub(crate) ray_cast_count: std::cell::Cell<usize>,
     gravity: Vector<Real>,
     integration_parameters: IntegrationParameters,
     physics_pipeline: PhysicsPipeline,
@@ -5742,6 +5744,8 @@ impl PhysicsWorld {
             island_manager,
             broad_phase,
             has_stepped: false,
+            #[cfg(test)]
+            ray_cast_count: std::cell::Cell::new(0),
             narrow_phase,
             impulse_joint_set,
             multibody_joint_set,
@@ -7312,6 +7316,9 @@ impl PhysicsWorld {
         ignore_sensors: bool,
         entity_filter: Option<&dyn Fn(EntityId) -> bool>,
     ) -> Option<RayCastResult> {
+        #[cfg(test)]
+        self.ray_cast_count.set(self.ray_cast_count.get() + 1);
+
         // Guard against degenerate rays. A zero-length direction normalizes to
         // NaN, and a NaN/zero ray direction sends parry's `clip_aabb_line` down
         // its `near_side == 0` path (see parry3d clip_aabb_line.rs): when the

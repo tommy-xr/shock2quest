@@ -18,7 +18,7 @@ use crate::{
     input_context::Hand,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     scripts::{Message, MessagePayload},
-    util::{self, point3_to_vec3},
+    util::point3_to_vec3,
     vr_config::{self, Handedness},
 };
 
@@ -855,21 +855,10 @@ pub(crate) fn carried_weapon_by_class(world: &World, class_template_id: i32) -> 
         })
 }
 
-///
-/// In the case where we hit an entity that is 'proxied' (like, a hitbox that points to a parent),
-/// resolve to the parent entity.
-///
-fn resolve_hit_proxy_entity(world: &World, ray_cast_result: RayCastResult) -> RayCastResult {
-    let maybe_new_entity_id = ray_cast_result
-        .maybe_entity_id
-        .map(|entity_id| util::resolve_proxy_entity(world, entity_id));
-
-    RayCastResult {
-        maybe_entity_id: maybe_new_entity_id,
-        ..ray_cast_result
-    }
-}
-
+/// Resolve one interaction target, including world-panel host bypass.
+/// A panel owns its projected quad: its host and hitboxes resolving to that
+/// host cannot be frobbed/grabbed through it. Outside the quad the host remains
+/// targetable. The object panel auto-closes when the player moves 4 units away.
 pub(crate) fn interaction_ray_cast(
     physics: &PhysicsWorld,
     world: &World,
@@ -881,29 +870,42 @@ pub(crate) fn interaction_ray_cast(
         | InternalCollisionGroups::SELECTABLE
         | InternalCollisionGroups::WORLD
         | InternalCollisionGroups::RAYCAST;
-    let ui_hit = physics.ray_cast2(
-        ray_start,
-        forward,
-        FROB_REACH,
-        InternalCollisionGroups::UI,
-        entity_to_ignore,
-        true,
-    );
+    // Borrow once per resolution, not once per candidate collider in Rapier's
+    // predicate. A GUI proxy identifies a panel host; a runtime proxy identifies
+    // a hitbox parent. Keep those two meanings separate.
+    let (gui_proxies, runtime_proxies) = world
+        .borrow::<(
+            View<GuiPropProxyEntity>,
+            View<crate::runtime_props::RuntimePropProxyEntity>,
+        )>()
+        .ok()?;
+    let resolve_entity = |entity| runtime_proxies.get(entity).map_or(entity, |proxy| proxy.0);
+    // With no open world panel, the combined query below already handles every
+    // UI collider. Avoid a full UI-only broad-phase traversal in that common case.
+    let ui_hit = (!gui_proxies.is_empty())
+        .then(|| {
+            physics.ray_cast2(
+                ray_start,
+                forward,
+                FROB_REACH,
+                InternalCollisionGroups::UI,
+                entity_to_ignore,
+                true,
+            )
+        })
+        .flatten();
 
     let gui_host = ui_hit.as_ref().and_then(|hit| {
         let proxy = hit.maybe_entity_id?;
-        world
-            .borrow::<View<GuiPropProxyEntity>>()
-            .ok()?
+        gui_proxies
             .get(proxy)
             .ok()
             .map(GuiPropProxyEntity::host_entity)
     });
 
-    if let (Some(ui_hit), Some(gui_host)) = (ui_hit, gui_host) {
+    let result = if let (Some(ui_hit), Some(gui_host)) = (ui_hit, gui_host) {
         let ui_distance = (ui_hit.hit_point - ray_start).magnitude();
-        let is_not_panel_host =
-            |entity_id| util::resolve_proxy_entity(world, entity_id) != gui_host;
+        let is_not_panel_host = |entity_id| resolve_entity(entity_id) != gui_host;
         let blocker = physics.ray_cast2_with_entity_filter(
             ray_start,
             forward,
@@ -914,21 +916,24 @@ pub(crate) fn interaction_ray_cast(
             &is_not_panel_host,
         );
 
-        blocker
-            .map(|result| resolve_hit_proxy_entity(world, result))
-            .or(Some(ui_hit))
+        blocker.or(Some(ui_hit))
     } else {
-        physics
-            .ray_cast2(
-                ray_start,
-                forward,
-                FROB_REACH,
-                ordinary_groups | InternalCollisionGroups::UI,
-                entity_to_ignore,
-                true,
-            )
-            .map(|result| resolve_hit_proxy_entity(world, result))
-    }
+        physics.ray_cast2(
+            ray_start,
+            forward,
+            FROB_REACH,
+            ordinary_groups | InternalCollisionGroups::UI,
+            entity_to_ignore,
+            true,
+        )
+    };
+    // Every return path resolves runtime proxies, including UI hits. Current
+    // GUI proxies do not also carry RuntimePropProxyEntity, but keep that an
+    // implementation detail rather than an implicit requirement here.
+    result.map(|mut hit| {
+        hit.maybe_entity_id = hit.maybe_entity_id.map(resolve_entity);
+        hit
+    })
 }
 
 #[cfg(test)]
@@ -1000,7 +1005,7 @@ mod tests {
             vec3(0.0, 0.0, -1.0),
             identity,
             Vector3::zero(),
-            vec3(1.0, 1.0, 0.4),
+            vec3(2.0, 1.0, 0.4),
             CollisionGroup::selectable(),
             false,
         );
@@ -1014,16 +1019,26 @@ mod tests {
             false,
         );
 
-        let player = world.add_entity(());
-        let mut player_handle = physics.create_player(vec3(100.0, 100.0, 100.0), player);
-        physics.update(Vector3::zero(), &mut player_handle);
+        update_queries(&mut world, &mut physics);
         (world, physics, host, proxy)
     }
 
+    #[derive(shipyard::Unique)]
+    struct QueryPlayer(crate::physics::PlayerHandle);
+
     fn update_queries(world: &mut World, physics: &mut PhysicsWorld) {
-        let player = world.add_entity(());
-        let mut player_handle = physics.create_player(vec3(100.0, 100.0, 100.0), player);
-        physics.update(Vector3::zero(), &mut player_handle);
+        // Rapier refreshes broad-phase queries during a step. Reuse one distant
+        // player instead of accumulating a capsule for every added occluder.
+        if world.borrow::<UniqueView<QueryPlayer>>().is_err() {
+            let player = world.add_entity(());
+            world.add_unique(QueryPlayer(
+                physics.create_player(vec3(100.0, 100.0, 100.0), player),
+            ));
+        }
+        let mut player = world
+            .borrow::<shipyard::UniqueViewMut<QueryPlayer>>()
+            .unwrap();
+        physics.update(Vector3::zero(), &mut player.0);
     }
 
     /// Register `entity` as a selectable kinematic body and refresh the
@@ -1080,6 +1095,97 @@ mod tests {
             ignored,
         )
         .and_then(|hit| hit.maybe_entity_id)
+    }
+
+    #[test]
+    fn no_panel_empty_hand_resolves_once_and_shares_hover_and_frob() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let target = add_occluder(&mut world, &mut physics, -1.0, CollisionGroup::selectable());
+        let held = add_occluder(&mut world, &mut physics, -0.5, CollisionGroup::selectable());
+        let mut input = Hand::default();
+        input.trigger_value = 1.0;
+        physics.ray_cast_count.set(0);
+        let (hand, effects) = VirtualHand::update(
+            &VirtualHand::new(Handedness::Right),
+            &physics,
+            &world,
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            &input,
+            Some(held),
+            Vector3::zero(),
+            1.0 / 60.0,
+        );
+        assert_eq!(hand.raytrace_hit.unwrap().maybe_entity_id, Some(target));
+        assert!(effects.iter().any(|effect| matches!(effect,
+            VirtualHandEffect::OutMessage { message } if message.to == target && matches!(message.payload, MessagePayload::Frob))));
+        assert!(effects.iter().any(|effect| matches!(effect,
+            VirtualHandEffect::OutMessage { message } if message.to == target && matches!(message.payload, MessagePayload::Hover { .. }))));
+        assert_eq!(
+            physics.ray_cast_count.get(),
+            1,
+            "one shared combined query without an open panel"
+        );
+    }
+
+    #[test]
+    fn world_panel_ui_hit_resolves_runtime_proxy_too() {
+        let (mut world, physics, _host, proxy) = interaction_fixture();
+        let target = world.add_entity(());
+        world.add_component(proxy, crate::runtime_props::RuntimePropProxyEntity(target));
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(target));
+    }
+
+    #[test]
+    fn missing_panel_plane_still_returns_host() {
+        let (world, physics, host, _proxy) = interaction_fixture();
+        let hit = interaction_ray_cast(
+            &physics,
+            &world,
+            point3(0.75, 0.0, 0.0),
+            vec3(0.0, 0.0, -1.0),
+            None,
+        );
+        assert_eq!(hit.unwrap().maybe_entity_id, Some(host));
+    }
+
+    #[test]
+    fn ui_without_gui_proxy_remains_targetable() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let ui = add_occluder(&mut world, &mut physics, -0.5, CollisionGroup::ui());
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(ui));
+    }
+
+    #[test]
+    fn ui_without_gui_proxy_remains_targetable_with_an_open_panel() {
+        let (mut world, mut physics, _host, _proxy) = interaction_fixture();
+        let ui = add_occluder(&mut world, &mut physics, -0.5, CollisionGroup::ui());
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(ui));
+    }
+
+    #[test]
+    fn host_hitbox_is_bypassed_only_inside_panel_projection() {
+        let (mut world, mut physics, host, proxy) = interaction_fixture();
+        let hitbox = world.add_entity(crate::runtime_props::RuntimePropProxyEntity(host));
+        register_kinematic_body(
+            &mut world,
+            &mut physics,
+            hitbox,
+            vec3(0.0, 0.0, -0.5),
+            vec3(2.0, 1.0, 0.1),
+            CollisionGroup::selectable(),
+        );
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(proxy));
+        let outside = interaction_ray_cast(
+            &physics,
+            &world,
+            point3(0.75, 0.0, 0.0),
+            vec3(0.0, 0.0, -1.0),
+            None,
+        );
+        assert_eq!(outside.unwrap().maybe_entity_id, Some(host));
     }
 
     /// Negative-first regression for #1114: the transmitter's selectable

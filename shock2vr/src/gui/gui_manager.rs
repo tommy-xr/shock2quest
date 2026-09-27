@@ -61,7 +61,6 @@ const PANEL_AUTO_CLOSE_DISTANCE: f32 = 4.0;
 
 #[derive(Component)]
 pub struct GuiPropProxyEntity {
-    #[allow(dead_code)]
     entity_id: EntityId,
 }
 
