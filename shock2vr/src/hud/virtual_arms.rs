@@ -1,5 +1,5 @@
 use cgmath::{Deg, Matrix4, vec3};
-use dark::properties::{PropHitPoints, PropMaxHitPoints, PropPsiState};
+use dark::properties::{PropGunState, PropHitPoints, PropMaxHitPoints, PropPsiState};
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{Get, UniqueView, View, World};
 
@@ -84,7 +84,14 @@ pub fn create_wrist_hud_panels(
         // Some weapons carry an authored hand instead of our glove. Give
         // their complete shared readout a hologram mount; there is no physical
         // cuff to host it. Otherwise charging in VR would be invisible.
-        let weapon = crate::wielded_weapon::held_by_hand(world, hand).or(supported[i]);
+        // Only a steadied gun lends its readout: a melee weapon's charge
+        // already shows on the hand swinging it.
+        let steadied_gun = supported[i].filter(|&entity| {
+            world
+                .borrow::<View<PropGunState>>()
+                .is_ok_and(|guns| guns.contains(entity))
+        });
+        let weapon = crate::wielded_weapon::held_by_hand(world, hand).or(steadied_gun);
         let readout = ammo_panel::AmmoReadout::for_weapon(world, weapon, false);
         // The refusal is available even when a weapon carries its own hand
         // mesh. Only the physical wrist plates require a visible glove.
