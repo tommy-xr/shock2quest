@@ -49,25 +49,47 @@ impl<'a> ObjectLighting<'a> {
         })
     }
 
-    /// Hands and viewmodels can extend into solid space. Keep the player's
-    /// light set there instead of abruptly dropping to ambient-only; shader
-    /// distance/cone tests still use the mesh's actual world position.
+    /// Lights for the player's own gloves and held items. They can extend into
+    /// solid space, so keep the player's light set there instead of abruptly
+    /// dropping to ambient-only; shader distance/cone tests still use the
+    /// mesh's actual world position. Their ambient is raised to
+    /// `held_light_floor` so they stay readable where the lamps miss them.
     pub fn at_player_position(&self, position: Vector3<f32>) -> std::rc::Rc<LightArray> {
-        self.at_position(if self.spatial.get_cell_from_position(position).is_some() {
+        let position = if self.spatial.get_cell_from_position(position).is_some() {
             position
         } else {
             self.player_position
-        })
+        };
+        std::rc::Rc::new(with_ambient_floor(
+            self.lights_at(position),
+            dev_params::get(dev_params::HELD_LIGHT_FLOOR),
+        ))
     }
 
     pub fn at_position(&self, position: Vector3<f32>) -> std::rc::Rc<LightArray> {
-        std::rc::Rc::new(
-            lights_for_position(self.spatial, position, self.intensities).with_environment(
-                self.environment.clone(),
-                dev_params::get(dev_params::OBJECT_REFLECTION),
-            ),
+        std::rc::Rc::new(self.lights_at(position))
+    }
+
+    fn lights_at(&self, position: Vector3<f32>) -> LightArray {
+        lights_for_position(self.spatial, position, self.intensities).with_environment(
+            self.environment.clone(),
+            dev_params::get(dev_params::OBJECT_REFLECTION),
         )
     }
+}
+
+/// `lights` with its ambient brightened until its strongest channel reaches
+/// `floor`, keeping the room's tint; a black ambient becomes grey.
+fn with_ambient_floor(mut lights: LightArray, floor: f32) -> LightArray {
+    let strongest = lights.ambient.x.max(lights.ambient.y).max(lights.ambient.z);
+    if strongest < floor {
+        lights.ambient = if strongest > 1e-4 {
+            lights.ambient * (floor / strongest)
+        } else {
+            vec3(floor, floor, floor)
+        };
+    }
+    lights
 }
 
 /// How many lights the renderer can apply to one object.
@@ -290,6 +312,16 @@ fn normalize_or_down(direction: Vector3<f32>) -> Vector3<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_held_floor_brightens_dark_ambient_and_keeps_its_tint() {
+        let ambient = |value| {
+            with_ambient_floor(LightArray::new().with_object_lighting(value, 0.0), 0.6).ambient
+        };
+        assert_eq!(ambient(vec3(0.05, 0.1, 0.05)), vec3(0.3, 0.6, 0.3));
+        assert_eq!(ambient(vec3(0.2, 0.8, 0.2)), vec3(0.2, 0.8, 0.2));
+        assert_eq!(ambient(vec3(0.0, 0.0, 0.0)), vec3(0.6, 0.6, 0.6));
+    }
 
     fn omni(position: Vector3<f32>, brightness: f32, radius: f32) -> WorldLight {
         WorldLight {

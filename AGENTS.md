@@ -776,7 +776,10 @@ not occupy a light slot. This does not add temporal flicker/pulse modes beyond
 the existing controller. VR gloves sample at each rendered hand pose; VR held
 models and flat first-person weapons use the same selection path. A held
 visual outside the world rep falls back to the player's cell. Lit gloves drop
-full-texture emission while keeping their emissive status-light mask. Flat weapon
+full-texture emission while keeping their emissive status-light mask.
+The player's gloves and held items (VR and flat) never drop below the
+`held_light_floor` ambient: authored lamps are mostly downward cones that
+miss a hand at chest height, which otherwise reads as a black silhouette. Flat weapon
 FOV is a per-object projection override, preserving world positions/normals
 for lighting; its emissive attachments and the HUD remain independent.
 This is no longer an experimental flag.
