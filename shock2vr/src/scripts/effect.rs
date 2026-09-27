@@ -745,6 +745,13 @@ pub enum Effect {
     },
 
     /// Revalidate and acquire an aimed world item before spending psi.
+    /// Set the current-position marker or recall to it, spending the authored cost.
+    PsiTeleport {
+        amp: EntityId,
+        cost: i32,
+    },
+    ClearPsiTeleport,
+
     PsiPull {
         amp: EntityId,
         cost: i32,

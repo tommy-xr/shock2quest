@@ -139,6 +139,9 @@ impl ActionDispatcher {
                 forward: true,
             });
         }
+        if state.just_triggered(InputAction::ClearPsiTeleport) {
+            effects.push(Effect::ClearPsiTeleport);
+        }
         if state.just_triggered(InputAction::SelectPsiPower) {
             effects.push(Effect::OpenPsiPowers);
         }

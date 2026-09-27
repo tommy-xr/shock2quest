@@ -140,6 +140,10 @@ pub trait GameScene {
     /// player-visible feedback; every other scene deliberately ignores it.
     fn on_load_failed(&mut self) {}
 
+    /// Discard level-local state before caching an outgoing mission. Ordinary
+    /// save/load snapshots do not call this hook.
+    fn end_level(&mut self) {}
+
     /// Cancel scene-local input gestures when a system overlay takes ownership.
     fn cancel_transient_input(&mut self) {}
 

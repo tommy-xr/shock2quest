@@ -267,6 +267,9 @@ impl Default for PsiTrainerState {
 /// setting a sustained status flag alone does not make that status useful.
 fn purchasable_power(power: &crate::psi::PsiPowerInfo) -> bool {
     use crate::psi::*;
+    if power.template_id == crate::psi_teleport::POWER {
+        return true;
+    }
     match power.power.activation_type {
         ACTIVATION_TYPE_INSTANT => matches!(
             power.template_id,
@@ -521,6 +524,7 @@ pub enum PsiPowersGuiMsg {
     BrowseTier(i32),
     /// Select the power with this id, if the player is trained in it.
     SelectPower(i32),
+    ClearTeleportMarker,
 }
 
 /// The strings the panel reads: the whole `psihelp.str` table, kept as a
@@ -634,6 +638,20 @@ pub(crate) fn psi_panel_components(
         }
     }
 
+    if tier_override.is_none() && crate::psi_teleport::marker(world).is_some() {
+        components.push(
+            gui::button(PsiPowersGuiMsg::ClearTeleportMarker)
+                .with_label("CLEAR MARKER")
+                .with_position(vec2(15.0, 270.0))
+                .with_size(vec2(159.0, 19.0)),
+        );
+        components.push(
+            gui::text("CLEAR MARKER")
+                .with_position(vec2(48.0, 274.0))
+                .with_size(vec2(100.0, 11.0)),
+        );
+    }
+
     // The help panel reads whatever the cursor is over - a discipline's
     // own entry, or the strip's one line about the tabs.
     if let Some(help) = cursor
@@ -687,6 +705,7 @@ impl Gui<PsiPowersGuiState, PsiPowersGuiMsg> for PsiPowersGui {
         msg: &PsiPowersGuiMsg,
     ) -> (PsiPowersGuiState, Effect) {
         let effect = match msg {
+            PsiPowersGuiMsg::ClearTeleportMarker => Effect::ClearPsiTeleport,
             PsiPowersGuiMsg::BrowseTier(tier) => Effect::SetPsiBrowsedTier { tier: *tier },
             // The trained-only guard is the effect's, not the panel's: the same
             // rule has to hold for every way in (a click, the stick, HTTP).
@@ -744,6 +763,23 @@ mod tests {
             }
         }
         powers
+    }
+
+    #[test]
+    fn quantum_relocation_is_purchasable_without_a_projectile_link() {
+        let power = PsiPowerInfo {
+            template_id: crate::psi_teleport::POWER,
+            name: "Teleport".into(),
+            power: PropPsiPower {
+                power_id: 35,
+                activation_type: 3,
+                psi_cost: 5,
+                data: [0.0; 4],
+            },
+            ..registry().remove(0)
+        };
+        assert!(power.projectiles.is_empty());
+        assert!(purchasable_power(&power));
     }
 
     fn world_with(selected_power_id: i32, browsed_tier: i32, trained: &[i32]) -> World {

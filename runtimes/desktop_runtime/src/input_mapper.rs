@@ -124,6 +124,11 @@ impl DesktopInputMapper {
             },
             Binding {
                 key: Key::T,
+                modifier: Modifier::Alt,
+                action: InputAction::ClearPsiTeleport,
+            },
+            Binding {
+                key: Key::T,
                 modifier: Modifier::None,
                 action: InputAction::CycleAmmo,
             },
@@ -260,6 +265,21 @@ mod tests {
     fn frame(mapper: &mut DesktopInputMapper, state: &mut InputActionState, held: &[Key]) {
         state.clear_triggered();
         mapper.resolve(|key| held.contains(&key), state);
+    }
+
+    #[test]
+    fn alt_t_clears_the_marker_without_also_cycling_ammo() {
+        let mut mapper = DesktopInputMapper::new();
+        let mut state = InputActionState::new();
+        frame(&mut mapper, &mut state, &[Key::LeftAlt, Key::T]);
+        assert!(state.just_triggered(InputAction::ClearPsiTeleport));
+        assert!(!state.just_triggered(InputAction::CycleAmmo));
+        frame(&mut mapper, &mut state, &[Key::LeftAlt, Key::T]);
+        assert!(!state.just_triggered(InputAction::ClearPsiTeleport));
+        frame(&mut mapper, &mut state, &[]);
+        frame(&mut mapper, &mut state, &[Key::T]);
+        assert!(state.just_triggered(InputAction::CycleAmmo));
+        assert!(!state.just_triggered(InputAction::ClearPsiTeleport));
     }
 
     #[test]
