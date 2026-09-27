@@ -16,7 +16,13 @@ const ROOTS = {
 
 export function createControllerView(container, { accent = "#39e1e6" } = {}) {
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  } catch {
+    container.textContent = "3D controller view needs WebGL.";
+    return { setMode() {} };
+  }
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.8;
@@ -92,7 +98,7 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
   let yaw = 0, drag = null, lastInput = -1e9;
   renderer.domElement.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, yaw }; renderer.domElement.setPointerCapture(e.pointerId); });
   renderer.domElement.addEventListener("pointermove", (e) => { if (drag) { yaw = drag.yaw + (e.clientX - drag.x) * 0.01; lastInput = performance.now(); } });
-  renderer.domElement.addEventListener("pointerup", () => (drag = null));
+  for (const t of ["pointerup", "pointercancel"]) renderer.domElement.addEventListener(t, () => (drag = null));
 
   const resize = () => {
     const { width, height } = container.getBoundingClientRect();
@@ -106,7 +112,7 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
   new ResizeObserver(resize).observe(container);
   resize();
 
-  renderer.setAnimationLoop((ms) => {
+  const frame = (ms) => {
     const t = ms / 1000;
     const idle = performance.now() - lastInput > 2500 && !drag;
     if (idle && !reduce) yaw += (Math.sin(t * 0.4) * 0.25 - yaw) * 0.02;
@@ -124,9 +130,14 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
       }
     }
     renderer.render(scene, camera);
-  });
+  };
+  // Render only while on screen.
+  const onScreen = new IntersectionObserver(([e]) => renderer.setAnimationLoop(e.isIntersecting ? frame : null));
+  onScreen.observe(container);
 
   Promise.all([load("L", "left.glb", -0.065), load("R", "right.glb", 0.065)]).catch((e) => {
+    onScreen.disconnect();
+    renderer.setAnimationLoop(null);
     container.textContent = "Controller model unavailable offline.";
     console.error(e);
   });

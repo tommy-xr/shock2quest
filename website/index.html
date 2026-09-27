@@ -55,7 +55,7 @@ h2.sec{font-size:34px;margin:6px 0 22px}
 .feeds .main img{display:block;width:100%}
 .feeds .main span{position:absolute;left:12px;top:10px;font:12px "Share Tech Mono",monospace;background:rgba(0,0,0,.7);padding:2px 8px}
 .feeds .main span::before{content:"● ";color:#ff5555}
-.feeds .side{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.feeds .side{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 .feeds .side button{padding:0;border:1px solid var(--line);background:none;cursor:pointer;opacity:.6}
 .feeds .side button[aria-pressed=true],.feeds .side button:hover{opacity:1;border-color:var(--cyan)}
 .feeds .side img{display:block;width:100%}
@@ -148,20 +148,24 @@ adb push cutscenes /sdcard/shock2quest/</div></li>
 
 <script type="module">
 import { MODES, SHOTS, LINKS, DISCLOSURE, socialLinks, wireLinks, fetchVersion } from "./shared/controls.js";
-import { createControllerView } from "./shared/controller3d.js";
 const $ = (s) => document.querySelector(s);
 
 $("#social").innerHTML = $("#social2").innerHTML = socialLinks();
 wireLinks();
 $("#pre").textContent = "commit " + LINKS.preAgentShort;
 document.querySelectorAll("[data-d]").forEach((p) => (p.textContent = DISCLOSURE[p.dataset.d]));
-fetchVersion().then((v) => ($("[data-version]").innerHTML = v ? `Latest build <a href="${v.url}">${v.label}</a> · ${v.date}` : "See GitHub releases"));
+fetchVersion().then((v) => {
+  const el = $("[data-version]");
+  if (!v) { el.textContent = "See GitHub releases"; return; }
+  const a = Object.assign(document.createElement("a"), { href: v.url, textContent: v.label });
+  el.replaceChildren("Latest build ", a, ` · ${v.date}`);
+});
 
 // Copy buttons
 document.querySelectorAll(".code").forEach((c) => {
   const text = c.textContent, b = document.createElement("button");
   b.textContent = "COPY";
-  b.onclick = () => navigator.clipboard?.writeText(text).then(() => { b.textContent = "COPIED"; setTimeout(() => (b.textContent = "COPY"), 1200); });
+  b.onclick = () => navigator.clipboard?.writeText(text).then(() => { b.textContent = "COPIED"; setTimeout(() => (b.textContent = "COPY"), 1200); }, () => {});
   c.appendChild(b);
 });
 
@@ -170,7 +174,7 @@ const feed = $("#feed"), feedcap = $("#feedcap"), list = $("#feedlist");
 const pick = ([f, c]) => { feed.src = "media/" + f; feed.alt = c; feedcap.textContent = c; };
 SHOTS.forEach((s, i) => {
   const b = document.createElement("button");
-  b.innerHTML = `<img src="media/${s[0].replace(".gif", ".png")}" alt="${s[1]}">`;
+  b.innerHTML = `<img src="media/${s[0].replace(".gif", ".png")}" alt="${s[1]}" loading="lazy">`;
   b.setAttribute("aria-pressed", i === 0);
   b.onclick = () => { pick(s); list.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b)); };
   list.appendChild(b);
@@ -178,7 +182,12 @@ SHOTS.forEach((s, i) => {
 pick(SHOTS[0]);
 
 // Controls MFD
-const view = createControllerView($("#ctl3d"), { accent: "#39e1e6" });
+// Loaded lazily so a CDN/WebGL failure only costs the 3D view, not the text.
+let view = null;
+import("./shared/controller3d.js").then(
+  ({ createControllerView }) => { view = createControllerView($("#ctl3d")); view.setMode(MODES[cur]); },
+  () => ($("#ctl3d").textContent = "3D controller view unavailable."),
+);
 const tabs = $("#tabs");
 let cur = 0;
 MODES.forEach((m, i) => {
@@ -191,16 +200,20 @@ MODES.forEach((m, i) => {
 function set(i) {
   cur = (i + MODES.length) % MODES.length;
   const m = MODES[cur];
-  tabs.querySelectorAll("button").forEach((b, j) => b.setAttribute("aria-selected", j === cur));
+  tabs.querySelectorAll("button").forEach((b, j) => { b.setAttribute("aria-selected", j === cur); b.tabIndex = j === cur ? 0 : -1; });
   $("#blurb").textContent = m.blurb;
   $("#rows").innerHTML = m.rows.map(([k, v]) => `<div class="chip"><b>${k}</b>${v}</div>`).join("");
   $("#clip").innerHTML = m.clip ? `<img src="media/${m.clip}" alt="${m.title} footage">` : `FOOTAGE PENDING · ${m.title.toUpperCase()}`;
-  view.setMode(m);
+  view?.setMode(m);
 }
 set(0);
+// Arrow keys move selection and focus together (roving tabindex).
 tabs.addEventListener("keydown", (e) => {
-  if (e.key === "ArrowDown" || e.key === "ArrowRight") set(cur + 1);
-  if (e.key === "ArrowUp" || e.key === "ArrowLeft") set(cur - 1);
+  const d = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+  if (!d) return;
+  e.preventDefault();
+  set(cur + d);
+  tabs.children[cur].focus();
 });
 </script>
 </body>
