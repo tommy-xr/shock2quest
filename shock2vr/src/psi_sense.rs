@@ -27,7 +27,7 @@ pub fn silhouette(
         engine::scene::color_material::create(color)
     };
     let mut echo = object.clone();
-    echo.material = Rc::new(RefCell::new(replacement));
+    echo.replace_material(Rc::new(RefCell::new(replacement)));
     echo.set_transparency(Some(1.0 - 0.75 * strength));
     echo.set_depth_write(false);
     // SceneOverlay has its own depth, so walls cannot hide the echo. SceneUi

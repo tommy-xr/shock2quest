@@ -133,14 +133,14 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         }
 
         void main() {
-            vec4 texColor = texture(texture1, texCoord);
+            vec4 texColor = sampleMaterialPass(texture1, texCoord, worldPos, worldNormal);
             if (additiveUnlit) {
                 // SRC_COLOR/ONE squares RGB. Scale by sqrt(opacity) so the
                 // accumulated light fades linearly with authored alpha.
                 fragColor = vec4(texColor.rgb * sqrt(texColor.a * (1.0 - transparency)), 1.0);
                 return;
             }
-            if (texColor.a < 0.1) discard;
+            if ((!materialPassEnabled || materialPassAlphaTest) && texColor.a < 0.1) discard;
 
             vec3 finalColor = texColor.rgb * emissivity;
 
@@ -155,12 +155,13 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             finalColor += texColor.rgb * light;
             vec4 shaded = applyShine(vec4(finalColor, texColor.a * (1.0 - transparency)), light, specular, 1.0 - transparency, texCoord, worldPos, normal);
 
-            fragColor = applyIncidence(shaded, texColor, worldPos, worldNormal);
+            fragColor = applyMaterialPass(applyIncidence(shaded, texColor, worldPos, worldNormal), texColor, worldPos, worldNormal);
         }
 "#;
 
 struct UnifiedUniforms {
     incidence: IncidenceUniforms,
+    render_pass: super::render_pass::Uniforms,
     shine: ShineUniforms,
     // Basic transformation matrices
     world_loc: i32,
@@ -194,12 +195,14 @@ where
 {
     has_initialized: bool,
     diffuse_texture: T,
+    diffuse_override: Option<std::rc::Rc<dyn TextureTrait>>,
     emissivity: f32,
     transparency: f32,
     base_transparency: f32,
     additive_unlit: bool,
     fixed_ambient: bool,
     incidence: Option<IncidencePass>,
+    render_pass: Option<super::render_pass::RenderPass>,
     shine: Option<Shine>,
 }
 
@@ -221,7 +224,11 @@ where
         let (shader_program, uniforms) = UNIFIED_SHADER_PROGRAM
             .get()
             .expect("unified shader not compiled");
-        self.diffuse_texture.bind0(render_context);
+        if let Some(texture) = &self.diffuse_override {
+            texture.bind0(render_context);
+        } else {
+            self.diffuse_texture.bind0(render_context);
+        }
         unsafe {
             gl::UseProgram(shader_program.gl_id);
             uniforms
@@ -231,6 +238,12 @@ where
                 .shine
                 .bind(self.shine.as_ref(), lights, render_context, view_matrix);
 
+            uniforms.render_pass.bind(
+                self.render_pass.as_ref(),
+                render_context,
+                view_matrix,
+                1.0 - self.transparency,
+            );
             let projection = render_context.projection_matrix;
 
             // Set basic transformation matrices
@@ -321,6 +334,18 @@ impl<T> Material for BasicMaterial<T>
 where
     T: Deref<Target = dyn TextureTrait> + 'static,
 {
+    fn emissivity(&self) -> f32 {
+        self.emissivity
+    }
+
+    fn set_diffuse_texture(&mut self, texture: std::rc::Rc<dyn TextureTrait>) {
+        self.diffuse_override = Some(texture);
+    }
+
+    fn set_render_pass(&mut self, pass: super::render_pass::RenderPass) {
+        self.render_pass = Some(pass);
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -359,10 +384,11 @@ where
 
             let fragment_shader = crate::shader::build(
                 &format!(
-                    "{}\n{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}\n{}",
                     super::incidence::GLSL,
                     super::environment::GLSL,
                     super::shine::GLSL,
+                    super::render_pass::GLSL,
                     UNIFIED_FRAGMENT_SHADER_SOURCE
                 ),
                 crate::shader::ShaderType::Fragment,
@@ -375,6 +401,7 @@ where
                 // Get uniform locations for all shader variables
                 let uniforms = UnifiedUniforms {
                     incidence: IncidenceUniforms::new(shader.gl_id),
+                    render_pass: super::render_pass::Uniforms::new(shader.gl_id),
                     shine: ShineUniforms::new(shader.gl_id),
                     // Basic transformation matrices
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
@@ -599,12 +626,14 @@ where
     Box::new(BasicMaterial {
         diffuse_texture,
         has_initialized: false,
+        diffuse_override: None,
         emissivity,
         transparency,
         base_transparency: transparency,
         additive_unlit,
         fixed_ambient: false,
         incidence: None,
+        render_pass: None,
         shine: None,
     })
 }
@@ -622,12 +651,14 @@ where
     Box::new(BasicMaterial {
         diffuse_texture,
         has_initialized: false,
+        diffuse_override: None,
         emissivity,
         transparency,
         base_transparency: transparency,
         additive_unlit: false,
         fixed_ambient: true,
         incidence: None,
+        render_pass: None,
         shine: None,
     })
 }
@@ -641,12 +672,14 @@ pub fn create_incidence(
     Box::new(BasicMaterial {
         diffuse_texture: texture,
         has_initialized: false,
+        diffuse_override: None,
         emissivity: 0.0,
         transparency: 0.0,
         base_transparency: 0.0,
         additive_unlit: false,
         fixed_ambient: false,
         incidence: Some(pass),
+        render_pass: None,
         shine: None,
     })
 }

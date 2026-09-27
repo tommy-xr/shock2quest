@@ -699,7 +699,7 @@ pub fn body(
         .clone_scene_objects()
         .into_iter()
         .map(|mut object| {
-            object.material = material.clone();
+            object.replace_material(material.clone());
             object.set_transform(transform);
             object.set_debug_tag(Some(Rc::new(SceneObjectDebugTag {
                 entity_id: None,
@@ -948,7 +948,7 @@ pub fn hologram(
                 engine::scene::color_material::create(color)
             };
             let mut glow = object.clone();
-            glow.material = std::rc::Rc::new(std::cell::RefCell::new(replacement));
+            glow.replace_material(std::rc::Rc::new(std::cell::RefCell::new(replacement)));
             glow.set_transparency(Some(0.80));
             glow
         })

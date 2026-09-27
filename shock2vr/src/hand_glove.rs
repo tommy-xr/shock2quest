@@ -382,7 +382,7 @@ impl GloveRenderer {
 
         let mut objects = model.to_scene_objects_with_skinning();
         for (object, material) in objects.iter_mut().zip(materials) {
-            object.material = material.clone();
+            object.replace_material(material.clone());
             object.set_transform(world);
         }
 

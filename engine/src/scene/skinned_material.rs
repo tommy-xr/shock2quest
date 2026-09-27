@@ -181,8 +181,8 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         }
 
         void main() {
-            vec4 texColor = texture(texture1, texCoord);
-            if (texColor.a < 0.1) discard;
+            vec4 texColor = sampleMaterialPass(texture1, texCoord, worldPos, worldNormal);
+            if ((!materialPassEnabled || materialPassAlphaTest) && texColor.a < 0.1) discard;
 
             if (silhouetteColor.x >= 0.0) {
                 float rim = pow(1.0 - abs(dot(normalize(worldNormal), normalize(eyePosition - worldPos))), 2.0);
@@ -209,12 +209,13 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             finalColor += texColor.rgb * light;
             vec4 shaded = applyShine(vec4(finalColor, texColor.a * (1.0 - transparency)), light, specular, 1.0 - transparency, texCoord, worldPos, normal);
 
-            fragColor = applyIncidence(shaded, texColor, worldPos, worldNormal);
+            fragColor = applyMaterialPass(applyIncidence(shaded, texColor, worldPos, worldNormal), texColor, worldPos, worldNormal);
         }
 "#;
 
 struct UnifiedUniforms {
     incidence: IncidenceUniforms,
+    render_pass: super::render_pass::Uniforms,
     shine: ShineUniforms,
     // Basic transformation matrices
     world_loc: i32,
@@ -250,6 +251,7 @@ static UNIFIED_SHADER_PROGRAM: OnceCell<(ShaderProgram, UnifiedUniforms)> = Once
 #[derive(Clone)]
 pub struct SkinnedMaterial {
     incidence: Option<IncidencePass>,
+    render_pass: Option<super::render_pass::RenderPass>,
     shine: Option<Shine>,
     silhouette_color: Option<Vector3<f32>>,
     has_initialized: bool,
@@ -272,6 +274,7 @@ impl SkinnedMaterial {
         let mut material = self.clone();
         material.silhouette_color = Some(color);
         material.incidence = None;
+        material.render_pass = None;
         material.shine = None;
         Box::new(material)
     }
@@ -313,6 +316,12 @@ impl SkinnedMaterial {
                 .shine
                 .bind(self.shine.as_ref(), lights, render_context, view_matrix);
 
+            uniforms.render_pass.bind(
+                self.render_pass.as_ref(),
+                render_context,
+                view_matrix,
+                1.0 - self.transparency,
+            );
             let projection = render_context.projection_matrix;
 
             // Set basic transformation matrices
@@ -437,6 +446,18 @@ impl SkinnedMaterial {
     }
 }
 impl Material for SkinnedMaterial {
+    fn emissivity(&self) -> f32 {
+        self.emissivity
+    }
+
+    fn set_diffuse_texture(&mut self, texture: Rc<dyn TextureTrait>) {
+        self.diffuse_texture = texture;
+    }
+
+    fn set_render_pass(&mut self, pass: super::render_pass::RenderPass) {
+        self.render_pass = Some(pass);
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -475,10 +496,11 @@ impl Material for SkinnedMaterial {
 
             let fragment_shader = crate::shader::build(
                 &format!(
-                    "{}\n{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}\n{}",
                     super::incidence::GLSL,
                     super::environment::GLSL,
                     super::shine::GLSL,
+                    super::render_pass::GLSL,
                     UNIFIED_FRAGMENT_SHADER_SOURCE
                 ),
                 crate::shader::ShaderType::Fragment,
@@ -508,6 +530,7 @@ impl Material for SkinnedMaterial {
 
                 let uniforms = UnifiedUniforms {
                     incidence: IncidenceUniforms::new(shader.gl_id),
+                    render_pass: super::render_pass::Uniforms::new(shader.gl_id),
                     shine: ShineUniforms::new(shader.gl_id),
                     // Basic transformation matrices
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
@@ -778,6 +801,7 @@ impl SkinnedMaterial {
     ) -> Box<dyn Material> {
         Box::new(Self {
             incidence: Some(pass),
+            render_pass: None,
             shine: None,
             silhouette_color: None,
             diffuse_texture: texture,
@@ -799,6 +823,7 @@ impl SkinnedMaterial {
     ) -> Box<dyn Material> {
         Box::new(SkinnedMaterial {
             incidence: None,
+            render_pass: None,
             shine: None,
             silhouette_color: None,
             diffuse_texture,
