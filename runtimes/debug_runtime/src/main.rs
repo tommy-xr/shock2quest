@@ -1614,6 +1614,7 @@ fn process_command(
             let loops: Vec<_> = game.active_audio_loops().into_iter().map(|entry| json!({
                 "handle": entry.handle, "sample": entry.sample, "owner": entry.owner,
                 "entity_id": entry.source.map(|id| id.inner()), "elapsed_secs": entry.elapsed_secs,
+                "paused": entry.paused,
             })).collect();
             let _ = reply.send(json!({ "loops": loops }));
         }

@@ -1603,6 +1603,9 @@ impl Game {
         // scene is not updated at all, so a scene-routed effect could never
         // close the menu again.
         self.update_pause_menu(time, input_context, actions);
+        self.audio_context
+            .set_scene_paused(self.pause_menu.suspends_scene());
+        self.audio_context.reap_finished_sounds();
         if self.pause_menu.suspends_scene() {
             self.active_game_scene.cancel_transient_input();
             self.weapon_buttons.cancel(self.active_game_scene.world());

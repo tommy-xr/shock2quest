@@ -1138,6 +1138,7 @@ export interface ActiveAudioLoopsResult {
     entity_id: number | null;
     /** Wall-clock playback age; audio runs independently of simulation stepping. */
     elapsed_secs: number;
+    paused: boolean;
   }>;
 }
 
