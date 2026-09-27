@@ -50,6 +50,7 @@ pub mod pause_menu;
 mod physics;
 pub mod player_stats;
 mod psi;
+mod psi_defenses;
 mod psi_heal_visual;
 mod psi_invisibility;
 pub mod psi_pull;

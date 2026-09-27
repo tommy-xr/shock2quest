@@ -3149,6 +3149,10 @@ impl MissionCore {
         world.add_unique(GlobalHrmParams(game_entity_info.hrm_params().cloned()));
         world.add_unique(GlobalSkillParams(game_entity_info.skill_params().cloned()));
         let (mut psi_powers, psi_selection) = crate::psi::build_psi_power_registry(&entity_info_rc);
+        world.add_unique(crate::psi_defenses::PowerReceptrons::from_registry(
+            &entity_info_rc,
+            &psi_powers,
+        ));
         // Player-facing discipline names come from the psihelp string table;
         // a data install without it just keeps the gamesys symbolic names.
         // The whole table is kept: the selection MFD reads icon basenames
@@ -7514,9 +7518,9 @@ impl MissionCore {
                     Link::Receptron(options) => Some(options.clone()),
                     _ => None,
                 });
-            // Immolate's Amplify 0.0 on Incendiary is what keeps the burning
-            // player from cooking in their own aura.
-            receptrons.extend(crate::scripts::immolate::immolate_caster_receptrons(
+            // Active power metaproperties filter the authored stimulus before
+            // it becomes untyped Damage (including Immolate's fire immunity).
+            receptrons.extend(crate::psi_defenses::active_receptrons(
                 &self.world,
                 entity_id,
             ));

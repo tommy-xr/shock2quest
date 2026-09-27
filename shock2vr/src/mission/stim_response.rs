@@ -166,9 +166,8 @@ pub fn resolve_stim_freeze(
 }
 
 fn victim_receptrons(world: &World, victim: EntityId) -> Vec<(i32, ReceptronOptions)> {
-    // Immolate's caster is fireproof against contact stims too, not just the
-    // radius ones - the power reads as a metaproperty on the player.
-    let mut receptrons = crate::scripts::immolate::immolate_caster_receptrons(world, victim);
+    // The same active power filters apply to contact hits and radius blasts.
+    let mut receptrons = crate::psi_defenses::active_receptrons(world, victim);
     let Ok(v_links) = world.borrow::<View<Links>>() else {
         return receptrons;
     };
