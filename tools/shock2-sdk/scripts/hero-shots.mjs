@@ -279,7 +279,10 @@ async function recordClip(game, shot, subjectId) {
       assert.ok(grip?.support?.attached, `${shot.name}: the support hand let go`);
     }
     if (clip.destroysSubject) {
-      assert.equal(await aimPoints(game, subjectId), null, `${shot.name}: the subject survived`);
+      // A burst pod lingers as scenery, without hit points.
+      const detail = await game.entities.detail(subjectId);
+      const hp = Number(detail?.properties.find((p) => p.name === "HitPoints")?.value ?? 0);
+      assert.ok(hp <= 0, `${shot.name}: the subject survived (${hp} hp)`);
     }
     return sink.finish();
   } finally {
