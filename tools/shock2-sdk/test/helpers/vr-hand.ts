@@ -109,19 +109,20 @@ export const LOOT_PANEL_SIZE_PX: Vec3 = [188, 178, 0];
 export const LOOT_SLOT_CENTER_PX: Vec3 = [24 + 35 / 2, 34 + 34 / 2, 0];
 
 /**
- * Squeeze one element of an open world panel with the production VR hand.
+ * Press one element of an open world panel with the production VR hand.
  *
  * Aims at the element's own spot on the panel's collider - in VR the panel is a
  * physical quad, so this is the gesture a player makes - and confirms the ray
- * actually lands on it before squeezing. A panel can carry more than one UI
+ * actually lands on it before pressing. A panel can carry more than one UI
  * collider at the same pose, so the check is "the ray hit one of them", not
  * "there is exactly one".
  */
-export async function squeezeWorldPanelElement(
+export async function clickWorldPanelElement(
   game: GameServer,
   panelSizePx: Vec3,
   worldScale: number,
   element: { screen_rect: [number, number, number, number] },
+  button: "trigger" | "squeeze" = "trigger",
 ): Promise<void> {
   const panels = (await game.physics.bodies()).bodies.filter((body) =>
     body.collision_groups.includes("ui"),
@@ -150,10 +151,20 @@ export async function squeezeWorldPanelElement(
     throw new Error("the production hand ray must land on the panel");
   }
 
-  await game.input.set("right_hand.squeeze", 1);
+  await game.input.set(`right_hand.${button}`, 1);
   await game.step({ frames: 4 });
-  await game.input.set("right_hand.squeeze", 0);
+  await game.input.set(`right_hand.${button}`, 0);
   await game.step({ frames: 8 });
+}
+
+/** Loot buttons retain their grab gesture; ordinary buttons use trigger. */
+export async function squeezeWorldPanelElement(
+  game: GameServer,
+  panelSizePx: Vec3,
+  worldScale: number,
+  element: { screen_rect: [number, number, number, number] },
+): Promise<void> {
+  await clickWorldPanelElement(game, panelSizePx, worldScale, element, "squeeze");
 }
 
 /** Draw the permanent card using the same calibrated palm contact as body slots. */

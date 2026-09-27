@@ -64,6 +64,11 @@ where
                 .get_components(cursor, entity_id, world, &self.state)
         };
         self.last_cursor = None;
+        // An unavailable GUI must not create a second cursor-only world
+        // panel over another script's active interface on the same entity.
+        if components.is_empty() {
+            return Effect::NoEffect;
+        }
         let mut canvas = UiCanvas::from_elements(config.screen_size_in_pixels, components);
         let size = vec2(16.0, 16.0);
         canvas.push(GuiComponent::Image {

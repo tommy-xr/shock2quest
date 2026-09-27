@@ -7,14 +7,14 @@ export function hasHackTexture(panel: UiPanel, texture: string): boolean {
 }
 
 /** Play the visible paid HRM board, avoiding the mines its artwork reveals. */
-export async function winHack(game: GameServer): Promise<UiPanel> {
+export async function winHack(game: GameServer, click = clickUiElement): Promise<UiPanel> {
   for (let attempt = 0; attempt < 8; attempt++) {
     let panel = (await game.ui.state()).active_panel;
     assert.ok(panel, "the hacking panel must remain open");
     if (hasHackTexture(panel, "winh.pcx")) return panel;
     const deal = panel.elements.find((element) => element.label === "start-hack" || element.label === "reset-hack");
     assert.ok(deal, "an unfinished board must offer START/RESET");
-    await clickUiElement(game, deal);
+    await click(game, deal);
     for (let y = 0; y < 4; y++) {
       for (let x = 0; x < 5; x++) {
         panel = (await game.ui.state()).active_panel;
@@ -26,7 +26,7 @@ export async function winHack(game: GameServer): Promise<UiPanel> {
         if (!node || panel.elements.some((element) =>
           ["hrmmine.pcx", "hrmburn.pcx", "hrmon.pcx"].includes(element.texture?.toLowerCase() ?? "") &&
           element.rect[0] === node.rect[0] && element.rect[1] === node.rect[1])) continue;
-        await clickUiElement(game, node);
+        await click(game, node);
       }
     }
   }

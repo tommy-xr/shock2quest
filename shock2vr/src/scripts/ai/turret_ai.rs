@@ -264,9 +264,30 @@ impl Script for TurretAI {
         // helper uses +Z and negates its heading argument; convert only here.
         // This is a coordinate-system boundary, not a correction to a bone.
         let heading = Deg(90.0 - self.pose.facing);
-        let visible = crate::security_alarm::security_devices_can_detect_player(world)
-            && ai_util::is_player_visible_in_fov(entity_id, world, physics, heading, 30.0);
-        let target = ai_util::chase_target(world, entity_id)
+        let broken = world
+            .borrow::<View<dark::properties::PropObjState>>()
+            .ok()
+            .and_then(|states| states.get(entity_id).ok().map(|state| state.0))
+            .is_some_and(|state| {
+                matches!(
+                    state,
+                    dark::properties::ObjectState::Broken
+                        | dark::properties::ObjectState::Destroyed
+                )
+            });
+        let target_position = if broken {
+            None
+        } else if ai_util::ai_team(world, entity_id) == dark::properties::AITeam::Good {
+            ai_util::nearest_visible_hostile(entity_id, world, physics, heading, 30.0)
+        } else if crate::security_alarm::security_devices_can_detect_player(world)
+            && ai_util::is_player_visible_in_fov(entity_id, world, physics, heading, 30.0)
+        {
+            ai_util::chase_target(world, entity_id)
+        } else {
+            None
+        };
+        let visible = target_position.is_some();
+        let target = target_position
             .and_then(|target| {
                 let transforms = world.borrow::<View<RuntimePropTransform>>().ok()?;
                 let root = transforms.get(entity_id).ok()?.0;
@@ -303,7 +324,9 @@ impl Script for TurretAI {
             entity_id,
             parameters: parameters.clone(),
         });
-        if self.pose.can_fire(visible, target, device.facing_epsilon) {
+        if let Some(target_position) = target_position
+            && self.pose.can_fire(visible, target, device.facing_epsilon)
+        {
             let rig = world
                 .borrow::<View<RuntimePropObjectArticulation>>()
                 .unwrap();
@@ -321,6 +344,7 @@ impl Script for TurretAI {
                         world,
                         entity_id,
                         muzzle_transform,
+                        target_position,
                     ));
                     self.pose.fire_cooldown = 1.0;
                 }

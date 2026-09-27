@@ -94,9 +94,33 @@ pub(crate) fn restore_authored_computer_data(
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ComputerKind {
+    #[default]
+    Generic,
+    Security,
+    Turret,
+}
+
 #[derive(Default)]
 pub struct ComputerGui {
-    pub security: bool,
+    kind: ComputerKind,
+}
+
+impl ComputerGui {
+    pub fn security() -> Self {
+        Self {
+            kind: ComputerKind::Security,
+        }
+    }
+    pub fn turret() -> Self {
+        Self {
+            kind: ComputerKind::Turret,
+        }
+    }
+    fn is_security(&self) -> bool {
+        self.kind == ComputerKind::Security
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -131,6 +155,13 @@ fn security_hack_success(entity_id: EntityId, world: &World) -> Effect {
         Effect::ActivateSecurityHack { duration_seconds },
         announce(entity_id, SECURITY_HACKED_SCHEMA),
     ])
+}
+
+fn turret_hack_success(entity_id: EntityId, _world: &World) -> Effect {
+    Effect::SetAITeam {
+        entity_id,
+        team: dark::properties::AITeam::Good,
+    }
 }
 
 fn computer_hack_success(entity_id: EntityId, world: &World) -> Effect {
@@ -206,7 +237,7 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
             entity_id,
             &state.hack,
             diff,
-            self.security,
+            self.is_security(),
             ComputerMsg::Hack,
         )
     }
@@ -235,14 +266,14 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
             &state.hack,
             msg,
             diff,
-            self.security,
+            self.is_security(),
             HackOutcomeEffects {
-                success: if self.security {
-                    security_hack_success
-                } else {
-                    computer_hack_success
+                success: match self.kind {
+                    ComputerKind::Security => security_hack_success,
+                    ComputerKind::Turret => turret_hack_success,
+                    ComputerKind::Generic => computer_hack_success,
                 },
-                critical_failure: if self.security {
+                critical_failure: if self.is_security() {
                     security_hack_critical_failure
                 } else {
                     computer_hack_critical_failure
@@ -254,6 +285,9 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
 
     fn opens_on_frob(&self, entity_id: EntityId, world: &World) -> bool {
         can_hack(world, entity_id)
+            && (self.kind != ComputerKind::Turret
+                || crate::scripts::ai::ai_util::ai_team(world, entity_id)
+                    != dark::properties::AITeam::Good)
     }
 
     fn prepare_state_on_frob(&self, state: &mut ComputerState) {
@@ -381,6 +415,26 @@ mod tests {
         state.hack.phase = HackPhase::Won;
         gui.prepare_state_on_frob(&mut state);
         assert_eq!(state.hack.phase, HackPhase::Unpaid);
+    }
+
+    #[test]
+    fn won_turret_hack_changes_team_and_stops_offering_the_board() {
+        let mut world = World::new();
+        let turret = world.add_entity(PropHackDiff {
+            success_chance: 20,
+            critical_chance: 5,
+            cost: 5.0,
+        });
+        let gui = ComputerGui::turret();
+        assert!(gui.opens_on_frob(turret, &world));
+        assert!(
+            matches!(turret_hack_success(turret, &world), Effect::SetAITeam { entity_id, team: dark::properties::AITeam::Good } if entity_id == turret)
+        );
+        world.add_component(
+            turret,
+            dark::properties::PropAITeam(dark::properties::AITeam::Good),
+        );
+        assert!(!gui.opens_on_frob(turret, &world));
     }
 
     #[test]

@@ -439,6 +439,7 @@ pub fn fire_ranged_weapon(
     world: &World,
     entity_id: EntityId,
     muzzle_transform: Matrix4<f32>,
+    target_position: Vector3<f32>,
 ) -> Effect {
     // First, let's find the link
     let maybe_ranged_weapon = get_first_link_with_template_and_data(world, entity_id, |link| {
@@ -494,8 +495,8 @@ pub fn fire_ranged_weapon(
 
         if let Some((_projectile_id, _options)) = maybe_projectile {
             let (projectile_template_id, _projectile_opts) = maybe_projectile.unwrap();
-            let projectile_transform =
-                projectile_transform_aimed_at_player(world, position, muzzle_transform);
+            let projectile_transform = projectile_transform_aimed_at(position, target_position)
+                .unwrap_or(muzzle_transform);
 
             fire_effects.push(Effect::CreateEntity {
                 // Testing
@@ -1407,12 +1408,90 @@ fn has_line_of_fire_from(
 /// explicit `P$AI_Team` overrides (including the shipped Good Guy and Charmed
 /// metaproperties). Equal teams are allies; a living creature on another team
 /// is a valid hostile obstruction and does not suppress the shot.
-fn ai_team(world: &World, entity_id: EntityId) -> AITeam {
+pub(crate) fn ai_team(world: &World, entity_id: EntityId) -> AITeam {
     world
         .borrow::<View<PropAITeam>>()
         .ok()
         .and_then(|v| v.get(entity_id).ok().map(|team| team.0))
         .unwrap_or(AITeam::Bad1)
+}
+
+fn within_view_cone(
+    pose: &PropPosition,
+    target: Vector3<f32>,
+    heading: Deg<f32>,
+    half_angle: f32,
+) -> bool {
+    let direction = target - pose.position;
+    let horizontal = vec3(direction.x, 0.0, direction.z);
+    if horizontal.magnitude2() < 1e-6 {
+        return true;
+    }
+    let orientation = pose.rotation * Quaternion::from_angle_y(-heading);
+    let forward = orientation.rotate_vector(vec3(0.0, 0.0, 1.0));
+    let forward = vec3(forward.x, 0.0, forward.z).normalize();
+    forward
+        .dot(horizontal.normalize())
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees()
+        <= half_angle
+}
+
+/// A hacked turret searches living hostile creatures, not other security
+/// devices. Test nearest-first and retain the ordinary sight occlusion rule.
+pub(crate) fn nearest_visible_hostile(
+    observer: EntityId,
+    world: &World,
+    physics: &PhysicsWorld,
+    heading: Deg<f32>,
+    half_angle: f32,
+) -> Option<Vector3<f32>> {
+    let (positions, creatures, health) = world
+        .borrow::<(View<PropPosition>, View<PropCreature>, View<PropHitPoints>)>()
+        .ok()?;
+    let pose = positions.get(observer).ok()?;
+    let team = ai_team(world, observer);
+    let player = world
+        .borrow::<UniqueView<PlayerInfo>>()
+        .ok()
+        .map(|player| player.entity_id);
+    let mut candidates = (&positions, &creatures, &health)
+        .iter()
+        .with_id()
+        .filter(|(entity, (_, _, hp))| {
+            *entity != observer
+                && Some(*entity) != player
+                && hp.hit_points > 0
+                && ai_team(world, *entity) != team
+        })
+        .map(|(entity, (position, _, _))| {
+            (
+                entity,
+                position.position + creature::sense_offset(world, entity),
+            )
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|(_, a), (_, b)| {
+        (a - pose.position)
+            .magnitude2()
+            .total_cmp(&(b - pose.position).magnitude2())
+    });
+    let origin = Point3::from_vec(pose.position + creature::sense_offset(world, observer));
+    candidates
+        .into_iter()
+        .find(|(entity, point)| {
+            within_view_cone(pose, *point, heading, half_angle)
+                && has_clear_sight_between(
+                    observer,
+                    *entity,
+                    origin,
+                    Point3::from_vec(*point),
+                    world,
+                    physics,
+                )
+        })
+        .map(|(_, point)| point)
 }
 
 /// Check if the player is visible from an entity within a field of view
@@ -1471,22 +1550,7 @@ pub fn is_player_visible_in_fov(
             return is_player_visible(from_entity, world, physics);
         }
 
-        let to_player_2d = to_player_2d.normalize();
-
-        // Calculate entity's forward direction combining base rotation and heading offset
-        // This matches the debug visualization in ai_debug_util::draw_debug_fov
-        let orientation = ent_pos.rotation * Quaternion::from_angle_y(-heading);
-        let forward_3d = orientation.rotate_vector(vec3(0.0, 0.0, 1.0));
-        let forward = Vector3::new(forward_3d.x, 0.0, forward_3d.z).normalize();
-
-        // Calculate angle between forward and direction to player
-        let dot = forward.dot(to_player_2d);
-        // Clamp dot product to valid range for acos
-        let dot_clamped = dot.clamp(-1.0, 1.0);
-        let angle_to_player = dot_clamped.acos().to_degrees();
-
-        // Check if player is within FOV
-        if angle_to_player > fov_half_angle {
+        if !within_view_cone(ent_pos, player_pos, heading, fov_half_angle) {
             return false;
         }
 
@@ -2363,5 +2427,58 @@ mod muzzle_tests {
     fn a_target_inside_the_margin_never_puts_the_muzzle_behind_the_shooter() {
         assert_eq!(muzzle_offset_for_distance(0.1), 0.0);
         assert_eq!(muzzle_offset_for_distance(0.0), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod hacked_turret_target_tests {
+    use super::*;
+
+    fn pose(z: f32) -> PropPosition {
+        PropPosition {
+            position: vec3(0.0, 0.0, z),
+            cell: 0,
+            rotation: Quaternion::from_sv(1.0, vec3(0.0, 0.0, 0.0)),
+        }
+    }
+
+    #[test]
+    fn a_hacked_turret_ignores_player_allies_dead_creatures_and_devices() {
+        let mut world = World::new();
+        let turret = world.add_entity((pose(0.0), PropAITeam(AITeam::Good)));
+        let player =
+            world.add_entity((pose(1.0), PropCreature(0), PropHitPoints { hit_points: 35 }));
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 1.0),
+            rotation: pose(0.0).rotation,
+            entity_id: player,
+            inventory_entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+        });
+        world.add_entity((
+            pose(2.0),
+            PropCreature(0),
+            PropHitPoints { hit_points: 35 },
+            PropAITeam(AITeam::Good),
+        ));
+        world.add_entity((pose(3.0), PropCreature(0), PropHitPoints { hit_points: 0 }));
+        world.add_entity((pose(4.0), PropHitPoints { hit_points: 35 }));
+        world.add_entity((
+            pose(-2.0),
+            PropCreature(0),
+            PropHitPoints { hit_points: 35 },
+        ));
+        let physics = PhysicsWorld::new();
+        assert_eq!(
+            nearest_visible_hostile(turret, &world, &physics, Deg(0.0), 30.0),
+            None
+        );
+        world.add_entity((pose(6.0), PropCreature(0), PropHitPoints { hit_points: 35 }));
+        world.add_entity((pose(5.0), PropCreature(0), PropHitPoints { hit_points: 35 }));
+        assert_eq!(
+            nearest_visible_hostile(turret, &world, &physics, Deg(0.0), 30.0),
+            Some(vec3(0.0, 0.0, 5.0))
+        );
     }
 }

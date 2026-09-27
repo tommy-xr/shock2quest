@@ -344,6 +344,11 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
         world: &World,
         _state: &ContainerGuiState,
     ) -> Vec<GuiComponent<ContainerGuiMsg>> {
+        // A living turret can expose a hacking GUI on the same entity. Its
+        // inherited loot script must contribute neither art nor hit targets.
+        if !self.opens_on_frob(entity_id, world) {
+            return Vec::new();
+        }
         let spec = self.spec(world);
         let mut components: Vec<GuiComponent<ContainerGuiMsg>> = vec![match &spec.backdrop {
             PanelBackdrop::Art(_) => gui::image(spec.backdrop.texture())
@@ -1500,6 +1505,11 @@ mod tests {
         let mut world = World::new();
         let live_creature = world.add_entity((PropHitPoints { hit_points: 10 }, Links::empty()));
         let item = world.add_entity(());
+        assert!(
+            ContainerGui::loot_creature()
+                .get_components(&None, live_creature, &world, &ContainerGuiState {})
+                .is_empty()
+        );
 
         let effect =
             ContainerGui::loot_creature().on_provide_for_consumption(live_creature, &world, item);

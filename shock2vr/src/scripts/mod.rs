@@ -1174,7 +1174,7 @@ impl ScriptWorld {
             // partially implemented:
             "keypadunhackable" => gui_script(Box::new(KeyPadGui)),
             "keypad" => gui_script(Box::new(KeyPadGui)),
-            "securitycomputer" => gui_script(Box::new(ComputerGui { security: true })),
+            "securitycomputer" => gui_script(Box::new(ComputerGui::security())),
             "resurrectmachine" => Box::new(BaseButton::new()),
             "twostatebutton" => Box::new(BaseButton::new()),
 
@@ -1234,7 +1234,7 @@ impl ScriptWorld {
             "computer" => gui_script(Box::new(ComputerGui::default())),
             "lightsoundon" => Box::new(NoopScript::new()),
             "hackablecrate" => gui_script(Box::new(HackableCrateGui::new())),
-            "turret" => Box::new(UnimplementedScript::new(&script_name)),
+            "turret" => gui_script(Box::new(ComputerGui::turret())),
             "triggerdestroy" => Box::new(TriggerDestroy::new()),
 
             // skill point machines
