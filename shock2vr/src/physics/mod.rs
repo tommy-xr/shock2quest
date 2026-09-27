@@ -782,8 +782,11 @@ fn try_step_up(
         return None;
     }
     let dir = desired_h / desired_norm;
-    // Not blocked: the move achieved most of the desired horizontal distance.
-    if applied.dot(&dir) > 0.5 * desired_norm {
+    // Preserve the forward-progress gate, but also probe when a diagonal
+    // approach slides sideways along a riser. The y component of the cross
+    // product measures horizontal deflection without counting vertical motion.
+    let sideways = applied.cross(&dir).y.abs();
+    if applied.dot(&dir) > 0.5 * desired_norm && sideways <= 0.25 * desired_norm {
         return None;
     }
 
@@ -14578,6 +14581,53 @@ mod tests {
         assert!(
             wall_x < 0.8,
             "a validated move must not pass into a wall, advanced {wall_x}"
+        );
+    }
+
+    /// A diagonal walk into a low tread may preserve most of its speed by
+    /// sliding along the riser while losing the component that would carry it
+    /// onto the tread. The step probe must classify the resolved vector, not
+    /// just its projection onto the requested heading.
+    #[test]
+    fn diagonal_move_steps_instead_of_sliding_along_a_low_tread() {
+        let mut world = PhysicsWorld::new();
+        let floor_verts = vec![
+            point![-100.0, 0.0, -100.0],
+            point![100.0, 0.0, -100.0],
+            point![100.0, 0.0, 100.0],
+            point![-100.0, 0.0, 100.0],
+        ];
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::trimesh(floor_verts, vec![[0u32, 1, 2], [0, 2, 3]])
+                .expect("floor trimesh")
+                .build(),
+        );
+        // One-foot-high tread spanning x, with its front face at z=0.
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(0.0, 0.2, 2.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(100.0, 0.4, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(0.0, 1.0, -1.0), EntityId::from_inner(2000).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let start = world.get_player_translation(&player);
+        let input = vec3(2.4f32, 0.0, 1.2).normalize() * PLAYER_MOVE_SUBSTEP;
+        for _ in 0..20 {
+            world.update(input, &mut player);
+        }
+        let end = world.get_player_translation(&player);
+
+        assert!(
+            end.y - start.y > 0.3 && end.z > 0.2,
+            "the diagonal walk should climb and reach the tread: {start:?} -> {end:?}"
         );
     }
 
