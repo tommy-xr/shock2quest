@@ -1,5 +1,5 @@
 use cgmath::{Deg, Matrix4, vec3};
-use dark::properties::{PropHitPoints, PropMaxHitPoints, PropPsiState};
+use dark::properties::{PropGunState, PropHitPoints, PropMaxHitPoints, PropPsiState};
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{Get, UniqueView, View, World};
 
@@ -10,13 +10,16 @@ use crate::{
 };
 
 /// Compact readouts ride the calibrated visible glove, not the raw controller.
-/// Both wrists show health/psi; each cuff opening shows only its own weapon.
+/// Both wrists show health/psi; each cuff opening shows its own weapon, or the
+/// weapon it steadies (`supported`, per hand) - with a two-handed gun the
+/// support wrist is often the only one facing the player.
 pub fn create_wrist_hud_panels(
     asset_cache: &mut AssetCache,
     world: &World,
     use_mode: bool,
     poses: [crate::vr_support::GripPose; 2],
     wrist_frames: [Matrix4<f32>; 2],
+    supported: [Option<shipyard::EntityId>; 2],
 ) -> Vec<SceneObject> {
     if use_mode {
         return Vec::new();
@@ -81,7 +84,14 @@ pub fn create_wrist_hud_panels(
         // Some weapons carry an authored hand instead of our glove. Give
         // their complete shared readout a hologram mount; there is no physical
         // cuff to host it. Otherwise charging in VR would be invisible.
-        let weapon = crate::wielded_weapon::held_by_hand(world, hand);
+        // Only a steadied gun lends its readout: a melee weapon's charge
+        // already shows on the hand swinging it.
+        let steadied_gun = supported[i].filter(|&entity| {
+            world
+                .borrow::<View<PropGunState>>()
+                .is_ok_and(|guns| guns.contains(entity))
+        });
+        let weapon = crate::wielded_weapon::held_by_hand(world, hand).or(steadied_gun);
         let readout = ammo_panel::AmmoReadout::for_weapon(world, weapon, false);
         // The refusal is available even when a weapon carries its own hand
         // mesh. Only the physical wrist plates require a visible glove.
