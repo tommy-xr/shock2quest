@@ -26,7 +26,7 @@ nav.top .links a:not(.social):hover{color:var(--cyan)}
 .social svg{width:18px;height:18px}
 /* Hero: full-bleed gameplay, copy left, install card right. */
 .hero{position:relative;min-height:100vh;padding:96px 5vw 48px;display:grid;grid-template-columns:1.1fr minmax(340px,440px);gap:5vw;align-items:center;overflow:hidden}
-.hero img.bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}
+.hero .bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}
 .hero::after{content:"";position:absolute;inset:0;z-index:1;background:linear-gradient(90deg,rgba(5,11,13,.9) 0,rgba(5,11,13,.45) 55%,rgba(5,11,13,.7)),linear-gradient(0deg,var(--bg),transparent 25%)}
 .hero > *:not(.bg){position:relative;z-index:2;min-width:0}
 h1{font-size:clamp(40px,5.2vw,74px);line-height:.95;margin:12px 0 18px;letter-spacing:.5px}
@@ -52,7 +52,7 @@ h2.sec{font-size:34px;margin:6px 0 22px}
 /* Camera feeds */
 .feeds{display:grid;gap:12px}
 .feeds .main{position:relative;border:1px solid var(--line)}
-.feeds .main img{display:block;width:100%}
+.feeds .main video{display:block;width:100%;aspect-ratio:16/9}
 .feeds .main span{position:absolute;left:12px;top:10px;font:12px "Share Tech Mono",monospace;background:rgba(0,0,0,.7);padding:2px 8px}
 .feeds .main span::before{content:"● ";color:#ff5555}
 .feeds .side{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
@@ -69,7 +69,7 @@ h2.sec{font-size:34px;margin:6px 0 22px}
 .screen .blurb{grid-column:1/-1;margin:0;color:var(--dim)}
 .ctl3d{height:280px;background:radial-gradient(ellipse at 50% 40%,#0f2a30,#050d10 70%);border:1px solid #12303a}
 .clip{aspect-ratio:16/9;border:1px solid #12303a;background:#000;display:grid;place-items:center;color:var(--dim);font:13px "Share Tech Mono",monospace;text-align:center;overflow:hidden}
-.clip img{display:block;width:100%;height:100%;object-fit:cover}
+.clip video{display:block;width:100%;height:100%;object-fit:cover}
 .rows{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
 .chip{border-left:2px solid var(--cyan);padding:6px 10px;background:rgba(57,225,230,.05)}
 .chip b{display:block;font:13px "Share Tech Mono",monospace;color:var(--cyan)}
@@ -87,7 +87,7 @@ footer{max-width:1160px;margin:60px auto 0;padding:24px 20px 40px;border-top:1px
 </nav>
 
 <header class="hero" id="install">
-  <img class="bg" src="media/ops2.gif" alt="">
+  <video class="bg" src="../screenshots/hero/ops2.mp4" poster="../screenshots/hero/ops2.png" autoplay muted loop playsinline aria-hidden="true"></video>
   <div>
     <div class="kicker">Unofficial fan project · Meta Quest</div>
     <h1>System Shock 2.<br><span>In your hands.</span></h1>
@@ -115,7 +115,7 @@ adb push cutscenes /sdcard/shock2quest/</div></li>
   <div class="kicker">Camera feeds</div>
   <h2 class="sec">Aboard the Von Braun.</h2>
   <div class="feeds">
-    <div class="main"><img id="feed" alt=""><span id="feedcap"></span></div>
+    <div class="main"><video id="feed" autoplay muted loop playsinline></video><span id="feedcap"></span></div>
     <div class="side" id="feedlist"></div>
   </div>
 </section>
@@ -147,7 +147,7 @@ adb push cutscenes /sdcard/shock2quest/</div></li>
 <footer><span>Unofficial fan project · engine code GPLv2</span><span id="social2"></span></footer>
 
 <script type="module">
-import { MODES, SHOTS, LINKS, DISCLOSURE, socialLinks, wireLinks, fetchVersion } from "./shared/controls.js";
+import { HERO, MODES, SHOTS, LINKS, DISCLOSURE, socialLinks, wireLinks, fetchVersion } from "./shared/controls.js";
 const $ = (s) => document.querySelector(s);
 
 $("#social").innerHTML = $("#social2").innerHTML = socialLinks();
@@ -171,10 +171,10 @@ document.querySelectorAll(".code").forEach((c) => {
 
 // Camera feeds
 const feed = $("#feed"), feedcap = $("#feedcap"), list = $("#feedlist");
-const pick = ([f, c]) => { feed.src = "media/" + f; feed.alt = c; feedcap.textContent = c; };
+const pick = ([f, c]) => { feed.poster = HERO + f + ".png"; feed.src = HERO + f + ".mp4"; feed.setAttribute("aria-label", c); feedcap.textContent = c; };
 SHOTS.forEach((s, i) => {
   const b = document.createElement("button");
-  b.innerHTML = `<img src="media/${s[0].replace(".gif", ".png")}" alt="${s[1]}" loading="lazy">`;
+  b.innerHTML = `<img src="${HERO}${s[0]}.png" alt="${s[1]}" loading="lazy">`;
   b.setAttribute("aria-pressed", i === 0);
   b.onclick = () => { pick(s); list.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b)); };
   list.appendChild(b);
@@ -203,7 +203,7 @@ function set(i) {
   tabs.querySelectorAll("button").forEach((b, j) => { b.setAttribute("aria-selected", j === cur); b.tabIndex = j === cur ? 0 : -1; });
   $("#blurb").textContent = m.blurb;
   $("#rows").innerHTML = m.rows.map(([k, v]) => `<div class="chip"><b>${k}</b>${v}</div>`).join("");
-  $("#clip").innerHTML = m.clip ? `<img src="media/${m.clip}" alt="${m.title} footage">` : `FOOTAGE PENDING · ${m.title.toUpperCase()}`;
+  $("#clip").innerHTML = m.clip ? `<video src="${HERO}${m.clip}.mp4" poster="${HERO}${m.clip}.png" autoplay muted loop playsinline aria-label="${m.title} footage"></video>` : `FOOTAGE PENDING · ${m.title.toUpperCase()}`;
   view?.setMode(m);
 }
 set(0);

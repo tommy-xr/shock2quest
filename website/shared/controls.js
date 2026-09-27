@@ -1,7 +1,7 @@
 // Page content: copy, links, control-scheme data.
 
 // Parts per hand: stick, trigger, grip, upper (Y/B), lower (X/A), menu (left only).
-// `clip` is gameplay footage for the mode; null until it's recorded.
+// `clip` names a capture in screenshots/hero (<clip>.mp4 + <clip>.png poster); null until recorded.
 export const MODES = [
   {
     id: "move",
@@ -34,7 +34,7 @@ export const MODES = [
     title: "Weapons",
     blurb: "Aim down real sights. Reload by hand.",
     hot: { L: ["grip"], R: ["trigger", "grip", "upper"] },
-    clip: "rec1.gif",
+    clip: "medsci1-melee",
     rows: [
       ["Grip", "Hold weapon (off-hand steadies two-handers)"],
       ["Trigger", "Fire"],
@@ -49,7 +49,7 @@ export const MODES = [
     title: "Psi Amp",
     blurb: "Two powers at your fingertip, the rest on a carousel.",
     hot: { L: [], R: ["trigger", "upper", "stick"] },
-    clip: "ops2.gif",
+    clip: "ops2",
     rows: [
       ["Trigger", "Cast"],
       ["Y / B tap", "Swap current ↔ alternate power"],
@@ -88,10 +88,14 @@ export const MODES = [
   },
 ];
 
+// Captures from tools/shock2-sdk/scripts/hero-shots.mjs, committed under screenshots/hero.
+export const HERO = "../screenshots/hero/";
+
+// Camera feeds: [capture, caption].
 export const SHOTS = [
-  ["rec1.gif", "Recreation · pistol"],
-  ["ops2.gif", "Operations · psi amp + laser"],
-  ["medsci1.png", "MedSci · wrench + pistol"],
+  ["rec1", "Recreation · pistol"],
+  ["ops2", "Operations · psi amp + laser"],
+  ["medsci1-melee", "MedSci · pistol + wrench"],
 ];
 
 export const LINKS = {

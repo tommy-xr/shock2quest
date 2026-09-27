@@ -1,9 +1,10 @@
 # Website
 
-Static landing page, no build step. ES modules, so serve over HTTP:
+Static landing page, no build step. It uses ES modules and the captures in
+`screenshots/hero/`, so serve the repo root over HTTP and open `/website/`:
 
 ```sh
-python3 -m http.server -d website 4180
+python3 -m http.server 4180   # http://127.0.0.1:4180/website/
 ```
 
 - `index.html` — the page.
@@ -11,5 +12,5 @@ python3 -m http.server -d website 4180
 - `shared/controller3d.js` — Meta Quest Touch Plus pair, rendered with three.js from the
   [WebXR Input Profiles](https://github.com/immersive-web/webxr-input-profiles) models (MIT).
   A control mode's buttons glow and animate through their press range.
-- `media/` — captures from `tools/shock2-sdk/scripts/hero-shots.mjs`. Control modes with
-  `clip: null` show "footage pending" until a clip is recorded.
+- Media comes from `screenshots/hero/` (regenerate with `tools/shock2-sdk/scripts/hero-shots.mjs`).
+  Control modes with `clip: null` show "footage pending" until a clip is recorded.
