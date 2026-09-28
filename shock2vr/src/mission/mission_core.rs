@@ -15576,22 +15576,34 @@ impl MissionCore {
         )
     }
 
-    /// Map the shared HUD origin onto the head panel, just like the banner.
-    /// The block's dimensions affect its centre, never the first glyph's anchor.
+    /// Shooter messages use the head panel. In use mode the inventory owns
+    /// the canvas: share its world-locked anchor so turning the head cannot
+    /// move the message over the inventory strip.
     fn render_vr_messages(
         &self,
         asset_cache: &mut AssetCache,
         messages: &[String],
     ) -> Vec<SceneObject> {
         let font = crate::ui::resolve_font(asset_cache, crate::hud::message_line::FONT);
-        let canvas =
-            crate::hud::message_line::build_message_canvas(messages, font.as_ref().as_ref());
-        let size = canvas.size();
-        let centre = crate::hud::message_line::flat_origin(self.use_mode) + size * 0.5
-            - crate::mission::flat_ui_host::CANVAS_SIZE * 0.5;
-        self.render_vr_head_canvas(asset_cache, &canvas, size, |scale| {
-            vec3(centre.x * scale, -centre.y * scale, 0.0)
-        })
+        let size = crate::mission::flat_ui_host::CANVAS_SIZE;
+        let mut canvas = crate::ui::UiCanvas::new(size);
+        crate::hud::message_line::emit(
+            &mut canvas,
+            crate::hud::message_line::flat_origin(self.use_mode),
+            messages,
+            font.as_ref().as_ref(),
+        );
+        if self.use_mode {
+            canvas.render_world_space(
+                asset_cache,
+                self.vr_use_mode_anchor.panel().transform(),
+                None,
+                None,
+                crate::ui::VR_COMPONENT_Z_STEP,
+            )
+        } else {
+            self.render_vr_head_canvas(asset_cache, &canvas, size, |_| vec3(0.0, 0.0, 0.0))
+        }
     }
 
     /// Whether the shared `show_position` readout is visible during gameplay.
