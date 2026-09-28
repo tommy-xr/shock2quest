@@ -1,9 +1,9 @@
 //! The HUD status-message line: short lines of text the game tells the player
 //! ("This lift has been taken offline for repairs.").
 //!
-//! The original draws these as a stack of up to six lines under the top-left
-//! of the HUD, each expiring five seconds after it was added; a seventh line
-//! scrolls the oldest one off. Placement lives here once, in 640x480 canvas
+//! The original draws up to six messages, wrapping each within 446 pixels.
+//! Each expires five seconds after posting; a seventh message scrolls the
+//! oldest whole message off. Placement lives here once, in 640x480 canvas
 //! pixels: flat emits it into the HUD canvas, VR draws the same canvas on a
 //! head-anchored panel.
 
@@ -17,21 +17,17 @@ use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 /// How long a line stays up. The original's default message time (5 s).
 pub const MESSAGE_DURATION: Duration = Duration::from_secs(5);
 
-/// How many lines are shown at once; a further line scrolls the oldest off.
+/// Maximum message entries (not wrapped lines), as in MAX_OVERLAY_LINES.
 pub const MAX_LINES: usize = 6;
 
 /// The block's upper-left corner on the 640x480 HUD canvas, and the width the
 /// original wraps its message text within.
 const ORIGIN: Vector2<f32> = vec2(192.0, 18.0);
 const LINE_WIDTH: f32 = 446.0;
-/// One line's box: the bitmap font's native height plus the original's 5px
-/// inter-line spacing.
-const LINE_HEIGHT: f32 = 20.0;
+/// DrawOverlayText adds this after each whole message, not each wrapped row.
+const MESSAGE_SPACING: f32 = 5.0;
 
-const FONT: &str = "mainfont.fon";
-
-/// The message block's own canvas size, used by the VR panel.
-pub const PANEL_SIZE: Vector2<f32> = vec2(LINE_WIDTH, LINE_HEIGHT * MAX_LINES as f32);
+pub(crate) const FONT: &str = crate::ui::MESSAGE_FONT;
 
 /// The status messages currently on screen, oldest first, each with the
 /// mission time it stops being shown.
@@ -55,53 +51,83 @@ impl HudMessages {
     /// dropped here rather than on a timer (the `DamageFlash` pattern).
     pub fn active(&mut self, now: Duration) -> Vec<String> {
         self.lines.retain(|(expiry, _)| *expiry > now);
-        let mut visible = self
-            .lines
-            .iter()
-            .flat_map(|(_, text)| text.lines().map(str::to_owned))
-            .collect::<Vec<_>>();
-        if visible.len() > MAX_LINES {
-            visible.drain(..visible.len() - MAX_LINES);
-        }
-        visible
+        self.lines.iter().map(|(_, text)| text.clone()).collect()
     }
 }
 
 /// Emit the message lines into `canvas` with the block's upper-left corner at
 /// `origin` in that canvas's pixel space.
-pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, lines: &[String]) {
-    for (index, line) in lines.iter().take(MAX_LINES).enumerate() {
-        canvas.text_native(
-            Rect::new(
-                origin.x,
-                origin.y + LINE_HEIGHT * index as f32,
-                LINE_WIDTH,
-                LINE_HEIGHT,
-            ),
-            line,
-            FONT,
-            HAlign::Left,
-            VAlign::Top,
-        );
+pub(crate) fn emit(
+    canvas: &mut UiCanvas,
+    origin: Vector2<f32>,
+    messages: &[String],
+    font: &dyn engine::Font,
+) -> f32 {
+    let height = font.base_height();
+    let mut y = origin.y;
+    for message in messages
+        .iter()
+        .take(MAX_LINES)
+        .filter(|text| !text.is_empty())
+    {
+        for line in engine::wrap_text_to_width(font, message, height, LINE_WIDTH) {
+            canvas.text_native(
+                Rect::new(origin.x, y, LINE_WIDTH, height),
+                &line,
+                FONT,
+                HAlign::Left,
+                VAlign::Top,
+            );
+            y += height;
+        }
+        y += MESSAGE_SPACING;
     }
+    (y - origin.y - MESSAGE_SPACING).max(height)
 }
 
-/// Where the block sits on the flat HUD canvas.
-pub(crate) fn flat_origin() -> Vector2<f32> {
-    ORIGIN
+/// DrawOverlayText's 640x480 positions. The inventory occupies the top strip
+/// in use mode. Dark's extra 70px at native widths >=800 avoids its hacking
+/// tab; our entire HUD (including that tab) scales from a 640x480 canvas, so
+/// applying that physical-screen correction here would move only the text.
+pub(crate) fn flat_origin(use_mode: bool) -> Vector2<f32> {
+    vec2(ORIGIN.x, if use_mode { 130.0 } else { ORIGIN.y })
 }
 
-/// The block as the VR head panel draws it: the same lines on a canvas that is
-/// exactly the block, so the panel *is* the block (the `ammo_panel` pattern).
-pub(crate) fn build_message_canvas(lines: &[String]) -> UiCanvas {
-    let mut canvas = UiCanvas::new(PANEL_SIZE);
-    emit(&mut canvas, vec2(0.0, 0.0), lines);
-    canvas
+/// The same message block, tightly sized for a world-space panel. Increasing
+/// its wrapped height must not move the first line; the panel mount maps its
+/// top-left back to flat_origin rather than centering it above the gaze.
+pub(crate) fn build_message_canvas(messages: &[String], font: &dyn engine::Font) -> UiCanvas {
+    let mut canvas = UiCanvas::new(vec2(LINE_WIDTH, 1.0));
+    let height = emit(&mut canvas, vec2(0.0, 0.0), messages, font);
+    UiCanvas::from_elements(vec2(LINE_WIDTH, height), canvas.into_elements())
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// Native-height metrics without uploading a GL texture.
+    pub(crate) struct StubFont;
+    impl engine::Font for StubFont {
+        fn get_texture(&self) -> std::rc::Rc<dyn engine::texture::TextureTrait> {
+            unreachable!("layout only needs glyph metrics")
+        }
+        fn get_character_info(&self, _: char) -> Option<engine::FontCharacterInfo> {
+            Some(engine::FontCharacterInfo {
+                min_uv_x: 0.0,
+                min_uv_y: 0.0,
+                max_uv_x: 1.0,
+                max_uv_y: 1.0,
+                advance: 6.0,
+            })
+        }
+        fn base_height(&self) -> f32 {
+            11.0
+        }
+        fn get_half_pixel(&self) -> f32 {
+            0.0
+        }
+    }
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
@@ -138,20 +164,57 @@ mod tests {
         );
         assert_eq!(
             messages.active(secs(14)),
-            vec!["Research completed!", "Click Reports to read it."]
+            vec!["Research completed!\nClick Reports to read it."]
         );
         assert!(messages.active(secs(15)).is_empty());
     }
 
-    /// `render_vr_messages` is the one presentation boundary that lifts the
-    /// complete block above gaze. Every glyph and line inside that block must
-    /// retain its flat HUD pixel layout.
+    #[test]
+    fn six_multiline_messages_retain_all_their_rows() {
+        let mut messages = HudMessages::default();
+        for index in 0..6 {
+            messages.push(format!("message {index}\nsecond row"), secs(10));
+        }
+        let active = messages.active(secs(11));
+        assert_eq!(active.len(), 6);
+        let canvas = build_message_canvas(&active, &StubFont);
+        assert_eq!(canvas.element_count(), 12);
+        // Two native-height rows plus one 5px gap per message, no trailing gap.
+        assert_eq!(canvas.size().y, 6.0 * (2.0 * 11.0 + 5.0) - 5.0);
+        assert_eq!(active[0], "message 0\nsecond row");
+    }
+
+    #[test]
+    fn wraps_at_original_width_and_spaces_between_messages_only() {
+        let messages = [format!("{}last", "word ".repeat(20)), "next\nrow".into()];
+        let canvas = build_message_canvas(&messages, &StubFont);
+        let elements = canvas.elements();
+        assert_eq!(elements.len(), 4);
+        let rows: Vec<_> = elements.iter().map(|element| element.rect().y).collect();
+        assert_eq!(rows, [0.0, 11.0, 27.0, 38.0]);
+        for element in elements {
+            let crate::ui::UiElement::Text {
+                text,
+                font,
+                font_size,
+                ..
+            } = element
+            else {
+                panic!("expected message text");
+            };
+            assert_eq!(font, crate::ui::MESSAGE_FONT);
+            assert_eq!(*font_size, 0.0, "use native font size");
+            assert!(engine::measure_text_width(&StubFont, text, 11.0) <= 446.0);
+        }
+    }
+
+    /// Every wrapped glyph and line must retain its flat HUD pixel layout.
     #[test]
     fn flat_and_vr_message_blocks_have_identical_relative_layout() {
-        let lines = ["one".to_string(), "two".to_string()];
+        let lines = ["word ".repeat(20), "two\nthree".to_string()];
         let mut flat = UiCanvas::new(vec2(640.0, 480.0));
-        emit(&mut flat, flat_origin(), &lines);
-        let panel = build_message_canvas(&lines);
+        emit(&mut flat, flat_origin(false), &lines, &StubFont);
+        let panel = build_message_canvas(&lines, &StubFont);
 
         let flat_rects: Vec<Rect> = flat
             .elements()
@@ -165,11 +228,11 @@ mod tests {
             .collect();
         assert_eq!(flat_rects.len(), panel_rects.len());
         for (flat, panel) in flat_rects.iter().zip(panel_rects.iter()) {
-            assert_eq!(flat.x - flat_origin().x, panel.x);
-            assert_eq!(flat.y - flat_origin().y, panel.y);
+            assert_eq!(flat.x - flat_origin(false).x, panel.x);
+            assert_eq!(flat.y - flat_origin(false).y, panel.y);
             assert_eq!(flat.w, panel.w);
             assert_eq!(flat.h, panel.h);
         }
-        assert_eq!(panel_rects[1].y - panel_rects[0].y, LINE_HEIGHT);
+        assert_eq!(panel_rects[1].y - panel_rects[0].y, 11.0);
     }
 }
