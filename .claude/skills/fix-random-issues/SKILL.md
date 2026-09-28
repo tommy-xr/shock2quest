@@ -80,7 +80,7 @@ runtime test in an issue worktree:
 1. Resolve and verify a 25AE root (normally the user's shared install) from its
    remaster sentinel/layout, including `sshock2.kpf` and the remaster `mods/`
    assets. Do not treat a legacy/unpacked data root as equivalent.
-2. Launch every focused runtime scenario and the full SDK E2E suite with
+2. Launch every focused runtime scenario and any broader SDK E2E checks with
    `DARK_ASSET_PATH` explicitly set to that verified root. Do not rely on an
    inherited environment value or the engine's relative-path fallback.
 3. Report the exact asset root and sentinel used with the test result. If a run
@@ -89,9 +89,23 @@ runtime test in an issue worktree:
 
 Classic/legacy assets may be used only for a separately identified
 compatibility test whose purpose requires them; they never substitute for the
-25AE-backed focused and full E2E evidence. If no verified 25AE root is
+25AE-backed runtime evidence. If no verified 25AE root is
 available, return the concrete missing-dependency blocker instead of claiming
 runtime verification from another asset set.
+
+### Verification scope
+
+Use focused regression tests plus green PR CI for each fix. Reproduce the
+failure before the change, then verify the reported behavior and affected
+systems after it, including flat and VR when applicable. Keep the warning-free
+package checks, formatting, and mandatory visual evidence.
+
+For this workflow, this replaces the repository's blanket full SDK E2E
+requirement for non-trivial changes. Do not run the full suite per issue by
+default. Broaden testing when a concrete failure or unresolved concern warrants
+it, or when the user requests it. State exactly which checks ran; green CI does
+not imply the full E2E suite passed. If broader testing exposes unrelated
+failures, document baseline evidence without expanding the fix's scope.
 
 For each selected issue, in emitted order:
 
@@ -105,6 +119,9 @@ For each selected issue, in emitted order:
    host-provided isolated worktree. Otherwise create a unique branch/worktree
    from current `origin/main`, named along the lines of
    `fix/issue-<number>-<slug>`.
+   Let issue workers inherit the coordinator's model and reasoning settings;
+   omit model overrides unless the user requests one. Record inheritance or
+   any explicit override in the run ledger. Keep issue workers sequential.
 3. Give the worker the prompt contract below and the worktree path. Wait for its
    final result. Do not start another issue worker concurrently. Every proposed
    fix must pass through the `pr-visuals` gate below; wait for its capture helper
@@ -141,7 +158,13 @@ visual proof. Cutscene timing/sequence fixes are always player-observable.
 For a player-observable fix:
 
 1. Delegate the complete `pr-visuals` flow to a capture helper when delegation
-   is available, and wait for it.
+   is available, and wait for it. Prefer `gpt-6-sol` for this capture task when
+   the host supports model selection. With Codex `spawn_agent`, use
+   `model: "gpt-6-sol"` and `fork_turns: "none"`; provide the skill path,
+   worktree, exact base/fix refs or binaries, verified asset root, deterministic
+   request sequence, framing requirements, PR, and expected artifacts. If model
+   selection is unavailable, inherit the worker's model and report that choice.
+   The issue worker and manager still inspect the media before accepting it.
 2. Replay the same deterministic request sequence against the exact base and fix.
 3. Embed a looping GIF, a still PNG, and a labeled before/after comparison in
    the PR. A one-sided after image is insufficient when existing behavior
@@ -222,12 +245,14 @@ the product fix. Keep one logical conventional commit.
 
 VERIFY: Resolve a verified 25th Anniversary Remaster asset root (including its
 `sshock2.kpf` sentinel and remaster mods), report the exact path, and set
-`DARK_ASSET_PATH` to it explicitly for every focused runtime scenario and the
-full SDK E2E suite. Never count an inherited legacy/unpacked root or relative
+`DARK_ASSET_PATH` to it explicitly for every focused runtime scenario and any
+broader SDK E2E checks. Never count an inherited legacy/unpacked root or relative
 fallback as E2E evidence; discard and rerun any such result. Classic assets are
-allowed only for separately named compatibility checks. Run the focused test,
-the repository's warning-free package checks, format checks, and every
-runtime/SDK/e2e verification required by AGENTS.md for the affected area.
+allowed only for separately named compatibility checks. Run focused regression
+tests for the reported behavior and affected systems, warning-free package
+checks, and format checks; require green PR CI. This workflow replaces the
+blanket full SDK E2E requirement: broaden testing only for a concrete unresolved
+concern or user request. Report exactly what ran and any baseline failures.
 
 VISUALIZE: Run the pr-visuals skill for every proposed fix. Treat any behavior
 whose result changes a rendered frame or sequence as player-observable even
