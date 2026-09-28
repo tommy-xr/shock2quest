@@ -27,54 +27,67 @@ const FAR = 100;
 type Region = { d: [number, number]; y: [number, number]; w?: [number, number] };
 type Station = { lane: number; outside: Region[] };
 
-// Regions the body centre can never legitimately reach (duplicated from the
-// scene's constants; keep in sync with debug_ladder.rs).
+/// Half the crouched capsule's height: a body centre this close under a
+/// ceiling already has its crown through it, whatever the stance.
+const CROUCH_HALF_HEIGHT = 0.56;
+
+/// The region whose body centres put the crown through a ceiling at `y`.
+function above(d: [number, number], y: number): Region {
+  return { d, y: [y - CROUCH_HALF_HEIGHT, FAR] };
+}
+
+/// Solid (or outside the level) at every height.
+function solid(d: [number, number], w?: [number, number]): Region {
+  return { d, y: [-FAR, FAR], w };
+}
+
+// Regions the body centre can never legitimately reach, duplicated from the
+// scene's constants (keep in sync with debug_ladder.rs). Slabs a correct
+// top-out may cross (Dark's top-out ignores level terrain) are left out.
 const CAPPED: Station = {
   lane: 36,
-  // Above the 10.0 ceiling, and above the 9.6 roof behind the ladder wall.
-  outside: [
-    { d: [0, 7.8], y: [10.0, FAR] },
-    { d: [-4, 0], y: [9.6, FAR] },
-  ],
+  // Through the 10.0 ceiling, or onto the 9.6 roof behind the ladder wall.
+  outside: [above([0, 7.8], 10.0), above([-4, 0], 9.6)],
 };
 const SETBACK: Station = {
   lane: 48,
-  // Above the deck's 11.6 ceiling, and above the shaft's (mission 45.2).
-  outside: [
-    { d: [0, 4.3], y: [11.6, FAR] },
-    { d: [-4, 0], y: [15.6, FAR] },
-  ],
+  // Through the deck's 11.6 ceiling, or the shaft's (mission 45.2).
+  outside: [above([0, 4.3], 11.6), above([-4, 0], 15.6)],
 };
 const RECESS: Station = {
   lane: 60,
+  // The 7.2 ceiling, its 45-degree slope behind the climber, the shaft's.
   outside: [
-    { d: [0, 6], y: [7.2, FAR] },
-    { d: [-4, 0], y: [11.2, FAR] },
+    above([0, 1.6], 7.2),
+    ...Array.from({ length: 8 }, (_, k) =>
+      above([1.6 + 0.4 * k, 2.0 + 0.4 * k], 7.2 - 0.4 * (k + 1)),
+    ),
+    above([-4, 0], 11.2),
   ],
 };
 const THROUGH: Station = {
   lane: 72,
-  outside: [
-    { d: [0, 5.6], y: [9.6, FAR] },
-    { d: [-2.4, 0], y: [10.0, FAR] },
-    { d: [-FAR, -2.4], y: [-FAR, FAR] },
-  ],
+  // The corridor's taller ceiling, the room's 10.0 ceiling, the room's far
+  // wall. The 6.4 ceiling over the ladder is where the top-out crosses.
+  outside: [above([1.67, 5.6], 9.6), above([-2.4, 1.67], 10.0), solid([-FAR, -2.4])],
 };
 const MIDMOUNT: Station = {
   lane: 84,
-  // Above the 8.4 ceiling; behind the ladder wall is solid in hydro2.
-  outside: [
-    { d: [0, 6], y: [8.4, FAR] },
-    { d: [-FAR, 0], y: [-FAR, FAR] },
-  ],
+  // The 8.4 ceiling; behind the ladder wall is solid in hydro2.
+  outside: [above([0, 6], 8.4), solid([-FAR, 0])],
 };
 const JUMP_GRAB: Station = {
   lane: 96,
+  // The 16.4 ceiling and the shaft's walls.
   outside: [
-    { d: [0, 7.7], y: [16.4, FAR] },
-    { d: [-FAR, 0], y: [-FAR, FAR] },
+    above([0, 7.7], 16.4),
+    solid([-FAR, 0]),
+    solid([-FAR, FAR], [1.93, FAR]),
+    solid([-FAR, FAR], [-FAR, -3.37]),
   ],
 };
+/// Every station: off the side of its lane.
+const OFF_LANE: Region[] = [solid([-FAR, FAR], [4.5, FAR]), solid([-FAR, FAR], [-FAR, -4.5])];
 
 /// A world point from station-frame coordinates.
 function at(station: Station, d: number, y: number, w = 0): Vec3 {
@@ -100,6 +113,7 @@ class Run {
 
   async frames(count: number, stop?: (p: Pos) => boolean | Promise<boolean>): Promise<Pos> {
     let p = await this.pos();
+    if (this.trace.length === 0) this.check(p);
     for (let i = 0; i < count; i++) {
       await this.game.step({ frames: 1 });
       p = await this.pos();
@@ -114,8 +128,8 @@ class Run {
     if (this.escaped) return;
     const d = p.x - STATION_FACE_X;
     const w = p.z - this.station.lane;
-    for (const r of this.station.outside) {
-      const [w0, w1] = r.w ?? [-4, 4];
+    for (const r of [...this.station.outside, ...OFF_LANE]) {
+      const [w0, w1] = r.w ?? [-FAR, FAR];
       if (d >= r.d[0] && d <= r.d[1] && p.y >= r.y[0] && p.y <= r.y[1] && w >= w0 && w <= w1) {
         this.escaped =
           `frame ${this.trace.length}: body centre (d=${d.toFixed(3)}, y=${p.y.toFixed(3)}, ` +
@@ -129,14 +143,22 @@ class Run {
     assert.equal(this.escaped, null, this.escaped ?? "");
   }
 
-  /// Height of the walkable surface under the player, if one is within 3.
+  /// Height of the highest walkable surface under the player's footprint
+  /// (centre and four points 0.3 out, inside the crouched radius), if any
+  /// is within 3.
   async supportY(p: Pos): Promise<number | null> {
-    const hit = await this.game.raycast({
-      start: [p.x, p.y, p.z],
-      end: [p.x, p.y - 3, p.z],
-      collision_groups: ["world", "entity"],
-    });
-    return hit.hit && hit.hit_normal && hit.hit_normal[1] > 0.7 ? hit.hit_point![1] : null;
+    let best: number | null = null;
+    for (const [dx, dz] of [[0, 0], [0.3, 0], [-0.3, 0], [0, 0.3], [0, -0.3]]) {
+      const hit = await this.game.raycast({
+        start: [p.x + dx, p.y, p.z + dz],
+        end: [p.x + dx, p.y - 3, p.z + dz],
+        collision_groups: ["world", "entity"],
+      });
+      if (hit.hit && hit.hit_normal && hit.hit_normal[1] > 0.7) {
+        best = Math.max(best ?? -Infinity, hit.hit_point![1]);
+      }
+    }
+    return best;
   }
 
   /// Ends resting on the floor at `floorY` (standing or crouched).
@@ -164,12 +186,13 @@ async function place(game: GameServer, station: Station, d: number, y: number, w
   await game.step({ frames: 25 });
 }
 
-/// Push forward until the height stops rising for `still` frames.
-async function climbToStall(run: Run, maxFrames: number, still = 30): Promise<Pos> {
+/// Push forward until, above `minY`, the height stops rising for `still`
+/// frames (so a hitch low on the ladder does not count as the cap).
+async function climbToStall(run: Run, maxFrames: number, minY: number, still = 20): Promise<Pos> {
   let best = -Infinity;
   let since = 0;
   return run.frames(maxFrames, (p) => {
-    if (p.y > best + 0.01) {
+    if (p.y > best + 0.01 || p.y < minY) {
       best = p.y;
       since = 0;
     } else {
@@ -193,7 +216,7 @@ test(
     const up = Math.tan(Math.PI / 3) * 10;
     await game.input.lookAtWorldPoint([start.x - 10, start.y + up, start.z]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
-    const cap = await climbToStall(run, 300, 3);
+    const cap = await climbToStall(run, 300, start.y + 5);
 
     // Turn back toward the corridor (a little off-axis, as in the mission)
     // and jump off with forward held.
@@ -294,7 +317,7 @@ test(
     // The mission's aim: 11.8 ahead and 7.644 below the start, looking down.
     await game.input.lookAtWorldPoint([start.x - 11.8, start.y - 7.644, start.z]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
-    await run.frames(60);
+    await run.frames(120);
     await game.input.set("right_hand.thumbstick", [0, 0]);
 
     run.assertStayedInside();
@@ -323,10 +346,11 @@ test(
     const run = new Run(game, JUMP_GRAB);
     await game.input.set("crouch", 1);
     await game.step({ frames: 2 });
-    // Crouched on the pipe top (14.8), 1.4 west (-w) and 0.4 in front of the
-    // ladder's face line.
+    // Crouched on the pipe top (14.8), 1.79 west (-w) of the ladder and 1.1
+    // in front of it: the mission's start pose (165.88, 93.79, 9.81).
     await place(game, JUMP_GRAB, 1.286, 15.394, -1.789);
-    const east = JUMP_GRAB.lane + (166.4 - 167.669);
+    // Walk east to the mission's takeoff point, 1.27 west of the ladder.
+    const east = JUMP_GRAB.lane - 1.269;
     const walk = await run.pos();
     await game.input.lookAtWorldPoint([walk.x, walk.y, walk.z + 10]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
@@ -340,13 +364,9 @@ test(
     await game.input.set("jump", 0);
     await run.frames(7);
     await game.input.lookAtWorldPoint([stage.x - 10, stage.y + rise, stage.z]);
-    let prev = await run.pos();
     let grip: number | null = null;
-    let frame = 0;
-    await run.frames(90, (p) => {
-      frame++;
-      if (frame > 3 && p.y - prev.y > 0.01) grip = prev.y;
-      prev = p;
+    await run.frames(90, async (p) => {
+      if ((await game.info()).player.climb.is_climbing) grip = p.y;
       return grip !== null;
     });
     await game.input.set("right_hand.thumbstick", [0, 0]);

@@ -107,8 +107,8 @@ fn lane_box(color: Vector3<f32>, lane: f32, d: [f32; 2], y: [f32; 2], w: [f32; 2
 }
 
 /// A ladder in a repro lane, centered `d` in front of the wall at height `y`.
-fn lane_ladder(template_id: i32, lane: f32, d: f32, y: f32, w: f32) -> Effect {
-    spawn_ladder(template_id, Point3::new(STATION_FACE_X + d, y, lane + w))
+fn lane_ladder(template_id: i32, lane: f32, d: f32, y: f32) -> Effect {
+    spawn_ladder(template_id, Point3::new(STATION_FACE_X + d, y, lane))
 }
 
 // Repro stations: each reproduces a ladder bug seen in a shipped mission,
@@ -128,6 +128,7 @@ const CAPPED_ROOF: f32 = 9.6;
 /// Ladder 532 authors a 12.8-tall PhysDims box offset 6.4 down, so its
 /// climbable column ends at 40.4 - 1.6 below the ceiling, not at its model top.
 const CAPPED_COLUMN_TOP: f32 = 8.4;
+const CAPPED_LADDER_D: f32 = 0.1;
 
 const WALL_COLOR: Vector3<f32> = vec3(0.32, 0.36, 0.40);
 const FLOOR_COLOR: Vector3<f32> = vec3(0.30, 0.42, 0.34);
@@ -218,6 +219,8 @@ fn capped_boxes() -> Vec<SceneBox> {
 /// underside; the deck (38.0) runs back over the climber to the wall the
 /// ladder stands 0.51 in front of, beyond which is an open shaft. A pipe
 /// entity over the deck leaves 1.4 headroom, so only a crouched climber fits.
+/// The slab is closed, so reaching the deck needs Dark's top-out, which
+/// passes through level terrain.
 const SETBACK_Z: f32 = 48.0;
 const SETBACK_LADDER_D: f32 = 0.51;
 const SETBACK_PIT_CEILING: f32 = 7.6;
@@ -338,13 +341,16 @@ fn recess_boxes() -> Vec<SceneBox> {
         side_face(z, hole_d, [RECESS_DECK_UNDERSIDE, RECESS_DECK], hole_w[1]),
         ceiling_face(z, [0.0, 1.6], RECESS_CEILING, lane),
     ];
-    // The ceiling behind the climber slopes down 45 degrees to the deck.
+    // The ceiling behind the climber slopes down 45 degrees to the deck, as
+    // closed 0.4 steps.
     for step in 0..8 {
         let d = 1.6 + 0.4 * step as f32;
-        boxes.push(ceiling_face(
+        let underside = RECESS_CEILING - 0.4 * (step + 1) as f32;
+        boxes.push(lane_box(
+            CEILING_COLOR,
             z,
             [d, d + 0.4],
-            RECESS_CEILING - 0.4 * (step + 1) as f32,
+            [underside, RECESS_CEILING + THIN],
             lane,
         ));
     }
@@ -353,7 +359,8 @@ fn recess_boxes() -> Vec<SceneBox> {
 
 /// eng1 Ladder 317: an eng1 `Ladder 16'` from the -19.8 corridor floor to
 /// its -13.4 ceiling, on a 0.4-thick wall. The -16.6 floor of the room
-/// behind that wall (3.2 above the corridor, ceiling -9.8) is the only exit.
+/// behind that wall (3.2 above the corridor, ceiling -9.8) is the only exit;
+/// like Dark's top-out, reaching it passes through level terrain.
 const THROUGH_Z: f32 = 72.0;
 const THROUGH_CEILING: f32 = 6.4;
 const THROUGH_WALL: f32 = 0.4;
@@ -483,7 +490,6 @@ fn jump_grab_boxes() -> Vec<SceneBox> {
 }
 
 fn repro_ladders() -> Vec<Effect> {
-    let d = 0.1;
     // Mission +Z (into the ladder) is -X here: a -90 degree yaw.
     let mission_yaw = Quaternion::from_angle_y(Deg(-90.0));
     let mut effects = vec![
@@ -492,9 +498,8 @@ fn repro_ladders() -> Vec<Effect> {
             SETBACK_Z,
             SETBACK_LADDER_D,
             LADDER_16_HEIGHT / 2.0 - 0.12,
-            0.0,
         ),
-        // Mission Pipe 633: centered 40.2, 0.8 behind the ladder plane.
+        // Mission Pipe 633: centered 40.2, 1.18 out from the wall.
         spawn_at_oriented(
             PIPE_24X4,
             Point3::new(STATION_FACE_X + 1.18, 10.6, SETBACK_Z - 1.63),
@@ -514,7 +519,6 @@ fn repro_ladders() -> Vec<Effect> {
             JUMP_GRAB_Z,
             JUMP_GRAB_LADDER_D,
             JUMP_GRAB_LADDER_BOTTOM + LADDER_16_HEIGHT * (index as f32 + 0.5),
-            0.0,
         ));
     }
     for w in [-1.53, -0.93] {
@@ -530,17 +534,15 @@ fn repro_ladders() -> Vec<Effect> {
             MIDMOUNT_Z,
             MIDMOUNT_RUNG_D,
             RUNG_SPACING * index as f32,
-            0.0,
         ));
     }
     effects.extend([
-        lane_ladder(ENG_LADDER_16, THROUGH_Z, 0.07, 3.2, 0.0),
+        lane_ladder(ENG_LADDER_16, THROUGH_Z, 0.07, 3.2),
         lane_ladder(
             LADDER_16,
             RECESS_Z,
             RECESS_LADDER_D,
             LADDER_16_HEIGHT / 2.0 - 0.12,
-            0.0,
         ),
         // Mission Curved Pipe 735 on the strip, 1.78 east of the ladder
         // (this lane mirrors the mission: east is -z).
@@ -550,13 +552,17 @@ fn repro_ladders() -> Vec<Effect> {
             Quaternion::from_angle_y(Deg(90.0))
                 * Quaternion::new(0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2),
         ),
-        lane_ladder(LADDER_16, CAPPED_Z, d, -1.2 + LADDER_16_HEIGHT / 2.0, 0.0),
         lane_ladder(
             LADDER_16,
             CAPPED_Z,
-            d,
+            CAPPED_LADDER_D,
+            -1.2 + LADDER_16_HEIGHT / 2.0,
+        ),
+        lane_ladder(
+            LADDER_16,
+            CAPPED_Z,
+            CAPPED_LADDER_D,
             CAPPED_COLUMN_TOP - LADDER_16_HEIGHT / 2.0,
-            0.0,
         ),
     ]);
     effects
