@@ -77,6 +77,107 @@ const MANTLE_HEIGHT: f32 = 3.0;
 
 const WALL_Z: f32 = -16.0;
 
+/// The repro lanes reach this far along +z; the floor covers them.
+const FLOOR_MAX_Z: f32 = 110.0;
+
+type SceneBox = (Vector3<f32>, Vector3<f32>, Vector3<f32>);
+
+/// A box in a repro lane's frame: `d` is the distance in front of the
+/// ladder wall (`x - STATION_FACE_X`, positive toward the climber), `w` the
+/// offset across the lane (`z - lane`), `y` the height. Ranges are min..max.
+fn lane_box(color: Vector3<f32>, lane: f32, d: [f32; 2], y: [f32; 2], w: [f32; 2]) -> SceneBox {
+    let min = vec3(STATION_FACE_X + d[0], y[0], lane + w[0]);
+    let max = vec3(STATION_FACE_X + d[1], y[1], lane + w[1]);
+    (color, (min + max) / 2.0, max - min)
+}
+
+/// A ladder in a repro lane, centered `d` in front of the wall at height `y`.
+fn lane_ladder(template_id: i32, lane: f32, d: f32, y: f32, w: f32) -> Effect {
+    spawn_ladder(template_id, Point3::new(STATION_FACE_X + d, y, lane + w))
+}
+
+// Repro stations: each reproduces a ladder bug seen in a shipped mission,
+// with the mission's heights measured by raycast and re-based so the lowest
+// floor is y = 0. Mission "into the ladder" maps to -X here.
+
+/// rick1 Ladder 530/532: stacked 16' ladders (mission 30.8 -> 43.6 over a
+/// 32.0 shaft floor) run 1.6 above the 42.0 ceiling. Behind the climber is a
+/// 38.8 corridor floor; behind the ladder wall is a 41.6 roof, open above.
+pub const CAPPED_Z: f32 = 36.0;
+/// Thickness of a slab standing in for a one-sided mission face.
+const THIN: f32 = 0.02;
+const CAPPED_CEILING: f32 = 10.0;
+const CAPPED_UPPER_FLOOR: f32 = 6.8;
+const CAPPED_PIT_DEPTH: f32 = 2.2;
+const CAPPED_ROOF: f32 = 9.6;
+/// Ladder 532 authors a 12.8-tall PhysDims box offset 6.4 down, so its
+/// climbable column ends at 40.4 - 1.6 below the ceiling, not at its model top.
+const CAPPED_COLUMN_TOP: f32 = 8.4;
+
+fn repro_boxes() -> Vec<SceneBox> {
+    let c = CAPPED_Z;
+    let wall = vec3(0.32, 0.36, 0.40);
+    let floor = vec3(0.30, 0.42, 0.34);
+    let ceiling = vec3(0.42, 0.34, 0.30);
+    vec![
+        // Corridor floor behind the climber, wrapping the 2-wide pit.
+        lane_box(
+            floor,
+            c,
+            [CAPPED_PIT_DEPTH, 7.8],
+            [0.0, CAPPED_UPPER_FLOOR],
+            [-4.0, 4.0],
+        ),
+        lane_box(
+            floor,
+            c,
+            [0.0, CAPPED_PIT_DEPTH],
+            [0.0, CAPPED_UPPER_FLOOR],
+            [-4.0, -1.0],
+        ),
+        lane_box(
+            floor,
+            c,
+            [0.0, CAPPED_PIT_DEPTH],
+            [0.0, CAPPED_UPPER_FLOOR],
+            [1.0, 4.0],
+        ),
+        // Ceiling over pit and corridor, with a 0.8 lintel at the wall. The
+        // mission's ceiling is a single face with nothing above it, so the
+        // slab is thin: a thick one would hide the top-out probe's path.
+        lane_box(
+            ceiling,
+            c,
+            [0.0, 7.8],
+            [CAPPED_CEILING, CAPPED_CEILING + THIN],
+            [-4.0, 4.0],
+        ),
+        lane_box(
+            wall,
+            c,
+            [0.0, 0.2],
+            [CAPPED_CEILING - 0.8, CAPPED_CEILING],
+            [-4.0, 4.0],
+        ),
+        // The ladder wall, solid back to the roof.
+        lane_box(wall, c, [-4.0, 0.0], [0.0, CAPPED_ROOF], [-4.0, 4.0]),
+    ]
+}
+
+fn repro_ladders() -> Vec<Effect> {
+    let d = 0.1;
+    vec![
+        lane_ladder(LADDER_16, CAPPED_Z, d, -1.2 + LADDER_16_HEIGHT / 2.0, 0.0),
+        lane_ladder(
+            LADDER_16,
+            CAPPED_Z,
+            d,
+            CAPPED_COLUMN_TOP - LADDER_16_HEIGHT / 2.0,
+            0.0,
+        ),
+    ]
+}
+
 /// The ladder models are authored with their rungs facing ±Z. Every station
 /// here is approached along X, so the ladders turn a quarter to face the
 /// player.
@@ -105,11 +206,11 @@ pub fn create_debug_ladder_scene(
     // Every piece is a (color, center, size) box used for both the visual and
     // the collider so the two cannot drift.
     let mut boxes: Vec<(Vector3<f32>, Vector3<f32>, Vector3<f32>)> = vec![
-        // floor
+        // floor, extended along +z under the repro lanes
         (
             vec3(0.18, 0.18, 0.22),
-            vec3(0.0, -0.5, 0.0),
-            vec3(60.0, 1.0, 60.0),
+            vec3(0.0, -0.5, FLOOR_MAX_Z / 2.0 - 15.0),
+            vec3(60.0, 1.0, FLOOR_MAX_Z + 30.0),
         ),
         block(vec3(0.30, 0.40, 0.30), LEDGE_Z, LEDGE_HEIGHT, LEDGE_DEPTH),
         block(vec3(0.40, 0.30, 0.30), ARCH_Z, LADDER_16_HEIGHT, ARCH_DEPTH),
@@ -122,6 +223,7 @@ pub fn create_debug_ladder_scene(
         block(vec3(0.45, 0.40, 0.30), MANTLE_Z, MANTLE_HEIGHT, LEDGE_DEPTH),
         block(vec3(0.35, 0.35, 0.35), WALL_Z, LEDGE_HEIGHT, LEDGE_DEPTH),
     ];
+    boxes.extend(repro_boxes());
 
     let scene_objects = boxes
         .iter()
@@ -213,6 +315,7 @@ impl DebugSceneHooks for LadderHooks {
                 Point3::new(STATION_FACE_X - 1.0, LADDER_4_HEIGHT / 2.0, SHORT_Z),
             ),
         ];
+        effects.extend(repro_ladders());
         for index in 0..RUNG_COUNT {
             effects.push(spawn_ladder(
                 LADDER_RUNG,
