@@ -18,7 +18,10 @@ pub enum RuntimeCommand {
     Step(StepSpec, oneshot::Sender<Result<StepResult, StepError>>),
 
     /// Take a screenshot of the current frame
-    Screenshot(ScreenshotSpec, oneshot::Sender<ScreenshotResult>),
+    Screenshot(
+        ScreenshotSpec,
+        oneshot::Sender<Result<ScreenshotResult, String>>,
+    ),
 
     /// Perform a physics raycast
     RayCast(RayCastRequest, oneshot::Sender<RayCastResult>),
