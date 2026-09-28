@@ -145,6 +145,7 @@ fn repro_boxes() -> Vec<SceneBox> {
     boxes.extend(setback_boxes());
     boxes.extend(recess_boxes());
     boxes.extend(through_boxes());
+    boxes.extend(midmount_boxes());
     boxes
 }
 
@@ -386,6 +387,53 @@ fn through_boxes() -> Vec<SceneBox> {
     ]
 }
 
+/// hydro2 Ladder 551 (#802): eleven stacked rungs (mission -2.4 -> 6.4, the
+/// ceiling) 0.2 in front of a wall, rising through a 1.96 x 1.8 hole in an
+/// office floor 4.4 above the lower floor. The climber walks off the office
+/// floor onto the middle of the ladder.
+pub const MIDMOUNT_Z: f32 = 84.0;
+const MIDMOUNT_RUNG_D: f32 = 0.2;
+const MIDMOUNT_SLAB_UNDERSIDE: f32 = 4.0;
+const MIDMOUNT_OFFICE: f32 = 4.4;
+const MIDMOUNT_CEILING: f32 = 8.4;
+const MIDMOUNT_HOLE_D: f32 = 1.8;
+const MIDMOUNT_HOLE_HALF_WIDTH: f32 = 0.98;
+
+fn midmount_boxes() -> Vec<SceneBox> {
+    let z = MIDMOUNT_Z;
+    let lane = [-4.0, 4.0];
+    let (hw, hd) = (MIDMOUNT_HOLE_HALF_WIDTH, MIDMOUNT_HOLE_D);
+    let mut boxes = vec![
+        wall_face(z, 0.0, [0.0, MIDMOUNT_CEILING], lane),
+        ceiling_face(z, [0.0, 6.0], MIDMOUNT_CEILING, lane),
+        // Hole edges, from the office floor down to the slab underside.
+        lane_box(
+            WALL_COLOR,
+            z,
+            [hd, hd + THIN],
+            [MIDMOUNT_SLAB_UNDERSIDE, MIDMOUNT_OFFICE],
+            [-hw, hw],
+        ),
+        side_face(
+            z,
+            [0.0, hd],
+            [MIDMOUNT_SLAB_UNDERSIDE, MIDMOUNT_OFFICE],
+            -hw,
+        ),
+        side_face(z, [0.0, hd], [MIDMOUNT_SLAB_UNDERSIDE, MIDMOUNT_OFFICE], hw),
+    ];
+    // The office floor (and the lower room's ceiling) around the hole.
+    for (d, w) in [
+        ([hd, 6.0], lane),
+        ([0.0, hd], [lane[0], -hw]),
+        ([0.0, hd], [hw, lane[1]]),
+    ] {
+        boxes.push(floor_face(z, d, MIDMOUNT_OFFICE, w));
+        boxes.push(ceiling_face(z, d, MIDMOUNT_SLAB_UNDERSIDE, w));
+    }
+    boxes
+}
+
 fn repro_ladders() -> Vec<Effect> {
     let d = 0.1;
     // Mission +Z (into the ladder) is -X here: a -90 degree yaw.
@@ -410,6 +458,15 @@ fn repro_ladders() -> Vec<Effect> {
             RICK_CONDUIT,
             Point3::new(STATION_FACE_X + 0.1, 6.0, SETBACK_Z + w),
             mission_yaw * Quaternion::new(0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2),
+        ));
+    }
+    for index in 0..RUNG_COUNT {
+        effects.push(lane_ladder(
+            LADDER_RUNG,
+            MIDMOUNT_Z,
+            MIDMOUNT_RUNG_D,
+            RUNG_SPACING * index as f32,
+            0.0,
         ));
     }
     effects.extend([
