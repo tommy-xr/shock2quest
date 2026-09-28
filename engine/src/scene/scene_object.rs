@@ -355,16 +355,8 @@ impl SceneObject {
     /// normalize into, so it produces an empty mesh.
     pub fn world_space_text(str: &str, font: Rc<Box<dyn Font>>, transparency: f32) -> SceneObject {
         let mesh = mesh::create(Self::unit_text_vertices(str, &**font));
-        let material =
-            basic_material::create_with_fixed_ambient(font.get_texture(), 1.0, transparency);
-        let mut object = Self::new(material, Box::new(mesh));
-        // UI font pixels already contain their display colour, just as in
-        // screen_space_text. Emission supplies it once; adding ambient or
-        // scene lights washes out coloured glyphs (Shock's green becomes cyan).
-        object.set_lights(Some(Rc::new(
-            crate::scene::light::LightArray::new().with_object_lighting(vec3(0.0, 0.0, 0.0), 0.0),
-        )));
-        object
+        let material = basic_material::create_unlit(font.get_texture(), transparency);
+        Self::new(material, Box::new(mesh))
     }
 
     pub fn create(

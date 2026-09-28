@@ -25,6 +25,7 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
         uniform mat4 view;
         uniform mat4 projection;
         uniform mat3 normalMatrix;
+        uniform bool unlit;
 
         out vec2 texCoord;
         out vec3 worldPos;
@@ -35,7 +36,7 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
             vec4 worldPosition = world * vec4(inPos, 1.0);
             worldPos = worldPosition.xyz;
 
-            worldNormal = normalize(normalMatrix * inNormal);
+            worldNormal = unlit ? vec3(0.0) : normalize(normalMatrix * inNormal);
 
             gl_Position = projection * view * worldPosition;
         }
@@ -54,6 +55,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform float ambientIntensity;
         uniform float transparency;
         uniform bool additiveUnlit;
+        uniform bool unlit;
 
         // Spotlight array uniforms (up to 6 spotlights)
         uniform vec3 spotlightPos[6];
@@ -141,6 +143,12 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
                 return;
             }
             if (texColor.a < 0.1) discard;
+            if (unlit) {
+                // UI texels are already display colours. Skip every lighting
+                // contribution, including lamps merged in by the renderer.
+                fragColor = vec4(texColor.rgb, texColor.a * (1.0 - transparency));
+                return;
+            }
 
             vec3 finalColor = texColor.rgb * emissivity;
 
@@ -173,6 +181,7 @@ struct UnifiedUniforms {
     ambient_intensity_loc: i32,
     transparency_loc: i32,
     additive_unlit_loc: i32,
+    unlit_loc: i32,
 
     // Spotlight array uniforms (6 spotlights)
     spotlight_pos_loc: [i32; 6],
@@ -199,6 +208,7 @@ where
     base_transparency: f32,
     additive_unlit: bool,
     fixed_ambient: bool,
+    unlit: bool,
     incidence: Option<IncidencePass>,
     shine: Option<Shine>,
 }
@@ -247,6 +257,7 @@ where
 
             // Set material properties
             gl::Uniform1i(uniforms.additive_unlit_loc, i32::from(self.additive_unlit));
+            gl::Uniform1i(uniforms.unlit_loc, i32::from(self.unlit));
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
             gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
             gl::Uniform1f(
@@ -397,6 +408,7 @@ where
                         shader.gl_id,
                         c_str!("emissivity").as_ptr(),
                     ),
+                    unlit_loc: gl::GetUniformLocation(shader.gl_id, c_str!("unlit").as_ptr()),
                     additive_unlit_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("additiveUnlit").as_ptr(),
@@ -604,6 +616,7 @@ where
         base_transparency: transparency,
         additive_unlit,
         fixed_ambient: false,
+        unlit: false,
         incidence: None,
         shine: None,
     })
@@ -627,6 +640,27 @@ where
         base_transparency: transparency,
         additive_unlit: false,
         fixed_ambient: true,
+        unlit: false,
+        incidence: None,
+        shine: None,
+    })
+}
+
+/// World-space UI, with the same texture colour and alpha as screen-space UI.
+/// Emission alone is not unlit: the basic shader also adds scene lighting.
+pub fn create_unlit<T>(diffuse_texture: T, transparency: f32) -> Box<dyn Material>
+where
+    T: Deref<Target = dyn TextureTrait> + 'static,
+{
+    Box::new(BasicMaterial {
+        diffuse_texture,
+        has_initialized: false,
+        emissivity: 1.0,
+        transparency,
+        base_transparency: transparency,
+        additive_unlit: false,
+        fixed_ambient: false,
+        unlit: true,
         incidence: None,
         shine: None,
     })
@@ -646,6 +680,7 @@ pub fn create_incidence(
         base_transparency: 0.0,
         additive_unlit: false,
         fixed_ambient: false,
+        unlit: false,
         incidence: Some(pass),
         shine: None,
     })

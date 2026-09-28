@@ -1362,9 +1362,8 @@ fn present_world(
             let texture = asset_cache
                 .get_ext(&TEXTURE_IMPORTER, texture, &texture_options(*kind))
                 .clone();
-            let material = engine::scene::basic_material::create_with_fixed_ambient(
+            let material = engine::scene::basic_material::create_unlit(
                 texture as Rc<dyn TextureTrait>,
-                1.0,
                 1.0 - alpha,
             );
             match kind.uv_rect() {
@@ -1393,7 +1392,7 @@ fn present_world(
                 Box::new(engine::scene::quad::create()),
             );
             // `color_material` authors itself opaque; a blended plate is a
-            // per-object override, as the image path's fixed ambient is.
+            // per-object override, as on the unlit image path.
             object.set_transparency(Some((1.0 - alpha).clamp(0.0, 1.0)));
             object
         }
