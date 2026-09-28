@@ -38,10 +38,11 @@
 //! thin slabs: a thick box would block top-out probes that start inside it
 //! where the mission's faces do not.
 
-use std::f32::consts::FRAC_1_SQRT_2;
+use std::{f32::consts::FRAC_1_SQRT_2, rc::Rc};
 
-use cgmath::{Deg, Point3, Quaternion, Rotation3, Vector3, vec3};
-use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
+use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, Vector3, vec3};
+use dark::importers::FONT_IMPORTER;
+use engine::{Font, assets::asset_cache::AssetCache, audio::AudioContext, scene::SceneObject};
 use rapier3d::prelude::{ColliderBuilder, Isometry, SharedShape};
 use shipyard::EntityId;
 
@@ -51,7 +52,7 @@ use crate::{
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     scenes::debug_common::{
         DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene, cube_object,
-        spawn_at_oriented,
+        shaded_cube_object, spawn_at_oriented,
     },
     scripts::Effect,
 };
@@ -617,7 +618,7 @@ pub fn create_debug_ladder_scene(
 
     let scene_objects = boxes
         .iter()
-        .map(|(color, translation, scale)| cube_object(*color, *translation, *scale))
+        .map(|(color, translation, scale)| shaded_cube_object(*color, *translation, *scale))
         .collect::<Vec<_>>();
     let collider = ColliderBuilder::compound(
         boxes
@@ -638,7 +639,8 @@ pub fn create_debug_ladder_scene(
             Quaternion::from_angle_y(Deg(0.0)),
         ))
         .with_physics_geometry(collider);
-    for scene_object in scene_objects {
+    let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
+    for scene_object in scene_objects.into_iter().chain(guide_objects(&font)) {
         builder = builder.add_scene_object(scene_object);
     }
 
@@ -657,7 +659,9 @@ pub fn create_debug_ladder_scene(
          climbable flag and colliders are the production ones. Mission repros: z=36 capped ladder\n\
          (rick1 532), z=48 setback crouched top-out (rick1 488), z=60 deck hole (rick1 499),\n\
          z=72 exit through the wall (eng1 317), z=84 mid-ladder mount (hydro2 551), z=96 jump grab\n\
-         (rick2 210)."
+         (rick2 210). Each station's sign names its case and start pad (cyan); yellow marks the\n\
+         route, green the correct end. Enclosed stations: POST /v1/player/teleport to the pad\n\
+         position on the sign."
     );
 
     Box::new(HookedDebugScene::new(core, LadderHooks::default()))
@@ -724,4 +728,286 @@ impl DebugSceneHooks for LadderHooks {
             audio_context,
         );
     }
+}
+
+// Station guides: a sign facing the approach (+X), a start pad at the pose
+// each e2e test teleports to, and markers on the correct route and its end
+// support. Visual only - none of this joins the physics geometry.
+
+const PAD_COLOR: Vector3<f32> = vec3(0.1, 0.75, 0.9);
+const PATH_COLOR: Vector3<f32> = vec3(0.95, 0.8, 0.15);
+const GOAL_COLOR: Vector3<f32> = vec3(0.2, 0.95, 0.3);
+/// Floor markers stand this proud of the surface they mark.
+const MARK_LIFT: f32 = 0.02;
+/// The existing stations' tests start 1.5 in front of the ladder wall.
+const NEAR_D: f32 = 1.5;
+
+/// A lane-frame box: `d`, `y`, `w` ranges (see [`lane_box`]).
+type Span = ([f32; 2], [f32; 2], [f32; 2]);
+
+/// A marker lying on the surface at `y`.
+fn on(d: [f32; 2], y: f32, w: [f32; 2]) -> Span {
+    (d, [y, y + MARK_LIFT], w)
+}
+
+struct Guide {
+    lane: f32,
+    /// Sign position: distance in front of the ladder wall, and top line's height.
+    sign: [f32; 2],
+    /// Title, case, and a two-line how-to.
+    lines: [&'static str; 4],
+    /// Start pad centre on its surface: `d`, surface `y`, `w`.
+    pad: [f32; 3],
+    path: Vec<Span>,
+    goal: Vec<Span>,
+    /// Step notes ("crouch here", "jump") at lane-frame points.
+    notes: Vec<(&'static str, [f32; 3])>,
+}
+
+impl Guide {
+    /// An existing station: pad 1.5 out on the floor, goal on a block top.
+    fn basic(lane: f32, lines: [&'static str; 4], goal: Option<([f32; 2], f32)>) -> Self {
+        Guide {
+            lane,
+            sign: [3.5, 3.4],
+            lines,
+            pad: [NEAR_D, 0.0, 0.0],
+            path: Vec::new(),
+            goal: goal
+                .map(|(d, y)| on(d, y, [-0.6, 0.6]))
+                .into_iter()
+                .collect(),
+            notes: Vec::new(),
+        }
+    }
+
+    /// A repro station: the sign stands in front of everything it builds.
+    fn repro(lane: f32, lines: [&'static str; 4], pad: [f32; 3]) -> Self {
+        Guide {
+            lane,
+            sign: [8.5, 3.4],
+            lines,
+            pad,
+            path: Vec::new(),
+            goal: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
+}
+
+fn guides() -> Vec<Guide> {
+    let centre = [-0.6, 0.6];
+    let mut capped = Guide::repro(
+        CAPPED_Z,
+        [
+            "CEILING-CAPPED LADDER (z 36)",
+            "rick1 Ladder 532 - #1770",
+            "Pad: face the ladder, hold forward.",
+            "Correct: stop under ceiling, jump back.",
+        ],
+        [0.729, 0.0, 0.0],
+    );
+    capped.path = vec![on([CAPPED_PIT_DEPTH, 2.8], CAPPED_UPPER_FLOOR, [-0.1, 0.1])];
+    capped.goal = vec![on([2.8, 3.8], CAPPED_UPPER_FLOOR, centre)];
+    capped.notes = vec![("jump back from the top", [1.2, 8.6, 0.0])];
+
+    let mut setback = Guide::repro(
+        SETBACK_Z,
+        [
+            "SETBACK LADDER (z 48)",
+            "rick1 Ladder 488",
+            "Crouch on the pad, hold forward.",
+            "Correct: crouched onto the deck above.",
+        ],
+        [1.2, 0.0, 0.0],
+    );
+    setback.goal = vec![on([0.3, 1.5], SETBACK_DECK, centre)];
+    setback.notes = vec![
+        ("crouch here", [1.2, 1.4, 0.0]),
+        ("goal: deck (crouched)", [2.0, 9.6, 0.0]),
+    ];
+
+    let mut recess = Guide::repro(
+        RECESS_Z,
+        [
+            "DECK-HOLE LADDER (z 60)",
+            "rick1 Ladder 499",
+            "Crouch on the pad, hold forward.",
+            "Correct: onto the deck strip past it.",
+        ],
+        [0.89, 0.0, 0.0],
+    );
+    recess.goal = vec![on([0.03, RECESS_HOLE_D[0] - 0.02], RECESS_DECK, centre)];
+    recess.notes = vec![("crouch here", [1.3, 1.4, 0.0])];
+
+    let mut through = Guide::repro(
+        THROUGH_Z,
+        [
+            "EXIT THROUGH THE WALL (z 72)",
+            "eng1 Ladder 317",
+            "Pad: face the ladder, hold forward.",
+            "Correct: end on the floor behind it.",
+        ],
+        [0.76, 0.0, 0.0],
+    );
+    through.goal = vec![on([-2.0, -0.6], THROUGH_UPPER_FLOOR, centre)];
+    through.notes = vec![("goal: floor behind this wall", [0.9, 5.9, 0.0])];
+
+    let mut midmount = Guide::repro(
+        MIDMOUNT_Z,
+        [
+            "MID-LADDER MOUNT (z 84)",
+            "hydro2 Ladder 551 - #802",
+            "Pad: look down, walk off the ledge.",
+            "Correct: grab the rungs, no drop.",
+        ],
+        [2.0, MIDMOUNT_OFFICE, 0.0],
+    );
+    midmount.sign[1] = 6.6;
+    midmount.path = vec![on([MIDMOUNT_HOLE_D, 2.0], MIDMOUNT_OFFICE, [-0.1, 0.1])];
+    midmount.goal = vec![on([0.5, 1.3], 0.0, centre)];
+    midmount.notes = vec![("look down, walk off", [2.0, 5.8, 0.0])];
+
+    let mut jump = Guide::repro(
+        JUMP_GRAB_Z,
+        [
+            "JUMP-TO-LADDER GRAB (z 96)",
+            "rick2 Ladder 210 - #907",
+            "Crouch on the pipe, walk right, jump,",
+            "turn in. Correct: grab above the band.",
+        ],
+        [1.286, JUMP_GRAB_PLATFORM_TOP, -1.789],
+    );
+    jump.path = vec![on([1.2, 1.37], JUMP_GRAB_PLATFORM_TOP, [-1.789, -1.269])];
+    // A band on the ladder wall: a correct grab happens at 14.1 or above.
+    jump.goal = vec![([0.0, 0.02], [14.1, JUMP_GRAB_CEILING], [-0.7, 0.7])];
+    jump.notes = vec![
+        ("crouch", [1.286, 15.9, -1.789]),
+        ("jump", [1.286, 15.9, -1.269]),
+    ];
+
+    let top_of = |depth: f32| [-depth + 0.5, -0.8];
+    vec![
+        Guide::basic(
+            LEDGE_Z,
+            [
+                "LEDGE (z 0)",
+                "rick1 opening-deck shape",
+                "Face the ladder, hold forward.",
+                "Correct: top out onto the block.",
+            ],
+            Some((top_of(LEDGE_DEPTH), LEDGE_HEIGHT)),
+        ),
+        Guide::basic(
+            ARCH_Z,
+            [
+                "ARCH (z 8)",
+                "ladder on both faces",
+                "Face a ladder, hold forward.",
+                "Correct: up, across the top, down.",
+            ],
+            Some(([-ARCH_DEPTH + 0.4, -0.4], LADDER_16_HEIGHT)),
+        ),
+        Guide::basic(
+            STACK_Z,
+            [
+                "RUNG STACK (z -8)",
+                "hydro2 Sector-C shape",
+                "Face the rungs, hold forward.",
+                "Correct: top out onto the wall.",
+            ],
+            Some((top_of(LEDGE_DEPTH), STACK_WALL_HEIGHT)),
+        ),
+        Guide::basic(
+            SHORT_Z,
+            [
+                "SHORT 4' LADDER (z 16)",
+                "freestanding",
+                "Face the ladder, hold forward.",
+                "Correct: climb to its top.",
+            ],
+            None,
+        ),
+        Guide::basic(
+            MANTLE_Z,
+            [
+                "MANTLE (z 24)",
+                "earth.mis training ledge",
+                "Hold jump and forward.",
+                "Correct: mantle onto the block.",
+            ],
+            Some((top_of(LEDGE_DEPTH), MANTLE_HEIGHT)),
+        ),
+        Guide::basic(
+            WALL_Z,
+            [
+                "PLAIN WALL (z -16)",
+                "negative case, no ladder",
+                "Face the wall, hold forward.",
+                "Correct: nothing climbs.",
+            ],
+            None,
+        ),
+        capped,
+        setback,
+        recess,
+        through,
+        midmount,
+        jump,
+    ]
+}
+
+/// A world-space label centred on `centre`, `height` tall, facing +X (the
+/// approach). The glyphs use the shared canvas-y-down text geometry in flat
+/// and VR; the flip here is its one boundary conversion.
+fn label(font: &Rc<Box<dyn Font>>, text: &str, centre: Vector3<f32>, height: f32) -> SceneObject {
+    let mut object = SceneObject::world_space_text(text, font.clone(), 0.0);
+    object.set_transform(
+        Matrix4::from_translation(centre)
+            * Matrix4::from_angle_y(Deg(90.0))
+            * Matrix4::from_nonuniform_scale(
+                height * engine::measure_text_width(&***font, text, 1.0),
+                height,
+                1.0,
+            )
+            * Matrix4::from_angle_x(Deg(180.0)),
+    );
+    object
+}
+
+fn guide_objects(font: &Rc<Box<dyn Font>>) -> Vec<SceneObject> {
+    let mut objects = Vec::new();
+    for guide in guides() {
+        let lane = guide.lane;
+        let at = |[d, y, w]: [f32; 3]| vec3(STATION_FACE_X + d, y, lane + w);
+        let [sign_d, sign_y] = guide.sign;
+        let [d, y, w] = guide.pad;
+        // Most stations are enclosed as in their mission: enter by teleport
+        // (POST /v1/player/teleport) to the pad, standing height above it.
+        let pad_point = at([d, y + 1.244, w]);
+        let enter = format!(
+            "Enter: teleport {:.2}, {:.2}, {:.2}",
+            pad_point.x, pad_point.y, pad_point.z
+        );
+        let lines = guide.lines.iter().copied().chain([enter.as_str()]);
+        for (i, line) in lines.enumerate() {
+            let (height, drop) = match i {
+                0 => (0.22, 0.0),
+                _ => (0.14, 0.12 + 0.22 * i as f32),
+            };
+            objects.push(label(font, line, at([sign_d, sign_y - drop, 0.0]), height));
+        }
+        let pad = on([d - 0.35, d + 0.35], y, [w - 0.35, w + 0.35]);
+        let spans = std::iter::once((PAD_COLOR, pad))
+            .chain(guide.path.into_iter().map(|span| (PATH_COLOR, span)))
+            .chain(guide.goal.into_iter().map(|span| (GOAL_COLOR, span)));
+        for (color, (d, y, w)) in spans {
+            let (color, centre, size) = lane_box(color, lane, d, y, w);
+            objects.push(cube_object(color, centre, size));
+        }
+        for (text, point) in guide.notes {
+            objects.push(label(font, text, at(point), 0.12));
+        }
+    }
+    objects
 }
