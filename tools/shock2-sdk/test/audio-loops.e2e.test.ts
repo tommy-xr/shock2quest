@@ -69,4 +69,43 @@ test("live audio loops retire on scene changes and out-of-radius movement", {
   const final = (await game.audio.loops()).loops;
   assert.equal(final.length, 1, JSON.stringify(final));
   assert.equal(final[0].owner, "scene", "scene replacement retires all mission beds");
+  assert.equal(final[0].paused, false, "main menu audio stays live after quitting pause");
 });
+
+for (const vr of [false, true]) {
+  for (const region of ["ambient_emitter", "environmental"]) {
+    test(`pause suspends ${region} while menu audio plays, then resumes the same sinks (${vr ? "VR" : "flat"})`, {
+      skip: !enabled, timeout: 600_000,
+    }, async () => {
+      await using game = await GameServer.launch({ mission: "medsci1.mis", port: 0, debugFlags: vr ? ["--vr"] : [] });
+      await game.player.teleport(region === "ambient_emitter"
+        ? { x: -13.824831, y: -6.240317, z: -65.7749 }
+        : { x: 11, y: -0.244, z: -54.334 });
+      await game.step({ frames: 2 });
+      const before = (await game.audio.loops()).loops;
+      assert.ok(before.some(loop => loop.owner === region));
+      assert.ok(before.every(loop => !loop.paused));
+      await game.input.trigger("TogglePauseMenu");
+      await game.step({ frames: 2 });
+      const paused = (await game.audio.loops()).loops;
+      for (const prior of before) {
+        const current = paused.find(loop => loop.handle === prior.handle);
+        assert.ok(current?.paused, `${prior.owner} must suspend its existing sink`);
+      }
+      const menu = paused.find(loop => /mloop1/i.test(loop.sample));
+      assert.ok(menu && !menu.paused, "menu hum must keep playing");
+      // Rodio runs on the device clock, independently of fixed simulation stepping.
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      await game.step({ frames: 120 });
+      await game.input.trigger("TogglePauseMenu");
+      await game.step({ frames: 2 });
+      const resumed = (await game.audio.loops()).loops;
+      for (const prior of before) {
+        const current = resumed.find(loop => loop.handle === prior.handle);
+        assert.ok(current && !current.paused, `${prior.owner} resumes without replacement`);
+      }
+      assert.ok(!resumed.some(loop => loop.handle === menu.handle), "pause menu bed retires");
+    });
+
+  }
+}

@@ -455,6 +455,7 @@ mod tests {
             gain: 0.25,
             channel_gains: [0.5, 0.75],
             looping: true,
+            ..Default::default()
         };
 
         play_and_record_with(

@@ -61,6 +61,7 @@ pub struct ActiveLoop<T> {
     pub owner: &'static str,
     pub source: Option<T>,
     pub elapsed_secs: f64,
+    pub paused: bool,
 }
 
 struct LoopPlayback {
@@ -78,13 +79,14 @@ impl LoopPlayback {
         }
     }
 
-    fn snapshot<T>(&self, owner: &'static str, source: Option<T>) -> ActiveLoop<T> {
+    fn snapshot<T>(&self, owner: &'static str, source: Option<T>, paused: bool) -> ActiveLoop<T> {
         ActiveLoop {
             handle: self.handle,
             sample: self.sample.clone(),
             owner,
             source,
             elapsed_secs: self.started.elapsed().as_secs_f64(),
+            paused,
         }
     }
 }
@@ -97,6 +99,8 @@ pub struct AudioPlaybackSettings {
     pub channel_gains: [f32; 2],
     /// Repeat forever instead of playing once. `stop_audio` ends it.
     pub looping: bool,
+    /// Gameplay pauses with simulation; frontend hum and clicks opt out.
+    pub pause_with_scene: bool,
 }
 
 impl Default for AudioPlaybackSettings {
@@ -105,6 +109,7 @@ impl Default for AudioPlaybackSettings {
             gain: 1.0,
             channel_gains: [STATIC_CENTER_GAIN, STATIC_CENTER_GAIN],
             looping: false,
+            pause_with_scene: true,
         }
     }
 }
@@ -161,7 +166,10 @@ where
 }
 
 enum SinkAdapter<TSourceKey> {
-    StaticSink(Sink),
+    StaticSink {
+        sink: Sink,
+        pause_with_scene: bool,
+    },
     PositionalSink {
         sink: SpatialSink,
         emitter: TrackedEmitter<TSourceKey>,
@@ -172,8 +180,11 @@ impl<TSourceKey> SinkAdapter<TSourceKey>
 where
     TSourceKey: Copy,
 {
-    fn fixed(sink: Sink) -> SinkAdapter<TSourceKey> {
-        SinkAdapter::StaticSink(sink)
+    fn fixed(sink: Sink, pause_with_scene: bool) -> SinkAdapter<TSourceKey> {
+        SinkAdapter::StaticSink {
+            sink,
+            pause_with_scene,
+        }
     }
 
     fn positional(
@@ -196,7 +207,7 @@ where
         F: FnMut(TSourceKey) -> Option<Vector3<f32>>,
     {
         match self {
-            SinkAdapter::StaticSink(_) => (),
+            SinkAdapter::StaticSink { .. } => (),
             SinkAdapter::PositionalSink { sink, emitter } => {
                 emitter.refresh(source_position);
                 sink.set_emitter_position(to_audio_position(emitter.position()));
@@ -208,14 +219,45 @@ where
 
     fn empty(&self) -> bool {
         match self {
-            SinkAdapter::StaticSink(sink) => sink.empty(),
+            SinkAdapter::StaticSink { sink, .. } => sink.empty(),
             SinkAdapter::PositionalSink { sink, .. } => sink.empty(),
+        }
+    }
+
+    fn set_scene_paused(&self, paused: bool) {
+        match self {
+            SinkAdapter::StaticSink {
+                sink,
+                pause_with_scene,
+            } => {
+                if *pause_with_scene {
+                    if paused {
+                        sink.pause();
+                    } else {
+                        sink.play();
+                    }
+                }
+            }
+            SinkAdapter::PositionalSink { sink, .. } => {
+                if paused {
+                    sink.pause();
+                } else {
+                    sink.play();
+                }
+            }
+        }
+    }
+
+    fn is_paused(&self) -> bool {
+        match self {
+            SinkAdapter::StaticSink { sink, .. } => sink.is_paused(),
+            SinkAdapter::PositionalSink { sink, .. } => sink.is_paused(),
         }
     }
 
     fn stop(&self) {
         match self {
-            SinkAdapter::StaticSink(sink) => sink.stop(),
+            SinkAdapter::StaticSink { sink, .. } => sink.stop(),
             SinkAdapter::PositionalSink { sink, .. } => sink.stop(),
         }
     }
@@ -234,6 +276,7 @@ where
     channel_to_last_handle: HashMap<String, u64>,
     handle_to_sink: HashMap<u64, SinkAdapter<TAmbientKey>>,
     handle_loops: HashMap<u64, LoopPlayback>,
+    scene_paused: bool,
     // Background music
     background_music: Option<Sink>,
     background_music_player: Option<Box<dyn BackgroundMusic<TCue>>>,
@@ -275,6 +318,7 @@ where
             handle_to_sink: HashMap::new(),
             handle_loops: HashMap::new(),
             channel_to_last_handle: HashMap::new(),
+            scene_paused: false,
             background_music: None,
             background_music_player: None,
             next_music_cue: None,
@@ -286,6 +330,45 @@ where
 
             ambient_sounds: HashMap::new(),
         }
+    }
+
+    /// Freeze gameplay at its current sample while frontend sounds remain live.
+    /// Apply before queueing new sounds so cheats/scene changes while paused
+    /// inherit the same policy. Repeated calls do not restart playback.
+    pub fn set_scene_paused(&mut self, paused: bool) {
+        if self.scene_paused == paused {
+            return;
+        }
+        self.scene_paused = paused;
+        for sink in self.handle_to_sink.values() {
+            sink.set_scene_paused(paused);
+        }
+        for sink in self
+            .background_music
+            .iter()
+            .chain(self.environmental_sink.iter().map(|(sink, _)| sink))
+        {
+            if paused {
+                sink.pause();
+            } else {
+                sink.play();
+            }
+        }
+        for (sink, _) in self.ambient_sounds.values() {
+            if paused {
+                sink.pause();
+            } else {
+                sink.play();
+            }
+        }
+    }
+
+    /// Safe without advancing the scene, listener pose, or music selection.
+    /// In particular, menu rollover clicks must not accumulate during pause.
+    pub fn reap_finished_sounds(&mut self) {
+        self.handle_to_sink.retain(|_, sink| !sink.empty());
+        self.handle_loops
+            .retain(|handle, _| self.handle_to_sink.contains_key(handle));
     }
 
     pub fn set_background_music(
@@ -312,9 +395,11 @@ where
     pub fn set_environmental_sound(&mut self, clip: Rc<AudioClip>) {
         self.stop_environmental_sound();
         let sink = rodio::Sink::try_new(&self.handle).unwrap();
+        if self.scene_paused {
+            sink.pause();
+        }
         clip.add_to_sink_looping(&sink);
         sink.set_volume(0.2);
-        sink.play();
         self.environmental_sink = Some((sink, LoopPlayback::new(AudioHandle::new().id(), &clip)));
     }
 
@@ -340,17 +425,21 @@ where
                 .get(handle)
                 .is_some_and(|sink| !sink.empty())
             {
-                loops.push(playback.snapshot("scene", None));
+                loops.push(playback.snapshot(
+                    "scene",
+                    None,
+                    self.handle_to_sink[handle].is_paused(),
+                ));
             }
         }
         if let Some((sink, playback)) = &self.environmental_sink {
             if !sink.empty() {
-                loops.push(playback.snapshot("environmental", None));
+                loops.push(playback.snapshot("environmental", None, sink.is_paused()));
             }
         }
         for (entity, (sink, playback)) in &self.ambient_sounds {
             if !sink.empty() {
-                loops.push(playback.snapshot("ambient_emitter", Some(*entity)));
+                loops.push(playback.snapshot("ambient_emitter", Some(*entity), sink.is_paused()));
             }
         }
         loops.sort_by_key(|entry| entry.handle);
@@ -388,9 +477,7 @@ where
             right_ear_position[2],
         );
 
-        self.handle_to_sink.retain(|_, sink| !sink.empty());
-        self.handle_loops
-            .retain(|handle, _| self.handle_to_sink.contains_key(handle));
+        self.reap_finished_sounds();
         // Update positional sounds
         for sink in self.handle_to_sink.values_mut() {
             sink.update_spatial_position(
@@ -439,6 +526,9 @@ where
                 )
                 .unwrap();
 
+                if self.scene_paused {
+                    sink.pause();
+                }
                 clip.add_to_spatial_sink_looping(&sink);
                 sink.set_volume(0.5);
                 self.ambient_sounds.insert(
@@ -450,6 +540,9 @@ where
     }
 
     fn update_background_music(&mut self) {
+        if self.scene_paused {
+            return;
+        }
         if let Some(background_music) = &self.background_music {
             if background_music.len() == 0 {
                 self.background_music = None;
@@ -693,9 +786,14 @@ pub fn play_streaming_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     let preempted = prepare_audio_play(context, &handle, None);
     let sink = rodio::Sink::try_new(&context.handle).unwrap();
     let settings = AudioPlaybackSettings::default();
+    if context.scene_paused {
+        sink.pause();
+    }
     sink.set_volume(settings.gain);
     sink.append(ChannelVolume::new(source, settings.channel_gains.to_vec()));
-    context.handle_to_sink.insert(id, SinkAdapter::fixed(sink));
+    context
+        .handle_to_sink
+        .insert(id, SinkAdapter::fixed(sink, true));
     preempted
 }
 
@@ -737,6 +835,9 @@ pub fn play_audio_with_settings<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     let id = handle.id;
     let preempted = prepare_audio_play(context, &handle, maybe_channel);
     let sink = rodio::Sink::try_new(&context.handle).unwrap();
+    if context.scene_paused && settings.pause_with_scene {
+        sink.pause();
+    }
     audio_clip.add_to_sink_with_settings(&sink, settings);
     if settings.looping {
         context
@@ -744,7 +845,9 @@ pub fn play_audio_with_settings<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
             .insert(id, LoopPlayback::new(id, &audio_clip));
     }
 
-    context.handle_to_sink.insert(id, SinkAdapter::fixed(sink));
+    context
+        .handle_to_sink
+        .insert(id, SinkAdapter::fixed(sink, settings.pause_with_scene));
     preempted
 }
 
@@ -824,6 +927,9 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     );
     let sink = rodio::SpatialSink::try_new(&context.handle, positions.0, positions.1, positions.2)
         .unwrap();
+    if context.scene_paused {
+        sink.pause();
+    }
     audio_clip.add_to_spatial_sink(&sink);
 
     //context.handle_to_sink.insert(handle.id, sink);
@@ -913,6 +1019,122 @@ mod tests {
             "stop must leave no queued audio"
         );
         assert!(audio.background_music_player.is_none());
+    }
+
+    #[test]
+    fn paused_sink_emits_silence_without_consuming_the_clip() {
+        let clip = AudioClip::from_raw(1, 48_000, vec![8192; 48_000]);
+        let (sink, mut output) = rodio::Sink::new_idle();
+        let adapter = super::SinkAdapter::<()>::fixed(sink, true);
+        adapter.set_scene_paused(true);
+        if let super::SinkAdapter::StaticSink { sink, .. } = &adapter {
+            clip.add_to_sink(sink);
+        }
+        // Read well beyond the clip's duration on the audio clock. A muted
+        // (rather than suspended) source would be exhausted on resume.
+        assert!(output.by_ref().take(96_000).all(|sample| sample == 0.0));
+        assert!(!adapter.empty());
+        adapter.set_scene_paused(false);
+        assert!(output.by_ref().take(1000).any(|sample| sample > 0.2));
+        adapter.stop();
+    }
+
+    #[test]
+    #[ignore = "requires an audio output device"]
+    fn scene_pause_preserves_all_gameplay_sinks_and_reaps_menu_sounds() {
+        use super::*;
+        struct Bed;
+        impl BackgroundMusic<String> for Bed {
+            fn next_clip(&mut self, _: Option<String>) -> Option<Rc<AudioClip>> {
+                Some(Rc::new(AudioClip::from_raw(1, 8000, vec![0; 80000])))
+            }
+        }
+        let mut audio = AudioContext::<u32, String>::new();
+        let clip = Rc::new(AudioClip::from_raw(1, 8000, vec![0; 80000]));
+        let voice = AudioHandle::new();
+        play_audio(&mut audio, voice.clone(), None, clip.clone());
+        let spatial = AudioHandle::new();
+        play_spatial_audio(
+            &mut audio,
+            vec3(0.0, 0.0, 0.0),
+            None,
+            spatial.clone(),
+            None,
+            clip.clone(),
+        );
+        audio.set_background_music(Box::new(Bed));
+        audio.set_environmental_sound(clip.clone());
+        audio.update(
+            vec3(-0.1, 0.0, 0.0),
+            vec3(0.1, 0.0, 0.0),
+            vec![(1, vec3(0.0, 0.0, 0.0), clip.clone())],
+            |_| None,
+        );
+        audio.set_scene_paused(true);
+        assert!(audio.handle_to_sink[&voice.id()].is_paused());
+        assert!(audio.handle_to_sink[&spatial.id()].is_paused());
+        assert!(audio.background_music.as_ref().unwrap().is_paused());
+        assert!(audio.environmental_sink.as_ref().unwrap().0.is_paused());
+        assert!(audio.ambient_sounds[&1].0.is_paused());
+        let new_voice = AudioHandle::new();
+        play_audio(&mut audio, new_voice.clone(), None, clip.clone());
+        assert!(audio.handle_to_sink[&new_voice.id()].is_paused());
+        let new_spatial = AudioHandle::new();
+        play_spatial_audio(
+            &mut audio,
+            vec3(0.0, 0.0, 0.0),
+            None,
+            new_spatial.clone(),
+            None,
+            clip.clone(),
+        );
+        assert!(audio.handle_to_sink[&new_spatial.id()].is_paused());
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        sender.send(vec![0; 80000]).unwrap();
+        let streaming = AudioHandle::new();
+        play_streaming_audio(
+            &mut audio,
+            streaming.clone(),
+            StreamingAudioSource::new(1, 8000, receiver),
+        );
+        assert!(audio.handle_to_sink[&streaming.id()].is_paused());
+        audio.set_environmental_sound(clip.clone());
+        audio.update(
+            vec3(-0.1, 0.0, 0.0),
+            vec3(0.1, 0.0, 0.0),
+            vec![
+                (1, vec3(0.0, 0.0, 0.0), clip.clone()),
+                (2, vec3(1.0, 0.0, 0.0), clip.clone()),
+            ],
+            |_| None,
+        );
+        assert!(audio.environmental_sink.as_ref().unwrap().0.is_paused());
+        assert!(audio.ambient_sounds[&2].0.is_paused());
+        drop(sender);
+        let menu = AudioHandle::new();
+        play_audio_with_settings(
+            &mut audio,
+            menu.clone(),
+            None,
+            Rc::new(AudioClip::from_raw(1, 8000, vec![0; 80])),
+            AudioPlaybackSettings {
+                pause_with_scene: false,
+                ..Default::default()
+            },
+        );
+        audio.set_scene_paused(false);
+        audio.set_scene_paused(true);
+        assert!(!audio.handle_to_sink[&menu.id()].is_paused());
+        // Actual audio callbacks consume the 10ms menu click during pause.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        audio.reap_finished_sounds();
+        assert!(!audio.handle_to_sink.contains_key(&menu.id()));
+        assert!(audio.handle_to_sink.contains_key(&voice.id()));
+        audio.set_scene_paused(false);
+        assert!(audio.handle_to_sink.values().all(|sink| !sink.is_paused()));
+        assert!(!audio.background_music.as_ref().unwrap().is_paused());
+        assert!(!audio.environmental_sink.as_ref().unwrap().0.is_paused());
+        assert!(!audio.ambient_sounds[&1].0.is_paused());
     }
 
     #[test]
@@ -1011,6 +1233,7 @@ mod tests {
                 gain: 0.5,
                 channel_gains: [1.0, 0.25],
                 looping: false,
+                ..Default::default()
             },
         );
 

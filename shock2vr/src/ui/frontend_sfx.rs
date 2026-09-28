@@ -126,6 +126,7 @@ impl<TWidget: Copy + PartialEq> FrontendSfx<TWidget> {
                 &handle,
                 AudioPlaybackSettings {
                     gain: HUM_VOLUME,
+                    pause_with_scene: false,
                     looping: true,
                     ..Default::default()
                 },
@@ -144,6 +145,7 @@ impl<TWidget: Copy + PartialEq> FrontendSfx<TWidget> {
                 &AudioHandle::new(),
                 AudioPlaybackSettings {
                     gain: volume,
+                    pause_with_scene: false,
                     ..Default::default()
                 },
                 asset_cache,
