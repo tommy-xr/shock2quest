@@ -143,6 +143,7 @@ fn side_face(lane: f32, d: [f32; 2], y: [f32; 2], w: f32) -> SceneBox {
 fn repro_boxes() -> Vec<SceneBox> {
     let mut boxes = capped_boxes();
     boxes.extend(setback_boxes());
+    boxes.extend(recess_boxes());
     boxes
 }
 
@@ -260,6 +261,80 @@ fn setback_boxes() -> Vec<SceneBox> {
     ]
 }
 
+/// rick1 Ladder 499: a 16' ladder (mission 33.88 -> 40.28) at the far edge
+/// of a 2.4 x 2.36 hole in the y38 deck, climbed from the y34 floor below.
+/// Past the ladder is a 0.44 deck strip, then a wall over an open shaft; the
+/// deck wraps the hole on both sides. Ceiling 41.2, sloping down 45 degrees
+/// behind the climber.
+pub const RECESS_Z: f32 = 60.0;
+const RECESS_LADDER_D: f32 = 0.49;
+const RECESS_DECK_UNDERSIDE: f32 = 3.2;
+const RECESS_DECK: f32 = 4.0;
+const RECESS_CEILING: f32 = 7.2;
+/// The hole in the deck: from the strip edge to its far edge, and across.
+const RECESS_HOLE_D: [f32; 2] = [0.44, 2.8];
+const RECESS_HOLE_W: [f32; 2] = [-1.21, 1.19];
+/// `Curved Pipe 1' Diameter`, one sits on the strip beside ladder 499.
+const CURVED_PIPE_1FT: i32 = -1148;
+
+fn recess_boxes() -> Vec<SceneBox> {
+    let z = RECESS_Z;
+    let lane = [-4.0, 4.0];
+    let hole_d = RECESS_HOLE_D;
+    let hole_w = RECESS_HOLE_W;
+    let mut boxes = vec![
+        // Shaft wall past the ladder, open at the deck slab's edge.
+        wall_face(z, 0.0, [0.0, RECESS_DECK_UNDERSIDE], lane),
+        wall_face(z, 0.0, [RECESS_DECK, RECESS_CEILING], lane),
+        // Far wall of the y34 room under the deck.
+        lane_box(
+            WALL_COLOR,
+            z,
+            [3.2, 3.2 + THIN],
+            [0.0, RECESS_DECK_UNDERSIDE],
+            lane,
+        ),
+        // Deck faces around the hole: the strip, the far side, both flanks.
+        floor_face(z, [0.0, hole_d[0]], RECESS_DECK, lane),
+        floor_face(z, [hole_d[1], 6.0], RECESS_DECK, lane),
+        floor_face(z, hole_d, RECESS_DECK, [lane[0], hole_w[0]]),
+        floor_face(z, hole_d, RECESS_DECK, [hole_w[1], lane[1]]),
+        ceiling_face(z, [0.0, hole_d[0]], RECESS_DECK_UNDERSIDE, lane),
+        ceiling_face(z, [hole_d[1], 6.0], RECESS_DECK_UNDERSIDE, lane),
+        ceiling_face(z, hole_d, RECESS_DECK_UNDERSIDE, [lane[0], hole_w[0]]),
+        ceiling_face(z, hole_d, RECESS_DECK_UNDERSIDE, [hole_w[1], lane[1]]),
+        // The slab's edges facing into the hole.
+        lane_box(
+            WALL_COLOR,
+            z,
+            [hole_d[0] - THIN, hole_d[0]],
+            [RECESS_DECK_UNDERSIDE, RECESS_DECK],
+            hole_w,
+        ),
+        lane_box(
+            WALL_COLOR,
+            z,
+            [hole_d[1], hole_d[1] + THIN],
+            [RECESS_DECK_UNDERSIDE, RECESS_DECK],
+            hole_w,
+        ),
+        side_face(z, hole_d, [RECESS_DECK_UNDERSIDE, RECESS_DECK], hole_w[0]),
+        side_face(z, hole_d, [RECESS_DECK_UNDERSIDE, RECESS_DECK], hole_w[1]),
+        ceiling_face(z, [0.0, 1.6], RECESS_CEILING, lane),
+    ];
+    // The ceiling behind the climber slopes down 45 degrees to the deck.
+    for step in 0..8 {
+        let d = 1.6 + 0.4 * step as f32;
+        boxes.push(ceiling_face(
+            z,
+            [d, d + 0.4],
+            RECESS_CEILING - 0.4 * (step + 1) as f32,
+            lane,
+        ));
+    }
+    boxes
+}
+
 fn repro_ladders() -> Vec<Effect> {
     let d = 0.1;
     // Mission +Z (into the ladder) is -X here: a -90 degree yaw.
@@ -287,6 +362,21 @@ fn repro_ladders() -> Vec<Effect> {
         ));
     }
     effects.extend([
+        lane_ladder(
+            LADDER_16,
+            RECESS_Z,
+            RECESS_LADDER_D,
+            LADDER_16_HEIGHT / 2.0 - 0.12,
+            0.0,
+        ),
+        // Mission Curved Pipe 735 on the strip, 1.78 east of the ladder
+        // (this lane mirrors the mission: east is -z).
+        spawn_at_oriented(
+            CURVED_PIPE_1FT,
+            Point3::new(STATION_FACE_X + 0.42, 4.84, RECESS_Z - 1.78),
+            Quaternion::from_angle_y(Deg(90.0))
+                * Quaternion::new(0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2),
+        ),
         lane_ladder(LADDER_16, CAPPED_Z, d, -1.2 + LADDER_16_HEIGHT / 2.0, 0.0),
         lane_ladder(
             LADDER_16,
