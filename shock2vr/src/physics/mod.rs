@@ -821,6 +821,7 @@ fn try_step_up(
 struct ClimbPass<'a> {
     movement: Vector<Real>,
     top_out: Option<(Vector<Real>, Real)>,
+    level_bsp: Option<&'a dark::mission::BspTree>,
     validation_queries: QueryPipeline<'a>,
     probe_queries: QueryPipeline<'a>,
     scripted_queries: QueryPipeline<'a>,
@@ -1965,6 +1966,7 @@ fn step_player_movement(
     if let Some(ClimbPass {
         movement: climb,
         top_out,
+        level_bsp,
         validation_queries,
         probe_queries: climb_queries,
         scripted_queries,
@@ -1972,7 +1974,7 @@ fn step_player_movement(
     {
         if climb.y > 0.0 {
             if let Some(top_out) = top_out.and_then(|(direction, minimum_clear_forward)| {
-                plan_climb_top_out(
+                let planned = plan_climb_top_out(
                     controller,
                     &validation_queries,
                     &climb_queries,
@@ -1981,7 +1983,19 @@ fn step_player_movement(
                     direction,
                     minimum_clear_forward,
                     dt,
-                )
+                )?;
+                // The scripted lip crossing may pass through local terrain,
+                // but must end inside the authored world. Collision alone
+                // also accepts the exterior roof as a supported landing when
+                // a ladder extends through its room's ceiling (Rick1 532).
+                let landing = planned.top_out?.waypoints[6];
+                if level_bsp
+                    .is_some_and(|bsp| bsp.cell_from_position(nvec_to_cgmath(landing)).is_none())
+                {
+                    None
+                } else {
+                    Some(planned)
+                }
             }) {
                 return top_out;
             }
@@ -2857,6 +2871,7 @@ impl LevelSurfaceMaterials {
 /// with [`PhysicsWorld::add_level_geometry`].
 pub struct LevelGeometry {
     collider: Collider,
+    bsp_tree: Option<dark::mission::BspTree>,
     per_triangle_material: Vec<u16>,
     material_names: Vec<String>,
 }
@@ -2868,6 +2883,7 @@ impl LevelGeometry {
     pub fn untextured(collider: Collider) -> Self {
         Self {
             collider,
+            bsp_tree: None,
             per_triangle_material: Vec::new(),
             material_names: Vec::new(),
         }
@@ -2887,6 +2903,7 @@ pub fn build_level_geometry(level: &SystemShock2Level) -> Option<LevelGeometry> 
 
     Some(LevelGeometry {
         collider,
+        bsp_tree: Some(level.bsp_tree.clone()),
         per_triangle_material: triangles.per_triangle_material,
         material_names: triangles.material_names,
     })
@@ -3304,6 +3321,9 @@ pub struct PhysicsWorld {
     /// Shared with the collision-event handler so contacts and ray hits name
     /// the same surface. Debug scenes build their own trimeshes and have none.
     level_surface_materials: Option<std::sync::Arc<LevelSurfaceMaterials>>,
+    /// Authored playable space for scripted ladder landing validation.
+    /// The tree shares its immutable nodes with the loaded mission.
+    level_bsp: Option<dark::mission::BspTree>,
 
     entity_id_to_body: HashMap<EntityId, RigidBodyHandle>,
 
@@ -3452,9 +3472,11 @@ impl PhysicsWorld {
     pub fn add_level_geometry(&mut self, entity_id: EntityId, geometry: LevelGeometry) {
         let LevelGeometry {
             mut collider,
+            bsp_tree,
             per_triangle_material,
             material_names,
         } = geometry;
+        self.level_bsp = bsp_tree;
 
         collider.user_data = entity_id.inner() as u128;
         collider.set_collision_groups(InteractionGroups {
@@ -5891,6 +5913,7 @@ impl PhysicsWorld {
             rigid_body_set,
             no_bodies: RigidBodySet::new(),
             level_surface_materials: None,
+            level_bsp: None,
             rigid_bodies_with_forces: Vec::new(),
             // TODO:
             // physics_hooks: Box::new(physics_hooks),
@@ -7000,6 +7023,7 @@ impl PhysicsWorld {
                         climb_movement.map(|(movement, top_out)| ClimbPass {
                             movement,
                             top_out,
+                            level_bsp: self.level_bsp.as_ref(),
                             validation_queries: queries,
                             probe_queries: queries.with_filter(climb_pass_filter),
                             scripted_queries: queries.with_filter(scripted_top_out_filter),
@@ -14123,6 +14147,7 @@ mod tests {
             EntityId::from_inner(1).unwrap(),
             LevelGeometry {
                 collider,
+                bsp_tree: None,
                 per_triangle_material: vec![0, 1],
                 material_names: vec!["metal".to_owned(), "fabric".to_owned()],
             },
