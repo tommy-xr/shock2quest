@@ -25,6 +25,7 @@ impl Script for TrapEXPOnce {
                 let award_amount = v_amount.get(entity_id).map(|p| p.0).unwrap_or(0);
                 let award_effect = Effect::AwardXP {
                     amount: award_amount,
+                    verbose: true,
                 };
                 let destroy_effect = Effect::DestroyEntity { entity_id };
                 Effect::Combined {

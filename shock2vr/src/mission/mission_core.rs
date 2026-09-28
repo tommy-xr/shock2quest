@@ -444,6 +444,15 @@ fn world_pickup_feedback(
     if !moves_on_world_frob {
         return Vec::new();
     }
+    pickup_feedback(world, asset_cache, entity_id)
+}
+
+/// Shared by MOVE pickups and explicit stat-item collection scripts.
+fn pickup_feedback(
+    world: &World,
+    asset_cache: &mut AssetCache,
+    entity_id: EntityId,
+) -> Vec<Effect> {
     let name = crate::hud::resolve_item_short_name(asset_cache, world, entity_id)
         .unwrap_or_else(|| "Item".to_owned());
     let format =
@@ -10927,11 +10936,16 @@ impl MissionCore {
                         let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                         quests.collect_log(deck, log);
                     }
-                    let name = crate::hud::localized_log_title(asset_cache, &self.world, entity_id)
-                        .or_else(|| {
-                            crate::hud::resolve_item_short_name(asset_cache, &self.world, entity_id)
-                        })
-                        .unwrap_or_else(|| "Audio log".to_owned());
+                    let name =
+                        crate::hud::localized_log_pickup_title(asset_cache, &self.world, entity_id)
+                            .or_else(|| {
+                                crate::hud::resolve_item_short_name(
+                                    asset_cache,
+                                    &self.world,
+                                    entity_id,
+                                )
+                            })
+                            .unwrap_or_else(|| "Audio log".to_owned());
                     let format = crate::scripts::gui::PanelText::string(
                         &self.world,
                         "misc",
@@ -11655,7 +11669,7 @@ impl MissionCore {
                     }
                 }
 
-                Effect::AwardXP { amount } => {
+                Effect::AwardXP { amount, verbose } => {
                     // Cyber modules are the game's upgrade currency (retail's
                     // "XP"). Persisted on the character sheet inside QuestInfo,
                     // so the balance survives level transitions + save/load.
@@ -11663,18 +11677,24 @@ impl MissionCore {
                     let balance = quests.player_stats_mut().award_cyber_modules(amount);
                     if amount > 0 {
                         info!("Awarded {} cyber modules (balance now {})", amount, balance);
-                        effects.push_back(Effect::ShowMessage {
-                            text: crate::scripts::gui::PanelText::format(
-                                &crate::scripts::gui::PanelText::string(
-                                    &self.world,
-                                    "misc",
-                                    "AddExp",
-                                    "%d cyber modules received.",
+                        if verbose {
+                            effects.push_back(Effect::ShowMessage {
+                                text: crate::scripts::gui::PanelText::format(
+                                    &crate::scripts::gui::PanelText::string(
+                                        &self.world,
+                                        "misc",
+                                        "AddExp",
+                                        "%d cyber modules received.",
+                                    ),
+                                    &[amount],
                                 ),
-                                &[amount],
-                            ),
-                        });
+                            });
+                        }
                     }
+                }
+
+                Effect::ReportPickup { entity_id } => {
+                    effects.extend(pickup_feedback(&self.world, asset_cache, entity_id));
                 }
 
                 Effect::AwardNanites { amount } => {
@@ -11682,9 +11702,6 @@ impl MissionCore {
                     let balance = quests.player_stats_mut().award_nanites(amount);
                     if amount > 0 {
                         info!("Awarded {} nanites (stat balance now {})", amount, balance);
-                        effects.push_back(Effect::ShowMessage {
-                            text: format!("{amount} nanites picked up."),
-                        });
                     }
                 }
 
@@ -17020,6 +17037,7 @@ impl MissionCore {
     ) -> Vec<Effect> {
         let mut deferred = Vec::new();
         for msg in msgs {
+            let world_pickup = matches!(msg, VirtualHandEffect::StoreWorldPickup { .. });
             match msg {
                 VirtualHandEffect::MoveSlide {
                     entity_id,
@@ -17205,8 +17223,16 @@ impl MissionCore {
                         });
                     }
                 }
-                VirtualHandEffect::StoreItem { entity_id } => {
+                VirtualHandEffect::StoreItem { entity_id }
+                | VirtualHandEffect::StoreWorldPickup { entity_id } => {
+                    // A merge destroys entity_id. Resolve authored name/count
+                    // before storage, but never report a refused pickup.
                     let sound = inventory_transfer_sound(&self.world, entity_id);
+                    let feedback = if world_pickup {
+                        world_pickup_feedback(&self.world, asset_cache, entity_id)
+                    } else {
+                        Vec::new()
+                    };
                     let inventory_entity = self
                         .world
                         .borrow::<UniqueView<PlayerInfo>>()
@@ -17217,10 +17243,15 @@ impl MissionCore {
                             .is_some()
                     });
                     if stored {
-                        deferred.push(crate::scripts::script_util::announce(
-                            inventory_entity.unwrap(),
-                            sound,
-                        ));
+                        // A MOVE pickup's feedback already carries the item cue.
+                        if feedback.is_empty() {
+                            deferred.push(crate::scripts::script_util::announce(
+                                inventory_entity.unwrap(),
+                                sound,
+                            ));
+                        } else {
+                            deferred.extend(feedback);
+                        }
                     } else {
                         deferred.push(backpack_full_feedback(entity_id));
                         self.restore_refused_store_to_world(entity_id);

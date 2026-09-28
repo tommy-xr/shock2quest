@@ -51,6 +51,7 @@ impl Script for InternalNanitesScript {
                 Effect::Combined {
                     effects: vec![
                         Effect::AwardNanites { amount },
+                        Effect::ReportPickup { entity_id },
                         Effect::DestroyEntity { entity_id },
                     ],
                 }
@@ -89,6 +90,18 @@ mod tests {
             effects
                 .iter()
                 .any(|e| matches!(e, Effect::DestroyEntity { entity_id } if *entity_id == entity))
+        );
+        let report = effects
+            .iter()
+            .position(|e| matches!(e, Effect::ReportPickup { entity_id } if *entity_id == entity))
+            .unwrap();
+        let destroy = effects
+            .iter()
+            .position(|e| matches!(e, Effect::DestroyEntity { .. }))
+            .unwrap();
+        assert!(
+            report < destroy,
+            "resolve the pickup name before consuming the pile"
         );
     }
 

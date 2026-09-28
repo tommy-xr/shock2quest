@@ -193,10 +193,7 @@ impl FlatPlayerController {
             effects.push(VirtualHandEffect::ReportWorldPickup { entity_id });
             effects
         } else {
-            vec![
-                VirtualHandEffect::StoreItem { entity_id },
-                VirtualHandEffect::ReportWorldPickup { entity_id },
-            ]
+            vec![VirtualHandEffect::StoreWorldPickup { entity_id }]
         }
     }
 
@@ -809,7 +806,7 @@ mod tests {
         assert!(
             matches!(
                 effects.as_slice(),
-                [VirtualHandEffect::StoreItem { entity_id }, VirtualHandEffect::ReportWorldPickup { entity_id: reported }] if *entity_id == ammo && *reported == ammo
+                [VirtualHandEffect::StoreWorldPickup { entity_id }] if *entity_id == ammo
             ),
             "ordinary loot should be sent to the backpack"
         );
