@@ -25,6 +25,8 @@
 //! - `z = -16` wall: a plain block, same size as the ledge's, with no ladder.
 //!   The negative case.
 
+use std::f32::consts::FRAC_1_SQRT_2;
+
 use cgmath::{Deg, Point3, Quaternion, Rotation3, Vector3, vec3};
 use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use rapier3d::prelude::{ColliderBuilder, Isometry, SharedShape};
@@ -114,11 +116,41 @@ const CAPPED_ROOF: f32 = 9.6;
 /// climbable column ends at 40.4 - 1.6 below the ceiling, not at its model top.
 const CAPPED_COLUMN_TOP: f32 = 8.4;
 
+const WALL_COLOR: Vector3<f32> = vec3(0.32, 0.36, 0.40);
+const FLOOR_COLOR: Vector3<f32> = vec3(0.30, 0.42, 0.34);
+const CEILING_COLOR: Vector3<f32> = vec3(0.42, 0.34, 0.30);
+
+/// A walkable face whose top is at `y`.
+fn floor_face(lane: f32, d: [f32; 2], y: f32, w: [f32; 2]) -> SceneBox {
+    lane_box(FLOOR_COLOR, lane, d, [y - THIN, y], w)
+}
+
+/// A ceiling face whose underside is at `y`.
+fn ceiling_face(lane: f32, d: [f32; 2], y: f32, w: [f32; 2]) -> SceneBox {
+    lane_box(CEILING_COLOR, lane, d, [y, y + THIN], w)
+}
+
+/// A wall face across the lane whose climber-side surface is at `d`.
+fn wall_face(lane: f32, d: f32, y: [f32; 2], w: [f32; 2]) -> SceneBox {
+    lane_box(WALL_COLOR, lane, [d - THIN, d], y, w)
+}
+
+/// A wall face along the lane at `w`, spanning `d`.
+fn side_face(lane: f32, d: [f32; 2], y: [f32; 2], w: f32) -> SceneBox {
+    lane_box(WALL_COLOR, lane, d, y, [w - THIN / 2.0, w + THIN / 2.0])
+}
+
 fn repro_boxes() -> Vec<SceneBox> {
+    let mut boxes = capped_boxes();
+    boxes.extend(setback_boxes());
+    boxes
+}
+
+fn capped_boxes() -> Vec<SceneBox> {
     let c = CAPPED_Z;
-    let wall = vec3(0.32, 0.36, 0.40);
-    let floor = vec3(0.30, 0.42, 0.34);
-    let ceiling = vec3(0.42, 0.34, 0.30);
+    let wall = WALL_COLOR;
+    let floor = FLOOR_COLOR;
+    let ceiling = CEILING_COLOR;
     vec![
         // Corridor floor behind the climber, wrapping the 2-wide pit.
         lane_box(
@@ -164,9 +196,97 @@ fn repro_boxes() -> Vec<SceneBox> {
     ]
 }
 
+/// rick1 Ladder 488: a 16' ladder (mission 29.48 -> 35.88, floor 29.6) in
+/// a pit under the y38 deck. The pit ceiling (37.2) is the deck slab's
+/// underside; the deck (38.0) runs back over the climber to the wall the
+/// ladder stands 0.51 in front of, beyond which is an open shaft. A pipe
+/// entity over the deck leaves 1.4 headroom, so only a crouched climber fits.
+pub const SETBACK_Z: f32 = 48.0;
+const SETBACK_LADDER_D: f32 = 0.51;
+const SETBACK_PIT_CEILING: f32 = 7.6;
+const SETBACK_DECK: f32 = 8.4;
+const SETBACK_DECK_CEILING: f32 = 11.6;
+const SETBACK_PIT_DEPTH: f32 = 3.2;
+const SETBACK_DECK_DEPTH: f32 = 4.3;
+const SETBACK_PIT_HALF_WIDTH: f32 = 1.2;
+/// `Pipe 24x4`, the entity over rick1's deck.
+const PIPE_24X4: i32 = -1092;
+/// `Rick Conduit`: 3.2-long conduit entities run along the wall behind
+/// ladder 488 at 34.98..36.22, protruding 0.29 toward the climber.
+const RICK_CONDUIT: i32 = -94;
+
+fn setback_boxes() -> Vec<SceneBox> {
+    let z = SETBACK_Z;
+    let pit = [-SETBACK_PIT_HALF_WIDTH, SETBACK_PIT_HALF_WIDTH];
+    let lane = [-4.0, 4.0];
+    vec![
+        // Wall behind the ladder: pit side and deck side, with the open slab
+        // edge between them (the mission's slab has no face toward the shaft).
+        wall_face(z, 0.0, [0.0, SETBACK_PIT_CEILING], lane),
+        wall_face(z, 0.0, [SETBACK_DECK, SETBACK_DECK_CEILING], lane),
+        // The 32.8..34.0 ledge between ladder and wall.
+        lane_box(FLOOR_COLOR, z, [0.0, 0.4], [3.2, 4.4], pit),
+        // Pit: back wall and sides.
+        lane_box(
+            WALL_COLOR,
+            z,
+            [SETBACK_PIT_DEPTH, SETBACK_PIT_DEPTH + THIN],
+            [0.0, SETBACK_PIT_CEILING],
+            pit,
+        ),
+        side_face(
+            z,
+            [0.0, SETBACK_PIT_DEPTH],
+            [0.0, SETBACK_PIT_CEILING],
+            pit[0],
+        ),
+        side_face(
+            z,
+            [0.0, SETBACK_PIT_DEPTH],
+            [0.0, SETBACK_PIT_CEILING],
+            pit[1],
+        ),
+        // Deck slab: underside over the pit, top over pit and climber.
+        ceiling_face(z, [0.0, SETBACK_DECK_DEPTH], SETBACK_PIT_CEILING, lane),
+        floor_face(z, [0.0, SETBACK_DECK_DEPTH], SETBACK_DECK, lane),
+        ceiling_face(z, [0.0, SETBACK_DECK_DEPTH], SETBACK_DECK_CEILING, lane),
+        lane_box(
+            WALL_COLOR,
+            z,
+            [SETBACK_DECK_DEPTH, SETBACK_DECK_DEPTH + THIN],
+            [SETBACK_DECK, SETBACK_DECK_CEILING],
+            lane,
+        ),
+    ]
+}
+
 fn repro_ladders() -> Vec<Effect> {
     let d = 0.1;
-    vec![
+    // Mission +Z (into the ladder) is -X here: a -90 degree yaw.
+    let mission_yaw = Quaternion::from_angle_y(Deg(-90.0));
+    let mut effects = vec![
+        lane_ladder(
+            LADDER_16,
+            SETBACK_Z,
+            SETBACK_LADDER_D,
+            LADDER_16_HEIGHT / 2.0 - 0.12,
+            0.0,
+        ),
+        // Mission Pipe 633: centered 40.2, 0.8 behind the ladder plane.
+        spawn_at_oriented(
+            PIPE_24X4,
+            Point3::new(STATION_FACE_X + 1.18, 10.6, SETBACK_Z - 1.63),
+            mission_yaw * Quaternion::new(0.5, -0.5, 0.5, 0.5),
+        ),
+    ];
+    for w in [-3.68, -0.48, 2.72] {
+        effects.push(spawn_at_oriented(
+            RICK_CONDUIT,
+            Point3::new(STATION_FACE_X + 0.1, 6.0, SETBACK_Z + w),
+            mission_yaw * Quaternion::new(0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2),
+        ));
+    }
+    effects.extend([
         lane_ladder(LADDER_16, CAPPED_Z, d, -1.2 + LADDER_16_HEIGHT / 2.0, 0.0),
         lane_ladder(
             LADDER_16,
@@ -175,7 +295,8 @@ fn repro_ladders() -> Vec<Effect> {
             CAPPED_COLUMN_TOP - LADDER_16_HEIGHT / 2.0,
             0.0,
         ),
-    ]
+    ]);
+    effects
 }
 
 /// The ladder models are authored with their rungs facing ±Z. Every station
