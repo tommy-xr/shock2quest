@@ -28,7 +28,7 @@
 //! Repro stations, one per ladder bug seen in a shipped mission, rebuilt from
 //! raycast measurements (heights re-based so the lowest floor is `y = 0`):
 //! - `z = 36`  capped: stacked ladders running up into a ceiling (rick1 532).
-//! - `z = 48`  setback: crouched top-out onto a deck over the pit (rick1 488).
+//! - `z = 48`  setback: ladder in a pit under a closed deck slab (rick1 488).
 //! - `z = 60`  deck hole: ladder up through a hole in a deck (rick1 499).
 //! - `z = 72`  through: ladder on a wall whose only exit is behind it (eng1 317).
 //! - `z = 84`  mid-mount: step off a ledge onto a rung stack (hydro2 551).
@@ -219,9 +219,9 @@ fn capped_boxes() -> Vec<SceneBox> {
 /// a pit under the y38 deck. The pit ceiling (37.2) is the deck slab's
 /// underside; the deck (38.0) runs back over the climber to the wall the
 /// ladder stands 0.51 in front of, beyond which is an open shaft. A pipe
-/// entity over the deck leaves 1.4 headroom, so only a crouched climber fits.
-/// The slab is closed, so reaching the deck needs Dark's top-out, which
-/// passes through level terrain.
+/// entity over the deck leaves 1.4 headroom. The slab is closed over the pit,
+/// so the deck cannot be reached from it; the pit opens at its sides onto the
+/// y34 floors (mission 32.8..34.0 slabs), which is where the climb exits.
 const SETBACK_Z: f32 = 48.0;
 const SETBACK_LADDER_D: f32 = 0.51;
 const SETBACK_PIT_CEILING: f32 = 7.6;
@@ -247,7 +247,7 @@ fn setback_boxes() -> Vec<SceneBox> {
         wall_face(z, 0.0, [SETBACK_DECK, SETBACK_DECK_CEILING], lane),
         // The 32.8..34.0 ledge between ladder and wall.
         lane_box(FLOOR_COLOR, z, [0.0, 0.4], [3.2, 4.4], pit),
-        // Pit: back wall and sides.
+        // Pit: back wall; its sides open onto the y34 floor slabs.
         lane_box(
             WALL_COLOR,
             z,
@@ -255,17 +255,19 @@ fn setback_boxes() -> Vec<SceneBox> {
             [0.0, SETBACK_PIT_CEILING],
             pit,
         ),
-        side_face(
+        lane_box(
+            FLOOR_COLOR,
             z,
             [0.0, SETBACK_PIT_DEPTH],
-            [0.0, SETBACK_PIT_CEILING],
-            pit[0],
+            [3.2, 4.4],
+            [lane[0], pit[0]],
         ),
-        side_face(
+        lane_box(
+            FLOOR_COLOR,
             z,
             [0.0, SETBACK_PIT_DEPTH],
-            [0.0, SETBACK_PIT_CEILING],
-            pit[1],
+            [3.2, 4.4],
+            [pit[1], lane[1]],
         ),
         // Deck slab: underside over the pit, top over pit and climber.
         ceiling_face(z, [0.0, SETBACK_DECK_DEPTH], SETBACK_PIT_CEILING, lane),
@@ -657,7 +659,7 @@ pub fn create_debug_ladder_scene(
          faces), z=-8 stack (11 stacked rungs), z=16 short 4' ladder, z=24 low\n\
          mantle block (no ladder), z=-16 plain wall (not climbable). Ladders are the shipped templates, so their\n\
          climbable flag and colliders are the production ones. Mission repros: z=36 capped ladder\n\
-         (rick1 532), z=48 setback crouched top-out (rick1 488), z=60 deck hole (rick1 499),\n\
+         (rick1 532), z=48 setback pit under a deck (rick1 488), z=60 deck hole (rick1 499),\n\
          z=72 exit through the wall (eng1 317), z=84 mid-ladder mount (hydro2 551), z=96 jump grab\n\
          (rick2 210). Each station's sign names its case and start pad (cyan); yellow marks the\n\
          route, green the correct end. Enclosed stations: POST /v1/player/teleport to the pad\n\
@@ -816,15 +818,15 @@ fn guides() -> Vec<Guide> {
         [
             "SETBACK LADDER (z 48)",
             "rick1 Ladder 488",
-            "Crouch on the pad, hold forward.",
-            "Correct: crouched onto the deck above.",
+            "Crouch, climb to the top, then step",
+            "sideways onto the y34 floor.",
         ],
         [1.2, 0.0, 0.0],
     );
-    setback.goal = vec![on([0.3, 1.5], SETBACK_DECK, centre)];
+    setback.goal = vec![on([0.6, 1.8], 4.4, [1.6, 2.8])];
     setback.notes = vec![
         ("crouch here", [1.2, 1.4, 0.0]),
-        ("goal: deck (crouched)", [2.0, 9.6, 0.0]),
+        ("step sideways", [1.2, 5.9, 1.2]),
     ];
 
     let mut recess = Guide::repro(
@@ -832,12 +834,12 @@ fn guides() -> Vec<Guide> {
         [
             "DECK-HOLE LADDER (z 60)",
             "rick1 Ladder 499",
-            "Crouch on the pad, hold forward.",
-            "Correct: onto the deck strip past it.",
+            "Crouch, climb to the top, then step",
+            "sideways onto the deck.",
         ],
         [0.89, 0.0, 0.0],
     );
-    recess.goal = vec![on([0.03, RECESS_HOLE_D[0] - 0.02], RECESS_DECK, centre)];
+    recess.goal = vec![on([0.6, 1.8], RECESS_DECK, [1.3, 2.5])];
     recess.notes = vec![("crouch here", [1.3, 1.4, 0.0])];
 
     let mut through = Guide::repro(

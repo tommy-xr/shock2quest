@@ -52,8 +52,8 @@ const CAPPED: Station = {
 };
 const SETBACK: Station = {
   lane: 48,
-  // Through the deck's 11.6 ceiling, or the shaft's (mission 45.2).
-  outside: [above([0, 4.3], 11.6), above([-4, 0], 15.6)],
+  // Through the closed deck slab over the pit (7.6), or the shaft's ceiling.
+  outside: [above([0, 4.3], 7.6), above([-4, 0], 15.6)],
 };
 const RECESS: Station = {
   lane: 60,
@@ -238,12 +238,31 @@ test(
   },
 );
 
+/// From a stalled climb, look level along +w (across the lane) and walk until
+/// supported on the floor at `floorY` beside the ladder, then a step more so
+/// the body is wholly on it.
+async function stepSideways(game: GameServer, run: Run, floorY: number): Promise<void> {
+  const top = await run.pos();
+  const eye = (await game.info()).player.camera_offset[1];
+  await game.input.lookAtWorldPoint([top.x, top.y + eye, top.z + 10]);
+  await game.input.set("right_hand.thumbstick", [0, 1]);
+  await run.frames(120, async (p) => {
+    const support = await run.supportY(p);
+    return support !== null && Math.abs(support - floorY) < 0.05 && p.y - floorY < 1.35;
+  });
+  await run.frames(8);
+  await game.input.set("right_hand.thumbstick", [0, 0]);
+  await run.frames(60);
+}
+
 test(
-  "debug_ladder setback ladder: a crouched climber tops out onto the deck over the pit",
-  // rick1 Ladder 488. Main: crouched climbers never get a top-out; stuck
-  // unsupported at y 6.871, d 0.656 under the 7.6 slab (mission 36.477,
-  // 0.657 from the wall).
-  { skip: !e2eEnabled, timeout: 300_000, todo: "rick1 Ladder 488 crouched top-out" },
+  "debug_ladder setback ladder: a crouched climber stays under the slab and steps off sideways",
+  // rick1 Ladder 488. The deck (8.4) is over a closed slab (7.6..8.4) that
+  // covers the whole pit, so the climb cannot reach it; the original refuses
+  // any mantle with something within 3.5 ft above the head. The climb stalls
+  // under the slab (y 6.871, mission 36.477) and exits sideways onto the y34
+  // floor slabs that flank the pit (4.4), as it does in the mission.
+  { skip: !e2eEnabled, timeout: 300_000 },
   async () => {
     await using game = await launch();
     await startTrail(game);
@@ -253,23 +272,24 @@ test(
     await run.frames(10);
     await game.input.lookAtWorldPoint(at(SETBACK, 1.2 - 10.7, 11.1));
     await game.input.set("right_hand.thumbstick", [0, 1]);
-    await run.frames(720, async (p) => p.y > 8.4 && (await run.supportY(p)) !== null);
-    await game.input.set("right_hand.thumbstick", [0, 0]);
-    await run.frames(120);
+    await climbToStall(run, 720, 6.0);
+    await stepSideways(game, run, 4.4);
 
     await shootTrail(game, "setback");
     run.assertStayedInside();
-    await run.assertSupportedOn(8.4, "setback");
+    const end = await run.assertSupportedOn(4.4, "setback");
+    assert.ok(end.z - SETBACK.lane > 1.2, "setback: should end on the floor beside the pit");
   },
 );
 
 test(
-  "debug_ladder deck-hole ladder: pushing into the ladder from the top reaches the deck",
-  // rick1 Ladder 499, climbed crouched from the y34 room. Main: bobs 6.41-6.60
-  // at d 0.93 under the 7.2 ceiling and drops back to the room floor on
-  // release (mission 40.41-40.60). Looking or strafing sideways off the top
-  // already works on main; pushing on into the ladder does not.
-  { skip: !e2eEnabled, timeout: 300_000, todo: "rick1 Ladder 499 crouched top-out" },
+  "debug_ladder deck-hole ladder: a crouched climber steps sideways off the top onto the deck",
+  // rick1 Ladder 499, climbed crouched from the y34 room. Straight ahead is a
+  // 0.44 strip between the ladder and the wall, too narrow for the crouched
+  // body (0.64 across), so pushing on into the ladder only bobs under the 7.2
+  // ceiling (6.41-6.60, mission 40.41-40.60). The way off is sideways onto the
+  // deck that wraps the hole, as in the mission.
+  { skip: !e2eEnabled, timeout: 300_000 },
   async () => {
     await using game = await launch();
     await startTrail(game);
@@ -279,13 +299,16 @@ test(
     await place(game, RECESS, 0.89, 0.7);
     await game.input.lookAtWorldPoint(at(RECESS, 0.49 - 10, 11.08));
     await game.input.set("right_hand.thumbstick", [0, 1]);
-    await run.frames(900, async (p) => p.y > 4.0 && (await run.supportY(p)) !== null);
-    await game.input.set("right_hand.thumbstick", [0, 0]);
-    await run.frames(120);
+    await climbToStall(run, 900, 5.0);
+    await stepSideways(game, run, 4.0);
 
     await shootTrail(game, "recess");
     run.assertStayedInside();
-    await run.assertSupportedOn(4.0, "deck hole");
+    const end = await run.assertSupportedOn(4.0, "deck hole");
+    assert.ok(
+      end.z - RECESS.lane > 1.19,
+      `deck hole: should end on the deck beside the hole (d=${(end.x - STATION_FACE_X).toFixed(3)}, w=${(end.z - RECESS.lane).toFixed(3)})`,
+    );
   },
 );
 
