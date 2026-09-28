@@ -4,6 +4,8 @@ use std::{
     io::{self, IsTerminal},
     path::PathBuf,
     process::Command,
+    thread,
+    time::Duration,
 };
 
 mod dashboard;
@@ -57,6 +59,11 @@ enum Action {
     Deploy {
         #[arg(long)]
         apk: Option<PathBuf>,
+    },
+    /// Switch the USB-attached headset to ADB over Wi-Fi (lasts until reboot)
+    Wifi {
+        #[arg(long, default_value_t = 5555)]
+        port: u16,
     },
     /// Launch the installed app without rebuilding
     Launch,
@@ -134,6 +141,7 @@ fn main() -> Result<()> {
             ensure!(apk.is_file(), "APK not found: {}", apk.display());
             inherit(device.adb().args(["install", "-r"]).arg(apk))?;
         }
+        Action::Wifi { port } => device.wifi(port)?,
         Action::Launch => device.launch()?,
         Action::Stop => device.stop()?,
         Action::Ls { path } => {
@@ -301,6 +309,34 @@ impl Device {
         );
         Ok(())
     }
+    fn wifi(&self, port: u16) -> Result<()> {
+        // A missing wlan0 prints nothing, so it lands in the same error below.
+        let addresses = self.shell("ip -f inet addr show wlan0 2>/dev/null || true")?;
+        let ip = parse_wlan_ip(&addresses).context("no wlan0 address; is the headset on Wi-Fi?")?;
+        output(self.adb().args(["tcpip", &port.to_string()]))?;
+        let target = format!("{ip}:{port}");
+        // adbd restarts into TCP mode, so the first connects may be refused.
+        // `adb connect` can report success for a stale transport; get-state confirms.
+        let mut last = String::new();
+        for _ in 0..5 {
+            thread::sleep(Duration::from_secs(1));
+            last = match output(Command::new("adb").args(["connect", &target])) {
+                Ok(message) => message,
+                Err(error) => error.to_string(),
+            };
+            let state = output(Command::new("adb").args(["-s", &target, "get-state"]));
+            if state.is_ok_and(|state| state.trim() == "device") {
+                println!(
+                    "Connected: {target}\nUnplug USB, or pass --serial {target} while both are attached."
+                );
+                return Ok(());
+            }
+        }
+        bail!(
+            "could not connect to {target} ({}); check the headset and this machine share a network",
+            last.trim()
+        )
+    }
     fn launch(&self) -> Result<()> {
         let result = self.shell(&format!(
             "am start -S -W -n {PACKAGE}/android.app.NativeActivity"
@@ -418,6 +454,15 @@ fn parse_recording(line: &str) -> Result<Recording> {
     })
 }
 
+/// First IPv4 address in `ip -f inet addr show` output, e.g.
+/// `inet 192.168.1.42/24 brd ...` -> `192.168.1.42`.
+fn parse_wlan_ip(listing: &str) -> Option<&str> {
+    listing.lines().find_map(|line| {
+        let address = line.trim().strip_prefix("inet ")?.split('/').next()?;
+        (!address.is_empty()).then_some(address)
+    })
+}
+
 fn validate_setting(value: &str, mission: bool) -> Result<Option<String>> {
     let value = value.trim();
     if value.is_empty() {
@@ -463,6 +508,12 @@ mod tests {
         assert!(select_serial("", None).is_err());
         assert!(select_serial("a device\nb device", None).is_err());
         assert_eq!(select_serial("a device\nb device", Some("b")).unwrap(), "b");
+    }
+    #[test]
+    fn wlan_ip_parses_first_inet_address() {
+        let listing = "30: wlan0: <UP> mtu 1500\n    inet 192.168.1.42/24 brd 192.168.1.255 scope global wlan0\n";
+        assert_eq!(parse_wlan_ip(listing), Some("192.168.1.42"));
+        assert_eq!(parse_wlan_ip(""), None);
     }
     #[test]
     fn settings_validate_and_empty_means_delete() {

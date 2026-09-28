@@ -15,6 +15,7 @@ cargo dvr run                       # release build, install, launch, follow log
 cargo dvr run --no-logcat           # return after launch
 cargo dvr deploy                    # release build + install; does not launch
 cargo dvr deploy --apk /path/to/shock2quest.apk
+cargo dvr wifi                      # USB -> ADB over Wi-Fi until reboot, then unplug
 cargo dvr launch                    # restart installed app, no build
 cargo dvr stop
 cargo dvr ls                        # defaults to /sdcard/shock2quest
@@ -31,6 +32,11 @@ cargo dvr debug-port set 8171
 cargo dvr debug-port get
 cargo dvr debug-port unset
 ```
+
+`wifi` needs the headset on USB once: it reads its `wlan0` address, runs
+`adb tcpip` (`--port`, default 5555) and connects. The headset stays reachable through sleep, but
+a reboot returns it to USB-only. While USB and Wi-Fi are both attached ADB lists
+the headset twice, so unplug or pass `--serial IP:PORT`.
 
 The dashboard refreshes every five seconds: **m** edits the mission, **l** launches,
 **s** stops, **f** lists game files, **r** returns to status, and **q** quits.
