@@ -15559,23 +15559,22 @@ impl MissionCore {
         )
     }
 
-    /// The status-message block in VR. The original's placement is a line near
-    /// the top of a 640x480 screen, which has no world position - so the one
-    /// thing this presentation decides for itself is to lift the block above
-    /// the gaze, so it does not sit over what the player is aiming at;
-    /// everything on it is placed by the shared `message_line` layout.
+    /// Map the shared HUD origin onto the head panel, just like the banner.
+    /// The block's dimensions affect its centre, never the first glyph's anchor.
     fn render_vr_messages(
         &self,
         asset_cache: &mut AssetCache,
         messages: &[String],
     ) -> Vec<SceneObject> {
-        let size = crate::hud::message_line::PANEL_SIZE;
-        self.render_vr_head_canvas(
-            asset_cache,
-            &crate::hud::message_line::build_message_canvas(messages),
-            size,
-            |scale| vec3(0.0, size.y * scale * 0.5 + 0.2, 0.0),
-        )
+        let font = crate::ui::resolve_font(asset_cache, crate::hud::message_line::FONT);
+        let canvas =
+            crate::hud::message_line::build_message_canvas(messages, font.as_ref().as_ref());
+        let size = canvas.size();
+        let centre = crate::hud::message_line::flat_origin(self.use_mode) + size * 0.5
+            - crate::mission::flat_ui_host::CANVAS_SIZE * 0.5;
+        self.render_vr_head_canvas(asset_cache, &canvas, size, |scale| {
+            vec3(centre.x * scale, -centre.y * scale, 0.0)
+        })
     }
 
     /// Whether the shared `show_position` readout is visible during gameplay.
