@@ -164,12 +164,15 @@ test(
         `ended=(${beforeTopOut.x.toFixed(2)}, ${beforeTopOut.y.toFixed(2)}, ${beforeTopOut.z.toFixed(2)})`,
     );
 
-    // Aim diagonally +Z BEFORE the top-out can be planned. The z=2.4 level wall
-    // is genuinely solid along that route: the ordered transition must rise
-    // while remaining on its near side, then cross only after clearing it.
+    // Aim a little +Z BEFORE the top-out can be planned. The climber is under
+    // a ceiling here (20.4, 20.0 over the recess), so the top-out rises only
+    // to that headroom and crosses south of the z=2.4 wall onto the lower
+    // deck. A steeper heading would have to pass over the wall's top, through
+    // the ceiling; that top-out is refused, as the original refuses a mantle
+    // with anything within 3.5 ft above the head.
     const topOutTarget = {
       x: ladder.x + 8,
-      z: ladder.z + 4,
+      z: ladder.z + 2,
     };
     await game.input.lookAtWorldPoint([
       topOutTarget.x,

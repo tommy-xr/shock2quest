@@ -1253,24 +1253,28 @@ fn plan_climb_top_out(
     let direction = direction_h / direction_norm;
     let head_offset = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
     let head = pos.translation.vector + Vector::y() * head_offset;
-    let raised = head + Vector::y() * CLIMB_TOP_OUT_UP;
+    let up_ray = Ray::new(Point::from(head), Vector::y());
+    let up_obstruction = probe_queries
+        .cast_ray(&up_ray, CLIMB_TOP_OUT_UP, true)
+        .map(|(_, time_of_impact)| (time_of_impact, head.y + time_of_impact));
+    // A ceiling close enough to pin the compressed head sphere leaves no room
+    // to rise at all.
+    if up_obstruction.is_some_and(|(time_of_impact, _)| time_of_impact < CLIMB_TOP_OUT_RADIUS) {
+        return None;
+    }
+    // The rise stops under whatever is above the head, as the head's own
+    // collision would. Every probe below starts from that capped height, so a
+    // top-out cannot cross the ceiling the climber is under to reach a
+    // surface above it - e.g. the far side of a roof beyond the ladder wall.
+    let headroom_y = up_obstruction.map_or(f32::INFINITY, |(_, obstruction_y)| {
+        obstruction_y - CLIMB_TOP_OUT_RADIUS - PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+    });
+    let raised = head + Vector::y() * CLIMB_TOP_OUT_UP.min((headroom_y - head.y).max(0.0));
     let probe_ahead = raised + direction * CLIMB_TOP_OUT_PROBE_FORWARD;
     let route_forward = minimum_clear_forward.max(CLIMB_TOP_OUT_PROBE_FORWARD);
     let route_ahead = raised + direction * route_forward;
     let standing = standing_player_capsule();
     let compressed = Ball::new(CLIMB_TOP_OUT_RADIUS);
-    let up_ray = Ray::new(Point::from(head), Vector::y());
-    // BreakClimb's jump-through remains valid when the mantle search meets a
-    // lip after the compressed head has room to rise. Do not conflate that
-    // authored fallback with a low ceiling: it must clear at least one full
-    // head radius before the first upward obstruction. Rick1's merged lip is
-    // hit after 0.559 wu; a ceiling close enough to pin the sphere is rejected.
-    let up_obstruction = probe_queries
-        .cast_ray(&up_ray, CLIMB_TOP_OUT_UP, true)
-        .map(|(_, time_of_impact)| (time_of_impact, head.y + time_of_impact));
-    if up_obstruction.is_some_and(|(time_of_impact, _)| time_of_impact < CLIMB_TOP_OUT_RADIUS) {
-        return None;
-    }
     if !ray_segment_is_clear(probe_queries, raised, probe_ahead) {
         return None;
     }
@@ -1279,18 +1283,6 @@ fn plan_climb_top_out(
         .cast_ray_and_get_normal(&down_ray, CLIMB_TOP_OUT_MAX_DROP, true)
         .filter(|(_, landing)| landing.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
         .map(|(_, landing)| probe_ahead - Vector::y() * landing.time_of_impact);
-    if up_obstruction.is_some_and(|(_, obstruction_y)| {
-        // A lip can have a thin underside above its adjacent landing. Treat
-        // surfaces within one compressed radius plus the solver gap on both
-        // faces as the same landing edge; a genuinely separate low ceiling
-        // remains farther above the probed floor.
-        mantle_floor.is_none_or(|floor| {
-            floor.y + CLIMB_TOP_OUT_RADIUS + 2.0 * PLAYER_CONTACT_OFFSET / SCALE_FACTOR + 1.0e-4
-                < obstruction_y
-        })
-    }) {
-        return None;
-    }
 
     // Dark's mantle target puts the physical head sphere just over the lip:
     // lip + 1.02 * radius + one authored unit. If CheckMantle cannot find that
@@ -1310,6 +1302,10 @@ fn plan_climb_top_out(
     // viable retreat and avoids multiplying hundreds of controller casts per
     // candidate.
     let cross_y = minimum_cross_y.max(raised.y);
+    // Clearing the lip would take the head through the ceiling above it.
+    if cross_y > headroom_y {
+        return None;
+    }
     // A full sphere can sit under an overhanging lip even when the head
     // point above it is clear. Dark's recovery searches backward/up within
     // four authored feet. Use the same bound and choose the first
