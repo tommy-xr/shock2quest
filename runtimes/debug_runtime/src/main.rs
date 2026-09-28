@@ -400,6 +400,7 @@ async fn start_http_server(
         )
         .route("/v1/entities/:id/animation", get(get_animation_state))
         .route("/v1/player/position", get(get_player_position))
+        .route("/v1/player/trail", get(get_player_trail))
         .route("/v1/camera", get(get_camera_state))
         .route("/v1/camera", axum::routing::post(set_camera_state))
         .route("/v1/player/teleport", axum::routing::post(teleport_player))
@@ -485,6 +486,7 @@ async fn start_http_server(
         "  GET  /v1/entities/{{id}}/animation - Animation playback state + posed skeleton (world-space joints)"
     );
     info!("  GET  /v1/player/position  - Get current player position");
+    info!("  GET  /v1/player/trail     - Player trail samples (player_trail dev param)");
     info!("  GET  /v1/camera           - Get free (debug) camera state");
     info!("  POST /v1/player/teleport  - Teleport player to coordinates (raw, unbounded)");
     info!("  POST /v1/player/move      - Bounded, collision-valid move toward {{x,y,z}}");
@@ -1645,6 +1647,13 @@ fn process_command(
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send camera placement result - receiver dropped");
             }
+        }
+        RuntimeCommand::GetPlayerTrail(reply) => {
+            let samples = game
+                .debug_scene()
+                .map(|scene| scene.player_trail())
+                .unwrap_or_default();
+            let _ = reply.send(json!({ "samples": samples }));
         }
         RuntimeCommand::GetPlayerPosition(reply) => {
             if let Some(debug_scene) = game.debug_scene() {
@@ -4716,6 +4725,21 @@ async fn get_recent_audio(Query(params): Query<RecentAudioQueryParams>) -> Json<
         sounds.retain(|sound| sound.still_playing);
     }
     Json(serde_json::json!({ "sounds": sounds }))
+}
+
+/// HTTP handler for the player trail: `{ samples: [{frame, pos, state, crouched}] }`,
+/// oldest first. Empty unless the `player_trail` dev param is on.
+async fn get_player_trail(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    command_tx
+        .send(RuntimeCommand::GetPlayerTrail(reply_tx))
+        .map_err(|_| game_loop_unavailable())?;
+    reply_rx
+        .await
+        .map(Json)
+        .map_err(|_| game_loop_unavailable())
 }
 
 async fn get_audio_loops(

@@ -986,6 +986,12 @@ pub trait DebuggableScene {
     /// Player position in world coordinates
     fn player_position(&self) -> Vector3<f32>;
 
+    /// The player trail's samples, oldest first (empty while the
+    /// `player_trail` dev param is off).
+    fn player_trail(&self) -> Vec<crate::debug_trail::TrailSample> {
+        Vec::new()
+    }
+
     /// List physics rigid bodies in the scene
     ///
     /// Returns a list of physics body summaries with basic information
