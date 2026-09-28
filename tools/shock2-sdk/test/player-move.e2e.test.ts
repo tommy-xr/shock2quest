@@ -205,3 +205,61 @@ test(
     );
   },
 );
+
+// #782: a collision-safe hop has a radius budget in addition to geometry.
+// The same QBR catwalk route remains traversable with production locomotion.
+test(
+  "validated player move: reports its radius limit separately from a dead end",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "hydro2.mis" });
+    const start = { x: 50.83, y: 3.64, z: 25.86 };
+    await game.step({ frames: 2 });
+    await game.player.teleport(start);
+    await game.step({ frames: 3 });
+    const before = await game.player.position();
+    const result = await game.player.moveTo({ ...before, x: before.x - 3 });
+    const after = await game.player.position();
+    assert.equal(result.blocked, true);
+    assert.equal(result.budget_limited, true);
+    assert.ok(horizontalDistance(before, after) <= 3.02);
+
+    await game.player.teleport(start);
+    await game.step({ frames: 3 });
+    // Hydro2's initial pawn rotation maps head yaw 180 to world -X.
+    await game.input.set("head.look", [180, 0]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    try {
+      await game.step({ frames: 24 });
+    } finally {
+      await game.input.set("right_hand.thumbstick", [0, 0]);
+    }
+    const walked = await game.player.position();
+    assert.ok(
+      before.x - walked.x > 3.05 && walked.x < after.x - 0.1,
+      `production locomotion should pass the bounded endpoint: ${JSON.stringify(walked)}`,
+    );
+
+    await game.player.teleport(start);
+    await game.step({ frames: 3 });
+    const scrape = await game.player.position();
+    const diagonal = 3 / Math.sqrt(2);
+    const stalled = await game.player.moveTo({
+      x: scrape.x - diagonal,
+      y: scrape.y,
+      z: scrape.z + diagonal,
+    });
+    assert.equal(stalled.blocked, true);
+    assert.equal(
+      stalled.budget_limited, false,
+      "a low-progress scrape must not be misreported as radius exhaustion",
+    );
+
+    await game.player.teleport(start);
+    await game.step({ frames: 3 });
+    const open = await game.player.position();
+    const clear = await game.player.moveTo({ ...open, x: open.x + 3 });
+    assert.equal(clear.blocked, false);
+    assert.equal(clear.budget_limited, false);
+  },
+);

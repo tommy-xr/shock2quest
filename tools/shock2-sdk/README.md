@@ -151,6 +151,42 @@ To attach to a runtime you started yourself (`cargo dbgr -- --mission ... --port
 const game = await GameServer.connect("http://127.0.0.1:8080");
 ```
 
+## Bounded hops and production walking
+
+`game.player.moveTo(target)` (`POST /v1/player/move`) uses the production
+collision step/slide solver, with an additional strict horizontal radius of
+`min(horizontal target distance, 5)` world units. Requested Y is ignored.
+It runs between frames; it does not advance physics or scripts.
+
+`blocked: true` only means the bounded destination was not reached. It is not
+proof of a navigation dead end. A small request can be shorter than the
+clearance needed to step onto a low prop; sliding can also exhaust the radius.
+`budget_limited: true` identifies a collision-safe solver result rejected by
+that radius. Try a longer hop or ordinary walking. A false value can still
+mean stalled progress and does not establish that a route is impassable.
+`distance_moved` is the reduction in distance to the bounded destination, not
+path length.
+
+For production locomotion, use the existing input and stepping APIs. This
+advances the same simulation frames as holding the stick, including moving
+props, scripts and triggers:
+
+```ts
+// Aim the camera along the desired route first. head.look is pawn-local;
+// game.input.lookAtWorldPoint([x, y, z]) aims at a world-space point.
+await game.input.set("right_hand.thumbstick", [0, 1]);
+try {
+  await game.step({ frames: 20 });
+} finally {
+  await game.input.set("right_hand.thumbstick", [0, 0]);
+}
+const reached = await game.player.position();
+```
+
+Walking is time-bounded, not distance-bounded, and neither API plans a route
+around obstacles. A closed door still requires opening; teleport is not the
+walking fallback.
+
 ## Notes
 
 - `GameServer.launch` finds the cargo workspace by walking up from `cwd`;

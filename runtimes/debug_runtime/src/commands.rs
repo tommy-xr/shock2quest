@@ -617,12 +617,14 @@ pub struct CommandResult {
 pub struct MoveResult {
     /// Whether the player position actually changed.
     pub moved: bool,
-    /// Whether the shape cast hit geometry before the full clamped distance.
+    /// Whether the bounded destination was not reached (not a dead-end verdict).
     pub blocked: bool,
+    /// A collision-safe step/slide was rejected by the requested horizontal radius.
+    pub budget_limited: bool,
     pub new_position: [f32; 3],
-    /// How far the player actually advanced (world units).
+    /// Reduction in distance to the bounded horizontal destination (world units).
     pub distance_moved: f32,
-    /// The distance the move was allowed to attempt: `min(target distance, 5.0)`.
+    /// The distance the move was allowed to attempt: `min(horizontal target distance, 5.0)`.
     pub requested_distance: f32,
 }
 

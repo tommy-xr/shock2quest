@@ -108,12 +108,20 @@ export class PlayerApi {
   /**
    * Move the player toward `target` in a single bounded, collision-valid hop.
    *
-   * The displacement is clamped to at most 5 world units and the player
-   * collider is shape-cast along the way, stopping just short of any geometry
-   * it hits (`blocked: true`). Unlike {@link teleport}, this can never move the
-   * player through a wall or out of bounds - prefer it for exploration. A
-   * closed door blocks the move, so the pattern is: move up to the door (it
-   * trips the tripwire, or Frob it), step until it opens, then move through.
+   * Horizontal distance is clamped to 5 world units. The production step/slide
+   * solver resolves collisions and elevation, but every result must stay within
+   * the requested radius. `blocked` means the destination was not reached; it
+   * does NOT establish a dead end. `budget_limited` identifies a collision-safe
+   * step or slide rejected because it would exceed that radius (common with
+   * tiny hops into low props). `distance_moved` is progress toward the bounded
+   * destination, not total path length. Requested Y is ignored.
+   *
+   * Try a longer bounded hop when `budget_limited`, or use production walking:
+   * set `right_hand.thumbstick` to [0, 1], call `game.step({ frames: 20 })`, then
+   * reset the stick to [0, 0] in a `finally` block. Aim the camera first; walking
+   * follows its heading. Unlike this between-frame hop, that advances physics,
+   * scripts, moving props and triggers. Neither method plans a route around
+   * obstacles. A false `budget_limited` does not establish an impassable wall.
    *
    * Named `moveTo` because `move` is awkward as a bare method name.
    */

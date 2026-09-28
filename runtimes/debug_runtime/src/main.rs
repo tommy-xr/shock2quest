@@ -1327,6 +1327,7 @@ fn process_command(
                 MoveResult {
                     moved: r.moved,
                     blocked: r.blocked,
+                    budget_limited: r.budget_limited,
                     new_position: [r.new_position.x, r.new_position.y, r.new_position.z],
                     distance_moved: r.distance_moved,
                     requested_distance: r.requested_distance,
@@ -1338,6 +1339,7 @@ fn process_command(
                 MoveResult {
                     moved: false,
                     blocked: false,
+                    budget_limited: false,
                     new_position: [0.0, 0.0, 0.0],
                     distance_moved: 0.0,
                     requested_distance: 0.0,
