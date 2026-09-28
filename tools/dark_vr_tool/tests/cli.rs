@@ -23,6 +23,8 @@ with (root / 'calls').open('a') as f: f.write(json.dumps(a) + '\n')
 if a == ['devices', '-l']:
     print(os.environ.get('DVR_TEST_DEVICES', 'List of devices attached\nquest device model:Quest_3'))
     sys.exit(0)
+if a[0] == 'connect':
+    print('connected to ' + a[1]); sys.exit(0)
 assert a[:2] == ['-s', 'quest'], a
 a = a[2:]
 if os.environ.get('DVR_TEST_FAIL'):
@@ -31,10 +33,13 @@ if a[0] == 'shell' and len(a) == 2:
     script = a[1].replace('/sdcard/shock2quest', str(root / 'data'))
     if script.startswith('am start'): print('Status: ok'); sys.exit(0)
     if script.startswith('am force-stop'): sys.exit(0)
+    if script.startswith('ip '): print('    inet 192.168.1.42/24 brd 192.168.1.255 scope global wlan0'); sys.exit(0)
     sys.exit(subprocess.call(['sh', '-c', script]))
 if a[0] == 'pull':
     src = Path(a[1].replace('/sdcard/shock2quest', str(root / 'data')))
     Path(a[2]).write_bytes(src.read_bytes()); sys.exit(0)
+if a[0] == 'tcpip':
+    print('restarting in TCP mode port: ' + a[1]); sys.exit(0)
 if a[0] == 'install':
     assert a[1] == '-r' and Path(a[2]).is_file()
     print('Success'); sys.exit(0)
@@ -185,4 +190,13 @@ fn recordings_list_newest_first_and_pull_with_their_save() {
             .status
             .success()
     );
+}
+#[test]
+fn wifi_switches_usb_device_to_tcp_and_connects() {
+    let h = Harness::new();
+    let out = h.run(&["wifi"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("192.168.1.42:5555"));
+    let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
+    assert!(calls.contains(r#"["-s", "quest", "tcpip", "5555"]"#));
+    assert!(calls.contains(r#"["connect", "192.168.1.42:5555"]"#));
 }
