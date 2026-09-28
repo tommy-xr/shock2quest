@@ -61,7 +61,11 @@ pub fn create_wrist_hud_panels(
         if let Some(notice) = crate::wielded_weapon::held_by_hand(world, hand).and_then(|weapon| {
             crate::weapon_requirements::active_weapon_skill_notice(world, weapon)
         }) {
-            let canvas = crate::hud::message_line::build_message_canvas(&[notice.message()]);
+            let font = crate::ui::resolve_font(asset_cache, crate::hud::message_line::FONT);
+            let canvas = crate::hud::message_line::build_message_canvas(
+                &[notice.message()],
+                font.as_ref().as_ref(),
+            );
             // Same pixel layout as the flat status line. Only the panel's
             // world placement differs: above this glove.
             let width = 0.32;

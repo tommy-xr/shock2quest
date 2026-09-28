@@ -54,7 +54,11 @@ pub fn parse_strings(content: &[String]) -> HashMap<String, String> {
             if let Some(key) = current_key.take() {
                 map.insert(
                     key.to_ascii_lowercase(),
-                    current_value.trim_end_matches("\"").trim().to_string(),
+                    current_value
+                        .trim_end()
+                        .trim_end_matches('"')
+                        .trim()
+                        .to_string(),
                 );
                 current_value.clear();
             }
@@ -70,7 +74,11 @@ pub fn parse_strings(content: &[String]) -> HashMap<String, String> {
             if let Some(key) = current_key.take() {
                 map.insert(
                     key.to_ascii_lowercase(),
-                    current_value.trim_end_matches("\"").trim().to_string(),
+                    current_value
+                        .trim_end()
+                        .trim_end_matches('"')
+                        .trim()
+                        .to_string(),
                 );
                 current_value.clear();
             }
@@ -209,6 +217,16 @@ mod tests {
             .iter()
             .map(|(key, value)| (key.to_ascii_lowercase(), (*value).to_string()))
             .collect()
+    }
+
+    #[test]
+    fn trailing_whitespace_after_a_closing_quote_is_not_displayed() {
+        let strings = parse_strings(&[
+            "PickupString:\"%s picked up.\"\t".to_owned(),
+            "Next:\"next\"".to_owned(),
+        ]);
+        assert_eq!(strings["pickupstring"], "%s picked up.");
+        assert_eq!(strings["next"], "next");
     }
 
     #[test]
