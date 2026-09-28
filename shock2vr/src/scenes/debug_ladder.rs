@@ -144,6 +144,7 @@ fn repro_boxes() -> Vec<SceneBox> {
     let mut boxes = capped_boxes();
     boxes.extend(setback_boxes());
     boxes.extend(recess_boxes());
+    boxes.extend(through_boxes());
     boxes
 }
 
@@ -335,6 +336,56 @@ fn recess_boxes() -> Vec<SceneBox> {
     boxes
 }
 
+/// eng1 Ladder 317: an eng1 `Ladder 16'` from the -19.8 corridor floor to
+/// its -13.4 ceiling, on a 0.4-thick wall. The -16.6 floor of the room
+/// behind that wall (3.2 above the corridor, ceiling -9.8) is the only exit.
+pub const THROUGH_Z: f32 = 72.0;
+const THROUGH_CEILING: f32 = 6.4;
+const THROUGH_WALL: f32 = 0.4;
+const THROUGH_UPPER_FLOOR: f32 = 3.2;
+const THROUGH_UPPER_CEILING: f32 = 10.0;
+/// Corridor width across the lane (mission x 1.6..3.0), and the 3.2 shelf
+/// beside it (x 3.0..4.6, slab 2.8..3.2).
+const THROUGH_CORRIDOR_W: [f32; 2] = [-0.77, 0.63];
+const THROUGH_SHELF_W: f32 = 2.23;
+/// eng1's `Ladder 16'` (model `ladder`, 1.65 wide).
+const ENG_LADDER_16: i32 = -784;
+
+fn through_boxes() -> Vec<SceneBox> {
+    let z = THROUGH_Z;
+    let lane = [-4.0, 4.0];
+    let corridor = [THROUGH_CORRIDOR_W[0], THROUGH_SHELF_W];
+    let back = -THROUGH_WALL;
+    vec![
+        // The wall: its two faces, as in the mission.
+        wall_face(z, 0.0, [0.0, THROUGH_UPPER_CEILING], lane),
+        lane_box(
+            WALL_COLOR,
+            z,
+            [back, back + THIN],
+            [THROUGH_UPPER_FLOOR, THROUGH_UPPER_CEILING],
+            lane,
+        ),
+        // Corridor: ceiling (taller past 1.67), sides, shelf, far end.
+        ceiling_face(z, [0.0, 1.67], THROUGH_CEILING, corridor),
+        ceiling_face(z, [1.67, 5.6], 9.6, corridor),
+        side_face(z, [0.0, 5.6], [0.0, 9.6], THROUGH_CORRIDOR_W[0]),
+        side_face(z, [0.0, 5.6], [0.0, 9.6], THROUGH_SHELF_W),
+        lane_box(
+            FLOOR_COLOR,
+            z,
+            [0.0, 5.6],
+            [2.8, THROUGH_UPPER_FLOOR],
+            [THROUGH_CORRIDOR_W[1], THROUGH_SHELF_W],
+        ),
+        lane_box(WALL_COLOR, z, [5.6, 5.6 + THIN], [0.0, 9.6], corridor),
+        // The room behind the wall.
+        floor_face(z, [-2.4, back], THROUGH_UPPER_FLOOR, lane),
+        ceiling_face(z, [-2.4, back], THROUGH_UPPER_CEILING, lane),
+        wall_face(z, -2.4, [0.0, THROUGH_UPPER_CEILING], lane),
+    ]
+}
+
 fn repro_ladders() -> Vec<Effect> {
     let d = 0.1;
     // Mission +Z (into the ladder) is -X here: a -90 degree yaw.
@@ -362,6 +413,7 @@ fn repro_ladders() -> Vec<Effect> {
         ));
     }
     effects.extend([
+        lane_ladder(ENG_LADDER_16, THROUGH_Z, 0.07, 3.2, 0.0),
         lane_ladder(
             LADDER_16,
             RECESS_Z,
