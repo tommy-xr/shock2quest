@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
+import { shootTrail, startTrail } from "./helpers/trail.js";
 
 // debug_ladder's repro stations: each rebuilds, from raycast measurements, a
 // shipped-mission ladder whose climb is broken on main, and drives the same
@@ -88,6 +89,11 @@ const JUMP_GRAB: Station = {
 };
 /// Every station: off the side of its lane.
 const OFF_LANE: Region[] = [solid([-FAR, FAR], [4.5, FAR]), solid([-FAR, FAR], [-FAR, -4.5])];
+
+/// A side view (from +w, outside the lane) centred on station point (d, y).
+function sideView(station: Station, d: number, y: number): { position: Vec3; lookAt: Vec3 } {
+  return { position: at(station, d, y, 7.5), lookAt: at(station, d, y, 0) };
+}
 
 /// A world point from station-frame coordinates.
 function at(station: Station, d: number, y: number, w = 0): Vec3 {
@@ -210,6 +216,7 @@ test(
   { skip: !e2eEnabled, timeout: 300_000, todo: "#1770 rick1 Ladder 532" },
   async () => {
     await using game = await launch();
+    await startTrail(game);
     const run = new Run(game, CAPPED);
     await place(game, CAPPED, 0.729, 1.244);
     const start = await run.pos();
@@ -228,6 +235,7 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 0]);
     await run.frames(120);
 
+    await shootTrail(game, "capped", sideView(CAPPED, 1.5, 6));
     run.assertStayedInside();
     const end = await run.assertSupportedOn(6.8, "capped");
     assert.ok(end.x - STATION_FACE_X > 2.2, `capped: should land in the corridor, not the pit`);
@@ -242,6 +250,7 @@ test(
   { skip: !e2eEnabled, timeout: 300_000, todo: "rick1 Ladder 488 crouched top-out" },
   async () => {
     await using game = await launch();
+    await startTrail(game);
     const run = new Run(game, SETBACK);
     await place(game, SETBACK, 1.2, 0.6);
     await game.input.set("crouch", 1);
@@ -252,6 +261,7 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 0]);
     await run.frames(120);
 
+    await shootTrail(game, "setback", sideView(SETBACK, 1.5, 5));
     run.assertStayedInside();
     await run.assertSupportedOn(8.4, "setback");
   },
@@ -266,6 +276,7 @@ test(
   { skip: !e2eEnabled, timeout: 300_000, todo: "rick1 Ladder 499 crouched top-out" },
   async () => {
     await using game = await launch();
+    await startTrail(game);
     const run = new Run(game, RECESS);
     await game.input.set("crouch", 1);
     await game.step({ frames: 2 });
@@ -276,6 +287,7 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 0]);
     await run.frames(120);
 
+    await shootTrail(game, "recess", sideView(RECESS, 1.0, 3.5));
     run.assertStayedInside();
     await run.assertSupportedOn(4.0, "deck hole");
   },
@@ -289,6 +301,7 @@ test(
   { skip: !e2eEnabled, timeout: 300_000, todo: "eng1 Ladder 317 exit through the wall" },
   async () => {
     await using game = await launch();
+    await startTrail(game);
     const run = new Run(game, THROUGH);
     await place(game, THROUGH, 0.76, 1.244);
     const start = await run.pos();
@@ -298,6 +311,7 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 0]);
     await run.frames(180);
 
+    await shootTrail(game, "through", sideView(THROUGH, 0.5, 3.5));
     run.assertStayedInside();
     const end = await run.assertSupportedOn(3.2, "through");
     assert.ok(end.x - STATION_FACE_X < -0.4, "through: should end behind the ladder wall");
@@ -311,6 +325,7 @@ test(
   { skip: !e2eEnabled, timeout: 300_000, todo: "#802 hydro2 pre-grip drop (PR #866)" },
   async () => {
     await using game = await launch();
+    await startTrail(game);
     const run = new Run(game, MIDMOUNT);
     await place(game, MIDMOUNT, 2.0, 5.644);
     const start = await run.pos();
@@ -320,6 +335,7 @@ test(
     await run.frames(120);
     await game.input.set("right_hand.thumbstick", [0, 0]);
 
+    await shootTrail(game, "midmount", sideView(MIDMOUNT, 1.5, 3.5));
     run.assertStayedInside();
     const drops = run.trace.slice(1).map((p, i) => run.trace[i].y - p.y);
     const worst = Math.max(...drops);
@@ -343,6 +359,7 @@ test(
   { skip: !e2eEnabled, timeout: 300_000, todo: "#907 rick2 jump grab" },
   async () => {
     await using game = await launch();
+    await startTrail(game);
     const run = new Run(game, JUMP_GRAB);
     await game.input.set("crouch", 1);
     await game.step({ frames: 2 });
@@ -371,6 +388,7 @@ test(
     });
     await game.input.set("right_hand.thumbstick", [0, 0]);
 
+    await shootTrail(game, "jump-grab", sideView(JUMP_GRAB, 1.0, 13.5));
     run.assertStayedInside();
     assert.ok(grip !== null && grip >= 14.1, `jump grab: gripped at ${grip} (want >= 14.1)`);
   },
