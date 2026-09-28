@@ -146,6 +146,7 @@ fn repro_boxes() -> Vec<SceneBox> {
     boxes.extend(recess_boxes());
     boxes.extend(through_boxes());
     boxes.extend(midmount_boxes());
+    boxes.extend(jump_grab_boxes());
     boxes
 }
 
@@ -434,6 +435,40 @@ fn midmount_boxes() -> Vec<SceneBox> {
     boxes
 }
 
+/// rick2 Ladder 210/211/212 (#907): a ladder column 0.19 in front of the
+/// wall of a pipe shaft, from below the floor (mission 76.1, floor 78.4) to
+/// 0.5 above the 94.8 ceiling. The climber jumps to it from the top of a pipe
+/// (93.2) 1.4 west and 0.4 south of it.
+pub const JUMP_GRAB_Z: f32 = 96.0;
+const JUMP_GRAB_CEILING: f32 = 16.4;
+const JUMP_GRAB_LADDER_D: f32 = 0.19;
+const JUMP_GRAB_LADDER_BOTTOM: f32 = -2.3;
+/// The pipe the jump starts from: its top, and its footprint.
+pub const JUMP_GRAB_PLATFORM_TOP: f32 = 14.8;
+const JUMP_GRAB_PLATFORM_D: [f32; 2] = [0.57, 1.77];
+const JUMP_GRAB_PLATFORM_W: [f32; 2] = [-3.4, -1.0];
+/// `RickPipe_1x16`: two stand vertically between the pipe and the ladder.
+const RICK_PIPE_1X16: i32 = -2979;
+
+fn jump_grab_boxes() -> Vec<SceneBox> {
+    let z = JUMP_GRAB_Z;
+    let shaft = [-3.37, 1.93];
+    vec![
+        wall_face(z, 0.0, [0.0, JUMP_GRAB_CEILING], shaft),
+        wall_face(z, 7.7 + THIN, [0.0, JUMP_GRAB_CEILING], shaft),
+        side_face(z, [0.0, 7.7], [0.0, JUMP_GRAB_CEILING], shaft[0]),
+        side_face(z, [0.0, 7.7], [0.0, JUMP_GRAB_CEILING], shaft[1]),
+        ceiling_face(z, [0.0, 7.7], JUMP_GRAB_CEILING, shaft),
+        lane_box(
+            FLOOR_COLOR,
+            z,
+            JUMP_GRAB_PLATFORM_D,
+            [JUMP_GRAB_PLATFORM_TOP - 2.4, JUMP_GRAB_PLATFORM_TOP],
+            JUMP_GRAB_PLATFORM_W,
+        ),
+    ]
+}
+
 fn repro_ladders() -> Vec<Effect> {
     let d = 0.1;
     // Mission +Z (into the ladder) is -X here: a -90 degree yaw.
@@ -458,6 +493,22 @@ fn repro_ladders() -> Vec<Effect> {
             RICK_CONDUIT,
             Point3::new(STATION_FACE_X + 0.1, 6.0, SETBACK_Z + w),
             mission_yaw * Quaternion::new(0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2),
+        ));
+    }
+    for index in 0..3 {
+        effects.push(lane_ladder(
+            LADDER_16,
+            JUMP_GRAB_Z,
+            JUMP_GRAB_LADDER_D,
+            JUMP_GRAB_LADDER_BOTTOM + LADDER_16_HEIGHT * (index as f32 + 0.5),
+            0.0,
+        ));
+    }
+    for w in [-1.53, -0.93] {
+        effects.push(spawn_at_oriented(
+            RICK_PIPE_1X16,
+            Point3::new(STATION_FACE_X + 0.31, 14.0, JUMP_GRAB_Z + w),
+            mission_yaw * Quaternion::new(FRAC_1_SQRT_2, -FRAC_1_SQRT_2, 0.0, 0.0),
         ));
     }
     for index in 0..RUNG_COUNT {
