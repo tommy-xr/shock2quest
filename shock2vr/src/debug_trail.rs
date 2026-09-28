@@ -75,6 +75,14 @@ const TELEPORT_DISTANCE: f32 = 2.0;
 const TICK_FRAMES: u64 = 30;
 const TICK_SIZE: f32 = 0.06;
 const TRANSITION_SIZE: f32 = 0.2;
+const STROKE: f32 = 0.012;
+const STROKE_OFFSETS: [[f32; 3]; 5] = [
+    [0.0, 0.0, 0.0],
+    [STROKE, 0.0, 0.0],
+    [-STROKE, 0.0, 0.0],
+    [0.0, 0.0, STROKE],
+    [0.0, STROKE, -STROKE],
+];
 
 #[derive(Default)]
 pub struct DebugTrail {
@@ -147,7 +155,12 @@ impl DebugTrail {
             let color = sample.motion.color() * if sample.crouched { 0.6 } else { 1.0 };
             let p = sample.position;
             if let Some(prev) = previous {
-                push(color, prev.position, p);
+                // GL lines are one pixel wide; parallel copies make a
+                // readable stroke from any side.
+                for offset in STROKE_OFFSETS {
+                    let offset = Vector3::from(offset);
+                    push(color, prev.position + offset, p + offset);
+                }
                 if prev.motion != sample.motion {
                     for axis in [Vector3::unit_x(), Vector3::unit_y(), Vector3::unit_z()] {
                         push(

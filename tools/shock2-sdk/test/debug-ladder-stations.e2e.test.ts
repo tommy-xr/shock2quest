@@ -90,11 +90,6 @@ const JUMP_GRAB: Station = {
 /// Every station: off the side of its lane.
 const OFF_LANE: Region[] = [solid([-FAR, FAR], [4.5, FAR]), solid([-FAR, FAR], [-FAR, -4.5])];
 
-/// A side view (from +w, outside the lane) centred on station point (d, y).
-function sideView(station: Station, d: number, y: number): { position: Vec3; lookAt: Vec3 } {
-  return { position: at(station, d, y, 7.5), lookAt: at(station, d, y, 0) };
-}
-
 /// A world point from station-frame coordinates.
 function at(station: Station, d: number, y: number, w = 0): Vec3 {
   return [STATION_FACE_X + d, y, station.lane + w];
@@ -235,7 +230,7 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 0]);
     await run.frames(120);
 
-    await shootTrail(game, "capped", sideView(CAPPED, 1.5, 6));
+    await shootTrail(game, "capped");
     run.assertStayedInside();
     const end = await run.assertSupportedOn(6.8, "capped");
     assert.ok(end.x - STATION_FACE_X > 2.2, `capped: should land in the corridor, not the pit`);
@@ -261,7 +256,7 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 0]);
     await run.frames(120);
 
-    await shootTrail(game, "setback", sideView(SETBACK, 1.5, 5));
+    await shootTrail(game, "setback");
     run.assertStayedInside();
     await run.assertSupportedOn(8.4, "setback");
   },
@@ -287,7 +282,7 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 0]);
     await run.frames(120);
 
-    await shootTrail(game, "recess", sideView(RECESS, 1.0, 3.5));
+    await shootTrail(game, "recess");
     run.assertStayedInside();
     await run.assertSupportedOn(4.0, "deck hole");
   },
@@ -311,7 +306,7 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 0]);
     await run.frames(180);
 
-    await shootTrail(game, "through", sideView(THROUGH, 0.5, 3.5));
+    await shootTrail(game, "through");
     run.assertStayedInside();
     const end = await run.assertSupportedOn(3.2, "through");
     assert.ok(end.x - STATION_FACE_X < -0.4, "through: should end behind the ladder wall");
@@ -335,7 +330,7 @@ test(
     await run.frames(120);
     await game.input.set("right_hand.thumbstick", [0, 0]);
 
-    await shootTrail(game, "midmount", sideView(MIDMOUNT, 1.5, 3.5));
+    await shootTrail(game, "midmount");
     run.assertStayedInside();
     const drops = run.trace.slice(1).map((p, i) => run.trace[i].y - p.y);
     const worst = Math.max(...drops);
@@ -388,7 +383,7 @@ test(
     });
     await game.input.set("right_hand.thumbstick", [0, 0]);
 
-    await shootTrail(game, "jump-grab", sideView(JUMP_GRAB, 1.0, 13.5));
+    await shootTrail(game, "jump-grab");
     run.assertStayedInside();
     assert.ok(grip !== null && grip >= 14.1, `jump grab: gripped at ${grip} (want >= 14.1)`);
   },

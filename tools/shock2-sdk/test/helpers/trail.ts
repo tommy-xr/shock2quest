@@ -14,19 +14,26 @@ export async function startTrail(game: GameServer): Promise<void> {
   await game.devParams.set("player_trail", 1);
 }
 
-/// Frame the trail from `camera` and save `<name>.png` + `<name>.json`.
-/// Call before asserting, so a failing run still leaves its picture.
-export async function shootTrail(
-  game: GameServer,
-  name: string,
-  camera: { position: Vec3; lookAt: Vec3 },
-): Promise<void> {
+/// Save the trail as `<name>.json`, then frame it side-on (from +z, far
+/// enough back to fit its bounding box) and save `<name>.png`. Call before
+/// asserting, so a failing run still leaves its picture.
+export async function shootTrail(game: GameServer, name: string): Promise<void> {
   if (!shotDir) return;
   const dir = resolve(shotDir);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${name}.json`), JSON.stringify(await game.player.trail()));
+  const trail = await game.player.trail();
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify(trail));
+  if (trail.length === 0) return;
+  const axis = (i: number) => trail.map((s) => s.pos[i]);
+  const lo = [0, 1, 2].map((i) => Math.min(...axis(i)));
+  const hi = [0, 1, 2].map((i) => Math.max(...axis(i)));
+  const centre = lo.map((v, i) => (v + hi[i]) / 2) as Vec3;
+  const extent = Math.max(hi[0] - lo[0], hi[1] - lo[1], 2);
   await game.devParams.set("free_camera_cull", 1);
-  await game.camera.set(camera);
+  await game.camera.set({
+    position: [centre[0], centre[1], hi[2] + 1.5 * extent + 2],
+    lookAt: centre,
+  });
   await game.step({ frames: 1 });
   await game.screenshot(join(dir, `${name}.png`));
 }
