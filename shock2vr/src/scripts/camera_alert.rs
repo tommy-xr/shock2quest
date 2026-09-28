@@ -67,7 +67,10 @@ impl Script for CameraAlert {
     ) -> Effect {
         let high_alert = Self::is_high_alert(world, entity_id);
         match self.phase {
-            AlarmPhase::Armed if high_alert => {
+            AlarmPhase::Armed
+                if high_alert
+                    && crate::security_alarm::security_devices_can_detect_player(world) =>
+            {
                 self.phase = AlarmPhase::Latched;
                 // The camera both pulses its authored switch links (the
                 // ecology and any mission-authored alarm devices on them) and
@@ -267,6 +270,28 @@ mod tests {
         set_alertness(&world, camera, AIAlertLevel::High);
         let effect = script.update(camera, &world, &PhysicsWorld::new(), &time());
         assert!(raises_alarm(effect, camera, ecology));
+    }
+
+    #[test]
+    fn suppressed_camera_cannot_raise_a_stale_identification() {
+        let (world, camera, ecology) = camera_world();
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.activate_security_hack(10.0);
+        world.add_unique(quests);
+        let mut script = CameraAlert::new();
+        assert!(matches!(
+            script.update(camera, &world, &PhysicsWorld::new(), &time()),
+            Effect::NoEffect
+        ));
+        world
+            .borrow::<shipyard::UniqueViewMut<crate::quest_info::QuestInfo>>()
+            .unwrap()
+            .activate_security_hack(0.0);
+        assert!(raises_alarm(
+            script.update(camera, &world, &PhysicsWorld::new(), &time()),
+            camera,
+            ecology
+        ));
     }
 
     #[test]

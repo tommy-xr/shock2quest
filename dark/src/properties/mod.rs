@@ -347,6 +347,10 @@ pub struct PropMapText(pub String);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropHackText(pub String);
 
+/// Authored security suppression duration in milliseconds (`P$HackTime`).
+#[derive(Debug, Component, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PropHackTime(pub i32);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropMapObjIcon(pub String);
 
@@ -1807,6 +1811,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$HackText",
             read_variable_length_string,
             PropHackText,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$HackTime",
+            |reader, _len| read_i32(reader),
+            PropHackTime,
             accumulator::latest,
         ),
         define_prop(

@@ -116,9 +116,19 @@ fn can_hack(world: &World, entity_id: EntityId) -> bool {
     ) && hack_diff(world, entity_id).is_some()
 }
 
-fn security_hack_success(entity_id: EntityId, _world: &World) -> Effect {
+fn security_hack_success(entity_id: EntityId, world: &World) -> Effect {
+    let milliseconds = world
+        .borrow::<View<dark::properties::PropHackTime>>()
+        .ok()
+        .and_then(|times| times.get(entity_id).ok().map(|time| time.0))
+        .unwrap_or(0);
+    let cyber = crate::implants::effective_stats(world)
+        .map(|stats| stats.cyber_affinity)
+        .unwrap_or(1);
+    let duration_seconds = milliseconds.saturating_mul(cyber).max(0) as f32 / 1000.0;
     Effect::combine(vec![
         Effect::ClearSecurityAlarm { from: entity_id },
+        Effect::ActivateSecurityHack { duration_seconds },
         announce(entity_id, SECURITY_HACKED_SCHEMA),
     ])
 }
@@ -158,6 +168,26 @@ fn computer_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect
         entity_id,
         state: ObjectState::Broken,
     }
+}
+
+fn security_hack_critical_failure(entity_id: EntityId, world: &World) -> Effect {
+    let mut effects = vec![
+        computer_hack_critical_failure(entity_id, world),
+        Effect::RaiseSecurityAlarm {
+            seconds: crate::security_alarm::authored_alarm_seconds(world, entity_id),
+        },
+    ];
+    effects.extend(
+        crate::scripts::script_util::get_all_switch_links(world, entity_id)
+            .into_iter()
+            .map(|to| Effect::Send {
+                msg: Message {
+                    to,
+                    payload: MessagePayload::Alarm { from: entity_id },
+                },
+            }),
+    );
+    Effect::combine(effects)
 }
 
 impl Gui<ComputerState, ComputerMsg> for ComputerGui {
@@ -212,7 +242,11 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
                 } else {
                     computer_hack_success
                 },
-                critical_failure: computer_hack_critical_failure,
+                critical_failure: if self.security {
+                    security_hack_critical_failure
+                } else {
+                    computer_hack_critical_failure
+                },
             },
         );
         (ComputerState { hack }, effect)
@@ -347,6 +381,38 @@ mod tests {
         state.hack.phase = HackPhase::Won;
         gui.prepare_state_on_frob(&mut state);
         assert_eq!(state.hack.phase, HackPhase::Unpaid);
+    }
+
+    #[test]
+    fn security_hack_uses_authored_milliseconds_and_cyber() {
+        let mut world = World::new();
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.player_stats_mut().cyber_affinity = 3;
+        world.add_unique(quests);
+        let computer = world.add_entity(dark::properties::PropHackTime(30_000));
+        let effects = security_hack_success(computer, &world);
+        assert!(flatten(&effects).iter().any(|effect| matches!(effect,
+            Effect::ActivateSecurityHack { duration_seconds } if *duration_seconds == 90.0)));
+        assert!(flatten(&effects).iter().any(|effect| matches!(effect,
+            Effect::ClearSecurityAlarm { from } if *from == computer)));
+    }
+
+    #[test]
+    fn security_failure_breaks_the_console_and_alarms_its_link() {
+        let mut world = World::new();
+        let ecology = world.add_entity(());
+        let computer = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: 1,
+                to_entity_id: Some(WrappedEntityId(ecology)),
+                link: Link::SwitchLink,
+            }],
+        });
+        let effects = security_hack_critical_failure(computer, &world);
+        assert!(flatten(&effects).iter().any(|effect| matches!(effect,
+            Effect::SetObjectState { entity_id, state: ObjectState::Broken } if *entity_id == computer)));
+        assert!(flatten(&effects).iter().any(|effect| matches!(effect,
+            Effect::Send { msg } if msg.to == ecology && matches!(msg.payload, MessagePayload::Alarm { from } if from == computer))));
     }
 
     #[test]
