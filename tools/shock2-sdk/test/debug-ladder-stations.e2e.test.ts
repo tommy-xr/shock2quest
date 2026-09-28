@@ -43,8 +43,7 @@ function solid(d: [number, number], w?: [number, number]): Region {
 }
 
 // Regions the body centre can never legitimately reach, duplicated from the
-// scene's constants (keep in sync with debug_ladder.rs). Slabs a correct
-// top-out may cross (Dark's top-out ignores level terrain) are left out.
+// scene's constants (keep in sync with debug_ladder.rs).
 const CAPPED: Station = {
   lane: 36,
   // Through the 10.0 ceiling, or onto the 9.6 roof behind the ladder wall.
@@ -69,7 +68,10 @@ const RECESS: Station = {
 const THROUGH: Station = {
   lane: 72,
   // The corridor's taller ceiling, the room's 10.0 ceiling, the room's far
-  // wall. The 6.4 ceiling over the ladder is where the top-out crosses.
+  // wall. The 6.4 ceiling over the ladder is left open because this
+  // station's todo still expects a route through the wall; that expectation
+  // is unverified against the original, which refuses a mantle with anything
+  // within 3.5 ft above the head.
   outside: [above([1.67, 5.6], 9.6), above([-2.4, 1.67], 10.0), solid([-FAR, -2.4])],
 };
 const MIDMOUNT: Station = {
@@ -272,23 +274,33 @@ test(
     await run.frames(10);
     await game.input.lookAtWorldPoint(at(SETBACK, 1.2 - 10.7, 11.1));
     await game.input.set("right_hand.thumbstick", [0, 1]);
-    await climbToStall(run, 720, 6.0);
+    const stall = await climbToStall(run, 720, 6.0);
+    assert.ok(
+      stall.y > 6.8 && stall.y + CROUCH_HALF_HEIGHT <= 7.6,
+      `setback: the climb should stall just under the slab (y=${stall.y.toFixed(3)})`,
+    );
     await stepSideways(game, run, 4.4);
 
     await shootTrail(game, "setback");
     run.assertStayedInside();
     const end = await run.assertSupportedOn(4.4, "setback");
-    assert.ok(end.z - SETBACK.lane > 1.2, "setback: should end on the floor beside the pit");
+    // Wholly on the side floor: past the pit edge (1.2) by the crouched radius.
+    assert.ok(
+      end.z - SETBACK.lane > 1.52,
+      `setback: should end on the floor beside the pit (w=${(end.z - SETBACK.lane).toFixed(3)})`,
+    );
   },
 );
 
 test(
   "debug_ladder deck-hole ladder: a crouched climber steps sideways off the top onto the deck",
-  // rick1 Ladder 499, climbed crouched from the y34 room. Straight ahead is a
-  // 0.44 strip between the ladder and the wall, too narrow for the crouched
-  // body (0.64 across), so pushing on into the ladder only bobs under the 7.2
-  // ceiling (6.41-6.60, mission 40.41-40.60). The way off is sideways onto the
-  // deck that wraps the hole, as in the mission.
+  // rick1 Ladder 499, climbed crouched from the y34 room. Straight ahead, the
+  // ladder column (up to 40.28, above the crouched body's feet on the deck)
+  // leaves 0.44 between its back and the wall, less than the crouched
+  // capsule's 0.64 plus contact gaps, so there is no pose in front of the
+  // ladder to top out to. Pushing on only bobs under the 7.2 ceiling
+  // (6.41-6.60, mission 40.41-40.60). The way off is sideways onto the deck
+  // that wraps the hole, as in the mission.
   { skip: !e2eEnabled, timeout: 300_000 },
   async () => {
     await using game = await launch();
@@ -299,14 +311,18 @@ test(
     await place(game, RECESS, 0.89, 0.7);
     await game.input.lookAtWorldPoint(at(RECESS, 0.49 - 10, 11.08));
     await game.input.set("right_hand.thumbstick", [0, 1]);
-    await climbToStall(run, 900, 5.0);
+    const stall = await climbToStall(run, 900, 5.0);
+    assert.ok(
+      stall.y > 6.3 && stall.y + CROUCH_HALF_HEIGHT <= 7.2,
+      `deck hole: the climb should stall just under the ceiling (y=${stall.y.toFixed(3)})`,
+    );
     await stepSideways(game, run, 4.0);
 
     await shootTrail(game, "recess");
     run.assertStayedInside();
     const end = await run.assertSupportedOn(4.0, "deck hole");
     assert.ok(
-      end.z - RECESS.lane > 1.19,
+      end.z - RECESS.lane > 1.51,
       `deck hole: should end on the deck beside the hole (d=${(end.x - STATION_FACE_X).toFixed(3)}, w=${(end.z - RECESS.lane).toFixed(3)})`,
     );
   },
