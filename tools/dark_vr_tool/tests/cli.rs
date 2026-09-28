@@ -25,6 +25,8 @@ if a == ['devices', '-l']:
     sys.exit(0)
 if a[0] == 'connect':
     print('connected to ' + a[1]); sys.exit(0)
+if a[0] == '-s' and a[2:] == ['get-state']:
+    print(os.environ.get('DVR_TEST_WIFI_STATE', 'device')); sys.exit(0)
 assert a[:2] == ['-s', 'quest'], a
 a = a[2:]
 if os.environ.get('DVR_TEST_FAIL'):
@@ -199,4 +201,17 @@ fn wifi_switches_usb_device_to_tcp_and_connects() {
     let calls = fs::read_to_string(h.dir.path().join("calls")).unwrap();
     assert!(calls.contains(r#"["-s", "quest", "tcpip", "5555"]"#));
     assert!(calls.contains(r#"["connect", "192.168.1.42:5555"]"#));
+}
+#[test]
+fn wifi_fails_when_connected_transport_is_offline() {
+    let h = Harness::new();
+    let out = h
+        .command(&["wifi"])
+        .env("DVR_TEST_WIFI_STATE", "offline")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("could not connect to 192.168.1.42:5555")
+    );
 }

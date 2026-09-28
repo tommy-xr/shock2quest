@@ -838,18 +838,16 @@ don't commit it.
 ##### Wireless deploy & logs (no cable)
 
 Everything in the Quest loop (`cargo apk run`, `adb install`, `adb logcat`) goes
-through adb, so it all works over Wi-Fi once adb is connected wirelessly. One-time
-setup per headset boot, with the cable plugged in:
+through adb, so it all works over Wi-Fi once adb is connected wirelessly. Once per
+headset boot, with the cable plugged in:
 
 ```sh
-adb tcpip 5555
-adb shell ip route     # note the headset's IP, e.g. 192.168.1.42
-# unplug the cable, then:
-adb connect 192.168.1.42:5555
+cargo dvr wifi         # adb tcpip 5555 + adb connect <headset IP>:5555
 ```
 
-After that, `adb devices` lists `192.168.1.42:5555` and `cargo apk run --release`
-installs + launches over the air; `adb logcat` streams logs wirelessly.
+Then unplug. `adb devices` lists `192.168.1.42:5555` (your headset's IP) and
+`cargo apk run --release` installs + launches over the air; `adb logcat` streams
+logs wirelessly.
 
 - If both a USB and a wireless device are listed, target one with
   `adb -s 192.168.1.42:5555 ...` or `export ANDROID_SERIAL=192.168.1.42:5555`.

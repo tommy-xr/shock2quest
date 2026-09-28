@@ -310,23 +310,32 @@ impl Device {
         Ok(())
     }
     fn wifi(&self, port: u16) -> Result<()> {
-        let addresses = self.shell("ip -f inet addr show wlan0")?;
+        // A missing wlan0 prints nothing, so it lands in the same error below.
+        let addresses = self.shell("ip -f inet addr show wlan0 2>/dev/null || true")?;
         let ip = parse_wlan_ip(&addresses).context("no wlan0 address; is the headset on Wi-Fi?")?;
         output(self.adb().args(["tcpip", &port.to_string()]))?;
         let target = format!("{ip}:{port}");
         // adbd restarts into TCP mode, so the first connects may be refused.
-        // `adb connect` exits 0 on failure; only its message tells.
+        // `adb connect` can report success for a stale transport; get-state confirms.
+        let mut last = String::new();
         for _ in 0..5 {
             thread::sleep(Duration::from_secs(1));
-            let result = output(Command::new("adb").args(["connect", &target]))?;
-            if result.contains("connected to") {
+            last = match output(Command::new("adb").args(["connect", &target])) {
+                Ok(message) => message,
+                Err(error) => error.to_string(),
+            };
+            let state = output(Command::new("adb").args(["-s", &target, "get-state"]));
+            if state.is_ok_and(|state| state.trim() == "device") {
                 println!(
                     "Connected: {target}\nUnplug USB, or pass --serial {target} while both are attached."
                 );
                 return Ok(());
             }
         }
-        bail!("could not connect to {target}; check the headset and this machine share a network")
+        bail!(
+            "could not connect to {target} ({}); check the headset and this machine share a network",
+            last.trim()
+        )
     }
     fn launch(&self) -> Result<()> {
         let result = self.shell(&format!(
