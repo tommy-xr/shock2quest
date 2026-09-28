@@ -54,11 +54,7 @@ pub fn parse_strings(content: &[String]) -> HashMap<String, String> {
             if let Some(key) = current_key.take() {
                 map.insert(
                     key.to_ascii_lowercase(),
-                    current_value
-                        .trim_end()
-                        .trim_end_matches('"')
-                        .trim()
-                        .to_string(),
+                    finish_string_value(&current_value),
                 );
                 current_value.clear();
             }
@@ -70,21 +66,28 @@ pub fn parse_strings(content: &[String]) -> HashMap<String, String> {
             current_value.push_str(&line_str);
         }
 
-        if line_str.ends_with("\"") && current_key.is_some() {
+        if line_str.trim_end().ends_with('"') && current_key.is_some() {
             if let Some(key) = current_key.take() {
                 map.insert(
                     key.to_ascii_lowercase(),
-                    current_value
-                        .trim_end()
-                        .trim_end_matches('"')
-                        .trim()
-                        .to_string(),
+                    finish_string_value(&current_value),
                 );
                 current_value.clear();
             }
         }
     }
     map
+}
+
+/// Remove the table's closing delimiter before decoding escaped quotation
+/// marks. Keep literal newline escapes for the callers that handle paragraphs.
+fn finish_string_value(value: &str) -> String {
+    let value = value.trim_end();
+    value
+        .strip_suffix('"')
+        .unwrap_or(value)
+        .trim()
+        .replace(r#"\""#, "\"")
 }
 
 /// Split a Dark object string (`key: "fallback text"`) into its lookup key and
@@ -227,6 +230,33 @@ mod tests {
         ]);
         assert_eq!(strings["pickupstring"], "%s picked up.");
         assert_eq!(strings["next"], "next");
+    }
+
+    #[test]
+    fn research_message_decodes_escaped_quotes_but_retains_paragraph_marker() {
+        let strings = parse_strings(&[
+            r#"ResearchDone:"Research completed!\nClick the \"reports\" button to see the results.""#.to_owned(),
+        ]);
+        assert_eq!(
+            strings["researchdone"],
+            "Research completed!\\nClick the \"reports\" button to see the results."
+        );
+    }
+
+    #[test]
+    fn escaped_quote_at_end_of_text_is_not_a_second_closing_delimiter() {
+        let strings = parse_strings(&[r#"Name:"Read \"reports\"""#.to_owned()]);
+        assert_eq!(strings["name"], "Read \"reports\"");
+    }
+
+    #[test]
+    fn closing_quote_with_padding_does_not_absorb_a_following_comment() {
+        let strings = parse_strings(&[
+            "PickupString:\"%s picked up.\"  ".to_owned(),
+            "; this is not part of the value".to_owned(),
+            "Next:\"next\"".to_owned(),
+        ]);
+        assert_eq!(strings["pickupstring"], "%s picked up.");
     }
 
     #[test]
