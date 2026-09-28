@@ -56,6 +56,8 @@ impl TrailMotion {
 pub struct TrailSample {
     /// Recorded-frame counter since the trail was last cleared.
     pub frame: u64,
+    /// Simulated seconds since the trail was last cleared.
+    pub time: f32,
     /// The player position `/v1/player/position` reports.
     #[serde(rename = "pos", serialize_with = "serialize_vec3")]
     pub position: Vector3<f32>,
@@ -71,40 +73,38 @@ fn serialize_vec3<S: serde::Serializer>(v: &Vector3<f32>, s: S) -> Result<S::Ok,
 /// A jump this far between consecutive frames is a teleport, not motion
 /// (a fall at terminal speed covers ~0.2 a frame): the trail restarts there.
 const TELEPORT_DISTANCE: f32 = 2.0;
-/// A tick every half second of recorded frames.
-const TICK_FRAMES: u64 = 30;
+/// A tick every half second of simulated time.
+const TICK_SECONDS: f32 = 0.5;
+/// Hard bound on the buffer whatever the frame rate (two minutes at 144 Hz).
+const MAX_SAMPLES: usize = 120 * 144;
 const TICK_SIZE: f32 = 0.06;
 const TRANSITION_SIZE: f32 = 0.2;
 const STROKE: f32 = 0.012;
-const STROKE_OFFSETS: [[f32; 3]; 5] = [
+const STROKE_OFFSETS: [[f32; 3]; 3] = [
     [0.0, 0.0, 0.0],
-    [STROKE, 0.0, 0.0],
-    [-STROKE, 0.0, 0.0],
-    [0.0, 0.0, STROKE],
-    [0.0, STROKE, -STROKE],
+    [STROKE, STROKE, 0.0],
+    [0.0, -STROKE, STROKE],
 ];
 
 #[derive(Default)]
 pub struct DebugTrail {
     samples: VecDeque<TrailSample>,
     next_frame: u64,
+    /// Simulated seconds since the trail was last cleared.
+    elapsed: f32,
 }
 
 impl DebugTrail {
-    /// Record one simulated frame. `capacity` bounds the buffer (oldest
-    /// samples drop first); a disabled trail is emptied instead.
+    /// Record one simulated frame of `dt` seconds, keeping the last
+    /// `keep_seconds` of samples (oldest drop first).
     pub fn record(
         &mut self,
-        enabled: bool,
-        capacity: usize,
+        dt: f32,
+        keep_seconds: f32,
         position: Vector3<f32>,
         motion: TrailMotion,
         crouched: bool,
     ) {
-        if !enabled {
-            self.clear();
-            return;
-        }
         if self
             .samples
             .back()
@@ -112,14 +112,21 @@ impl DebugTrail {
         {
             self.clear();
         }
+        self.elapsed += dt;
         self.samples.push_back(TrailSample {
             frame: self.next_frame,
+            time: self.elapsed,
             position,
             motion,
             crouched,
         });
         self.next_frame += 1;
-        while self.samples.len() > capacity.max(1) {
+        while self.samples.len() > MAX_SAMPLES
+            || self
+                .samples
+                .front()
+                .is_some_and(|oldest| oldest.time < self.elapsed - keep_seconds)
+        {
             self.samples.pop_front();
         }
     }
@@ -127,6 +134,7 @@ impl DebugTrail {
     pub fn clear(&mut self) {
         self.samples.clear();
         self.next_frame = 0;
+        self.elapsed = 0.0;
     }
 
     pub fn samples(&self) -> impl Iterator<Item = &TrailSample> {
@@ -171,7 +179,8 @@ impl DebugTrail {
                     }
                 }
             }
-            if sample.frame % TICK_FRAMES == 0 {
+            let tick = |s: &TrailSample| (s.time / TICK_SECONDS) as u64;
+            if previous.is_none_or(|prev| tick(prev) != tick(sample)) {
                 push(
                     color,
                     p - Vector3::unit_x() * TICK_SIZE,
@@ -203,8 +212,9 @@ impl DebugTrail {
 mod tests {
     use super::*;
 
-    fn record(trail: &mut DebugTrail, capacity: usize, y: f32, motion: TrailMotion) {
-        trail.record(true, capacity, vec3(0.0, y, 0.0), motion, false);
+    /// One-second frames, so ages read as frame counts.
+    fn record(trail: &mut DebugTrail, keep_seconds: f32, y: f32, motion: TrailMotion) {
+        trail.record(1.0, keep_seconds, vec3(0.0, y, 0.0), motion, false);
     }
 
     #[test]
@@ -217,31 +227,32 @@ mod tests {
     }
 
     #[test]
-    fn the_buffer_keeps_only_the_newest_samples() {
+    fn the_buffer_keeps_only_the_last_seconds() {
         let mut trail = DebugTrail::default();
         for i in 0..10 {
-            record(&mut trail, 4, i as f32 * 0.1, TrailMotion::Climbing);
+            record(&mut trail, 3.5, i as f32 * 0.1, TrailMotion::Climbing);
         }
         let frames: Vec<u64> = trail.samples().map(|s| s.frame).collect();
         assert_eq!(frames, vec![6, 7, 8, 9]);
     }
 
     #[test]
-    fn disabling_clears_and_restarts_the_frame_count() {
+    fn clearing_restarts_the_frame_count_and_clock() {
         let mut trail = DebugTrail::default();
-        record(&mut trail, 8, 0.0, TrailMotion::Supported);
-        trail.record(false, 8, vec3(0.0, 0.0, 0.0), TrailMotion::Supported, false);
+        record(&mut trail, 8.0, 0.0, TrailMotion::Supported);
+        trail.clear();
         assert_eq!(trail.samples().count(), 0);
-        record(&mut trail, 8, 0.0, TrailMotion::Supported);
-        assert_eq!(trail.samples().next().unwrap().frame, 0);
+        record(&mut trail, 8.0, 0.0, TrailMotion::Supported);
+        let first = trail.samples().next().unwrap();
+        assert_eq!((first.frame, first.time), (0, 1.0));
     }
 
     #[test]
     fn a_teleport_sized_jump_restarts_the_trail() {
         let mut trail = DebugTrail::default();
-        record(&mut trail, 8, 0.0, TrailMotion::Supported);
-        record(&mut trail, 8, 0.1, TrailMotion::Supported);
-        record(&mut trail, 8, 5.0, TrailMotion::Supported);
+        record(&mut trail, 8.0, 0.0, TrailMotion::Supported);
+        record(&mut trail, 8.0, 0.1, TrailMotion::Supported);
+        record(&mut trail, 8.0, 5.0, TrailMotion::Supported);
         let ys: Vec<f32> = trail.samples().map(|s| s.position.y).collect();
         assert_eq!(ys, vec![5.0]);
     }
@@ -249,11 +260,11 @@ mod tests {
     #[test]
     fn samples_serialize_with_their_state() {
         let mut trail = DebugTrail::default();
-        trail.record(true, 8, vec3(1.0, 2.0, 3.0), TrailMotion::TopOut, true);
+        trail.record(0.5, 8.0, vec3(1.0, 2.0, 3.0), TrailMotion::TopOut, true);
         let json = serde_json::to_value(trail.samples().collect::<Vec<_>>()).unwrap();
         assert_eq!(
             json,
-            serde_json::json!([{"frame": 0, "pos": [1.0, 2.0, 3.0], "state": "top_out", "crouched": true}])
+            serde_json::json!([{"frame": 0, "time": 0.5, "pos": [1.0, 2.0, 3.0], "state": "top_out", "crouched": true}])
         );
     }
 }

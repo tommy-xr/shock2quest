@@ -34,6 +34,8 @@ export async function shootTrail(game: GameServer, name: string): Promise<void> 
     position: [centre[0], centre[1], hi[2] + 1.5 * extent + 2],
     lookAt: centre,
   });
-  await game.step({ frames: 1 });
+  // No step: a paused runtime still renders each loop, so the screenshot
+  // sees the new camera without advancing the simulation under test.
   await game.screenshot(join(dir, `${name}.png`));
+  await game.camera.attach();
 }

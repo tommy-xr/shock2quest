@@ -4863,12 +4863,14 @@ impl MissionCore {
         player_info.right_hand_entity_id = right_hand_entity_id;
         drop(player_info);
 
-        // One trail sample per simulated frame (a paused frame moved nobody).
-        if !time.elapsed.is_zero() {
-            let trail_seconds = crate::dev_params::get(crate::dev_params::PLAYER_TRAIL_SECONDS);
+        // One trail sample per simulated frame (a paused frame moved nobody);
+        // switching the trail off clears it even while paused.
+        if !crate::dev_params::get_bool(crate::dev_params::PLAYER_TRAIL) {
+            self.debug_trail.clear();
+        } else if !time.elapsed.is_zero() {
             self.debug_trail.record(
-                crate::dev_params::get_bool(crate::dev_params::PLAYER_TRAIL),
-                (trail_seconds * 60.0) as usize,
+                time.elapsed.as_secs_f32(),
+                crate::dev_params::get(crate::dev_params::PLAYER_TRAIL_SECONDS),
                 new_character_pos,
                 crate::debug_trail::TrailMotion::classify(
                     self.player_handle.is_grounded(),
