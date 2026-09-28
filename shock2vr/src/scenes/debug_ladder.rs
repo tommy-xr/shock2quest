@@ -24,6 +24,19 @@
 //!   hand grabs.
 //! - `z = -16` wall: a plain block, same size as the ledge's, with no ladder.
 //!   The negative case.
+//!
+//! Repro stations, one per ladder bug seen in a shipped mission, rebuilt from
+//! raycast measurements (heights re-based so the lowest floor is `y = 0`):
+//! - `z = 36`  capped: stacked ladders running up into a ceiling (rick1 532).
+//! - `z = 48`  setback: crouched top-out onto a deck over the pit (rick1 488).
+//! - `z = 60`  deck hole: ladder up through a hole in a deck (rick1 499).
+//! - `z = 72`  through: ladder on a wall whose only exit is behind it (eng1 317).
+//! - `z = 84`  mid-mount: step off a ledge onto a rung stack (hydro2 551).
+//! - `z = 96`  jump grab: jump from a pipe onto a ladder (rick2 210).
+//!
+//! Mission surfaces are one-sided faces, so the repro stations build them from
+//! thin slabs: a thick box would block top-out probes that start inside it
+//! where the mission's faces do not.
 
 use std::f32::consts::FRAC_1_SQRT_2;
 
@@ -105,7 +118,7 @@ fn lane_ladder(template_id: i32, lane: f32, d: f32, y: f32, w: f32) -> Effect {
 /// rick1 Ladder 530/532: stacked 16' ladders (mission 30.8 -> 43.6 over a
 /// 32.0 shaft floor) run 1.6 above the 42.0 ceiling. Behind the climber is a
 /// 38.8 corridor floor; behind the ladder wall is a 41.6 roof, open above.
-pub const CAPPED_Z: f32 = 36.0;
+const CAPPED_Z: f32 = 36.0;
 /// Thickness of a slab standing in for a one-sided mission face.
 const THIN: f32 = 0.02;
 const CAPPED_CEILING: f32 = 10.0;
@@ -205,7 +218,7 @@ fn capped_boxes() -> Vec<SceneBox> {
 /// underside; the deck (38.0) runs back over the climber to the wall the
 /// ladder stands 0.51 in front of, beyond which is an open shaft. A pipe
 /// entity over the deck leaves 1.4 headroom, so only a crouched climber fits.
-pub const SETBACK_Z: f32 = 48.0;
+const SETBACK_Z: f32 = 48.0;
 const SETBACK_LADDER_D: f32 = 0.51;
 const SETBACK_PIT_CEILING: f32 = 7.6;
 const SETBACK_DECK: f32 = 8.4;
@@ -269,7 +282,7 @@ fn setback_boxes() -> Vec<SceneBox> {
 /// Past the ladder is a 0.44 deck strip, then a wall over an open shaft; the
 /// deck wraps the hole on both sides. Ceiling 41.2, sloping down 45 degrees
 /// behind the climber.
-pub const RECESS_Z: f32 = 60.0;
+const RECESS_Z: f32 = 60.0;
 const RECESS_LADDER_D: f32 = 0.49;
 const RECESS_DECK_UNDERSIDE: f32 = 3.2;
 const RECESS_DECK: f32 = 4.0;
@@ -341,7 +354,7 @@ fn recess_boxes() -> Vec<SceneBox> {
 /// eng1 Ladder 317: an eng1 `Ladder 16'` from the -19.8 corridor floor to
 /// its -13.4 ceiling, on a 0.4-thick wall. The -16.6 floor of the room
 /// behind that wall (3.2 above the corridor, ceiling -9.8) is the only exit.
-pub const THROUGH_Z: f32 = 72.0;
+const THROUGH_Z: f32 = 72.0;
 const THROUGH_CEILING: f32 = 6.4;
 const THROUGH_WALL: f32 = 0.4;
 const THROUGH_UPPER_FLOOR: f32 = 3.2;
@@ -392,7 +405,7 @@ fn through_boxes() -> Vec<SceneBox> {
 /// ceiling) 0.2 in front of a wall, rising through a 1.96 x 1.8 hole in an
 /// office floor 4.4 above the lower floor. The climber walks off the office
 /// floor onto the middle of the ladder.
-pub const MIDMOUNT_Z: f32 = 84.0;
+const MIDMOUNT_Z: f32 = 84.0;
 const MIDMOUNT_RUNG_D: f32 = 0.2;
 const MIDMOUNT_SLAB_UNDERSIDE: f32 = 4.0;
 const MIDMOUNT_OFFICE: f32 = 4.4;
@@ -439,12 +452,12 @@ fn midmount_boxes() -> Vec<SceneBox> {
 /// wall of a pipe shaft, from below the floor (mission 76.1, floor 78.4) to
 /// 0.5 above the 94.8 ceiling. The climber jumps to it from the top of a pipe
 /// (93.2) 1.4 west and 0.4 south of it.
-pub const JUMP_GRAB_Z: f32 = 96.0;
+const JUMP_GRAB_Z: f32 = 96.0;
 const JUMP_GRAB_CEILING: f32 = 16.4;
 const JUMP_GRAB_LADDER_D: f32 = 0.19;
 const JUMP_GRAB_LADDER_BOTTOM: f32 = -2.3;
 /// The pipe the jump starts from: its top, and its footprint.
-pub const JUMP_GRAB_PLATFORM_TOP: f32 = 14.8;
+const JUMP_GRAB_PLATFORM_TOP: f32 = 14.8;
 const JUMP_GRAB_PLATFORM_D: [f32; 2] = [0.57, 1.77];
 const JUMP_GRAB_PLATFORM_W: [f32; 2] = [-3.4, -1.0];
 /// `RickPipe_1x16`: two stand vertically between the pipe and the ladder.
@@ -635,7 +648,10 @@ pub fn create_debug_ladder_scene(
          z=0 ledge (16' ladder, top-out onto the block), z=8 arch (ladder both\n\
          faces), z=-8 stack (11 stacked rungs), z=16 short 4' ladder, z=24 low\n\
          mantle block (no ladder), z=-16 plain wall (not climbable). Ladders are the shipped templates, so their\n\
-         climbable flag and colliders are the production ones."
+         climbable flag and colliders are the production ones. Mission repros: z=36 capped ladder\n\
+         (rick1 532), z=48 setback crouched top-out (rick1 488), z=60 deck hole (rick1 499),\n\
+         z=72 exit through the wall (eng1 317), z=84 mid-ladder mount (hydro2 551), z=96 jump grab\n\
+         (rick2 210)."
     );
 
     Box::new(HookedDebugScene::new(core, LadderHooks::default()))
