@@ -1257,8 +1257,8 @@ fn plan_climb_top_out(
     let up_obstruction = probe_queries
         .cast_ray(&up_ray, CLIMB_TOP_OUT_UP, true)
         .map(|(_, time_of_impact)| (time_of_impact, head.y + time_of_impact));
-    // A ceiling close enough to pin the compressed head sphere leaves no room
-    // to rise at all.
+    // Short-circuit: a ceiling close enough to pin the compressed head sphere
+    // leaves no room to rise at all.
     if up_obstruction.is_some_and(|(time_of_impact, _)| time_of_impact < CLIMB_TOP_OUT_RADIUS) {
         return None;
     }
@@ -1296,8 +1296,8 @@ fn plan_climb_top_out(
                 .max(floor.y + (1.02 * PLAYER_STANDING_RADIUS + 1.0) / SCALE_FACTOR)
         })
         .unwrap_or(head.y);
-    // Dark's rise target is the authored 3.5-foot probe endpoint (or the
-    // mantle floor-derived target when higher). Only that one route is
+    // Dark's rise target is the authored 3.5-foot probe endpoint, capped at the
+    // headroom above (or the mantle floor-derived target when higher). Only that one route is
     // simulated; the bounded recovery search below already selects its nearest
     // viable retreat and avoids multiplying hundreds of controller casts per
     // candidate.
@@ -1323,31 +1323,21 @@ fn plan_climb_top_out(
     if !shape_sweep_is_clear(probe_queries, head, rise_start, &compressed) {
         return None;
     }
-    // The continuous capsule must compress before rising through the local
-    // lip that Dark's sparse body can straddle. Validate the recovered
-    // vertical centerline against all terrain: it may cross that same lip
-    // surface, but never an offset ceiling the original upward probe did
-    // not see, and it must leave the one overlap before crossing forward.
+    // The recovered rise must be clear all the way to the crossing height:
+    // the head probe's obstruction is already above that height, so any hit
+    // here is a ceiling over the retreated column.
     let recovery_up_ray = Ray::new(Point::from(rise_start), Vector::y());
-    let recovery_up_obstruction = probe_queries
+    if probe_queries
         .cast_ray(&recovery_up_ray, cross_y - rise_start.y, true)
-        .map(|(_, time_of_impact)| (time_of_impact, rise_start.y + time_of_impact));
-    if recovery_up_obstruction.is_some_and(|(_, obstruction_y)| {
-        up_obstruction.is_none_or(|(_, original_y)| {
-            (obstruction_y - original_y).abs()
-                > CLIMB_TOP_OUT_RECOVERY_RETREAT + PROBE_SKIN / SCALE_FACTOR
-        })
-    }) {
+        .is_some()
+    {
         return None;
     }
-    let recovery_obstruction_limit = recovery_up_obstruction
-        .map(|(time_of_impact, _)| time_of_impact + CLIMB_TOP_OUT_RECOVERY_RETREAT)
-        .unwrap_or(0.0);
     if !shape_route_exits_only_initial_obstruction(
         probe_queries,
         &[rise_start, cross_start],
         &route_probe,
-        recovery_obstruction_limit,
+        0.0,
     ) {
         return None;
     }
@@ -11269,6 +11259,74 @@ mod tests {
             movement.is_none(),
             "a blocked upward clearance probe must not become permission to phase through terrain"
         );
+    }
+
+    /// A thin terrain slab: `min`..`max` corners.
+    fn slab(world: &mut PhysicsWorld, id: u64, min: [f32; 3], max: [f32; 3]) {
+        let half = vector![
+            (max[0] - min[0]) / 2.0,
+            (max[1] - min[1]) / 2.0,
+            (max[2] - min[2]) / 2.0
+        ];
+        let centre = vector![
+            (max[0] + min[0]) / 2.0,
+            (max[1] + min[1]) / 2.0,
+            (max[2] + min[2]) / 2.0
+        ];
+        world.add_collider(
+            EntityId::from_inner(id).unwrap(),
+            ColliderBuilder::cuboid(half.x, half.y, half.z)
+                .translation(centre)
+                .build(),
+        );
+    }
+
+    #[test]
+    fn climb_top_out_cannot_cross_the_ceiling_to_a_roof_beyond_the_wall() {
+        // rick1's capped shaft, relative to the climber (body at the origin,
+        // head 0.72 up): a one-face-thin ceiling 1.39 above the head, a lintel
+        // under it at the wall, and beyond the wall a roof 0.99 above the head
+        // with nothing over it. Reaching the roof means rising through the
+        // ceiling.
+        let mut world = PhysicsWorld::new();
+        slab(&mut world, 1, [-2.0, 2.11, -2.0], [0.52, 2.115, 2.0]);
+        slab(&mut world, 2, [0.52, 1.31, -2.0], [0.92, 2.11, 2.0]);
+        slab(&mut world, 3, [0.92, -2.0, -2.0], [4.0, 1.71, 2.0]);
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(9).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let movement = plan_top_out_from_origin(&world);
+
+        assert!(
+            movement.is_none(),
+            "a top-out must not rise through the ceiling the climber is under; planned {:?}",
+            movement.and_then(|m| m.top_out).map(|t| t.waypoints)
+        );
+    }
+
+    #[test]
+    fn climb_top_out_under_a_low_ceiling_rises_only_to_its_headroom() {
+        // A ceiling at 2.0 is within the rise, but the landing ahead (-0.6)
+        // needs less: the top-out crosses below the ceiling.
+        let mut world = PhysicsWorld::new();
+        slab(&mut world, 1, [-2.0, 2.0, -2.0], [4.0, 2.02, 2.0]);
+        slab(&mut world, 2, [0.6, -2.0, -2.0], [4.0, -0.6, 2.0]);
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(9).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let waypoints = plan_top_out_from_origin(&world)
+            .and_then(|movement| movement.top_out)
+            .map(|top_out| top_out.waypoints)
+            .expect("the landing is reachable under the ceiling");
+        let headroom = 2.0 - CLIMB_TOP_OUT_RADIUS - PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+        for waypoint in waypoints {
+            assert!(
+                waypoint.y <= headroom + 1.0e-4,
+                "{waypoint:?} rises above {headroom}"
+            );
+        }
     }
 
     #[test]

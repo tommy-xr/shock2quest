@@ -168,8 +168,7 @@ test(
     // a ceiling here (20.4, 20.0 over the recess), so the top-out rises only
     // to that headroom and crosses south of the z=2.4 wall onto the lower
     // deck. A steeper heading would have to pass over the wall's top, through
-    // the ceiling; that top-out is refused, as the original refuses a mantle
-    // with anything within 3.5 ft above the head.
+    // the ceiling; the next test checks that top-out is refused.
     const topOutTarget = {
       x: ladder.x + 8,
       z: ladder.z + 2,
@@ -310,6 +309,55 @@ test(
         `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)}), ` +
         `deckSide=(${deckSide.x.toFixed(2)}, ${deckSide.y.toFixed(2)}, ${deckSide.z.toFixed(2)}), ` +
         `ended=(${final.x.toFixed(2)}, ${final.y.toFixed(2)}, ${final.z.toFixed(2)})`,
+    );
+  },
+);
+
+test(
+  "flat climbing: a top-out that would pass over rick1's wall top through the ceiling is refused",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    // Same ladder and approach as the opening-deck test, but aimed steeply +Z
+    // (ladder.z + 4): that route crosses the z=2.4 wall above its top, which
+    // is only reachable through the 20.4 ceiling over the climber (#1770).
+    await using game = await GameServer.launch({ mission: "rick1.mis" });
+    await game.step({ frames: 5 });
+    const rungs = (
+      await game.entities.list({ filter: "Rick Ladder 16", limit: 100 })
+    ).entities;
+    const spawn = await game.player.position();
+    const ladder = groupLadderColumns(rungs)
+      .filter((col) => Math.max(...col.ys) - Math.min(...col.ys) > 15)
+      .reduce((best, col) => {
+        const distance = (candidate: LadderColumn) =>
+          Math.hypot(candidate.x - spawn.x, candidate.z - spawn.z);
+        return distance(col) < distance(best) ? col : best;
+      });
+    const ladderBottom = Math.min(...ladder.ys);
+    const ladderTop = Math.max(...ladder.ys);
+    await game.player.teleport({ x: ladder.x - 1, y: ladderBottom - 2.2, z: ladder.z - 0.4 });
+    await game.step({ frames: 30 });
+    await game.input.lookAtWorldPoint([ladder.x + 8, ladderTop + 2, ladder.z + 4]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+
+    const ceiling = 20.4;
+    const crown = 1.2; // standing capsule half-height
+    let highest = -Infinity;
+    let farthestZ = -Infinity;
+    for (let frame = 0; frame < 900; frame += 1) {
+      await game.step({ frames: 1 });
+      const p = await game.player.position();
+      highest = Math.max(highest, p.y);
+      farthestZ = Math.max(farthestZ, p.z);
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    assert.ok(
+      highest + crown <= ceiling + 0.05,
+      `the climber's crown must stay under the ${ceiling} ceiling (highest body y ${highest.toFixed(3)})`,
+    );
+    assert.ok(
+      farthestZ < 2.4,
+      `the climber must stay on the ladder side of the z=2.4 wall (farthest z ${farthestZ.toFixed(3)})`,
     );
   },
 );
