@@ -12367,6 +12367,10 @@ impl MissionCore {
                         self.world.add_component(entity_id, PropHasRefs(visible));
                     }
                 }
+                Effect::SetAITeam { entity_id, team } => {
+                    self.world
+                        .add_component(entity_id, dark::properties::PropAITeam(team));
+                }
                 Effect::SetObjectState { entity_id, state } => {
                     let is_alive = self
                         .world

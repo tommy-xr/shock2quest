@@ -1040,6 +1040,11 @@ pub enum Effect {
         visible: bool,
     },
 
+    /// Change allegiance while retaining the entity and its current pose.
+    SetAITeam {
+        entity_id: EntityId,
+        team: dark::properties::AITeam,
+    },
     /// Persistently set Dark's `P$ObjState` on one live object. Replicator HRM
     /// success uses Hacked; a critical failure uses Broken. Because ObjState is
     /// a registered Dark property, mission save/load serializes the result.
