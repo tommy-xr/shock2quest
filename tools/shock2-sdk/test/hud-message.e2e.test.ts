@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { earthWorldUse } from "./helpers/earth-world-use.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
+import { stackCount } from "./helpers/nanites.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
@@ -28,7 +29,7 @@ for (const presentation of ["flat", "vr"] as const) {
 
       const messages = (await game.ui.state()).messages;
       assert.ok(
-        messages.some((message) => message.startsWith("Log ") && message.includes("TRAINER") && message.endsWith("added to PDA.")),
+        messages.includes("Log TRAINER 06.FEB.11 added to PDA."),
         `${presentation}: expected a localized pickup line, got ${JSON.stringify(messages)}`,
       );
       const sounds = (await game.audio.recent()).sounds.filter((sound) => sound.sequence > since);
@@ -178,6 +179,59 @@ test(
       ).length,
       1,
       "the award has one message and one beep",
+    );
+  },
+);
+
+
+test(
+  "flat: a second ammo pickup merges and still posts its message and both cues",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "earth.mis" });
+    await game.step({ frames: 5 });
+    const [first] = await game.entities.byTemplate(248);
+    const [second] = await game.entities.byTemplate(247);
+    assert.ok(first && second);
+    const firstCount = stackCount((await game.entities.detail(first.id)).properties)!;
+    const secondCount = stackCount((await game.entities.detail(second.id)).properties)!;
+    await earthWorldUse(game, first);
+    await game.step({ frames: 301 });
+    const since = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
+    await earthWorldUse(game, second);
+    await game.step({ frames: 3 });
+    assert.equal(stackCount((await game.entities.detail(first.id)).properties), firstCount + secondCount);
+    const inventory = await game.player.inventory();
+    assert.ok(!inventory.items.some(item => item.entity_id === second.id));
+    assert.deepEqual((await game.ui.state()).messages, ["Standard bullets picked up."]);
+    assert.deepEqual(
+      (await game.audio.recent()).sounds.filter(sound => sound.sequence > since)
+        .map(sound => sound.sample.toLowerCase()).filter(sample => sample === "linebeep" || sample === "pickup"),
+      ["linebeep", "pickup"],
+    );
+  },
+);
+
+test(
+  "collecting nanites uses the localized stack name and both pickup cues",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "medsci1.mis" });
+    await game.step({ frames: 5 });
+    const piles = (await game.entities.list({ filter: "Nanites" })).entities;
+    const pile = piles.find(entity => entity.name.toLowerCase().includes("nanites"));
+    assert.ok(pile, "an uncollected world nanite pile must exist");
+    const amount = stackCount((await game.entities.detail(pile.id)).properties) ?? 1;
+    const before = (await game.info()).player.stats?.nanites ?? 0;
+    const since = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
+    await game.entities.sendMessage(pile.id, { type: "Frob" });
+    await game.step({ frames: 3 });
+    assert.equal((await game.info()).player.stats?.nanites, before + amount);
+    assert.ok((await game.ui.state()).messages.includes(`${amount} nanites picked up.`));
+    assert.deepEqual(
+      (await game.audio.recent()).sounds.filter(sound => sound.sequence > since)
+        .map(sound => sound.sample.toLowerCase()).filter(sample => sample === "linebeep" || sample === "pickup"),
+      ["linebeep", "pickup"],
     );
   },
 );

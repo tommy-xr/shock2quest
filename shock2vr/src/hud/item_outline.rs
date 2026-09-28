@@ -102,6 +102,28 @@ pub(crate) fn localized_log_title(
     world: &World,
     entity_id: EntityId,
 ) -> Option<String> {
+    localized_log_name(asset_cache, world, entity_id)
+        .map(|name| format_inline_localized_text(&name))
+}
+
+/// ShockScriptService::AddLog truncates the pickup name at its first newline;
+/// the hover label still includes the subject on subsequent lines.
+pub(crate) fn localized_log_pickup_title(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+) -> Option<String> {
+    localized_log_name(asset_cache, world, entity_id).map(|name| {
+        let name = name.replace("\\n", "\n");
+        name.lines().next().unwrap_or("").trim().to_owned()
+    })
+}
+
+fn localized_log_name(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+) -> Option<String> {
     let (deck, log) = {
         let logs = world.borrow::<View<PropLog>>().ok()?;
         let log = logs.get(entity_id).ok()?;
@@ -112,9 +134,7 @@ pub(crate) fn localized_log_title(
     }
 
     let strings = asset_cache.get_opt(&STRINGS_IMPORTER, &format!("level{deck:02}.str"))?;
-    strings
-        .get(&format!("logname{log}"))
-        .map(|name| format_inline_localized_text(name))
+    strings.get(&format!("logname{log}")).cloned()
 }
 
 /// The WEAPON.STR key for a gun's condition word: `GunCondVal1..10`, one per

@@ -101,10 +101,15 @@ pub enum VirtualHandEffect {
     HoldItem {
         entity_id: EntityId,
     },
-    /// A successful world-to-player take. Emitted after HoldItem/StoreItem so
+    /// A successful world-to-hand take. Emitted after HoldItem so
     /// the mission can show the pickup line and sounds only once possession
     /// actually changed; equipping or re-storing a carried item never emits it.
     ReportWorldPickup {
+        entity_id: EntityId,
+    },
+    /// Store a world pickup and report only a successful transfer. Unlike a
+    /// held pickup, storage can merge and destroy the incoming entity.
+    StoreWorldPickup {
         entity_id: EntityId,
     },
     /// Move an item into the player's backpack - a flat world pickup of
