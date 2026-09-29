@@ -465,10 +465,11 @@ const CLIMB_SPEED_SCALE: f32 = 0.6;
 /// surface before the player grips it: 0.5 is a 60 degree cone around the
 /// contact normal. Below it the push is mostly along the surface, which is
 /// someone walking PAST a wall-mounted ladder, not climbing it - they keep
-/// walking (and keep gravity). Since a grip now consumes the whole horizontal
-/// input (see [`climb_redirect`]), without this floor a ladder set into a
-/// corridor wall would act as flypaper: a grazing input would zero the player's
-/// forward progress and creep them up the wall instead.
+/// walking (and keep gravity). Since a grip holds the player until they let go
+/// (see [`climb_redirect`]), without this floor a ladder set into a corridor
+/// wall would act as flypaper: a grazing input would catch the player on it.
+/// The same fraction separates a clear push away from a held ladder (which
+/// lets go) from a sideways one.
 const MIN_CLIMB_GRIP_FRACTION: f32 = 0.5;
 
 /// How much of the requested climb the cast must actually achieve for the frame
@@ -509,51 +510,164 @@ const CLIMB_TOP_OUT_SUBSTEP: f32 = 10.0 / SCALE_FACTOR / 60.0;
 
 /// Half-Life-style flat ladder movement: convert the into-ladder component of
 /// the desired movement into a vertical climb. `toward_ladder` is the
-/// horizontal unit normal from the player toward the climbable surface (from
-/// the contact query - NOT the collider-center direction, which tilts away from
-/// the surface whenever the player is off-center and so mis-measures both the
-/// grip test and the climb speed). Returns `None` when the player is not
-/// pushing mostly toward the ladder (no grip - normal walking/gravity
-/// applies). Looking down (a downward-pitched desired movement) descends
-/// instead of ascending, so the same input walks down a shaft ladder; the sign
-/// flip at the pitch threshold matches classic ladder feel.
+/// horizontal unit normal from the player toward the gripped face (the contact
+/// normal when the grip is taken, kept while it is held). Looking down (a
+/// downward-pitched desired movement) descends instead of ascending, so the
+/// same input walks down a shaft ladder; the sign flip at the pitch threshold
+/// matches classic ladder feel.
 ///
-/// **A grip climbs straight up the face: the horizontal movement is dropped
-/// entirely, not just its into-ladder component.** The into-ladder part has to
-/// go because the character controller's slope limiting treats a vertical
-/// climbable face as an unclimbable slope and cancels the ascent when the
-/// player also pushes into it (empirically: ascent drops from ~7u to ~0.3u over
-/// 240 frames). Passing the remaining ALONG-face part through is what broke
-/// issue #596: shipped ladders are ~0.9 world units wide, so a few degrees of
-/// heading error slides the player off the side at walk speed (10 wu/s x sin
-/// theta) in a fraction of the ~0.5 s the 6 wu/s climb needs - and once the
-/// capsule is past the ladder's edge the contact normal turns diagonal, so even
-/// a dead-on push resolves into a sideways shove that carries the player
-/// further off (a positive feedback loop: measured as a stall after ~1.4 wu
-/// with the player shoved ~1.1 wu sideways, on stacked-rung AND single-collider
-/// ladders alike). Climbing straight up removes both: the redirect can no
-/// longer steer the player off the surface it is gripping. Stepping off at the
-/// top is unaffected - the grip drops once the capsule clears the ladder's top
-/// and normal walking carries the player onto the landing.
+/// A grip starts only when the player pushes mostly toward the ladder. Once
+/// `held`, it persists like the original's climb state: no input holds the
+/// player in place (gravity stays off), and only a clear push away lets go
+/// here (a forward push, never a strafe) - the caller also releases on a
+/// jump, on the ground, or out of reach.
+/// Returns `None` when there is no grip.
 ///
-/// The vertical component of `desired` (head pitch / debug fly channel) is
-/// dropped so climb speed depends only on the into-ladder push.
-fn climb_redirect(desired: Vector<Real>, toward_ladder: Vector<Real>) -> Option<Vector<Real>> {
+/// Pushing into the face, only the strafe part of the input (across `facing`)
+/// slides the player along it; the caller stops the slide at the ladder's
+/// side edge. So a forward push never slides, however far the heading is off
+/// the face normal: passing that along-face residue through is what broke
+/// issue #596 - shipped ladders are ~0.9 world units wide, so a few degrees of
+/// heading error slid the player off the side at walk speed in a fraction of
+/// the time the climb needs. A held push that is neither in nor away is aimed
+/// along the face, and all of it slides. A push not mostly into the face does
+/// not climb.
+///
+/// The into-ladder part never moves the player horizontally: the character
+/// controller's slope limiting treats a vertical climbable face as an
+/// unclimbable slope and cancels the ascent when the player also pushes into
+/// it. The vertical component of `desired` (head pitch / debug fly channel)
+/// only picks the direction.
+fn climb_redirect(
+    desired: Vector<Real>,
+    facing: Vector<Real>,
+    toward_ladder: Vector<Real>,
+    held: bool,
+) -> Option<Vector<Real>> {
     let desired_h = vector![desired.x, 0.0, desired.z];
     let speed = desired_h.norm();
-    if speed <= 1e-6 {
-        return None;
-    }
     let into = desired_h.dot(&toward_ladder);
-    if into < MIN_CLIMB_GRIP_FRACTION * speed {
+    let pushing_in = speed > 1e-6 && into >= MIN_CLIMB_GRIP_FRACTION * speed;
+    // Split the input at the player's facing: a strafe is never a push away,
+    // however far the heading is off the face normal.
+    let (push, strafe) = vector![facing.x, 0.0, facing.z]
+        .try_normalize(1.0e-6)
+        .map_or((desired_h, Vector::zeros()), |forward| {
+            let push = forward * desired_h.dot(&forward);
+            (push, desired_h - push)
+        });
+    let pushing_away = speed > 1e-6 && push.dot(&toward_ladder) <= -MIN_CLIMB_GRIP_FRACTION * speed;
+    if !pushing_in && !(held && !pushing_away) {
         return None;
     }
-    let vertical = if desired.y < -0.25 * into {
+    let vertical = if !pushing_in {
+        0.0
+    } else if desired.y < -0.25 * into {
         -into
     } else {
         into
     };
-    Some(Vector::y() * vertical * CLIMB_SPEED_SCALE)
+    // Pushing in, only the strafe slides (#596). A held push that is neither
+    // in nor away is aimed along the face, so all of it slides.
+    let slide = if pushing_in { strafe } else { desired_h };
+    let along = vector![-toward_ladder.z, 0.0, toward_ladder.x];
+    Some((Vector::y() * vertical + along * slide.dot(&along)) * CLIMB_SPEED_SCALE)
+}
+
+/// The walk input for a frame the ladder pass may hand to the walk pass. For
+/// a stalled ascent, which keeps the grip, its along-face part is replaced by
+/// the grip's own slide, so walking out from under an overhang cannot carry
+/// the player past the side edge or drift them off the ladder.
+fn climb_walk_input(
+    desired: Vector<Real>,
+    climb: Option<(Vector<Real>, Option<(Vector<Real>, Real)>, Vector<Real>)>,
+) -> Vector<Real> {
+    // A descent the floor stops lets go and walks freely.
+    climb
+        .filter(|(movement, _, _)| movement.y > 0.0)
+        .map_or(desired, |(movement, _, toward)| {
+            let along = vector![-toward.z, 0.0, toward.x];
+            desired + along * (movement.dot(&along) / CLIMB_SPEED_SCALE - desired.dot(&along))
+        })
+}
+
+/// Dark's push off a ladder when jumping from it (5 ft/s).
+const LADDER_JUMP_PUSH_SPEED: f32 = 5.0 / SCALE_FACTOR;
+
+/// Stops a slide along a held ladder at its side edge, so the climber hangs
+/// there over whatever is below, as in the original.
+///
+/// Deliberate deviation: the original lets go only on foot contact, a jump or
+/// 2 ft past a side. Here, when walkable floor lies within
+/// `CLIMB_TOP_OUT_MAX_DROP` below the feet under the body where the grip runs
+/// out of reach (its centre or its leading edge), the slide carries on past
+/// the edge and the player drops onto that floor.
+fn stop_at_ladder_side(
+    movement: Vector<Real>,
+    toward_ladder: Vector<Real>,
+    ladder: &Collider,
+    center: Vector<Real>,
+    capsule: &Capsule,
+    floor_queries: &QueryPipeline,
+) -> Vector<Real> {
+    let along = vector![-toward_ladder.z, 0.0, toward_ladder.x];
+    let slide = movement.dot(&along);
+    if slide.abs() <= 1.0e-6 {
+        return movement;
+    }
+    // Climbables are boxes; anything without a support map has no edge to
+    // measure, so it does not slide.
+    let Some(shape) = ladder.shape().as_support_map() else {
+        return movement - along * slide;
+    };
+    let side = along * slide.signum();
+    // How far the ladder extends in `direction`, as a coordinate along it.
+    let extent = |direction: Vector<Real>| {
+        shape
+            .support_point(ladder.position(), &direction)
+            .coords
+            .dot(&direction)
+    };
+    let room = extent(side) - center.dot(&side);
+    if slide.abs() <= room {
+        return movement;
+    }
+    // Where the grip runs out of reach: the capsule's horizontal distance to
+    // the side edge reaches radius + CLIMB_REACH.
+    let gap = (-extent(-toward_ladder) - center.dot(&toward_ladder)).max(0.0);
+    let reach = capsule.radius + CLIMB_REACH;
+    let feet = Vector::y() * (capsule.half_height() + capsule.radius);
+    let release = center - feet + side * (room + (reach * reach - gap * gap).max(0.0).sqrt());
+    let floor_below = |point: Vector<Real>| {
+        floor_queries
+            .cast_ray_and_get_normal(
+                &Ray::new(Point::from(point), -Vector::y()),
+                CLIMB_TOP_OUT_MAX_DROP,
+                true,
+            )
+            .is_some_and(|(_, floor)| floor.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
+    };
+    if floor_below(release) || floor_below(release + side * capsule.radius) {
+        movement
+    } else {
+        movement - side * (slide.abs() - room.max(0.0))
+    }
+}
+
+/// Dark's jump off a ladder adds a push to the ordinary jump: along the
+/// player's facing when it points away from the face, else that facing
+/// reflected off the face at half strength.
+fn ladder_jump_push(facing: Vector<Real>, toward_ladder: Vector<Real>) -> Vector<Real> {
+    let Some(facing) = vector![facing.x, 0.0, facing.z].try_normalize(1.0e-6) else {
+        return Vector::zeros();
+    };
+    let outward = -toward_ladder;
+    let direction = if facing.dot(&outward) > 0.0 {
+        facing
+    } else {
+        (facing - outward * (2.0 * facing.dot(&outward))) * 0.5
+    };
+    direction * LADDER_JUMP_PUSH_SPEED
 }
 
 /// Original mantling follows projected player-facing, not a strafe direction.
@@ -795,11 +909,11 @@ fn try_step_up(
     None
 }
 
-/// One frame of gripped ladder movement: the vertical redirect from
-/// [`climb_redirect`], plus the query pipeline it is cast against.
+/// One frame of gripped ladder movement: the redirect from [`climb_redirect`]
+/// (a climb, a slide along the face, or a hold), plus the query pipeline it is cast against.
 ///
 /// The climb cast gets its OWN pipeline because it must ignore **climbable
-/// colliders themselves**. A grip slides the player vertically along the face it
+/// colliders themselves**. A grip slides the player along the face it
 /// holds, so the ladder standing in that path is not an obstacle - but to the
 /// character controller it is ordinary solid geometry, and a capsule that grazes
 /// it (which is exactly where a gripped player sits) has its vertical cast
@@ -1915,8 +2029,8 @@ fn player_gravity_step(character_body: &RigidBody) -> Real {
 /// `climb` is the ladder redirect vector when the player grips a climbable
 /// surface, paired with the query pipeline the climb cast runs against (see
 /// [`ClimbPass`]): it replaces both the walk input and the gravity pass - unless
-/// it achieves nothing, in which case the frame walks normally (see
-/// `CLIMB_MIN_PROGRESS_FRACTION`).
+/// a vertical climb achieves nothing, in which case the frame walks normally
+/// (see `CLIMB_MIN_PROGRESS_FRACTION`).
 ///
 /// `carry` is how far the moving-terrain body underfoot travelled this frame
 /// (see [`PlayerSupport`]); it is applied first, so the player's own input and
@@ -1940,17 +2054,17 @@ fn step_player_movement(
     airborne_vertical: Option<Real>,
     climb: Option<ClimbPass<'_>>,
 ) -> PlayerMovement {
-    // Ladder: the climb vector replaces both the walk and the gravity pass.
-    // Only if it actually moves the player, though - a climb consumes the
-    // horizontal input, so a grip whose redirect is cast into solid geometry
-    // (the floor the player is standing on when the redirect points DOWN, a
-    // ceiling above them when it points up) would otherwise pin them in place
-    // with nothing left to walk out with.
+    // Ladder: the climb vector replaces both the walk and the gravity pass,
+    // including when it has no vertical part (a held grip with no input, or
+    // a strafe along the face): the grip holds the player there, as Dark's
+    // climb cancels gravity. A climb that achieves nothing walks normally
+    // instead: a descent the floor stops is the feet finding the ground, and
+    // an ascent wedged under an overhang must be able to walk out from under
+    // it (the grip survives that frame; see `move_player`).
     //
-    // Progress is measured as SIGNED VERTICAL travel, not the raw translation
-    // length: the redirect is purely vertical, so any horizontal component in
-    // the result is the character controller sliding off something in the way -
-    // sideways travel is the blocked case, not a climb.
+    // Progress is measured as SIGNED VERTICAL travel: horizontal travel is a
+    // strafe along the face, or the controller sliding off something in the
+    // way, and neither is the climb getting anywhere.
     if let Some(ClimbPass {
         movement: climb,
         top_out,
@@ -1977,7 +2091,7 @@ fn step_player_movement(
         }
         let mvt = controller.move_shape(dt, &climb_queries, shape, pos, climb, |_c| ());
         let climbed = mvt.translation.y * climb.y.signum();
-        if climbed > CLIMB_MIN_PROGRESS_FRACTION * climb.y.abs() {
+        if climb.y == 0.0 || climbed > CLIMB_MIN_PROGRESS_FRACTION * climb.y.abs() {
             return PlayerMovement {
                 self_translation: mvt.translation,
                 movement: mvt,
@@ -3135,8 +3249,9 @@ pub struct PlayerHandle {
     // Held-button edge state: one press launches at most one jump.
     jump_was_pressed: bool,
     // Horizontal velocity (world units/second) carried through the current
-    // ballistic arc: what a VR climb release throws the player sideways with.
-    // Ordinary jumps steer with the stick instead and leave this zero.
+    // ballistic arc: what a VR climb release throws the player sideways with,
+    // or a jump's push off a held ladder. Ordinary jumps steer with the stick
+    // instead and leave this zero.
     air_velocity: Vector<Real>,
     // The player's OWN translation from the last movement frame - this
     // frame's total travel minus the moving-support carry - so a rider
@@ -3146,6 +3261,11 @@ pub struct PlayerHandle {
     // Whether that frame was a ladder climb or a scripted mantle rather than
     // ordinary walking. Also purely derived per-frame state.
     is_climbing: bool,
+    // A flat ladder grip held through the last frame: the horizontal unit
+    // normal toward the gripped face. The grip persists without input (see
+    // `climb_redirect`) until a jump, a clear push away, the feet reaching
+    // the ground, or the ladder leaving reach. Relocation drops it.
+    ladder_grip: Option<Vector<Real>>,
     // Highest unsupported position plus the sustained-contact state needed to
     // distinguish a real landing from geometry brushed during the same fall.
     fatal_fall: FatalFallTracker,
@@ -4036,6 +4156,7 @@ impl PhysicsWorld {
         player_handle.is_grounded = false;
         player_handle.jump_velocity = None;
         player_handle.air_velocity = Vector::zeros();
+        player_handle.ladder_grip = None;
         player_handle.fatal_fall.relocate(position.y);
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         let shape = if player_handle.is_crouched {
@@ -5698,6 +5819,7 @@ impl PhysicsWorld {
             air_velocity: Vector::zeros(),
             self_translation: Vector3::new(0.0, 0.0, 0.0),
             is_climbing: false,
+            ladder_grip: None,
             fatal_fall: FatalFallTracker::new(start_pos.y),
         }
     }
@@ -6716,11 +6838,19 @@ impl PhysicsWorld {
         let jump_edge = jump_pressed && !player_handle.jump_was_pressed;
         player_handle.jump_was_pressed = jump_pressed;
         // Underwater the held button swims up (below) instead of launching.
-        let launch_jump =
-            !swimming && jump_edge && player_handle.is_grounded && player_handle.top_out.is_none();
+        // A held ladder launches a jump like the floor does, and the jump
+        // lets go of it (below: a rising arc never grips).
+        let ladder_jump_from = player_handle
+            .ladder_grip
+            .filter(|_| push_to_climb && !player_handle.is_grounded);
+        let launch_jump = !swimming
+            && jump_edge
+            && (player_handle.is_grounded || ladder_jump_from.is_some())
+            && player_handle.top_out.is_none();
         if launch_jump {
             player_handle.jump_velocity = Some(PLAYER_JUMP_LAUNCH_SPEED);
-            player_handle.air_velocity = Vector::zeros();
+            player_handle.air_velocity = ladder_jump_from
+                .map_or_else(Vector::zeros, |toward| ladder_jump_push(facing, toward));
             player_handle.is_grounded = false;
             // A jumping player has left their moving support. Its carry is
             // already represented by the first frame's body pose; do not keep
@@ -6750,12 +6880,29 @@ impl PhysicsWorld {
         let movement_filter = player_movement_filter(player_handle.character_handle);
         let dispatcher = self.narrow_phase.query_dispatcher();
 
+        // The climb cast collides with everything the walk does EXCEPT the
+        // climbable surfaces themselves - see `ClimbPass`. Membership is checked
+        // by predicate rather than by group filter because a ladder is also an
+        // `ENTITY`, so masking the CLIMBABLE bit out of the group filter would
+        // not exclude it.
+        let not_climbable =
+            |_handle: ColliderHandle, collider: &Collider| collider_is_not_climbable(collider);
+        let parented_non_climbable = |_handle: ColliderHandle, collider: &Collider| {
+            collider.parent().is_some() && collider_is_not_climbable(collider)
+        };
+        let climb_pass_filter = movement_filter.predicate(&not_climbable);
+        // Dark's scripted jump-through may cross immutable world terrain.
+        // Structural parentage is the boundary: every parented entity collider
+        // stays live, while only parentless terrain and climbables are omitted.
+        let scripted_top_out_filter = movement_filter.predicate(&parented_non_climbable);
         // Flat climbing: when the player overlaps a climbable surface (ladder)
-        // and pushes toward it, redirect that input to vertical movement and
-        // suppress the gravity pass for this frame (see `climb_redirect`).
-        // A jump grips only once its arc is falling, like any other fall
-        // (#907); the rise stays ballistic so a jump past a ladder clears it.
+        // and pushes toward it - or already holds it - redirect the input
+        // along the face and suppress the gravity pass for this frame (see
+        // `climb_redirect`). A jump grips only once its arc is falling, like
+        // any other fall (#907); the rise stays ballistic so a jump past a
+        // ladder clears it. A held grip lets go once the feet are down.
         let rising_jump = player_handle.jump_velocity.is_some_and(|v| v > 0.0);
+        let held = player_handle.ladder_grip.is_some() && !player_handle.is_grounded;
         let climb_movement = if !push_to_climb || rising_jump {
             None
         } else {
@@ -6800,7 +6947,7 @@ impl PhysicsWorld {
                 // (The collider-center direction is wrong when the player is
                 // off-center: it tilts away from the face, which under-reads
                 // the into-ladder push the grip test and climb speed use.)
-                let mut nearest: Option<(f32, Vector<Real>)> = None;
+                let mut nearest: Option<(f32, Vector<Real>, &Collider)> = None;
                 for (_handle, collider) in queries.intersect_shape(character_pos, &inflated) {
                     let contact = rapier3d::parry::query::contact(
                         &character_pos,
@@ -6815,14 +6962,30 @@ impl PhysicsWorld {
                         let toward_norm = toward_h.norm();
                         // A mostly-vertical normal means the player is on top of
                         // (or under) the surface - that's standing, not climbing.
-                        if toward_norm > 0.5 && nearest.is_none_or(|(d, _)| contact.dist < d) {
+                        if toward_norm > 0.5 && nearest.is_none_or(|(d, _, _)| contact.dist < d) {
                             let toward = toward_h / toward_norm;
-                            nearest = Some((contact.dist, toward));
+                            nearest = Some((contact.dist, toward, collider));
                         }
                     }
                 }
-                nearest.and_then(|(_, toward)| {
-                    climb_redirect(desired_movement, toward).map(|movement| {
+                let floor_queries = self
+                    .player_movement_queries(dispatcher, movement_filter)
+                    .with_filter(climb_pass_filter);
+                nearest.and_then(|(_, toward, ladder)| {
+                    // A held grip keeps the face normal it took. Near a corner,
+                    // or once a slide passes a side edge, the contact normal
+                    // swings, which would turn a climb into a slide along the
+                    // other face or a strafe into a push away.
+                    let toward = player_handle.ladder_grip.filter(|_| held).unwrap_or(toward);
+                    climb_redirect(desired_movement, facing, toward, held).map(|movement| {
+                        let movement = stop_at_ladder_side(
+                            movement,
+                            toward,
+                            ladder,
+                            character_pos.translation.vector,
+                            capsule,
+                            &floor_queries,
+                        );
                         let top_out = if near_column_top && !player_handle.is_crouched {
                             climb_top_out_direction(desired_movement, facing).map(|direction| {
                                 // Stay compressed until projected facing has
@@ -6846,27 +7009,11 @@ impl PhysicsWorld {
                         } else {
                             None
                         };
-                        (movement, top_out)
+                        (movement, top_out, toward)
                     })
                 })
             })
         };
-
-        // The climb cast collides with everything the walk does EXCEPT the
-        // climbable surfaces themselves - see `ClimbPass`. Membership is checked
-        // by predicate rather than by group filter because a ladder is also an
-        // `ENTITY`, so masking the CLIMBABLE bit out of the group filter would
-        // not exclude it.
-        let not_climbable =
-            |_handle: ColliderHandle, collider: &Collider| collider_is_not_climbable(collider);
-        let parented_non_climbable = |_handle: ColliderHandle, collider: &Collider| {
-            collider.parent().is_some() && collider_is_not_climbable(collider)
-        };
-        let climb_pass_filter = movement_filter.predicate(&not_climbable);
-        // Dark's scripted jump-through may cross immutable world terrain.
-        // Structural parentage is the boundary: every parented entity collider
-        // stays live, while only parentless terrain and climbables are omitted.
-        let scripted_top_out_filter = movement_filter.predicate(&parented_non_climbable);
 
         // How far the moving terrain the player is standing on travelled since
         // the last time we saw them on it. The physics step above has already
@@ -6932,7 +7079,7 @@ impl PhysicsWorld {
                 // A compressed mantle restores the same standing/crouched
                 // capsule it started with, so a player deliberately crouched
                 // for a low stacked route never expands under its ceiling.
-                let jump_mantle = launch_jump
+                let jump_mantle = (launch_jump && ladder_jump_from.is_none())
                     .then(|| {
                         plan_jump_mantle(
                             &player_handle.controller,
@@ -6983,13 +7130,13 @@ impl PhysicsWorld {
                         &queries,
                         character_shape.as_ref(),
                         &character_pos,
-                        desired_movement,
+                        climb_walk_input(desired_movement, climb_movement),
                         carry,
                         self.integration_parameters.dt,
                         gravity,
                         Some(player_handle.slope_displacement),
                         airborne_vertical,
-                        climb_movement.map(|(movement, top_out)| ClimbPass {
+                        climb_movement.map(|(movement, top_out, _)| ClimbPass {
                             movement,
                             top_out,
                             validation_queries: queries,
@@ -7006,6 +7153,17 @@ impl PhysicsWorld {
         let self_translation = player_movement.self_translation;
         player_handle.self_translation = nvec_to_cgmath(self_translation);
         player_handle.is_climbing = player_movement.is_climbing;
+        // Only a frame the ladder pass resolved, or an ascent it handed to
+        // the walk pass, keeps the grip: a top-out, a hand climb or a descent
+        // reaching the floor lets go.
+        player_handle.ladder_grip = climb_movement
+            .filter(|(movement, _, _)| {
+                (player_movement.is_climbing || movement.y > 0.0)
+                    && player_movement.top_out.is_none()
+                    && player_handle.top_out.is_none()
+                    && hand_climb.is_none()
+            })
+            .map(|(_, _, toward)| toward);
         if player_movement.top_out.is_none()
             && player_handle
                 .top_out
@@ -11092,7 +11250,13 @@ mod tests {
     #[test]
     fn climb_redirect_ascends_when_pushing_into_ladder() {
         let toward = vector![1.0, 0.0, 0.0];
-        let climb = climb_redirect(vector![0.1, 0.0, 0.0], toward).expect("should grip");
+        let climb = climb_redirect(
+            vector![0.1, 0.0, 0.0],
+            vector![0.1, 0.0, 0.0],
+            toward,
+            false,
+        )
+        .expect("should grip");
         assert!(climb.y > 0.0, "expected upward redirect, got {climb:?}");
     }
 
@@ -11100,17 +11264,86 @@ mod tests {
     #[test]
     fn climb_redirect_ignores_push_away_or_parallel() {
         let toward = vector![1.0, 0.0, 0.0];
-        assert!(climb_redirect(vector![-0.1, 0.0, 0.0], toward).is_none());
-        assert!(climb_redirect(vector![0.0, 0.0, 0.1], toward).is_none());
-        assert!(climb_redirect(vector![0.0, 0.0, 0.0], toward).is_none());
+        assert!(
+            climb_redirect(
+                vector![-0.1, 0.0, 0.0],
+                vector![-0.1, 0.0, 0.0],
+                toward,
+                false
+            )
+            .is_none()
+        );
+        assert!(
+            climb_redirect(
+                vector![0.0, 0.0, 0.1],
+                vector![0.0, 0.0, 0.1],
+                toward,
+                false
+            )
+            .is_none()
+        );
+        assert!(
+            climb_redirect(
+                vector![0.0, 0.0, 0.0],
+                vector![0.0, 0.0, 0.0],
+                toward,
+                false
+            )
+            .is_none()
+        );
     }
 
     /// A downward-pitched push (looking down) descends instead of ascending.
     #[test]
     fn climb_redirect_descends_when_looking_down() {
         let toward = vector![1.0, 0.0, 0.0];
-        let climb = climb_redirect(vector![0.1, -0.1, 0.0], toward).expect("should grip");
+        let climb = climb_redirect(
+            vector![0.1, -0.1, 0.0],
+            vector![0.1, -0.1, 0.0],
+            toward,
+            false,
+        )
+        .expect("should grip");
         assert!(climb.y < 0.0, "expected downward redirect, got {climb:?}");
+    }
+
+    /// A held grip: no input holds, a strafe slides along the face, a forward
+    /// push off the face normal does not, and only a clear push away lets go.
+    #[test]
+    fn climb_redirect_holds_slides_and_releases_a_held_grip() {
+        let toward = vector![1.0, 0.0, 0.0];
+        let facing = toward;
+        let hold = climb_redirect(Vector::zeros(), facing, toward, true).expect("held");
+        assert_eq!(hold, Vector::zeros());
+        let strafe = climb_redirect(vector![0.0, 0.0, 0.1], facing, toward, true).expect("held");
+        assert!(
+            strafe.y == 0.0 && strafe.z > 0.0,
+            "strafe slides: {strafe:?}"
+        );
+        // Forward, 40 degrees off the face normal: climbs, no slide.
+        let off = vector![0.077, 0.0, 0.064];
+        let drift = climb_redirect(off, off, toward, true).expect("held");
+        assert!(
+            drift.y > 0.0 && drift.z == 0.0,
+            "drift climbs straight: {drift:?}"
+        );
+        // Facing 40 degrees off the face, a strafe either way stays held and
+        // slides (never a push away, even with its into part past half).
+        let oblique = vector![0.766, 0.0, 0.643];
+        for strafe in [vector![0.064, 0.0, -0.077], vector![-0.064, 0.0, 0.077]] {
+            let slide = climb_redirect(strafe, oblique, toward, true).expect("held");
+            assert!(slide.z != 0.0, "oblique strafe slides: {slide:?}");
+        }
+        // Facing along the face, forward slides along it.
+        let along = vector![0.0, 0.0, 0.1];
+        let walk = climb_redirect(along, along, toward, true).expect("held");
+        assert!(
+            walk.y == 0.0 && walk.z > 0.0,
+            "forward along the face: {walk:?}"
+        );
+        // Sideways and a little back: still held, still sliding.
+        assert!(climb_redirect(vector![-0.03, 0.0, 0.1], facing, toward, true).is_some());
+        assert!(climb_redirect(vector![-0.1, 0.0, 0.02], facing, toward, true).is_none());
     }
 
     #[test]
@@ -12333,9 +12566,25 @@ mod tests {
     fn climb_redirect_ignores_a_grazing_push() {
         let toward = vector![1.0, 0.0, 0.0];
         // ~15 degrees into the face: mostly walking along it.
-        assert!(climb_redirect(vector![0.026, 0.0, 0.097], toward).is_none());
+        assert!(
+            climb_redirect(
+                vector![0.026, 0.0, 0.097],
+                vector![0.026, 0.0, 0.097],
+                toward,
+                false
+            )
+            .is_none()
+        );
         // ~70 degrees into the face: climbing.
-        assert!(climb_redirect(vector![0.094, 0.0, 0.034], toward).is_some());
+        assert!(
+            climb_redirect(
+                vector![0.094, 0.0, 0.034],
+                vector![0.094, 0.0, 0.034],
+                toward,
+                false
+            )
+            .is_some()
+        );
     }
 
     /// Issue #596: real ladders are built as a STACK of ~0.8 wu rung colliders
@@ -12410,6 +12659,142 @@ mod tests {
             drift.abs() < 0.45,
             "the climb must not slide the player off the 0.9-wide ladder, drifted {drift}"
         );
+    }
+
+    /// A floor at y=0 and one 0.9-wide, 8-tall ladder box facing +X at x=-5,
+    /// with the player climbed 40 frames up it (center ~y 5). Returns the
+    /// world, the player and one frame of walking along +X (into the ladder).
+    fn climbed_single_ladder() -> (PhysicsWorld, PlayerHandle, f32) {
+        let mut world = PhysicsWorld::new();
+        let floor_verts = vec![
+            point![-100.0, 0.0, -100.0],
+            point![100.0, 0.0, -100.0],
+            point![100.0, 0.0, 100.0],
+            point![-100.0, 0.0, 100.0],
+        ];
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::trimesh(floor_verts, vec![[0u32, 1, 2], [0, 2, 3]])
+                .expect("floor trimesh")
+                .build(),
+        );
+        world.add_kinematic(
+            EntityId::from_inner(2001).unwrap(),
+            vec3(-5.0, 4.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.1, 8.0, 0.9),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(-6.0, 1.0, 0.0), EntityId::from_inner(3000).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let walk = 25.0 / SCALE_FACTOR / 60.0;
+        for _ in 0..40 {
+            world.update(Vector3::new(walk, 0.0, 0.0), &mut player);
+        }
+        assert!(
+            player.is_climbing(),
+            "setup should leave the player on the ladder"
+        );
+        (world, player, walk)
+    }
+
+    /// Letting go of the stick mid-ladder holds the player there: the grip
+    /// persists and gravity stays off. Negative-first: the per-frame grip
+    /// dropped with the input and the player slid back down.
+    #[test]
+    fn a_held_ladder_grip_holds_without_input() {
+        let (mut world, mut player, _) = climbed_single_ladder();
+        // The first frame still lands the last climb step.
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let start = world.get_player_translation(&player);
+        for _ in 0..120 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            (end - start).magnitude() < 0.01 && player.is_climbing(),
+            "no input should hold the grip: {start:?} -> {end:?}"
+        );
+    }
+
+    /// A strafe slides along the held ladder and stops at its side edge over
+    /// the drop, still holding. Negative-first: a strafe dropped the grip and
+    /// the player fell to the floor.
+    #[test]
+    fn a_strafe_along_a_held_ladder_hangs_at_its_edge_over_a_drop() {
+        let (mut world, mut player, walk) = climbed_single_ladder();
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let start = world.get_player_translation(&player);
+        for _ in 0..120 {
+            world.update_with_facing(Vector3::new(0.0, 0.0, walk), Vector3::unit_x(), &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            (end.z - 0.45).abs() < 0.02 && (end.y - start.y).abs() < 0.01 && player.is_climbing(),
+            "should hang with its centre at the ladder's side (z 0.45): {start:?} -> {end:?}"
+        );
+    }
+
+    /// Deliberate deviation from the original (which only hangs): floor within
+    /// a mantle's drop beside the ladder takes the strafe off onto it.
+    #[test]
+    fn a_strafe_along_a_held_ladder_steps_off_onto_floor_beside_it() {
+        let (mut world, mut player, walk) = climbed_single_ladder();
+        let feet =
+            world.get_player_translation(&player).y - PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR;
+        let top = feet - 1.5;
+        world.add_kinematic(
+            EntityId::from_inner(2002).unwrap(),
+            vec3(-6.0, top / 2.0, 10.3),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(2.0, top, 19.4),
+            CollisionGroup::entity(),
+            false,
+        );
+        for _ in 0..60 {
+            world.update_with_facing(Vector3::new(0.0, 0.0, walk), Vector3::unit_x(), &mut player);
+        }
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            end.z > 1.0
+                && (end.y - (top + PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR)).abs() < 0.1,
+            "should end standing on the {top} floor beside the ladder: {end:?}"
+        );
+        assert!(!player.is_climbing());
+    }
+
+    /// Jumping from a held ladder lets go and pushes off it (facing away).
+    /// Negative-first: mid-ladder the jump was ignored (not grounded).
+    #[test]
+    fn jumping_from_a_held_ladder_lets_go_and_pushes_off() {
+        let (mut world, mut player, _) = climbed_single_ladder();
+        let start = world.get_player_translation(&player);
+        let away = Vector3::new(-1.0, 0.0, 0.0);
+        world.update_with_facing_and_jump(Vector3::new(0.0, 0.0, 0.0), away, true, &mut player);
+        let mut peak = start.y;
+        for _ in 0..20 {
+            world.update_with_facing_and_jump(Vector3::new(0.0, 0.0, 0.0), away, true, &mut player);
+            peak = peak.max(world.get_player_translation(&player).y);
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            peak > start.y + 0.2,
+            "the jump should rise: {start:?} peak {peak}"
+        );
+        assert!(
+            end.x < start.x - 0.3,
+            "the jump should push off the ladder: {start:?} -> {end:?}"
+        );
+        assert!(!player.is_climbing());
     }
 
     /// A diagonal route through a wide-X/thin-Z ladder clears at the first

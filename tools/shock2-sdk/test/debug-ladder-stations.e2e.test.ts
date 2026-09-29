@@ -242,15 +242,12 @@ test(
   },
 );
 
-/// From a stalled climb, look level along +w (across the lane) and walk until
-/// supported on the floor at `floorY` beside the ladder, then a step more so
-/// the body is wholly on it.
+/// From a stalled climb, still facing the ladder, strafe right (+w, desktop
+/// D) along it until supported on the floor at `floorY` beside the ladder,
+/// then a step more so the body is wholly on it.
 async function stepSideways(game: GameServer, run: Run, floorY: number): Promise<void> {
-  const top = await run.pos();
-  const eye = (await game.info()).player.camera_offset[1];
-  await game.input.lookAtWorldPoint([top.x, top.y + eye, top.z + 10]);
-  await game.input.set("right_hand.thumbstick", [0, 1]);
-  await run.frames(120, async (p) => {
+  await game.input.set("right_hand.thumbstick", [1, 0]);
+  await run.frames(180, async (p) => {
     const support = await run.supportY(p);
     return support !== null && Math.abs(support - floorY) < 0.05 && p.y - floorY < 1.35;
   });
@@ -264,7 +261,7 @@ test(
   // rick1 Ladder 488. The deck (8.4) is over a closed slab (7.6..8.4) that
   // covers the whole pit, so the climb cannot reach it; the original refuses
   // any mantle with something within 3.5 ft above the head. The climb stalls
-  // under the slab (y 6.871, mission 36.477) and exits sideways onto the y34
+  // under the slab (y 6.871, mission 36.477) and strafes off onto the y34
   // floor slabs that flank the pit (4.4), as it does in the mission.
   { skip: !e2eEnabled, timeout: 300_000 },
   async () => {
@@ -330,9 +327,9 @@ test(
   // ladder column (up to 40.28, above the crouched body's feet on the deck)
   // leaves 0.44 between its back and the wall, less than the crouched
   // capsule's 0.64 plus contact gaps, so there is no pose in front of the
-  // ladder to top out to. Pushing on only bobs under the 7.2 ceiling
-  // (6.41-6.60, mission 40.41-40.60). The way off is sideways onto the deck
-  // that wraps the hole, as in the mission.
+  // ladder to top out to. Pushing on only stalls under the 7.2 ceiling
+  // (mission bobs at 40.41-40.60). The way off is a strafe onto the deck that
+  // wraps the hole, as in the mission.
   { skip: !e2eEnabled, timeout: 300_000 },
   async () => {
     await using game = await launch();
@@ -365,9 +362,9 @@ test(
   // eng1 Ladder 317. The ladder stands on a 0.4 wall and ends at the 6.4
   // ceiling (mission -13.4); the -16.6 room behind the wall cannot be reached
   // from the trench (the original refuses a mantle with anything within
-  // 3.5 ft above the head). The climb bobs at 4.96-5.16 under the ceiling
-  // (mission -14.84/-14.64); the exit is the 3.2 shelf beside the ladder
-  // (mission -16.6, x 3.0..4.6), as in eng1.
+  // 3.5 ft above the head). The climb stalls under the ceiling (mission bobs
+  // at -14.84/-14.64); the exit is a strafe onto the 3.2 shelf beside the
+  // ladder (mission -16.6, x 3.0..4.6), as in eng1.
   { skip: !e2eEnabled, timeout: 300_000 },
   async () => {
     await using game = await launch();

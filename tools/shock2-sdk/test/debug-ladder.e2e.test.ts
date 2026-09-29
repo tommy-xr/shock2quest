@@ -98,3 +98,66 @@ test(
     }
   },
 );
+
+/// The stack station's lane: rungs up a 9-tall wall, bare on both sides.
+const STACK_Z = -8;
+
+/// Climb the stack station's rungs partway: face them level, push forward
+/// for `frames`, then let go of the stick.
+async function climbStack(game: GameServer, frames: number) {
+  await teleportVerified(game, { x: NEAR_X, y: 1.5, z: STACK_Z });
+  await game.step({ frames: 30 });
+  const floorY = (await game.player.position()).y;
+  const eyeY = floorY + (await game.info()).player.camera_offset[1];
+  await game.input.lookAtWorldPoint([-7, eyeY, STACK_Z]);
+  await game.step({ frames: 5 });
+  await game.input.set("right_hand.thumbstick", [0, 1]);
+  await game.step({ frames });
+  await game.input.set("right_hand.thumbstick", [0, 0]);
+  await game.step({ frames: 2 });
+  assert.ok((await game.info()).player.climb.is_climbing, "should be on the ladder");
+  return { floorY, start: await game.player.position() };
+}
+
+test(
+  "debug_ladder: a held ladder holds the player for 120 frames with no input",
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ladder" });
+    await game.step({ frames: 5 });
+    const { floorY, start } = await climbStack(game, 60);
+    assert.ok(start.y > floorY + 4, `should have climbed (y=${start.y.toFixed(3)})`);
+    await game.step({ frames: 120 });
+    const end = await game.player.position();
+    assert.ok(
+      Math.abs(end.y - start.y) < 0.02 && (await game.info()).player.climb.is_climbing,
+      `no input should hold on the ladder: y ${start.y.toFixed(3)} -> ${end.y.toFixed(3)}`,
+    );
+  },
+);
+
+test(
+  "debug_ladder: strafing along a held ladder over a drop hangs at its side edge",
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ladder" });
+    await game.step({ frames: 5 });
+    // Both sides (desktop A/D): the wall is bare beside the rungs, and the
+    // floor is further below the feet than a step-off accepts.
+    for (const strafe of [1, -1]) {
+      const { floorY, start } = await climbStack(game, 60);
+      await game.input.set("right_hand.thumbstick", [strafe, 0]);
+      await game.step({ frames: 120 });
+      const end = await game.player.position();
+      await game.input.set("right_hand.thumbstick", [0, 0]);
+      assert.ok(
+        Math.abs(end.y - start.y) < 0.02 && (await game.info()).player.climb.is_climbing,
+        `strafe ${strafe}: should hang on the ladder, y ${start.y.toFixed(3)} -> ` +
+          `${end.y.toFixed(3)} (floor ${floorY.toFixed(3)})`,
+      );
+      // Slid to the side edge, not off it.
+      const w = (end.z - STACK_Z) * strafe;
+      assert.ok(w > 0.3 && w < 0.7, `strafe ${strafe}: should stop at the side edge (z=${end.z.toFixed(3)})`);
+    }
+  },
+);
