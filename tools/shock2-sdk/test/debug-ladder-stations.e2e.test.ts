@@ -401,10 +401,9 @@ test(
 
 test(
   "debug_ladder jump-to-ladder: pressing into the ladder mid-jump grabs it high",
-  // rick2 Ladder 210 (#907). Main: no grip while a jump arc is active; the
-  // player falls through face reach from 15.78 and grips only at 10.97
-  // (mission 94.18 -> 89.68).
-  { skip: !e2eEnabled, timeout: 300_000, todo: "#907 rick2 jump grab" },
+  // rick2 Ladder 210 (#907). A falling jump arc grips like any other fall;
+  // before, no grip until the arc ended, at 10.97 (mission 89.68).
+  { skip: !e2eEnabled, timeout: 300_000 },
   async () => {
     await using game = await launch();
     await startTrail(game);
