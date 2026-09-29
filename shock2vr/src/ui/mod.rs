@@ -1072,6 +1072,88 @@ where
         }
         objects
     }
+
+    /// [`render_world_space`](Self::render_world_space) wrapped around a
+    /// cylinder whose axis is panel-local +Y: the canvas width spans `arc`,
+    /// curving away from the viewer at both sides (a band around a wrist).
+    /// `root_transform` must scale panel x and z alike, or the arc flattens.
+    /// Quads are cut into chord-exact column facets; text stays flat, tangent
+    /// at its centre.
+    pub fn render_world_space_bent(
+        &self,
+        asset_cache: &mut AssetCache,
+        root_transform: Matrix4<f32>,
+        arc: Deg<f32>,
+        component_z_step: f32,
+    ) -> Vec<SceneObject> {
+        let radius = 1.0 / cgmath::Rad::from(arc).0;
+        let placed = self.layout_with_pointer(asset_cache, None);
+        let layers = overlap_layers(placed.iter().map(|element| element.rect));
+        let mut objects = Vec::new();
+        for (element, layer) in placed.iter().zip(layers) {
+            let object = present_world(asset_cache, element, element.alpha, self.size);
+            let z = component_z_step * layer as f32;
+            let x0 = element.rect.x / self.size.x - 0.5;
+            let x1 = (element.rect.x + element.rect.w) / self.size.x - 0.5;
+            let uv = match &element.content {
+                _ if element.turns != 0 => None,
+                PlacedContent::Text { .. } => None,
+                PlacedContent::Image { kind, .. } => {
+                    Some(kind.uv_rect().unwrap_or((vec2(0.0, 0.0), vec2(1.0, 1.0))))
+                }
+                PlacedContent::Bar { .. } | PlacedContent::Fill { .. } => {
+                    Some((vec2(0.0, 0.0), vec2(1.0, 1.0)))
+                }
+            };
+            let Some((uv_min, uv_max)) = uv else {
+                let mut facet = object;
+                facet.set_transform(root_transform * bend_facet(radius, x0, x1, z));
+                objects.push(facet);
+                continue;
+            };
+            // Columns of at most ~8 degrees keep the chord error invisible.
+            let columns = ((x1 - x0) / radius / 8f32.to_radians()).ceil().max(1.0) as usize;
+            for column in 0..columns {
+                let (t0, t1) = (
+                    column as f32 / columns as f32,
+                    (column + 1) as f32 / columns as f32,
+                );
+                let mut slice = object.clone();
+                let u = |t: f32| uv_min.x + (uv_max.x - uv_min.x) * t;
+                slice.geometry = Rc::new(Box::new(engine::scene::quad::create_with_uv(
+                    vec2(u(t0), uv_min.y),
+                    vec2(u(t1), uv_max.y),
+                )));
+                // The unit quad spans x in [-0.5, 0.5]; keep only this column.
+                slice.set_local_transform(
+                    object.local_transform
+                        * Matrix4::from_translation(vec3((t0 + t1) * 0.5 - 0.5, 0.0, 0.0))
+                        * Matrix4::from_nonuniform_scale(t1 - t0, 1.0, 1.0),
+                );
+                let (s0, s1) = (x0 + (x1 - x0) * t0, x0 + (x1 - x0) * t1);
+                slice.set_transform(root_transform * bend_facet(radius, s0, s1, z));
+                objects.push(slice);
+            }
+        }
+        objects
+    }
+}
+
+/// Carry the flat panel strip `x0..x1` onto a cylinder of `radius` (axis +Y,
+/// through `(0, 0, -radius)`): the strip becomes the chord between its two
+/// arc points, lifted `z` along the outward normal. Arc length equals flat
+/// width, so `x = 0` stays put and the edges wrap back.
+fn bend_facet(radius: f32, x0: f32, x1: f32, z: f32) -> Matrix4<f32> {
+    let (a0, a1) = (x0 / radius, x1 / radius);
+    let mid = (a0 + a1) * 0.5;
+    let half = (a1 - a0) * 0.5;
+    let chord = 2.0 * radius * half.sin();
+    let reach = radius * half.cos() + z;
+    let scale = if x1 > x0 { chord / (x1 - x0) } else { 1.0 };
+    Matrix4::from_translation(vec3(reach * mid.sin(), 0.0, reach * mid.cos() - radius))
+        * Matrix4::from_angle_y(cgmath::Rad(mid))
+        * Matrix4::from_nonuniform_scale(scale, 1.0, 1.0)
+        * Matrix4::from_translation(vec3(-(x0 + x1) * 0.5, 0.0, 0.0))
 }
 
 /// Preserve painter order where rectangles overlap, keeping adjoining pieces
@@ -1484,6 +1566,37 @@ fn world_element_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bent_facets_meet_on_the_cylinder_and_face_outward() {
+        let radius = 0.5;
+        let center = vec3(0.0, 0.0, -radius);
+        let on_arc = |x: f32| {
+            vec3(
+                radius * (x / radius).sin(),
+                0.0,
+                radius * (x / radius).cos() - radius,
+            )
+        };
+        let edges = [-0.5, -0.2, 0.1, 0.5];
+        for pair in edges.windows(2) {
+            let (x0, x1) = (pair[0], pair[1]);
+            let facet = bend_facet(radius, x0, x1, 0.0);
+            let left = (facet * vec3(x0, 0.0, 0.0).extend(1.0)).truncate();
+            let right = (facet * vec3(x1, 0.0, 0.0).extend(1.0)).truncate();
+            // Chord ends sit exactly on the arc, so neighbours share an edge.
+            assert!((left - on_arc(x0)).magnitude() < 1e-5);
+            assert!((right - on_arc(x1)).magnitude() < 1e-5);
+            let mid = (left + right) * 0.5;
+            let normal = facet.z.truncate().normalize();
+            assert!(normal.dot((mid - center).normalize()) > 0.999);
+            assert!(cgmath::SquareMatrix::determinant(&facet) > 0.0);
+        }
+        // A lifted overlay moves along the outward normal only.
+        let lifted = bend_facet(radius, -0.1, 0.1, 0.01) * vec3(0.0, 0.0, 0.0).extend(1.0);
+        let flat = bend_facet(radius, -0.1, 0.1, 0.0) * vec3(0.0, 0.0, 0.0).extend(1.0);
+        assert!(((lifted - flat).truncate() - vec3(0.0, 0.0, 0.01)).magnitude() < 1e-6);
+    }
 
     #[test]
     fn adjacent_background_pieces_share_depth_but_overlays_keep_painter_order() {

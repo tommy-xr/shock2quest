@@ -115,16 +115,18 @@ pub fn create_wrist_hud_panels(
             }
             continue;
         }
-        for (ammo, canvas) in [
-            (false, readouts::build_watch_canvas(&bio)),
-            (true, ammo_panel::build_wrist_canvas(&readout)),
-        ] {
-            if canvas.element_count() == 0 {
-                continue;
-            }
-            objects.extend(canvas.render_world_space(
+        let bio_canvas = readouts::build_watch_canvas(&bio);
+        objects.extend(bio_canvas.render_world_space_bent(
+            asset_cache,
+            wrist_panel_transform(root, bio_canvas.size(), false),
+            Deg::from(cgmath::Rad(BIO_WIDTH / BIO_BAND_RADIUS)),
+            0.001 / BIO_WIDTH,
+        ));
+        let ammo_canvas = ammo_panel::build_wrist_canvas(&readout);
+        if ammo_canvas.element_count() > 0 {
+            objects.extend(ammo_canvas.render_world_space(
                 asset_cache,
-                wrist_panel_transform(root, canvas.size(), ammo),
+                wrist_panel_transform(root, ammo_canvas.size(), true),
                 None,
                 None,
                 0.001,
@@ -165,15 +167,20 @@ fn wrist_hologram_transform(
         * Matrix4::from_nonuniform_scale(size.x * scale, height, 1.0)
 }
 
+const BIO_WIDTH: f32 = 0.085;
+/// The bio band wraps a cylinder about the wrist axis, just outside the cuff.
+const BIO_BAND_RADIUS: f32 = 0.045;
+
 /// Wrist-frame +Z points out of the glove's back; +Y points toward its fingers.
-/// Bio faces dorsally. Ammo caps the cuff opening and faces back along the
-/// forearm, rotated counterclockwise in its face plane to fit inside the rim.
+/// Bio faces dorsally, scaled alike in x and z so it can bend around the
+/// wrist. Ammo caps the cuff opening and faces back along the forearm,
+/// rotated counterclockwise in its face plane to fit inside the rim.
 fn wrist_panel_transform(
     root: Matrix4<f32>,
     canvas_size: cgmath::Vector2<f32>,
     ammo: bool,
 ) -> Matrix4<f32> {
-    let width = if ammo { 0.058 } else { 0.085 };
+    let width = if ammo { 0.058 } else { BIO_WIDTH };
     let mount = if ammo {
         Matrix4::from_translation(vec3(0.0, -0.033, -0.005))
             * Matrix4::from_angle_x(Deg(90.0))
@@ -181,7 +188,9 @@ fn wrist_panel_transform(
     } else {
         Matrix4::from_translation(vec3(0.0, -0.015, 0.04))
     };
-    root * mount * Matrix4::from_nonuniform_scale(width, width * canvas_size.y / canvas_size.x, 1.0)
+    let depth = if ammo { 1.0 } else { width };
+    root * mount
+        * Matrix4::from_nonuniform_scale(width, width * canvas_size.y / canvas_size.x, depth)
 }
 
 /// Get player health percentage (0.0 to 1.0)
