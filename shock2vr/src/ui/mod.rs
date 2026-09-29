@@ -1074,27 +1074,24 @@ where
     }
 
     /// [`render_world_space`](Self::render_world_space) wrapped around a
-    /// cylinder whose axis is panel-local +Y: the canvas width spans `arc`,
-    /// curving away from the viewer at both sides (a band around a wrist).
-    /// `root_transform` must scale panel x and z alike, or the arc flattens.
-    /// Quads become column strips on the arc; text stays flat, tangent at its
-    /// centre.
+    /// cylinder whose axis is panel-local +Y, curving away from the viewer at
+    /// both sides (a band around a wrist). `radius` is in panel widths, so the
+    /// band spans `1 / radius` radians; `root_transform` must scale panel x and
+    /// z alike, or the arc flattens. Quads become column strips on the arc;
+    /// text stays flat, tangent at its centre.
     pub fn render_world_space_bent(
         &self,
         asset_cache: &mut AssetCache,
         root_transform: Matrix4<f32>,
-        arc: Deg<f32>,
+        radius: f32,
         component_z_step: f32,
     ) -> Vec<SceneObject> {
-        let radius = 1.0 / cgmath::Rad::from(arc).0;
         let placed = self.layout_with_pointer(asset_cache, None);
         let layers = overlap_layers(placed.iter().map(|element| element.rect));
         let mut objects = Vec::new();
         for (element, layer) in placed.iter().zip(layers) {
-            let object = present_world(asset_cache, element, element.alpha, self.size);
+            let mut object = present_world(asset_cache, element, element.alpha, self.size);
             let z = component_z_step * layer as f32;
-            let x0 = element.rect.x / self.size.x - 0.5;
-            let x1 = (element.rect.x + element.rect.w) / self.size.x - 0.5;
             let uv = match &element.content {
                 _ if element.turns != 0 => None,
                 PlacedContent::Text { .. } => None,
@@ -1105,52 +1102,95 @@ where
                     Some((vec2(0.0, 0.0), vec2(1.0, 1.0)))
                 }
             };
-            let Some((uv_min, uv_max)) = uv else {
-                let mut facet = object;
-                facet.set_transform(root_transform * bend_facet(radius, x0, x1, z));
-                objects.push(facet);
+            let Some(uv) = uv else {
+                let x0 = element.rect.x / self.size.x - 0.5;
+                let x1 = (element.rect.x + element.rect.w) / self.size.x - 0.5;
+                // A chord sags inside the arc; lift it so its middle, not just
+                // its ends, clears the layers beneath.
+                let sag = radius * (1.0 - ((x1 - x0) * 0.5 / radius).cos());
+                object.set_transform(root_transform * bend_facet(radius, x0, x1, z + sag));
+                objects.push(object);
                 continue;
             };
-            // One strip mesh per element: neighbouring columns share their
-            // edge vertices, so the band cannot crack at column boundaries.
-            // Columns of at most ~8 degrees keep the chord error invisible.
-            let columns = ((x1 - x0) / radius / 8f32.to_radians()).ceil().max(1.0) as usize;
-            let vertex = |t: f32, v: f32| {
-                let p =
-                    (object.local_transform * vec3(t - 0.5, v - 0.5, 0.0).extend(1.0)).truncate();
-                engine::scene::VertexPositionTextureNormal {
-                    position: bend_point(radius, vec3(p.x, p.y, z)),
-                    uv: vec2(
-                        uv_min.x + (uv_max.x - uv_min.x) * t,
-                        uv_min.y + (uv_max.y - uv_min.y) * v,
-                    ),
-                    normal: vec3(0.0, 0.0, 1.0),
-                }
-            };
-            let mut vertices = Vec::with_capacity(columns * 6);
-            for column in 0..columns {
-                let (t0, t1) = (
-                    column as f32 / columns as f32,
-                    (column + 1) as f32 / columns as f32,
-                );
-                // The unit quad's winding, so the material culls the same way.
-                vertices.extend([
-                    vertex(t0, 0.0),
-                    vertex(t0, 1.0),
-                    vertex(t1, 1.0),
-                    vertex(t1, 0.0),
-                    vertex(t1, 1.0),
-                    vertex(t0, 0.0),
-                ]);
-            }
-            let mut strip = object;
-            strip.geometry = Rc::new(Box::new(engine::scene::mesh::create(vertices)));
-            strip.set_local_transform(Matrix4::from_scale(1.0));
-            strip.set_transform(root_transform);
-            objects.push(strip);
+            // The strip depends only on placement, so it is built once and
+            // reused: the wrist HUD redraws every frame.
+            let local = object.local_transform;
+            let key: Vec<u32> = AsRef::<[f32; 16]>::as_ref(&local)
+                .iter()
+                .chain(&[uv.0.x, uv.0.y, uv.1.x, uv.1.y, radius, z])
+                .map(|f| f.to_bits())
+                .collect();
+            object.geometry = BENT_STRIPS.with(|cache| {
+                cache
+                    .borrow_mut()
+                    .entry(key)
+                    .or_insert_with(|| {
+                        Rc::new(Box::new(engine::scene::mesh::create(bent_strip(
+                            local, uv, radius, z,
+                        ))))
+                    })
+                    .clone()
+            });
+            object.set_local_transform(Matrix4::from_scale(1.0));
+            object.set_transform(root_transform);
+            objects.push(object);
         }
         objects
     }
+}
+
+thread_local! {
+    static BENT_STRIPS: std::cell::RefCell<
+        std::collections::HashMap<Vec<u32>, Rc<Box<dyn engine::scene::Geometry>>>,
+    > = Default::default();
+}
+
+/// The unit quad placed by `local`, cut into columns and carried onto the
+/// cylinder of [`bend_point`]. Neighbouring columns compute their common edge
+/// from the same inputs, so the band cannot crack between them. Columns of at
+/// most ~8 degrees keep the chord error invisible.
+fn bent_strip(
+    local: Matrix4<f32>,
+    (uv_min, uv_max): (Vector2<f32>, Vector2<f32>),
+    radius: f32,
+    z: f32,
+) -> Vec<engine::scene::VertexPositionTextureNormal> {
+    let point = |t: f32, v: f32| (local * vec3(t - 0.5, v - 0.5, 0.0).extend(1.0)).truncate();
+    let width = (point(1.0, 0.0).x - point(0.0, 0.0).x).abs();
+    let columns = (width / radius / 8f32.to_radians()).ceil().max(1.0) as usize;
+    // The quad's own facing, after placement, turned with the arc.
+    let facing = (local * vec3(0.0, 0.0, 1.0).extend(0.0)).truncate();
+    let vertex = |t: f32, v: f32| {
+        let p = point(t, v);
+        let angle = p.x / radius;
+        engine::scene::VertexPositionTextureNormal {
+            position: bend_point(radius, vec3(p.x, p.y, z)),
+            uv: vec2(
+                uv_min.x + (uv_max.x - uv_min.x) * t,
+                uv_min.y + (uv_max.y - uv_min.y) * v,
+            ),
+            normal: (Matrix4::from_angle_y(cgmath::Rad(angle)) * facing.extend(0.0))
+                .truncate()
+                .normalize(),
+        }
+    };
+    let mut vertices = Vec::with_capacity(columns * 6);
+    for column in 0..columns {
+        let (t0, t1) = (
+            column as f32 / columns as f32,
+            (column + 1) as f32 / columns as f32,
+        );
+        // The unit quad's winding, so the material culls the same way.
+        vertices.extend([
+            vertex(t0, 0.0),
+            vertex(t0, 1.0),
+            vertex(t1, 1.0),
+            vertex(t1, 0.0),
+            vertex(t1, 1.0),
+            vertex(t0, 0.0),
+        ]);
+    }
+    vertices
 }
 
 /// A flat panel point on the cylinder of [`bend_facet`]: `x` becomes arc
@@ -1620,6 +1660,27 @@ mod tests {
         let lifted = bend_facet(radius, -0.1, 0.1, 0.01) * vec3(0.0, 0.0, 0.0).extend(1.0);
         let flat = bend_facet(radius, -0.1, 0.1, 0.0) * vec3(0.0, 0.0, 0.0).extend(1.0);
         assert!(((lifted - flat).truncate() - vec3(0.0, 0.0, 0.01)).magnitude() < 1e-6);
+    }
+
+    #[test]
+    fn bent_strips_lie_on_the_cylinder_and_keep_the_quads_facing() {
+        let radius = 0.4;
+        // A panel-wide element placed like any flat one (y-flipped quad).
+        let local =
+            world_element_transform(vec2(0.0, 10.0), vec2(100.0, 20.0), vec2(100.0, 40.0), 0.0);
+        let strip = bent_strip(local, (vec2(0.0, 0.0), vec2(1.0, 1.0)), radius, 0.02);
+        assert!(strip.len() > 6, "a 143-degree band needs several columns");
+        let axis = vec3(0.0, 0.0, -radius);
+        for v in &strip {
+            let from_axis = vec3(v.position.x, 0.0, v.position.z) - axis;
+            assert!((from_axis.magnitude() - (radius + 0.02)).abs() < 1e-5);
+            // The flat quad shows its -Z face; bent, it faces the axis side.
+            assert!(v.normal.dot(from_axis.normalize()) < -0.999);
+        }
+        // UVs run edge to edge.
+        let us: Vec<f32> = strip.iter().map(|v| v.uv.x).collect();
+        assert_eq!(us.iter().cloned().fold(f32::MAX, f32::min), 0.0);
+        assert_eq!(us.iter().cloned().fold(f32::MIN, f32::max), 1.0);
     }
 
     #[test]

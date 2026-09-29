@@ -119,7 +119,7 @@ pub fn create_wrist_hud_panels(
         objects.extend(bio_canvas.render_world_space_bent(
             asset_cache,
             wrist_panel_transform(root, bio_canvas.size(), false),
-            Deg::from(cgmath::Rad(BIO_WIDTH / BIO_BAND_RADIUS)),
+            BIO_BAND_RADIUS / BIO_WIDTH,
             0.001 / BIO_WIDTH,
         ));
         let ammo_canvas = ammo_panel::build_wrist_canvas(&readout);
