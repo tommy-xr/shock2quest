@@ -159,7 +159,7 @@ fn repro_boxes() -> Vec<SceneBox> {
     let mut boxes = capped_boxes();
     boxes.extend(setback_boxes());
     boxes.extend(recess_boxes());
-    boxes.extend(through_boxes());
+    boxes.extend(trench_boxes());
     boxes.extend(midmount_boxes());
     boxes.extend(jump_grab_boxes());
     boxes
@@ -365,50 +365,50 @@ fn recess_boxes() -> Vec<SceneBox> {
 /// unreachable from here: the climb meets the ceiling, and the original
 /// refuses a mantle with anything within 3.5 ft above the head. The exit is
 /// the -16.6 shelf beside the ladder (3.2 above the trench).
-const THROUGH_Z: f32 = 72.0;
-const THROUGH_CEILING: f32 = 6.4;
-const THROUGH_WALL: f32 = 0.4;
-const THROUGH_UPPER_FLOOR: f32 = 3.2;
-const THROUGH_UPPER_CEILING: f32 = 10.0;
-/// Corridor width across the lane (mission x 1.6..3.0), and the 3.2 shelf
+const TRENCH_Z: f32 = 72.0;
+const TRENCH_CEILING: f32 = 6.4;
+const TRENCH_WALL: f32 = 0.4;
+const TRENCH_UPPER_FLOOR: f32 = 3.2;
+const TRENCH_UPPER_CEILING: f32 = 10.0;
+/// Trench width across the lane (mission x 1.6..3.0), and the 3.2 shelf
 /// beside it (x 3.0..4.6, slab 2.8..3.2).
-const THROUGH_CORRIDOR_W: [f32; 2] = [-0.77, 0.63];
-const THROUGH_SHELF_W: f32 = 2.23;
+const TRENCH_W: [f32; 2] = [-0.77, 0.63];
+const TRENCH_SHELF_W: f32 = 2.23;
 /// eng1's `Ladder 16'` (model `ladder`, 1.65 wide).
 const ENG_LADDER_16: i32 = -784;
 
-fn through_boxes() -> Vec<SceneBox> {
-    let z = THROUGH_Z;
+fn trench_boxes() -> Vec<SceneBox> {
+    let z = TRENCH_Z;
     let lane = [-4.0, 4.0];
-    let corridor = [THROUGH_CORRIDOR_W[0], THROUGH_SHELF_W];
-    let back = -THROUGH_WALL;
+    let trench = [TRENCH_W[0], TRENCH_SHELF_W];
+    let back = -TRENCH_WALL;
     vec![
         // The wall: its two faces, as in the mission.
-        wall_face(z, 0.0, [0.0, THROUGH_UPPER_CEILING], lane),
+        wall_face(z, 0.0, [0.0, TRENCH_UPPER_CEILING], lane),
         lane_box(
             WALL_COLOR,
             z,
             [back, back + THIN],
-            [THROUGH_UPPER_FLOOR, THROUGH_UPPER_CEILING],
+            [TRENCH_UPPER_FLOOR, TRENCH_UPPER_CEILING],
             lane,
         ),
-        // Corridor: ceiling (taller past 1.67), sides, shelf, far end.
-        ceiling_face(z, [0.0, 1.67], THROUGH_CEILING, corridor),
-        ceiling_face(z, [1.67, 5.6], 9.6, corridor),
-        side_face(z, [0.0, 5.6], [0.0, 9.6], THROUGH_CORRIDOR_W[0]),
-        side_face(z, [0.0, 5.6], [0.0, 9.6], THROUGH_SHELF_W),
+        // Trench: ceiling (taller past 1.67), sides, shelf, far end.
+        ceiling_face(z, [0.0, 1.67], TRENCH_CEILING, trench),
+        ceiling_face(z, [1.67, 5.6], 9.6, trench),
+        side_face(z, [0.0, 5.6], [0.0, 9.6], TRENCH_W[0]),
+        side_face(z, [0.0, 5.6], [0.0, 9.6], TRENCH_SHELF_W),
         lane_box(
             FLOOR_COLOR,
             z,
             [0.0, 5.6],
-            [2.8, THROUGH_UPPER_FLOOR],
-            [THROUGH_CORRIDOR_W[1], THROUGH_SHELF_W],
+            [2.8, TRENCH_UPPER_FLOOR],
+            [TRENCH_W[1], TRENCH_SHELF_W],
         ),
-        lane_box(WALL_COLOR, z, [5.6, 5.6 + THIN], [0.0, 9.6], corridor),
+        lane_box(WALL_COLOR, z, [5.6, 5.6 + THIN], [0.0, 9.6], trench),
         // The room behind the wall.
-        floor_face(z, [-2.4, back], THROUGH_UPPER_FLOOR, lane),
-        ceiling_face(z, [-2.4, back], THROUGH_UPPER_CEILING, lane),
-        wall_face(z, -2.4, [0.0, THROUGH_UPPER_CEILING], lane),
+        floor_face(z, [-2.4, back], TRENCH_UPPER_FLOOR, lane),
+        ceiling_face(z, [-2.4, back], TRENCH_UPPER_CEILING, lane),
+        wall_face(z, -2.4, [0.0, TRENCH_UPPER_CEILING], lane),
     ]
 }
 
@@ -541,7 +541,7 @@ fn repro_ladders() -> Vec<Effect> {
         ));
     }
     effects.extend([
-        lane_ladder(ENG_LADDER_16, THROUGH_Z, 0.07, 3.2),
+        lane_ladder(ENG_LADDER_16, TRENCH_Z, 0.07, 3.2),
         lane_ladder(
             LADDER_16,
             RECESS_Z,
@@ -843,8 +843,8 @@ fn guides() -> Vec<Guide> {
     recess.goal = vec![on([0.6, 1.8], RECESS_DECK, [1.3, 2.5])];
     recess.notes = vec![("crouch here", [1.3, 1.4, 0.0])];
 
-    let mut through = Guide::repro(
-        THROUGH_Z,
+    let mut trench = Guide::repro(
+        TRENCH_Z,
         [
             "TRENCH LADDER (z 72)",
             "eng1 Ladder 317",
@@ -853,8 +853,8 @@ fn guides() -> Vec<Guide> {
         ],
         [0.76, 0.0, 0.0],
     );
-    through.goal = vec![on([0.4, 1.4], THROUGH_UPPER_FLOOR, [1.2, 2.0])];
-    through.notes = vec![("step sideways", [0.9, 5.9, 0.9])];
+    trench.goal = vec![on([0.4, 1.4], TRENCH_UPPER_FLOOR, [1.2, 2.0])];
+    trench.notes = vec![("step sideways", [0.9, 5.9, 0.9])];
 
     let mut midmount = Guide::repro(
         MIDMOUNT_Z,
@@ -954,7 +954,7 @@ fn guides() -> Vec<Guide> {
         capped,
         setback,
         recess,
-        through,
+        trench,
         midmount,
         jump,
     ]

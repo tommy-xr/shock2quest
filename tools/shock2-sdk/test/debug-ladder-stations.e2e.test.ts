@@ -31,6 +31,8 @@ type Station = { lane: number; outside: Region[] };
 /// Half the crouched capsule's height: a body centre this close under a
 /// ceiling already has its crown through it, whatever the stance.
 const CROUCH_HALF_HEIGHT = 0.56;
+/// Half the standing capsule's height (6 ft / 2.5 / 2).
+const STANDING_HALF_HEIGHT = 1.2;
 
 /// The region whose body centres put the crown through a ceiling at `y`.
 function above(d: [number, number], y: number): Region {
@@ -65,10 +67,13 @@ const RECESS: Station = {
     above([-4, 0], 11.2),
   ],
 };
-const THROUGH: Station = {
+const TRENCH: Station = {
   lane: 72,
   // Through the 6.4 ceiling over the ladder or the taller one past it, or
   // behind the ladder wall (the room there is not reachable from the trench).
+  // Like every station's ceiling regions this uses the crouched half-height,
+  // so a standing crown is caught only once well through; the test also
+  // checks the stall height directly.
   outside: [above([0, 1.67], 6.4), above([1.67, 5.6], 9.6), solid([-FAR, 0])],
 };
 const MIDMOUNT: Station = {
@@ -337,25 +342,26 @@ test(
   async () => {
     await using game = await launch();
     await startTrail(game);
-    const run = new Run(game, THROUGH);
-    await place(game, THROUGH, 0.76, 1.244);
+    const run = new Run(game, TRENCH);
+    await place(game, TRENCH, 0.76, 1.244);
     const start = await run.pos();
     await game.input.lookAtWorldPoint([start.x - 10, start.y + 6, start.z]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
     const stall = await climbToStall(run, 480, 4.5);
     assert.ok(
-      stall.y > 4.9 && stall.y + 1.2 <= 6.45,
+      stall.y > 4.9 && stall.y + STANDING_HALF_HEIGHT <= 6.4,
       `trench: the climb should stall just under the ceiling (y=${stall.y.toFixed(3)})`,
     );
     await stepSideways(game, run, 3.2);
 
-    await shootTrail(game, "through");
+    await shootTrail(game, "trench");
     run.assertStayedInside();
     const end = await run.assertSupportedOn(3.2, "trench");
-    // Wholly on the shelf: past its edge (0.63) by the standing radius.
+    // Wholly on the shelf (0.63..2.23): a standing radius inside both edges.
+    const w = end.z - TRENCH.lane;
     assert.ok(
-      end.z - THROUGH.lane > 1.11,
-      `trench: should end on the shelf beside the ladder (w=${(end.z - THROUGH.lane).toFixed(3)})`,
+      w > 0.63 + 0.48 && w < 2.23 - 0.48 + 0.05,
+      `trench: should end on the shelf beside the ladder (w=${w.toFixed(3)})`,
     );
   },
 );
