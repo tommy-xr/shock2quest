@@ -1077,8 +1077,8 @@ where
     /// cylinder whose axis is panel-local +Y: the canvas width spans `arc`,
     /// curving away from the viewer at both sides (a band around a wrist).
     /// `root_transform` must scale panel x and z alike, or the arc flattens.
-    /// Quads are cut into chord-exact column facets; text stays flat, tangent
-    /// at its centre.
+    /// Quads become column strips on the arc; text stays flat, tangent at its
+    /// centre.
     pub fn render_world_space_bent(
         &self,
         asset_cache: &mut AssetCache,
@@ -1111,32 +1111,54 @@ where
                 objects.push(facet);
                 continue;
             };
+            // One strip mesh per element: neighbouring columns share their
+            // edge vertices, so the band cannot crack at column boundaries.
             // Columns of at most ~8 degrees keep the chord error invisible.
             let columns = ((x1 - x0) / radius / 8f32.to_radians()).ceil().max(1.0) as usize;
+            let vertex = |t: f32, v: f32| {
+                let p =
+                    (object.local_transform * vec3(t - 0.5, v - 0.5, 0.0).extend(1.0)).truncate();
+                engine::scene::VertexPositionTextureNormal {
+                    position: bend_point(radius, vec3(p.x, p.y, z)),
+                    uv: vec2(
+                        uv_min.x + (uv_max.x - uv_min.x) * t,
+                        uv_min.y + (uv_max.y - uv_min.y) * v,
+                    ),
+                    normal: vec3(0.0, 0.0, 1.0),
+                }
+            };
+            let mut vertices = Vec::with_capacity(columns * 6);
             for column in 0..columns {
                 let (t0, t1) = (
                     column as f32 / columns as f32,
                     (column + 1) as f32 / columns as f32,
                 );
-                let mut slice = object.clone();
-                let u = |t: f32| uv_min.x + (uv_max.x - uv_min.x) * t;
-                slice.geometry = Rc::new(Box::new(engine::scene::quad::create_with_uv(
-                    vec2(u(t0), uv_min.y),
-                    vec2(u(t1), uv_max.y),
-                )));
-                // The unit quad spans x in [-0.5, 0.5]; keep only this column.
-                slice.set_local_transform(
-                    object.local_transform
-                        * Matrix4::from_translation(vec3((t0 + t1) * 0.5 - 0.5, 0.0, 0.0))
-                        * Matrix4::from_nonuniform_scale(t1 - t0, 1.0, 1.0),
-                );
-                let (s0, s1) = (x0 + (x1 - x0) * t0, x0 + (x1 - x0) * t1);
-                slice.set_transform(root_transform * bend_facet(radius, s0, s1, z));
-                objects.push(slice);
+                // The unit quad's winding, so the material culls the same way.
+                vertices.extend([
+                    vertex(t0, 0.0),
+                    vertex(t0, 1.0),
+                    vertex(t1, 1.0),
+                    vertex(t1, 0.0),
+                    vertex(t1, 1.0),
+                    vertex(t0, 0.0),
+                ]);
             }
+            let mut strip = object;
+            strip.geometry = Rc::new(Box::new(engine::scene::mesh::create(vertices)));
+            strip.set_local_transform(Matrix4::from_scale(1.0));
+            strip.set_transform(root_transform);
+            objects.push(strip);
         }
         objects
     }
+}
+
+/// A flat panel point on the cylinder of [`bend_facet`]: `x` becomes arc
+/// length, `z` lift along the outward normal.
+fn bend_point(radius: f32, p: Vector3<f32>) -> Vector3<f32> {
+    let angle = p.x / radius;
+    let reach = radius + p.z;
+    vec3(reach * angle.sin(), p.y, reach * angle.cos() - radius)
 }
 
 /// Carry the flat panel strip `x0..x1` onto a cylinder of `radius` (axis +Y,
@@ -1587,6 +1609,8 @@ mod tests {
             // Chord ends sit exactly on the arc, so neighbours share an edge.
             assert!((left - on_arc(x0)).magnitude() < 1e-5);
             assert!((right - on_arc(x1)).magnitude() < 1e-5);
+            // Strips and text facets land on the same cylinder.
+            assert!((bend_point(radius, vec3(x0, 0.0, 0.0)) - left).magnitude() < 1e-5);
             let mid = (left + right) * 0.5;
             let normal = facet.z.truncate().normalize();
             assert!(normal.dot((mid - center).normalize()) > 0.999);
