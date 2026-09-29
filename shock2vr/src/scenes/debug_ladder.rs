@@ -40,7 +40,7 @@
 
 use std::{f32::consts::FRAC_1_SQRT_2, rc::Rc};
 
-use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, Vector3, vec3};
+use cgmath::{Deg, Matrix4, Point3, Quaternion, Rad, Rotation3, Vector3, vec3};
 use dark::importers::FONT_IMPORTER;
 use engine::{Font, assets::asset_cache::AssetCache, audio::AudioContext, scene::SceneObject};
 use rapier3d::prelude::{ColliderBuilder, Isometry, SharedShape};
@@ -48,13 +48,15 @@ use shipyard::EntityId;
 
 use crate::{
     GameOptions,
-    game_scene::GameScene,
+    game_scene::{DebuggableScene, GameScene},
+    input_context::InputContext,
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     scenes::debug_common::{
         DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene, cube_object,
         shaded_cube_object, spawn_at_oriented,
     },
     scripts::Effect,
+    time::Time,
 };
 
 /// `Rick Ladder 16` / `Rick Ladder 4`: one-piece ladders, 16 and 4 SS2 feet
@@ -663,19 +665,49 @@ pub fn create_debug_ladder_scene(
          (rick1 532), z=48 setback pit under a deck (rick1 488), z=60 deck hole (rick1 499),\n\
          z=72 trench ladder (eng1 317), z=84 mid-ladder mount (hydro2 551), z=96 jump grab\n\
          (rick2 210). Each station's sign names its case and start pad (cyan); yellow marks the\n\
-         route, green the correct end. Enclosed stations: POST /v1/player/teleport to the pad\n\
-         position on the sign."
+         route, green the correct end. Repro stations are enclosed: step on a station's magenta\n\
+         \"to\" pad (beside its sign) to go to its start pad, and on its \"exit\" pad to come back\n\
+         (or POST /v1/player/teleport to the position on the sign)."
     );
 
-    Box::new(HookedDebugScene::new(core, LadderHooks::default()))
+    let hooks = LadderHooks {
+        populated: false,
+        pads: teleport_pads(&guides()),
+        on_pad: None,
+    };
+    Box::new(HookedDebugScene::new(core, hooks))
 }
 
-#[derive(Default)]
 struct LadderHooks {
     populated: bool,
+    pads: Vec<TeleportPad>,
+    /// The pad the player stood on last frame: a pad fires on entry only.
+    on_pad: Option<usize>,
 }
 
 impl DebugSceneHooks for LadderHooks {
+    fn before_update(
+        &mut self,
+        core: &mut MissionCore,
+        _time: &Time,
+        _input_context: &InputContext,
+        _asset_cache: &mut AssetCache,
+        _game_options: &GameOptions,
+    ) {
+        let position = core.player_position();
+        let on_pad = self.pads.iter().position(|pad| pad.contains(position));
+        if let Some(index) = on_pad.filter(|_| on_pad != self.on_pad) {
+            // The same move as POST /v1/player/teleport, so flat and VR agree.
+            let pad = &self.pads[index];
+            let _ = if pad.crouched {
+                core.teleport_player_crouched(pad.to)
+            } else {
+                core.teleport_player(pad.to)
+            };
+        }
+        self.on_pad = on_pad;
+    }
+
     fn before_handle_effects(
         &mut self,
         core: &mut MissionCore,
@@ -761,10 +793,16 @@ struct Guide {
     lines: [&'static str; 4],
     /// Start pad centre on its surface: `d`, surface `y`, `w`.
     pad: [f32; 3],
+    /// The start pad has no standing headroom: arrive (and stay) crouched.
+    crouched: bool,
     path: Vec<Span>,
     goal: Vec<Span>,
     /// Step notes ("crouch here", "jump") at lane-frame points.
     notes: Vec<(&'static str, [f32; 3])>,
+    /// Enclosed stations: the go pad's label, and exit pads (lane-frame
+    /// surface points, clear of the tested route) that lead back out.
+    short: &'static str,
+    exits: Vec<[f32; 3]>,
 }
 
 impl Guide {
@@ -775,33 +813,124 @@ impl Guide {
             sign: [3.5, 3.4],
             lines,
             pad: [NEAR_D, 0.0, 0.0],
+            crouched: false,
             path: Vec::new(),
             goal: goal
                 .map(|(d, y)| on(d, y, [-0.6, 0.6]))
                 .into_iter()
                 .collect(),
             notes: Vec::new(),
+            short: "",
+            exits: Vec::new(),
         }
     }
 
     /// A repro station: the sign stands in front of everything it builds.
-    fn repro(lane: f32, lines: [&'static str; 4], pad: [f32; 3]) -> Self {
+    fn repro(
+        lane: f32,
+        short: &'static str,
+        lines: [&'static str; 4],
+        pad: [f32; 3],
+        exits: Vec<[f32; 3]>,
+    ) -> Self {
         Guide {
             lane,
             sign: [8.5, 3.4],
             lines,
             pad,
+            crouched: false,
             path: Vec::new(),
             goal: Vec::new(),
             notes: Vec::new(),
+            short,
+            exits,
         }
     }
+
+    /// Where a test (or a pad) puts the player's body centre on the start pad.
+    fn start_pose(&self) -> Vector3<f32> {
+        let [d, y, w] = self.pad;
+        let lift = crate::physics::player_center_above_floor(self.crouched);
+        lane_point(self.lane, [d, y + lift, w])
+    }
+}
+
+/// Signs and labels face +X, toward the spawn the stations are approached from.
+const APPROACH: Deg<f32> = Deg(90.0);
+
+/// A world point from lane-frame `d`, `y`, `w`.
+fn lane_point(lane: f32, [d, y, w]: [f32; 3]) -> Vector3<f32> {
+    vec3(STATION_FACE_X + d, y, lane + w)
+}
+
+// Teleport pads: enclosed stations cannot be walked into, so each gets a go
+// pad on the open floor beside its sign and exit pads inside. Stepping onto a
+// pad moves the player; no arrival point lies on a pad (see the test).
+
+const TELEPORT_COLOR: Vector3<f32> = vec3(0.9, 0.2, 0.85);
+/// Pad half-size across the floor.
+const TELEPORT_HALF: f32 = 0.4;
+/// Go pads, lane frame: beside the repro signs (d 8.5, w 0).
+const GO_PAD: [f32; 3] = [10.0, 0.0, 3.0];
+/// An exit lands this far past its station's go pad (toward the spawn side).
+const EXIT_ARRIVAL_D: f32 = 2.0;
+
+struct TeleportPad {
+    /// Centre of the pad on its surface.
+    centre: Vector3<f32>,
+    /// Body centre the player is moved to.
+    to: Vector3<f32>,
+    text: String,
+    /// Label facing: toward where the player sees the pad from.
+    facing: Deg<f32>,
+    /// `to` is a crouched body centre: arrive in the crouched capsule.
+    crouched: bool,
+}
+
+impl TeleportPad {
+    /// The body centre is over the pad, standing or crouched on it.
+    fn contains(&self, position: Vector3<f32>) -> bool {
+        let offset = position - self.centre;
+        offset.x.abs() <= TELEPORT_HALF
+            && offset.z.abs() <= TELEPORT_HALF
+            && (0.3..=1.8).contains(&offset.y)
+    }
+}
+
+fn teleport_pads(guides: &[Guide]) -> Vec<TeleportPad> {
+    let mut pads = Vec::new();
+    for guide in guides.iter().filter(|guide| !guide.exits.is_empty()) {
+        let [d, y, w] = GO_PAD;
+        let standing = crate::physics::player_center_above_floor(false);
+        let back = lane_point(guide.lane, [d + EXIT_ARRIVAL_D, y + standing, w]);
+        let start = guide.start_pose();
+        pads.push(TeleportPad {
+            centre: lane_point(guide.lane, GO_PAD),
+            to: start,
+            text: format!("to {}", guide.short),
+            facing: APPROACH,
+            crouched: guide.crouched,
+        });
+        for exit in &guide.exits {
+            let centre = lane_point(guide.lane, *exit);
+            let toward = start - centre;
+            pads.push(TeleportPad {
+                centre,
+                to: back,
+                text: "exit".to_string(),
+                facing: Rad(toward.x.atan2(toward.z)).into(),
+                crouched: false,
+            });
+        }
+    }
+    pads
 }
 
 fn guides() -> Vec<Guide> {
     let centre = [-0.6, 0.6];
     let mut capped = Guide::repro(
         CAPPED_Z,
+        "capped",
         [
             "CEILING-CAPPED LADDER (z 36)",
             "rick1 Ladder 532 - #1770",
@@ -809,6 +938,7 @@ fn guides() -> Vec<Guide> {
             "Correct: stop under ceiling, jump back.",
         ],
         [0.729, 0.0, 0.0],
+        vec![[1.7, 0.0, 0.55]],
     );
     capped.path = vec![on([CAPPED_PIT_DEPTH, 2.8], CAPPED_UPPER_FLOOR, [-0.1, 0.1])];
     capped.goal = vec![on([2.8, 3.8], CAPPED_UPPER_FLOOR, centre)];
@@ -816,6 +946,7 @@ fn guides() -> Vec<Guide> {
 
     let mut setback = Guide::repro(
         SETBACK_Z,
+        "setback",
         [
             "SETBACK LADDER (z 48)",
             "rick1 Ladder 488",
@@ -823,6 +954,7 @@ fn guides() -> Vec<Guide> {
             "sideways onto the y34 floor.",
         ],
         [1.2, 0.0, 0.0],
+        vec![[2.6, 0.0, -0.6]],
     );
     setback.goal = vec![on([0.6, 1.8], 4.4, [1.6, 2.8])];
     setback.notes = vec![
@@ -832,6 +964,7 @@ fn guides() -> Vec<Guide> {
 
     let mut recess = Guide::repro(
         RECESS_Z,
+        "deck hole",
         [
             "DECK-HOLE LADDER (z 60)",
             "rick1 Ladder 499",
@@ -839,12 +972,14 @@ fn guides() -> Vec<Guide> {
             "sideways onto the deck.",
         ],
         [0.89, 0.0, 0.0],
+        vec![[2.5, 0.0, -2.5]],
     );
     recess.goal = vec![on([0.6, 1.8], RECESS_DECK, [1.3, 2.5])];
     recess.notes = vec![("crouch here", [1.3, 1.4, 0.0])];
 
     let mut trench = Guide::repro(
         TRENCH_Z,
+        "trench",
         [
             "TRENCH LADDER (z 72)",
             "eng1 Ladder 317",
@@ -852,12 +987,14 @@ fn guides() -> Vec<Guide> {
             "sideways onto the shelf.",
         ],
         [0.76, 0.0, 0.0],
+        vec![[4.6, 0.0, -0.07]],
     );
     trench.goal = vec![on([0.4, 1.4], TRENCH_UPPER_FLOOR, [1.2, 2.0])];
     trench.notes = vec![("step sideways", [0.9, 5.9, 0.9])];
 
     let mut midmount = Guide::repro(
         MIDMOUNT_Z,
+        "mid-mount",
         [
             "MID-LADDER MOUNT (z 84)",
             "hydro2 Ladder 551 - #802",
@@ -865,6 +1002,7 @@ fn guides() -> Vec<Guide> {
             "Correct: grab the rungs, no drop.",
         ],
         [2.0, MIDMOUNT_OFFICE, 0.0],
+        vec![[4.5, MIDMOUNT_OFFICE, 2.5]],
     );
     midmount.sign[1] = 6.6;
     midmount.path = vec![on([MIDMOUNT_HOLE_D, 2.0], MIDMOUNT_OFFICE, [-0.1, 0.1])];
@@ -873,6 +1011,7 @@ fn guides() -> Vec<Guide> {
 
     let mut jump = Guide::repro(
         JUMP_GRAB_Z,
+        "jump grab",
         [
             "JUMP-TO-LADDER GRAB (z 96)",
             "rick2 Ladder 210 - #907",
@@ -880,7 +1019,11 @@ fn guides() -> Vec<Guide> {
             "turn in. Correct: grab above the band.",
         ],
         [1.286, JUMP_GRAB_PLATFORM_TOP, -1.789],
+        vec![[1.17, JUMP_GRAB_PLATFORM_TOP, -2.95], [4.5, 0.0, -0.7]],
     );
+    // 1.6 under the ceiling: only a crouched body fits on the pipe, so its
+    // go pad arrives crouched.
+    jump.crouched = true;
     jump.path = vec![on([1.2, 1.37], JUMP_GRAB_PLATFORM_TOP, [-1.789, -1.269])];
     // A band on the ladder wall: a correct grab happens at 14.1 or above.
     jump.goal = vec![([0.0, 0.02], [14.1, JUMP_GRAB_CEILING], [-0.7, 0.7])];
@@ -960,14 +1103,21 @@ fn guides() -> Vec<Guide> {
     ]
 }
 
-/// A world-space label centred on `centre`, `height` tall, facing +X (the
-/// approach). The glyphs use the shared canvas-y-down text geometry in flat
-/// and VR; the flip here is its one boundary conversion.
-fn label(font: &Rc<Box<dyn Font>>, text: &str, centre: Vector3<f32>, height: f32) -> SceneObject {
+/// A world-space label centred on `centre`, `height` tall, readable from
+/// `facing` (yaw about +Y; 90 degrees faces +X, the approach). The glyphs use
+/// the shared canvas-y-down text geometry in flat and VR; the flip here is its
+/// one boundary conversion.
+fn label(
+    font: &Rc<Box<dyn Font>>,
+    text: &str,
+    centre: Vector3<f32>,
+    height: f32,
+    facing: Deg<f32>,
+) -> SceneObject {
     let mut object = SceneObject::world_space_text(text, font.clone(), 0.0);
     object.set_transform(
         Matrix4::from_translation(centre)
-            * Matrix4::from_angle_y(Deg(90.0))
+            * Matrix4::from_angle_y(facing)
             * Matrix4::from_nonuniform_scale(
                 height * engine::measure_text_width(&***font, text, 1.0),
                 height,
@@ -979,18 +1129,34 @@ fn label(font: &Rc<Box<dyn Font>>, text: &str, centre: Vector3<f32>, height: f32
 }
 
 fn guide_objects(font: &Rc<Box<dyn Font>>) -> Vec<SceneObject> {
+    let guides = guides();
     let mut objects = Vec::new();
-    for guide in guides() {
+    for pad in teleport_pads(&guides) {
+        let size = vec3(2.0 * TELEPORT_HALF, MARK_LIFT, 2.0 * TELEPORT_HALF);
+        let centre = pad.centre + vec3(0.0, MARK_LIFT / 2.0, 0.0);
+        objects.push(cube_object(TELEPORT_COLOR, centre, size));
+        objects.push(label(
+            font,
+            &pad.text,
+            pad.centre + vec3(0.0, 1.0, 0.0),
+            0.16,
+            pad.facing,
+        ));
+    }
+    for guide in guides {
         let lane = guide.lane;
-        let at = |[d, y, w]: [f32; 3]| vec3(STATION_FACE_X + d, y, lane + w);
+        let at = |point: [f32; 3]| lane_point(lane, point);
         let [sign_d, sign_y] = guide.sign;
         let [d, y, w] = guide.pad;
-        // Most stations are enclosed as in their mission: enter by teleport
-        // (POST /v1/player/teleport) to the pad, standing height above it.
-        let pad_point = at([d, y + 1.244, w]);
+        // Enclosed stations are entered by their go pad or by teleport
+        // (POST /v1/player/teleport) to the pad's start pose.
+        let pad_point = guide.start_pose();
         let enter = format!(
-            "Enter: teleport {:.2}, {:.2}, {:.2}",
-            pad_point.x, pad_point.y, pad_point.z
+            "Enter: teleport {:.2}, {:.2}, {:.2}{}",
+            pad_point.x,
+            pad_point.y,
+            pad_point.z,
+            if guide.crouched { " (crouched)" } else { "" }
         );
         let lines = guide.lines.iter().copied().chain([enter.as_str()]);
         for (i, line) in lines.enumerate() {
@@ -998,7 +1164,13 @@ fn guide_objects(font: &Rc<Box<dyn Font>>) -> Vec<SceneObject> {
                 0 => (0.22, 0.0),
                 _ => (0.14, 0.12 + 0.22 * i as f32),
             };
-            objects.push(label(font, line, at([sign_d, sign_y - drop, 0.0]), height));
+            objects.push(label(
+                font,
+                line,
+                at([sign_d, sign_y - drop, 0.0]),
+                height,
+                APPROACH,
+            ));
         }
         let pad = on([d - 0.35, d + 0.35], y, [w - 0.35, w + 0.35]);
         let spans = std::iter::once((PAD_COLOR, pad))
@@ -1009,8 +1181,31 @@ fn guide_objects(font: &Rc<Box<dyn Font>>) -> Vec<SceneObject> {
             objects.push(cube_object(color, centre, size));
         }
         for (text, point) in guide.notes {
-            objects.push(label(font, text, at(point), 0.12));
+            objects.push(label(font, text, at(point), 0.12, APPROACH));
         }
     }
     objects
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_teleport_pad_lands_the_player_on_a_pad() {
+        // Arriving on a pad would fire it straight back (or onward).
+        let pads = teleport_pads(&guides());
+        assert!(!pads.is_empty());
+        for pad in &pads {
+            for other in &pads {
+                assert!(
+                    !other.contains(pad.to),
+                    "'{}' lands on '{}' at {:?}",
+                    pad.text,
+                    other.text,
+                    other.centre
+                );
+            }
+        }
+    }
 }
