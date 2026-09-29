@@ -2689,8 +2689,12 @@ pub struct MoveResult {
     /// the player under gravity).
     pub moved: bool,
     /// Whether the player failed to cover the requested distance - stopped by
-    /// geometry (a wall or a closed door; stairs and ramps are walked over).
+    /// geometry, the bounded radius, or insufficient progress. Not a pathfinding
+    /// verdict: a short hop can reject an otherwise walkable step or slide.
     pub blocked: bool,
+    /// A collision-checked solver step was rejected because its endpoint would
+    /// exceed this call's horizontal radius. This is not proof of a dead end.
+    pub budget_limited: bool,
     /// The player's new world position after the move.
     pub new_position: Vector3<f32>,
     /// How much closer the player got to the bounded horizontal destination
@@ -4424,10 +4428,12 @@ impl PhysicsWorld {
     /// increments through [`step_player_movement`] - the same character
     /// controller, gravity/ground-snapping and stair step-up path real player
     /// movement uses, fed the same horizontal walk vector. So it traverses
-    /// whatever the player can actually walk over (stairs, ramps, small ledges)
-    /// instead of reporting the first riser as a wall (issue #559), and the
-    /// vertical result is whatever walking produces - the requested `y` only
-    /// picks a direction to walk in, it is never moved along.
+    /// stairs, ramps and small ledges when their step/slide fits the requested
+    /// horizontal radius. A shorter request can reject a valid step;
+    /// `budget_limited` identifies that limit rather than a geometric dead end.
+    /// Unlike production locomotion, this call does not advance simulation frames
+    /// or moving obstacles. Walking decides the vertical result; requested `y`
+    /// is ignored.
     ///
     /// Safety is unchanged: every applied translation comes from the
     /// controller's shape-cast solver or the step probe's collision-checked
@@ -4464,6 +4470,7 @@ impl PhysicsWorld {
                 return MoveResult {
                     moved: false,
                     blocked: true,
+                    budget_limited: false,
                     new_position: current,
                     distance_moved: 0.0,
                     requested_distance: if requested_distance.is_finite() {
@@ -4490,6 +4497,7 @@ impl PhysicsWorld {
             return MoveResult {
                 moved: rewound_top_out,
                 blocked: false,
+                budget_limited: false,
                 new_position: current,
                 distance_moved: 0.0,
                 requested_distance: 0.0,
@@ -4530,6 +4538,7 @@ impl PhysicsWorld {
         let walk_dir = vector![delta_h.x / dist, 0.0, delta_h.z / dist];
         let destination = start + walk_dir * requested_distance;
         let mut stalled_substeps = 0;
+        let mut budget_limited = false;
         let mut grounded = player_handle.is_grounded;
         // Sensor volumes the player occupies, carried across the sweep. The hop
         // is committed as one jump, so without polling per substep any volume
@@ -4614,6 +4623,7 @@ impl PhysicsWorld {
                 // a bounded hop. Never commit a solver result outside the
                 // requested horizontal radius.
                 if from_start.norm() > requested_distance + PLAYER_MOVE_ARRIVAL_EPSILON {
+                    budget_limited = true;
                     break;
                 }
                 let after = vector![
@@ -4672,6 +4682,7 @@ impl PhysicsWorld {
         MoveResult {
             moved,
             blocked: remaining > PLAYER_MOVE_ARRIVAL_EPSILON,
+            budget_limited,
             new_position,
             distance_moved,
             requested_distance,
@@ -13680,8 +13691,8 @@ mod tests {
     #[test]
     fn validated_move_steps_up_stairs_but_not_walls() {
         // Walk +x into an obstacle `obstacle_height` tall using validated
-        // moves only; report (x advanced, y gained, any call reported blocked).
-        let run = |obstacle_height: f32| -> (f32, f32, bool) {
+        // moves only; report progress, climb height, and which limits were hit.
+        let run = |obstacle_height: f32, hop: f32| -> (f32, f32, bool, bool) {
             let mut world = PhysicsWorld::new();
             // Floor top at y=0 (parentless trimesh, like level geometry).
             let floor_verts = vec![
@@ -13717,25 +13728,48 @@ mod tests {
             }
             let start = world.get_player_translation(&player);
             let mut blocked_any = false;
+            let mut budget_limited_any = false;
             let mut max_y = start.y;
             for _ in 0..4 {
                 let current = world.get_player_translation(&player);
-                // Leave enough horizontal budget for the capsule axis to plant
-                // on the tread. A shorter target can end before any valid
+                // A long hop lets the capsule axis plant on the tread.
+                // A short target can end before any valid
                 // standing pose on top of the riser and must remain bounded
                 // rather than overshoot that target.
                 let result =
-                    world.move_player_validated(current + vec3(1.5, 0.0, 0.0), &mut player);
+                    world.move_player_validated(current + vec3(hop, 0.0, 0.0), &mut player);
                 blocked_any |= result.blocked;
+                budget_limited_any |= result.budget_limited;
+                assert!(
+                    vec3(
+                        result.new_position.x - current.x,
+                        0.0,
+                        result.new_position.z - current.z
+                    )
+                    .magnitude()
+                        <= hop + PLAYER_MOVE_ARRIVAL_EPSILON
+                );
                 max_y = max_y.max(result.new_position.y);
             }
             let end = world.get_player_translation(&player);
-            (end.x - start.x, max_y - start.y, blocked_any)
+            (
+                end.x - start.x,
+                max_y - start.y,
+                blocked_any,
+                budget_limited_any,
+            )
         };
 
         // 1.5 SS2 ft (0.6 wu) - a typical stair riser: walkable, so validated
         // moves must climb it and cross the platform.
-        let (riser_x, riser_y, riser_blocked) = run(0.6);
+        let (riser_x, riser_y, riser_blocked, riser_budget) = run(0.6, 1.5);
+        assert!(!riser_budget);
+        let (short_x, _, short_blocked, short_budget) = run(0.6, 0.3);
+        assert!(
+            short_blocked && short_budget,
+            "short riser hop must identify the radius limit"
+        );
+        assert!(short_x < 1.0);
         assert!(
             riser_x > 5.0,
             "a validated move should walk over a 1.5 ft riser, advanced {riser_x}"
@@ -13752,7 +13786,8 @@ mod tests {
         // A full-height wall: the safety property - the player stops in front
         // of it (the capsule's own radius is the only advance) and never
         // passes through.
-        let (wall_x, _, wall_blocked) = run(10.0);
+        let (wall_x, _, wall_blocked, wall_budget) = run(10.0, 1.5);
+        assert!(!wall_budget, "a solid wall is not a budget failure");
         assert!(
             wall_blocked,
             "a solid wall must still report blocked, advanced {wall_x}"

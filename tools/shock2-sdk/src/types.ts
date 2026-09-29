@@ -863,12 +863,14 @@ export interface TeleportResult {
 export interface MoveResult {
   /** Whether the player position actually changed. */
   moved: boolean;
-  /** Whether the move hit geometry before the full clamped distance. */
+  /** Whether the bounded destination was not reached; not a dead-end verdict. */
   blocked: boolean;
+  /** A collision-safe step/slide was rejected by the requested horizontal radius. */
+  budget_limited: boolean;
   new_position: Vec3;
-  /** How far the player actually advanced (world units). */
+  /** Reduction in distance to the bounded horizontal destination (world units). */
   distance_moved: number;
-  /** The distance the move was allowed to attempt: `min(target distance, 5.0)`. */
+  /** The distance the move was allowed to attempt: `min(horizontal target distance, 5.0)`. */
   requested_distance: number;
 }
 
