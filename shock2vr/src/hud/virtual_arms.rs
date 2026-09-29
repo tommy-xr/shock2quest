@@ -239,7 +239,7 @@ fn wrist_panel_transform(
     let width = if ammo { 0.058 } else { BIO_WIDTH };
     let placed = if ammo {
         roll_upright(
-            root * Matrix4::from_translation(vec3(0.0, -0.033, -0.005))
+            root * Matrix4::from_translation(vec3(0.0, -0.026, -0.005))
                 * Matrix4::from_angle_x(Deg(90.0)),
         )
     } else {
