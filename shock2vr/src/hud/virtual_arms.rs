@@ -81,9 +81,8 @@ pub fn create_wrist_hud_panels(
                 );
             objects.extend(canvas.render_world_space(asset_cache, transform, None, None, 0.001));
         }
-        // Some weapons carry an authored hand instead of our glove. Give
-        // their complete shared readout a hologram mount; there is no physical
-        // cuff to host it. Otherwise charging in VR would be invisible.
+        // Some weapons carry an authored hand instead of our glove. Give a
+        // melee charge a hologram mount; there is no physical cuff to host it.
         // Only a steadied gun lends its readout: a melee weapon's charge
         // already shows on the hand swinging it.
         let steadied_gun = supported[i].filter(|&entity| {
@@ -99,7 +98,7 @@ pub fn create_wrist_hud_panels(
             world,
             crate::wielded_weapon::held_by_hand(world, hand),
         ) {
-            if readout.psi_power.is_some() || readout.melee_charge.is_some() {
+            if readout.melee_charge.is_some() {
                 let canvas = ammo_panel::build_wrist_canvas(&readout);
                 objects.extend(canvas.render_world_space(
                     asset_cache,
@@ -123,7 +122,8 @@ pub fn create_wrist_hud_panels(
             0.001 / BIO_WIDTH,
         ));
         let ammo_canvas = ammo_panel::build_wrist_canvas(&readout);
-        if ammo_canvas.element_count() > 0 {
+        // A psi amp carries its own readout (`psi_amp_readout`).
+        if ammo_canvas.element_count() > 0 && readout.psi_power.is_none() {
             objects.extend(ammo_canvas.render_world_space(
                 asset_cache,
                 wrist_panel_transform(root, ammo_canvas.size(), true),

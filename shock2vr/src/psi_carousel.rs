@@ -97,7 +97,7 @@ fn visible_slot(slot: f32) -> f32 {
     (slot + 3.5).rem_euclid(7.0) - 3.5
 }
 
-fn projection_frame(
+pub(crate) fn projection_frame(
     origin: cgmath::Vector3<f32>,
     eye: cgmath::Vector3<f32>,
 ) -> cgmath::Matrix4<f32> {
@@ -120,7 +120,7 @@ fn projection_frame(
     )
 }
 
-fn luminous_icon(canvas: &mut UiCanvas, rect: Rect, texture: &str, alpha: f32) {
+pub(crate) fn luminous_icon(canvas: &mut UiCanvas, rect: Rect, texture: &str, alpha: f32) {
     canvas.push(crate::ui::UiElement::Image {
         position: vec2(rect.x, rect.y),
         size: vec2(rect.w, rect.h),
