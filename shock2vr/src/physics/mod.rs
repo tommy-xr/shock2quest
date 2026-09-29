@@ -7099,7 +7099,7 @@ impl PhysicsWorld {
             player_handle.air_velocity = Vector::zeros();
             player_handle.is_grounded = false;
         } else if player_handle.is_climbing {
-            // A grip taken mid-fall ends the ballistic arc.
+            // Climbing owns vertical movement; a grip taken mid-arc ends it.
             player_handle.jump_velocity = None;
             player_handle.air_velocity = Vector::zeros();
             player_handle.is_grounded = mvt.grounded;
