@@ -30,7 +30,7 @@
 //! - `z = 36`  capped: stacked ladders running up into a ceiling (rick1 532).
 //! - `z = 48`  setback: ladder in a pit under a closed deck slab (rick1 488).
 //! - `z = 60`  deck hole: ladder up through a hole in a deck (rick1 499).
-//! - `z = 72`  through: ladder on a wall whose only exit is behind it (eng1 317).
+//! - `z = 72`  trench: ladder up a trench wall to a ceiling, exit onto the shelf (eng1 317).
 //! - `z = 84`  mid-mount: step off a ledge onto a rung stack (hydro2 551).
 //! - `z = 96`  jump grab: jump from a pipe onto a ladder (rick2 210).
 //!
@@ -360,10 +360,11 @@ fn recess_boxes() -> Vec<SceneBox> {
     boxes
 }
 
-/// eng1 Ladder 317: an eng1 `Ladder 16'` from the -19.8 corridor floor to
-/// its -13.4 ceiling, on a 0.4-thick wall. The -16.6 floor of the room
-/// behind that wall (3.2 above the corridor, ceiling -9.8) is the only exit;
-/// like Dark's top-out, reaching it passes through level terrain.
+/// eng1 Ladder 317: an eng1 `Ladder 16'` from the -19.8 trench floor to its
+/// -13.4 ceiling, on a 0.4-thick wall. Beyond the wall is a room at -16.6,
+/// unreachable from here: the climb meets the ceiling, and the original
+/// refuses a mantle with anything within 3.5 ft above the head. The exit is
+/// the -16.6 shelf beside the ladder (3.2 above the trench).
 const THROUGH_Z: f32 = 72.0;
 const THROUGH_CEILING: f32 = 6.4;
 const THROUGH_WALL: f32 = 0.4;
@@ -660,7 +661,7 @@ pub fn create_debug_ladder_scene(
          mantle block (no ladder), z=-16 plain wall (not climbable). Ladders are the shipped templates, so their\n\
          climbable flag and colliders are the production ones. Mission repros: z=36 capped ladder\n\
          (rick1 532), z=48 setback pit under a deck (rick1 488), z=60 deck hole (rick1 499),\n\
-         z=72 exit through the wall (eng1 317), z=84 mid-ladder mount (hydro2 551), z=96 jump grab\n\
+         z=72 trench ladder (eng1 317), z=84 mid-ladder mount (hydro2 551), z=96 jump grab\n\
          (rick2 210). Each station's sign names its case and start pad (cyan); yellow marks the\n\
          route, green the correct end. Enclosed stations: POST /v1/player/teleport to the pad\n\
          position on the sign."
@@ -845,15 +846,15 @@ fn guides() -> Vec<Guide> {
     let mut through = Guide::repro(
         THROUGH_Z,
         [
-            "EXIT THROUGH THE WALL (z 72)",
+            "TRENCH LADDER (z 72)",
             "eng1 Ladder 317",
-            "Pad: face the ladder, hold forward.",
-            "Correct: end on the floor behind it.",
+            "Climb to the ceiling, then step",
+            "sideways onto the shelf.",
         ],
         [0.76, 0.0, 0.0],
     );
-    through.goal = vec![on([-2.0, -0.6], THROUGH_UPPER_FLOOR, centre)];
-    through.notes = vec![("goal: floor behind this wall", [0.9, 5.9, 0.0])];
+    through.goal = vec![on([0.4, 1.4], THROUGH_UPPER_FLOOR, [1.2, 2.0])];
+    through.notes = vec![("step sideways", [0.9, 5.9, 0.9])];
 
     let mut midmount = Guide::repro(
         MIDMOUNT_Z,
