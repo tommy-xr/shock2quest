@@ -26,6 +26,7 @@ mod shoulder_backpack;
 pub mod spatial_query;
 mod spawn_location;
 pub mod stim_response;
+mod synthetic_panels;
 pub(crate) mod turn_clip;
 pub mod visibility_engine;
 

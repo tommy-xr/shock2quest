@@ -3289,93 +3289,43 @@ impl MissionCore {
                 dark::map::MapChunkData::load_from_mission(asset_cache, &level_stem)
                     .map(|data| (data.revealed_rects, data.explored_rects))
                     .unwrap_or_default();
-            let entity = world.add_entity((
-                Links::empty(),
-                PropScripts {
-                    scripts: vec!["internal_map".to_owned()],
-                    inherits: false,
-                },
-                dark::properties::PropTemplateId { template_id: -1 },
-                PropPosition {
-                    position: vec3(0.0, 0.0, 0.0),
-                    rotation: Quaternion {
-                        v: vec3(0.0, 0.0, 0.0),
-                        s: 1.0,
-                    },
-                    cell: 0,
-                },
-                RuntimePropTransform(Matrix4::identity()),
-                RuntimePropDoNotSerialize,
+            let entity = super::synthetic_panels::spawn(&mut world, "internal_map", None);
+            world.add_component(
+                entity,
                 crate::runtime_props::RuntimePropMapData {
                     mission: mission.clone(),
                     map_params: abstract_mission.map_params,
                     revealed_rects,
                     explored_rects,
                 },
-            ));
+            );
             world.add_unique(MapPanelEntity(entity));
         }
 
         // Both presentations share the exact MediaGui canvas. Flat docks this
         // synthetic host in its MFD slot; VR positions the same host in front
         // of the player's current gaze and routes it through GuiManager.
-        let media_panel = world.add_entity((
-            Links::empty(),
-            PropScripts {
-                scripts: vec!["internal_media".to_owned()],
-                inherits: false,
-            },
-            dark::properties::PropTemplateId { template_id: -1 },
-            PropSymName("Audio Log Reader".to_owned()),
-            PropPosition {
-                position: vec3(0.0, 0.0, 0.0),
-                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                cell: 0,
-            },
-            RuntimePropTransform(Matrix4::identity()),
-            RuntimePropDoNotSerialize,
-        ));
+        let media_panel =
+            super::synthetic_panels::spawn(&mut world, "internal_media", Some("Audio Log Reader"));
+
         world.add_unique(MediaPanelEntity(media_panel));
 
         // The weapon settings MFD's host. Like the reader above it has no world
         // object of its own: it presents whichever gun is wielded, so it is
         // rebuilt per mission and never serialized.
-        let weapon_settings_panel = world.add_entity((
-            Links::empty(),
-            PropScripts {
-                scripts: vec!["internal_weapon_settings".to_owned()],
-                inherits: false,
-            },
-            dark::properties::PropTemplateId { template_id: -1 },
-            PropSymName("Weapon Settings".to_owned()),
-            PropPosition {
-                position: vec3(0.0, 0.0, 0.0),
-                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                cell: 0,
-            },
-            RuntimePropTransform(Matrix4::identity()),
-            RuntimePropDoNotSerialize,
-        ));
+        let weapon_settings_panel = super::synthetic_panels::spawn(
+            &mut world,
+            "internal_weapon_settings",
+            Some("Weapon Settings"),
+        );
+
         world.add_unique(WeaponSettingsPanelEntity(weapon_settings_panel));
 
         // The psi power selection MFD's host, on the same terms: player state,
         // no world object, rebuilt per mission and never serialized.
-        let psi_powers_panel = world.add_entity((
-            Links::empty(),
-            PropScripts {
-                scripts: vec!["internal_psi_powers".to_owned()],
-                inherits: false,
-            },
-            dark::properties::PropTemplateId { template_id: -1 },
-            PropSymName("Psi Powers".to_owned()),
-            PropPosition {
-                position: vec3(0.0, 0.0, 0.0),
-                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                cell: 0,
-            },
-            RuntimePropTransform(Matrix4::identity()),
-            RuntimePropDoNotSerialize,
-        ));
+        let psi_powers_panel =
+            super::synthetic_panels::spawn(&mut world, "internal_psi_powers", Some("Psi Powers"));
+
         world.add_unique(PsiPowersPanelEntity(psi_powers_panel));
 
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
@@ -6394,18 +6344,13 @@ impl MissionCore {
                 .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
                 .map(|panel| panel.0)
                 .ok();
-            let ours_is_docked = panel.is_some() && self.flat_ui.active_panel() == panel;
             let put_away = crate::scripts::gui::should_close_settings_panel(
                 opened_for,
                 crate::wielded_weapon::held_in_hand(&self.world, opened_for).then_some(opened_for),
                 self.entity_exists(opened_for),
             );
-            if put_away && !self.flat_ui.device {
-                if ours_is_docked {
-                    self.flat_ui.close();
-                }
-                self.weapon_settings_gun = None;
-            } else if !ours_is_docked {
+            let dismiss = put_away && !self.flat_ui.device;
+            if !super::synthetic_panels::retain_docked(&mut self.flat_ui, panel, dismiss) {
                 self.weapon_settings_gun = None;
             }
         }
@@ -6420,13 +6365,9 @@ impl MissionCore {
                 .borrow::<UniqueView<PsiPowersPanelEntity>>()
                 .map(|panel| panel.0)
                 .ok();
-            let ours_is_docked = panel.is_some() && self.flat_ui.active_panel() == panel;
-            if !ours_is_docked {
-                self.psi_powers_open = false;
-            } else if !self.wielding_psi_amp() {
-                self.flat_ui.close();
-                self.psi_powers_open = false;
-            }
+            let dismiss = !self.wielding_psi_amp();
+            self.psi_powers_open =
+                super::synthetic_panels::retain_docked(&mut self.flat_ui, panel, dismiss);
         }
 
         // Flat-mode MFD panel input: map the 2D pointer onto the active panel
@@ -6560,9 +6501,7 @@ impl MissionCore {
                 .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
                 .ok()
                 .map(|panel| panel.0);
-            if panel.is_some() && self.flat_ui.active_panel() == panel {
-                self.flat_ui.close();
-            }
+            super::synthetic_panels::retain_docked(&mut self.flat_ui, panel, true);
             self.weapon_settings_gun = None;
         }
         let name_strip = self.flat_ui.strip_entity().and_then(|_| {
