@@ -16,7 +16,9 @@ for (const [weapon, casingTemplate] of [["Assault Rifle", -2657], ["Pistol", -26
         const hand = presentation === "left" ? "left" : "right";
         await using game = await GameServer.launch({ mission: "debug_weapons", debugFlags: vr ? ["--vr"] : [] });
         await game.step({ frames: 10 });
-        const gun = await cycleToWeapon(game, e => e.name === weapon, { settleFrames: 90 });
+        // The pistol draw lasts two seconds; measure ejection from its settled
+        // carry pose, not the banked equip gesture.
+        const gun = await cycleToWeapon(game, e => e.name === weapon, { settleFrames: 150 });
         if (vr) {
           await aimVrHandAt(game, gun.position as Vec3, 0.45, 1, 0, { hand });
           await game.step({ frames: 8 });

@@ -11908,7 +11908,7 @@ impl MissionCore {
                     drop(quests);
                 }
                 Effect::WeaponRecoil { entity_id } => {
-                    self.flat_weapon_animation.fired(entity_id);
+                    self.flat_weapon_animation.fired(&self.world, entity_id);
                     let hands = self.interaction.haptic_hands(entity_id);
                     for (hand, pulse) in hands
                         .into_iter()
@@ -14106,8 +14106,9 @@ impl MissionCore {
                         // leaves them unposed (the wrench looked mid-swing). Pose
                         // them with an AnimationPlayer: a melee weapon mid-swing
                         // uses its swing player; otherwise melee holds the static
-                        // player-melee idle (frame 0 = head-up ready stance); guns
-                        // use the empty/bind pose. No-op for static meshes.
+                        // player-melee idle (frame 0 = head-up ready stance).
+                        // Guns apply the flat timeline's scalar parameters to
+                        // this first-person mesh. No-op for static meshes.
                         // Melee poses cancel the clip's root motion: the arm is
                         // anchored to the camera by the entity transform every
                         // frame (the original engine's camSynch virtual motion),

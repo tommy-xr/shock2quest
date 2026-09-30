@@ -355,11 +355,30 @@ fn field_body(record: &str, field: &str) -> Option<usize> {
 
 fn field_number(record: &str, field: &str) -> Option<f32> {
     let start = field_body(record, field)?;
-    let bytes = record.as_bytes();
-    let end = (start..bytes.len())
-        .find(|at| !matches!(bytes[*at], b'0'..=b'9' | b'.' | b'-' | b'+'))
-        .unwrap_or(bytes.len());
-    record[start..end].parse().ok()
+    let value = record[start..].split([',', '}']).next()?.trim();
+    // The shipped shotgun reload writes frame offsets as `20+24`. Accept
+    // sums of numeric literals only; this is data parsing, never evaluation
+    // of the surrounding Squirrel program.
+    value.split('+').try_fold(0.0, |sum, term| {
+        let number = term.trim().parse::<f32>().ok()?;
+        let result = sum + number;
+        result.is_finite().then_some(result)
+    })
+}
+
+#[test]
+fn frame_offsets_accept_literal_sums_only() {
+    assert_eq!(
+        field_number(r#"{ "frame":20+24, "pos":[] }"#, "frame"),
+        Some(44.0)
+    );
+    assert_eq!(field_number(r#"{ "frame": 33 + 24 }"#, "frame"), Some(57.0));
+    for expression in ["20+", "20+offset", "20*2", "20; run()", "NaN", "inf"] {
+        assert_eq!(
+            field_number(&format!(r#"{{ "frame": {expression} }}"#), "frame"),
+            None
+        );
+    }
 }
 
 fn field_vec3(record: &str, field: &str) -> Option<Vector3<f32>> {

@@ -367,7 +367,11 @@ impl FlatPlayerController {
                             look,
                             camera_pos,
                             offset,
-                            pitch_deg,
+                            if pose.clip == Some("reload") {
+                                GUN_CARRY_PITCH_DEG
+                            } else {
+                                pitch_deg
+                            },
                             (vec3(0.0, 0.0, 0.0), Quaternion::from_angle_x(Deg(0.0))),
                         );
                         (
