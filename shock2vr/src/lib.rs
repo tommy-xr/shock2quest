@@ -855,6 +855,15 @@ impl Game {
         self.pending_transition.is_some()
     }
 
+    /// The pawn's position and rotation - the frame tracked hands are in - or
+    /// `None` without a player. A cheap per-frame read for debug tooling.
+    pub fn player_pose(&self) -> Option<(Vector3<f32>, Quaternion<f32>)> {
+        use crate::mission::mission_core::PlayerInfo;
+        let world = self.world();
+        let info = world.borrow::<shipyard::UniqueView<PlayerInfo>>().ok()?;
+        Some((info.pos, info.rotation))
+    }
+
     /// A snapshot of the player (position, look rotation, held/wielded entities)
     /// for debug tooling, or `None` if the active scene has no player (e.g. a
     /// menu). Reads the `PlayerInfo` unique from the active world.

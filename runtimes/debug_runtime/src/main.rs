@@ -26,6 +26,7 @@ use tokio::{signal, sync::mpsc, sync::oneshot};
 use tracing::info;
 
 mod commands;
+mod hand_targets;
 mod lifecycle;
 use commands::*;
 use lifecycle::{DEFAULT_IDLE_TIMEOUT_SECS, IDLE_POLL_INTERVAL, IdleWatchdog};
@@ -685,6 +686,7 @@ fn run_game_blocking(
         current_input.left_hand.position = vec3(-0.55, 1.4, 0.2);
         current_input.left_hand.rotation = aim_forward;
     }
+    let mut hand_targets = hand_targets::HandTargets::new(args.vr);
 
     // Deferred replies so HTTP commands observe a complete, post-render frame:
     // - `Step` replies only after all requested frames have actually run, so
@@ -808,6 +810,7 @@ fn run_game_blocking(
                     reply,
                 } => {
                     replay.clear();
+                    hand_targets.clear();
                     let loaded = if pending_step_reply.is_some() {
                         Err((409, "a step is in progress".to_owned()))
                     } else if header.presentation != presentation_mode
@@ -849,6 +852,7 @@ fn run_game_blocking(
                         frame_counter,
                         &mut action_state,
                         &mut current_input,
+                        &mut hand_targets,
                         &last_scene,
                         last_scene_frame,
                         args.defer_transitions,
@@ -919,6 +923,9 @@ fn run_game_blocking(
             } else {
                 game_time.clone()
             };
+            if replay_frame.is_none() {
+                hand_targets.apply(&game, &mut current_input);
+            }
             profile!(
                 "game.update",
                 game.update(&game_time, &current_input, &mut action_state)
@@ -1035,6 +1042,7 @@ fn run_game_blocking(
                 total: Duration::from_secs_f32(accumulated_time),
             };
             // Still call update with zero time to maintain state consistency
+            hand_targets.apply(&game, &mut current_input);
             profile!(
                 "game.update",
                 game.update(&zero_time, &current_input, &mut action_state)
@@ -1224,6 +1232,7 @@ fn process_command(
     frame_counter: u64,
     action_state: &mut InputActionState,
     current_input: &mut InputContext,
+    hand_targets: &mut hand_targets::HandTargets,
     last_scene: &[commands::SceneObjectSummary],
     last_scene_frame: u64,
     defer_transitions: bool,
@@ -2200,7 +2209,16 @@ fn process_command(
         }
         RuntimeCommand::GetInput(reply) => {
             // Report the runtime-owned input state (what is fed to game.update).
-            let input_state = input_state_from_context(current_input);
+            let mut input_state = input_state_from_context(current_input);
+            let [left, right] = hand_targets.report(game, current_input);
+            (
+                input_state.left_hand.world_target,
+                input_state.left_hand.world_position,
+            ) = left;
+            (
+                input_state.right_hand.world_target,
+                input_state.right_hand.world_position,
+            ) = right;
             if let Err(_) = reply.send(input_state) {
                 tracing::warn!("Failed to send input state - receiver dropped");
             }
@@ -2212,7 +2230,13 @@ fn process_command(
             // caller gets an actionable error instead of a silent partial apply.
             let mut result = Ok(());
             for patch in &patches {
-                match apply_input_patch(current_input, &patch.channel, &patch.value) {
+                let applied = hand_targets
+                    .patch(game, current_input, &patch.channel, &patch.value)
+                    .unwrap_or_else(|| {
+                        apply_input_patch(current_input, &patch.channel, &patch.value)
+                            .inspect(|()| hand_targets.release_on_position(&patch.channel))
+                    });
+                match applied {
                     Ok(()) => tracing::info!(
                         "Set input channel '{}' = {} via remote control",
                         patch.channel,
@@ -2246,6 +2270,8 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
             trigger_value: h.trigger_value,
             squeeze_value: h.squeeze_value,
             a_value: h.a_value,
+            world_target: None,
+            world_position: None,
         }
     }
     commands::InputState {

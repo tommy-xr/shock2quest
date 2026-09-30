@@ -42,6 +42,29 @@ export type InputAction =
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
 
+/** One hand in GET /v1/control/input. Positions are pawn-local, rotation [x,y,z,w]. */
+export interface InputHandState {
+  position: Vec3;
+  rotation: Quat;
+  thumbstick: [number, number];
+  trigger_value: number;
+  squeeze_value: number;
+  a_value: number;
+  /** The `<hand>_hand.world_target` holding this hand, if any (VR only). */
+  world_target: Vec3 | null;
+  /** Where the game puts the hand's calibrated grip point (VR only). */
+  world_position: Vec3 | null;
+}
+
+/** The runtime-owned input state (GET /v1/control/input). */
+export interface InputState {
+  left_hand: InputHandState;
+  right_hand: InputHandState;
+  crouch: boolean;
+  jump: boolean;
+  lean: number;
+}
+
 export interface Position {
   x: number;
   y: number;

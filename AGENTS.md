@@ -435,6 +435,17 @@ For debugging visual/rendering changes without a full interactive session:
    # exact world direction, place the debug camera with look_at instead.
    curl -X POST http://127.0.0.1:8080/v1/control/input -d '{"head.look": [90.0, -30.0]}'
 
+   # (--vr) Hold a hand's grip point on a WORLD point: re-solved into the pawn-
+   # local hand pose every frame, so it stays put while the body moves/turns
+   # (exact at rest; trails by one frame's motion while moving). Rejected (400,
+   # reason in body) beyond 0.7 m of that shoulder (a crouch lowers it - step
+   # the crouch before targeting from it); while the body is out of
+   # reach the hand stays put, then follows again. `null`, a
+   # `<hand>_hand.position` patch, a replay or a level change releases it. A gripped hand held this way
+   # pulls nothing - to climb, release it and drive `position` down.
+   # GET /v1/control/input reports each hand's world_target and world_position.
+   curl -X POST http://127.0.0.1:8080/v1/control/input -d '{"right_hand.world_target": [-6.8, 2.3, 0]}'
+
    # Place the debug (free) camera anywhere and aim it - the only way to
    # photograph something the player's own eye cannot see, the player and
    # whatever they are holding included. `position` is the world-space EYE
