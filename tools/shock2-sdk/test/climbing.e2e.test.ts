@@ -149,7 +149,9 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 1]);
     let beforeTopOut = await game.player.position();
     for (let elapsed = 0; elapsed < 720; ) {
-      const frames = beforeTopOut.y < ladderTop - 3 ? 30 : 1;
+      // Coarse steps stop a full step short of the band: the climb covers
+      // about 1 unit in 12 frames whatever the pitch.
+      const frames = beforeTopOut.y < ladderTop - 4 ? 12 : 1;
       await game.step({ frames });
       elapsed += frames;
       beforeTopOut = await game.player.position();
