@@ -16,6 +16,9 @@ use shipyard::Component;
 #[derive(Component)]
 pub struct RuntimePropGloveWeapon {
     pub item_scale: f32,
+    /// Magazine visibility baked into this cached mesh variant.
+    pub magazine_removed: bool,
+    pub magazine_anchor: Option<Vector3<f32>>,
 }
 
 // RuntimePropGazeAmount - track how much the player is gazing at a prop

@@ -98,6 +98,28 @@ pub struct MagazineModel {
     pub source_center: Vector3<f32>,
 }
 
+/// Material selection handles the pistol's shared hand/magazine joint;
+/// sub-object selection handles the rifle's shared gun/magazine material.
+fn filter_magazine(mesh: SystemShock2ObjectMesh, keep: bool) -> Option<SystemShock2ObjectMesh> {
+    if mesh
+        .materials
+        .iter()
+        .any(|m| m.name.eq_ignore_ascii_case("ND-ammo1.psd"))
+    {
+        Some(ss2_bin_obj_loader::retain_materials(mesh, |name| {
+            name.eq_ignore_ascii_case("ND-ammo1.psd") == keep
+        }))
+    } else {
+        let magazine = mesh
+            .sub_objects
+            .iter()
+            .position(|part| part.name == "@s02_cli")?;
+        Some(ss2_bin_obj_loader::retain_sub_objects(mesh, |index| {
+            (index as usize == magazine) == keep
+        }))
+    }
+}
+
 pub static MAGAZINE_MODEL_IMPORTER: Lazy<
     AssetImporter<(String, SystemShockContentModel), Option<MagazineModel>, ()>,
 > = Lazy::new(|| {
@@ -111,19 +133,10 @@ pub static MAGAZINE_MODEL_IMPORTER: Lazy<
                 return None;
             };
             let name = name.to_ascii_lowercase();
-            let mut mesh = match name.trim_end_matches(".bin") {
-                "atek_h" => ss2_bin_obj_loader::retain_materials(mesh, |name| {
-                    name.eq_ignore_ascii_case("ND-ammo1.psd")
-                }),
-                "ar15_h" => {
-                    let magazine = mesh
-                        .sub_objects
-                        .iter()
-                        .position(|part| part.name == "@s02_cli")?;
-                    ss2_bin_obj_loader::retain_sub_objects(mesh, |index| index as usize == magazine)
-                }
-                _ => return None,
-            };
+            if !matches!(name.trim_end_matches(".bin"), "atek_h" | "ar15_h") {
+                return None;
+            }
+            let mut mesh = filter_magazine(mesh, true)?;
             let triangles = object_triangles(&mesh);
             let first = *triangles.first()?.first()?;
             let (min, max) = triangles
@@ -509,86 +522,101 @@ pub struct GloveWeaponModel {
     pub melee_joints: Option<[Matrix4<f32>; MAX_SKINNED_JOINTS]>,
 }
 
+#[derive(Default, Hash)]
+pub struct GloveWeaponOptions {
+    pub magazine_removed: bool,
+}
+
 pub static GLOVE_WEAPON_IMPORTER: Lazy<
-    AssetImporter<SystemShockContentModel, Option<GloveWeaponModel>, ()>,
+    AssetImporter<SystemShockContentModel, Option<GloveWeaponModel>, GloveWeaponOptions>,
 > = Lazy::new(|| {
-    AssetImporter::define(load_model, |content, cache, _| {
-        let mesh = match content {
-            SystemShockContentModel::Obj(mesh) => mesh,
-            SystemShockContentModel::Mesh(mesh, skeleton, Some(mut pmnm)) => {
-                if !pmnm
+    AssetImporter::define(
+        |name, reader, cache, _| load_model(name, reader, cache, &()),
+        |content, cache, options| {
+            let mesh = match content {
+                SystemShockContentModel::Obj(mesh) => mesh,
+                SystemShockContentModel::Mesh(mesh, skeleton, Some(mut pmnm)) => {
+                    if !pmnm
+                        .materials
+                        .iter()
+                        .any(|m| is_melee_arm_material(&m.name))
+                    {
+                        return None;
+                    }
+                    let clip = cache.get_opt(&super::ANIMATION_CLIP_IMPORTER, "ph212203_.mc")?;
+                    let player = AnimationPlayer::with_root_motion_cancelled(
+                        &AnimationPlayer::from_completed_animation(clip),
+                    );
+                    let joints = player.get_transforms(&skeleton);
+                    let bind = ss2_bin_ai_loader::pmnm_bind_matrices(&skeleton);
+                    let palette = crate::model::build_palette(&joints, &skeleton, Some(&bind));
+                    let mut triangles = Vec::new();
+                    let mut arm_triangles = Vec::new();
+                    for (name, vertices) in pmnm.to_skinned_vertices() {
+                        let target = if is_melee_arm_material(&name) {
+                            &mut arm_triangles
+                        } else {
+                            &mut triangles
+                        };
+                        for tri in vertices.chunks_exact(3) {
+                            let points: Option<Vec<_>> =
+                                tri.iter().map(|v| skinned_point(v, &palette)).collect();
+                            let points = points?;
+                            target.push([points[0], points[1], points[2]]);
+                        }
+                    }
+                    pmnm.materials.retain(|m| !is_melee_arm_material(&m.name));
+                    if triangles.is_empty() || pmnm.materials.is_empty() {
+                        return None;
+                    }
+                    let model = Model::from_ai_bin(mesh, skeleton, Some(pmnm), cache)
+                        .with_animation_pose(&player);
+                    // A missing PMNM material can make the model builder fall back
+                    // to the classic mesh, whose arms were not removed.
+                    if model.bind_matrices().is_none() {
+                        return None;
+                    }
+                    return Some(GloveWeaponModel {
+                        model,
+                        triangles,
+                        arm_triangles,
+                        melee_joints: Some(joints),
+                    });
+                }
+                _ => return None,
+            };
+            let mesh = if options.magazine_removed {
+                filter_magazine(mesh.clone(), false).unwrap_or(mesh)
+            } else {
+                mesh
+            };
+            let arms =
+                ss2_bin_obj_loader::retain_materials(mesh.clone(), is_first_person_arm_material);
+            let arm_triangles = object_triangles(&arms);
+            // An unrecognized material layout must keep its authored fallback.
+            if arm_triangles.is_empty()
+                && !mesh
                     .materials
                     .iter()
-                    .any(|m| is_melee_arm_material(&m.name))
-                {
-                    return None;
-                }
-                let clip = cache.get_opt(&super::ANIMATION_CLIP_IMPORTER, "ph212203_.mc")?;
-                let player = AnimationPlayer::with_root_motion_cancelled(
-                    &AnimationPlayer::from_completed_animation(clip),
-                );
-                let joints = player.get_transforms(&skeleton);
-                let bind = ss2_bin_ai_loader::pmnm_bind_matrices(&skeleton);
-                let palette = crate::model::build_palette(&joints, &skeleton, Some(&bind));
-                let mut triangles = Vec::new();
-                let mut arm_triangles = Vec::new();
-                for (name, vertices) in pmnm.to_skinned_vertices() {
-                    let target = if is_melee_arm_material(&name) {
-                        &mut arm_triangles
-                    } else {
-                        &mut triangles
-                    };
-                    for tri in vertices.chunks_exact(3) {
-                        let points: Option<Vec<_>> =
-                            tri.iter().map(|v| skinned_point(v, &palette)).collect();
-                        let points = points?;
-                        target.push([points[0], points[1], points[2]]);
-                    }
-                }
-                pmnm.materials.retain(|m| !is_melee_arm_material(&m.name));
-                if triangles.is_empty() || pmnm.materials.is_empty() {
-                    return None;
-                }
-                let model = Model::from_ai_bin(mesh, skeleton, Some(pmnm), cache)
-                    .with_animation_pose(&player);
-                // A missing PMNM material can make the model builder fall back
-                // to the classic mesh, whose arms were not removed.
-                if model.bind_matrices().is_none() {
-                    return None;
-                }
-                return Some(GloveWeaponModel {
-                    model,
-                    triangles,
-                    arm_triangles,
-                    melee_joints: Some(joints),
-                });
+                    .any(|m| m.name.to_ascii_lowercase().starts_with("nd-"))
+            {
+                return None;
             }
-            _ => return None,
-        };
-        let arms = ss2_bin_obj_loader::retain_materials(mesh.clone(), is_first_person_arm_material);
-        let arm_triangles = object_triangles(&arms);
-        // An unrecognized material layout must keep its authored fallback.
-        if arm_triangles.is_empty()
-            && !mesh
-                .materials
-                .iter()
-                .any(|m| m.name.to_ascii_lowercase().starts_with("nd-"))
-        {
-            return None;
-        }
-        let weapon =
-            ss2_bin_obj_loader::retain_materials(mesh, |name| !is_first_person_arm_material(name));
-        let triangles = object_triangles(&weapon);
-        if triangles.is_empty() {
-            return None;
-        }
-        Some(GloveWeaponModel {
-            model: Model::from_obj_bin(weapon, cache),
-            triangles,
-            arm_triangles,
-            melee_joints: None,
-        })
-    })
+            let weapon = ss2_bin_obj_loader::retain_materials(mesh, |name| {
+                !is_first_person_arm_material(name)
+            });
+            let triangles = object_triangles(&weapon);
+            if triangles.is_empty() {
+                return None;
+            }
+            Some(GloveWeaponModel {
+                model: Model::from_obj_bin(weapon, cache),
+                triangles,
+                arm_triangles,
+                melee_joints: None,
+            })
+        },
+    )
 });
 
 /// Newtype so this importer gets its own [`AssetCache`] bucket.

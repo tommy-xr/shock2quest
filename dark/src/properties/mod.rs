@@ -589,6 +589,9 @@ pub struct InternalPropMagazineModel {
 }
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct InternalPropMagazineRemoved(pub bool);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropScale(pub Vector3<f32>);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
@@ -2651,6 +2654,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
                 item_scale: 1.0,
             },
             |value| value,
+            accumulator::latest,
+        ),
+        define_prop(
+            "__P$MagazineRemoved",
+            |reader, _| read_bool(reader),
+            InternalPropMagazineRemoved,
             accumulator::latest,
         ),
     ];

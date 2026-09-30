@@ -5868,6 +5868,10 @@ impl MissionCore {
             self.interaction.viewmodel_entity(),
             time.elapsed.as_secs_f32(),
         ));
+        effects.extend(crate::vr_magazine::refresh_weapons(
+            &self.world,
+            self.interaction.held_entities(),
+        ));
         let mut interaction_msgs = self.interaction.update(&InteractionContext {
             physics: &self.physics,
             world: &self.world,
@@ -11558,9 +11562,15 @@ impl MissionCore {
                         let glove_source =
                             if vr_held && crate::vr_weapon_grip::supports_model(&model_name) {
                                 asset_cache
-                                    .get_opt(
+                                    .get_ext_opt(
                                         &dark::importers::GLOVE_WEAPON_IMPORTER,
                                         &format!("{model_name}.bin"),
+                                        &dark::importers::GloveWeaponOptions {
+                                            magazine_removed: crate::vr_magazine::removed(
+                                                &self.world,
+                                                entity_id,
+                                            ),
+                                        },
                                     )
                                     .filter(|source| source.as_ref().is_some())
                             } else {
@@ -11612,12 +11622,38 @@ impl MissionCore {
                             continue;
                         };
 
+                        let held_scale = self
+                            .world
+                            .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+                            .ok()
+                            .and_then(|v| v.get(entity_id).ok().map(|p| p.item_scale))
+                            .unwrap_or(1.0);
                         self.world
                             .remove::<crate::runtime_props::RuntimePropGloveWeapon>(entity_id);
                         if glove_weapon {
                             self.world.add_component(
                                 entity_id,
-                                crate::runtime_props::RuntimePropGloveWeapon { item_scale: 1.0 },
+                                crate::runtime_props::RuntimePropGloveWeapon {
+                                    item_scale: held_scale,
+                                    magazine_removed: crate::vr_magazine::removed(
+                                        &self.world,
+                                        entity_id,
+                                    ),
+                                    magazine_anchor: crate::vr_magazine::load(
+                                        asset_cache,
+                                        &model_name,
+                                    )
+                                    .and_then(|model| {
+                                        model.as_ref().as_ref().map(|m| {
+                                            use cgmath::Transform;
+                                            self.interaction
+                                                .holding_hand(entity_id)
+                                                .unwrap_or(crate::Handedness::Right)
+                                                .gun_mirror()
+                                                .transform_vector(m.source_center)
+                                        })
+                                    }),
+                                },
                             );
                         }
                         let mut vhots = new_model.vhots();
@@ -13267,6 +13303,7 @@ impl MissionCore {
         if reload.rounds_loaded == 0 {
             return Effect::NoEffect;
         }
+        crate::vr_magazine::set_removed(&mut self.world, weapon, false);
         for item in reload.depleted_items {
             self.interaction.on_entity_destroyed(item);
             self.flat_ui.on_entity_destroyed(item);
@@ -13367,7 +13404,12 @@ impl MissionCore {
     /// Where `weapon`'s magazine zone is centred in the world: its per-model
     /// anchor (`vr_config`) carried by the live transform.
     fn magazine_anchor_world(&self, weapon: EntityId) -> Option<Vector3<f32>> {
-        let anchor = crate::vr_config::magazine_anchor_from_entity(&self.world, weapon);
+        let anchor = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().and_then(|p| p.magazine_anchor))
+            .unwrap_or_else(|| crate::vr_config::magazine_anchor_from_entity(&self.world, weapon));
         self.entity_point_world(weapon, anchor)
     }
 
@@ -13436,6 +13478,7 @@ impl MissionCore {
             // reload that did not happen would be a lie.
             return Vec::new();
         }
+        crate::vr_magazine::set_removed(&mut self.world, weapon, false);
         // A clip drained to nothing leaves the hand with it - the hand is
         // released by `on_entity_destroyed`. A clip with rounds left over stays
         // held, and the zone's exit radius keeps it from re-inserting in place.
@@ -13599,8 +13642,11 @@ impl MissionCore {
             .entity_id;
         self.world
             .add_component(clip, dark::properties::PropStackCount(rounds));
+        self.prepare_magazine_model(asset_cache, weapon, clip);
+        self.make_un_physical(clip);
         self.make_physical(clip);
         super::reload::empty_magazine(&self.world, weapon);
+        crate::vr_magazine::set_removed(&mut self.world, weapon, true);
         Some(crate::scripts::script_util::play_environmental_sound(
             &self.world,
             weapon,
@@ -13735,14 +13781,18 @@ impl MissionCore {
     /// unearned. Rounds exist in exactly one place at every instant.
     fn unload_magazine(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) -> bool {
         let outcome = crate::mission::reload::unload_to_reserve(&self.world, weapon);
-        match outcome.spawn_clip {
+        let emptied = match outcome.spawn_clip {
             Some((clip_template, rounds)) => {
                 self.give_ejected_clip(asset_cache, weapon, clip_template, rounds)
             }
             // No clip to place: the rounds either merged into a carried stack
             // or never moved, and only the magazine can say which.
             None => outcome.rounds_unloaded > 0 || self.magazine_rounds(weapon) == 0,
+        };
+        if emptied && (outcome.rounds_unloaded > 0 || outcome.spawn_clip.is_some()) {
+            crate::vr_magazine::set_removed(&mut self.world, weapon, true);
         }
+        emptied
     }
 
     /// Mint `rounds` rounds of `clip_template` into the backpack - the half of
@@ -15644,6 +15694,55 @@ impl MissionCore {
         deferred
     }
 
+    /// Apply the source weapon's magazine geometry to a real ammo clip.
+    fn prepare_magazine_model(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        weapon: EntityId,
+        clip: EntityId,
+    ) {
+        // Ammo identity and stack count stay on the real clip entity.
+        if let Some(source) =
+            crate::scripts::internal_switch_held_model::get_raw_view_model(&self.world, weapon)
+                .map(|name| name.to_ascii_lowercase())
+        {
+            if let Some(magazine) = crate::vr_magazine::load(asset_cache, &source) {
+                let item_scale = self
+                    .world
+                    .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+                    .ok()
+                    .and_then(|v| v.get(weapon).ok().map(|w| w.item_scale))
+                    .unwrap_or(1.0);
+                self.world.add_component(
+                    clip,
+                    (
+                        dark::properties::InternalPropMagazineModel { source, item_scale },
+                        dark::properties::PropScale(vec3(item_scale, item_scale, item_scale)),
+                    ),
+                );
+                if let Some(old) = self.id_to_model.get(&clip) {
+                    let transform = self
+                        .world
+                        .borrow::<View<PropPosition>>()
+                        .ok()
+                        .and_then(|v| {
+                            v.get(clip).ok().map(|p| {
+                                Matrix4::from_translation(p.position)
+                                    * Matrix4::from(p.rotation)
+                                    * Matrix4::from_scale(item_scale)
+                            })
+                        })
+                        .unwrap_or_else(|| old.get_transform());
+                    self.id_to_model.insert(
+                        clip,
+                        Model::transform(&magazine.as_ref().as_ref().unwrap().model, transform),
+                    );
+                    self.id_to_animation_player.remove(&clip);
+                }
+            }
+        }
+    }
+
     /// Re-resolve stock at commit time. A split is debited only after its new
     /// clip is actually in the requested hand; a failed grab rolls it back.
     fn withdraw_pouch_ammo(
@@ -15687,36 +15786,7 @@ impl MissionCore {
         };
         let mut effects = self.grab_entity_into_hand(asset_cache, clip, hand);
         if self.interaction.holding_hand(clip) == Some(hand) {
-            // Change only the representation of this real clip after the grab
-            // succeeds. Its archetype, ammo type and stack count stay intact.
-            if let Some(source) =
-                crate::scripts::internal_switch_held_model::get_raw_view_model(&self.world, weapon)
-                    .map(|name| name.to_ascii_lowercase())
-            {
-                if let Some(magazine) = crate::vr_magazine::load(asset_cache, &source) {
-                    let item_scale = self
-                        .world
-                        .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
-                        .ok()
-                        .and_then(|v| v.get(weapon).ok().map(|w| w.item_scale))
-                        .unwrap_or(1.0);
-                    self.world.add_component(
-                        clip,
-                        (
-                            dark::properties::InternalPropMagazineModel { source, item_scale },
-                            dark::properties::PropScale(vec3(item_scale, item_scale, item_scale)),
-                        ),
-                    );
-                    if let Some(old) = self.id_to_model.get(&clip) {
-                        let transform = old.get_transform();
-                        self.id_to_model.insert(
-                            clip,
-                            Model::transform(&magazine.as_ref().as_ref().unwrap().model, transform),
-                        );
-                        self.id_to_animation_player.remove(&clip);
-                    }
-                }
-            }
+            self.prepare_magazine_model(asset_cache, weapon, clip);
             if split {
                 self.world.add_component(
                     offer.reserve,
@@ -17479,6 +17549,19 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         name: "MagazineModel".into(),
                         value: serde_json::to_string(&magazine).unwrap(),
                     });
+                }
+                if let Ok(meshes) = self.world.borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>() {
+                    if let Ok(mesh) = meshes.get(id) {
+                        if mesh.magazine_anchor.is_some() {
+                            properties.push(DebugPropertyInfo {
+                                name: "MagazineSeated".into(),
+                                value: serde_json::json!({
+                                    "present": !crate::vr_magazine::removed(&self.world, id),
+                                    "rendered": !mesh.magazine_removed,
+                                }).to_string(),
+                            });
+                        }
+                    }
                 }
                 if let Ok(poses) = self.world.borrow::<View<crate::flat_weapon_animation::FlatWeaponPose>>() {
                     if let Ok(pose) = poses.get(id) {

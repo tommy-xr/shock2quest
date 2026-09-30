@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
-import { aimVrHandAtCanvas, quatConjugate, quatRotate, sub } from "./helpers/vr-hand.js";
+import { drawPouchAmmo } from "./helpers/ammo-pouch.js";
+import { ammoOf } from "./helpers/weapon.js";
+import { aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
 for (const [model, template] of [["atek_h", -17], ["ar15_h", -18]] as const) {
   for (const hand of ["left", "right"] as const) {
@@ -26,22 +28,11 @@ for (const [model, template] of [["atek_h", -17], ["ar15_h", -18]] as const) {
       await game.input.set(`${primary}_hand.position`, [primary === "left" ? -.3 : .3, 1, -.5]);
       await game.input.set(`${primary}_hand.rotation`, [0, 0, 0, 1]);
       await game.step({ frames: 10 });
+      await game.input.trigger("EjectClip");
+      await game.step({ frames: 5 });
       await game.player.spawnItem(-31);
       await game.step({ frames: 5 });
-      const player = (await game.info()).player;
-      const pouch = player.hand_feedback?.ammo_pouch;
-      assert.ok(pouch?.center);
-      const offer = pouch.offers[hand === "left" ? 0 : 1];
-      assert.ok(offer);
-      await game.input.set(`${hand}_hand.position`, quatRotate(quatConjugate(player.rotation), sub(pouch.center, player.position)));
-      await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
-      await game.input.set(`${hand}_hand.squeeze`, 0);
-      await game.step({ frames: 2 });
-      await game.input.set(`${hand}_hand.squeeze`, 1);
-      await game.step({ frames: 8 });
-      const held = (await game.info()).player;
-      const id = hand === "left" ? held.wielded_entity_id : held.right_hand_entity_id;
-      assert.ok(id != null);
+      const { offer, player: held, entityId: id } = await drawPouchAmmo(game, hand);
       const detail = await game.entities.detail(id);
       const appearance = detail.properties.find(p => p.name === "MagazineModel");
       assert.ok(appearance, "pouch ammo must use the extracted magazine");
@@ -67,6 +58,11 @@ for (const [model, template] of [["atek_h", -17], ["ar15_h", -18]] as const) {
       const restoredId = hand === "left" ? restored.wielded_entity_id : restored.right_hand_entity_id;
       assert.ok(restoredId != null);
       const saved = await game.entities.detail(restoredId);
+      const restoredGun = primary === "left" ? restored.wielded_entity_id : restored.right_hand_entity_id;
+      assert.ok(restoredGun != null);
+      const seating = (await game.entities.detail(restoredGun)).properties.find(p => p.name === "MagazineSeated");
+      assert.ok(seating);
+      assert.deepEqual(JSON.parse(seating.value), { present: false, rendered: false }, "removed magazine stays absent after save/load");
       assert.deepEqual(JSON.parse(saved.properties.find(p => p.name === "MagazineModel")!.value), magazine);
       assert.equal(Number(saved.properties.find(p => p.name === "StackCount")?.value), offer.rounds);
       assert.ok((await game.scene.objects({ entityId: restoredId })).objects.length > 0);
@@ -91,6 +87,26 @@ for (const [model, template] of [["atek_h", -17], ["ar15_h", -18]] as const) {
       assert.ok(looseId != null, "loose magazine appearance survives save/load");
       for (const object of (await game.scene.objects({ entityId: looseId })).objects) {
         assert.ok(object.scale.every(s => Math.abs(s - magazine.item_scale) < 1e-5));
+      }
+      if (model === "atek_h" && hand === "right") {
+        await using flat = await GameServer.launch({ mission: "medsci1.mis" });
+        await flat.load(save);
+        await flat.input.trigger("EquipPistol");
+        await flat.step({ frames: 10 });
+        await flat.input.trigger("Reload");
+        await flat.step({ frames: 300 });
+        const flatGun = (await flat.info()).player.wielded_entity_id;
+        assert.ok(flatGun != null);
+        assert.ok(ammoOf(await flat.entities.detail(flatGun)) > 0);
+        await flat.save(`${save}-flat`);
+        await game.load(`${save}-flat`);
+        await game.step({ frames: 8 });
+        const returned = (await game.info()).player.wielded_entity_id;
+        assert.ok(returned != null);
+        const restoredSeating = (await game.entities.detail(returned)).properties.find(p => p.name === "MagazineSeated");
+        assert.ok(restoredSeating);
+        assert.deepEqual(JSON.parse(restoredSeating.value), { present: true, rendered: true },
+          "a successful flat reload restores the magazine when returning to VR");
       }
     });
   }
