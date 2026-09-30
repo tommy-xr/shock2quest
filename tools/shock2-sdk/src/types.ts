@@ -641,6 +641,18 @@ export interface ClimbGrip {
   normal: Vec3;
 }
 
+/** A ladder's hand holds, read off its model (GET /v1/physics/ladder). */
+export interface LadderHolds {
+  entity_id: number;
+  model: string;
+  /** Rungs (bars, or a pole ladder's pegs) bottom to top, as [end, end]. */
+  rungs: [Vec3, Vec3][];
+  /** Rails (or the pole, or a slab's side edges), as [bottom, top]. */
+  rails: [Vec3, Vec3][];
+  /** The face normal; either side may be the climbing side. */
+  normal: Vec3;
+}
+
 export interface ClimbGripResult {
   /** Null when nothing at the queried point is grabbable. */
   grip: ClimbGrip | null;

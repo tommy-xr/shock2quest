@@ -1,14 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import { GameServer, vrClimbLadder, vrGrab, vrPull } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import {
-  vrClimbPull,
-  vrHandLocal,
-  vrHandLocalDelta,
-} from "./helpers/vr-climb.js";
+import { vrHandLocalDelta } from "./helpers/vr-climb.js";
 
 // VR climbs with its hands: a squeeze on a hold pins the hand to the point it
 // grabbed and the body moves inversely underneath it. Driven on the
@@ -16,17 +12,36 @@ import {
 // a 6 wu block at x = -7 with a 16' ladder on its near face (x ~= -6.83).
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-/** In front of the ledge station's ladder, on the floor. */
-const STAND: Vec3 = [-5.5, 1.5, 0];
+/** At the ledge station's ladder, on the floor: close enough for arm's reach. */
+const STAND: Vec3 = [-6.3, 1.5, 0];
 /** A rung of the ledge ladder, within a standing player's reach. */
 const LADDER_HOLD: Vec3 = [-6.8, 2.6, 0];
+/** Against the ladder: the climb helpers' holds stay in reach all the way up. */
+const CLIMB_STAND: Vec3 = [-6.48, 1.5, 0];
 /** The plain, non-climbable wall station. */
-const WALL_HOLD: Vec3 = [-6.9, 2.6, -16];
+const WALL_HOLD: Vec3 = [-6.9, 2.3, -16];
+/** The ledge ladder's rungs (ricklad6: every 0.8 from 0.4). */
+const RUNG_HEIGHTS = [0.4, 1.2, 2.0, 2.8, 3.6, 4.4, 5.2, 6.0];
 /** Capsule-center height of a player standing on this scene's floor. */
 const FLOOR_Y = 1.24;
 
 const launchVr = () =>
   GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+
+/** Far enough from the ladder for some free travel toward it, near enough
+ * to reach a rung at shoulder height. */
+const STRETCH_STAND: Vec3 = [-5.95, 1.5, 0];
+const STRETCH_HOLD: Vec3 = [-6.8, 2.0, 0];
+const INTO_STEP = 0.06;
+const INTO_STEPS = 48;
+
+/** Haul the gripping right hand toward the body, one step a frame, until the
+ * grip breaks; the step it broke at, or 0 when it held throughout. */
+async function pullIntoTheWall(game: GameServer): Promise<number> {
+  const into = await vrHandLocalDelta(game, [INTO_STEP * INTO_STEPS, 0, 0]);
+  const path = await vrPull(game, "right", into, INTO_STEPS, (p) => p.climb.grips.length === 0);
+  return (await game.info()).player.climb.grips.length === 0 ? path.length : 0;
+}
 
 async function standAtTheLadder(game: GameServer, at: Vec3 = STAND) {
   await game.step({ frames: 5 });
@@ -41,12 +56,9 @@ test(
     await using game = await launchVr();
     await standAtTheLadder(game);
 
-    const { before, after } = await vrClimbPull(game, {
-      hand: "right",
-      grabAt: LADDER_HOLD,
-      pull: [0, -1.0, 0],
-      frames: 30,
-    });
+    const before = (await game.info()).player.position;
+    await vrGrab(game, "right", LADDER_HOLD);
+    const after = (await vrPull(game, "right", [0, -1.0, 0], 30)).at(-1)!;
 
     assert.ok(
       Math.abs(after[1] - before[1] - 1.0) < 0.15,
@@ -83,36 +95,21 @@ test(
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await launchVr();
-    await standAtTheLadder(game);
+    await standAtTheLadder(game, CLIMB_STAND);
 
-    const rightHold: Vec3 = [-6.8, 2.4, 0];
-    const leftHold: Vec3 = [-6.8, 3.0, 0];
+    const rightHold: Vec3 = [-6.8, 2.3, 0];
+    const leftHold: Vec3 = [-6.8, 2.7, 0];
 
     // Right hand on, then the left higher up: the last hand to grab drives.
-    await game.input.set("right_hand.position", await vrHandLocal(game, rightHold));
-    await game.input.set("right_hand.squeeze", 1);
-    await game.step({ frames: 1 });
-    const leftAtGrab = await vrHandLocal(game, leftHold, "left");
-    await game.input.set("left_hand.position", leftAtGrab);
-    await game.input.set("left_hand.squeeze", 1);
-    await game.step({ frames: 1 });
+    await vrGrab(game, "right", rightHold);
+    await vrGrab(game, "left", leftHold);
     assert.equal((await game.info()).player.climb.anchor_hand, "left");
 
     // Pull with the left. The right hand is left where it is: a hand that is
     // holding on does not move relative to the player, the player moves.
-    const heights: number[] = [(await game.info()).player.position[1]];
     const PULL = 0.4;
-    const FRAMES = 20;
-    const down = await vrHandLocalDelta(game, [0, -PULL, 0]);
-    for (let frame = 1; frame <= FRAMES; frame += 1) {
-      await game.input.set("left_hand.position", [
-        leftAtGrab[0] + (down[0] * frame) / FRAMES,
-        leftAtGrab[1] + (down[1] * frame) / FRAMES,
-        leftAtGrab[2] + (down[2] * frame) / FRAMES,
-      ]);
-      await game.step({ frames: 1 });
-      heights.push((await game.info()).player.position[1]);
-    }
+    const heights: number[] = [(await game.info()).player.position[1]];
+    heights.push(...(await vrPull(game, "left", [0, -PULL, 0], 20)).map((p) => p[1]));
     assert.ok(
       heights[heights.length - 1] - heights[0] > PULL - 0.1,
       `expected the left pull to lift the body, ${heights[0]} -> ${heights[heights.length - 1]}`,
@@ -143,16 +140,8 @@ test(
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await launchVr();
-    await standAtTheLadder(game);
-
-    await game.input.set(
-      "right_hand.position",
-      await vrHandLocal(game, LADDER_HOLD),
-    );
-    await game.input.set("right_hand.squeeze", 0);
-    await game.step({ frames: 1 });
-    await game.input.set("right_hand.squeeze", 1);
-    await game.step({ frames: 1 });
+    await standAtTheLadder(game, STRETCH_STAND);
+    await vrGrab(game, "right", STRETCH_HOLD);
     assert.equal((await game.info()).player.climb.grips.length, 1);
 
     // Pull the hand back toward the body, a step at a time: pinned to the
@@ -160,24 +149,9 @@ test(
     // is far short of the break distance, so nothing breaks on the reach
     // alone - the grip only comes off once the wall stops the body and the
     // separation accumulates.
-    const STEP = 0.12;
-    const atGrab = await vrHandLocal(game, LADDER_HOLD);
-    const into = await vrHandLocalDelta(game, [STEP, 0, 0]);
-    let broke = 0;
-    for (let frame = 1; frame <= 24; frame += 1) {
-      await game.input.set("right_hand.position", [
-        atGrab[0] + into[0] * frame,
-        atGrab[1] + into[1] * frame,
-        atGrab[2] + into[2] * frame,
-      ]);
-      await game.step({ frames: 1 });
-      if ((await game.info()).player.climb.grips.length === 0) {
-        broke = frame;
-        break;
-      }
-    }
+    const broke = await pullIntoTheWall(game);
 
-    // The player has ~0.8 wu of floor before the block stops them, so the
+    // The player has ~0.6 wu of floor before the block stops them, so the
     // first several steps are free travel the body follows exactly - proof the
     // break comes from the blocked body and not from the reach itself.
     assert.ok(
@@ -185,8 +159,8 @@ test(
       `an unobstructed reach must not break the grip, broke at step ${broke}`,
     );
     assert.ok(
-      broke <= 20,
-      `a blocked body must break the grip, still held after ${STEP * 24} wu`,
+      broke <= 40,
+      `a blocked body must break the grip, still held after ${INTO_STEP * INTO_STEPS} wu`,
     );
     assert.equal((await game.info()).player.climb.anchor_hand, null);
   },
@@ -197,14 +171,11 @@ test(
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await launchVr();
-    await standAtTheLadder(game, [-5.5, 1.5, -16]);
+    await standAtTheLadder(game, [STAND[0], STAND[1], -16]);
 
-    const { before, after } = await vrClimbPull(game, {
-      hand: "right",
-      grabAt: WALL_HOLD,
-      pull: [0, -1.0, 0],
-      frames: 30,
-    });
+    const before = (await game.info()).player.position;
+    await assert.rejects(vrGrab(game, "right", WALL_HOLD), /closed on nothing/);
+    const after = (await vrPull(game, "right", [0, -1.0, 0], 30)).at(-1)!;
 
     assert.equal((await game.info()).player.climb.grips.length, 0);
     assert.ok(
@@ -251,6 +222,16 @@ test(
   },
 );
 
+/** Grab LADDER_HOLD, pull the right hand down 1 wu over `frames`, open it;
+ * the body position just after. */
+async function pullAndLetGo(game: GameServer, frames: number): Promise<Vec3> {
+  await vrGrab(game, "right", LADDER_HOLD);
+  await vrPull(game, "right", [0, -1.0, 0], frames);
+  await game.input.set("right_hand.squeeze", 0);
+  await game.step({ frames: 1 });
+  return (await game.info()).player.position;
+}
+
 /** Every pawn height while stepping `frames` frames, one at a time. */
 async function stepTrackingHeight(
   game: GameServer,
@@ -272,13 +253,7 @@ test(
     await standAtTheLadder(game);
 
     // A wrench of a pull: 1 wu of hand travel in 6 frames.
-    const { after } = await vrClimbPull(game, {
-      hand: "right",
-      grabAt: LADDER_HOLD,
-      pull: [0, -1.0, 0],
-      frames: 6,
-      release: true,
-    });
+    const after = await pullAndLetGo(game, 6);
 
     const heights = await stepTrackingHeight(game, 120);
     const peak = Math.max(...heights);
@@ -305,13 +280,7 @@ test(
 
     // The same 1 wu of hand travel at 0.33 wu/s - under the release
     // deadzone (CLIMB_RELEASE_MIN_SPEED), so letting go is just letting go.
-    const { after } = await vrClimbPull(game, {
-      hand: "right",
-      grabAt: LADDER_HOLD,
-      pull: [0, -1.0, 0],
-      frames: 180,
-      release: true,
-    });
+    const after = await pullAndLetGo(game, 180);
 
     const peak = Math.max(...(await stepTrackingHeight(game, 120)));
     assert.ok(
@@ -326,33 +295,15 @@ test(
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await launchVr();
-    await standAtTheLadder(game);
 
     // Haul the body into the wall the ladder hangs on until the grip breaks
     // (the same blocked-body break the stretch test drives), then check that
     // the recorded "pull" - which was the body failing to follow - did not
     // become a launch.
-    const atGrab = await vrHandLocal(game, LADDER_HOLD);
-    const into = await vrHandLocalDelta(game, [0.12, 0, 0]);
-    await game.input.set("right_hand.position", atGrab);
-    await game.input.set("right_hand.squeeze", 0);
-    await game.step({ frames: 1 });
-    await game.input.set("right_hand.squeeze", 1);
-    await game.step({ frames: 1 });
-
-    let brokeAt: number | null = null;
-    for (let frame = 1; frame <= 24 && brokeAt === null; frame += 1) {
-      await game.input.set("right_hand.position", [
-        atGrab[0] + into[0] * frame,
-        atGrab[1] + into[1] * frame,
-        atGrab[2] + into[2] * frame,
-      ]);
-      await game.step({ frames: 1 });
-      if ((await game.info()).player.climb.grips.length === 0) {
-        brokeAt = frame;
-      }
-    }
-    assert.ok(brokeAt !== null, "the blocked body should have broken the grip");
+    await standAtTheLadder(game, STRETCH_STAND);
+    await vrGrab(game, "right", STRETCH_HOLD);
+    const brokeAt = await pullIntoTheWall(game);
+    assert.ok(brokeAt > 0, "the blocked body should have broken the grip");
 
     const broken = (await game.info()).player.position[1];
     const peak = Math.max(...(await stepTrackingHeight(game, 90)));
@@ -363,74 +314,41 @@ test(
   },
 );
 
-test(
-  "debug_ladder (VR): hand over hand climbs the ladder",
-  { skip: !e2eEnabled, timeout: 600_000 },
-  async () => {
-    await using game = await launchVr();
-    await standAtTheLadder(game);
+for (const style of ["rung", "edge"] as const) {
+  test(
+    `debug_ladder (VR): hand over hand climbs the ladder by its ${style}s`,
+    { skip: !e2eEnabled, timeout: 600_000 },
+    async () => {
+      await using game = await launchVr();
+      await standAtTheLadder(game, CLIMB_STAND);
 
-    // Hands are tracked in PAWN space, so one reach height serves every
-    // cycle: as the body rises, the same reach lands on a higher rung.
-    const reach = await vrHandLocal(game, LADDER_HOLD);
-    const PULL = 0.5;
-    const FRAMES = 12;
-    const down = await vrHandLocalDelta(game, [0, -PULL, 0]);
-    const lowered: Vec3 = [
-      reach[0] + down[0],
-      reach[1] + down[1],
-      reach[2] + down[2],
-    ];
-
-    const heights = [(await game.info()).player.position[1]];
-    let pulling: "left" | "right" = "right";
-    await game.input.set("right_hand.position", reach);
-    await game.input.set("right_hand.squeeze", 0);
-    await game.step({ frames: 1 });
-    await game.input.set("right_hand.squeeze", 1);
-    heights.push(...(await stepTrackingHeight(game, 1)));
-
-    for (let half = 0; half < 6; half += 1) {
-      // Haul the gripping hand down: the body comes up to meet it.
-      for (let frame = 1; frame <= FRAMES; frame += 1) {
-        await game.input.set(`${pulling}_hand.position`, [
-          reach[0] + (down[0] * frame) / FRAMES,
-          reach[1] + (down[1] * frame) / FRAMES,
-          reach[2] + (down[2] * frame) / FRAMES,
-        ]);
-        heights.push(...(await stepTrackingHeight(game, 1)));
-      }
-      assert.equal(
-        (await game.info()).player.climb.anchor_hand,
-        pulling,
-        `the ${pulling} hand should be driving on half-cycle ${half}`,
-      );
-
-      // The other hand reaches past it and takes over, then this one lets go
-      // while still holding on - a handoff, not a release.
-      const other: "left" | "right" = pulling === "right" ? "left" : "right";
-      await game.input.set(`${other}_hand.position`, reach);
-      await game.input.set(`${other}_hand.squeeze`, 0);
-      heights.push(...(await stepTrackingHeight(game, 1)));
-      await game.input.set(`${other}_hand.squeeze`, 1);
-      heights.push(...(await stepTrackingHeight(game, 1)));
-      await game.input.set(`${pulling}_hand.squeeze`, 0);
-      await game.input.set(`${pulling}_hand.position`, lowered);
-      heights.push(...(await stepTrackingHeight(game, 1)));
+      const start = (await game.info()).player.position[1];
+      const { anchor, heights } = await vrClimbLadder(game, {
+        near: LADDER_HOLD,
+        untilY: start + 2.5,
+        style,
+      });
 
       const climb = (await game.info()).player.climb;
-      assert.equal(climb.anchor_hand, other, `handoff failed on half ${half}`);
+      assert.equal(climb.anchor_hand, anchor);
       assert.equal(climb.grips.length, 1);
-      pulling = other;
-    }
-
-    const climbed = heights[heights.length - 1] - heights[0];
-    assert.ok(climbed > 2.5, `hand over hand climbed only ${climbed} wu`);
-    for (let i = 1; i < heights.length; i += 1) {
-      assert.ok(
-        Math.abs(heights[i] - heights[i - 1]) < 0.1,
-        `the body jumped ${heights[i - 1]} -> ${heights[i]} in one frame`,
-      );
-    }
-  },
-);
+      assert.equal(climb.grips[0].kind, "ladder");
+      // Each hand closed on the ladder's own geometry: a rung, or its rail.
+      const held = climb.grips[0].point;
+      if (style === "rung") {
+        assert.ok(
+          RUNG_HEIGHTS.some((y) => Math.abs(held[1] - y) < 0.05),
+          `the ${anchor} hand should hold a rung, got ${held.join(",")}`,
+        );
+      } else {
+        assert.ok(Math.abs(Math.abs(held[2]) - 0.4) < 0.05, `the ${anchor} hand should hold a rail, got ${held.join(",")}`);
+      }
+      for (let i = 1; i < heights.length; i += 1) {
+        assert.ok(
+          Math.abs(heights[i] - heights[i - 1]) < 0.1,
+          `the body jumped ${heights[i - 1]} -> ${heights[i]} in one frame`,
+        );
+      }
+    },
+  );
+}

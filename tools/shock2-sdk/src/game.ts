@@ -23,6 +23,7 @@ import type {
   Position,
   RagdollMetricsResult,
   ClimbGripResult,
+  LadderHolds,
   RayCastRequest,
   RayCastResult,
   ScreenshotResult,
@@ -631,6 +632,11 @@ export class PhysicsApi {
       params.set("radius", String(options.radius));
     if (options?.feetY !== undefined) params.set("feet_y", String(options.feetY));
     return this.client.get<ClimbGripResult>(`/v1/physics/grip?${params}`);
+  }
+
+  /** The rungs and rails of the ladder entity `entityId`, from its model. */
+  async ladder(entityId: number): Promise<LadderHolds> {
+    return this.client.get<LadderHolds>(`/v1/physics/ladder?entity_id=${entityId}`);
   }
 }
 

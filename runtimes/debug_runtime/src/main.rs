@@ -434,6 +434,7 @@ async fn start_http_server(
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
         .route("/v1/physics/joints", get(list_physics_joints))
         .route("/v1/physics/grip", get(climb_grip))
+        .route("/v1/physics/ladder", get(ladder_holds))
         .route(
             "/v1/physics/bodies/:id/impulse",
             axum::routing::post(apply_body_impulse),
@@ -2177,6 +2178,21 @@ fn process_command(
                 });
             if reply.send(commands::ClimbGripResult { grip }).is_err() {
                 tracing::warn!("Failed to send climb grip - receiver dropped");
+            }
+        }
+        RuntimeCommand::LadderHolds { entity_id, reply } => {
+            let array = |v: cgmath::Vector3<f32>| [v.x, v.y, v.z];
+            let result = game.ladder_holds(entity_id).map(|(model, holds, normal)| {
+                commands::LadderHoldsResult {
+                    entity_id,
+                    model,
+                    rungs: holds.rungs.iter().map(|s| s.map(array)).collect(),
+                    rails: holds.rails.iter().map(|s| s.map(array)).collect(),
+                    normal: array(normal),
+                }
+            });
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send ladder holds - receiver dropped");
             }
         }
         RuntimeCommand::ApplyBodyImpulse {
@@ -4022,6 +4038,32 @@ async fn climb_grip(
             Json(commands::ClimbGripResult { grip: None })
         }
     }
+}
+
+#[derive(Deserialize)]
+struct LadderQueryParams {
+    entity_id: i32,
+}
+
+/// HTTP handler for `GET /v1/physics/ladder?entity_id=N`: the rungs and rails
+/// of a ladder, from its model (its physics body is one box). 404 with the
+/// reason when the entity has no object model.
+async fn ladder_holds(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Query(params): Query<LadderQueryParams>,
+) -> Result<Json<commands::LadderHoldsResult>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    command_tx
+        .send(RuntimeCommand::LadderHolds {
+            entity_id: params.entity_id,
+            reply: reply_tx,
+        })
+        .map_err(|_| game_loop_unavailable())?;
+    reply_rx
+        .await
+        .map_err(|_| game_loop_unavailable())?
+        .map(Json)
+        .map_err(|reason| (StatusCode::NOT_FOUND, reason))
 }
 
 /// HTTP handler for impulse-joint diagnostics (ragdoll constraint health).

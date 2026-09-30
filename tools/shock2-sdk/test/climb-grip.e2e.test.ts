@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import { GameServer, vrGrab, vrPull } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
-import { vrClimbPull } from "./helpers/vr-climb.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
 // `GET /v1/physics/grip` answers "could a hand hold on here?" against the
@@ -134,10 +133,13 @@ test("debug_ladder (VR): a hand below the mantle corner can hold and pull", {
 }, async () => {
   await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
   await game.step({ frames: 5 });
-  await teleportVerified(game, { x: -6.35, y: 1.5, z: 24 });
+  // Against the block, so the corner is within arm's reach (0.7 m).
+  await teleportVerified(game, { x: -6.6, y: 1.5, z: 24 });
   await game.step({ frames: 30 });
-  const pull = await vrClimbPull(game, { grabAt: [-6.95, 2.99, 24], pull: [0, -0.3, 0], frames: 30 });
+  const before = (await game.info()).player.position;
+  await vrGrab(game, "right", [-6.9, 2.75, 24]);
+  const after = (await vrPull(game, "right", [0, -0.3, 0], 30)).at(-1)!;
   const climb = (await game.info()).player.climb;
   assert.equal(climb.grips[0]?.kind, "ledge");
-  assert.ok(pull.after[1] - pull.before[1] > 0.2, "corner grip must move the body");
+  assert.ok(after[1] - before[1] > 0.2, "corner grip must move the body");
 });
