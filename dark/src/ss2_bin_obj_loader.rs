@@ -376,6 +376,26 @@ pub fn retain_materials(
     retain_polygons(mesh, |polygon| kept_slots.contains(&polygon.slot_index))
 }
 
+/// Keep the geometry owned by selected LGMD sub-objects, retaining the complete
+/// hierarchy so hidden parents still transform their visible children correctly.
+/// Cross-joint polygons are retained only if all of their vertices are visible.
+pub fn retain_sub_objects(
+    mut mesh: SystemShock2ObjectMesh,
+    keep: impl Fn(u32) -> bool,
+) -> SystemShock2ObjectMesh {
+    let owners = (0..mesh.vertices.len())
+        .map(|index| get_bone_index_for_point(&mesh, index as u16))
+        .collect::<Vec<_>>();
+    mesh.polygons.retain(|polygon| {
+        polygon.vertex_indices.iter().all(|index| {
+            owners
+                .get(*index as usize)
+                .is_some_and(|owner| keep(*owner))
+        })
+    });
+    mesh
+}
+
 /// The material slots whose name `keep` accepts.
 fn material_slots(mesh: &SystemShock2ObjectMesh, keep: impl Fn(&str) -> bool) -> HashSet<u16> {
     mesh.materials
@@ -1360,6 +1380,33 @@ mod tests {
             vhot_start: 0,
             vhot_count: 0,
         }
+    }
+
+    #[test]
+    fn retained_sub_objects_preserve_the_rig_and_material_selection() {
+        let polygon = |vertices| SystemShock2ObjectPolygon {
+            vertex_indices: vertices,
+            normal_indices: vec![0; 3],
+            uv_indices: vec![0; 3],
+            slot_index: 0,
+        };
+        let mut mesh = mesh_with(
+            vec![material_in_slot("magazine", 0)],
+            vec![polygon(vec![0, 1, 2]), polygon(vec![3, 4, 5])],
+        );
+        let mut root = sub_object("root", vec3(0.0, 0.0, 0.0), 1, -1);
+        root.point_stop = 3;
+        let mut magazine = sub_object("magazine", vec3(0.0, 2.0, 0.0), -1, -1);
+        magazine.point_start = 3;
+        magazine.point_stop = 6;
+        mesh.sub_objects = vec![root, magazine];
+        mesh.vertices.resize(6, vec3(0.0, 0.0, 0.0));
+        let selected = retain_sub_objects(mesh, |index| index == 1);
+        assert_eq!(selected.polygons.len(), 1);
+        assert_eq!(selected.polygons[0].vertex_indices, vec![3, 4, 5]);
+        assert_eq!(selected.sub_objects.len(), 2);
+        assert_eq!(sub_object_transforms(&selected)[1].1.w.y, 2.0);
+        assert!(retain_materials(selected, |_| false).polygons.is_empty());
     }
 
     /// A sub-object's authored transform is relative to its parent, so a pivot
