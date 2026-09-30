@@ -389,6 +389,13 @@ impl FlatWeaponAnimator {
         let (pos, rot) = sample
             .and_then(|(clip, frame)| clip.sample("gunPoint", frame))
             .unwrap_or((vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0)));
+        let rot = if self.playback.as_ref().is_some_and(|p| p.clip == "shoot")
+            && crate::weapon_recoil::still_hand_active(world)
+        {
+            vec3(0.0, 0.0, 0.0)
+        } else {
+            rot
+        };
         let parameters = std::array::from_fn(|index| {
             let value = sample
                 .and_then(|(clip, frame)| clip.sample(&format!("joint{}", index + 1), frame))

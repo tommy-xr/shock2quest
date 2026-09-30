@@ -25,14 +25,23 @@ for (const vr of [false, true]) {
       const ammo = ammoOf(await game.entities.detail(pistol.id));
       await fireOnce(game);
       let peak = 0;
+      let hasAuthoredPose = false;
+      let slideTravel = 0;
       for (let i = 0; i < 12; i++) {
         await game.step({ frames: 1 });
-        const forward = muzzleFrameOf(await game.entities.detail(pistol.id)).forward;
+        const detail = await game.entities.detail(pistol.id);
+        const forward = muzzleFrameOf(detail).forward;
+        const pose = detail.properties.find(p => p.name === "FlatWeaponAnimation");
+        if (pose) {
+          hasAuthoredPose = true;
+          slideTravel = Math.max(slideTravel, Math.abs(JSON.parse(pose.value).parameters[0][1]));
+        }
         const dot = rest.reduce((sum, v, j) => sum + v * forward[j]!, 0);
         peak = Math.max(peak, Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI);
       }
       assert.equal(ammoOf(await game.entities.detail(pistol.id)), ammo - 1);
       assert.deepEqual((await game.info()).player.camera_rotation, head, "the tracked head never recoils");
+      if (hasAuthoredPose) assert.ok(slideTravel > 0.1, "Still Hand preserves the mechanical slide cycle");
       return peak;
     }
     await equip(pistol.id, "EquipPistol");
