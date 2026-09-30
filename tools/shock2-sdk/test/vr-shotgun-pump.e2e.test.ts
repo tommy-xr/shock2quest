@@ -8,11 +8,16 @@ import { ammoOf, cycleToWeapon } from "./helpers/weapon.js";
 const v = (p: ResolvedGrip["offset"]): Vec3 => [p.x, p.y, p.z];
 const q = (r: ResolvedGrip["rotation"]): Quat => [...v(r.v), r.s];
 
-for (const [primary, mission] of [["left", "debug_weapons"], ["right", "debug_weapons"], ["left", "medsci1.mis"]] as const) {
-  test(`shotgun pump ${primary} ${mission}: hand-driven cycle, delayed casing, re-grip and ownership`, {
+for (const [primary, mission, triple, physical] of [
+  ["left", "debug_weapons", false, false],
+  ["right", "debug_weapons", false, true],
+  ["left", "debug_weapons", true, false],
+  ["left", "medsci1.mis", false, false],
+] as const) {
+  test(`shotgun pump ${primary} ${mission}${triple ? " triple" : ""}${physical ? " physical" : ""}: hand-driven cycle, delayed casing, re-grip and ownership`, {
     skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000,
   }, async () => {
-    await using game = await GameServer.launch({ mission, debugFlags: ["--vr"] });
+    await using game = await GameServer.launch({ mission, debugFlags: physical ? ["--vr", "--experimental", "physical_held_items"] : ["--vr"] });
     await game.input.set("head.rotation", [0, 0, 0, 1]);
     await game.step({ frames: 30 });
     await game.player.setStats({ skills: { standard_weapons: 6 } });
@@ -45,13 +50,18 @@ for (const [primary, mission] of [["left", "debug_weapons"], ["right", "debug_we
     };
     await attachSupportHand(game, primary);
     assert.equal((await support()).attached, true);
+    if (triple) {
+      await game.input.trigger("CycleGunSetting");
+      await game.step({ frames: 2 });
+    }
+    const roundsPerShot = triple ? 3 : 1;
     const initial = ammoOf(await game.entities.detail(gun.id));
     await fire();
-    assert.equal(ammoOf(await game.entities.detail(gun.id)), initial - 1);
+    assert.equal(ammoOf(await game.entities.detail(gun.id)), initial - roundsPerShot);
     assert.equal((await state()).phase, "Spent");
     assert.equal((await game.entities.byTemplate(-2658)).length, 0, "firing retains the shell until the rear stroke");
     await fire();
-    assert.equal(ammoOf(await game.entities.detail(gun.id)), initial - 1, "cooldown alone cannot chamber the next shot");
+    assert.equal(ammoOf(await game.entities.detail(gun.id)), initial - roundsPerShot, "cooldown alone cannot chamber the next shot");
     await place(.5);
     await game.step({ frames: 10 });
     assert.ok(Math.abs((await state()).fraction - .5) < .015);
@@ -85,12 +95,12 @@ for (const [primary, mission] of [["left", "debug_weapons"], ["right", "debug_we
     await game.step({ frames: 8 });
     assert.equal((await game.entities.byTemplate(-2658)).length, 1, "rear dwell does not duplicate the shell");
     await fire();
-    assert.equal(ammoOf(await game.entities.detail(gun.id)), initial - 1, "open action blocks firing");
+    assert.equal(ammoOf(await game.entities.detail(gun.id)), initial - roundsPerShot, "open action blocks firing");
     await place(0);
     await game.step({ frames: 10 });
     assert.equal((await state()).phase, "Ready", JSON.stringify({state: await state(), support: await support()}));
     await fire();
-    assert.equal(ammoOf(await game.entities.detail(gun.id)), initial - 2);
+    assert.equal(ammoOf(await game.entities.detail(gun.id)), initial - 2 * roundsPerShot);
     const player = (await game.info()).player;
     assert.equal(primary === "left" ? player.wielded_entity_id : player.right_hand_entity_id, gun.id);
     assert.equal(other === "left" ? player.wielded_entity_id : player.right_hand_entity_id, null);

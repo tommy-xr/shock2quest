@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 
 import type { EntitySummary, GameServer, Vec3 } from "../../src/index.js";
+import { setHandWorldPose } from "../../src/index.js";
+
+/** Move an attached support hand to an absolute fraction of its authored rail. */
+export async function moveSupportPump(game: GameServer, primary: "left" | "right", fraction: number): Promise<void> {
+  const player = (await game.info()).player;
+  const support = player.hand_grips.find(g => g.hand === primary)?.support;
+  assert.ok(support?.attached && support.pump, "the support hand must hold a moving part");
+  const p = support.controller_position, t = support.pump.world_travel, q = support.controller_rotation;
+  const delta = fraction - support.pump.fraction;
+  await setHandWorldPose(game, player, primary === "left" ? "right" : "left",
+    [p.x + t.x * delta, p.y + t.y * delta, p.z + t.z * delta], [q.v.x, q.v.y, q.v.z, q.s]);
+  await game.step({ frames: 1 });
+}
 
 /** The `Ammo` property of a weapon's entity detail - its loaded rounds. */
 export function ammoOf(detail: {

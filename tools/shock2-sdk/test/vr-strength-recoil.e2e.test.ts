@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { GameServer } from "../src/index.js";
+import { GameServer, attachSupportHand } from "../src/index.js";
 import {
   aimVrHandAt,
   quatConjugate,
@@ -11,7 +11,7 @@ import {
   sub,
   type Quat,
 } from "./helpers/vr-hand.js";
-import { ammoOf, cycleToWeapon, muzzleFrameOf } from "./helpers/weapon.js";
+import { ammoOf, cycleToWeapon, muzzleFrameOf, moveSupportPump } from "./helpers/weapon.js";
 
 for (const [name, template, profiled, setting, overrides] of [
   ["pistol", -17, true, 0, false],
@@ -89,6 +89,18 @@ for (const [name, template, profiled, setting, overrides] of [
         );
       };
       const support = async (attached: boolean) => {
+        if (template === -19) {
+          // Each measurement is a new shot. Rack the physical action between
+          // samples, then establish the supported/unsupported pose below.
+          const pump = (await game.entities.detail(gun.id)).properties.find(p => p.name === "ShotgunPump");
+          if (pump && JSON.parse(pump.value).phase !== "Ready") {
+            await game.input.set("left_hand.squeeze", 0);
+            await game.step({ frames: 2 });
+            await attachSupportHand(game, "right");
+            await moveSupportPump(game, "right", 1);
+            await moveSupportPump(game, "right", 0);
+          }
+        }
         await game.input.set("left_hand.squeeze", 0);
         await game.step({ frames: 2 });
         if (attached) {

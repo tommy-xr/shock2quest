@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GameServer, attachSupportHand, setHandWorldPose } from "../src/index.js";
+import { GameServer, attachSupportHand } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
-import { cycleToWeapon } from "./helpers/weapon.js";
+import { cycleToWeapon, moveSupportPump } from "./helpers/weapon.js";
 import { aimVrHandAt, quatConjugate, quatFromTo, quatRotate } from "./helpers/vr-hand.js";
 
 import type { Quat } from "./helpers/vr-hand.js";
@@ -41,13 +41,7 @@ for (const [weapon, casingTemplate] of [["Assault Rifle", -2657], ["Pistol", -26
           assert.equal(spawned.filter(e => e.template_id === casingTemplate).length, 0,
             "VR shotgun retains its shell until the physical rear stroke");
           await attachSupportHand(game, hand);
-          const player = (await game.info()).player;
-          const support = player.hand_grips.find(g => g.entity_id === gun.id)!.support!;
-          assert.ok(support.pump);
-          const p = support.controller_position, t = support.pump.world_travel, q = support.controller_rotation;
-          await setHandWorldPose(game, player, hand === "left" ? "right" : "left",
-            [p.x + t.x, p.y + t.y, p.z + t.z], [q.v.x, q.v.y, q.v.z, q.s]);
-          await game.step({ frames: 1 });
+          await moveSupportPump(game, hand, 1);
         }
         const pumping = !vr && weapon === "Shotgun";
         if (pumping) {
