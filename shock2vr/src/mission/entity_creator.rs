@@ -764,7 +764,9 @@ fn create_model(
 
     if let (Ok(pos), Ok(model)) = (v_prop_position.get(entity_id), v_prop_model.get(entity_id)) {
         let model_name = model.0.to_owned();
-        let maybe_model = asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"));
+        let maybe_model = crate::vr_magazine::entity_model(asset_cache, world, entity_id)
+            .map(std::rc::Rc::new)
+            .or_else(|| asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN")));
 
         maybe_model.as_ref()?;
 
@@ -1220,6 +1222,26 @@ fn create_physics_representation_with_options(
     } else {
         DynamicPhysicsOptions::default()
     };
+
+    // Extracted magazines have their own centered geometry and persisted
+    // physical scale. The ordinary pickup fallback deliberately uses broader
+    // unscaled bounds; applying that here makes these small parts float above
+    // the floor on a collider larger than the art.
+    if crate::vr_magazine::appearance(world, entity_id).is_some() {
+        if let (Some(bounds), Ok(pos)) = (model_bounds, v_pos.get(entity_id)) {
+            let size = bounds.dim();
+            let size = vec3(
+                (size.x * model_scale.x).max(0.004),
+                (size.y * model_scale.y).max(0.004),
+                (size.z * model_scale.z).max(0.004),
+            );
+            return Some(physics.add_dynamic(
+                entity_id, pos.position, pos.rotation, model_bounds_center,
+                PhysicsShape::Cuboid(size), entity_group.non_solid_to_player(),
+                false, dynamics_options,
+            ));
+        }
+    }
 
     // A restored generated death pose is a completed, resting corpse. Its
     // serialized P$Position is already the live Rapier body position:
@@ -2475,6 +2497,24 @@ mod tests {
             );
         }
         entity_id
+    }
+
+    #[test]
+    fn extracted_magazine_collision_follows_its_small_scaled_mesh() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity = add_wall_fixture(&mut world, None);
+        world.add_component(entity, (
+            dark::properties::InternalPropMagazineModel { source: "atek_h".into(), item_scale: 0.55 },
+            PropScale(vec3(0.55, 0.55, 0.55)),
+        ));
+        let model = Model::from_glb(vec![], Aabb3::new(
+            Point3::new(-0.05, -0.15, -0.02), Point3::new(0.05, 0.15, 0.02),
+        ), None);
+        create_physics_representation(&mut world, &mut physics, &Some(&model), entity).unwrap();
+        let bounds = physics.get_aabb2(entity).unwrap();
+        let size = bounds.max - bounds.min;
+        assert!((size - vec3(0.055, 0.165, 0.022)).magnitude() < 1e-5);
     }
 
     /// A scaled mesh sits somewhere else, so the box follows `PropScale` to the

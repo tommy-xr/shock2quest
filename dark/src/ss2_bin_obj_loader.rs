@@ -1064,7 +1064,7 @@ pub struct SubObjectHeader {
     pub parameter: i32,
     pub motion_type: u8,
     pub name: String,
-    transform: Matrix4<f32>,
+    pub(crate) transform: Matrix4<f32>,
     #[allow(dead_code)]
     min_range: f32,
     #[allow(dead_code)]

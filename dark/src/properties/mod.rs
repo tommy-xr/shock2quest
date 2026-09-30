@@ -580,6 +580,14 @@ pub struct PropModelName(pub String);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct InternalPropOriginalModelName(pub String);
 
+/// Appearance of real ammo extracted as a detachable weapon magazine.
+/// Ammo type/count remain on the original entity; this only selects its mesh.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct InternalPropMagazineModel {
+    pub source: String,
+    pub item_scale: f32,
+}
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropScale(pub Vector3<f32>);
 
@@ -2634,6 +2642,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "__P$OriginalModelName",
             read_prop_string,
             InternalPropOriginalModelName,
+            accumulator::latest,
+        ),
+        define_prop(
+            "__P$MagazineModel",
+            |reader, len| InternalPropMagazineModel { source: read_prop_string(reader, len), item_scale: 1.0 },
+            |value| value,
             accumulator::latest,
         ),
     ];

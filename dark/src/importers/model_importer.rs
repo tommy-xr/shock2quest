@@ -1,7 +1,7 @@
 use std::io::{Read, Seek};
 use std::{path::PathBuf, rc::Rc};
 
-use cgmath::{Matrix4, Point3, SquareMatrix, Vector3, Vector4};
+use cgmath::{EuclideanSpace, Matrix4, Point3, SquareMatrix, Vector3, Vector4};
 use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
 use engine::scene::{
     MAX_SKINNED_JOINTS, SKINNING_PALETTE_SIZE, VertexPositionTextureSkinnedNormal,
@@ -88,6 +88,54 @@ fn process_model(
 
 pub static MODELS_IMPORTER: Lazy<AssetImporter<SystemShockContentModel, Model, ()>> =
     Lazy::new(|| AssetImporter::define(load_model, process_model));
+
+/// A complete detachable magazine, centered on its own visible geometry.
+/// The original weapon mesh remains in its separate importer/cache bucket.
+pub struct MagazineModel {
+    pub model: Model,
+    pub triangles: Vec<[Point3<f32>; 3]>,
+    /// Magazine center in the source weapon's bind frame (before held scale).
+    pub source_center: Vector3<f32>,
+}
+
+pub static MAGAZINE_MODEL_IMPORTER: Lazy<
+    AssetImporter<(String, SystemShockContentModel), Option<MagazineModel>, ()>,
+> = Lazy::new(|| AssetImporter::define(
+    |name, reader, cache, config| {
+        let content = load_model(name.clone(), reader, cache, config);
+        (name, content)
+    },
+    |(name, content), cache, _| {
+        let SystemShockContentModel::Obj(mesh) = content else { return None; };
+        let name = name.to_ascii_lowercase();
+        let mut mesh = match name.trim_end_matches(".bin") {
+            "atek_h" => ss2_bin_obj_loader::retain_materials(mesh, |name| name.eq_ignore_ascii_case("ND-ammo1.psd")),
+            "ar15_h" => {
+                let magazine = mesh.sub_objects.iter().position(|part| part.name == "@s02_cli")?;
+                ss2_bin_obj_loader::retain_sub_objects(mesh, |index| index as usize == magazine)
+            }
+            _ => return None,
+        };
+        let triangles = object_triangles(&mesh);
+        let first = *triangles.first()?.first()?;
+        let (min, max) = triangles.iter().flatten().fold((first, first), |(min, max), p| (
+            Point3::new(min.x.min(p.x), min.y.min(p.y), min.z.min(p.z)),
+            Point3::new(max.x.max(p.x), max.y.max(p.y), max.z.max(p.z)),
+        ));
+        let center = (min.to_vec() + max.to_vec()) * 0.5;
+        // Moving the root moves every retained child in the same frame. Keep
+        // the hierarchy so vertex ownership and bind transforms remain valid.
+        let root = mesh.sub_objects.first_mut()?;
+        root.transform = Matrix4::from_translation(-center) * root.transform;
+        let bounds = collision::Aabb3::new(min - center, max - center);
+        mesh.bounding_box = bounds;
+        mesh.vhots.clear();
+        let triangles = triangles.into_iter().map(|triangle| triangle.map(|p| p - center)).collect();
+        let model = Model::from_obj_bin(mesh, cache);
+        let model = Model::from_glb(model.to_animated_scene_objects(&AnimationPlayer::empty()), bounds, None);
+        Some(MagazineModel { model, triangles, source_center: center })
+    },
+));
 
 /// Visible, bind-pose triangles of an LGMD pickup, in the same units and
 /// sub-object frames as the renderer. Animated creatures/weapons deliberately

@@ -266,6 +266,7 @@ pub struct VrInteraction {
     hand_climb: crate::vr_climb::HandClimb,
     grip_kinematics: Option<[crate::vr_grip::GripKinematics; 2]>,
     grip_geometry: HashMap<String, Option<GripGeometry>>,
+    magazine_grips: HashMap<String, Option<crate::vr_grip::ResolvedGrip>>,
     kinematics_hashes: [String; 2],
     grip_library: Option<crate::vr_grip::GripLibrary>,
     grip_hints: HashMap<String, crate::vr_grip::GripHints>,
@@ -371,6 +372,7 @@ impl VrInteraction {
             hand_climb: crate::vr_climb::HandClimb::default(),
             grip_kinematics: None,
             grip_geometry: HashMap::new(),
+            magazine_grips: HashMap::new(),
             kinematics_hashes: [String::new(), String::new()],
             grip_library: None,
             grip_hints: HashMap::new(),
@@ -931,10 +933,12 @@ impl PlayerInteraction for VrInteraction {
                 self.fitted_grips[index] = None;
                 continue;
             };
+            let magazine = crate::vr_magazine::appearance(world, entity);
             let model = world
                 .borrow::<View<PropModelName>>()
                 .ok()
                 .and_then(|v| v.get(entity).ok().map(|p| p.0.to_lowercase()));
+            let model = magazine.as_ref().map(|m| format!("magazine:{}:{}", m.source, m.item_scale.to_bits())).or(model);
             let Some(model) = model else {
                 self.fitted_grips[index] = None;
                 continue;
@@ -945,7 +949,7 @@ impl PlayerInteraction for VrInteraction {
             {
                 let start = std::time::Instant::now();
                 let hand_name = if index == 0 { "left" } else { "right" };
-                let eligible = bake
+                let eligible = magazine.is_some() || bake
                     || self
                         .grip_library
                         .as_ref()
@@ -957,6 +961,15 @@ impl PlayerInteraction for VrInteraction {
                     self.grip_geometry
                         .entry(format!("{model}:{hand_name}"))
                         .or_insert_with(|| {
+                            if let Some(magazine) = magazine.as_ref() {
+                                let source = crate::vr_magazine::load(assets, &magazine.source)?;
+                                let source = source.as_ref().as_ref()?;
+                                return Some(GripGeometry {
+                                    triangles: std::rc::Rc::new(source.triangles.clone()),
+                                    fingerprint: crate::vr_grip::surface_fingerprint(&source.triangles),
+                                    weapon_arms: None,
+                                });
+                            }
                             if crate::vr_weapon_grip::supports_model(&model) {
                                 let (triangles, arms, fingerprint) = crate::vr_weapon_grip::inputs(
                                     assets,
@@ -991,7 +1004,12 @@ impl PlayerInteraction for VrInteraction {
                 let kinematics_hash = self.kinematics_hashes[index].clone();
                 let hints = self.grip_hints.entry(model.clone()).or_default();
                 let hints_hash = hints.fingerprint();
-                let resolved = if bake && geometry.is_some_and(|g| g.weapon_arms.is_some()) {
+                let resolved = if let Some(magazine) = magazine.as_ref() {
+                    self.magazine_grips.entry(format!("{model}:{hand_name}"))
+                        .or_insert_with(|| triangles.and_then(|triangles| {
+                            crate::vr_magazine::resolve_grip(triangles, magazine.item_scale, &kinematics[index])
+                        })).clone()
+                } else if bake && geometry.is_some_and(|g| g.weapon_arms.is_some()) {
                     let geometry = geometry.unwrap();
                     crate::vr_weapon_grip::resolve(
                         &model,
@@ -1016,7 +1034,7 @@ impl PlayerInteraction for VrInteraction {
                         .lookup(&model, hand_name)
                         .cloned()
                 };
-                let source = if bake {
+                let source = if bake || magazine.is_some() {
                     "bake"
                 } else if resolved.is_some() {
                     "prepared"
