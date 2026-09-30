@@ -9,6 +9,26 @@ function animation(detail: { properties: { name: string; value: string }[] }) {
   return JSON.parse(property.value) as { clip: string | null; frame: number; parameters: [number, number][] };
 }
 
+test("flat pistol cycles its slide and ejects immediately", {
+  skip: process.env.SHOCK2_E2E !== "1",
+}, async () => {
+  await using game = await GameServer.launch({ mission: "debug_weapons" });
+  await game.step({ frames: 10 });
+  const gun = await cycleToWeapon(game, e => e.name === "Pistol", { settleFrames: 120 });
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 1 });
+  await game.input.set("right_hand.trigger", 0);
+  assert.equal((await game.entities.byTemplate(-2657)).length, 1);
+  await game.step({ frames: 2 });
+  const pose = animation(await game.entities.detail(gun.id));
+  assert.equal(pose.clip, "shoot");
+  assert.ok(pose.parameters.some(([, value]) => value < -0.1), "slide recoils behind the barrel");
+  await game.step({ frames: 16 });
+  assert.ok(animation(await game.entities.detail(gun.id)).parameters.every(([, value]) => Math.abs(value) < 0.001),
+    "slide returns to battery");
+  assert.equal((await game.entities.byTemplate(-2657)).length, 1, "slide motion adds no second casing");
+});
+
 test("flat shotgun ejects during its pump stroke, once per successful shot", {
   skip: process.env.SHOCK2_E2E !== "1",
 }, async () => {

@@ -206,6 +206,7 @@ impl FlatWeaponAnimator {
             let gun = guns.get(entity).ok()?;
             let category = match gun.hand_model.to_ascii_lowercase().as_str() {
                 "sg_h" => "Shotgun",
+                "atek_h" => "Pistol",
                 _ => return None,
             };
             self.clips.get(category, "shoot")?;
