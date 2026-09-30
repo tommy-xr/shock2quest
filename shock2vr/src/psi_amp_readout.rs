@@ -20,8 +20,10 @@ use crate::{
 const AMP_SPHERE_CENTER: Point3<f32> = Point3::new(-0.42, 0.094, -0.04);
 const AMP_SPHERE_RADIUS: f32 = 0.155;
 const ICON_SIZE: f32 = 0.05;
-/// Gap between the sphere's top and the badge's bottom edge.
+/// Minimum gap between the sphere's top and the badge's bottom edge.
 const ICON_GAP: f32 = 0.04;
+/// Extra badge gap with the hand over the ball (see [`badge_lift`]).
+const FINGER_CLEARANCE: f32 = 0.03;
 /// The meter's clearance off the sphere, in sphere radii.
 const RING_CLEARANCE: f32 = 0.2;
 const RING_ARC: Deg<f32> = Deg(110.0);
@@ -69,7 +71,7 @@ pub(crate) fn render(
             );
             let canvas = badge_canvas(&icon, power.tier());
             let height = ICON_SIZE * canvas.size().y / canvas.size().x;
-            let origin = center + vec3(0.0, radius + ICON_GAP + height * 0.5, 0.0);
+            let origin = center + vec3(0.0, radius + badge_lift(axes.y) + height * 0.5, 0.0);
             let transform = crate::psi_carousel::projection_frame(origin, eye)
                 * Matrix4::from_nonuniform_scale(ICON_SIZE, height, 1.0);
             objects.extend(canvas.render_world_space(assets, transform, None, None, 0.001));
@@ -138,6 +140,12 @@ pub(crate) fn sphere(
             transform.z.truncate().normalize(),
         ),
     ))
+}
+
+/// Gap under the badge for a palm-to-ball axis `up`: least palm up, most once
+/// the fingers (palm sideways) or the whole hand (palm down) are over the top.
+fn badge_lift(up: Vector3<f32>) -> f32 {
+    ICON_GAP + FINGER_CLEARANCE * (1.0 - up.y.max(0.0))
 }
 
 fn ring_radius(sphere_radius: f32) -> f32 {
@@ -211,6 +219,16 @@ mod tests {
             assert!(axes.y.dot(vec3(1.0, 0.0, 0.0)) > 0.999);
             assert!(axes.x.dot(vec3(0.0, -1.0, 0.0)) > 0.999);
         }
+    }
+
+    #[test]
+    fn badge_clears_the_hand_over_the_ball() {
+        let up = badge_lift(vec3(0.0, 1.0, 0.0));
+        let sideways = badge_lift(vec3(1.0, 0.0, 0.0));
+        let down = badge_lift(vec3(0.0, -1.0, 0.0));
+        assert!((up - ICON_GAP).abs() < 1e-6);
+        assert!((sideways - ICON_GAP - FINGER_CLEARANCE).abs() < 1e-6);
+        assert_eq!(down, sideways);
     }
 
     #[test]
