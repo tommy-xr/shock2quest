@@ -33,10 +33,29 @@ use crate::{
 
 /// The original first-person FOV, applied in projection space so shading
 /// continues to use undistorted world positions and normals.
+const VIEWMODEL_FOV_Y_DEG: f32 = 73.74; // 90 degrees horizontal at 4:3.
+
 pub fn viewmodel_projection(projection: Matrix4<f32>) -> Matrix4<f32> {
-    const FOV_Y_DEG: f32 = 73.74; // 90 degrees horizontal at 4:3.
-    let scale = (1.0 / projection.y.y) / (FOV_Y_DEG / 2.0).to_radians().tan();
+    let scale = (1.0 / projection.y.y) / (VIEWMODEL_FOV_Y_DEG / 2.0).to_radians().tan();
     projection * Matrix4::from_nonuniform_scale(scale, scale, 1.0)
+}
+
+/// Map a departing viewmodel effect into the world projection once, at launch.
+/// A casing otherwise jumps offscreen because its port used the wider weapon
+/// FOV. After launch it uses ordinary world physics/rendering, including gravity.
+pub(crate) fn viewmodel_to_world(
+    eye: Point3<f32>,
+    look: Quaternion<f32>,
+    world_fov_deg: f32,
+) -> Matrix4<f32> {
+    use cgmath::EuclideanSpace;
+    let scale =
+        (world_fov_deg / 2.0).to_radians().tan() / (VIEWMODEL_FOV_Y_DEG / 2.0).to_radians().tan();
+    Matrix4::from_translation(eye.to_vec())
+        * Matrix4::from(look)
+        * Matrix4::from_nonuniform_scale(scale, scale, 1.0)
+        * Matrix4::from(look.conjugate())
+        * Matrix4::from_translation(-eye.to_vec())
 }
 
 /// Fallback viewmodel framing offset (look space: +x right, +y up, -z forward),
@@ -445,6 +464,26 @@ mod tests {
     use dark::properties::{FrobFlag, KeyCard, PropFrobInfo, PropKeySrc, PropPlayerGun};
 
     use crate::physics::CollisionGroup;
+
+    #[test]
+    fn departing_effect_starts_at_the_visible_port_for_every_camera_pose_and_fov() {
+        use cgmath::{EuclideanSpace, SquareMatrix};
+        let eye = point3(12.0, 2.4, -37.0);
+        for fov in [45.0, 73.74, 100.0] {
+            for yaw in [0.0, 90.0, -135.0] {
+                let look = Quaternion::from_angle_y(Deg(yaw))
+                    * Quaternion::from_angle_x(Deg(35.0))
+                    * Quaternion::from_angle_z(Deg(15.0));
+                let camera = Matrix4::from_translation(eye.to_vec()) * Matrix4::from(look);
+                let view = camera.invert().unwrap();
+                let projection = cgmath::perspective(Deg(fov), 4.0 / 3.0, 0.1, 1000.0);
+                let port = camera * point3(0.4, -0.25, -0.6).to_homogeneous();
+                let visible = viewmodel_projection(projection) * view * port;
+                let departing = projection * view * viewmodel_to_world(eye, look, fov) * port;
+                assert!((visible / visible.w - departing / departing.w).magnitude() < 0.0001);
+            }
+        }
+    }
 
     #[test]
     fn viewmodel_projection_preserves_framing_without_moving_world_geometry() {

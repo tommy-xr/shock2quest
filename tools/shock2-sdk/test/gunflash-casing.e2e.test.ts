@@ -3,56 +3,78 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
 import { cycleToWeapon } from "./helpers/weapon.js";
-import { aimVrHandAt, quatFromTo, quatRotate } from "./helpers/vr-hand.js";
+import { aimVrHandAt, quatConjugate, quatFromTo, quatRotate } from "./helpers/vr-hand.js";
 
 import type { Quat } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
-for (const presentation of ["flat", "left", "right"] as const) {
-  test(`AR15 casings launch independently in ${presentation}`,
-    { skip: enabled ? false : "set SHOCK2_E2E=1 to run" }, async () => {
-      const vr = presentation !== "flat";
-      const hand = presentation === "left" ? "left" : "right";
-      await using game = await GameServer.launch({ mission: "debug_weapons", debugFlags: vr ? ["--vr"] : [] });
-      await game.step({ frames: 10 });
-      const gun = await cycleToWeapon(game, e => e.name === "Assault Rifle", { settleFrames: 90 });
-      if (vr) {
-        await aimVrHandAt(game, gun.position as Vec3, 0.45, 1, 0, { hand });
+for (const [weapon, casingTemplate] of [["Assault Rifle", -2657], ["Pistol", -2657], ["Shotgun", -2658]] as const) {
+  for (const presentation of ["flat", "left", "right"] as const) {
+    test(`${weapon} flashes and ejects casings independently in ${presentation}`,
+      { skip: enabled ? false : "set SHOCK2_E2E=1 to run" }, async () => {
+        const vr = presentation !== "flat";
+        const hand = presentation === "left" ? "left" : "right";
+        await using game = await GameServer.launch({ mission: "debug_weapons", debugFlags: vr ? ["--vr"] : [] });
+        await game.step({ frames: 10 });
+        const gun = await cycleToWeapon(game, e => e.name === weapon, { settleFrames: 90 });
+        if (vr) {
+          await aimVrHandAt(game, gun.position as Vec3, 0.45, 1, 0, { hand });
+          await game.step({ frames: 8 });
+          const info = await game.info();
+          assert.equal(hand === "right" ? info.player.right_hand_entity_id : info.player.wielded_entity_id, gun.id);
+          await game.input.set(`${hand}_hand.position`, [0, 1, -2]);
+          await game.input.set(`${hand}_hand.rotation`, quatFromTo([0, 0, -1], [-1, 0, 0]));
+          await game.step({ frames: 3 });
+        }
+        const before = new Set((await game.entities.list()).entities.map(e => e.id));
+        await game.input.set(`${hand}_hand.trigger`, 1);
+        await game.step({ frames: 1 });
+        await game.input.set(`${hand}_hand.trigger`, 0);
+        const spawned = (await game.entities.list()).entities.filter(e => !before.has(e.id));
+        const flashes = spawned.filter(e => e.name === "Assault Flash" || e.name === "Shotgun Flash");
+        assert.equal(flashes.length, 1, "one visible muzzle flash per shot");
+        assert.ok((await game.scene.objects({ entityId: flashes[0].id })).objects.length > 0,
+          "the flash must reach the renderer");
+        const casings = spawned.filter(e => e.template_id === casingTemplate);
+        assert.equal(casings.length, 1, "one spent casing per shot");
+        const casing = casings[0];
+        assert.ok((await game.scene.objects({ entityId: casing.id })).objects.length > 0,
+          "the casing must reach the renderer");
+        const initial = casing.position as Vec3;
+        if (!vr) {
+          const { player } = await game.info();
+          const relative = initial.map((v, i) => v - player.position[i]) as Vec3;
+          const pawnSpace = quatRotate(quatConjugate(player.rotation), relative);
+          const [cw, cx, cy, cz] = player.camera_rotation;
+          const eyeSpace = quatRotate([-cx, -cy, -cz, cw],
+            pawnSpace.map((v, i) => v - player.camera_offset[i]) as Vec3);
+          const halfHeight = -eyeSpace[2] * Math.tan(45 * Math.PI / 360);
+          assert.ok(halfHeight > 0 && Math.abs(eyeSpace[0]) < halfHeight * 4 / 3
+            && Math.abs(eyeSpace[1]) < halfHeight,
+            `casing starts at the visible viewmodel port, not offscreen: ${JSON.stringify(eyeSpace)}`);
+        }
+        // Both classic and 25AE shell meshes have their long axis along +Y.
+        // A level gun must launch that axis sideways, not standing upright.
+        const pose = (await game.entities.detail(casing.id)).rotation as Quat;
+        const longAxis = quatRotate(pose, [0, 1, 0]);
+        assert.ok(Math.abs(longAxis[1]) < 0.3,
+          `casing must lie along the barrel at launch: ${JSON.stringify(longAxis)}`);
         await game.step({ frames: 8 });
-        const info = await game.info();
-        assert.equal(hand === "right" ? info.player.right_hand_entity_id : info.player.wielded_entity_id, gun.id);
-        await game.input.set(`${hand}_hand.position`, [0, 1, -2]);
-        await game.input.set(`${hand}_hand.rotation`, quatFromTo([0, 0, -1], [-1, 0, 0]));
-        await game.step({ frames: 3 });
-      }
-      const before = new Set((await game.entities.list()).entities.map(e => e.id));
-      await game.input.set(`${hand}_hand.trigger`, 1);
-      await game.step({ frames: 1 });
-      await game.input.set(`${hand}_hand.trigger`, 0);
-      const casing = (await game.entities.list()).entities.find(e => !before.has(e.id) && e.template_id === -2657);
-      assert.ok(casing, "the authored casing GunFlash link must spawn an object");
-      const initial = casing.position as Vec3;
-      // Both classic and 25AE shell meshes have their long axis along +Y.
-      // A level gun must launch that axis sideways, not standing upright.
-      const pose = (await game.entities.detail(casing.id)).rotation as Quat;
-      const longAxis = quatRotate(pose, [0, 1, 0]);
-      assert.ok(Math.abs(longAxis[1]) < 0.3,
-        `casing must lie along the barrel at launch: ${JSON.stringify(longAxis)}`);
-      await game.step({ frames: 8 });
-      const later = (await game.entities.detail(casing.id)).position as Vec3;
-      assert.ok(later[1] - initial[1] > 0.15,
-        `authored upward ejection must separate from the breech: ${JSON.stringify({initial, later})}`);
-      // With a level -X barrel, authored sideways speed is -0.2 world units/s;
-      // it reflects with the left-hand ejection port. Allow physics integration.
-      {
-        const sideways = later[2] - initial[2];
-        assert.ok(hand === "left" ? sideways > 0.01 : sideways < -0.01,
-          `casing must leave the ${hand} ejection side: ${sideways}`);
-      }
-      await game.step({ frames: 60 });
-      assert.ok(!(await game.entities.list()).entities.some(e => e.id === casing.id),
-        "casing retains its authored effect lifetime");
-    });
+        const later = (await game.entities.detail(casing.id)).position as Vec3;
+        assert.ok(later[1] - initial[1] > 0.15,
+          `authored upward ejection must separate from the breech: ${JSON.stringify({initial, later})}`);
+        // With a level -X barrel, authored sideways speed is -0.2 world units/s;
+        // it reflects with the left-hand ejection port. Allow physics integration.
+        {
+          const sideways = later[2] - initial[2];
+          assert.ok(hand === "left" ? sideways > 0.01 : sideways < -0.01,
+            `casing must leave the ${hand} ejection side: ${sideways}`);
+        }
+        await game.step({ frames: 60 });
+        assert.ok(!(await game.entities.list()).entities.some(e => e.id === casing.id),
+          "casing retains its authored effect lifetime");
+      });
+  }
 }
 
 // Debug scenes have no mission file to reload; exercise saves in a real mission.

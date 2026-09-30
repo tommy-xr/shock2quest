@@ -352,6 +352,11 @@ pub struct RuntimePropFlatAim {
     pub forward: Vector3<f32>,
 }
 
+/// Launch-time projection conversion for effects leaving a flat viewmodel.
+/// Kept separate from FlatAim, whose forward vector includes ballistic recoil.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct RuntimePropViewmodelToWorld(pub Matrix4<f32>);
+
 /// Whether `entity` is the FLATSCREEN player's wielded weapon: the flat
 /// controller sets its crosshair aim ray on it every frame, and nothing else
 /// carries one. The shared answer to "is this the flat presentation's gun?".
