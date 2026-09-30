@@ -16,9 +16,14 @@ export async function startTrail(game: GameServer): Promise<void> {
 
 /// Save the trail as `<name>.json`, then frame it side-on (from +z, far
 /// enough back to fit its bounding box, VR hand paths included) and save
-/// `<name>.png`. Call before asserting, so a failing run still leaves its
-/// picture.
-export async function shootTrail(game: GameServer, name: string): Promise<void> {
+/// `<name>.png`; with `oblique`, also `<name>-oblique.png` from above, in
+/// front and to the side (+x +y +z). Call before asserting, so a failing run
+/// still leaves its picture.
+export async function shootTrail(
+  game: GameServer,
+  name: string,
+  { oblique = false }: { oblique?: boolean } = {},
+): Promise<void> {
   if (!shotDir) return;
   const dir = resolve(shotDir);
   mkdirSync(dir, { recursive: true });
@@ -41,5 +46,13 @@ export async function shootTrail(game: GameServer, name: string): Promise<void> 
   // No step: a paused runtime still renders each loop, so the screenshot
   // sees the new camera without advancing the simulation under test.
   await game.screenshot(join(dir, `${name}.png`));
+  if (oblique) {
+    const reach = Math.max(extent, hi[2] - lo[2]) * 1.5 + 2;
+    await game.camera.set({
+      position: [centre[0] + 0.6 * reach, centre[1] + 0.5 * reach, centre[2] + 0.6 * reach],
+      lookAt: centre,
+    });
+    await game.screenshot(join(dir, `${name}-oblique.png`));
+  }
   await game.camera.attach();
 }
