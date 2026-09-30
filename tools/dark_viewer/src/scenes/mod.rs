@@ -22,5 +22,6 @@ pub use bin_ai_viewer::BinAiViewerScene;
 pub use bin_obj_viewer::BinObjViewerScene;
 pub use font_viewer::FontViewerScene;
 pub use glb_viewer::GlbViewerScene;
+pub use render_helpers::build_model_scene_with_debug_skeletons;
 pub use skeleton_viewer::SkeletonViewerScene;
 pub use video_player::VideoPlayerScene;

@@ -1,4 +1,4 @@
-use cgmath::{EuclideanSpace, Matrix4, Vector3};
+use cgmath::{EuclideanSpace, Matrix4, Transform, Vector3};
 use dark::{importers::TEXTURE_IMPORTER, model::Model, motion::AnimationPlayer};
 use engine::assets::asset_cache::AssetCache;
 use engine::scene::{
@@ -21,7 +21,10 @@ const OVERLAY_GHOST_TRANSPARENCY: f32 = 0.35;
 /// Markers for a static `.bin`'s articulation points: one cube per sub-object
 /// pivot (the parts tweqs rotate/translate) and one per vhot (attachment
 /// points - muzzle, light, particle origins). Empty for LGMM/GLB models.
-pub fn articulation_overlay(model: &Model) -> Vec<SceneObject> {
+pub fn articulation_overlay(model: &Model, player: Option<&AnimationPlayer>) -> Vec<SceneObject> {
+    let pose = player
+        .filter(|_| model.object_articulation().is_some())
+        .map(|player| model.get_joint_transforms(player));
     let model_transform = model.get_transform();
     let marker = |color: Vector3<f32>, at: Matrix4<f32>, size: f32| {
         let mut obj = SceneObject::new(color_material::create(color), Box::new(cube::create()));
@@ -32,15 +35,34 @@ pub fn articulation_overlay(model: &Model) -> Vec<SceneObject> {
     let mut objects = model
         .sub_objects()
         .iter()
-        .map(|sub_object| {
+        .enumerate()
+        .map(|(index, sub_object)| {
             // Pivot only: the sub-object's rotation would skew the cube.
-            let at = Matrix4::from_translation(sub_object.transform.w.truncate());
+            let transform = pose
+                .as_ref()
+                .and_then(|p| p.get(index))
+                .unwrap_or(&sub_object.transform);
+            let at = Matrix4::from_translation(transform.w.truncate());
             marker(SUB_OBJECT_COLOR, at, SUB_OBJECT_MARKER_SIZE)
         })
         .collect::<Vec<SceneObject>>();
 
-    objects.extend(model.vhots().iter().map(|vhot| {
-        let at = Matrix4::from_translation(vhot.point.to_vec());
+    objects.extend(model.vhots().iter().enumerate().map(|(index, vhot)| {
+        let point = model
+            .object_articulation()
+            .and_then(|rig| {
+                let owner = rig
+                    .joints
+                    .iter()
+                    .find(|joint| joint.vhot_range.contains(&index))?;
+                Some(
+                    pose.as_ref()?
+                        .get(owner.index as usize)?
+                        .transform_point(vhot.point),
+                )
+            })
+            .unwrap_or(vhot.point);
+        let at = Matrix4::from_translation(point.to_vec());
         marker(VHOT_COLOR, at, VHOT_MARKER_SIZE)
     }));
 
@@ -97,7 +119,7 @@ pub fn build_model_scene_with_debug_skeletons(
     }
 
     if debug_articulation {
-        overlay.append(&mut articulation_overlay(model));
+        overlay.append(&mut articulation_overlay(model, animation_player));
     }
 
     // Ghost the model (and only the model - not the grid) so overlay geometry
