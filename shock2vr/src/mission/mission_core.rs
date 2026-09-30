@@ -4376,12 +4376,7 @@ impl MissionCore {
             let tracked = input_context
                 .pose_tracking
                 .is_none_or(|t| t.head && t.hands[hand_slot(menu.hand)]);
-            if tracked
-                && (held == Some(menu.amp)
-                    || game_options.presentation_mode == crate::PresentationMode::Flat
-                        && self.interaction.is_holding(menu.amp))
-                && !self.use_mode
-            {
+            if tracked && held == Some(menu.amp) && !self.use_mode {
                 let input = if menu.hand == crate::Handedness::Left {
                     &mut carousel_input.left_hand
                 } else {
