@@ -5,9 +5,9 @@
  *
  */
 use dark::properties::{
-    Link, Links, PropBaseTechDesc, PropChemicalNeeded, PropEcoState, PropEcoType, PropEcology,
-    PropObjLookString, PropRequiredTechDesc, PropResearchReport, PropResearchText,
-    PropResearchTime, PropSpawn, WrappedEntityId,
+    Link, Links, PropBaseTechDesc, PropChemicalNeeded, PropDoorTimer, PropEcoState, PropEcoType,
+    PropEcology, PropObjLookString, PropRequiredTechDesc, PropResearchReport, PropResearchText,
+    PropResearchTime, PropRotatingDoor, PropSpawn, WrappedEntityId,
 };
 use shipyard::{Get, View, ViewMut, World};
 use std::collections::HashMap;
@@ -59,10 +59,12 @@ impl EntityPopulator for SaveFileEntityPopulator {
 /// Saves deliberately own mutable runtime state, so loading cannot generally
 /// reapply the mission file over a restored entity. The ecology and research
 /// properties below are different: old builds could neither deserialize nor
-/// mutate them, and therefore could not have serialized them. Restore only a
-/// missing component/link, only for a concrete mission object which still
-/// exists in the save. Deleted generators/ecologies stay deleted, while newer
-/// saves retain their live values and spawned-child graph.
+/// mutate them, and therefore could not have serialized them. This includes
+/// RotDoor/DoorTimer data needed to repair transforms already serialized by an
+/// old runtime. Restore only a missing component/link, only for a concrete
+/// mission object which still exists in the save. Deleted generators/ecologies
+/// stay deleted, while newer saves retain their live values and spawned-child
+/// graph.
 fn restore_newly_parsed_authored_data(
     gamesys_entity_info: &SystemShock2EntityInfo,
     level_entity_info: &SystemShock2EntityInfo,
@@ -151,6 +153,8 @@ fn restore_newly_parsed_authored_data(
     restore_missing_component!(PropResearchReport);
     restore_missing_component!(PropResearchText);
     restore_missing_component!(PropResearchTime);
+    restore_missing_component!(PropRotatingDoor);
+    restore_missing_component!(PropDoorTimer);
 
     let authored_spawn_points = {
         let authored_links = authored_world.borrow::<View<Links>>().unwrap();
@@ -208,7 +212,10 @@ fn restore_newly_parsed_authored_data(
 mod tests {
     use std::sync::Arc;
 
-    use dark::properties::{PropResearchReport, PropResearchText, PropResearchTime};
+    use cgmath::{Quaternion, vec3};
+    use dark::properties::{
+        PropResearchReport, PropResearchText, PropResearchTime, PropRotatingDoor,
+    };
 
     use super::*;
 
@@ -266,5 +273,49 @@ mod tests {
             0x20,
             "serialized live values must win over authored defaults"
         );
+    }
+
+    #[test]
+    fn legacy_rotating_door_backfills_newly_parsed_authored_motion() {
+        let mut merged_entity_info = SystemShock2EntityInfo::empty();
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        merged_entity_info.entity_to_properties.insert(
+            85,
+            vec![Arc::new(Box::new(PropRotatingDoor {
+                door_type: 0,
+                closed: 0.0,
+                open: 95.0,
+                speed: 1.0,
+                axis: 0,
+                state: 0,
+                clockwise: false,
+                base_closed_location: vec3(0.1, -12.75, -23.7),
+                base_open_location: vec3(0.1, -11.9, -24.7),
+                base_location: vec3(0.1, -12.75, -23.7),
+                base_rotation: identity,
+                base_closed_rotation: identity,
+                base_open_rotation: identity,
+                progress: 0.0,
+            }))],
+        );
+        let mut level_entity_info = SystemShock2EntityInfo::empty();
+        level_entity_info.entity_to_properties.insert(85, vec![]);
+
+        let mut world = World::new();
+        let hatch = world.add_entity(());
+        let template_to_entity = HashMap::from([(85, WrappedEntityId(hatch))]);
+
+        restore_newly_parsed_authored_data(
+            &merged_entity_info,
+            &level_entity_info,
+            &HashMap::new(),
+            &template_to_entity,
+            &mut world,
+        );
+
+        let doors = world.borrow::<View<PropRotatingDoor>>().unwrap();
+        let restored = doors.get(hatch).unwrap();
+        assert_eq!(restored.base_closed_location, vec3(0.1, -12.75, -23.7));
+        assert_eq!(restored.open, 95.0);
     }
 }

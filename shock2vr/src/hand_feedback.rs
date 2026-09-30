@@ -38,7 +38,16 @@ impl HandTarget {
                 .get(entity)
                 .ok()
                 .cloned();
-            let blocked = if let Some(door) = door {
+            let rot_door_open = world
+                .borrow::<View<dark::properties::PropRotatingDoor>>()
+                .unwrap()
+                .get(entity)
+                .ok()
+                .map(|door| matches!(door.state, 1 | 3));
+            // RotDoor wins over its inherited zero TransDoor, as in StdDoor.
+            let blocked = if let Some(target_open) = rot_door_open {
+                crate::scripts::player_door_frob_blocked(world, entity, target_open)
+            } else if let Some(door) = door {
                 if door.is_permanently_open() {
                     return Self::default();
                 }
