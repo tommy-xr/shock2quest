@@ -4658,6 +4658,8 @@ impl MissionCore {
         // PlayerInfo/introspection even before the next real step.
         self.thrown_items
             .prepare(&self.physics, time.elapsed.as_secs_f32());
+        // The hold a hand vault starts from this frame, for the player trail.
+        let mut vault_hold = None;
         let (new_character_pos, collision_events) = if time.elapsed.is_zero() {
             (
                 self.physics.get_player_translation(&self.player_handle),
@@ -4710,6 +4712,11 @@ impl MissionCore {
                     .physics
                     .plan_hand_top_out(grip, &mut self.player_handle)
                 {
+                    vault_hold = self
+                        .interaction
+                        .hand_climb()
+                        .and_then(|climb| climb.anchor())
+                        .map(|hand| (hand, grip.into()));
                     self.interaction.release_climb_grips();
                     hand_climb.translation = None;
                 }
@@ -4862,24 +4869,6 @@ impl MissionCore {
         player_info.left_hand_entity_id = left_hand_entity_id;
         player_info.right_hand_entity_id = right_hand_entity_id;
         drop(player_info);
-
-        // One trail sample per simulated frame (a paused frame moved nobody);
-        // switching the trail off clears it even while paused.
-        if !crate::dev_params::get_bool(crate::dev_params::PLAYER_TRAIL) {
-            self.debug_trail.clear();
-        } else if !time.elapsed.is_zero() {
-            self.debug_trail.record(
-                time.elapsed.as_secs_f32(),
-                crate::dev_params::get(crate::dev_params::PLAYER_TRAIL_SECONDS),
-                new_character_pos,
-                crate::debug_trail::TrailMotion::classify(
-                    self.player_handle.is_grounded(),
-                    self.player_handle.is_climbing(),
-                    self.player_handle.is_topping_out(),
-                ),
-                self.player_handle.is_crouched(),
-            );
-        }
 
         // Sample the attachment that drove this physics step. Input is resolved
         // later below; a same-frame release can still downgrade before dispatch.
@@ -5172,6 +5161,28 @@ impl MissionCore {
         );
         let input_context = &rendered_input;
         self.last_head_position = input_context.head.position;
+
+        // One trail sample per simulated frame (a paused frame moved nobody);
+        // switching the trail off clears it even while paused. Taken after the
+        // stance rebase, so VR hands sit where they render.
+        if !crate::dev_params::get_bool(crate::dev_params::PLAYER_TRAIL) {
+            self.debug_trail.clear();
+        } else if !time.elapsed.is_zero() {
+            self.debug_trail.record(
+                time.elapsed.as_secs_f32(),
+                crate::dev_params::get(crate::dev_params::PLAYER_TRAIL_SECONDS),
+                new_character_pos,
+                crate::debug_trail::TrailMotion::classify(
+                    self.player_handle.is_grounded(),
+                    self.player_handle.is_climbing(),
+                    self.player_handle.is_topping_out(),
+                ),
+                self.player_handle.is_crouched(),
+                (game_options.presentation_mode == crate::PresentationMode::Vr).then(|| {
+                    self.trail_hands(input_context, new_character_pos, new_rotation, vault_hold)
+                }),
+            );
+        }
 
         // VR cyber interface (use mode): follow the head for the anchor's
         // lazy recenter and the comfort dim, resolve this frame's pointer, and
@@ -15569,6 +15580,39 @@ impl MissionCore {
         .then_some(anchor.grip)
     }
 
+    /// Both VR hands for the player trail: each controller's world point (the
+    /// one climbing grabs with, on the rendered rig) and the hold it is on.
+    fn trail_hands(
+        &self,
+        input: &InputContext,
+        pawn_pos: Vector3<f32>,
+        pawn_rotation: Quaternion<f32>,
+        top_out: Option<(crate::vr_config::Handedness, crate::debug_trail::TrailHold)>,
+    ) -> crate::debug_trail::TrailHands {
+        let mut holds = [None, None];
+        for (hand, anchor) in self
+            .interaction
+            .hand_climb()
+            .into_iter()
+            .flat_map(|c| c.grips())
+        {
+            holds[crate::vr_config::hand_slot(hand)] = Some(anchor.grip.into());
+        }
+        let hand =
+            |index: usize, input: &crate::input_context::Hand| crate::debug_trail::TrailHand {
+                position: crate::virtual_hand::hand_world_position(
+                    pawn_pos,
+                    pawn_rotation,
+                    input.position,
+                ),
+                hold: holds[index],
+            };
+        crate::debug_trail::TrailHands {
+            hands: [hand(0, &input.left_hand), hand(1, &input.right_hand)],
+            top_out,
+        }
+    }
+
     /// Whether either VR hand currently holds a climb hold.
     pub fn player_is_gripping(&self) -> bool {
         self.interaction
@@ -17814,6 +17858,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
     fn player_trail(&self) -> Vec<crate::debug_trail::TrailSample> {
         self.debug_trail.samples().copied().collect()
+    }
+
+    fn player_trail_events(&self) -> Vec<crate::debug_trail::TrailEvent> {
+        self.debug_trail.events().copied().collect()
     }
 
     fn player_position(&self) -> cgmath::Vector3<f32> {

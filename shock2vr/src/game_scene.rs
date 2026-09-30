@@ -992,6 +992,11 @@ pub trait DebuggableScene {
         Vec::new()
     }
 
+    /// The player trail's VR hand events (grip / release / top-out), oldest first.
+    fn player_trail_events(&self) -> Vec<crate::debug_trail::TrailEvent> {
+        Vec::new()
+    }
+
     /// List physics rigid bodies in the scene
     ///
     /// Returns a list of physics body summaries with basic information

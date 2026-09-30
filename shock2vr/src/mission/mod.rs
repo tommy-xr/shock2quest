@@ -435,6 +435,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.player_trail()
     }
 
+    fn player_trail_events(&self) -> Vec<crate::debug_trail::TrailEvent> {
+        self.mission_core.player_trail_events()
+    }
+
     fn list_physics_bodies(
         &self,
         limit: Option<usize>,
