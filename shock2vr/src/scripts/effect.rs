@@ -870,6 +870,11 @@ pub enum Effect {
     WeaponRecoil {
         entity_id: EntityId,
     },
+    /// A flat animation reached the chamber's ejection event. Resolve the
+    /// current weapon transform when applied, after this frame's placement.
+    EjectWeaponCasings {
+        entity_id: EntityId,
+    },
     /// One-shot controller feedback. Gameplay describes it; only the runtime
     /// talks to hardware. Transient output is never serialized into saves.
     HandHaptic {

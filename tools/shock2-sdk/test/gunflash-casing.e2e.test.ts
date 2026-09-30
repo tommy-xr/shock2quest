@@ -35,11 +35,17 @@ for (const [weapon, casingTemplate] of [["Assault Rifle", -2657], ["Pistol", -26
         assert.equal(flashes.length, 1, "one visible muzzle flash per shot");
         assert.ok((await game.scene.objects({ entityId: flashes[0].id })).objects.length > 0,
           "the flash must reach the renderer");
-        const casings = spawned.filter(e => e.template_id === casingTemplate);
+        const pumping = !vr && weapon === "Shotgun";
+        if (pumping) {
+          assert.equal(spawned.filter(e => e.template_id === casingTemplate).length, 0,
+            "flat shotgun retains its shell until the pump stroke");
+          await game.step({ frames: 47 });
+        }
+        const casings = (await game.entities.list()).entities.filter(e => !before.has(e.id) && e.template_id === casingTemplate);
         assert.equal(casings.length, 1, "one spent casing per shot");
         const casing = casings[0];
         assert.ok((await game.scene.objects({ entityId: casing.id })).objects.length > 0,
-          "the casing must reach the renderer");
+          "the casing must reach the renderer, including when it reuses the expired flash's entity slot");
         const initial = casing.position as Vec3;
         if (!vr) {
           const { player } = await game.info();
@@ -57,7 +63,7 @@ for (const [weapon, casingTemplate] of [["Assault Rifle", -2657], ["Pistol", -26
         // A level gun must launch that axis sideways, not standing upright.
         const pose = (await game.entities.detail(casing.id)).rotation as Quat;
         const longAxis = quatRotate(pose, [0, 1, 0]);
-        assert.ok(Math.abs(longAxis[1]) < 0.3,
+        assert.ok(pumping || Math.abs(longAxis[1]) < 0.3,
           `casing must lie along the barrel at launch: ${JSON.stringify(longAxis)}`);
         await game.step({ frames: 8 });
         const later = (await game.entities.detail(casing.id)).position as Vec3;
@@ -65,7 +71,7 @@ for (const [weapon, casingTemplate] of [["Assault Rifle", -2657], ["Pistol", -26
           `authored upward ejection must separate from the breech: ${JSON.stringify({initial, later})}`);
         // With a level -X barrel, authored sideways speed is -0.2 world units/s;
         // it reflects with the left-hand ejection port. Allow physics integration.
-        {
+        if (!pumping) {
           const sideways = later[2] - initial[2];
           assert.ok(hand === "left" ? sideways > 0.01 : sideways < -0.01,
             `casing must leave the ${hand} ejection side: ${sideways}`);

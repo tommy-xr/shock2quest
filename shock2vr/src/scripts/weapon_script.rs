@@ -630,6 +630,16 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
     let muzzle_flash_effect = Effect::Multiple(
         muzzle_flashes
             .into_iter()
+            .filter(|(_, options)| {
+                options.flags & 1 == 0
+                    || !world
+                        .borrow::<View<crate::flat_weapon_animation::FlatWeaponPose>>()
+                        .ok()
+                        .and_then(|poses| {
+                            poses.get(entity_id).ok().map(|pose| pose.delayed_ejection)
+                        })
+                        .unwrap_or(false)
+            })
             .map(|(template_id, options)| {
                 create_muzzle_flash(world, entity_id, template_id, &options)
             })
@@ -832,6 +842,16 @@ fn weapon_flash_links(world: &World, weapon: EntityId) -> Vec<(i32, GunFlashOpti
         }
     }
     links
+}
+
+pub(crate) fn eject_casings(world: &World, entity: EntityId) -> Effect {
+    Effect::Multiple(
+        weapon_flash_links(world, entity)
+            .into_iter()
+            .filter(|(_, options)| options.flags & 1 != 0)
+            .map(|(template, options)| create_muzzle_flash(world, entity, template, &options))
+            .collect(),
+    )
 }
 
 pub(super) fn create_muzzle_flash(

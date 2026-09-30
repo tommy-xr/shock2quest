@@ -32,7 +32,7 @@ use std::collections::HashMap;
 
 use cgmath::{Vector3, vec3};
 
-/// One authored key. `pos` is in SS2 units, `rot` Euler degrees.
+/// One authored key. `pos` is in SS2 units, `rot` is heading/pitch/bank in degrees.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Keyframe {
     pub frame: f32,
@@ -70,7 +70,7 @@ impl WeaponAnimation {
         self.tracks.iter().find(|track| track.joint == joint)
     }
 
-    /// The track's `(pos, rot)` at `frame`, linearly interpolated and clamped to
+    /// The track's `(pos, rot)` at `frame`, eased out and clamped to
     /// the authored range.
     pub fn sample(&self, joint: &str, frame: f32) -> Option<(Vector3<f32>, Vector3<f32>)> {
         let keys = &self.track(joint)?.keys;
@@ -97,6 +97,7 @@ impl WeaponAnimation {
             (frame - a.frame) / width
         };
 
+        let t = t * (2.0 - t);
         Some((a.pos + (b.pos - a.pos) * t, a.rot + (b.rot - a.rot) * t))
     }
 
@@ -496,8 +497,8 @@ ND.g_weaponAnimations["Pistol"]["raise"] <- ND.PointRigAnimation("raise", 30, 60
 
         let (mid, _) = raise.sample("joint1", 8.0).expect("slide at 8");
         assert!(
-            mid.x < 0.0 && mid.x > -0.20,
-            "slide should be part way back: {mid:?}"
+            (mid.x + 0.15).abs() < 1e-5,
+            "half time is 75% travel with ease-out"
         );
 
         let (home, _) = raise.sample("joint1", 26.0).expect("slide at 26");

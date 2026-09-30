@@ -35,6 +35,7 @@ mod developer_mode;
 pub mod difficulty;
 mod flat_lean;
 mod flat_player_controller;
+mod flat_weapon_animation;
 pub mod free_camera;
 mod glove_fit;
 mod gui;
@@ -272,6 +273,8 @@ const RESOURCE_FAMILIES: &[&str] = &[
     "strings",
     "materials",
     "env",
+    // Data-only animation tables; mounting these never executes Squirrel.
+    "sq_scripts",
 ];
 
 /// The 25AE mod stack, highest priority first, exactly as
@@ -322,7 +325,9 @@ fn mount_family(
 ) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
     match family {
         "strings" => ZipAssetPath::with_prefix_opts(archive, prefix, false, None),
-        "materials" | "env" => ZipAssetPath::with_prefix_opts(archive, prefix, false, Some(family)),
+        "materials" | "env" | "sq_scripts" => {
+            ZipAssetPath::with_prefix_opts(archive, prefix, false, Some(family))
+        }
         "iface" | "bitmap" | "objicon" | "obj" | "mesh" => {
             ZipAssetPath::with_prefix_opts(archive, prefix, true, Some(family))
         }
