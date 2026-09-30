@@ -2,7 +2,7 @@
 //! floats over the sphere, and the overload meter wraps around it. Both follow
 //! the amp's rendered transform, so a rescaled amp keeps them on its surface.
 use cgmath::{
-    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Rad, Transform, Vector3, vec2, vec3,
+    Deg, EuclideanSpace, InnerSpace, Matrix3, Matrix4, Point3, Rad, Transform, Vector3, vec2, vec3,
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -42,21 +42,20 @@ pub(crate) fn render(
         else {
             continue;
         };
-        let Some((center, radius, palm_up)) = sphere(world, amp, hand) else {
+        let Some((center, radius, axes)) = sphere(world, amp, hand) else {
             continue;
         };
         let readout = crate::hud::ammo_panel::AmmoReadout::for_weapon(world, Some(amp), false);
         if let Some((fraction, phase)) = readout.psi_charge {
             let canvas = meter_canvas(fraction, phase);
-            if let Some(transform) = ring_transform(center, radius, palm_up, eye) {
-                let width = transform.x.magnitude();
-                objects.extend(canvas.render_world_space_bent(
-                    assets,
-                    transform,
-                    ring_radius(radius) / width,
-                    0.001 / width,
-                ));
-            }
+            let transform = ring_transform(center, radius, axes.y, axes.x);
+            let width = transform.x.magnitude();
+            objects.extend(canvas.render_world_space_bent(
+                assets,
+                transform,
+                ring_radius(radius) / width,
+                0.001 / width,
+            ));
         }
         if let Some(power) = crate::psi_amp_selection::selected_power(world, amp) {
             let strings = world
@@ -115,14 +114,14 @@ fn meter_canvas(fraction: f32, phase: PsiChargePhase) -> UiCanvas {
     canvas
 }
 
-/// World centre, radius and palm-to-ball axis (model +y) of the amp's sphere,
-/// composed exactly as the held amp mesh is drawn (charge offset, pose, fit
-/// scale, left-hand mirror).
+/// World centre, radius and unit model axes of the amp's sphere, composed
+/// exactly as the held amp mesh is drawn (charge offset, pose, fit scale,
+/// left-hand mirror). Model +y runs palm to ball; +x points at the wrist.
 pub(crate) fn sphere(
     world: &World,
     amp: EntityId,
     hand: Handedness,
-) -> Option<(Vector3<f32>, f32, Vector3<f32>)> {
+) -> Option<(Vector3<f32>, f32, Matrix3<f32>)> {
     let transforms = world
         .borrow::<View<crate::runtime_props::RuntimePropTransform>>()
         .ok()?;
@@ -133,7 +132,11 @@ pub(crate) fn sphere(
     Some((
         transform.transform_point(AMP_SPHERE_CENTER).to_vec(),
         AMP_SPHERE_RADIUS * transform.x.truncate().magnitude(),
-        transform.y.truncate().normalize(),
+        Matrix3::from_cols(
+            transform.x.truncate().normalize(),
+            transform.y.truncate().normalize(),
+            transform.z.truncate().normalize(),
+        ),
     ))
 }
 
@@ -142,32 +145,25 @@ fn ring_radius(sphere_radius: f32) -> f32 {
 }
 
 /// Bend the meter around the amp's palm-to-ball axis, so it rolls with the
-/// sphere (level with the palm up, upright with the palm sideways), with its
-/// middle turned toward the eye. `None` when the eye looks along the axis and
-/// no side faces it.
+/// sphere (level with the palm up, upright with the palm sideways), its middle
+/// pinned to the wrist side, which faces the player and is clear of the
+/// fingers at any roll.
 fn ring_transform(
     center: Vector3<f32>,
     sphere_radius: f32,
     up: Vector3<f32>,
-    eye: Vector3<f32>,
-) -> Option<Matrix4<f32>> {
-    let toward = eye - center;
-    let normal = toward - up * toward.dot(up);
-    if normal.magnitude2() < 1e-8 {
-        return None;
-    }
-    let normal = normal.normalize();
+    wrist: Vector3<f32>,
+) -> Matrix4<f32> {
+    let normal = (wrist - up * wrist.dot(up)).normalize();
     let radius = ring_radius(sphere_radius);
     let width = Rad::from(RING_ARC).0 * radius;
     let height = width * METER.h / METER.w;
-    Some(
-        Matrix4::from_cols(
-            up.cross(normal).extend(0.0),
-            up.extend(0.0),
-            normal.extend(0.0),
-            (center + normal * radius).extend(1.0),
-        ) * Matrix4::from_nonuniform_scale(width, height, width),
-    )
+    Matrix4::from_cols(
+        up.cross(normal).extend(0.0),
+        up.extend(0.0),
+        normal.extend(0.0),
+        (center + normal * radius).extend(1.0),
+    ) * Matrix4::from_nonuniform_scale(width, height, width)
 }
 
 #[cfg(test)]
@@ -176,17 +172,17 @@ mod tests {
     use cgmath::SquareMatrix;
 
     #[test]
-    fn ring_wraps_the_palm_axis_facing_the_eye() {
+    fn ring_wraps_the_palm_axis_facing_the_wrist() {
         let center = vec3(1.0, 2.0, 3.0);
         // Palm sideways: the amp's up axis is world +x.
         let up = vec3(1.0, 0.0, 0.0);
-        let eye = center + vec3(0.5, 0.3, 0.4);
-        let ring = ring_transform(center, 0.1, up, eye).unwrap();
+        let wrist = vec3(0.5, 0.3, 0.4);
+        let ring = ring_transform(center, 0.1, up, wrist);
         assert!(ring.determinant() > 0.0);
         // Panel up follows the palm axis, so the band stands upright.
         assert!(ring.y.truncate().normalize().dot(up) > 0.999);
         assert!(ring.x.truncate().dot(up).abs() < 1e-6);
-        // Its middle turns toward the eye about that axis only.
+        // Its middle faces the wrist, projected off that axis.
         let normal = ring.z.truncate().normalize();
         assert!(normal.dot(vec3(0.0, 0.6, 0.8)) > 0.999);
         // The panel's middle sits just outside the sphere, on its equator.
@@ -196,7 +192,6 @@ mod tests {
         assert!(ring_radius(0.1) > 0.1);
         // Bending needs panel x and z scaled alike.
         assert!((ring.x.magnitude() - ring.z.magnitude()).abs() < 1e-6);
-        assert!(ring_transform(center, 0.1, up, center + up).is_none());
     }
 
     #[test]
@@ -205,15 +200,16 @@ mod tests {
         let amp = world.add_entity((crate::runtime_props::RuntimePropTransform(
             Matrix4::from_translation(vec3(1.0, 2.0, 3.0)) * Matrix4::from_angle_z(Deg(-90.0)),
         ),));
-        let (right, radius, right_up) = sphere(&world, amp, Handedness::Right).unwrap();
-        let (left, _, left_up) = sphere(&world, amp, Handedness::Left).unwrap();
+        let (right, radius, right_axes) = sphere(&world, amp, Handedness::Right).unwrap();
+        let (left, _, left_axes) = sphere(&world, amp, Handedness::Left).unwrap();
         let scale = crate::vr_config::psi_amp_fit_scale().x.x;
         assert!((radius - AMP_SPHERE_RADIUS * scale).abs() < 1e-6);
         assert!((right.z - 3.0 - AMP_SPHERE_CENTER.z * scale).abs() < 1e-6);
         assert!((left.z - 3.0 + AMP_SPHERE_CENTER.z * scale).abs() < 1e-6);
-        // Rolling the amp rolls the palm axis, in either hand.
-        for up in [right_up, left_up] {
-            assert!(up.dot(vec3(1.0, 0.0, 0.0)) > 0.999);
+        // Rolling the amp rolls its palm axis and wrist side, in either hand.
+        for axes in [right_axes, left_axes] {
+            assert!(axes.y.dot(vec3(1.0, 0.0, 0.0)) > 0.999);
+            assert!(axes.x.dot(vec3(0.0, -1.0, 0.0)) > 0.999);
         }
     }
 
