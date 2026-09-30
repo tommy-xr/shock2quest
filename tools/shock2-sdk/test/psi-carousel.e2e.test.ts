@@ -75,25 +75,19 @@ for (const hand of ["left", "right"] as const) {
   });
 }
 
-test("flat carousel uses the same preview and confirmation canvas", { skip: !enabled, timeout: 180_000 }, async () => {
+test("flatscreen never opens the carousel", { skip: !enabled, timeout: 180_000 }, async () => {
   await using game = await GameServer.launch({ mission: "debug_psi" });
   await game.step({ frames: 30 });
   const [amp] = await game.entities.byTemplate(-247);
-  const before = await state(game, amp.id);
   await game.input.hold("LeftHandUpperButton");
   await game.step({ frames: 35 });
   await game.input.release("LeftHandUpperButton");
   await game.step({ frames: 3 });
-  assert.ok((await state(game, amp.id)).menu);
-  await game.input.set("right_hand.thumbstick", [1, 0]);
-  await game.step({ frames: 2 });
-  await game.input.set("right_hand.thumbstick", [0, 0]);
-  await game.input.set("right_hand.trigger", 1);
-  await game.step({ frames: 2 });
   assert.ok(!(await state(game, amp.id)).menu);
-  assert.equal((await state(game, amp.id)).pair.alternate, before.pair.current);
+  await game.input.trigger("SelectPsiPower");
+  await game.step({ frames: 3 });
+  assert.ok(!(await state(game, amp.id)).menu);
 });
-
 
 test("two amps retain independent pairs across a level transition and save/load", { skip: !enabled, timeout: 300_000 }, async () => {
   await using game = await GameServer.launch({ mission: "debug_psi", debugFlags: ["--vr"] });
@@ -169,16 +163,18 @@ test("two amps retain independent pairs across a level transition and save/load"
 
 
 test("opening the selector cancels an existing overload and pause cancels browsing", { skip: !enabled, timeout: 180_000 }, async () => {
-  await using game = await GameServer.launch({ mission: "debug_psi" });
+  await using game = await GameServer.launch({ mission: "debug_psi", debugFlags: ["--vr"] });
   await game.step({frames: 30});
   const [amp] = await game.entities.byTemplate(-247);
+  await aimVrHandAt(game, amp.position, 0.3, 1, 0, { hand: "right" });
+  await game.step({frames: 8});
   const psi = (await game.info()).player.psi_points;
   await game.input.set("right_hand.trigger", 1);
   await game.step({frames: 10});
   assert.equal((await game.info()).player.psi_charge_phase, "charging");
-  await game.input.hold("LeftHandUpperButton");
+  await game.input.hold("RightHandUpperButton");
   await game.step({frames: 35});
-  await game.input.release("LeftHandUpperButton");
+  await game.input.release("RightHandUpperButton");
   await game.step({frames: 15});
   assert.ok((await state(game, amp.id)).menu, "held trigger on entry cannot confirm");
   assert.equal((await game.info()).player.psi_charge_phase, null);

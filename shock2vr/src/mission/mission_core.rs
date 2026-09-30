@@ -9204,16 +9204,14 @@ impl MissionCore {
     }
 
     fn open_amp_carousel(&mut self, amp: EntityId, hand: crate::Handedness) {
-        if self.use_mode || !self.player_is_alive() {
+        // VR only: flatscreen switches powers through the retail psi MFD and hotkeys.
+        if self.use_mode
+            || !self.player_is_alive()
+            || !crate::mission::presentation_is_vr(&self.world)
+        {
             return;
         }
         self.dismiss_amp_carousel();
-        // Flatscreen stores its weapon in the left slot but casts with the right trigger.
-        let hand = if crate::mission::presentation_is_vr(&self.world) {
-            hand
-        } else {
-            crate::Handedness::Right
-        };
         self.psi_carousel = crate::psi_carousel::Carousel::new(&self.world, amp, hand);
         if self.psi_carousel.is_some() {
             crate::psi_carousel::advance_input_epoch(&mut self.world, amp);

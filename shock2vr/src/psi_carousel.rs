@@ -87,8 +87,6 @@ const ROW_ANGLE: f32 = 0.34;
 /// Metres per carousel-local unit.
 const SCALE: f32 = 0.375;
 
-/// Shared spherical layout. Both presentations render these same cards;
-/// there is no separate flat placement or text-sizing path.
 fn arc_position(row: f32, slot: f32) -> cgmath::Vector3<f32> {
     let yaw = slot * SLOT_ANGLE;
     let pitch = row * ROW_ANGLE;
@@ -251,20 +249,10 @@ impl Carousel {
         // Attach to the synchronized physical amp, not a raw controller pose:
         // the card sphere is centred on the amp's ball. The projection stays
         // upright and faces the viewer as the amp moves.
-        let root = if crate::mission::presentation_is_vr(world) {
-            match crate::psi_amp_readout::sphere(world, self.amp, self.hand) {
-                Some((ball, _, _)) => sphere_root(ball, eye),
-                None => return vec![],
-            }
-        } else {
-            // Flat draws the amp as a viewmodel under its own FOV, so its world
-            // ball is not where it appears: hang the focal card above the muzzle.
-            let Some(muzzle) = crate::psi_sword::frame(world, self.amp) else {
-                return vec![];
-            };
-            projection_frame(muzzle.w.truncate() + vec3(0.0, 0.49, 0.0), eye)
-                * Matrix4::from_scale(SCALE)
+        let Some((ball, _, _)) = crate::psi_amp_readout::sphere(world, self.amp, self.hand) else {
+            return vec![];
         };
+        let root = sphere_root(ball, eye);
         let Ok(powers) = world.borrow::<UniqueView<GlobalPsiPowers>>() else {
             return vec![];
         };
