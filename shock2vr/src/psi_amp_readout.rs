@@ -24,8 +24,6 @@ const ICON_SIZE: f32 = 0.05;
 const ICON_GAP: f32 = 0.04;
 /// The meter's clearance off the sphere, in sphere radii.
 const RING_CLEARANCE: f32 = 0.2;
-/// How far below the equator the meter's centre rides, in sphere radii.
-const RING_DROP: f32 = 0.2;
 const RING_ARC: Deg<f32> = Deg(110.0);
 const METER: Rect = Rect::new(0.0, 0.0, 60.0, 19.0);
 const PIP_ON: [u8; 3] = [120, 255, 220];
@@ -44,13 +42,13 @@ pub(crate) fn render(
         else {
             continue;
         };
-        let Some((center, radius)) = sphere(world, amp, hand) else {
+        let Some((center, radius, palm_up)) = sphere(world, amp, hand) else {
             continue;
         };
         let readout = crate::hud::ammo_panel::AmmoReadout::for_weapon(world, Some(amp), false);
         if let Some((fraction, phase)) = readout.psi_charge {
             let canvas = meter_canvas(fraction, phase);
-            if let Some(transform) = ring_transform(center, radius, eye) {
+            if let Some(transform) = ring_transform(center, radius, palm_up, eye) {
                 let width = transform.x.magnitude();
                 objects.extend(canvas.render_world_space_bent(
                     assets,
@@ -117,9 +115,14 @@ fn meter_canvas(fraction: f32, phase: PsiChargePhase) -> UiCanvas {
     canvas
 }
 
-/// World centre and radius of the amp's sphere, composed exactly as the
-/// held amp mesh is drawn (charge offset, pose, fit scale, left-hand mirror).
-fn sphere(world: &World, amp: EntityId, hand: Handedness) -> Option<(Vector3<f32>, f32)> {
+/// World centre, radius and palm-to-ball axis (model +y) of the amp's sphere,
+/// composed exactly as the held amp mesh is drawn (charge offset, pose, fit
+/// scale, left-hand mirror).
+pub(crate) fn sphere(
+    world: &World,
+    amp: EntityId,
+    hand: Handedness,
+) -> Option<(Vector3<f32>, f32, Vector3<f32>)> {
     let transforms = world
         .borrow::<View<crate::runtime_props::RuntimePropTransform>>()
         .ok()?;
@@ -130,6 +133,7 @@ fn sphere(world: &World, amp: EntityId, hand: Handedness) -> Option<(Vector3<f32
     Some((
         transform.transform_point(AMP_SPHERE_CENTER).to_vec(),
         AMP_SPHERE_RADIUS * transform.x.truncate().magnitude(),
+        transform.y.truncate().normalize(),
     ))
 }
 
@@ -137,16 +141,16 @@ fn ring_radius(sphere_radius: f32) -> f32 {
     sphere_radius * (1.0 + RING_CLEARANCE)
 }
 
-/// Bend the meter around a world-vertical axis through the sphere, so its art
-/// stays level, with its middle turned toward the eye. `None` when the eye is
-/// straight above or below and no side faces it.
+/// Bend the meter around the amp's palm-to-ball axis, so it rolls with the
+/// sphere (level with the palm up, upright with the palm sideways), with its
+/// middle turned toward the eye. `None` when the eye looks along the axis and
+/// no side faces it.
 fn ring_transform(
     center: Vector3<f32>,
     sphere_radius: f32,
+    up: Vector3<f32>,
     eye: Vector3<f32>,
 ) -> Option<Matrix4<f32>> {
-    let up = vec3(0.0, 1.0, 0.0);
-    let center = center - up * (sphere_radius * RING_DROP);
     let toward = eye - center;
     let normal = toward - up * toward.dot(up);
     if normal.magnitude2() < 1e-8 {
@@ -172,38 +176,45 @@ mod tests {
     use cgmath::SquareMatrix;
 
     #[test]
-    fn ring_hugs_the_sphere_level_and_facing_the_eye() {
+    fn ring_wraps_the_palm_axis_facing_the_eye() {
         let center = vec3(1.0, 2.0, 3.0);
-        // Eye above and to the side: the meter turns toward it horizontally only.
-        let eye = center + vec3(0.3, 0.5, 0.4);
-        let ring = ring_transform(center, 0.1, eye).unwrap();
+        // Palm sideways: the amp's up axis is world +x.
+        let up = vec3(1.0, 0.0, 0.0);
+        let eye = center + vec3(0.5, 0.3, 0.4);
+        let ring = ring_transform(center, 0.1, up, eye).unwrap();
         assert!(ring.determinant() > 0.0);
-        // Level art: panel up is world up, panel right is horizontal.
-        assert!(ring.y.truncate().normalize().dot(vec3(0.0, 1.0, 0.0)) > 0.999);
-        assert!(ring.x.y.abs() < 1e-6);
+        // Panel up follows the palm axis, so the band stands upright.
+        assert!(ring.y.truncate().normalize().dot(up) > 0.999);
+        assert!(ring.x.truncate().dot(up).abs() < 1e-6);
+        // Its middle turns toward the eye about that axis only.
         let normal = ring.z.truncate().normalize();
-        assert!(normal.dot(vec3(0.6, 0.0, 0.8)) > 0.999);
-        // The panel's middle sits just outside the sphere, on the axis's circle.
+        assert!(normal.dot(vec3(0.0, 0.6, 0.8)) > 0.999);
+        // The panel's middle sits just outside the sphere, on its equator.
         let offset = ring.w.truncate() - center;
-        assert!((vec2(offset.x, offset.z).magnitude() - ring_radius(0.1)).abs() < 1e-5);
+        assert!(offset.dot(up).abs() < 1e-6);
+        assert!((offset.magnitude() - ring_radius(0.1)).abs() < 1e-5);
         assert!(ring_radius(0.1) > 0.1);
         // Bending needs panel x and z scaled alike.
         assert!((ring.x.magnitude() - ring.z.magnitude()).abs() < 1e-6);
-        assert!(ring_transform(center, 0.1, center + vec3(0.0, 1.0, 0.0)).is_none());
+        assert!(ring_transform(center, 0.1, up, center + up).is_none());
     }
 
     #[test]
-    fn sphere_follows_the_left_hand_mirror() {
+    fn sphere_follows_the_left_hand_mirror_and_amp_roll() {
         let mut world = World::new();
         let amp = world.add_entity((crate::runtime_props::RuntimePropTransform(
-            Matrix4::from_translation(vec3(1.0, 2.0, 3.0)),
+            Matrix4::from_translation(vec3(1.0, 2.0, 3.0)) * Matrix4::from_angle_z(Deg(-90.0)),
         ),));
-        let (right, radius) = sphere(&world, amp, Handedness::Right).unwrap();
-        let (left, _) = sphere(&world, amp, Handedness::Left).unwrap();
+        let (right, radius, right_up) = sphere(&world, amp, Handedness::Right).unwrap();
+        let (left, _, left_up) = sphere(&world, amp, Handedness::Left).unwrap();
         let scale = crate::vr_config::psi_amp_fit_scale().x.x;
         assert!((radius - AMP_SPHERE_RADIUS * scale).abs() < 1e-6);
         assert!((right.z - 3.0 - AMP_SPHERE_CENTER.z * scale).abs() < 1e-6);
         assert!((left.z - 3.0 + AMP_SPHERE_CENTER.z * scale).abs() < 1e-6);
+        // Rolling the amp rolls the palm axis, in either hand.
+        for up in [right_up, left_up] {
+            assert!(up.dot(vec3(1.0, 0.0, 0.0)) > 0.999);
+        }
     }
 
     #[test]
