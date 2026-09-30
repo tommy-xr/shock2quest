@@ -221,6 +221,7 @@ impl SupportEditor {
                     SupportProfile {
                         palm_anchor: [-0.09, 0.35, 0.02],
                         region: None,
+                        motion: None,
                         rotation_degrees: [0.0; 3],
                         curls: [0.4; 5],
                         trigger_curls: None,

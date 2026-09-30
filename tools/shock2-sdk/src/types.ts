@@ -1277,6 +1277,13 @@ export interface HandGrip {
     visual_trigger: number;
     finger_curls: ResolvedGrip["curls"];
     socket_position: ResolvedGrip["offset"];
+    pump?: {
+      parameter: number;
+      value: number;
+      fraction: number;
+      travel: ResolvedGrip["offset"];
+      world_travel: ResolvedGrip["offset"];
+    } | null;
     controller_position: ResolvedGrip["offset"];
     controller_rotation: ResolvedGrip["rotation"];
     model_position: ResolvedGrip["offset"];

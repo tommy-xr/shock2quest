@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GameServer } from "../src/index.js";
+import { GameServer, attachSupportHand, setHandWorldPose } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
 import { cycleToWeapon } from "./helpers/weapon.js";
 import { aimVrHandAt, quatConjugate, quatFromTo, quatRotate } from "./helpers/vr-hand.js";
@@ -37,6 +37,18 @@ for (const [weapon, casingTemplate] of [["Assault Rifle", -2657], ["Pistol", -26
         assert.equal(flashes.length, 1, "one visible muzzle flash per shot");
         assert.ok((await game.scene.objects({ entityId: flashes[0].id })).objects.length > 0,
           "the flash must reach the renderer");
+        if (vr && weapon === "Shotgun") {
+          assert.equal(spawned.filter(e => e.template_id === casingTemplate).length, 0,
+            "VR shotgun retains its shell until the physical rear stroke");
+          await attachSupportHand(game, hand);
+          const player = (await game.info()).player;
+          const support = player.hand_grips.find(g => g.entity_id === gun.id)!.support!;
+          assert.ok(support.pump);
+          const p = support.controller_position, t = support.pump.world_travel, q = support.controller_rotation;
+          await setHandWorldPose(game, player, hand === "left" ? "right" : "left",
+            [p.x + t.x, p.y + t.y, p.z + t.z], [q.v.x, q.v.y, q.v.z, q.s]);
+          await game.step({ frames: 1 });
+        }
         const pumping = !vr && weapon === "Shotgun";
         if (pumping) {
           assert.equal(spawned.filter(e => e.template_id === casingTemplate).length, 0,

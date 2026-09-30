@@ -591,6 +591,21 @@ pub struct InternalPropMagazineModel {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct InternalPropMagazineRemoved(pub bool);
 
+/// Shared physical shotgun state, persisted with the weapon across handoff/save.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PumpPhase {
+    #[default]
+    Ready,
+    Spent,
+    Ejected,
+}
+
+#[derive(Debug, Default, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct InternalPropPumpState {
+    pub fraction: f32,
+    pub phase: PumpPhase,
+}
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropScale(pub Vector3<f32>);
 
@@ -2660,6 +2675,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "__P$MagazineRemoved",
             |reader, _| read_bool(reader),
             InternalPropMagazineRemoved,
+            accumulator::latest,
+        ),
+        define_prop(
+            "__P$PumpState",
+            |_, _| InternalPropPumpState::default(),
+            |value| value,
             accumulator::latest,
         ),
     ];

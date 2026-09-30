@@ -83,6 +83,7 @@ mod virtual_hand;
 pub mod vr_belt;
 mod vr_config;
 mod vr_magazine;
+mod vr_shotgun_pump;
 pub mod weapon_modification;
 mod weapon_muzzle;
 pub mod weapon_recoil;

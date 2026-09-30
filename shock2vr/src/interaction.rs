@@ -289,7 +289,7 @@ struct SupportAttachment {
     active: bool,
     blend: f32,
     correction: Quaternion<f32>,
-    anchor: Vector3<f32>, // Scaled model-space contact, fixed until release.
+    anchor: Vector3<f32>,         // Closed-pose contact, fixed until release.
     primary_offset: Vector3<f32>, // Grab-time collision offset, in world space.
     player_rotation: Quaternion<f32>, // Rebase the offset on locomotion turns, never wrist twists.
 }
@@ -305,6 +305,8 @@ struct SupportCandidate {
     primary_anchor: Vector3<f32>,
     tracked_axis: Vector3<f32>,
     anchor: Vector3<f32>,
+    closed_anchor: Vector3<f32>,
+    pump: Option<(crate::vr_support::SupportMotion, Vector3<f32>, f32)>,
     region: Option<[Vector3<f32>; 2]>,
     model_pose: GripPose,
     hand_pose: GripPose,
@@ -490,6 +492,33 @@ impl VrInteraction {
         })
     }
 
+    fn pump_motion(
+        &self,
+        world: &World,
+        primary: usize,
+    ) -> Option<(crate::vr_support::SupportMotion, Vector3<f32>)> {
+        use cgmath::Transform;
+        use shipyard::{Get, View};
+        let held = self.fitted_grips[primary].as_ref()?;
+        if held.model != "sg_h" {
+            return None;
+        }
+        world
+            .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+            .ok()?
+            .get(held.entity)
+            .ok()?;
+        let motion = self.support_profiles.get(&held.model)?.motion?;
+        let rigs = world
+            .borrow::<View<crate::runtime_props::RuntimePropObjectArticulation>>()
+            .ok()?;
+        let mut travel = motion.travel(&rigs.get(held.entity).ok()?.0)?;
+        if primary == 0 {
+            travel = held.model_mirror?.transform_vector(travel);
+        }
+        Some((motion, travel * held.resolved.as_ref()?.item_scale))
+    }
+
     fn support_candidate(
         &self,
         world: &World,
@@ -538,7 +567,24 @@ impl VrInteraction {
             // Melee physics may stop short of its target at a wall. Acquisition
             // and visible gloves belong on that actual weapon, not an unseen target.
             let model_pose = held.physical_model_pose(world).unwrap_or(target_pose);
-            let anchor = self
+            let control_primary_palm = self
+                .support
+                .as_ref()
+                .filter(|s| prefer_locked_anchor && s.entity == held.entity && s.primary == primary)
+                .map_or(model_pose.point(primary_anchor), |s| {
+                    primary_palm + s.primary_offset
+                });
+            let pump = self.pump_motion(world, primary);
+            let old_fraction = crate::vr_shotgun_pump::state(world, held.entity).fraction;
+            let contact_pose = GripPose {
+                position: model_pose.point(
+                    pump.map_or(Vector3::new(0.0, 0.0, 0.0), |(_, travel)| {
+                        travel * old_fraction
+                    }),
+                ),
+                ..model_pose
+            };
+            let closed_anchor = self
                 .support
                 .as_ref()
                 .filter(|s| prefer_locked_anchor && s.entity == held.entity && s.primary == primary)
@@ -552,12 +598,33 @@ impl VrInteraction {
                             handedness,
                             model_mirror,
                             grip.item_scale,
-                            model_pose,
+                            contact_pose,
                             poses[1 - primary].point(rig[1 - primary].palm),
                         )
                     },
                     |s| s.anchor,
                 );
+            let pump = pump.and_then(|(motion, travel)| {
+                let separation = (poses[1 - primary].point(rig[1 - primary].palm)
+                    - control_primary_palm)
+                    .magnitude();
+                let fraction = crate::vr_support::pump_fraction_from_separation(
+                    closed_anchor - primary_anchor,
+                    travel,
+                    separation,
+                )?;
+                let moving = prefer_locked_anchor
+                    && self.step_dt > 0.0
+                    && poses.iter().all(|p| p.is_tracked())
+                    && self.support.as_ref().is_some_and(|s| {
+                        s.active && s.entity == held.entity && s.primary == primary
+                    });
+                Some((motion, travel, if moving { fraction } else { old_fraction }))
+            });
+            let anchor = closed_anchor
+                + pump.map_or(Vector3::new(0.0, 0.0, 0.0), |(_, travel, fraction)| {
+                    travel * fraction
+                });
             let hand_pose =
                 profile.glove_pose(handedness, model_pose, grip, &rig[1 - primary], anchor);
             return Some(SupportCandidate {
@@ -568,18 +635,12 @@ impl VrInteraction {
                 visible_primary_palm: model_pose.point(primary_anchor),
                 // Calibrate the controller reference once when grabbing a blocked
                 // weapon. Later collision motion is feedback, not a release gesture.
-                control_primary_palm: self
-                    .support
-                    .as_ref()
-                    .filter(|s| {
-                        prefer_locked_anchor && s.entity == held.entity && s.primary == primary
-                    })
-                    .map_or(model_pose.point(primary_anchor), |s| {
-                        primary_palm + s.primary_offset
-                    }),
+                control_primary_palm,
                 primary_anchor,
                 tracked_axis: base_rotation.rotate_vector(anchor - primary_anchor),
                 anchor,
+                closed_anchor,
+                pump,
                 region: profile.region.as_ref().map(|_| {
                     profile
                         .region_in_frame(handedness, model_mirror)
@@ -610,6 +671,10 @@ impl VrInteraction {
             rotation: ctx.player_rotation * input.rotation,
         });
         let pressed = inputs.map(|input| input.squeeze_value >= 0.5);
+        let tracking = ctx
+            .input
+            .pose_tracking
+            .is_none_or(|p| p.head && p.hands.iter().all(|v| *v));
         for i in 0..2 {
             if !pressed[i] && inputs[i].trigger_value < 0.5 {
                 self.support_blocked[i] = false;
@@ -643,10 +708,25 @@ impl VrInteraction {
                 };
                 let separation =
                     (poses[other].point(rig[other].palm) - c.control_primary_palm).magnitude();
+                // Input can change during a paused redraw. Test retention
+                // against the whole rail then, but only advance the part on a
+                // simulation step: a full stroke must not look like a release.
+                let anchor = c
+                    .pump
+                    .and_then(|(_, travel, _)| {
+                        crate::vr_support::pump_fraction_from_separation(
+                            c.closed_anchor - c.primary_anchor,
+                            travel,
+                            separation,
+                        )
+                        .map(|f| c.closed_anchor + travel * f)
+                    })
+                    .unwrap_or(c.anchor);
                 support.entity == c.entity
                     && support.primary == c.primary
                     && ctx.support_enabled
                     && available(c.primary)
+                    && tracking
                     && poses.iter().all(|p| p.is_tracked())
                     && pressed[c.primary]
                     && pressed[other]
@@ -655,7 +735,7 @@ impl VrInteraction {
                         c.tracked_axis,
                         poses[other].point(rig[other].palm) - c.control_primary_palm,
                     )
-                    && (separation - (c.anchor - c.primary_anchor).magnitude()).abs()
+                    && (separation - (anchor - c.primary_anchor).magnitude()).abs()
                         <= c.profile.release_distance
             });
             if !valid {
@@ -671,6 +751,7 @@ impl VrInteraction {
                 if let Some(rig) = self.grip_kinematics.as_ref() {
                     let palm = poses[other].point(rig[other].palm);
                     if available(c.primary)
+                        && tracking
                         && poses.iter().all(|p| p.is_tracked())
                         && pressed[c.primary]
                         && pressed[other]
@@ -693,7 +774,7 @@ impl VrInteraction {
                             active: true,
                             blend,
                             correction,
-                            anchor: c.anchor,
+                            anchor: c.closed_anchor,
                             // Lock this reference until release, including after a block
                             // clears. Following the body would turn physics recovery into
                             // a steering/release gesture with stationary controllers.
@@ -1156,6 +1237,22 @@ impl PlayerInteraction for VrInteraction {
         }
         drop(slot);
         self.apply_support(world, effects);
+        let candidate = self.support_candidate(world, self.hand_poses(), true);
+        for primary in 0..2 {
+            if let Some((motion, _)) = self.pump_motion(world, primary) {
+                let entity = self.fitted_grips[primary].as_ref().unwrap().entity;
+                let fraction = candidate
+                    .as_ref()
+                    .filter(|c| c.entity == entity)
+                    .and_then(|c| c.pump.map(|(_, _, fraction)| fraction))
+                    .unwrap_or_else(|| crate::vr_shotgun_pump::state(world, entity).fraction);
+                effects.push(VirtualHandEffect::MovePump {
+                    entity_id: entity,
+                    motion,
+                    fraction,
+                });
+            }
+        }
     }
 
     fn synchronize_held_visuals(&mut self, world: &World) {
@@ -1233,6 +1330,7 @@ impl PlayerInteraction for VrInteraction {
                     "primary_palm": c.primary_palm, "primary_anchor": c.primary_anchor,
                     "visible_primary_palm": c.visible_primary_palm,
                     "control_primary_palm": c.control_primary_palm,
+                    "pump": c.pump.map(|(motion, travel, fraction)| serde_json::json!({"parameter": motion.parameter, "value": motion.value(fraction), "fraction": fraction, "travel": travel, "world_travel": c.model_pose.rotation.rotate_vector(travel)})),
                     "support_anchor": c.anchor, "grab_radius": c.profile.grab_radius,
                     "region_endpoints": c.region.map(|ends| ends.map(|p| c.model_pose.point(p))),
                     "visual_trigger": visual_triggers[1-i],
@@ -1945,6 +2043,7 @@ mod tests {
             SupportProfile {
                 palm_anchor: [0.0, 0.2, 0.0],
                 region: None,
+                motion: None,
                 rotation_degrees: [0.0; 3],
                 curls: [0.5; 5],
                 trigger_curls: None,
@@ -2027,6 +2126,32 @@ mod tests {
         );
         assert_eq!(interaction.haptic_hands(EntityId::dead()), [None; 2]);
         assert_eq!(FlatInteraction::new().haptic_hands(entity), [None; 2]);
+    }
+
+    #[test]
+    fn support_tracking_loss_requires_a_fresh_grab() {
+        let (world, _, physics, mut interaction, mut input) = wrench_support_fixture();
+        interaction.update_support(&context(&world, &physics, &input));
+        input.left_hand.squeeze_value = 1.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(interaction.support.as_ref().unwrap().active);
+        input.pose_tracking = Some(crate::input_context::PoseTracking {
+            head: true,
+            hands: [false, true],
+        });
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(!interaction.support.as_ref().unwrap().active);
+        input.pose_tracking = None;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(
+            !interaction.support.as_ref().unwrap().active,
+            "tracking recovery is not a new squeeze"
+        );
+        input.left_hand.squeeze_value = 0.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        input.left_hand.squeeze_value = 1.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(interaction.support.as_ref().unwrap().active);
     }
 
     #[test]
