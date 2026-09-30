@@ -82,10 +82,14 @@ fn entries(
 /// The card sphere, in carousel-local units: centred on the amp's ball, which
 /// sits `SPHERE_RADIUS` behind the local origin (the front, focal card).
 const SPHERE_RADIUS: f32 = 0.53;
-const SLOT_ANGLE: f32 = 0.34;
+const SLOT_ANGLE: f32 = 0.30;
 const ROW_ANGLE: f32 = 0.34;
-/// Metres per carousel-local unit.
-const SCALE: f32 = 0.375;
+/// Carousel-local units per metre are set by the ball: one unit is this many
+/// ball radii, so the focal card sits ~2 radii (~12 cm) off it at any amp
+/// scale, clear of the eye even with the amp held close.
+const BALL_RADII_PER_UNIT: f32 = 3.4;
+/// How far the focal card lifts off the sphere, in carousel-local units.
+const FOCUS_LIFT: f32 = 0.045;
 
 fn arc_position(row: f32, slot: f32) -> cgmath::Vector3<f32> {
     let yaw = slot * SLOT_ANGLE;
@@ -103,10 +107,14 @@ fn visible_slot(slot: f32) -> f32 {
     (slot + 3.5).rem_euclid(7.0) - 3.5
 }
 
-fn sphere_root(ball: cgmath::Vector3<f32>, eye: cgmath::Vector3<f32>) -> cgmath::Matrix4<f32> {
+fn sphere_root(
+    ball: cgmath::Vector3<f32>,
+    ball_radius: f32,
+    eye: cgmath::Vector3<f32>,
+) -> cgmath::Matrix4<f32> {
     use cgmath::Matrix4;
     projection_frame(ball, eye)
-        * Matrix4::from_scale(SCALE)
+        * Matrix4::from_scale(ball_radius * BALL_RADII_PER_UNIT)
         * Matrix4::from_translation(cgmath::vec3(0.0, 0.0, SPHERE_RADIUS))
 }
 
@@ -249,10 +257,12 @@ impl Carousel {
         // Attach to the synchronized physical amp, not a raw controller pose:
         // the card sphere is centred on the amp's ball. The projection stays
         // upright and faces the viewer as the amp moves.
-        let Some((ball, _, _)) = crate::psi_amp_readout::sphere(world, self.amp, self.hand) else {
+        let Some((ball, ball_radius, _)) =
+            crate::psi_amp_readout::sphere(world, self.amp, self.hand)
+        else {
             return vec![];
         };
-        let root = sphere_root(ball, eye);
+        let root = sphere_root(ball, ball_radius, eye);
         let Ok(powers) = world.borrow::<UniqueView<GlobalPsiPowers>>() else {
             return vec![];
         };
@@ -276,7 +286,7 @@ impl Carousel {
             let slot_position = visible_slot(slot_position);
             let focus = (1.0 - (row_position.abs() + slot_position.abs()) * 1.5).clamp(0.0, 1.0);
             let position =
-                arc_position(row_position, slot_position) + vec3(0.0, 0.0, focus * 0.045);
+                arc_position(row_position, slot_position) + vec3(0.0, 0.0, focus * FOCUS_LIFT);
             let size = 0.145 + 0.035 * focus;
             let edge = ((3.5 - slot_position.abs()) * 2.0).clamp(0.0, 1.0);
             let alpha = (if row == 0 { 0.72 } else { 0.42 } + 0.28 * focus) * edge;
@@ -349,7 +359,8 @@ impl Carousel {
         focus.fill(Rect::new(14.0, 47.0, 20.0, 1.0), [90, 226, 255]);
         objects.extend(focus.render_world_space(
             assets,
-            root * Matrix4::from_translation(vec3(0.0, 0.0, 0.045)) * Matrix4::from_scale(0.18),
+            root * Matrix4::from_translation(vec3(0.0, 0.0, FOCUS_LIFT))
+                * Matrix4::from_scale(0.18),
             None,
             None,
             0.001,
@@ -381,8 +392,7 @@ impl Carousel {
         }
         objects.extend(details.render_world_space(
             assets,
-            // Just under the bottom row and no wider than the sphere: the
-            // focal plane sits close to the eye, so it reads large.
+            // Just under the bottom row and no wider than the sphere.
             root * Matrix4::from_translation(vec3(0.0, -0.29, 0.025))
                 * Matrix4::from_nonuniform_scale(0.55, 0.55 * 26.0 / 440.0, 1.0),
             None,
@@ -523,10 +533,27 @@ mod tests {
     #[test]
     fn cards_ride_a_sphere_centred_on_the_ball() {
         let ball = vec3(0.3, 1.1, -0.5);
-        let root = sphere_root(ball, vec3(0.0, 1.6, 0.0));
+        let root = sphere_root(ball, 0.1, vec3(0.0, 1.6, 0.0));
         for (row, slot) in [(0.0, 0.0), (1.0, -2.5), (-1.0, 3.5)] {
             let card = (root * arc_position(row, slot).extend(1.0)).truncate();
-            assert!(((card - ball).magnitude() - SPHERE_RADIUS * SCALE).abs() < 1e-5);
+            let expected = SPHERE_RADIUS * 0.1 * BALL_RADII_PER_UNIT;
+            assert!(((card - ball).magnitude() - expected).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn focal_card_hugs_the_ball_at_any_amp_scale() {
+        let ball = vec3(0.3, 1.1, -0.5);
+        let focal = |radius| {
+            let root = sphere_root(ball, radius, vec3(0.0, 1.6, 0.0));
+            let lifted = arc_position(0.0, 0.0) + vec3(0.0, 0.0, FOCUS_LIFT);
+            ((root * lifted.extend(1.0)).truncate() - ball).magnitude()
+        };
+        // The default amp's ball: ~12 cm off it, well short of a close hold's eye.
+        assert!(focal(0.062) < 0.13);
+        // Outside the ball however large the amp is scaled.
+        for radius in [0.04, 0.062, 0.155, 0.31] {
+            assert!(focal(radius) > 1.5 * radius);
         }
     }
 
