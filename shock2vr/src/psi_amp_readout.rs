@@ -30,6 +30,9 @@ const RING_ARC: Deg<f32> = Deg(110.0);
 const METER: Rect = Rect::new(0.0, 0.0, 60.0, 19.0);
 const PIP_ON: [u8; 3] = [120, 255, 220];
 const PIP_OFF: [u8; 3] = [40, 90, 80];
+/// Bent around the ball, LOADBACK is nearly the fill's green; dimmed over black
+/// (the band stays opaque), the charge reads at a glance. Flat keeps the retail art.
+const METER_BACK_OPACITY: f32 = 0.35;
 
 pub(crate) fn render(
     world: &World,
@@ -97,13 +100,16 @@ fn badge_canvas(icon: &str, tier: i32) -> UiCanvas {
     canvas
 }
 
-/// The retail overload meter art, the same states as the flat ammo panel.
+/// The retail overload meter art, the same states as the flat ammo panel,
+/// with its background dimmed.
 fn meter_canvas(fraction: f32, phase: PsiChargePhase) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(METER.w, METER.h));
     match phase {
         PsiChargePhase::Charging => {
             canvas
+                .fill(METER, [0, 0, 0])
                 .image(METER, "LOADBACK.PCX")
+                .opacity(METER_BACK_OPACITY)
                 .bar(METER, "LOADMETR.PCX", fraction);
         }
         PsiChargePhase::Overloaded => {
