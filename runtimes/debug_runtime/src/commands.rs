@@ -340,7 +340,7 @@ pub struct SceneListResult {
 /// One scene object as submitted to the renderer
 #[derive(Clone, Debug, Serialize)]
 pub struct SceneObjectSummary {
-    pub entity_id: Option<u64>,
+    pub entity_id: Option<i32>,
     pub name: Option<String>,
     pub model: Option<String>,
     /// Render path that produced it, e.g. "entity". Absent for engine-built
