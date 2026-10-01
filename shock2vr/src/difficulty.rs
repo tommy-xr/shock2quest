@@ -115,6 +115,19 @@ pub fn loot_discard_percent(world: &World) -> i32 {
         .unwrap_or(0)
 }
 
+/// Nanites a QBR reconstruction bills: free on Easy, 10 on every other
+/// difficulty, as the original player script charges.
+pub fn reconstruction_cost(world: &World) -> i32 {
+    reconstruction_cost_for(campaign_difficulty(world))
+}
+
+fn reconstruction_cost_for(difficulty: Difficulty) -> i32 {
+    match difficulty {
+        Difficulty::Easy => 0,
+        Difficulty::Normal | Difficulty::Hard | Difficulty::Impossible => 10,
+    }
+}
+
 /// The campaign's difficulty, defaulting for a world without a character sheet
 /// (debug scenes).
 fn campaign_difficulty(world: &World) -> Difficulty {
@@ -208,6 +221,13 @@ mod tests {
                 replicator_multiplier: [1.0, 0.85, 1.0, 1.25, 2.0, 1.0],
             }),
             ..Default::default()
+        }
+    }
+    #[test]
+    fn reconstruction_is_free_only_on_easy() {
+        assert_eq!(reconstruction_cost_for(Difficulty::Easy), 0);
+        for difficulty in [Difficulty::Normal, Difficulty::Hard, Difficulty::Impossible] {
+            assert_eq!(reconstruction_cost_for(difficulty), 10);
         }
     }
     #[test]
