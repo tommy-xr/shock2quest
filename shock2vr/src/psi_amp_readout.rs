@@ -26,7 +26,7 @@ const ICON_GAP: f32 = 0.04;
 const FINGER_CLEARANCE: f32 = 0.03;
 /// The meter's clearance off the sphere, in sphere radii.
 const RING_CLEARANCE: f32 = 0.2;
-const RING_ARC: Deg<f32> = Deg(110.0);
+const RING_ARC: Deg<f32> = Deg(80.0);
 const METER: Rect = Rect::new(0.0, 0.0, 60.0, 19.0);
 const PIP_ON: [u8; 3] = [120, 255, 220];
 const PIP_OFF: [u8; 3] = [40, 90, 80];
