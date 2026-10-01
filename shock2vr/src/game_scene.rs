@@ -820,6 +820,9 @@ pub struct DebugAnimationState {
     /// World-space joint positions (fixed 40-slot skeleton; unused slots track
     /// the entity transform).
     pub joints: Vec<[f32; 3]>,
+    /// Posed model-space X/Y/Z basis vectors, before entity placement. Unlike
+    /// pivots these expose rotation about a stationary joint, including scale.
+    pub joint_axes: Vec<[[f32; 3]; 3]>,
 }
 
 #[derive(Debug, Serialize, Clone)]

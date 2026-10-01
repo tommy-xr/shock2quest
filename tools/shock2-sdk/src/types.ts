@@ -335,6 +335,8 @@ export interface AnimationState {
    * the entity transform).
    */
   joints: Vec3[];
+  /** Posed model-space X/Y/Z axes, before entity placement (includes scale). */
+  joint_axes: [Vec3, Vec3, Vec3][];
 }
 
 export interface ScreenshotResult {
