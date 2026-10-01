@@ -13328,6 +13328,7 @@ impl MissionCore {
             return Effect::NoEffect;
         }
         crate::vr_magazine::set_removed(&mut self.world, weapon, false);
+        crate::vr_weapon_action::reloaded(&mut self.world, weapon);
         for item in reload.depleted_items {
             self.interaction.on_entity_destroyed(item);
             self.flat_ui.on_entity_destroyed(item);
@@ -13502,6 +13503,7 @@ impl MissionCore {
             // reload that did not happen would be a lie.
             return Vec::new();
         }
+        crate::vr_weapon_action::reloaded(&mut self.world, weapon);
         crate::vr_magazine::set_removed(&mut self.world, weapon, false);
         // A clip drained to nothing leaves the hand with it - the hand is
         // released by `on_entity_destroyed`. A clip with rounds left over stays
