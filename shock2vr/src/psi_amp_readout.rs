@@ -19,6 +19,11 @@ use crate::{
 /// classic meshes fit within 0.02 of these.
 const AMP_SPHERE_CENTER: Point3<f32> = Point3::new(-0.42, 0.094, -0.04);
 const AMP_SPHERE_RADIUS: f32 = 0.155;
+/// The baked forearm's axis at the wrist, in model space; the forearm runs
+/// along model +x. Placed from captures of the 25AE mesh, like the radius below.
+const AMP_WRIST_CENTER: Point3<f32> = Point3::new(-0.08, -0.12, -0.10);
+/// Bands at this radius sit just off the forearm's skin, palm and back.
+const AMP_FOREARM_RADIUS: f32 = 0.15;
 const ICON_SIZE: f32 = 0.05;
 /// Minimum gap between the sphere's top and the badge's bottom edge.
 const ICON_GAP: f32 = 0.04;
@@ -130,13 +135,7 @@ pub(crate) fn sphere(
     amp: EntityId,
     hand: Handedness,
 ) -> Option<(Vector3<f32>, f32, Matrix3<f32>)> {
-    let transforms = world
-        .borrow::<View<crate::runtime_props::RuntimePropTransform>>()
-        .ok()?;
-    let transform = crate::melee_charge_visual::transform(world, Some(amp))
-        * transforms.get(amp).ok()?.0
-        * crate::vr_config::psi_amp_fit_scale()
-        * hand.gun_mirror();
+    let transform = drawn_transform(world, amp, hand)?;
     Some((
         transform.transform_point(AMP_SPHERE_CENTER).to_vec(),
         AMP_SPHERE_RADIUS * transform.x.truncate().magnitude(),
@@ -152,6 +151,42 @@ pub(crate) fn sphere(
 /// the fingers (palm sideways) or the whole hand (palm down) are over the top.
 fn badge_lift(up: Vector3<f32>) -> f32 {
     ICON_GAP + FINGER_CLEARANCE * (1.0 - up.y.max(0.0))
+}
+
+/// The amp's baked wrist as a glove-style wrist frame (+Y toward the fingers,
+/// +Z out of the back of the hand, unit and right-handed in either hand), with
+/// the forearm's world radius.
+pub(crate) fn wrist(world: &World, amp: EntityId, hand: Handedness) -> Option<(Matrix4<f32>, f32)> {
+    let transform = drawn_transform(world, amp, hand)?;
+    Some((
+        wrist_frame(transform),
+        AMP_FOREARM_RADIUS * transform.x.truncate().magnitude(),
+    ))
+}
+
+fn wrist_frame(transform: Matrix4<f32>) -> Matrix4<f32> {
+    let fingers = -transform.x.truncate().normalize();
+    let back = -transform.y.truncate().normalize();
+    Matrix4::from_cols(
+        fingers.cross(back).extend(0.0),
+        fingers.extend(0.0),
+        back.extend(0.0),
+        transform.transform_point(AMP_WRIST_CENTER).to_homogeneous(),
+    )
+}
+
+/// The amp's model-to-world transform, as its mesh is drawn (charge offset,
+/// pose, fit scale, left-hand mirror).
+fn drawn_transform(world: &World, amp: EntityId, hand: Handedness) -> Option<Matrix4<f32>> {
+    let transforms = world
+        .borrow::<View<crate::runtime_props::RuntimePropTransform>>()
+        .ok()?;
+    Some(
+        crate::melee_charge_visual::transform(world, Some(amp))
+            * transforms.get(amp).ok()?.0
+            * crate::vr_config::psi_amp_fit_scale()
+            * hand.gun_mirror(),
+    )
 }
 
 fn ring_radius(sphere_radius: f32) -> f32 {
@@ -235,6 +270,23 @@ mod tests {
         assert!((up - ICON_GAP).abs() < 1e-6);
         assert!((sideways - ICON_GAP - FINGER_CLEARANCE).abs() < 1e-6);
         assert_eq!(down, sideways);
+    }
+
+    #[test]
+    fn amp_wrist_is_a_glove_style_frame_in_either_hand() {
+        let pose = Matrix4::from_translation(vec3(1.0, 2.0, 3.0))
+            * Matrix4::from_angle_z(Deg(-90.0))
+            * Matrix4::from_scale(0.4);
+        for hand in [Handedness::Right, Handedness::Left] {
+            let model = pose * hand.gun_mirror();
+            let frame = wrist_frame(model);
+            assert!((frame.determinant() - 1.0).abs() < 1e-5);
+            // +Y toward the fingers (model -x), +Z out of the back (model -y).
+            assert!(frame.y.truncate().dot(-model.x.truncate().normalize()) > 0.999);
+            assert!(frame.z.truncate().dot(-model.y.truncate().normalize()) > 0.999);
+            let centre = model.transform_point(AMP_WRIST_CENTER).to_vec();
+            assert!((frame.w.truncate() - centre).magnitude() < 1e-6);
+        }
     }
 
     #[test]
