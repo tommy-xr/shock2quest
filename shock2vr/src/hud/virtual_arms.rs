@@ -9,8 +9,9 @@ use crate::{
     vr_config::Handedness,
 };
 
-/// Compact readouts ride the calibrated visible glove, not the raw controller.
-/// Both wrists show health/psi; each cuff opening shows its own weapon, or the
+/// Compact readouts ride the calibrated visible glove, not the raw controller;
+/// a held psi amp carries the bio band on its own baked wrist instead.
+/// Both wrists show health/psi, back and palm; each cuff opening shows its own weapon, or the
 /// weapon it steadies (`supported`, per hand) - with a two-handed gun the
 /// support wrist is often the only one facing the player.
 pub fn create_wrist_hud_panels(
@@ -90,14 +91,13 @@ pub fn create_wrist_hud_panels(
                 .borrow::<View<PropGunState>>()
                 .is_ok_and(|guns| guns.contains(entity))
         });
-        let weapon = crate::wielded_weapon::held_by_hand(world, hand).or(steadied_gun);
+        let held = crate::wielded_weapon::held_by_hand(world, hand);
+        let weapon = held.or(steadied_gun);
         let readout = ammo_panel::AmmoReadout::for_weapon(world, weapon, false);
+        let bio_canvas = readouts::build_watch_canvas(&bio);
         // The refusal is available even when a weapon carries its own hand
-        // mesh. Only the physical wrist plates require a visible glove.
-        if !crate::virtual_hand::shows_hand_visual(
-            world,
-            crate::wielded_weapon::held_by_hand(world, hand),
-        ) {
+        // mesh. The cuff's wrist plates require a visible glove.
+        if !crate::virtual_hand::shows_hand_visual(world, held) {
             if readout.melee_charge.is_some() {
                 let canvas = ammo_panel::build_wrist_canvas(&readout);
                 objects.extend(canvas.render_world_space(
@@ -112,15 +112,18 @@ pub fn create_wrist_hud_panels(
                     0.001,
                 ));
             }
+            // The amp's baked forearm is thicker than the glove's cuff: scale
+            // the same band out to it.
+            if let Some((wrist, radius)) = held
+                .filter(|&amp| crate::wielded_weapon::is_psi_amp(world, amp))
+                .and_then(|amp| crate::psi_amp_readout::wrist(world, amp, hand))
+            {
+                let root = wrist * Matrix4::from_scale(radius / BIO_BAND_RADIUS);
+                objects.extend(bio_bands(asset_cache, &bio_canvas, root, 0.0));
+            }
             continue;
         }
-        let bio_canvas = readouts::build_watch_canvas(&bio);
-        objects.extend(bio_canvas.render_world_space_bent(
-            asset_cache,
-            wrist_panel_transform(root, bio_canvas.size(), false),
-            BIO_BAND_RADIUS / BIO_WIDTH,
-            0.001 / BIO_WIDTH,
-        ));
+        objects.extend(bio_bands(asset_cache, &bio_canvas, root, GLOVE_PALM_LIFT));
         let ammo_canvas = ammo_panel::build_wrist_canvas(&readout);
         // A psi amp carries its own readout (`psi_amp_readout`).
         if ammo_canvas.element_count() > 0 && readout.psi_power.is_none() {
@@ -135,6 +138,40 @@ pub fn create_wrist_hud_panels(
     }
     crate::util::tag_render_source(&mut objects, crate::util::render_source::PLAYER_HANDS);
     objects
+}
+
+/// The bio band on both sides of the wrist, back and palm, so it faces the
+/// player whichever way the hand is turned. `palm_lift` moves the palm band
+/// out past a cuff that is thicker on that side.
+fn bio_bands(
+    asset_cache: &mut AssetCache,
+    canvas: &crate::ui::UiCanvas,
+    root: Matrix4<f32>,
+    palm_lift: f32,
+) -> Vec<SceneObject> {
+    bio_band_transforms(root, canvas.size(), palm_lift)
+        .into_iter()
+        .flat_map(|transform| {
+            canvas.render_world_space_bent(
+                asset_cache,
+                transform,
+                BIO_BAND_RADIUS / BIO_WIDTH,
+                0.001 / BIO_WIDTH,
+            )
+        })
+        .collect()
+}
+
+fn bio_band_transforms(
+    root: Matrix4<f32>,
+    canvas_size: cgmath::Vector2<f32>,
+    palm_lift: f32,
+) -> [Matrix4<f32>; 2] {
+    [(Deg(0.0), 0.0), (Deg(180.0), palm_lift)].map(|(side, lift)| {
+        let side =
+            root * Matrix4::from_angle_y(side) * Matrix4::from_translation(vec3(0.0, 0.0, lift));
+        wrist_panel_transform(side, canvas_size, false)
+    })
 }
 
 /// An authored weapon hand mesh has no glove cuff. Lift the unchanged shared
@@ -170,6 +207,8 @@ fn wrist_hologram_transform(
 const BIO_WIDTH: f32 = 0.085;
 /// The bio band wraps a cylinder about the wrist axis, just outside the cuff.
 const BIO_BAND_RADIUS: f32 = 0.045;
+/// The glove's cuff stands further off the wrist on the palm side.
+const GLOVE_PALM_LIFT: f32 = 0.02;
 
 /// Wrist-frame +Z points out of the glove's back; +Y points toward its fingers.
 /// Bio faces dorsally, scaled alike in x and z so it can bend around the
@@ -387,6 +426,20 @@ mod tests {
             lower.z > 0.13,
             "the readout clears the authored hand instead of occupying a nonexistent cuff"
         );
+    }
+
+    #[test]
+    fn bio_bands_face_out_of_both_sides_of_the_wrist() {
+        let [back, palm] =
+            bio_band_transforms(Matrix4::identity(), cgmath::vec2(128.0, 44.0), 0.02);
+        for band in [back, palm] {
+            // Outward, unmirrored, and reading toward the fingers on both sides.
+            assert!(band.z.truncate().dot(band.w.truncate()) > 0.0);
+            assert!(band.determinant() > 0.0);
+            assert!(band.y.truncate().normalize().dot(vec3(0.0, 1.0, 0.0)) > 0.999);
+        }
+        assert!(back.z.z > 0.0 && palm.z.z < 0.0);
+        assert!((-palm.w.z - back.w.z - 0.02).abs() < 1e-6);
     }
 
     #[test]
