@@ -52,7 +52,9 @@ impl ResolvedGrip {
     pub fn with_item_scale(mut self, scale: f32) -> Self {
         self.item_scale = scale;
         self.anchor = self.anchor.map(|value| value / scale);
-        self.contacts = self.contacts.map(|contact| contact.map(|point| point.map(|value| value / scale)));
+        self.contacts = self
+            .contacts
+            .map(|contact| contact.map(|point| point.map(|value| value / scale)));
         self
     }
 

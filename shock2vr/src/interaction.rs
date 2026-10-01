@@ -938,7 +938,10 @@ impl PlayerInteraction for VrInteraction {
                 .borrow::<View<PropModelName>>()
                 .ok()
                 .and_then(|v| v.get(entity).ok().map(|p| p.0.to_lowercase()));
-            let model = magazine.as_ref().map(|m| format!("magazine:{}:{}", m.source, m.item_scale.to_bits())).or(model);
+            let model = magazine
+                .as_ref()
+                .map(|m| format!("magazine:{}:{}", m.source, m.item_scale.to_bits()))
+                .or(model);
             let Some(model) = model else {
                 self.fitted_grips[index] = None;
                 continue;
@@ -949,7 +952,8 @@ impl PlayerInteraction for VrInteraction {
             {
                 let start = std::time::Instant::now();
                 let hand_name = if index == 0 { "left" } else { "right" };
-                let eligible = magazine.is_some() || bake
+                let eligible = magazine.is_some()
+                    || bake
                     || self
                         .grip_library
                         .as_ref()
@@ -966,7 +970,9 @@ impl PlayerInteraction for VrInteraction {
                                 let source = source.as_ref().as_ref()?;
                                 return Some(GripGeometry {
                                     triangles: std::rc::Rc::new(source.triangles.clone()),
-                                    fingerprint: crate::vr_grip::surface_fingerprint(&source.triangles),
+                                    fingerprint: crate::vr_grip::surface_fingerprint(
+                                        &source.triangles,
+                                    ),
                                     weapon_arms: None,
                                 });
                             }
@@ -1005,10 +1011,18 @@ impl PlayerInteraction for VrInteraction {
                 let hints = self.grip_hints.entry(model.clone()).or_default();
                 let hints_hash = hints.fingerprint();
                 let resolved = if let Some(magazine) = magazine.as_ref() {
-                    self.magazine_grips.entry(format!("{model}:{hand_name}"))
-                        .or_insert_with(|| triangles.and_then(|triangles| {
-                            crate::vr_magazine::resolve_grip(triangles, magazine.item_scale, &kinematics[index])
-                        })).clone()
+                    self.magazine_grips
+                        .entry(format!("{model}:{hand_name}"))
+                        .or_insert_with(|| {
+                            triangles.and_then(|triangles| {
+                                crate::vr_magazine::resolve_grip(
+                                    triangles,
+                                    magazine.item_scale,
+                                    &kinematics[index],
+                                )
+                            })
+                        })
+                        .clone()
                 } else if bake && geometry.is_some_and(|g| g.weapon_arms.is_some()) {
                     let geometry = geometry.unwrap();
                     crate::vr_weapon_grip::resolve(

@@ -1236,9 +1236,14 @@ fn create_physics_representation_with_options(
                 (size.z * model_scale.z).max(0.004),
             );
             return Some(physics.add_dynamic(
-                entity_id, pos.position, pos.rotation, model_bounds_center,
-                PhysicsShape::Cuboid(size), entity_group.non_solid_to_player(),
-                false, dynamics_options,
+                entity_id,
+                pos.position,
+                pos.rotation,
+                model_bounds_center,
+                PhysicsShape::Cuboid(size),
+                entity_group.non_solid_to_player(),
+                false,
+                dynamics_options,
             ));
         }
     }
@@ -2504,13 +2509,24 @@ mod tests {
         let mut world = World::new();
         let mut physics = PhysicsWorld::new();
         let entity = add_wall_fixture(&mut world, None);
-        world.add_component(entity, (
-            dark::properties::InternalPropMagazineModel { source: "atek_h".into(), item_scale: 0.55 },
-            PropScale(vec3(0.55, 0.55, 0.55)),
-        ));
-        let model = Model::from_glb(vec![], Aabb3::new(
-            Point3::new(-0.05, -0.15, -0.02), Point3::new(0.05, 0.15, 0.02),
-        ), None);
+        world.add_component(
+            entity,
+            (
+                dark::properties::InternalPropMagazineModel {
+                    source: "atek_h".into(),
+                    item_scale: 0.55,
+                },
+                PropScale(vec3(0.55, 0.55, 0.55)),
+            ),
+        );
+        let model = Model::from_glb(
+            vec![],
+            Aabb3::new(
+                Point3::new(-0.05, -0.15, -0.02),
+                Point3::new(0.05, 0.15, 0.02),
+            ),
+            None,
+        );
         create_physics_representation(&mut world, &mut physics, &Some(&model), entity).unwrap();
         let bounds = physics.get_aabb2(entity).unwrap();
         let size = bounds.max - bounds.min;

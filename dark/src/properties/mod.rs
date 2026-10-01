@@ -2646,7 +2646,10 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         ),
         define_prop(
             "__P$MagazineModel",
-            |reader, len| InternalPropMagazineModel { source: read_prop_string(reader, len), item_scale: 1.0 },
+            |reader, len| InternalPropMagazineModel {
+                source: read_prop_string(reader, len),
+                item_scale: 1.0,
+            },
             |value| value,
             accumulator::latest,
         ),

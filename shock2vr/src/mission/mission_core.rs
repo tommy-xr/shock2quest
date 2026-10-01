@@ -11567,7 +11567,9 @@ impl MissionCore {
                                 None
                             };
                         let glove_weapon = glove_source.is_some();
-                        let (new_model, vr_held_source) = if let Some(magazine) = crate::vr_magazine::entity_model(asset_cache, &self.world, entity_id) {
+                        let (new_model, vr_held_source) = if let Some(magazine) =
+                            crate::vr_magazine::entity_model(asset_cache, &self.world, entity_id)
+                        {
                             (Some(Model::transform(&magazine, xform)), None)
                         } else if let Some(source) = glove_source {
                             (
@@ -15687,19 +15689,30 @@ impl MissionCore {
         if self.interaction.holding_hand(clip) == Some(hand) {
             // Change only the representation of this real clip after the grab
             // succeeds. Its archetype, ammo type and stack count stay intact.
-            if let Some(source) = crate::scripts::internal_switch_held_model::get_raw_view_model(&self.world, weapon)
-                .map(|name| name.to_ascii_lowercase())
+            if let Some(source) =
+                crate::scripts::internal_switch_held_model::get_raw_view_model(&self.world, weapon)
+                    .map(|name| name.to_ascii_lowercase())
             {
                 if let Some(magazine) = crate::vr_magazine::load(asset_cache, &source) {
-                    let item_scale = self.world.borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
-                        .ok().and_then(|v| v.get(weapon).ok().map(|w| w.item_scale)).unwrap_or(1.0);
-                    self.world.add_component(clip, (
-                        dark::properties::InternalPropMagazineModel { source, item_scale },
-                        dark::properties::PropScale(vec3(item_scale, item_scale, item_scale)),
-                    ));
+                    let item_scale = self
+                        .world
+                        .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+                        .ok()
+                        .and_then(|v| v.get(weapon).ok().map(|w| w.item_scale))
+                        .unwrap_or(1.0);
+                    self.world.add_component(
+                        clip,
+                        (
+                            dark::properties::InternalPropMagazineModel { source, item_scale },
+                            dark::properties::PropScale(vec3(item_scale, item_scale, item_scale)),
+                        ),
+                    );
                     if let Some(old) = self.id_to_model.get(&clip) {
                         let transform = old.get_transform();
-                        self.id_to_model.insert(clip, Model::transform(&magazine.as_ref().as_ref().unwrap().model, transform));
+                        self.id_to_model.insert(
+                            clip,
+                            Model::transform(&magazine.as_ref().as_ref().unwrap().model, transform),
+                        );
                         self.id_to_animation_player.remove(&clip);
                     }
                 }
@@ -16007,7 +16020,12 @@ impl MissionCore {
             .remove::<crate::runtime_props::RuntimePropGloveWeapon>(entity_id);
         let loose_scale = crate::vr_magazine::appearance(&self.world, entity_id)
             .map_or(1.0, |magazine| magazine.item_scale);
-        self.set_entity_position_rotation(entity_id, hand, rotation, vec3(loose_scale, loose_scale, loose_scale));
+        self.set_entity_position_rotation(
+            entity_id,
+            hand,
+            rotation,
+            vec3(loose_scale, loose_scale, loose_scale),
+        );
     }
 
     /// Give a held item the swept body its wield needs - the contact volume a
