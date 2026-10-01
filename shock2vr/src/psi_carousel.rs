@@ -394,7 +394,7 @@ impl Carousel {
             assets,
             // Just under the bottom row and no wider than the sphere.
             root * Matrix4::from_translation(vec3(0.0, -0.29, 0.025))
-                * Matrix4::from_nonuniform_scale(0.55, 0.55 * 26.0 / 440.0, 1.0),
+                * Matrix4::from_nonuniform_scale(0.8, 0.8 * 26.0 / 440.0, 1.0),
             None,
             None,
             0.001,
