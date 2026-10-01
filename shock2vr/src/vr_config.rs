@@ -582,6 +582,11 @@ pub fn get_vr_hand_model_adjustments_from_model(
     adjustment
 }
 
+/// The held amp mesh's live fit scale, composed after its rendered transform.
+pub(crate) fn psi_amp_fit_scale() -> cgmath::Matrix4<f32> {
+    cgmath::Matrix4::from_scale(crate::dev_params::get(crate::dev_params::PSI_AMP_SCALE))
+}
+
 /// Scale and rotate the authored seating offset with the mesh so both pivot about
 /// the hand origin. Apply physical hand -Z/+Y translation after rotation so the
 /// fit controls keep their controller-local directions.

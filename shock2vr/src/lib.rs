@@ -18,6 +18,7 @@ mod melee_swing;
 pub mod message_trace;
 pub mod object_lighting;
 pub mod particle_effects;
+mod psi_amp_readout;
 pub mod psi_amp_selection;
 mod psi_carousel;
 pub mod save_load;

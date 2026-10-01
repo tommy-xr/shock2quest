@@ -14753,10 +14753,7 @@ impl MissionCore {
                         .get(*entity_id)
                         .is_ok_and(|name| name.0.eq_ignore_ascii_case("amp_h"))
                 {
-                    visual_xform
-                        * Matrix4::from_scale(crate::dev_params::get(
-                            crate::dev_params::PSI_AMP_SCALE,
-                        ))
+                    visual_xform * crate::vr_config::psi_amp_fit_scale()
                 } else {
                     visual_xform
                 };
@@ -15329,9 +15326,19 @@ impl MissionCore {
             scene.extend(use_mode_objects);
         }
 
+        let eye = player.pos + player.rotation * self.last_head_position;
         if let Some(menu) = &self.psi_carousel {
-            let eye = player.pos + player.rotation * self.last_head_position;
             scene.extend(menu.render(&self.world, asset_cache, eye));
+        }
+        // The carousel replaces only its own amp's readout: a second amp can
+        // still charge and needs its meter.
+        if options.presentation_mode == crate::PresentationMode::Vr && !self.use_mode {
+            scene.extend(crate::psi_amp_readout::render(
+                &self.world,
+                asset_cache,
+                eye,
+                self.psi_carousel.as_ref().map(|menu| menu.amp),
+            ));
         }
         // Status messages in VR: flat draws them into its 2D HUD above, so this
         // is the VR half of the same shared canvas.
