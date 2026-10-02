@@ -136,12 +136,10 @@ pub fn resolve(
         if let Some(mut grip) =
             surface.resolve_weapon(rig, &arms, seed.offset * scale, seed.rotation)
         {
-            grip.item_scale = scale;
+            grip = grip.with_item_scale(scale);
             if is_melee(name) {
                 grip.pose_family = "cylindrical".to_owned();
             }
-            grip.anchor = grip.anchor.map(|v| v / scale);
-            grip.contacts = grip.contacts.map(|c| c.map(|p| p.map(|v| v / scale)));
             if best.as_ref().is_none_or(|b| grip.score > b.score) {
                 best = Some(grip);
             }

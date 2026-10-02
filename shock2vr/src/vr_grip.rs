@@ -47,6 +47,17 @@ fn default_item_scale() -> f32 {
 }
 
 impl ResolvedGrip {
+    /// Convert a grip fitted against scaled triangles back to source-mesh
+    /// coordinates. The hand-space offset already has the correct world size.
+    pub fn with_item_scale(mut self, scale: f32) -> Self {
+        self.item_scale = scale;
+        self.anchor = self.anchor.map(|value| value / scale);
+        self.contacts = self
+            .contacts
+            .map(|contact| contact.map(|point| point.map(|value| value / scale)));
+        self
+    }
+
     pub fn is_valid(&self) -> bool {
         [
             self.offset.x,
