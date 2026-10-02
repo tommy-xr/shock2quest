@@ -16,37 +16,20 @@ Once installed, copy `sshock2.kpf` and the `mods/` folder from it - see [DEVELOP
 
 ## Screenshots
 
-<img src="screenshots/hero/hydro1.png" alt="Hydroponics: two-handed assault rifle on an egg pod" width="400"/> <img src="screenshots/hero/medsci1.png" alt="Med/Sci: wrench and pistol against a hybrid" width="400"/>
-<img src="screenshots/hero/ops2.png" alt="Operations: psi amp and laser pistol against a protocol droid" width="400"/> <img src="screenshots/hero/rec1.png" alt="Recreation: pistol on a monkey" width="400"/>
 
 <img src="screenshots/hero/medsci1-melee.gif" alt="Med/Sci: pistol in one hand, a wrench swing with the other" width="400"/> <img src="screenshots/hero/ops2.gif" alt="Operations: casting cryokinesis from the psi amp, then firing the laser pistol" width="400"/>
 <img src="screenshots/hero/rec1.gif" alt="Recreation: raising a pistol and firing at a charging monkey" width="400"/> <img src="screenshots/hero/hydro1.gif" alt="Hydroponics: two-handed assault rifle bursting an egg pod" width="400"/>
-
-Regenerate with `node scripts/hero-shots.mjs` from `tools/shock2-sdk` (after `npm run build`).
-
-Older feature captures, until scripted replacements land:
-
-- Hitboxes
-
-<img src="screenshots/hitbox.png" alt="shock2quest: hitboxes" width="500"/>
-
-- Dual Wielding + Character Models
-
-<img src="screenshots/combat.png" alt="shock2quest: dual wielding" width="500"/>
-
-- Floating Inventory for VR
-
-<img src="screenshots/floating-inventory.png" alt="shock2quest: floating inventory" width="500"/>
 
 ## Running
 
 Download the signed Quest APK from the [latest release](https://github.com/tommy-xr/shock2quest/releases/latest),
 then follow the [installation instructions](INSTALL.md) to sideload it and copy
-your Remaster game files.
+your 25 AE Rgame files.
 
 ### Controls
 
-This is geared towards VR, so the control scheme is really meant for VR headsets and controllers.
+#### Desktop / Flat
+This is geared towards VR, so the control scheme is really meant for VR headsets and controllers, but you can run in flat mode for testing:
 
 However, you can play with a keyboard and a mouse, using the following hard-coded keys:
 - `Mouse` - look around (flat); in `--vr`, aim the head unless `Q` or `E` is held
@@ -58,6 +41,9 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `Space` - jump
 - `Tab` - toggle the cyber interface ("use" mode): a cursor-driven UI over the 3D view
 - `Alt+S` / `Alt+L` - quick save / quick load
+
+#### Quest
+
 - Quest VR: press the left controller's `Menu` button to toggle the cyber
   interface; hold it for half a second - a ring fills in front of you - to open
   the pause menu instead. The interface also carries a `MENU` button that opens
@@ -148,15 +134,15 @@ cargo dv grunt_p.bin  # View model file
  Pre Alpha: Initial development 
 - [x] Load gamesys 
 - [x] Speech DB / env sounds 
-- [ ] Menu / Launcher
-- [ ] Character sounds
-- [ ] Basic AI 
-- [ ] Load/save 
-- [ ] Basic item usage 
-- [ ] Initial inventory management 
-- [ ] Psi Powers
-- [ ] Act/React implementation 
-- [ ] Cutscenes
+- [x] Menu / Launcher
+- [x] Character sounds
+- [x] Basic AI 
+- [x] Load/save 
+- [x] Basic item usage 
+- [x] Initial inventory management 
+- [x] Psi Powers
+- [x] Act/React implementation 
+- [x] Cutscenes
 - [ ] Lighting implementation (Doom 3 multi-pass shadow rendering)
 - [ ] Mod support
 
