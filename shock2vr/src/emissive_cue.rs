@@ -2,10 +2,9 @@
 //! (the 25AE models give them their own material slot), e.g. the psi amp's
 //! strip dims as psi points drain. Only scales emissivity the art already
 //! has, so models without a glowing part are unaffected.
-use dark::properties::PropPsiState;
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use shipyard::{EntityId, UniqueView, World};
 
-use crate::{dev_params, mission::PlayerInfo, time::Time};
+use crate::{dev_params, time::Time};
 
 /// Glow left at a sliver of charge, so "low" still reads as "on".
 const FLOOR: f32 = 0.25;
@@ -19,10 +18,8 @@ pub(crate) fn held_scale(world: &World, item: EntityId) -> Option<f32> {
     {
         return None;
     }
-    let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?.entity_id;
-    let psi = world.borrow::<View<PropPsiState>>().ok()?;
-    let psi = psi.get(player).ok()?;
-    let fraction = psi.psi_points as f32 / psi.max_psi_points.max(1) as f32;
+    // Same fraction the HUD psi bar shows.
+    let fraction = crate::hud::get_psi_percentage(world);
     let secs = world.borrow::<UniqueView<Time>>().ok()?.total.as_secs_f32();
     Some(glow(fraction, secs))
 }
