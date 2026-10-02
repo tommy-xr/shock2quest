@@ -5899,7 +5899,7 @@ impl MissionCore {
             &self.world,
             self.interaction.held_entities(),
         ));
-        effects.extend(crate::vr_pistol_slide::advance(
+        effects.extend(crate::vr_weapon_slide::advance(
             &mut self.world,
             self.interaction.held_entities(),
             time.elapsed.as_secs_f32(),
@@ -11919,7 +11919,7 @@ impl MissionCore {
                         self.world
                             .remove::<crate::vr_shotgun_pump::PumpMotion>(entity_id);
                         self.world
-                            .remove::<crate::vr_pistol_slide::PistolSlide>(entity_id);
+                            .remove::<crate::vr_weapon_slide::WeaponSlide>(entity_id);
                         self.world
                             .remove::<crate::runtime_props::RuntimePropObjectArticulation>(
                                 entity_id,
@@ -11951,7 +11951,7 @@ impl MissionCore {
                         RuntimePropVhots,
                         crate::runtime_props::RuntimePropObjectArticulation,
                         crate::vr_shotgun_pump::PumpMotion,
-                        crate::vr_pistol_slide::PistolSlide,
+                        crate::vr_weapon_slide::WeaponSlide,
                         crate::weapon_muzzle::MuzzleFallback,
                         crate::runtime_props::RuntimePropGloveWeapon,
                     )>(entity_id);
@@ -11990,7 +11990,7 @@ impl MissionCore {
                 Effect::WeaponRecoil { entity_id } => {
                     self.flat_weapon_animation.fired(&self.world, entity_id);
                     crate::vr_shotgun_pump::fired(&mut self.world, entity_id);
-                    crate::vr_pistol_slide::fired(&mut self.world, entity_id);
+                    crate::vr_weapon_slide::fired(&mut self.world, entity_id);
                     let hands = self.interaction.haptic_hands(entity_id);
                     for (hand, pulse) in hands
                         .into_iter()
