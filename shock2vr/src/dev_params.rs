@@ -303,8 +303,9 @@ dev_params! {
     /// 2 feet is twice the original lean; 0 disables displacement and roll.
     /// Geometry still limits the resolved pose. VR uses tracked head motion.
     FLAT_LEAN_DISTANCE = Camera::float("flat_lean_distance", "Max lean (ft)", 2.0, 0.0, 4.0, 0.1),
-    /// Scale the world ambient floor and model ambient: 0 disables, 1 preserves.
-    AMBIENT_LIGHT_INTENSITY = Lighting::float("ambient_light_intensity", "Ambient intensity", 1.0, 0.0, 3.0, 0.05),
+    /// Scale the world ambient floor and model ambient. Disabled by default:
+    /// baked lighting and object lights supply the scene's illumination.
+    AMBIENT_LIGHT_INTENSITY = Lighting::float("ambient_light_intensity", "Ambient intensity", 0.0, 0.0, 3.0, 0.05),
     /// Scale baked world lighting independently of the ambient floor and spotlights.
     LEVEL_LIGHT_INTENSITY = Lighting::float("level_light_intensity", "Level light intensity", 1.0, 0.0, 3.0, 0.05),
     /// Weapon-handling test overrides only: 0 follows the character sheet,
