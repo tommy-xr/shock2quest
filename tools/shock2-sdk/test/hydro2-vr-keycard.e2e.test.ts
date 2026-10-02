@@ -106,6 +106,7 @@ test(
       mission: "hydro2.mis",
       debugFlags: ["--vr"],
     });
+    await game.devParams.set("vr_mfd_device", 0); // This path scans by physical card contact.
     await game.step({ frames: 5 });
     const corpse = only(await game.entities.byTemplate(CORPSE), "Hydro2 corpse 754");
     const card = only(await game.entities.byTemplate(CARD), "Hydro Card B 942");
@@ -145,6 +146,7 @@ test(
       mission: "hydro2.mis",
       debugFlags: ["--vr"],
     });
+    await game.devParams.set("vr_mfd_device", 0); // This path scans by physical card contact.
     await game.step({ frames: 5 });
 
     // Stage the authored card in the backpack to exercise the strip's grip

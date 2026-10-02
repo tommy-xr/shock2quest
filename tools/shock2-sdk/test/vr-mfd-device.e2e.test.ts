@@ -12,7 +12,7 @@ for (const hand of ["left", "right"] as const) {
   }, async () => {
     await using game = await GameServer.launch({ mission: "earth.mis", port: 0,
       debugFlags: hand === "left" ? ["--vr", "--experimental", "mfd_device"] : ["--vr"] });
-    if (hand === "right") await game.devParams.set("vr_mfd_device", 1);
+    // The right hand exercises the default launch; left keeps explicit-flag coverage.
     await game.devParams.set("vr_mfd_focus_scan", 0);
     await game.step({ frames: 30 });
     const [reader] = await game.entities.byTemplate(262);

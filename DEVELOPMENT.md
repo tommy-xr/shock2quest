@@ -979,12 +979,12 @@ The cyber interface's left and right paperdoll arm wells show the corresponding
 holstered items. They are read-only storage indicators; the weapon selectors
 below still operate on the items actually held in each hand.
 
-### Experimental belt MFD device
+### Belt MFD device
 
-Enable **Developer → Tricorder → MFD device prototype** (`vr_mfd_device`,
-session-only, default off), or launch with the flag below.
-`cargo dbgr --mission earth.mis --vr --experimental mfd_device` replaces the
-belt card with a handheld MFD prototype. Draw with squeeze and focus on a target
+The handheld MFD is enabled by default in VR (`cargo dbgr --mission earth.mis --vr`).
+Disable **Developer → Tricorder → MFD device prototype** (`vr_mfd_device`,
+session-only) to restore the personal card. `--experimental mfd_device` still
+forces the device on for explicit test launches. Draw with squeeze and focus on a target
 to scan; use an empty other hand's pointer to click or squeeze loot out of the
 screen. Release to return it. Nanites/modules and LOG / KEY / MFD / RES / ? sit
 below the original panel, with the HRM plug alongside when applicable.
