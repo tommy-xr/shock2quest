@@ -127,8 +127,10 @@ impl Sockets {
                 (vec3(0.0, -0.038, 0.0), vec3(0.06, 0.006, 0.012)),
                 (vec3(0.0, 0.038, 0.0), vec3(0.06, 0.006, 0.012)),
             ] {
+                // Fullbright surfaces need explicit contrast to reveal the recess.
+                let tint = if offset.z < 0.0 { color * 0.25 } else { color };
                 let mut object =
-                    SceneObject::new(color_material::create(color), Box::new(cube::create()));
+                    SceneObject::new(color_material::create(tint), Box::new(cube::create()));
                 object.set_transform(
                     frame
                         * Matrix4::from_translation(offset)
