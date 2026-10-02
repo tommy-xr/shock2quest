@@ -1,0 +1,23 @@
+2026-10-02T16:12:41.866912Z  INFO Starting dark_query                                                                                                       
+2026-10-02T16:12:41.867501Z  INFO Loading entity data...                                                                                                    
+2026-10-02T16:12:41.867673Z  INFO Loading gamesys + mission data from shock2.gam and medsci1.mis                                                            
+2026-10-02T16:12:41.867679Z  INFO Loading gamesys data from shock2.gam                                                                                      
+2026-10-02T16:12:42.435799Z  INFO reading chunk table of contents - inv_offset: 937526 zero: 0, one: 1, zeros: 256, dead_beef: 4022250974, debug: 4022250974
+2026-10-02T16:12:42.740563Z  INFO Loaded 4541 entities from gamesys                                                                                         
+2026-10-02T16:12:42.751380Z  INFO reading chunk table of contents - inv_offset: 5757236 zero: 0, one: 1, zeros: 256, dead_beef: 4022250974, debug: 402225097
+4                                                                                                                                                           
+2026-10-02T16:12:42.756180Z  INFO Loaded 1556 entities from mission                                                                                         
+2026-10-02T16:12:42.756197Z  INFO Merged total: 6097 entities                                                                                               
+2026-10-02T16:12:42.757002Z  INFO Analyzing entities...                                                                                                     
+ID       | Type     | Names                                    | Template | Props | Links | Unparsed | Matched Items                                        
+---------+----------+------------------------------------------+----------+-------+-------+----------+--------------------                                  
+-4791    | Template | sym:Comforce Door                        | -205     | 5     | 0     | Yes      | SymName:Comforce Door, S$StdDoor                     
+-4786    | Template | sym:HydroSectorC                         | -4783    | 2     | 0     | Yes      | S$StdDoor                                            
+-4785    | Template | sym:HydroSectorB                         | -4783    | 2     | 0     | Yes      | S$StdDoor                                            
+-4784    | Template | sym:HydroSectorA                         | -4783    | 2     | 0     | Yes      | S$StdDoor                                            
+-4783    | Template | sym:Hydro Sector Doors                   | -3539    | 4     | 0     | Yes      | SymName:Hydro Sector Doors, S$StdDoor                
+-4384    | Template | sym:door6slam                            | -4125    | 2     | 0     | Yes      | SymName:door6slam                                    
+-4383    | Template | sym:door6opening                         | -4125    | 3     | 0     | Yes      | SymName:door6opening                                 
+-4382    | Template | sym:door5slam                            | -4125    | 2     | 0     | Yes      | SymName:door5slam                                    
+                                                                                                                                                            
+Showing 8 of 156 entities (limited)

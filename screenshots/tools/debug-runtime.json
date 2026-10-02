@@ -1,0 +1,48 @@
+{
+  "mission": "debug_weapons",
+  "presentation": "Flatscreen",
+  "commands": [
+    [
+      "POST",
+      "/v1/step",
+      {
+        "frames": 30
+      }
+    ],
+    [
+      "POST",
+      "/v1/camera",
+      {
+        "position": [
+          4,
+          5,
+          -2
+        ],
+        "look_at": [
+          -2.6,
+          1.2,
+          3
+        ]
+      }
+    ],
+    [
+      "POST",
+      "/v1/step",
+      {
+        "frames": 15
+      }
+    ],
+    [
+      "POST",
+      "/v1/screenshot",
+      {
+        "max_width": 1280
+      }
+    ]
+  ],
+  "runtimeSha256": "b3126bd159e8dcd5ab77f2bfcd330c3515504b431075aa63e7702b9a8b8ecfbf",
+  "features": {
+    "implantSockets": null
+  },
+  "runtimeSource": "Existing main-checkout binary; gallery demonstration only"
+}

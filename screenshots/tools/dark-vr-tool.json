@@ -1,0 +1,12 @@
+{
+  "command": [
+    "target/debug/dark_vr_tool"
+  ],
+  "capturedAt": "2026-10-02T16:26:00.363455+00:00",
+  "revision": "7c0adc5d25f70bbf121cf91df8fca09ed0acfa9c",
+  "displayedCommand": "cargo dvr",
+  "capture": "Actual PTY output rendered with pyte and Menlo; no desktop session required",
+  "exitCode": 0,
+  "columns": 108,
+  "rows": 28
+}

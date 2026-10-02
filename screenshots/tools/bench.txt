@@ -1,0 +1,13 @@
+=== medsci1.mis ===                                                                                                                                         
+cells: 4695  vertices: 9900  links: 27035                                                                                                                   
+cell flags: unpathable=3 below_door=532 blocking_obb=366 moving_terrain=1                                                                                   
+link okBits:                                                                                                                                                
+  0x00 (none)                                   13845                                                                                                       
+  0x09 WALK|SMALL_CREATURE                      11713                                                                                                       
+  0x19 WALK|SMALL_CREATURE|STRESSED             737                                                                                                         
+  0x29 WALK|SMALL_CREATURE|HIGH_STRIKE          740                                                                                                         
+audit: walk links gated by a condition bit (rejected for calm AIs): 1477                                                                                    
+audit: walk links into unpathable/blocking-OBB cells (rejected): 0                                                                                          
+audit: links into below-door cells: walkable=3425 zero-bits=1891                                                                                            
+door table: 532 cell-door entries, 56 unique doors, 1 of those cells also BLOCKING_OBB                                                                      
+walk connectivity: 4325 pathable cells in 1683 components; largest: [1266, 260, 108, 104, 77]; isolated cells: 1523

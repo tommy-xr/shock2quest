@@ -1,0 +1,21 @@
+{
+  "command": [
+    "target/debug/bench",
+    "path",
+    "stats",
+    "medsci1.mis"
+  ],
+  "capturedAt": "2026-10-02T16:36:56.064225+00:00",
+  "revision": "7c0adc5d25f70bbf121cf91df8fca09ed0acfa9c",
+  "displayedCommand": "cargo bn path stats medsci1.mis",
+  "capture": "Actual PTY output rendered with pyte and Menlo; no desktop session required",
+  "exitCode": 0,
+  "columns": 156,
+  "rows": 28,
+  "crop": [
+    0,
+    0,
+    1610,
+    440
+  ]
+}

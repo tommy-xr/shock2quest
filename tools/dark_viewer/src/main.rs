@@ -92,6 +92,10 @@ struct Cli {
     /// Overlay LGMD sub-object pivots and vhots for object meshes (.bin).
     #[arg(long)]
     debug_articulation: bool,
+
+    /// Render one frame to a PNG and exit without opening a visible window.
+    #[arg(long, conflicts_with_all = ["debug_no_render", "debug_subobjects"])]
+    screenshot: Option<std::path::PathBuf>,
 }
 
 use dark_viewer::normalize_clip_name;
@@ -307,6 +311,9 @@ pub fn main() {
     ));
     #[cfg(target_os = "macos")]
     glfw.window_hint(glfw::WindowHint::OpenGlForwardCompat(true));
+    if cli.screenshot.is_some() {
+        glfw.window_hint(glfw::WindowHint::Visible(false));
+    }
 
     let (mut window, events) = glfw
         .create_window(
@@ -322,7 +329,9 @@ pub fn main() {
     window.set_scroll_polling(true);
     window.set_cursor_pos_polling(true);
     window.set_framebuffer_size_polling(true);
-    window.set_cursor_mode(glfw::CursorMode::Disabled);
+    if cli.screenshot.is_none() {
+        window.set_cursor_mode(glfw::CursorMode::Disabled);
+    }
 
     gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);
 
@@ -383,7 +392,11 @@ pub fn main() {
 
     while !window.should_close() {
         let time = glfw.get_time() as f32;
-        let delta_time = time - last_time;
+        let delta_time = if cli.screenshot.is_some() {
+            0.0
+        } else {
+            time - last_time
+        };
         last_time = time;
 
         let _input_context = process_events(&mut window, &mut camera_context, &events, delta_time);
@@ -410,7 +423,11 @@ pub fn main() {
         let render_context = engine::EngineRenderContext {
             ambient_light_intensity: 1.0,
             level_light_intensity: 1.0,
-            time: glfw.get_time() as f32,
+            time: if cli.screenshot.is_some() {
+                0.0
+            } else {
+                glfw.get_time() as f32
+            },
             camera_offset: orig_camera_position,
             camera_rotation: Quaternion {
                 v: vec3(0.0, 0.0, 0.0),
@@ -424,6 +441,36 @@ pub fn main() {
 
         let full_scene = Scene::from_objects(scene_objects);
         engine.render(&render_context, &full_scene);
+
+        if let Some(path) = &cli.screenshot {
+            let (width, height) = window.get_framebuffer_size();
+            let mut image = image::RgbImage::new(width as u32, height as u32);
+            unsafe {
+                gl::Finish();
+                gl::PixelStorei(gl::PACK_ALIGNMENT, 1);
+                gl::ReadPixels(
+                    0,
+                    0,
+                    width,
+                    height,
+                    gl::RGB,
+                    gl::UNSIGNED_BYTE,
+                    image.as_mut_ptr().cast(),
+                );
+                let error = gl::GetError();
+                if error != gl::NO_ERROR {
+                    eprintln!("Screenshot readback failed: OpenGL error {error}");
+                    std::process::exit(1);
+                }
+            }
+            image::imageops::flip_vertical_in_place(&mut image);
+            if let Err(error) = image.save(path) {
+                eprintln!("Cannot save screenshot {}: {error}", path.display());
+                std::process::exit(1);
+            }
+            println!("Screenshot saved to {}", path.display());
+            break;
+        }
 
         window.swap_buffers();
         glfw.poll_events();
