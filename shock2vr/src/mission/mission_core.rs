@@ -5865,9 +5865,14 @@ impl MissionCore {
                 &mut shoulder_input.right_hand
             };
             // Body storage may retain a consumed grip from a previous frame.
-            // Restore the UI-safe input for the socket that owns this interaction.
+            // Held implants keep their UI-safe grip; empty socket hands remove
+            // through the explicit action, never through an ordinary world grab.
             if self.implant_sockets.reserved[i] {
-                *hand = [&hands_input.left_hand, &hands_input.right_hand][i].clone();
+                hand.squeeze_value = if held[i].is_some() {
+                    [&hands_input.left_hand, &hands_input.right_hand][i].squeeze_value
+                } else {
+                    0.0
+                };
             }
             if self.implant_sockets.retained.keep_grip(i) {
                 hand.squeeze_value = 1.0;
