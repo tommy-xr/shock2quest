@@ -219,7 +219,7 @@ pub(crate) fn implant_socket_frame(
 ) -> Matrix4<f32> {
     let side = if hand == Handedness::Left { -1.0 } else { 1.0 };
     root * Matrix4::from_translation(vec3(
-        side * (BIO_BAND_RADIUS + 0.001),
+        side * (BIO_BAND_RADIUS + 0.004),
         -0.015,
         -palm_lift * 0.5,
     )) * Matrix4::from_angle_y(Deg(side * 90.0))
