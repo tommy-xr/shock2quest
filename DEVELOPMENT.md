@@ -445,10 +445,10 @@ selection rather than a shared setting.
 
 ### VR implant sockets
 
-The existing powered implant system has a square socket on the pinky side
+The existing powered implant system has a narrow socket on the pinky side
 of each wristband, between its front and back health/psi readouts. A thin bevelled
 rim surrounds a recessed bed; a small trapezoidal connector receives the
-implant's two prongs. Native open/locked inventory
+implant's two prongs fully, leaving only a narrow seam against the body. Native open/locked inventory
 art marks an empty socket; the installed implant's solid model seats inside the
 rim. A separate strip below the housing shows live charge relative to its
 Maintenance-based recharge capacity.

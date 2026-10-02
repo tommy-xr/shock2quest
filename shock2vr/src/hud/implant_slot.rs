@@ -6,19 +6,22 @@ use shipyard::World;
 use std::rc::Rc;
 
 pub(crate) const INVENTORY_SIZE: Vector2<f32> = Vector2::new(636.0, 121.0);
-const BED_HALF_EXTENT: f32 = 0.46;
+const BED_HALF_WIDTH: f32 = 0.24;
+const BED_HALF_HEIGHT: f32 = 0.46;
 // Authored against the two prongs of the SOFTRED/BLUE/GREN/PURP implant meshes,
 // in slot-width units after model_scale and the shared seating transform.
 const PIN_X: [f32; 2] = [-0.032, 0.095];
 const PIN_Z: f32 = 0.297;
-const CONNECTOR_FRONT: f32 = 0.33;
-const CONNECTOR_BACK: f32 = 0.52;
-const BORE_HALF_WIDTH: f32 = 0.026;
-const BORE_HALF_HEIGHT: f32 = 0.024;
+// The implant body ends at +0.126: leave only a hairline seam at full insertion.
+const CONNECTOR_FRONT: f32 = 0.128;
+const CONNECTOR_BACK: f32 = 0.44;
+const BORE_HALF_WIDTH: f32 = 0.034;
+const BORE_HALF_HEIGHT: f32 = 0.030;
 
-/// Keep the implant prominent while leaving clearance inside the thin square rim.
+/// Keep the implant prominent while leaving clearance inside the slim rim.
 pub(crate) fn model_scale(extent: Vector3<f32>) -> f32 {
-    2.0 * (BED_HALF_EXTENT - 0.05) / extent.x.max(extent.y)
+    (2.0 * (BED_HALF_HEIGHT - 0.05) / extent.x.max(extent.y))
+        .min(2.0 * (BED_HALF_WIDTH - 0.03) / extent.x)
 }
 pub(crate) fn inventory_well(slot: usize) -> Rect {
     Rect::new(563.0 + slot as f32 * 36.0, 84.0, 34.0, 34.0)
@@ -26,17 +29,18 @@ pub(crate) fn inventory_well(slot: usize) -> Rect {
 
 pub(crate) fn canvas(world: &World, slot: usize) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(34.0, 34.0));
-    let rect = Rect::new(7.0, 7.0, 20.0, 20.0);
+    // Keep the status symbol clear of the connector at the +Y end of the bed.
+    let rect = Rect::new(10.0, 14.0, 14.0, 14.0);
     if let Some(entity) = crate::implants::equipped(world)[slot] {
         // The physical implant sits on the well. Keep its charge strip below
         // the mount so the protruding mesh need not shrink to fit a UI cell.
-        canvas.fill(Rect::new(3.0, 41.0, 28.0, 4.0), [70, 80, 80]);
-        canvas.fill(Rect::new(4.0, 42.0, 26.0, 2.0), [12, 18, 18]);
+        canvas.fill(Rect::new(8.0, 41.0, 18.0, 4.0), [70, 80, 80]);
+        canvas.fill(Rect::new(9.0, 42.0, 16.0, 2.0), [12, 18, 18]);
         let charge = (crate::implants::energy(world, entity)
             / crate::implants::recharge_capacity(world))
         .clamp(0.0, 1.0);
         if charge > 0.0 {
-            canvas.fill(Rect::new(4.0, 42.0, 26.0 * charge, 2.0), [45, 215, 120]);
+            canvas.fill(Rect::new(9.0, 42.0, 16.0 * charge, 2.0), [45, 215, 120]);
         }
     } else if crate::implants::socket_locked(world, slot) {
         canvas.image(rect, "iface/block.pcx");
@@ -95,11 +99,11 @@ pub(crate) fn housing() -> Vec<SceneObject> {
         )
     }
 
-    let base = outline(0.54, 0.54, 0.54, -0.025);
-    let shoulder = outline(0.535, 0.535, 0.535, 0.035);
-    let rim = outline(0.52, 0.52, 0.52, 0.055);
-    let mouth = outline(0.47, 0.47, 0.47, 0.055);
-    let bed = outline(BED_HALF_EXTENT, BED_HALF_EXTENT, BED_HALF_EXTENT, 0.0);
+    let base = outline(0.32, 0.32, 0.54, -0.020);
+    let shoulder = outline(0.315, 0.315, 0.535, 0.020);
+    let rim = outline(0.30, 0.30, 0.52, 0.035);
+    let mouth = outline(0.25, 0.25, 0.47, 0.035);
+    let bed = outline(BED_HALF_WIDTH, BED_HALF_WIDTH, BED_HALF_HEIGHT, 0.0);
 
     // A small tapered block receives the prong tips at the +Y end of the bed.
     // Its front faces -Y; two actual blind bores continue into the solid block.
@@ -123,11 +127,11 @@ pub(crate) fn housing() -> Vec<SceneObject> {
     };
     let front = section(0.02, 0.37, CONNECTOR_FRONT);
     let back = section(0.02, 0.37, CONNECTOR_BACK);
-    let holes = PIN_X.map(|x| aperture(x, CONNECTOR_FRONT, 0.035, 0.032));
-    let middle = section(PIN_Z - 0.032, PIN_Z + 0.032, CONNECTOR_FRONT);
+    let holes = PIN_X.map(|x| aperture(x, CONNECTOR_FRONT, 0.043, 0.038));
+    let middle = section(PIN_Z - 0.038, PIN_Z + 0.038, CONNECTOR_FRONT);
     let face = vec![
-        section(0.02, PIN_Z - 0.032, CONNECTOR_FRONT),
-        section(PIN_Z + 0.032, 0.37, CONNECTOR_FRONT),
+        section(0.02, PIN_Z - 0.038, CONNECTOR_FRONT),
+        section(PIN_Z + 0.038, 0.37, CONNECTOR_FRONT),
         [middle[0], holes[0][0], holes[0][3], middle[3]],
         [holes[0][1], holes[1][0], holes[1][3], holes[0][2]],
         [holes[1][1], middle[1], middle[2], holes[1][2]],
@@ -175,6 +179,7 @@ mod tests {
         let extent = vec3(0.372229, 0.809114, 0.338684);
         let scale = model_scale(extent);
         let lift = extent.z * scale * 0.5 + 0.0005 / crate::hud::virtual_arms::IMPLANT_SLOT_WIDTH;
+        assert!((CONNECTOR_FRONT - 0.124333 * scale).abs() < 0.003);
         // The six tip vertices of SOFTRED.BIN, converted to engine coordinates.
         let tips = [
             vec3(-0.0238, 0.404557, 0.1000),
@@ -193,12 +198,12 @@ mod tests {
     }
 
     #[test]
-    fn wide_and_tall_implants_fit_inside_the_square_bed() {
+    fn wide_and_tall_implants_fit_inside_the_narrow_bed() {
         let bed = [
-            vec2(-0.46, -0.46),
-            vec2(0.46, -0.46),
-            vec2(0.46, 0.46),
-            vec2(-0.46, 0.46),
+            vec2(-BED_HALF_WIDTH, -BED_HALF_HEIGHT),
+            vec2(BED_HALF_WIDTH, -BED_HALF_HEIGHT),
+            vec2(BED_HALF_WIDTH, BED_HALF_HEIGHT),
+            vec2(-BED_HALF_WIDTH, BED_HALF_HEIGHT),
         ];
         for extent in [
             vec3(2.0, 1.0, 0.3),
