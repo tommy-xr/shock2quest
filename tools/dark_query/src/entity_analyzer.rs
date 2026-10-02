@@ -375,6 +375,7 @@ fn get_link_types(entity_id: i32, entity_info: &SystemShock2EntityInfo) -> Vec<S
                 Link::AIWatchObj(_) => "AIWatchObj".to_string(),
                 Link::Projectile(_) => "Projectile".to_string(),
                 Link::Corpse(_) => "Corpse".to_string(),
+                Link::Organ => "Organ".to_string(),
                 Link::AIProjectile(_) => "AIProjectile".to_string(),
                 Link::AIRangedWeapon => "AIRangedWeapon".to_string(),
                 Link::Weapon => "Weapon".to_string(),
