@@ -15269,7 +15269,7 @@ impl MissionCore {
                     self.implant_sockets
                         .render(asset_cache, &self.world, socket_frames),
                 );
-                // Fit the original implant mesh above the charge bar inside the well.
+                // Mount the solid implant on the wristband surface, outside the UI well.
                 // It is the same carried entity, with no duplicate physics or ownership.
                 for (slot, entity) in crate::implants::equipped(&self.world)
                     .into_iter()
@@ -15284,19 +15284,20 @@ impl MissionCore {
                         continue;
                     };
                     let extent = bounds.max - bounds.min;
-                    let longest = extent.x.max(extent.y).max(extent.z);
-                    if longest <= 0.0001 {
+                    let footprint = extent.x.max(extent.y);
+                    if footprint <= 0.0001 {
                         continue;
                     }
                     let width = crate::hud::virtual_arms::IMPLANT_SLOT_WIDTH;
-                    // Fit the bounding sphere so oblique views leave the charge bar clear.
-                    let scale = width * 0.56 / extent.magnitude();
+                    // Fill the mount's footprint; retain the model's real thickness.
+                    // The underside rests on the panel instead of centering the mesh in it.
+                    let scale = width * 0.82 / footprint;
                     let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
                     let root = frame
                         * Matrix4::from_translation(vec3(
                             0.0,
-                            width * 0.13,
-                            width * 0.01 + extent.z * scale * 0.5,
+                            0.0,
+                            0.0005 + extent.z * scale * 0.5,
                         ))
                         * Matrix4::from_scale(scale)
                         * Matrix4::from_translation(-center);

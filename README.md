@@ -96,8 +96,8 @@ the edge, and raise the held hand to lower your body. Release grip to let go.
 **Implants.** Bring a held implant to the slot on the pinky side of the opposite wristband and
 release grip to install it. Squeeze with the empty opposite hand to remove it.
 Either wrist can hold your first implant; the other locks while it is occupied.
-Cybernetically Enhanced allows both wrists at once. A bar below the miniature
-implant model shows its remaining charge. Installed implants keep their backpack slot and need power to
+Cybernetically Enhanced allows both wrists at once. The implant sits on top of
+the slot, with a separate bar below the mount showing its remaining charge. Installed implants keep their backpack slot and need power to
 supply their bonuses. Recharge them at a recharge station.
 
 Development builds carry additional debug keys and a Developer options screen -

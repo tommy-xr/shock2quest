@@ -447,8 +447,9 @@ selection rather than a shared setting.
 
 The existing powered implant system has a slot on the pinky side of each wristband,
 between its front and back health/psi readouts. It reuses the inventory’s open
-implant well, enlarged 1.75×, and fits the installed implant’s original model
-above a live charge bar (relative to its Maintenance-based recharge capacity).
+implant well, enlarged 1.75×, and mounts the installed implant’s solid model
+on its outer surface. A separate strip below the mount shows live charge
+(relative to its Maintenance-based recharge capacity).
 Release a held implant at the **opposite wristband slot** to install it; squeeze there
 with an empty hand to remove the original item. Either wrist accepts the first
 implant, then the other locks until it is removed. **Cybernetically Enhanced**
