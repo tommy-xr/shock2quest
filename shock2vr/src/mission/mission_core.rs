@@ -5459,11 +5459,44 @@ impl MissionCore {
         // the back of the glove. Keep the original input for weapon controls.
         let mut body_input = hands_input.clone();
         self.body_hand_contacts = self.interaction.body_palm_positions(hands_input);
+        let socket_frames = self.interaction.implant_socket_frames(&self.world);
+        let socket_palms = std::array::from_fn(|i| {
+            crate::virtual_hand::hand_world_position(
+                player_pos,
+                player_rot,
+                self.body_hand_contacts[i].unwrap_or(
+                    [
+                        input_context.left_hand.position,
+                        input_context.right_hand.position,
+                    ][i],
+                ),
+            )
+        });
+        let implant_actions = self.implant_sockets.update(
+            &self.world,
+            hands_input,
+            held,
+            socket_palms,
+            socket_frames,
+            std::array::from_fn(|i| {
+                held[i].is_some_and(|id| crate::implants::kind(&self.world, id).is_some())
+                    || self.interaction.hand_available_for_body_slot(
+                        [crate::Handedness::Left, crate::Handedness::Right][i],
+                    )
+            }),
+            game_options.presentation_mode == crate::PresentationMode::Vr
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
+        );
         for (i, hand) in [&mut body_input.left_hand, &mut body_input.right_hand]
             .into_iter()
             .enumerate()
         {
-            if let Some(palm) = self.body_hand_contacts[i] {
+            // A reachable implant owns the grip before shoulder/belt gestures can queue a draw.
+            if self.implant_sockets.reserved[i] {
+                hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+            } else if let Some(palm) = self.body_hand_contacts[i] {
                 hand.position = palm;
             } else {
                 hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
@@ -5825,36 +5858,17 @@ impl MissionCore {
                 hand.a_value = 0.0;
             }
         }
-        let socket_frames = self.interaction.implant_socket_frames(&self.world);
-        let socket_palms = std::array::from_fn(|i| {
-            crate::virtual_hand::hand_world_position(
-                player_pos,
-                player_rot,
-                self.body_hand_contacts[i].unwrap_or(
-                    [
-                        input_context.left_hand.position,
-                        input_context.right_hand.position,
-                    ][i],
-                ),
-            )
-        });
-        let implant_actions = self.implant_sockets.update(
-            &self.world,
-            &shoulder_input,
-            held,
-            socket_palms,
-            socket_frames,
-            game_options.presentation_mode == crate::PresentationMode::Vr
-                && !self.use_mode
-                && self.player_is_alive()
-                && self.player_controls_enabled,
-        );
         for (i, action) in implant_actions.iter().enumerate() {
             let hand = if i == 0 {
                 &mut shoulder_input.left_hand
             } else {
                 &mut shoulder_input.right_hand
             };
+            // Body storage may retain a consumed grip from a previous frame.
+            // Restore the UI-safe input for the socket that owns this interaction.
+            if self.implant_sockets.reserved[i] {
+                *hand = [&hands_input.left_hand, &hands_input.right_hand][i].clone();
+            }
             if self.implant_sockets.retained.keep_grip(i) {
                 hand.squeeze_value = 1.0;
             }
@@ -15270,13 +15284,14 @@ impl MissionCore {
                         continue;
                     }
                     let width = crate::hud::virtual_arms::IMPLANT_SLOT_WIDTH;
-                    let scale = width * 0.62 / longest;
+                    // Fit the bounding sphere so oblique views leave the charge bar clear.
+                    let scale = width * 0.56 / extent.magnitude();
                     let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
                     let root = frame
                         * Matrix4::from_translation(vec3(
                             0.0,
-                            width * 0.08,
-                            width * 0.05 + extent.z * scale * 0.5,
+                            width * 0.13,
+                            width * 0.01 + extent.z * scale * 0.5,
                         ))
                         * Matrix4::from_scale(scale)
                         * Matrix4::from_translation(-center);

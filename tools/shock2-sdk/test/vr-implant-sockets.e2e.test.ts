@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GameServer, type Vec3 } from "../src/index.js";
-import { quatConjugate, quatRotate, sub, add } from "./helpers/vr-hand.js";
+import { GameServer, aimHandsAt, type Vec3 } from "../src/index.js";
+import { quatConjugate, quatRotate, quatMultiply, sub, add } from "./helpers/vr-hand.js";
 
 // Align the actual calibrated palm with the socket, keeping the receiving wrist fixed.
 async function reachSocket(game: GameServer, slot: number, hand: "left" | "right", squeeze: number) {
@@ -70,3 +70,53 @@ test(`physical wristband implant in slot ${slot} preserves identity, energy and 
 });
 
 }
+
+test("wrist implant retrieval takes priority over a stored shoulder weapon", {
+  skip: process.env.SHOCK2_E2E !== "1", timeout: 300_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  await game.input.set("left_hand.squeeze", 1);
+  const weapon = await game.player.spawnItem(-19, { hand: "left" });
+  await game.step({ frames: 5 });
+  let player = (await game.info()).player;
+  const shoulder = player.hand_feedback!.shoulder_backpack!.centers![0]!;
+  await game.input.set("left_hand.position", quatRotate(quatConjugate(player.rotation), sub(shoulder, player.position)));
+  await game.step({ frames: 5 });
+  await game.input.set("left_hand.squeeze", 0);
+  await game.step({ frames: 8 });
+  assert.deepEqual((await game.info()).player.hand_feedback?.body_gear?.shoulder_weapons, [weapon.entity_id, null]);
+  await game.input.set("left_hand.position", [-0.2, 0.2, -0.5]);
+  await game.step({ frames: 3 });
+  await game.input.set("left_hand.squeeze", 1);
+  const implant = await game.player.spawnItem(-101, { hand: "left" });
+  await game.step({ frames: 5 });
+  await reachSocket(game, 1, "left", 1);
+  await game.input.set("left_hand.squeeze", 0);
+  await game.step({ frames: 8 });
+  assert.equal((await game.info()).player.hand_feedback?.implant_sockets?.items[1], implant.entity_id);
+
+  // A rolled, raised right wrist puts the opposite palm inside the left shoulder zone.
+  player = (await game.info()).player;
+  const eye = add(player.position, [0, player.camera_offset[1], 0]);
+  await aimHandsAt(game, add(eye, [2, -0.4, 0]), { left: [-0.2, -0.15, -0.5], right: [0.18, -0.15, -0.35] });
+  const pose = (await game.input.state()).right_hand;
+  await game.input.set("right_hand.rotation", quatMultiply(quatMultiply(pose.rotation, [0, 0.5, 0, Math.sqrt(3) / 2]), [0, 0, -Math.SQRT1_2, Math.SQRT1_2]));
+  await game.step({ frames: 5 });
+  const center = (await game.info()).player.hand_feedback!.implant_sockets!.centers[1]!;
+  await game.input.lookAtWorldPoint(center);
+  await game.step({ frames: 3 });
+  await reachSocket(game, 1, "left", 0);
+  player = (await game.info()).player;
+  const palm = player.hand_feedback!.glove_contacts!.centers[0]!;
+  const backpack = player.hand_feedback!.shoulder_backpack!;
+  assert.ok(Math.hypot(...sub(palm, backpack.centers![0]!)) < backpack.radius, "fixture overlaps shoulder storage");
+  const strength = player.effective_stats!.strength;
+  await game.input.set("left_hand.squeeze", 1);
+  await game.step({ frames: 8 });
+  player = (await game.info()).player;
+  assert.equal(player.wielded_entity_id, implant.entity_id, "fresh grip retrieves the implant, not the weapon");
+  assert.deepEqual(player.hand_feedback?.implant_sockets?.items, [null, null]);
+  assert.deepEqual(player.hand_feedback?.body_gear?.shoulder_weapons, [weapon.entity_id, null]);
+  assert.equal(player.effective_stats!.strength, strength - 1);
+});

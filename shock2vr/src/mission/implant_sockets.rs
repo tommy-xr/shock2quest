@@ -17,6 +17,7 @@ pub(super) struct Sockets {
     pressed_item: [Option<EntityId>; 2],
     pub retained: RetainedRelease,
     pub near: [bool; 2],
+    pub reserved: [bool; 2],
 }
 
 impl Default for Sockets {
@@ -26,6 +27,7 @@ impl Default for Sockets {
             pressed_item: [None; 2],
             retained: Default::default(),
             near: [false; 2],
+            reserved: [false; 2],
         }
     }
 }
@@ -38,6 +40,7 @@ impl Sockets {
         held: [Option<EntityId>; 2],
         palms: [Vector3<f32>; 2],
         frames: [Option<Matrix4<f32>>; 2],
+        available: [bool; 2],
         enabled: bool,
     ) -> [Option<Action>; 2] {
         let hands = [&input.left_hand, &input.right_hand];
@@ -48,6 +51,7 @@ impl Sockets {
             let slot = 1 - i;
             let pressed = hands[i].squeeze_value > 0.5;
             let tracked = enabled
+                && available[i]
                 && input
                     .pose_tracking
                     .is_none_or(|p| p.head && p.hands[0] && p.hands[1])
@@ -62,6 +66,9 @@ impl Sockets {
                 && frames[slot].is_some_and(|frame| {
                     (palms[i] - frame.w.truncate()).magnitude2() < 0.09_f32.powi(2)
                 });
+            self.reserved[i] = self.near[i]
+                && (held[i].is_some_and(|id| crate::implants::kind(world, id).is_some())
+                    || (held[i].is_none() && occupants[slot].is_some()));
             if self.near[i] {
                 if let Some(entity) =
                     held[i].filter(|id| crate::implants::kind(world, *id).is_some())
@@ -172,6 +179,7 @@ mod tests {
             held,
             [vec3(0.0, 0.0, 0.0); 2],
             [Some(Matrix4::from_scale(1.0)); 2],
+            [true; 2],
             true,
         )
     }
