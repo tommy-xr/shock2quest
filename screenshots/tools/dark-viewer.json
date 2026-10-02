@@ -1,0 +1,10 @@
+{
+  "command": "cargo dv grunt_p.bin --scale 1.5 --debug-skeletons --debug-hitboxes --screenshot <output.png>",
+  "capture": "Native OpenGL framebuffer; cropped empty margins",
+  "crop": [
+    300,
+    300,
+    1200,
+    930
+  ]
+}

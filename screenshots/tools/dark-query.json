@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/Users/bryphe/code/shock2quest-vr/target/debug/dark_query",
+    "entities",
+    "medsci1.mis",
+    "--filter",
+    "*Door*",
+    "--limit",
+    "8"
+  ],
+  "displayedCommand": "cargo dq entities medsci1.mis --filter *Door* --limit 8",
+  "capture": "Actual PTY output rendered with pyte and Menlo; no desktop session required",
+  "exitCode": 0,
+  "columns": 156,
+  "rows": 28
+}

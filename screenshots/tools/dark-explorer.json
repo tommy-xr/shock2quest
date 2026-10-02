@@ -1,0 +1,5 @@
+{
+  "command": "cargo dx ui --select mesh/grunt_p.bin --model-lights warm --model-ambient 0.2 --screenshot <output.png>",
+  "capture": "Native egui framebuffer capture",
+  "runtimeSource": "Existing main-checkout dark_explorer binary; gallery demonstration only"
+}

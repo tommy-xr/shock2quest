@@ -1,0 +1,28 @@
+┌ Device dashboard · refreshes every 5s ───────────────────────────────────────────────────────────────────┐
+│ SHOCK2QUEST  /  Quest control center                                                                     │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Status ──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Connection / operation failed                                                                             │
+│                                                                                                          │
+│expected one authorized device, found 0; connect/unlock your headset or pass --serial (cargo dvr devices) │
+│                                                                                                          │
+│Check USB or wireless ADB and authorize the headset.                                                      │
+│Use cargo dvr devices to list all transports.                                                             │
+│                                                                                                          │
+│                                                                                                          │
+│                                                                                                          │
+│                                                                                                          │
+│                                                                                                          │
+│                                                                                                          │
+│                                                                                                          │
+│                                                                                                          │
+│                                                                                                          │
+│                                                                                                          │
+│                                                                                                          │
+│                                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Actions ─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│[m] mission  [l] launch  [s] stop  [f] files  [r] refresh  [q] quit                                       │
+│Build & install: cargo dvr deploy   |   Build & run: cargo dvr run                                        │
+│More: cargo dvr --help   |   Unset mission boots main_menu                                                │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘

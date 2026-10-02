@@ -24,7 +24,7 @@ Once installed, copy `sshock2.kpf` and the `mods/` folder from it - see [DEVELOP
 
 Download the signed Quest APK from the [latest release](https://github.com/tommy-xr/shock2quest/releases/latest),
 then follow the [installation instructions](INSTALL.md) to sideload it and copy
-your 25 AE Rgame files.
+your remaster game files.
 
 ### Controls
 
@@ -105,6 +105,8 @@ See [DEVELOPMENT.md](DEVELOPMENT.md)
 The project includes convenient cargo aliases:
 - `cargo dr` - Run desktop runtime (shorthand for `cargo run -p desktop_runtime --`)
 - `cargo dvr` - Open the Quest device dashboard ([commands](tools/dark_vr_tool/README.md))
+- `cargo dx` - Open the asset explorer, including model previews, archetypes, audio, and VR pose editing (`cargo dx ui`)
+- `cargo bn` - Run pathfinding benchmarks and inspect navigation data
 - `cargo dq` - Run dark_query CLI tool (shorthand for `cargo run -p dark_query --`)
 - `cargo dv` - Run dark_viewer tool (shorthand for `cargo run -p dark_viewer --`)
 - `cargo dbgr` - Run the HTTP-controlled debug runtime (used for automation/testing; see `tools/shock2-sdk` for the TypeScript SDK that drives it)
@@ -112,9 +114,25 @@ The project includes convenient cargo aliases:
 Example usage:
 ```bash
 cargo dr --vr --experimental physical_held_items  # Run desktop with physical held items
+cargo dx ui --archetype Rumbler  # Browse an archetype and its model
 cargo dq entities earth.mis --limit 5  # Query entities in mission
 cargo dv grunt_p.bin  # View model file
 ```
+
+### Development tools
+
+| Tool | Purpose | Example |
+| --- | --- | --- |
+| `cargo dx` | Browse assets and archetypes; preview models, animations, and audio; author VR grips and belt-card poses | `cargo dx ui --archetype Rumbler` |
+| `cargo dv` | Inspect a model, its skeleton, hitboxes, or articulated parts | `cargo dv grunt_p.bin --debug-skeletons` |
+| `cargo dvr` | Inspect an attached Quest, deploy builds, and collect device diagnostics | `cargo dvr` |
+| `cargo dq` | Query mission entities, template inheritance, motions, and speech | `cargo dq entities earth.mis --limit 5` |
+| `cargo bn` | Inspect and benchmark navigation data | `cargo bn path stats medsci1.mis` |
+| `cargo dbgr` | Drive the game over HTTP for deterministic testing and captures | `cargo dbgr --mission medsci1.mis` |
+
+<img src="screenshots/tools/dark-explorer.png" alt="Asset explorer: model preview and asset browser" width="400"/> <img src="screenshots/tools/dark-viewer.png" alt="Model viewer" width="400"/>
+<img src="screenshots/tools/dark-vr-tool.png" alt="Quest device dashboard, with no headset connected" width="400"/> <img src="screenshots/tools/dark-query.png" alt="Entity query results" width="400"/>
+<img src="screenshots/tools/bench.png" alt="Navigation data inspection" width="400"/> <img src="screenshots/tools/debug-runtime.png" alt="HTTP-controlled debug runtime" width="400"/>
 
 ## Roadmap
 
