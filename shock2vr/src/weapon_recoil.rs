@@ -297,8 +297,8 @@ fn recovery_rate(return_rate: f32, limit: f32) -> f32 {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-struct Spring {
-    position: f32,
+pub(crate) struct Spring {
+    pub(crate) position: f32,
     velocity: f32,
 }
 
@@ -310,7 +310,7 @@ impl Spring {
         let peak = ((-4.0 * peak_time).exp() - (-10.0 * peak_time).exp()) / 6.0;
         self.velocity += amount * rate / peak;
     }
-    fn step_toward(&mut self, dt: f32, target: f32) {
+    pub(crate) fn step_toward(&mut self, dt: f32, target: f32) {
         if dt <= 0.0 || !dt.is_finite() {
             return;
         }

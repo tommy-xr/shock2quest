@@ -5904,6 +5904,12 @@ impl MissionCore {
             self.interaction.held_entities(),
             time.elapsed.as_secs_f32(),
         ));
+        effects.extend(crate::vr_psi_sway::advance(
+            &mut self.world,
+            self.interaction.held_entities(),
+            hands_input,
+            time.elapsed.as_secs_f32(),
+        ));
         let mut interaction_msgs = self.interaction.update(&InteractionContext {
             physics: &self.physics,
             world: &self.world,
@@ -11921,6 +11927,8 @@ impl MissionCore {
                         self.world
                             .remove::<crate::vr_weapon_action::WeaponAction>(entity_id);
                         self.world
+                            .remove::<crate::vr_psi_sway::CableSway>(entity_id);
+                        self.world
                             .remove::<crate::runtime_props::RuntimePropObjectArticulation>(
                                 entity_id,
                             );
@@ -11952,6 +11960,7 @@ impl MissionCore {
                         crate::runtime_props::RuntimePropObjectArticulation,
                         crate::vr_shotgun_pump::PumpMotion,
                         crate::vr_weapon_action::WeaponAction,
+                        crate::vr_psi_sway::CableSway,
                         crate::weapon_muzzle::MuzzleFallback,
                         crate::runtime_props::RuntimePropGloveWeapon,
                     )>(entity_id);
@@ -20496,6 +20505,7 @@ impl crate::game_scene::GameScene for MissionCore {
 
     fn cancel_transient_input(&mut self) {
         self.dismiss_amp_carousel();
+        crate::vr_psi_sway::suspend(&self.world);
     }
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
