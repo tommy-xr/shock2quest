@@ -17,6 +17,10 @@ impl Script for Implant {
         message: &MessagePayload,
     ) -> Effect {
         match message {
+            MessagePayload::EquipImplant { slot } => Effect::EquipImplant {
+                entity_id: id,
+                slot: *slot,
+            },
             MessagePayload::Frob => Effect::ToggleImplant { entity_id: id },
             MessagePayload::Drop => {
                 self.elapsed = 0.0;

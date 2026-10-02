@@ -260,6 +260,9 @@ pub enum MessagePayload {
         amount: f32,
     },
     Frob,
+    EquipImplant {
+        slot: u8,
+    },
 
     /// This entity's MFD panel was opened. Frobbing used to be the only way in,
     /// so panels reset their per-open state on `Frob`; the audio-log reader is

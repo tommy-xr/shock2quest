@@ -100,6 +100,20 @@ pub fn toggle_slot(world: &World, entity: EntityId) -> Result<Option<u8>, &'stat
         .ok_or("Remove an implant before equipping another.")
 }
 
+/// Validate a physical socket while preserving the ordinary equip rules.
+pub fn validate_socket(world: &World, entity: EntityId, slot: usize) -> Result<(), &'static str> {
+    if slot >= capacity(world) {
+        return Err("Cybernetically Enhanced unlocks the second socket.");
+    }
+    if toggle_slot(world, entity)?.is_none() {
+        return Err("Remove this implant before moving it.");
+    }
+    if equipped(world)[slot].is_some() {
+        return Err("Remove the implant in this socket first.");
+    }
+    Ok(())
+}
+
 pub fn effective_stats(world: &World) -> Option<PlayerStats> {
     let mut stats = world
         .borrow::<UniqueView<QuestInfo>>()

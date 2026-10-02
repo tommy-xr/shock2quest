@@ -443,6 +443,22 @@ The full psi MFD is still available inside the cyber interface, with its existin
 pointer controls and thumbstick navigation. Its readout resolves the target amp's
 selection rather than a shared setting.
 
+### VR implant sockets
+
+The existing powered implant system has physical sockets just behind each wrist.
+Release a held implant at the **opposite forearm** to install it; squeeze there
+with an empty hand to remove the original item. The left socket is available
+from the start. **Cybernetically Enhanced** unlocks the right socket. Full,
+locked, duplicate-type, unresearched, and unpowered inserts are refused.
+
+Installed implants retain their backpack cells, energy, and script timers, so
+the existing inventory controls, recharge stations, saves, and deck transitions
+continue to apply. Inserting also requires backpack room; a refused release
+keeps the implant in hand until you squeeze again. Socket rails turn red for a
+refusal and amber for an installed implant without power. Tracked poses are
+required for gestures; recovering tracking cannot manufacture a squeeze or
+release. Socket placement still needs a seated/standing comfort pass on a headset.
+
 ### Campaign difficulty
 
 New Game offers Easy, Normal (the default), Hard, and Impossible. Choose a level,

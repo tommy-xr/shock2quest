@@ -12,7 +12,7 @@ mod slide;
 
 use std::{cell::RefCell, collections::HashMap};
 
-use cgmath::{InnerSpace, One, Point3, Quaternion, Rotation, Vector3, Vector4};
+use cgmath::{InnerSpace, Matrix4, One, Point3, Quaternion, Rotation, Vector3, Vector4, vec3};
 use engine::{
     assets::asset_cache::AssetCache,
     scene::{SceneObject, light::SpotLight},
@@ -166,6 +166,11 @@ pub trait PlayerInteraction {
         _lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<SceneObject> {
         Vec::new()
+    }
+
+    /// Forearm sockets use the same calibrated, collision-resolved wrists as the HUD.
+    fn implant_socket_frames(&self) -> [Option<Matrix4<f32>>; 2] {
+        [None; 2]
     }
 
     /// Hand-mounted spotlights (`hand_spotlights` dev param).
@@ -891,6 +896,27 @@ impl VrInteraction {
 }
 
 impl PlayerInteraction for VrInteraction {
+    fn implant_socket_frames(&self) -> [Option<Matrix4<f32>>; 2] {
+        let mut glove = self.glove_renderer.borrow_mut();
+        let Some(Some(renderer)) = glove.as_mut() else {
+            return [None; 2];
+        };
+        let tracked = self.hand_poses();
+        std::array::from_fn(|i| {
+            let pose = self.visual_hands[i].unwrap_or(tracked[i]);
+            pose.is_tracked().then(|| {
+                Matrix4::from_translation(pose.position)
+                    * Matrix4::from(pose.rotation)
+                    * renderer.wrist_frame(if i == 0 {
+                        Handedness::Left
+                    } else {
+                        Handedness::Right
+                    })
+                    * Matrix4::from_translation(vec3(0.0, -0.105, 0.045))
+            })
+        })
+    }
+
     fn body_palm_positions(&self, input: &InputContext) -> [Option<Vector3<f32>>; 2] {
         let Some(rig) = &self.grip_kinematics else {
             return [None; 2];

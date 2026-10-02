@@ -792,6 +792,12 @@ export interface PlayerSnapshot {
       refused: [boolean, boolean];
       offers: [{reserve: number; template: number; rounds: number; stock: number} | null, {reserve: number; template: number; rounds: number; stock: number} | null];
     };
+    implant_sockets?: {
+      centers: [Vec3 | null, Vec3 | null];
+      enabled_slots: number;
+      items: [number | null, number | null];
+      near: [boolean, boolean];
+    };
     holsters?: {
       centers: [Vec3, Vec3] | null;
       radius: number;
