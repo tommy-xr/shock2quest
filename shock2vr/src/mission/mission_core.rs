@@ -397,12 +397,7 @@ fn rewrite_inventory_release(
     *effects = rewritten;
 }
 
-/// UI feedback for a backpack deposit the capacity check refused: retail's
-/// MISC.STR `InvFull` ("No room in inventory.") message. The port has no
-/// player-facing text facility yet (see the `SoftUseless`/`SoftUpgrade`
-/// handling above, which hits the same gap), so the text goes to the game
-/// log; the audible half is the same `repfail` UI chime other refused player
-/// actions already reuse (a replicator purchase without enough nanites).
+/// Retail's inventory-full announcement, emitted only on a refused attempt.
 fn backpack_full_feedback(entity_id: EntityId) -> Effect {
     game_log!(
         INFO,
@@ -412,8 +407,24 @@ fn backpack_full_feedback(entity_id: EntityId) -> Effect {
     Effect::PlaySound {
         handle: AudioHandle::new(),
         source: None,
-        name: "repfail".to_owned(),
+        name: "bb11".to_owned(),
         spatial: false,
+    }
+}
+
+/// Decide before ownership changes (or a merge destroys the incoming item).
+/// Acquiring world/container loot is a pickup; storing something the player
+/// already carries is a placement. Debug grants and load restoration bypass
+/// this feedback and keep the low-level containment helpers silent.
+fn inventory_transfer_sound(world: &World, item: EntityId) -> &'static str {
+    if crate::scripts::script_util::player_carried_items(world).contains(&item)
+        || world
+            .borrow::<View<crate::runtime_props::RuntimePropHolstered>>()
+            .is_ok_and(|holstered| holstered.get(item).is_ok())
+    {
+        "place_item"
+    } else {
+        "pickup_item"
     }
 }
 
@@ -5532,7 +5543,7 @@ impl MissionCore {
             .advance_downloads(time.elapsed.as_secs_f32());
         self.personal_card.load_pose(asset_cache);
         self.personal_card.device_mode = device_enabled;
-        self.personal_card.update(
+        let returned_to_belt = self.personal_card.update(
             &body_input,
             self.holsters.body_pose,
             [crate::Handedness::Left, crate::Handedness::Right].map(|hand| {
@@ -5546,6 +5557,15 @@ impl MissionCore {
                 && self.player_is_alive()
                 && self.player_controls_enabled,
         );
+        if returned_to_belt {
+            effects.push(crate::scripts::script_util::announce(
+                self.world
+                    .borrow::<UniqueView<PlayerInfo>>()
+                    .unwrap()
+                    .entity_id,
+                "place_item",
+            ));
+        }
         self.personal_card
             .sample_hand(hands_input, player_pos, player_rot);
         self.interaction
@@ -5747,15 +5767,12 @@ impl MissionCore {
                         "Backpack full — item kept in hand. Squeeze to re-grip.".to_owned()
                     },
                 });
-                if !held[i].is_some_and(|entity| {
-                    crate::scripts::script_util::is_download_pickup(&self.world, entity)
-                }) {
-                    effects.push(Effect::PlaySound {
-                        handle: AudioHandle::new(),
-                        name: if accepted { "bset" } else { "repfail" }.to_owned(),
-                        source: held[i],
-                        spatial: false,
-                    });
+                if !accepted
+                    && !held[i].is_some_and(|entity| {
+                        crate::scripts::script_util::is_download_pickup(&self.world, entity)
+                    })
+                {
+                    effects.push(backpack_full_feedback(held[i].unwrap()));
                 }
                 tracing::info!(hand = i, entity = ?held[i], accepted, "shoulder backpack release");
             }
@@ -5772,12 +5789,14 @@ impl MissionCore {
                     }
                     .to_owned(),
                 });
-                effects.push(Effect::PlaySound {
-                    handle: AudioHandle::new(),
-                    name: if refused { "repfail" } else { "bset" }.to_owned(),
-                    source: held[i],
-                    spatial: false,
-                });
+                if !matches!(action, Action::Store { .. }) {
+                    effects.push(Effect::PlaySound {
+                        handle: AudioHandle::new(),
+                        name: if refused { "repfail" } else { "bset" }.to_owned(),
+                        source: held[i],
+                        spatial: false,
+                    });
+                }
                 if matches!(action, Action::Retrieve { .. }) {
                     let hand = if i == 0 {
                         &mut shoulder_input.left_hand
@@ -5894,7 +5913,13 @@ impl MissionCore {
         // and destroys it), so it is claimed either way.
         let mut store: Vec<(EntityId, Option<(usize, usize)>)> = store
             .into_iter()
-            .filter(|entity_id| backpack_accepts_deposit(&self.world, **entity_id))
+            .filter(|entity_id| {
+                let accepted = backpack_accepts_deposit(&self.world, **entity_id);
+                if !accepted {
+                    effects.push(backpack_full_feedback(**entity_id));
+                }
+                accepted
+            })
             .map(|entity_id| (*entity_id, cell_for(*entity_id)))
             .collect();
 
@@ -8431,9 +8456,8 @@ impl MissionCore {
     }
 
     /// Apply a cursor-is-the-item drag action from the `FlatUiHost` (§1.5/§2.4).
-    /// Lift/place/swap never reach here: a lifted item stays in the backpack
-    /// container (the host just hides it from the strip), so only committing
-    /// the drag touches the world. `Throw` detaches + launches; `Wield`
+    /// A lifted item stays in the backpack container (the host just hides it
+    /// from the strip), so `Place` only plays feedback. `Throw` detaches + launches; `Wield`
     /// produces the same effect a backpack click does (returned for the normal
     /// effect pipeline, which has `asset_cache` for the grab).
     fn apply_flat_drag_action(
@@ -8443,6 +8467,10 @@ impl MissionCore {
         use crate::mission::flat_ui_host::FlatUiDragAction;
         match action {
             FlatUiDragAction::ToggleMap => vec![Effect::ToggleMap],
+            FlatUiDragAction::Place(entity_id) => vec![crate::scripts::script_util::announce(
+                entity_id,
+                "place_item",
+            )],
             FlatUiDragAction::Throw(entity_id) => {
                 self.throw_entity_into_world(entity_id);
                 Vec::new()
@@ -11299,10 +11327,20 @@ impl MissionCore {
                     parent_entity_id,
                     dropped_entity_id,
                 } => {
-                    if self
+                    let player_inventory = self
+                        .world
+                        .borrow::<View<PlayerInventoryEntity>>()
+                        .is_ok_and(|inventories| inventories.get(parent_entity_id).is_ok());
+                    let sound = inventory_transfer_sound(&self.world, dropped_entity_id);
+                    let stored = self
                         .drop_entity_into_container(parent_entity_id, dropped_entity_id)
-                        .is_none()
-                    {
+                        .is_some();
+                    if stored && player_inventory {
+                        effects.push_front(crate::scripts::script_util::announce(
+                            parent_entity_id,
+                            sound,
+                        ));
+                    } else if !stored && player_inventory {
                         effects.push_front(backpack_full_feedback(dropped_entity_id));
                     }
                 }
@@ -11341,7 +11379,18 @@ impl MissionCore {
                     hand,
                     current_parent_id: _,
                 } => {
+                    // VR panel grabs do not emit HoldItem. Keep their pickup
+                    // cue here so internal ammo cycling/splitting stays silent.
+                    let pickup = game_options.presentation_mode == crate::PresentationMode::Vr
+                        && !self.interaction.is_holding(entity_id)
+                        && inventory_transfer_sound(&self.world, entity_id) == "pickup_item";
                     effects.extend(self.grab_entity_into_hand(asset_cache, entity_id, hand));
+                    if pickup && self.interaction.is_holding(entity_id) {
+                        effects.push_back(crate::scripts::script_util::announce(
+                            entity_id,
+                            "pickup_item",
+                        ));
+                    }
                 }
                 Effect::SetObjectParameters {
                     entity_id,
@@ -16002,8 +16051,8 @@ impl MissionCore {
     /// Apply the effects produced by an interaction controller (the VR hands or
     /// the flat first-person controller). Shared so both presentations go
     /// through one path.
-    /// Returns any follow-up `Effect`s the batch produced (currently just UI
-    /// feedback for a refused backpack deposit) - the caller either has an
+    /// Returns follow-up `Effect`s, including successful pickup/placement and
+    /// refused-deposit feedback. The caller either has an
     /// in-flight `effects` deque to extend (inside `handle_effects`) or its
     /// own returned `Vec<Effect>` for the frame (`update`), and either way
     /// they still reach `handle_effects`'s `Effect::PlaySound` handler this
@@ -16087,6 +16136,12 @@ impl MissionCore {
                     );
                 }
                 VirtualHandEffect::HoldItem { entity_id } => {
+                    if inventory_transfer_sound(&self.world, entity_id) == "pickup_item" {
+                        deferred.push(crate::scripts::script_util::announce(
+                            entity_id,
+                            "pickup_item",
+                        ));
+                    }
                     self.thrown_items.cancel(entity_id);
                     self.thrown_items.publish(&self.world, &self.physics);
                     self.world
@@ -16163,12 +16218,17 @@ impl MissionCore {
                             PropHasRefs(false),
                         ),
                     );
+                    deferred.push(crate::scripts::script_util::announce(
+                        entity_id,
+                        "place_item",
+                    ));
                     self.script_world.dispatch(Message {
                         to: entity_id,
                         payload: MessagePayload::Drop,
                     });
                 }
                 VirtualHandEffect::StoreItem { entity_id } => {
+                    let sound = inventory_transfer_sound(&self.world, entity_id);
                     let inventory_entity = self
                         .world
                         .borrow::<UniqueView<PlayerInfo>>()
@@ -16178,7 +16238,12 @@ impl MissionCore {
                         self.drop_entity_into_container(inventory_entity, entity_id)
                             .is_some()
                     });
-                    if !stored {
+                    if stored {
+                        deferred.push(crate::scripts::script_util::announce(
+                            inventory_entity.unwrap(),
+                            sound,
+                        ));
+                    } else {
                         deferred.push(backpack_full_feedback(entity_id));
                         self.restore_refused_store_to_world(entity_id);
                     }
@@ -16192,7 +16257,12 @@ impl MissionCore {
                     let stored = inventory_entity.is_some_and(|inventory_entity| {
                         self.drop_entity_into_container_at_cell(inventory_entity, entity_id, cell)
                     });
-                    if !stored {
+                    if stored {
+                        deferred.push(crate::scripts::script_util::announce(
+                            inventory_entity.unwrap(),
+                            "place_item",
+                        ));
+                    } else {
                         deferred.push(backpack_full_feedback(entity_id));
                         self.restore_refused_store_to_world(entity_id);
                     }

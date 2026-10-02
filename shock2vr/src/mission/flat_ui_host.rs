@@ -77,16 +77,17 @@ const NAME_STRIP_FONT: &str = "mainfont.fon";
 /// A host-side action produced by the cursor-is-the-item drag (§1.5/§2.4),
 /// applied by `mission_core` because it touches physics/effects.
 ///
-/// Lift/place/swap are *not* here: a lifted item **stays in the backpack
+/// A lifted item **stays in the backpack
 /// container** (the host just hides it from the strip while it rides the
 /// cursor), so it is always reachable and serializes correctly on
-/// save/transition. Only committing the drag reaches the world: **Throw**
+/// save/transition. **Place** only requests audible feedback. **Throw**
 /// detaches it and gives it world presence with an impulse along the view ray;
 /// **Wield** equips/uses it (a double-click) via the same effect as a backpack
 /// click, acting on the still-contained item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlatUiDragAction {
     ToggleMap,
+    Place(EntityId),
     Throw(EntityId),
     Wield(EntityId),
     /// One of the AMMOFULL readout's controls was clicked (fire-mode setting,
@@ -1263,7 +1264,7 @@ impl FlatUiHost {
                     }
                     _ => self.cursor_item = None,
                 }
-                return (Vec::new(), Vec::new());
+                return (Vec::new(), vec![FlatUiDragAction::Place(held)]);
             }
             if over_panel || over_readout || pointer.bare_view == BareViewPress::Ignore {
                 // A click on an open MFD or either bottom strip keeps the held
@@ -3415,10 +3416,9 @@ mod tests {
     fn placing_over_the_strip_returns_the_item_and_clears_the_cursor() {
         let (world, mut host, wrench, _inv) = drag_world();
         press_edge(&mut host, &world, (23.5, 34.0)); // lift
-        // An empty strip cell (far from slot 0) places it back: cursor clears,
-        // no world action (the item never left the backpack).
+        // Placement clears the cursor and emits feedback; ownership stays put.
         let actions = press_edge(&mut host, &world, (400.0, 60.0));
-        assert!(actions.is_empty(), "placing emits no world action");
+        assert_eq!(actions, vec![FlatUiDragAction::Place(wrench)]);
         assert!(host.cursor_debug().is_none(), "placing clears the cursor");
         // The item is visible in the strip again.
         assert_eq!(host.strip_item_at(vec2(23.5, 34.0)), Some(wrench));
@@ -3451,9 +3451,9 @@ mod tests {
         press_edge(&mut host, &world, (23.5, 34.0)); // lift the Wrench
         // Drop onto slot 1 (Pistol): center (2 + 4 + 35 + 17.5, 34) = (58.5, 34).
         // Swapping is host-internal - the Pistol lifts onto the cursor, the
-        // Wrench returns to the grid; no world action.
+        // Wrench returns to the grid and earns placement feedback.
         let actions = press_edge(&mut host, &world, (58.5, 34.0));
-        assert!(actions.is_empty(), "swapping emits no world action");
+        assert_eq!(actions, vec![FlatUiDragAction::Place(wrench)]);
         let cursor = host
             .cursor_debug()
             .expect("the swapped-in Pistol is on the cursor");

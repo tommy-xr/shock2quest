@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
-import { aimVrHandAt, quatConjugate, quatRotate, sub } from "./helpers/vr-hand.js";
+import { setHandWorldPose } from "../src/vr-pose.js";
+import { add, aimVrHandAt, quatConjugate, quatRotate, sub } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 for (const hand of ["left", "right"] as const) {
@@ -40,9 +41,20 @@ for (const hand of ["left", "right"] as const) {
     await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
     await game.input.set(`${hand}_hand.squeeze`, 0);
     await game.step({ frames: 5 });
+    // Body slots use the calibrated palm, not the controller origin. Center
+    // that contact on the pouch so the nearby access card cannot win the grab.
+    const reached = (await game.info()).player;
+    const palm = reached.hand_feedback?.glove_contacts?.centers[i];
+    const pouchCenter = reached.hand_feedback?.ammo_pouch?.center;
+    assert.ok(palm && pouchCenter);
+    await setHandWorldPose(game, reached, hand, add(center, sub(pouchCenter, palm)), reached.rotation);
+    await game.step({ frames: 3 });
     assert.equal((await game.info()).player[owner], null, "reach alone must not draw");
+    const pickupsBefore = (await game.audio.recent()).sounds.filter(s => s.sample === "pickup").length;
     await game.input.set(`${hand}_hand.squeeze`, 1);
     await game.step({ frames: 8 });
+    assert.equal((await game.audio.recent()).sounds.filter(s => s.sample === "pickup").length, pickupsBefore,
+      "drawing owned reserve, including a split clip, must not add a world-pickup cue");
     const drawn = (await game.info()).player[owner];
     assert.ok(drawn !== null);
     if (hand === "left") assert.equal(drawn, reserve.entity_id, "one clip moves the exact reserve entity");

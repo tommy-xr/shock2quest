@@ -164,6 +164,7 @@ test(
       stillOpen?.elements.some((e) => e.entity_id === lootWrenchId),
       "the refused Wrench must still be listed in the loot panel",
     );
+    assert.equal((await game.audio.recent()).sounds.filter(s => s.sample === "bb11").length, 1);
   },
 );
 
@@ -305,6 +306,7 @@ test(
       (await game.physics.bodies({ entityId: clip!.id })).bodies.length > 0,
       "a refused strip release must fall back to the ordinary world drop",
     );
+    assert.equal((await game.audio.recent()).sounds.filter(s => s.sample === "bb11").length, 1);
   },
 );
 
