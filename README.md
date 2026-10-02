@@ -93,11 +93,11 @@ a deck, keep one hand attached while placing the other on the edge, then pull
 down or inward. To descend, crouch, grip near the ladder's top, pull yourself past
 the edge, and raise the held hand to lower your body. Release grip to let go.
 
-**Implants.** Bring a held implant to the slot on the pinky side of the opposite wristband and
+**Implants.** Bring a held implant to the trapezoidal socket on the pinky side of the opposite wristband and
 release grip to install it. Squeeze with the empty opposite hand to remove it.
 Either wrist can hold your first implant; the other locks while it is occupied.
-Cybernetically Enhanced allows both wrists at once. The implant sits on top of
-the slot, with a separate bar below the mount showing its remaining charge. Installed implants keep their backpack slot and need power to
+Cybernetically Enhanced allows both wrists at once. The implant seats inside
+the raised rim, with a separate bar below the housing showing its remaining charge. Installed implants keep their backpack slot and need power to
 supply their bonuses. Recharge them at a recharge station.
 
 Development builds carry additional debug keys and a Developer options screen -

@@ -15265,10 +15265,12 @@ impl MissionCore {
             }
             let socket_frames = self.interaction.implant_socket_frames(&self.world);
             if !self.use_mode {
-                scene.extend(
-                    self.implant_sockets
-                        .render(asset_cache, &self.world, socket_frames),
-                );
+                scene.extend(self.implant_sockets.render(
+                    asset_cache,
+                    &self.world,
+                    socket_frames,
+                    object_lights.as_ref(),
+                ));
                 // Mount the solid implant on the wristband surface, outside the UI well.
                 // It is the same carried entity, with no duplicate physics or ownership.
                 for (slot, entity) in crate::implants::equipped(&self.world)
@@ -15289,9 +15291,9 @@ impl MissionCore {
                         continue;
                     }
                     let width = crate::hud::virtual_arms::IMPLANT_SLOT_WIDTH;
-                    // Fill the mount's footprint; retain the model's real thickness.
-                    // The underside rests on the panel instead of centering the mesh in it.
-                    let scale = width * 0.82 / footprint;
+                    // Seat the underside in the bed, fitting the tapered cavity while
+                    // retaining the model's real thickness above the surrounding lip.
+                    let scale = width * crate::hud::implant_slot::model_scale(extent);
                     let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
                     let root = frame
                         * Matrix4::from_translation(vec3(

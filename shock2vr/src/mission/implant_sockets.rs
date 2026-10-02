@@ -18,6 +18,7 @@ pub(super) struct Sockets {
     pub retained: RetainedRelease,
     pub near: [bool; 2],
     pub reserved: [bool; 2],
+    housing: Option<Vec<engine::scene::SceneObject>>,
 }
 
 impl Default for Sockets {
@@ -28,6 +29,7 @@ impl Default for Sockets {
             retained: Default::default(),
             near: [false; 2],
             reserved: [false; 2],
+            housing: None,
         }
     }
 }
@@ -109,22 +111,36 @@ impl Sockets {
     }
 
     pub fn render(
-        &self,
+        &mut self,
         asset_cache: &mut engine::assets::asset_cache::AssetCache,
         world: &World,
         frames: [Option<Matrix4<f32>>; 2],
+        lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<engine::scene::SceneObject> {
-        use crate::hud::virtual_arms::{BIO_BAND_RADIUS, IMPLANT_SLOT_WIDTH};
+        use crate::hud::virtual_arms::IMPLANT_SLOT_WIDTH;
         let mut objects = Vec::new();
+        let housing = self
+            .housing
+            .get_or_insert_with(crate::hud::implant_slot::housing);
         for (slot, frame) in frames.into_iter().enumerate() {
             let Some(frame) = frame else {
                 continue;
             };
+            let lights = lighting.map(|lighting| lighting.at_player_position(frame.w.truncate()));
+            for mut part in housing.iter().cloned() {
+                part.set_transform(frame * Matrix4::from_scale(IMPLANT_SLOT_WIDTH));
+                part.set_lights(lights.clone());
+                objects.push(part);
+            }
             let canvas = crate::hud::implant_slot::canvas(world, slot);
-            objects.extend(canvas.render_world_space_bent(
+            // Empty-slot art lies on the flat bed. The charge strip remains below the housing.
+            objects.extend(canvas.render_world_space(
                 asset_cache,
-                frame * Matrix4::from_scale(IMPLANT_SLOT_WIDTH),
-                BIO_BAND_RADIUS / IMPLANT_SLOT_WIDTH,
+                frame
+                    * Matrix4::from_translation(cgmath::vec3(0.0, 0.0, 0.0003))
+                    * Matrix4::from_scale(IMPLANT_SLOT_WIDTH),
+                None,
+                None,
                 0.0003 / IMPLANT_SLOT_WIDTH,
             ));
         }
