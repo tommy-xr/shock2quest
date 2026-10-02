@@ -42,15 +42,12 @@ impl GlobalContactStims {
                     if options.propagator != StimPropagator::Contact {
                         continue;
                     }
-                    // A child archetype re-authoring the same stim replaces the
-                    // inherited intensity rather than stacking with it.
-                    match stims
-                        .iter_mut()
-                        .find(|(stim, _)| *stim == link.to_template_id)
-                    {
-                        Some(existing) => existing.1 = options.intensity,
-                        None => stims.push((link.to_template_id, options.intensity)),
-                    }
+                    // Each authored source link is a separate emission, even
+                    // when an ancestor emits the same stimulus. Pyro PSI 1
+                    // supplies 7 Incendiary; every child tier adds 2 more.
+                    // get_ancestors visits each donor once, so diamond
+                    // inheritance does not duplicate a source descriptor.
+                    stims.push((link.to_template_id, options.intensity));
                 }
             }
             if !stims.is_empty() {
@@ -476,6 +473,28 @@ mod tests {
         let stims = GlobalContactStims::from_entity_info(&entity_info);
 
         assert_eq!(stims.0.get(&LEAD_PIPE), Some(&vec![(WEAPON_BASH, 10.0)]));
+    }
+
+    #[test]
+    fn distinct_contact_sources_for_the_same_stim_are_preserved() {
+        // Pyro PSI 1 authors 7 Incendiary, then each child adds another 2.
+        // Source identity is the link, not its stimulus destination. Keep
+        // sources separate so flat/threshold reactions see each intensity.
+        let entity_info = entity_info_with_links(
+            LEAD_PIPE,
+            vec![
+                stim_source(WEAPON_BASH, 7.0, StimPropagator::Contact),
+                stim_source(WEAPON_BASH, 2.0, StimPropagator::Contact),
+                stim_source(WEAPON_BASH, 2.0, StimPropagator::Contact),
+            ],
+        );
+        let stims = GlobalContactStims::from_entity_info(&entity_info);
+        assert_eq!(
+            stims.0[&LEAD_PIPE],
+            vec![(WEAPON_BASH, 7.0), (WEAPON_BASH, 2.0), (WEAPON_BASH, 2.0)]
+        );
+        let (world, victim) = world_with_victim(stims, vec![(WEAPON_BASH, damage(0, 1.0))]);
+        assert_eq!(contact_stim_damage(&world, LEAD_PIPE, victim), 11.0);
     }
 
     fn world_with_victim(
