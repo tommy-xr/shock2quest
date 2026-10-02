@@ -711,15 +711,17 @@ impl PlayerLifeState {
     }
 }
 
-/// Apply a creature's authored `P$TimeWarp` to one animation tick: the clip
-/// clock runs `1 / warp` times as fast, and so does its root velocity (which the
-/// player reports per clip-second), so stride and ground speed stay matched.
-/// A missing or non-positive warp plays at the authored rate.
-fn time_warped(elapsed: Duration, warp: Option<f32>) -> (Duration, f32) {
-    match warp.filter(|warp| warp.is_finite() && *warp > 0.0) {
-        Some(warp) => (elapsed.div_f32(warp), 1.0 / warp),
-        None => (elapsed, 1.0),
-    }
+/// A creature's authored `P$TimeWarp`: the factor every motion's duration is
+/// scaled by (below 1.0 plays faster). Root-motion distance is unchanged, so
+/// ground speed scales by its inverse. Missing or invalid values play at the
+/// authored rate; the clamp keeps `Duration` arithmetic in range.
+fn creature_time_warp(world: &World, entity_id: EntityId) -> f32 {
+    world
+        .borrow::<View<dark::properties::PropTimeWarp>>()
+        .ok()
+        .and_then(|warps| warps.get(entity_id).ok().map(|warp| warp.0))
+        .filter(|warp| warp.is_finite() && *warp > 0.0)
+        .map_or(1.0, |warp| warp.clamp(0.1, 10.0))
 }
 
 /// Seed the death camera's fall direction from where the player died, so a
@@ -6912,11 +6914,13 @@ impl MissionCore {
                     };
                     let result = if let Some((_, delta, max_seconds)) = turn {
                         let options = global_context.motiondb.query_all(query.clone());
+                        // Budget the turn at the speed it will actually play.
+                        let warp = creature_time_warp(&self.world, entity_id);
                         let clips = options
                             .iter()
                             .map(|name| {
                                 let stuff = global_context.motiondb.get_motion_stuff(name.clone());
-                                (stuff.end_direction, stuff.duration)
+                                (stuff.end_direction, stuff.duration * warp)
                             })
                             .collect::<Vec<_>>();
                         dark::motion::nearest_turn_clip(delta, &clips, max_seconds)
@@ -7182,14 +7186,13 @@ impl MissionCore {
             // self.id_to_animation_player.entry(*id).and_modify(|player| {
             //     *player = AnimationPlayer::update(player, time.elapsed);
             // });
-            let warp = self
-                .world
-                .borrow::<View<dark::properties::PropTimeWarp>>()
-                .ok()
-                .and_then(|warps| warps.get(*id).ok().map(|warp| warp.0));
-            let (elapsed, velocity_scale) = time_warped(time.elapsed, warp);
-            let (new_player, flags, events, velocity) = AnimationPlayer::update(player, elapsed);
-            let velocity = velocity * velocity_scale;
+            // The clip clock (cross-fades included) runs `1 / warp` as fast, and so
+            // does the root velocity it reports per clip-second, keeping stride and
+            // speed matched.
+            let warp = creature_time_warp(&self.world, *id);
+            let (new_player, flags, events, velocity) =
+                AnimationPlayer::update(player, time.elapsed.div_f32(warp));
+            let velocity = velocity / warp;
             *player = new_player;
 
             // A pivot handing its yaw over rides the fade this player is
@@ -19058,30 +19061,39 @@ mod death_motion_tests {
 
 #[cfg(test)]
 mod time_warp_tests {
-    use super::time_warped;
-    use std::time::Duration;
+    use super::*;
+
+    fn warp_of(value: Option<f32>) -> f32 {
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        if let Some(value) = value {
+            world.add_component(entity, dark::properties::PropTimeWarp(value));
+        }
+        creature_time_warp(&world, entity)
+    }
 
     #[test]
-    fn warp_below_one_plays_faster_and_moves_faster() {
-        let (elapsed, scale) = time_warped(Duration::from_millis(100), Some(0.5));
-        assert_eq!(elapsed, Duration::from_millis(200));
-        assert_eq!(scale, 2.0);
+    fn authored_warp_is_used() {
+        assert_eq!(warp_of(Some(0.88)), 0.88);
     }
 
     #[test]
     fn missing_or_invalid_warp_plays_at_authored_rate() {
-        for warp in [
+        for value in [
             None,
             Some(0.0),
             Some(-1.0),
             Some(f32::NAN),
             Some(f32::INFINITY),
         ] {
-            assert_eq!(
-                time_warped(Duration::from_millis(100), warp),
-                (Duration::from_millis(100), 1.0)
-            );
+            assert_eq!(warp_of(value), 1.0);
         }
+    }
+
+    #[test]
+    fn extreme_warp_is_clamped_into_duration_range() {
+        assert_eq!(warp_of(Some(1e-30)), 0.1);
+        assert_eq!(warp_of(Some(1e30)), 10.0);
     }
 }
 
