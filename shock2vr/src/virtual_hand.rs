@@ -69,6 +69,10 @@ pub struct VirtualHand {
 
 #[derive(Debug)]
 pub enum VirtualHandEffect {
+    MoveSlide {
+        entity_id: EntityId,
+        fraction: f32,
+    },
     MovePump {
         entity_id: EntityId,
         motion: crate::vr_support::SupportMotion,

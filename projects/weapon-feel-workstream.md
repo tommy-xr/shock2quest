@@ -1041,3 +1041,26 @@ Open issues:
 - Only the angular kick is ridden. The backward travel does not move the shot,
   which is correct (it does not change where the barrel points) but means
   shotgun-style heavy kickback contributes nothing to drift.
+
+### Manual VR pistol slide
+
+With the Nightdive pistol held in either hand, squeeze the free hand over the
+rear/top of the slide, then pull backward. This contact uses the authored slide
+rail and never steers the receiver. The ordinary pistol support grip remains a
+separate contact. Releasing the slide springs it forward; an empty pistol keeps
+its existing open lock, and the existing reload releases that lock.
+
+This first increment is cosmetic: pulling the slide does not spend ammunition,
+eject a live round, or add a chambering requirement. Those gameplay transitions
+belong in a subsequent increment after checking the reach and feel on Quest.
+Tracking loss, leaving the rail, or disabling interaction breaks the contact;
+recovery requires a new squeeze. Moving both hands together preserves the pull.
+The slide hand owns no item and cannot inherit the pistol when its owner lets go.
+
+The shared `PISTOL_SLIDE_MOTION` defines travel for both the mesh and contact.
+`interaction/slide.rs` defines the rear/top contact and glove pose. Runtime
+`hand_grips[].slide` diagnostics expose the contact, actual visible glove,
+attachment and fraction. The SDK manual-slide scenario tests either hand and
+physical held items, including single-frame glove/joint agreement, ownership,
+normal support, spring return, empty lock and reload. Headset feel still needs a
+connected Quest; deterministic harness results establish geometry and behavior.
