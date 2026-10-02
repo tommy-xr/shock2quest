@@ -74,6 +74,10 @@ inventory strip and bringing it to the gun. Inserting another ammo type returns
 the loaded rounds to your backpack. In the amp's power selector, use that hand's
 stick up/down for tiers and left/right for purchased powers; confirm with its
 upper button or trigger. Each amp remembers its current and alternate powers.
+Enable **Developer options → Weapons → Free-hand psi pull** to aim your empty
+hand at a loose item and pull its trigger while holding an amp in the other hand.
+This requires trained Kinetic Redirection and spends its normal psi cost, without
+changing the amp's selected power. Grip the arriving item to catch it.
 
 **Inventory and equipment.** Grip an inventory item, point at its destination,
 and release. The preview is green when it fits or merges, amber for automatic
