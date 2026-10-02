@@ -1253,9 +1253,12 @@ fn plan_climb_top_out(
     let direction = direction_h / direction_norm;
     let head_offset = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
     let head = pos.translation.vector + Vector::y() * head_offset;
+    // Unbounded, not the 3.5 ft probe: a mantle over a lip found below can
+    // cross higher than the probe reaches, and that height must still clear
+    // the ceiling over the climber (rick1 Ladder 488 climbed standing).
     let up_ray = Ray::new(Point::from(head), Vector::y());
     let up_obstruction = probe_queries
-        .cast_ray(&up_ray, CLIMB_TOP_OUT_UP, true)
+        .cast_ray(&up_ray, Real::MAX, true)
         .map(|(_, time_of_impact)| (time_of_impact, head.y + time_of_impact));
     // Short-circuit: a ceiling close enough to pin the compressed head sphere
     // leaves no room to rise at all.
@@ -10317,6 +10320,15 @@ mod tests {
     /// Plan the standard rejection-test mantle: from the origin, facing +X,
     /// with the scripted casts seeing only parented (entity) colliders.
     fn plan_top_out_from_origin(world: &PhysicsWorld) -> Option<PlayerMovement> {
+        plan_top_out_from_origin_clearing(world, CLIMB_TOP_OUT_PROBE_FORWARD)
+    }
+
+    /// As [`plan_top_out_from_origin`], for a ladder column that ends
+    /// `minimum_clear_forward` ahead.
+    fn plan_top_out_from_origin_clearing(
+        world: &PhysicsWorld,
+        minimum_clear_forward: Real,
+    ) -> Option<PlayerMovement> {
         let validation_queries = query_pipeline(world, QueryFilter::default());
         let parented_only = QueryFilter::default()
             .predicate(&|_handle: ColliderHandle, collider: &Collider| collider.parent().is_some());
@@ -10328,7 +10340,7 @@ mod tests {
             &scripted_queries,
             &Isometry::translation(0.0, 0.0, 0.0),
             Vector::x(),
-            CLIMB_TOP_OUT_PROBE_FORWARD,
+            minimum_clear_forward,
             1.0 / 60.0,
         )
     }
@@ -11346,6 +11358,31 @@ mod tests {
                 "{waypoint:?} rises above {headroom}"
             );
         }
+    }
+
+    #[test]
+    fn climb_top_out_cannot_cross_to_a_lip_whose_mantle_height_is_in_the_ceiling() {
+        // rick1 Ladder 488 climbed standing, relative to the climber (body at
+        // the origin, head 0.72 up, facing +x): a wall-conduit top 1.34 above
+        // the head just ahead, the wall behind the ladder at x 1.2, and the
+        // slab ceiling over the climber's side 2.32 above the head - beyond
+        // the 3.5 ft probe, but under the height a mantle over that conduit
+        // needs. The ladder column ends 1.26 ahead, past the wall face.
+        let mut world = PhysicsWorld::new();
+        slab(&mut world, 1, [-2.0, 3.04, -2.0], [1.2, 3.06, 2.0]);
+        slab(&mut world, 2, [0.8, -2.0, -2.0], [1.1, 2.06, 2.0]);
+        slab(&mut world, 3, [1.2, -2.0, -2.0], [1.22, 3.04, 2.0]);
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(9).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let movement = plan_top_out_from_origin_clearing(&world, 1.26);
+
+        assert!(
+            movement.is_none(),
+            "a top-out must not cross at a height whose head sphere is in the ceiling; planned {:?}",
+            movement.and_then(|m| m.top_out).map(|t| t.waypoints)
+        );
     }
 
     #[test]

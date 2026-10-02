@@ -295,6 +295,36 @@ test(
 );
 
 test(
+  "debug_ladder setback ladder: a standing climber holding forward stays under the slab and in the pit",
+  // rick1 Ladder 488 climbed standing. The standing crown must stop under the
+  // 7.6 slab (body y <= 6.4) however long forward is held, and the body must
+  // never pass the wall behind the ladder (d < 0 is outside the level).
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async () => {
+    await using game = await launch();
+    await startTrail(game);
+    const run = new Run(game, SETBACK);
+    await place(game, SETBACK, 1.2, 1.25);
+    await game.input.lookAtWorldPoint(at(SETBACK, 1.2 - 10.7, 11.1));
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await run.frames(300);
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await run.frames(30);
+
+    await shootTrail(game, "setback-standing");
+    const highest = Math.max(...run.trace.map((p) => p.y));
+    const minD = Math.min(...run.trace.map((p) => p.x - STATION_FACE_X));
+    assert.ok(highest > 6.0, `setback standing: never climbed (highest y ${highest.toFixed(3)})`);
+    assert.ok(
+      highest + STANDING_HALF_HEIGHT <= 7.6 + 0.01,
+      `setback standing: crown must stay under the 7.6 slab (highest y ${highest.toFixed(3)})`,
+    );
+    assert.ok(minD > 0, `setback standing: body passed the wall behind the ladder (d ${minD.toFixed(3)})`);
+    run.assertStayedInside();
+  },
+);
+
+test(
   "debug_ladder deck-hole ladder: a crouched climber steps sideways off the top onto the deck",
   // rick1 Ladder 499, climbed crouched from the y34 room. Straight ahead, the
   // ladder column (up to 40.28, above the crouched body's feet on the deck)
