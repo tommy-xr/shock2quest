@@ -8,7 +8,7 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::{dev_params, mission::PlayerInfo, time::Time};
 
 /// Glow left at a sliver of charge, so "low" still reads as "on".
-const FLOOR: f32 = 0.1;
+const FLOOR: f32 = 0.25;
 /// Below this fraction the glow stutters, warning of an imminent empty.
 const LOW: f32 = 0.15;
 
@@ -38,7 +38,7 @@ fn glow(fraction: f32, secs: f32) -> f32 {
     // Two incommensurate sines give an irregular, deterministic stutter.
     let dropout = (secs * 23.0).sin() + (secs * 9.1).sin() > 1.2;
     if fraction < LOW && dropout {
-        level * 0.3
+        0.0
     } else {
         level
     }
