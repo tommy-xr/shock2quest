@@ -7,6 +7,7 @@ test("Cybernetically Enhanced unlocks two distinct powered implants through save
   skip: process.env.SHOCK2_E2E !== "1", timeout: 300_000,
 }, async () => {
   await using game = await GameServer.launch({ mission: "medsci2.mis" });
+  const start = (await game.info()).player.position;
   const brawn = (await game.player.spawnItem(-101)).entity_id;
   const endurance = (await game.player.spawnItem(-102)).entity_id;
   const duplicate = (await game.player.spawnItem(-101)).entity_id;
@@ -27,6 +28,8 @@ test("Cybernetically Enhanced unlocks two distinct powered implants through save
   await use(duplicate);
   assert.equal(await prop(duplicate, "ImplantSlot"), undefined, "two copies cannot stack even with an empty socket");
   await use(endurance);
+  // Wait in the starting room; the trait machine is exposed to patrolling enemies.
+  await game.player.teleport({ x: start[0], y: start[1], z: start[2] });
   const beforeEnergy = Number(await prop(endurance, "Energy"));
   await game.step({ frames: 600 });
   assert.equal(Number(await prop(endurance, "Energy")), beforeEnergy - 1);
