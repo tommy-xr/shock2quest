@@ -11271,9 +11271,9 @@ impl MissionCore {
                         }
                     }
                     // Articulation effects are applied after the update's physics
-                    // sync. Seat attached gloves on this frame's final joint pose.
+                    // sync. Refresh moving-part contacts without resampling support.
                     if self.interaction.holding_hand(entity_id).is_some() {
-                        self.interaction.synchronize_held_visuals(&self.world);
+                        self.interaction.synchronize_held_articulation(&self.world);
                     }
                 }
                 Effect::SetJointTransform {

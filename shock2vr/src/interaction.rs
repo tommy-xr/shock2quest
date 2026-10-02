@@ -82,6 +82,9 @@ pub trait PlayerInteraction {
     /// Refresh glove attachment from the collision-resolved item transform.
     fn synchronize_held_visuals(&mut self, _world: &World) {}
 
+    /// Refresh contacts on moving parts after their deferred joint poses apply.
+    fn synchronize_held_articulation(&mut self, _world: &World) {}
+
     fn hand_feedback_diagnostics(&self) -> serde_json::Value {
         serde_json::Value::Null
     }
@@ -1340,6 +1343,10 @@ impl PlayerInteraction for VrInteraction {
                     .slerp(candidate.hand_pose.rotation, support.blend),
             });
         }
+    }
+
+    fn synchronize_held_articulation(&mut self, world: &World) {
+        self.synchronize_slide(world);
     }
 
     fn hand_feedback_diagnostics(&self) -> serde_json::Value {
