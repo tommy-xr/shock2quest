@@ -457,9 +457,9 @@ fn player_character_controller() -> KinematicCharacterController {
 /// collider and the rungs, so the un-inflated shapes never intersect.
 const CLIMB_REACH: f32 = 1.0 / SCALE_FACTOR;
 
-/// Climb speed as a fraction of walk speed (the into-ladder input component is
-/// redirected to vertical movement at this scale).
-const CLIMB_SPEED_SCALE: f32 = 0.6;
+/// Climb speed as a fraction of walk speed: the original's climbing mode
+/// scales translation by half.
+const CLIMB_SPEED_SCALE: f32 = 0.5;
 
 /// How much of the desired horizontal movement must point INTO the climbable
 /// surface before the player grips it: 0.5 is a 60 degree cone around the
@@ -508,8 +508,8 @@ const CLIMB_TOP_OUT_COLUMN_LOOKAHEAD: f32 =
 /// runtime advances at a fixed 60 Hz.
 const CLIMB_TOP_OUT_SUBSTEP: f32 = 10.0 / SCALE_FACTOR / 60.0;
 
-/// Half-Life-style flat ladder movement: convert the into-ladder component of
-/// the desired movement into a vertical climb. `toward_ladder` is the
+/// Half-Life-style flat ladder movement: convert the forward push of the
+/// desired movement into a vertical climb. `toward_ladder` is the
 /// horizontal unit normal from the player toward the gripped face (the contact
 /// normal when the grip is taken, kept while it is held). Looking down (a
 /// downward-pitched desired movement) descends instead of ascending, so the
@@ -538,6 +538,11 @@ const CLIMB_TOP_OUT_SUBSTEP: f32 = 10.0 / SCALE_FACTOR / 60.0;
 /// unclimbable slope and cancels the ascent when the player also pushes into
 /// it. The vertical component of `desired` (head pitch / debug fly channel)
 /// only picks the direction.
+///
+/// The climb rate is the length of the push that does not slide, so it
+/// follows the stick alone, whatever the pitch or heading. Deliberate
+/// deviation: the original climbs at the vertical part of the pitched push
+/// (sin of the pitch), so looking level holds and looking up climbs fastest.
 fn climb_redirect(
     desired: Vector<Real>,
     facing: Vector<Real>,
@@ -549,29 +554,44 @@ fn climb_redirect(
     let into = desired_h.dot(&toward_ladder);
     let pushing_in = speed > 1e-6 && into >= MIN_CLIMB_GRIP_FRACTION * speed;
     // Split the input at the player's facing: a strafe is never a push away,
-    // however far the heading is off the face normal.
-    let (push, strafe) = vector![facing.x, 0.0, facing.z]
+    // however far the heading is off the face normal. `unpitch` undoes the
+    // pitch's shortening of the forward push (1 / cos pitch).
+    let (push, strafe, unpitch) = facing
         .try_normalize(1.0e-6)
-        .map_or((desired_h, Vector::zeros()), |forward| {
-            let push = forward * desired_h.dot(&forward);
-            (push, desired_h - push)
-        });
+        .and_then(|facing| {
+            let level = vector![facing.x, 0.0, facing.z];
+            let cos_pitch = level.norm();
+            level.try_normalize(1.0e-6).map(|forward| {
+                let push = forward * desired_h.dot(&forward);
+                (push, desired_h - push, 1.0 / cos_pitch)
+            })
+        })
+        .unwrap_or((desired_h, Vector::zeros(), 1.0));
     let pushing_away = speed > 1e-6 && push.dot(&toward_ladder) <= -MIN_CLIMB_GRIP_FRACTION * speed;
     if !pushing_in && !(held && !pushing_away) {
         return None;
     }
-    let vertical = if !pushing_in {
-        0.0
-    } else if desired.y < -0.25 * into {
-        -into
-    } else {
-        into
-    };
     // Pushing in, only the strafe slides (#596). A held push that is neither
     // in nor away is aimed along the face, so all of it slides.
     let slide = if pushing_in { strafe } else { desired_h };
     let along = vector![-toward_ladder.z, 0.0, toward_ladder.x];
-    Some((Vector::y() * vertical + along * slide.dot(&along)) * CLIMB_SPEED_SCALE)
+    let slide = along * slide.dot(&along);
+    // Whatever of the stick does not slide climbs. Built from the horizontal
+    // input, so the fly channel's vertical never adds speed; capped at the
+    // input's length, so `unpitch` cannot amplify carried jump momentum.
+    let stick = (push * unpitch + strafe).norm_squared();
+    let rate = (stick - slide.norm_squared())
+        .max(0.0)
+        .sqrt()
+        .min(desired.norm());
+    let vertical = if !pushing_in {
+        0.0
+    } else if desired.y < -0.25 * into {
+        -rate
+    } else {
+        rate
+    };
+    Some((Vector::y() * vertical + slide) * CLIMB_SPEED_SCALE)
 }
 
 /// The walk input for a frame the ladder pass may hand to the walk pass. For
@@ -6957,7 +6977,7 @@ impl PhysicsWorld {
                 // and take the contact's *face normal* as the climb direction.
                 // (The collider-center direction is wrong when the player is
                 // off-center: it tilts away from the face, which under-reads
-                // the into-ladder push the grip test and climb speed use.)
+                // the into-ladder push the grip test uses.)
                 let mut nearest: Option<(f32, Vector<Real>, &Collider)> = None;
                 for (_handle, collider) in queries.intersect_shape(character_pos, &inflated) {
                     let contact = rapier3d::parry::query::contact(
@@ -11318,6 +11338,67 @@ mod tests {
         assert!(climb.y < 0.0, "expected downward redirect, got {climb:?}");
     }
 
+    /// Climb speed comes from the stick's length, less any slide: looking up, level or
+    /// down, straight at the face or 30 degrees off it, the same stick climbs
+    /// at the same rate. Pitch only picks up (level/up) or down.
+    #[test]
+    fn climb_redirect_speed_is_independent_of_pitch_and_heading() {
+        let toward = vector![1.0, 0.0, 0.0];
+        let step = 0.1;
+        for (pitch_deg, heading_deg, up) in [
+            (0.0f32, 0.0f32, true),
+            (45.0, 0.0, true),
+            (-45.0, 0.0, false),
+            (0.0, 30.0, true),
+            (45.0, 30.0, true),
+            (-45.0, 30.0, false),
+        ] {
+            let (p, h) = (pitch_deg.to_radians(), heading_deg.to_radians());
+            let facing = vector![p.cos() * h.cos(), p.sin(), p.cos() * h.sin()];
+            let climb = climb_redirect(facing * step, facing, toward, false).expect("grips");
+            assert!(
+                (climb.y.abs() - step * CLIMB_SPEED_SCALE).abs() < 1e-5
+                    && (climb.y > 0.0) == up
+                    && climb.x.abs() < 1e-6
+                    && climb.z.abs() < 1e-6,
+                "pitch {pitch_deg} heading {heading_deg}: {climb:?}"
+            );
+        }
+        // Facing along the face, a strafe into it climbs at the same rate.
+        let along = vector![0.0, 0.0, -1.0];
+        let climb = climb_redirect(toward * step, along, toward, false).expect("grips");
+        assert!(
+            (climb.y - step * CLIMB_SPEED_SCALE).abs() < 1e-5,
+            "strafe in: {climb:?}"
+        );
+        // The fly channel's extra vertical picks the direction, not the speed.
+        let fly = climb_redirect(toward * step + Vector::y() * 0.4, toward, toward, false)
+            .expect("grips");
+        assert!(
+            (fly.y - step * CLIMB_SPEED_SCALE).abs() < 1e-5,
+            "fly: {fly:?}"
+        );
+        // Looking nearly straight up, carried jump momentum with no stick
+        // climbs no faster than that momentum.
+        let up = 89.0f32.to_radians();
+        let steep = vector![up.cos(), up.sin(), 0.0];
+        let carried = toward * step;
+        let caught = climb_redirect(carried, steep, toward, false).expect("grips");
+        assert!(
+            caught.y <= step * CLIMB_SPEED_SCALE + 1e-5,
+            "carried: {caught:?}"
+        );
+        // Facing 45 degrees off, a diagonal aimed straight into the face never
+        // climbs faster than its stick.
+        let h = 45.0f32.to_radians();
+        let slanted = climb_redirect(toward * step, vector![h.cos(), 0.0, h.sin()], toward, false)
+            .expect("grips");
+        assert!(
+            slanted.y <= step * CLIMB_SPEED_SCALE + 1e-5,
+            "diagonal: {slanted:?}"
+        );
+    }
+
     /// A held grip: no input holds, a strafe slides along the face, a forward
     /// push off the face normal does not, and only a clear push away lets go.
     #[test]
@@ -12960,14 +13041,15 @@ mod tests {
             world.update(descend, &mut player);
         }
         let after = world.get_player_translation(&player);
-        // 40 frames at the climb rate (CLIMB_SPEED_SCALE * walk * cos 60) covers
-        // 2 wu; a free fall covers 8 and would already be on the floor.
+        // 40 frames at the climb rate (CLIMB_SPEED_SCALE * walk; pitch only
+        // picks the direction) covers 3.3 wu; a free fall covers 8 and would
+        // already be on the floor.
         assert!(
             after.y < 6.2,
             "looking down and pushing into a ladder must descend it, stuck at {after:?}"
         );
         assert!(
-            after.y > 4.0,
+            after.y > 2.5,
             "the descent must ride the ladder at the climb rate, not fall - reached {after:?} in 40 frames"
         );
 

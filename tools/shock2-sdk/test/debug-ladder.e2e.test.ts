@@ -102,16 +102,23 @@ test(
 /// The stack station's lane: rungs up a 9-tall wall, bare on both sides.
 const STACK_Z = -8;
 
-/// Climb the stack station's rungs partway: face them level, push forward
-/// for `frames`, then let go of the stick.
-async function climbStack(game: GameServer, frames: number) {
-  await teleportVerified(game, { x: NEAR_X, y: 1.5, z: STACK_Z });
+/// Stand at the foot of the ladder in lane `z`, face it level and push
+/// forward. Returns the floor height.
+async function pushIntoLadder(game: GameServer, z: number) {
+  await teleportVerified(game, { x: NEAR_X, y: 1.5, z });
   await game.step({ frames: 30 });
   const floorY = (await game.player.position()).y;
   const eyeY = floorY + (await game.info()).player.camera_offset[1];
-  await game.input.lookAtWorldPoint([-7, eyeY, STACK_Z]);
+  await game.input.lookAtWorldPoint([-7, eyeY, z]);
   await game.step({ frames: 5 });
   await game.input.set("right_hand.thumbstick", [0, 1]);
+  return floorY;
+}
+
+/// Climb the stack station's rungs partway: face them level, push forward
+/// for `frames`, then let go of the stick.
+async function climbStack(game: GameServer, frames: number) {
+  const floorY = await pushIntoLadder(game, STACK_Z);
   await game.step({ frames });
   await game.input.set("right_hand.thumbstick", [0, 0]);
   await game.step({ frames: 2 });
@@ -158,6 +165,58 @@ test(
       // Slid to the side edge, not off it.
       const w = (end.z - STACK_Z) * strafe;
       assert.ok(w > 0.3 && w < 0.7, `strafe ${strafe}: should stop at the side edge (z=${end.z.toFixed(3)})`);
+    }
+  },
+);
+
+/// Climb rate (world units/s) over `frames`, pushing forward while looking
+/// from the eye along `pitchDeg` (positive up) and `headingDeg` off the
+/// ladder's face normal. Settles a few frames after re-aiming first.
+async function climbRate(game: GameServer, pitchDeg: number, headingDeg: number, frames: number) {
+  const { x, y, z } = await game.player.position();
+  const eyeY = y + (await game.info()).player.camera_offset[1];
+  const [p, h] = [(pitchDeg * Math.PI) / 180, (headingDeg * Math.PI) / 180];
+  await game.input.lookAtWorldPoint([
+    x - 2 * Math.cos(p) * Math.cos(h),
+    eyeY + 2 * Math.sin(p),
+    z + 2 * Math.cos(p) * Math.sin(h),
+  ]);
+  await game.step({ frames: 3 });
+  const y0 = (await game.player.position()).y;
+  await game.step({ frames });
+  const y1 = (await game.player.position()).y;
+  assert.ok((await game.info()).player.climb.is_climbing, `pitch ${pitchDeg}: should still be climbing`);
+  return ((y1 - y0) * 60) / frames;
+}
+
+test(
+  "debug_ladder: climb speed is the same looking level, up 45, down 45, and off to the side",
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ladder" });
+    await game.step({ frames: 5 });
+    const rates: Record<string, number[]> = {};
+    // ledge: one tall ladder collider; stack: eleven stacked rungs.
+    for (const [name, z] of [["ledge", 0], ["stack", STACK_Z]] as const) {
+      await pushIntoLadder(game, z);
+      await game.step({ frames: 10 });
+      // Short windows, descent second: the ledge's top-out starts near y 4.5.
+      const level = await climbRate(game, 0, 0, 8);
+      const down = await climbRate(game, -45, 0, 8);
+      const up = await climbRate(game, 45, 0, 8);
+      const side = await climbRate(game, 0, 30, 8);
+      rates[name] = [level, up, side, down];
+      await game.input.set("right_hand.thumbstick", [0, 0]);
+      console.log(`${name} climb rates (level, up 45, heading 30, down 45): ${rates[name].map((r) => r.toFixed(3)).join(", ")}`);
+    }
+    const level = rates.ledge[0];
+    for (const [name, [flat, up, side, down]] of Object.entries(rates)) {
+      for (const [label, r] of [["level", flat], ["up 45", up], ["heading 30", side], ["down 45", -down]] as const) {
+        assert.ok(
+          Math.abs(r - level) < 0.05 * level,
+          `${name} ${label}: climb rate ${r.toFixed(3)} should match level ${level.toFixed(3)}`,
+        );
+      }
     }
   },
 );
