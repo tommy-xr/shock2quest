@@ -100,13 +100,14 @@ impl PersonalCard {
         self.downloads.push((origin, 0.0));
     }
 
+    /// Returns true only for a deliberate, tracked release back to the belt.
     pub fn update(
         &mut self,
         input: &InputContext,
         body: Option<BodyPose>,
         available: [bool; 2],
         enabled: bool,
-    ) {
+    ) -> bool {
         self.center = body.map(|body| {
             self.belt_yaw = body.yaw;
             body.front(
@@ -134,8 +135,9 @@ impl PersonalCard {
             self.pressed = [true; 2];
             self.tracked = [false; 2];
             self.held_pose = None;
-            return;
+            return false;
         }
+        let mut returned = false;
         for (i, hand) in [&input.left_hand, &input.right_hand]
             .into_iter()
             .enumerate()
@@ -154,6 +156,7 @@ impl PersonalCard {
                 // Tracking loss never invents a release. Recovery requires a
                 // new squeeze before an open hand can return the card.
                 if tracked && self.tracked[i] && !pressed && self.pressed[i] {
+                    returned = true;
                     self.hand = None;
                     self.held_pose = None;
                     self.reader = None;
@@ -181,6 +184,7 @@ impl PersonalCard {
             self.pressed[i] = !tracked || pressed;
             self.tracked[i] = tracked;
         }
+        returned
     }
 
     pub fn sample_hand(
@@ -503,15 +507,28 @@ mod tests {
         assert_eq!(card.hand, Some(0));
         input.left_hand.position = vec3(5.0, 2.0, 5.0);
         input.left_hand.squeeze_value = 0.0;
-        card.update(&input, Some(body), [true; 2], true);
+        assert!(card.update(&input, Some(body), [true; 2], true));
         assert_eq!(card.hand, None);
         assert!(card.blocked[0], "return edge is consumed");
-        card.update(&input, Some(body), [true; 2], true);
+        assert!(!card.update(&input, Some(body), [true; 2], true));
         assert_eq!(
             card.hand, None,
             "other hand's held squeeze cannot steal returned card"
         );
     }
+    #[test]
+    fn disabling_or_losing_tracking_does_not_announce_a_belt_return() {
+        let (mut card, mut input, body) = fixture();
+        card.hand = Some(0);
+        card.pressed[0] = true;
+        card.tracked[0] = true;
+        input.left_hand.squeeze_value = 0.0;
+        assert!(!card.update(&input, None, [true; 2], true));
+        assert_eq!(card.hand, Some(0));
+        assert!(!card.update(&input, Some(body), [true; 2], false));
+        assert_eq!(card.hand, None);
+    }
+
     #[test]
     fn reader_requires_withdrawal_and_tracking_loss_cannot_rearm() {
         let (mut card, input, body) = fixture();
