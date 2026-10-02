@@ -4,9 +4,9 @@ When the player 'dies' in the VR game, we want to make them _feel_ it. The idea 
 
 If there is a revive chamber (a ResurrectionStation / ResStation - based on template -1677) and the following conditions are met:
 1. The user has _activated_ the revive station
-2. The user has 10 nanites (the retail Normal-or-higher cost)
+2. The user can pay the reconstruction cost: free on Easy, 10 nanites otherwise
 
-If the revive station is available, 10 nanites should be deducted from the player balance and the player should be teleported to the revive station.
+If the revive station is available, the cost is deducted from the player balance and the player is teleported to the revive station.
 
 ## Death Animation
 
@@ -38,9 +38,12 @@ The resurrection scanner uses the mission's existing authored flow:
   durable activation marker.
 - Its `SwitchLink` points to the authored `TrapTeleport` at the reconstruction
   position. Death never guesses a station coordinate or uses a runtime ID.
-- With an active station and 10 carried nanites, the cost is debited atomically,
-  input is suppressed for the retail five-second delay, then the player is
-  teleported to that trap and restored to half maximum health.
+- With an active station the reconstruction is billed by difficulty: free on
+  Easy, otherwise 10 nanites debited atomically. Input is suppressed for the
+  retail five-second delay, then the player is teleported to that trap and
+  restored to half maximum health. A billed arrival shows `MISC.STR`'s
+  `ResurrectUsed` ("10 nanites used in reconstruction."); it waits for arrival
+  because the HUD is hidden while the death camera has the view.
 - Without an activated and affordable station, death is terminal: the authored
   player death vocalization (`PlayerDeath0..4`, the gamesys SPEECH_TRIGGERS
   schemas) plays, continuous input stays suppressed (discrete actions such as

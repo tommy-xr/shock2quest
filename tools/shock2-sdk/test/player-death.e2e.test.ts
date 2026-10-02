@@ -28,6 +28,13 @@ async function killPlayer(game: GameServer): Promise<void> {
   await game.step({ frames: 1 });
 }
 
+async function activateResurrectionStation(game: GameServer): Promise<void> {
+  const [button] = await game.entities.byTemplate(RESURRECTION_BUTTON);
+  assert.ok(button, "medsci1 should contain its authored QBR scanner button");
+  await game.entities.sendMessage(button.id, { type: "Frob" });
+  await game.step({ frames: 2 });
+}
+
 test(
   "player death becomes terminal without an activated resurrection station",
   { skip: !e2eEnabled, timeout: 600_000 },
@@ -241,10 +248,7 @@ test(
     await game.step({ frames: 5 });
 
     await game.player.spawnItem("20 Nanites");
-    const [button] = await game.entities.byTemplate(RESURRECTION_BUTTON);
-    assert.ok(button, "medsci1 should contain its authored QBR scanner button");
-    await game.entities.sendMessage(button.id, { type: "Frob" });
-    await game.step({ frames: 2 });
+    await activateResurrectionStation(game);
 
     const alive = (await game.info()).player;
     await killPlayer(game);
@@ -284,14 +288,11 @@ test(
     const nanitesBefore = await carriedNaniteTotal(game);
     assert.ok(nanitesBefore >= RESURRECTION_COST);
 
-    const [button] = await game.entities.byTemplate(RESURRECTION_BUTTON);
-    assert.ok(button, "medsci1 should contain its authored QBR scanner button");
     const [target] = await game.entities.byTemplate(RESURRECTION_TARGET);
     assert.ok(target, "QBR button should link to its authored teleport target");
     const targetPosition = (await game.entities.detail(target.id)).position;
 
-    await game.entities.sendMessage(button.id, { type: "Frob" });
-    await game.step({ frames: 2 });
+    await activateResurrectionStation(game);
 
     // Activation is the scanner's authored switched model, which must survive
     // a save/load before a later death can rely on it.
@@ -320,6 +321,10 @@ test(
       "QBR reconstruction should restore half of maximum health",
     );
     assert.ok(
+      (await game.ui.state()).messages.includes("10 nanites used in reconstruction."),
+      "a billed reconstruction announces the charge on arrival",
+    );
+    assert.ok(
       Math.hypot(
         revived.player.position[0] - targetPosition[0],
         revived.player.position[1] - targetPosition[1],
@@ -345,6 +350,71 @@ async function click(game: GameServer, [x, y]: [number, number]): Promise<void> 
   await game.input.set("pointer.pressed", 0);
   await game.step({ frames: 2 });
 }
+
+test(
+  "an activated resurrection station reconstructs for free on Easy",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      difficulty: "easy",
+    });
+    await game.step({ frames: 5 });
+
+    await game.player.spawnItem("20 Nanites");
+    const nanitesBefore = await carriedNaniteTotal(game);
+    await activateResurrectionStation(game);
+
+    await killPlayer(game);
+    assert.equal(lifeState((await game.info()).player), "respawning");
+    assert.equal(
+      await carriedNaniteTotal(game),
+      nanitesBefore,
+      "Easy reconstruction must not bill nanites",
+    );
+
+    await game.step({ frames: RESPAWN_DELAY_FRAMES });
+    assert.equal(lifeState((await game.info()).player), "alive");
+    assert.deepEqual(
+      (await game.ui.state()).messages.filter((line) => /nanite/i.test(line)),
+      [],
+      "a free reconstruction announces no charge",
+    );
+  },
+);
+
+test(
+  "an activated resurrection station the player cannot pay for leaves death terminal",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+    });
+    await game.step({ frames: 5 });
+
+    const nanitesBefore = await carriedNaniteTotal(game);
+    assert.ok(
+      nanitesBefore < RESURRECTION_COST,
+      `the fresh medsci1 player must start short of the cost, has ${nanitesBefore}`,
+    );
+    await activateResurrectionStation(game);
+
+    await killPlayer(game);
+    assert.equal(
+      lifeState((await game.info()).player),
+      "dead",
+      "an unaffordable reconstruction must not queue a respawn",
+    );
+    assert.equal(
+      await carriedNaniteTotal(game),
+      nanitesBefore,
+      "a refused reconstruction must not spend a partial payment",
+    );
+
+    await game.step({ frames: DEATH_SEQUENCE_FRAMES + 30 });
+    assert.equal((await game.info()).mission, "game_over");
+  },
+);
 
 test(
   "terminal death reaches the game-over screen, whose load path resumes play",

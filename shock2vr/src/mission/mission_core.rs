@@ -723,7 +723,6 @@ fn death_seed(position: Vector3<f32>) -> u64 {
 }
 
 const PLAYER_RESPAWN_DELAY_SECONDS: f32 = 5.0;
-const PLAYER_RESPAWN_NANITE_COST: i32 = 10;
 /// How long terminal death lingers in the mission before the game-over screen
 /// takes over - the beat where the authored death vocalization plays and the
 /// player sees where they fell.
@@ -3891,9 +3890,9 @@ impl MissionCore {
     }
 
     /// Enter the death state once. An active QBR is usable only when the
-    /// player can atomically pay the retail 10-nanite reconstruction cost;
-    /// otherwise death is terminal and runs the death sequence that ends in
-    /// the game-over screen.
+    /// player can atomically pay its difficulty's reconstruction cost (see
+    /// [`crate::difficulty::reconstruction_cost`]); otherwise death is terminal
+    /// and runs the death sequence that ends in the game-over screen.
     ///
     /// Returns the death feedback to play (the authored death vocalization).
     fn begin_player_death(&mut self) -> Vec<Effect> {
@@ -3907,12 +3906,13 @@ impl MissionCore {
         {
             *status = Default::default();
         }
+        let cost = crate::difficulty::reconstruction_cost(&self.world);
         let paid_respawn = active_resurrection_target(&self.world).and_then(|target| {
-            crate::scripts::script_util::debit_player_nanites(
-                &self.world,
-                PLAYER_RESPAWN_NANITE_COST,
-            )
-            .map(|exhausted| (target, exhausted))
+            if cost == 0 {
+                return Some((target, Vec::new()));
+            }
+            let paid = crate::scripts::script_util::debit_player_nanites(&self.world, cost);
+            paid.map(|exhausted| (target, exhausted))
         });
 
         let next_state = if let Some(((position, rotation), exhausted)) = paid_respawn {
@@ -3921,7 +3921,7 @@ impl MissionCore {
             }
             info!(
                 "Player died: QBR reconstruction queued at {:?} (-{} nanites)",
-                position, PLAYER_RESPAWN_NANITE_COST
+                position, cost
             );
             PlayerLifeState::Respawning {
                 elapsed_seconds: 0.0,
@@ -4144,7 +4144,20 @@ impl MissionCore {
             .borrow::<UniqueViewMut<PlayerLifeState>>()
             .unwrap() = PlayerLifeState::Alive;
         info!("Player reconstructed at QBR {:?}", position);
-        Vec::new()
+        // The bill is announced on arrival: the HUD is hidden while the death
+        // camera has the view, and the line would expire before reconstruction.
+        // Difficulty is fixed for a campaign, so this is the cost charged at death.
+        if crate::difficulty::reconstruction_cost(&self.world) == 0 {
+            return Vec::new();
+        }
+        vec![Effect::ShowMessage {
+            text: crate::scripts::gui::PanelText::string(
+                &self.world,
+                "misc",
+                "ResurrectUsed",
+                "10 nanites used in reconstruction.",
+            ),
+        }]
     }
 
     pub fn update(
