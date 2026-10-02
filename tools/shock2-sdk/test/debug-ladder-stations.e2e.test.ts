@@ -31,6 +31,8 @@ type Station = { lane: number; outside: Region[] };
 /// Half the crouched capsule's height: a body centre this close under a
 /// ceiling already has its crown through it, whatever the stance.
 const CROUCH_HALF_HEIGHT = 0.56;
+/// Half the standing capsule's height (6 ft / 2.5 / 2).
+const STANDING_HALF_HEIGHT = 1.2;
 
 /// The region whose body centres put the crown through a ceiling at `y`.
 function above(d: [number, number], y: number): Region {
@@ -65,14 +67,14 @@ const RECESS: Station = {
     above([-4, 0], 11.2),
   ],
 };
-const THROUGH: Station = {
+const TRENCH: Station = {
   lane: 72,
-  // The corridor's taller ceiling, the room's 10.0 ceiling, the room's far
-  // wall. The 6.4 ceiling over the ladder is left open because this
-  // station's todo still expects a route through the wall; that expectation
-  // is unverified against the original, which refuses a mantle with anything
-  // within 3.5 ft above the head.
-  outside: [above([1.67, 5.6], 9.6), above([-2.4, 1.67], 10.0), solid([-FAR, -2.4])],
+  // Through the 6.4 ceiling over the ladder or the taller one past it, or
+  // behind the ladder wall (the room there is not reachable from the trench).
+  // Like every station's ceiling regions this uses the crouched half-height,
+  // so a standing crown is caught only once well through; the test also
+  // checks the stall height directly.
+  outside: [above([0, 1.67], 6.4), above([1.67, 5.6], 9.6), solid([-FAR, 0])],
 };
 const MIDMOUNT: Station = {
   lane: 84,
@@ -329,27 +331,38 @@ test(
 );
 
 test(
-  "debug_ladder through-the-wall ladder: the climb ends on the floor behind the ladder wall",
-  // eng1 Ladder 317. Main: bobs 4.96-5.16 at d 0.66 under the 6.4 ceiling and
-  // drops back to the corridor on release (mission -14.84/-14.64). The only
-  // exit is the 3.2 floor behind the 0.4 wall the ladder is mounted on.
-  { skip: !e2eEnabled, timeout: 300_000, todo: "eng1 Ladder 317 exit through the wall" },
+  "debug_ladder trench ladder: the climb stops under the ceiling and steps off onto the shelf",
+  // eng1 Ladder 317. The ladder stands on a 0.4 wall and ends at the 6.4
+  // ceiling (mission -13.4); the -16.6 room behind the wall cannot be reached
+  // from the trench (the original refuses a mantle with anything within
+  // 3.5 ft above the head). The climb bobs at 4.96-5.16 under the ceiling
+  // (mission -14.84/-14.64); the exit is the 3.2 shelf beside the ladder
+  // (mission -16.6, x 3.0..4.6), as in eng1.
+  { skip: !e2eEnabled, timeout: 300_000 },
   async () => {
     await using game = await launch();
     await startTrail(game);
-    const run = new Run(game, THROUGH);
-    await place(game, THROUGH, 0.76, 1.244);
+    const run = new Run(game, TRENCH);
+    await place(game, TRENCH, 0.76, 1.244);
     const start = await run.pos();
     await game.input.lookAtWorldPoint([start.x - 10, start.y + 6, start.z]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
-    await run.frames(480, async (p) => p.x - STATION_FACE_X < -0.4 && p.y > 3.2);
-    await game.input.set("right_hand.thumbstick", [0, 0]);
-    await run.frames(180);
+    const stall = await climbToStall(run, 480, 4.5);
+    assert.ok(
+      stall.y > 4.9 && stall.y + STANDING_HALF_HEIGHT <= 6.4,
+      `trench: the climb should stall just under the ceiling (y=${stall.y.toFixed(3)})`,
+    );
+    await stepSideways(game, run, 3.2);
 
-    await shootTrail(game, "through");
+    await shootTrail(game, "trench");
     run.assertStayedInside();
-    const end = await run.assertSupportedOn(3.2, "through");
-    assert.ok(end.x - STATION_FACE_X < -0.4, "through: should end behind the ladder wall");
+    const end = await run.assertSupportedOn(3.2, "trench");
+    // Wholly on the shelf (0.63..2.23): a standing radius inside both edges.
+    const w = end.z - TRENCH.lane;
+    assert.ok(
+      w > 0.63 + 0.48 && w < 2.23 - 0.48 + 0.05,
+      `trench: should end on the shelf beside the ladder (w=${w.toFixed(3)})`,
+    );
   },
 );
 

@@ -30,7 +30,7 @@
 //! - `z = 36`  capped: stacked ladders running up into a ceiling (rick1 532).
 //! - `z = 48`  setback: ladder in a pit under a closed deck slab (rick1 488).
 //! - `z = 60`  deck hole: ladder up through a hole in a deck (rick1 499).
-//! - `z = 72`  through: ladder on a wall whose only exit is behind it (eng1 317).
+//! - `z = 72`  trench: ladder up a trench wall to a ceiling, exit onto the shelf (eng1 317).
 //! - `z = 84`  mid-mount: step off a ledge onto a rung stack (hydro2 551).
 //! - `z = 96`  jump grab: jump from a pipe onto a ladder (rick2 210).
 //!
@@ -159,7 +159,7 @@ fn repro_boxes() -> Vec<SceneBox> {
     let mut boxes = capped_boxes();
     boxes.extend(setback_boxes());
     boxes.extend(recess_boxes());
-    boxes.extend(through_boxes());
+    boxes.extend(trench_boxes());
     boxes.extend(midmount_boxes());
     boxes.extend(jump_grab_boxes());
     boxes
@@ -360,54 +360,55 @@ fn recess_boxes() -> Vec<SceneBox> {
     boxes
 }
 
-/// eng1 Ladder 317: an eng1 `Ladder 16'` from the -19.8 corridor floor to
-/// its -13.4 ceiling, on a 0.4-thick wall. The -16.6 floor of the room
-/// behind that wall (3.2 above the corridor, ceiling -9.8) is the only exit;
-/// like Dark's top-out, reaching it passes through level terrain.
-const THROUGH_Z: f32 = 72.0;
-const THROUGH_CEILING: f32 = 6.4;
-const THROUGH_WALL: f32 = 0.4;
-const THROUGH_UPPER_FLOOR: f32 = 3.2;
-const THROUGH_UPPER_CEILING: f32 = 10.0;
-/// Corridor width across the lane (mission x 1.6..3.0), and the 3.2 shelf
+/// eng1 Ladder 317: an eng1 `Ladder 16'` from the -19.8 trench floor to its
+/// -13.4 ceiling, on a 0.4-thick wall. Beyond the wall is a room at -16.6,
+/// unreachable from here: the climb meets the ceiling, and the original
+/// refuses a mantle with anything within 3.5 ft above the head. The exit is
+/// the -16.6 shelf beside the ladder (3.2 above the trench).
+const TRENCH_Z: f32 = 72.0;
+const TRENCH_CEILING: f32 = 6.4;
+const TRENCH_WALL: f32 = 0.4;
+const TRENCH_UPPER_FLOOR: f32 = 3.2;
+const TRENCH_UPPER_CEILING: f32 = 10.0;
+/// Trench width across the lane (mission x 1.6..3.0), and the 3.2 shelf
 /// beside it (x 3.0..4.6, slab 2.8..3.2).
-const THROUGH_CORRIDOR_W: [f32; 2] = [-0.77, 0.63];
-const THROUGH_SHELF_W: f32 = 2.23;
+const TRENCH_W: [f32; 2] = [-0.77, 0.63];
+const TRENCH_SHELF_W: f32 = 2.23;
 /// eng1's `Ladder 16'` (model `ladder`, 1.65 wide).
 const ENG_LADDER_16: i32 = -784;
 
-fn through_boxes() -> Vec<SceneBox> {
-    let z = THROUGH_Z;
+fn trench_boxes() -> Vec<SceneBox> {
+    let z = TRENCH_Z;
     let lane = [-4.0, 4.0];
-    let corridor = [THROUGH_CORRIDOR_W[0], THROUGH_SHELF_W];
-    let back = -THROUGH_WALL;
+    let trench = [TRENCH_W[0], TRENCH_SHELF_W];
+    let back = -TRENCH_WALL;
     vec![
         // The wall: its two faces, as in the mission.
-        wall_face(z, 0.0, [0.0, THROUGH_UPPER_CEILING], lane),
+        wall_face(z, 0.0, [0.0, TRENCH_UPPER_CEILING], lane),
         lane_box(
             WALL_COLOR,
             z,
             [back, back + THIN],
-            [THROUGH_UPPER_FLOOR, THROUGH_UPPER_CEILING],
+            [TRENCH_UPPER_FLOOR, TRENCH_UPPER_CEILING],
             lane,
         ),
-        // Corridor: ceiling (taller past 1.67), sides, shelf, far end.
-        ceiling_face(z, [0.0, 1.67], THROUGH_CEILING, corridor),
-        ceiling_face(z, [1.67, 5.6], 9.6, corridor),
-        side_face(z, [0.0, 5.6], [0.0, 9.6], THROUGH_CORRIDOR_W[0]),
-        side_face(z, [0.0, 5.6], [0.0, 9.6], THROUGH_SHELF_W),
+        // Trench: ceiling (taller past 1.67), sides, shelf, far end.
+        ceiling_face(z, [0.0, 1.67], TRENCH_CEILING, trench),
+        ceiling_face(z, [1.67, 5.6], 9.6, trench),
+        side_face(z, [0.0, 5.6], [0.0, 9.6], TRENCH_W[0]),
+        side_face(z, [0.0, 5.6], [0.0, 9.6], TRENCH_SHELF_W),
         lane_box(
             FLOOR_COLOR,
             z,
             [0.0, 5.6],
-            [2.8, THROUGH_UPPER_FLOOR],
-            [THROUGH_CORRIDOR_W[1], THROUGH_SHELF_W],
+            [2.8, TRENCH_UPPER_FLOOR],
+            [TRENCH_W[1], TRENCH_SHELF_W],
         ),
-        lane_box(WALL_COLOR, z, [5.6, 5.6 + THIN], [0.0, 9.6], corridor),
+        lane_box(WALL_COLOR, z, [5.6, 5.6 + THIN], [0.0, 9.6], trench),
         // The room behind the wall.
-        floor_face(z, [-2.4, back], THROUGH_UPPER_FLOOR, lane),
-        ceiling_face(z, [-2.4, back], THROUGH_UPPER_CEILING, lane),
-        wall_face(z, -2.4, [0.0, THROUGH_UPPER_CEILING], lane),
+        floor_face(z, [-2.4, back], TRENCH_UPPER_FLOOR, lane),
+        ceiling_face(z, [-2.4, back], TRENCH_UPPER_CEILING, lane),
+        wall_face(z, -2.4, [0.0, TRENCH_UPPER_CEILING], lane),
     ]
 }
 
@@ -540,7 +541,7 @@ fn repro_ladders() -> Vec<Effect> {
         ));
     }
     effects.extend([
-        lane_ladder(ENG_LADDER_16, THROUGH_Z, 0.07, 3.2),
+        lane_ladder(ENG_LADDER_16, TRENCH_Z, 0.07, 3.2),
         lane_ladder(
             LADDER_16,
             RECESS_Z,
@@ -660,7 +661,7 @@ pub fn create_debug_ladder_scene(
          mantle block (no ladder), z=-16 plain wall (not climbable). Ladders are the shipped templates, so their\n\
          climbable flag and colliders are the production ones. Mission repros: z=36 capped ladder\n\
          (rick1 532), z=48 setback pit under a deck (rick1 488), z=60 deck hole (rick1 499),\n\
-         z=72 exit through the wall (eng1 317), z=84 mid-ladder mount (hydro2 551), z=96 jump grab\n\
+         z=72 trench ladder (eng1 317), z=84 mid-ladder mount (hydro2 551), z=96 jump grab\n\
          (rick2 210). Each station's sign names its case and start pad (cyan); yellow marks the\n\
          route, green the correct end. Enclosed stations: POST /v1/player/teleport to the pad\n\
          position on the sign."
@@ -842,18 +843,18 @@ fn guides() -> Vec<Guide> {
     recess.goal = vec![on([0.6, 1.8], RECESS_DECK, [1.3, 2.5])];
     recess.notes = vec![("crouch here", [1.3, 1.4, 0.0])];
 
-    let mut through = Guide::repro(
-        THROUGH_Z,
+    let mut trench = Guide::repro(
+        TRENCH_Z,
         [
-            "EXIT THROUGH THE WALL (z 72)",
+            "TRENCH LADDER (z 72)",
             "eng1 Ladder 317",
-            "Pad: face the ladder, hold forward.",
-            "Correct: end on the floor behind it.",
+            "Climb to the ceiling, then step",
+            "sideways onto the shelf.",
         ],
         [0.76, 0.0, 0.0],
     );
-    through.goal = vec![on([-2.0, -0.6], THROUGH_UPPER_FLOOR, centre)];
-    through.notes = vec![("goal: floor behind this wall", [0.9, 5.9, 0.0])];
+    trench.goal = vec![on([0.4, 1.4], TRENCH_UPPER_FLOOR, [1.2, 2.0])];
+    trench.notes = vec![("step sideways", [0.9, 5.9, 0.9])];
 
     let mut midmount = Guide::repro(
         MIDMOUNT_Z,
@@ -953,7 +954,7 @@ fn guides() -> Vec<Guide> {
         capped,
         setback,
         recess,
-        through,
+        trench,
         midmount,
         jump,
     ]
