@@ -6761,7 +6761,10 @@ impl PhysicsWorld {
         // Flat climbing: when the player overlaps a climbable surface (ladder)
         // and pushes toward it, redirect that input to vertical movement and
         // suppress the gravity pass for this frame (see `climb_redirect`).
-        let climb_movement = if !push_to_climb || player_handle.jump_velocity.is_some() {
+        // A jump grips only once its arc is falling, like any other fall
+        // (#907); the rise stays ballistic so a jump past a ladder clears it.
+        let rising_jump = player_handle.jump_velocity.is_some_and(|v| v > 0.0);
+        let climb_movement = if !push_to_climb || rising_jump {
             None
         } else {
             let climb_filter = QueryFilter::new()
@@ -7106,6 +7109,11 @@ impl PhysicsWorld {
             player_handle.jump_velocity = None;
             player_handle.air_velocity = Vector::zeros();
             player_handle.is_grounded = false;
+        } else if player_handle.is_climbing {
+            // Climbing owns vertical movement; a grip taken mid-arc ends it.
+            player_handle.jump_velocity = None;
+            player_handle.air_velocity = Vector::zeros();
+            player_handle.is_grounded = mvt.grounded;
         } else if let Some(mut velocity) = player_handle.jump_velocity {
             let requested_vertical = velocity * self.integration_parameters.dt;
             let applied_vertical = self_translation.y;
@@ -13152,6 +13160,77 @@ mod tests {
         assert!(
             capped_rise < 0.15,
             "a low ceiling must clip the jump cast, rose {capped_rise}"
+        );
+    }
+
+    /// Jump beside a face, pushing `push` from the first airborne frame. Returns
+    /// the arc's vertical velocity on the frame a grip was first reported (None
+    /// if the player never climbed), after asserting nothing gripped mid-rise.
+    fn jump_beside_face(group: CollisionGroup, push: Vector3<f32>) -> Option<f32> {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(2300).unwrap(),
+            vec3(0.0, -0.5, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(20.0, 1.0, 20.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        world.add_kinematic(
+            EntityId::from_inner(2301).unwrap(),
+            vec3(-0.3, 10.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.1, 20.0, 2.0),
+            group,
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(-1.0, 1.5, 0.0), EntityId::from_inner(2302).unwrap());
+        step(&mut world, &mut player, 30);
+        let facing = Vector3::unit_x();
+        world.update_with_facing_and_jump(Vector3::new(0.0, 0.0, 0.0), facing, true, &mut player);
+        for _ in 0..120 {
+            let velocity = player.jump_velocity?;
+            world.update_with_facing_and_jump(push, facing, false, &mut player);
+            if player.is_climbing {
+                assert!(
+                    velocity <= 0.0,
+                    "a rising jump must stay ballistic past a climbable (grip at v {velocity})"
+                );
+                assert!(
+                    player.jump_velocity.is_none(),
+                    "a grip must end the ballistic arc"
+                );
+                return Some(velocity);
+            }
+        }
+        None
+    }
+
+    /// #907: a falling jump pressed into a ladder takes it, as a fall does; the
+    /// rise, a wall, and a push along the face stay ballistic.
+    #[test]
+    fn descending_jump_grips_a_ladder_it_is_pushed_into() {
+        let into = Vector3::new(0.1, 0.0, 0.0);
+        let velocity = jump_beside_face(CollisionGroup::climbable_entity(), into);
+        assert!(
+            velocity.is_some(),
+            "a descending jump into a ladder must grip it"
+        );
+        assert_eq!(
+            jump_beside_face(CollisionGroup::entity(), into),
+            None,
+            "a non-climbable wall must not grip"
+        );
+        assert_eq!(
+            jump_beside_face(
+                CollisionGroup::climbable_entity(),
+                Vector3::new(0.0, 0.0, 0.1)
+            ),
+            None,
+            "a push along the ladder face must not grip"
         );
     }
 
