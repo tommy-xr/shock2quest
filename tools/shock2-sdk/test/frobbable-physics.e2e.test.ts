@@ -6,13 +6,17 @@ import { GameServer } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-// Command1's only WALK | SMALL_CREATURE link from path cell 3799 to 3798
-// passes beside mission object 1520. The object explicitly authors a SPHERE
-// physics model with radius 0.39198092, but the frobbable selection path used
-// to replace it with a kinematic 2.0 x 1.568 x 2.0 render-model box that sealed
-// the route. This keeps the real pod present and crosses via production input.
+// Command1 mission object 1520 (`Swarmer Floor Pod`) explicitly authors a
+// SPHERE physics model. The frobbable selection path used to replace it with a
+// kinematic 2.0 x 1.568 x 2.0 render-model box; this keeps the authored sphere.
+//
+// The strip between the pod and the east wall is NOT a player route in retail:
+// the authored radius is 1.96 ft and the pod is location-controlled, leaving
+// 1.59 ft to a wall that a 2.4-ft body (crouched or not) cannot pass. A
+// crouched walk along the wall must stop at the pod. (Until #1815 our sphere is
+// half size, and only the controller's contact offset closes the strip.)
 test(
-  "Command Floor Pod keeps its authored sphere beside the lower bridge route",
+  "Command Floor Pod keeps its authored sphere and blocks the strip beside the wall",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -57,8 +61,7 @@ test(
     );
 
     // Setup only: stage at the campaign-supported pose reached after the fast
-    // crouched ladder descent. The crossing itself uses look + locomotion and
-    // leaves the pod alive and solid.
+    // crouched ladder descent. The walk itself uses look + locomotion.
     await game.input.set("crouch", 1);
     await game.step({ frames: 60 });
     await game.player.teleport({
@@ -76,27 +79,37 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 1]);
     await game.step({ frames: 120 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
-    const crossed = await game.player.position();
+    const blocked = await game.player.position();
+    // The render-model box spans z 86.67..88.67, so it would hold the body
+    // short of z 87; the authored sphere lets it reach the pod's side, no further.
     assert.ok(
-      crossed.x > -289 &&
-        crossed.x < -287 &&
-        crossed.y > -7.9 &&
-        crossed.y < -7.6 &&
-        crossed.z > 89,
-      `production locomotion should pass the live pod inside the authored ` +
-        `cell 3799 -> 3798 route (${JSON.stringify(before)} -> ${JSON.stringify(crossed)})`,
+      blocked.z > 87 && blocked.z < pod.position[2] + 0.3 && blocked.y > -7.9 && blocked.y < -7.6,
+      `the crouched body should stop at the pod's side, not pass it ` +
+        `(${JSON.stringify(before)} -> ${JSON.stringify(blocked)})`,
     );
 
     await game.step({ frames: 120 });
     const supported = await game.player.position();
     assert.ok(
       Math.hypot(
-        supported.x - crossed.x,
-        supported.y - crossed.y,
-        supported.z - crossed.z,
+        supported.x - blocked.x,
+        supported.y - blocked.y,
+        supported.z - blocked.z,
       ) < 0.05,
-      `the crossing must finish supported, got ${JSON.stringify(crossed)} -> ` +
+      `the blocked body must stay supported, got ${JSON.stringify(blocked)} -> ` +
         JSON.stringify(supported),
+    );
+
+    // The surface beside the route is the authored sphere's (centre x -288.22,
+    // r 0.39 here), not the render box's face at x -287.22.
+    const side = await game.raycast({
+      start: [-286.9, -7.7, pod.position[2]],
+      end: [-290, -7.7, pod.position[2]],
+      collision_groups: ["entity"],
+    });
+    assert.ok(
+      side.entity_id === pod.id && side.hit_point && side.hit_point[0] < -287.6,
+      `the pod's physical surface should be its authored sphere, got ${JSON.stringify(side)}`,
     );
 
     const podBodies = (await game.physics.bodies({ entityId: pod.id })).bodies;

@@ -31,7 +31,7 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const TRIPWIRE_OBJECT_ID = 2308;
 const OBJECTIVE = "note_6_1";
 // The wire is a 1.6-deep box centred on its position, so anything beyond 0.8
-// (plus the player's ~0.32 radius) from the centre is clear of it. The two
+// (plus the player's 0.48 radius) from the centre is clear of it. The two
 // offsets keep the crossing hop (APPROACH + BEYOND = 4.0) inside the 5.0-unit
 // clamp on a validated move, so a clamp can never be mistaken for a block.
 const WIRE_HALF_DEPTH = 0.8;

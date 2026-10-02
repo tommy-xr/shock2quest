@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
+import { shootTrail, startTrail } from "./helpers/trail.js";
 
 // The debug_ladder scene: one climbing station per lane along z, all at
 // x ≈ -7 ahead of the spawn (see shock2vr/src/scenes/debug_ladder.rs). Flat
@@ -218,5 +219,35 @@ test(
         );
       }
     }
+  },
+);
+
+test(
+  "debug_ladder: crouch-walking into the mantle block still stands back up",
+  // Crouching keeps the standing width, so a crouched body can walk no
+  // closer to the block than a standing one fits.
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_ladder" });
+    await game.step({ frames: 5 });
+    const mantleZ = STATIONS.find((s) => s.mantle)!.z;
+    await teleportVerified(game, { x: NEAR_X, y: 1.5, z: mantleZ });
+    await game.step({ frames: 30 });
+    await startTrail(game);
+    const standing = (await game.player.position()).y;
+    const eyeY = standing + (await game.info()).player.camera_offset[1];
+    await game.input.lookAtWorldPoint([-7, eyeY, mantleZ]);
+    await game.input.set("crouch", 1);
+    await game.step({ frames: 10 });
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 90 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    const against = await game.player.position();
+    assert.ok(against.x < -6.3, `should have walked up to the block (x=${against.x.toFixed(3)})`);
+    await game.input.set("crouch", 0);
+    await game.step({ frames: 30 });
+    await shootTrail(game, "crouch-walk-stand", { oblique: true });
+    const y = (await game.player.position()).y;
+    assert.ok(Math.abs(y - standing) < 0.05, `expected to stand back up to ${standing}, got ${y}`);
   },
 );

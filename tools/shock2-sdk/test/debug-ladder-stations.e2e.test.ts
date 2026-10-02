@@ -285,7 +285,7 @@ test(
     const end = await run.assertSupportedOn(4.4, "setback");
     // Wholly on the side floor: past the pit edge (1.2) by the crouched radius.
     assert.ok(
-      end.z - SETBACK.lane > 1.52,
+      end.z - SETBACK.lane > 1.68,
       `setback: should end on the floor beside the pit (w=${(end.z - SETBACK.lane).toFixed(3)})`,
     );
   },
@@ -326,7 +326,7 @@ test(
   // rick1 Ladder 499, climbed crouched from the y34 room. Straight ahead, the
   // ladder column (up to 40.28, above the crouched body's feet on the deck)
   // leaves 0.44 between its back and the wall, less than the crouched
-  // capsule's 0.64 plus contact gaps, so there is no pose in front of the
+  // capsule's 0.96 plus contact gaps, so there is no pose in front of the
   // ladder to top out to. Pushing on only stalls under the 7.2 ceiling
   // (mission bobs at 40.41-40.60). The way off is a strafe onto the deck that
   // wraps the hole, as in the mission.
@@ -351,7 +351,7 @@ test(
     run.assertStayedInside();
     const end = await run.assertSupportedOn(4.0, "deck hole");
     assert.ok(
-      end.z - RECESS.lane > 1.51,
+      end.z - RECESS.lane > 1.67,
       `deck hole: should end on the deck beside the hole (d=${(end.x - STATION_FACE_X).toFixed(3)}, w=${(end.z - RECESS.lane).toFixed(3)})`,
     );
   },

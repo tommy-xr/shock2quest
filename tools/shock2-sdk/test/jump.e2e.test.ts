@@ -169,7 +169,7 @@ test(
     await game.step({ frames: 5 });
     position = await game.player.position();
     assert.ok(
-      position.z > 28.5 && position.z < 28.8,
+      position.z > 28.5 && position.z < 29.1,
       `crouched movement should round the outer north edge, got ${JSON.stringify(position)}`,
     );
     await game.input.lookAtWorldPoint(
@@ -179,9 +179,9 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 1]);
     await game.step({ frames: 20 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
-    // The central passage floor is a finite authored tread at z=28.5..28.8.
-    // Release input and prove the apparent entry is support rather than a
-    // mid-fall sample over the adjacent void.
+    // The passage floor is a finite authored 45-degree tread ending in a lip
+    // at z=28.8, with void beyond. Release input and prove the apparent entry
+    // is support rather than a mid-fall sample over that void.
     await game.step({ frames: 600 });
     const passage = await game.player.position();
     await game.step({ frames: 120 });
@@ -189,12 +189,13 @@ test(
     const inPassage = (sample: typeof passage): boolean =>
       sample.x > 31 &&
       sample.x < 33 &&
-      // Player positions are capsule centers: crouched half-height is 0.56
-      // world units, putting the feet on the mapped y=-33.6..-33.3 tread.
-      sample.y > -33.04 &&
+      // Player positions are capsule centers. The 1.2-ft-radius crouched body rests
+      // on the 45-degree tread (y=-33.6 at its z=28.8 lip) with its center
+      // 0.52 wu out along the tread normal, so up to ~0.3 past the lip.
+      sample.y > -33.1 &&
       sample.y < -32.74 &&
       sample.z > 28.5 &&
-      sample.z < 28.8;
+      sample.z < 29.1;
     assert.ok(
       inPassage(passage) &&
         inPassage(supportedPassage) &&
