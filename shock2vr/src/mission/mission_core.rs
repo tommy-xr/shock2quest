@@ -14750,9 +14750,27 @@ impl MissionCore {
         if !options.debug_show_ids {
             highlighted.retain(|e| is_hud_selectable(&self.world, *e));
         }
+        // One name frame, independent of damage flashes. In VR the existing
+        // name-strip arbitration also excludes hands operating the UI.
+        let rollover = self
+            .name_strip_world_pick(options)
+            .filter(|entity| options.debug_show_ids || is_hud_selectable(&self.world, *entity));
+        // The flat use-mode inventory bar already owns this readout. VR's
+        // inventory lives on a world panel, so it cannot cover the HUD frame.
+        if options.presentation_mode == crate::PresentationMode::Vr
+            || self.flat_ui.strip_entity().is_none()
+        {
+            ret.extend(draw_item_name(
+                asset_cache,
+                rollover,
+                self.flat_ui.name_strip_debug().as_deref(),
+                &self.world,
+                screen_size,
+                options.debug_show_ids,
+            ));
+        }
         for hit_entity in highlighted {
-            // What the highlight frames. Resolved once, so the brackets and
-            // the label can never frame different things.
+            // Resolve once so brackets and the health bar frame the same object.
             let Some(bounds) = self.selection_bounds(hit_entity) else {
                 continue;
             };
@@ -14765,17 +14783,6 @@ impl MissionCore {
                 view,
                 projection,
                 screen_size,
-            ));
-
-            ret.extend(draw_item_name(
-                asset_cache,
-                bounds,
-                hit_entity,
-                &self.world,
-                view,
-                projection,
-                screen_size,
-                options.debug_show_ids,
             ));
 
             ret.extend(draw_health_bar(
