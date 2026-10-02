@@ -1,0 +1,50 @@
+{
+  "command": [
+    "/Users/bryphe/.supacode/repos/shock2quest-vr/small-tweaks/target/debug/asset_probe",
+    "/tmp/shock2quest-tool-assets",
+    "--verbose"
+  ],
+  "capturedAt": "2026-10-02T17:26:14.309012+00:00",
+  "revision": "8f9116c16d09fbe09501a1c55dc1ef3fde9e6cc4",
+  "displayedCommand": "cargo run -p asset_probe -- /tmp/shock2quest-tool-assets --verbose",
+  "capture": "Actual PTY output rendered with pyte and Menlo; no desktop session required",
+  "exitCode": 0,
+  "columns": 156,
+  "rows": 28,
+  "renderedRows": 8,
+  "binarySha256": "87051abd11ee1cf132b11e37f0f5f708200024fdd4a311f9331dcacbbeeb0a6e",
+  "assets": {
+    "source": "System Shock 2 25th Anniversary Edition: sshock2.kpf plus mods/sshock2ee.kpf",
+    "extraction": "Base data/res/mesh/{GRUNT_P,GRUNT_S}.{BIN,CAL}, bitmap/BB.PCX, mesh/humshthp.mi; override mesh/grunt_p.bin and bitmap/ND-bsp.dds from mods/sshock2ee.kpf. Lowercase extracted names. Game data remains outside repository.",
+    "files": [
+      {
+        "file": "bb.pcx",
+        "sha256": "01d5ef9d76f02a0eb89346d358f998c763b85f0f7a4a6a39befff7f40f5b12b0"
+      },
+      {
+        "file": "humshthp.mi",
+        "sha256": "4bd2a259ed74711ed2f2abaa9554088fa366b163cd2f00640581026abe5e5dbf"
+      },
+      {
+        "file": "nd-bsp.dds",
+        "sha256": "bc03730b031881ba2180a8e7729668ffa73fca1b718ae87efc3254a84126bbbf"
+      },
+      {
+        "file": "mesh/grunt_p.bin",
+        "sha256": "1805326b0ab7087a40637c92f3f7edfedd14e3eada0b2c51dc9de51373198ad2"
+      },
+      {
+        "file": "mesh/grunt_s.bin",
+        "sha256": "1c0c2ce3a2e725fc3b29593cc12f8db627970ba86668145520e505a90fa0c9b8"
+      },
+      {
+        "file": "mesh/grunt_s.cal",
+        "sha256": "6b2f846078812c3cfe08354d26ad3aa285056261c76a52e07861a35df5bbf73b"
+      },
+      {
+        "file": "mesh/grunt_p.cal",
+        "sha256": "712bd45fc6965632212079ebf740379bb26c8da0d6eaf7ece8005652d1c99e27"
+      }
+    ]
+  }
+}
