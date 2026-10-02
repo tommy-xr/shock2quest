@@ -8,7 +8,7 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::{dev_params, mission::PlayerInfo, time::Time};
 
 /// Glow left at a sliver of charge, so "low" still reads as "on".
-const FLOOR: f32 = 0.2;
+const FLOOR: f32 = 0.1;
 /// Below this fraction the glow stutters, warning of an imminent empty.
 const LOW: f32 = 0.15;
 
@@ -27,13 +27,14 @@ pub(crate) fn held_scale(world: &World, item: EntityId) -> Option<f32> {
     Some(glow(fraction, secs))
 }
 
-/// Linear above a floor, stuttering when low, fully dark at empty.
+/// Quadratic above a floor - the glow saturates on top of the lit colour, so
+/// linear left half charge looking full. Stutters when low, dark at empty.
 fn glow(fraction: f32, secs: f32) -> f32 {
     let fraction = fraction.clamp(0.0, 1.0);
     if fraction <= 0.0 {
         return 0.0;
     }
-    let level = FLOOR + (1.0 - FLOOR) * fraction;
+    let level = FLOOR + (1.0 - FLOOR) * fraction * fraction;
     // Two incommensurate sines give an irregular, deterministic stutter.
     let dropout = (secs * 23.0).sin() + (secs * 9.1).sin() > 1.2;
     if fraction < LOW && dropout {

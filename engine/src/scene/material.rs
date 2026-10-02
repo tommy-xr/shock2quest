@@ -76,6 +76,19 @@ pub trait Material: Any {
     }
 }
 
+/// Multiplier on the *lit* colour of a glowing material under an emissivity
+/// scale, so a dimmed glow part reads as an unpowered lamp rather than a
+/// cyan surface lit by the room. Non-glowing materials are never darkened.
+pub fn lit_scale(emissivity: f32, emissivity_scale: f32) -> f32 {
+    /// Lit colour left on a fully unpowered glow part.
+    const UNPOWERED: f32 = 0.15;
+    if emissivity > 0.0 {
+        UNPOWERED + (1.0 - UNPOWERED) * emissivity_scale.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
 /// World-space position of the eye a view matrix looks from.
 pub fn eye_position(view: &Matrix4<f32>) -> cgmath::Vector3<f32> {
     view.invert().unwrap_or_else(Matrix4::identity).w.truncate()
@@ -108,5 +121,12 @@ mod tests {
         let world_normal = normal_matrix(&world) * normal;
 
         assert!(world_tangent.dot(world_normal).abs() < 1e-5);
+    }
+
+    #[test]
+    fn only_glow_parts_darken_with_their_glow() {
+        assert_eq!(lit_scale(0.0, 0.0), 1.0);
+        assert_eq!(lit_scale(1.0, 1.0), 1.0);
+        assert!(lit_scale(1.0, 0.0) < 0.2);
     }
 }
