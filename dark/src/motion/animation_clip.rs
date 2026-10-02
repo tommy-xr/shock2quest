@@ -86,6 +86,21 @@ impl AnimationClip {
     /// walk moving at its stride rate across the wrap instead of stalling for
     /// a frame, while a one-shot clip that rests at its end still reads ~0
     /// there (its trailing frames don't move).
+    /// This clip played under a schema's timing: `time_scale` multiplies its
+    /// duration and `stretch` its root travel (see `SchemaTiming`). The pose is
+    /// untouched; only the clock and the travel that drives movement change.
+    pub fn with_timing(&self, time_scale: f32, stretch: f32) -> AnimationClip {
+        let mut clip = self.clone();
+        clip.time_per_frame = self.time_per_frame.mul_f32(time_scale);
+        clip.duration = self.duration.mul_f32(time_scale);
+        clip.translation = self.translation * stretch;
+        clip.sliding_velocity = self.sliding_velocity * (stretch / time_scale);
+        for position in &mut clip.root_positions {
+            *position *= stretch;
+        }
+        clip
+    }
+
     pub fn root_velocity_at(&self, frame: u32) -> Option<Vector3<f32>> {
         if self.root_positions.len() < 2 {
             return None;

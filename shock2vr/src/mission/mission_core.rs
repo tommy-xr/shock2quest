@@ -642,10 +642,10 @@ fn is_realtime_crumple(frame_count: f32) -> bool {
     frame_count > 3.0
 }
 
-fn select_motion_option(
-    options: &[String],
+fn select_motion_option<T: Clone>(
+    options: &[T],
     selection_strategy: &MotionQuerySelectionStrategy,
-) -> Option<String> {
+) -> Option<T> {
     if options.is_empty() {
         return None;
     }
@@ -6912,15 +6912,18 @@ impl MissionCore {
                             .get_motion_stuff(name.clone())
                             .end_direction
                     };
+                    let options = global_context.motiondb.query_all_timed(query.clone());
                     let result = if let Some((_, delta, max_seconds)) = turn {
-                        let options = global_context.motiondb.query_all(query.clone());
                         // Budget the turn at the speed it will actually play.
                         let warp = creature_time_warp(&self.world, entity_id);
                         let clips = options
                             .iter()
-                            .map(|name| {
-                                let stuff = global_context.motiondb.get_motion_stuff(name.clone());
-                                (stuff.end_direction, stuff.duration * warp)
+                            .map(|option| {
+                                let stuff = global_context
+                                    .motiondb
+                                    .get_motion_stuff(option.name.clone());
+                                let schema_scale = option.timing.time_scale(stuff.duration);
+                                (stuff.end_direction, stuff.duration * schema_scale * warp)
                             })
                             .collect::<Vec<_>>();
                         dark::motion::nearest_turn_clip(delta, &clips, max_seconds)
@@ -6929,30 +6932,28 @@ impl MissionCore {
                         // Standing still must not play a turn: the schema's
                         // pivots would swing the creature's body with no
                         // heading change behind it.
-                        let options = global_context
-                            .motiondb
-                            .query_all(query.clone())
+                        let options = options
                             .into_iter()
-                            .filter(|name| !dark::motion::is_turn_clip(end_direction(name)))
+                            .filter(|option| {
+                                !dark::motion::is_turn_clip(end_direction(&option.name))
+                            })
                             .collect::<Vec<_>>();
                         select_motion_option(&options, &selection_strategy)
                     } else if is_death_query {
-                        let options = global_context
-                            .motiondb
-                            .query_all(query.clone())
+                        let options = options
                             .into_iter()
-                            .filter(|name| {
+                            .filter(|option| {
                                 is_realtime_crumple(
                                     global_context
                                         .motiondb
-                                        .get_mps_motions(name.clone())
+                                        .get_mps_motions(option.name.clone())
                                         .frame_count,
                                 )
                             })
                             .collect::<Vec<_>>();
                         select_motion_option(&options, &selection_strategy)
                     } else {
-                        global_context.motiondb.query(query.clone())
+                        select_motion_option(&options, &selection_strategy)
                     };
                     tried_queries.push(query);
                     result
@@ -6968,7 +6969,11 @@ impl MissionCore {
                     tried_queries.iter().map(|q| &q.items).collect::<Vec<_>>(),
                     maybe_next_animation
                 );
-                if let Some(next_animation) = maybe_next_animation {
+                if let Some(dark::motion::MotionOption {
+                    name: next_animation,
+                    timing,
+                }) = maybe_next_animation
+                {
                     let maybe_clip = asset_cache
                         .get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{}_.mc", next_animation));
 
@@ -7003,6 +7008,15 @@ impl MissionCore {
                                 ))
                             }
                             _ => clip,
+                        };
+                        // The schema's authored time warp / fixed duration and
+                        // stretch / fixed distance (most schemas have none).
+                        let time_scale = timing.time_scale(clip.duration.as_secs_f32());
+                        let stretch = timing.stretch(clip.translation.magnitude());
+                        let clip = if time_scale != 1.0 || stretch != 1.0 {
+                            Rc::new(clip.with_timing(time_scale, stretch))
+                        } else {
+                            clip
                         };
                         self.failed_animation_queries.remove(&entity_id);
                         if turn.is_some() {

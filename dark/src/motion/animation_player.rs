@@ -737,6 +737,17 @@ mod tests {
     }
 
     #[test]
+    fn schema_timing_scales_the_clock_and_the_travel() {
+        // Half the duration and 1.5x the travel: the root moves 3x as fast.
+        let clip = Rc::new(clip_with_root_motion().with_timing(0.5, 1.5));
+        assert_eq!(clip.duration, Duration::from_millis(150));
+        let player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip);
+
+        let (_, _, _, velocity) = AnimationPlayer::update(&player, Duration::from_millis(50));
+        assert!((velocity.x - 30.0).abs() < 1e-3, "got {velocity:?}");
+    }
+
+    #[test]
     fn update_returns_per_frame_root_velocity_not_clip_average() {
         let player =
             AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip_with_root_motion());
