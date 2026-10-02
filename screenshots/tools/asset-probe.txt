@@ -1,0 +1,6 @@
+  ok   mesh/grunt_p.bin                             LGMM v2 + PMNM (2488 tris, 1704 verts, 2 mats, 20 joints)                                               
+  ok   mesh/grunt_s.bin                             LGMM v1                                                                                                 
+models (LGMD/LGMM)         2 ok /     0 failed  (100% ok)                                                                                                   
+textures                   2 ok /     0 failed  (100% ok)                                                                                                   
+motions                    1 ok /     0 failed  (100% ok)                                                                                                   
+skipped                    2 (unhandled extensions)
