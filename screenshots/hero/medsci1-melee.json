@@ -1,8 +1,8 @@
 {
-  "revision": "b817935f784d67af42627861ca81c09f9e3e1d25",
+  "revision": "09131232bcda572232491f1020ccee3932c453d4",
   "dirty": false,
-  "runtimeSha256": "06e5d53839e62421d497ecd4823c98eeb6ccc95cb1bbb370c7e790b71ebcac9c",
-  "capturedAt": "2026-10-02T17:59:47.112Z",
+  "runtimeSha256": "16702f681cb2a4a14092b14e6efe218093276e170868d82762edb5c4f256d151",
+  "capturedAt": "2026-10-02T18:19:49.435Z",
   "mission": "medsci1.mis",
   "lighting": [
     {
@@ -12,8 +12,8 @@
     },
     {
       "key": "held_light_floor",
-      "value": 0.6000000238418579,
-      "default": 0.6000000238418579
+      "value": 0.30000001192092896,
+      "default": 0.30000001192092896
     }
   ],
   "player": [

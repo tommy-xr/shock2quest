@@ -147,7 +147,7 @@ await mkdir(out, { recursive: true });
 // The source revision, read before captures overwrite tracked media.
 const git = (...args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
 const source = {
-  revision: git("rev-parse", "HEAD"),
+  revision: process.env.SHOCK2_CAPTURE_REVISION ?? git("rev-parse", "HEAD"),
   dirty: git("status", "--porcelain", "--untracked-files=no") !== "",
   runtimeSha256: process.env.SHOCK2_CAPTURE_RUNTIME_SHA256,
 };
