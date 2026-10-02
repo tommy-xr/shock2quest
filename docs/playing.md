@@ -43,6 +43,10 @@ cycle through compatible ammo carried in your backpack. Inserting another ammo
 type returns the loaded rounds to your backpack. In the amp's power selector, use that hand's
 stick up/down for tiers and left/right for purchased powers; confirm with its
 upper button or trigger. Each amp remembers its current and alternate powers.
+Enable **Developer options → Weapons → Free-hand psi pull** to aim your empty
+hand at a loose item and pull its trigger while holding an amp in the other hand.
+This requires trained Kinetic Redirection and spends its normal psi cost, without
+changing the amp's selected power. Grip the arriving item to catch it.
 
 The pouch also offers carried prisms and worm beakers for compatible guns.
 With a laser pistol or EMP rifle held, it offers one portable battery at a time
