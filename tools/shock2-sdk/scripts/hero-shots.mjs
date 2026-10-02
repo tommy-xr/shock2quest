@@ -140,7 +140,8 @@ const { values } = parseArgs({
     name: { type: "string", default: "replay" },
   },
 });
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const repoRoot = process.env.SHOCK2_CAPTURE_REPO_ROOT
+  ?? resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const out = values.out ? resolve(values.out) : resolve(repoRoot, "screenshots/hero");
 await mkdir(out, { recursive: true });
 // The source revision, read before captures overwrite tracked media.
@@ -148,6 +149,7 @@ const git = (...args) => execFileSync("git", args, { cwd: repoRoot, encoding: "u
 const source = {
   revision: git("rev-parse", "HEAD"),
   dirty: git("status", "--porcelain", "--untracked-files=no") !== "",
+  runtimeSha256: process.env.SHOCK2_CAPTURE_RUNTIME_SHA256,
 };
 
 if (values.replay) {
@@ -222,6 +224,9 @@ async function captureShot(shot) {
     console.log(`${shot.name}: ${result.full_path} ${result.resolution.join("x")}`);
     const provenance = {
       mission: shot.mission,
+      lighting: (await game.devParams.list()).params
+        .filter((param) => param.key === "ambient_light_intensity")
+        .map(({ key, value, default: defaultValue }) => ({ key, value, default: defaultValue })),
       player: shot.player,
       subject: shot.subject ?? `template ${shot.spawnMonster}`,
       loadout: shot.loadout,

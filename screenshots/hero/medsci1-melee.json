@@ -1,8 +1,16 @@
 {
-  "revision": "ed2f8bf1cb962beccd9a59d11067ac691211c9f2",
+  "revision": "0c7257b8d74d8a9b1a142353ae877bee3c5b5d10",
   "dirty": false,
-  "capturedAt": "2026-09-26T23:40:39.817Z",
+  "runtimeSha256": "4cc4d6ee0a6c15208a53dd0533d658904a82992c0e0d68cb7c6c8a07059fdfe5",
+  "capturedAt": "2026-10-02T16:59:07.609Z",
   "mission": "medsci1.mis",
+  "lighting": [
+    {
+      "key": "ambient_light_intensity",
+      "value": 0,
+      "default": 0
+    }
+  ],
   "player": [
     16,
     1,
@@ -30,7 +38,7 @@
     "fps": 15,
     "hp": [
       12,
-      1
+      0
     ]
   }
 }

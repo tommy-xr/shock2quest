@@ -1,8 +1,16 @@
 {
-  "revision": "83e46240974ae3419897281e91178bff012b1b72",
+  "revision": "0c7257b8d74d8a9b1a142353ae877bee3c5b5d10",
   "dirty": false,
-  "capturedAt": "2026-09-26T23:20:24.297Z",
+  "runtimeSha256": "4cc4d6ee0a6c15208a53dd0533d658904a82992c0e0d68cb7c6c8a07059fdfe5",
+  "capturedAt": "2026-10-02T16:58:43.503Z",
   "mission": "ops2.mis",
+  "lighting": [
+    {
+      "key": "ambient_light_intensity",
+      "value": 0,
+      "default": 0
+    }
+  ],
   "player": [
     65.5,
     -7.3,
