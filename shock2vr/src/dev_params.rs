@@ -411,7 +411,7 @@ dev_params! {
     VR_HOLSTER_ZONES = Interaction::bool("vr_holster_zones", "Holster zones", false),
     /// Actual front of the curved belt, including the asset's authored offset.
     /// The pouch and personal card follow both belt settings with their grab targets.
-    VR_BELT_DISTANCE = Body::float("vr_belt_distance", "Belt forward (m)", 0.20, 0.10, 0.45, 0.01),
+    VR_BELT_DISTANCE = Body::float("vr_belt_distance", "Belt forward (m)", 0.0, -0.5, 0.5, 0.01),
     VR_BELT_DROP = Body::float("vr_belt_drop", "Belt below eyes (m)", 0.55, 0.30, 0.90, 0.01),
     /// Session-only handheld experiment, also available on Quest without CLI flags.
     VR_MFD_DEVICE = Tricorder::bool("vr_mfd_device", "MFD device prototype", true),

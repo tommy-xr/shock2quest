@@ -551,7 +551,8 @@ Declarations use `Category::float(...)` / `Category::bool(...)`, or
 `GET /v1/dev-params` also reports each parameter's category label and locked flag.
 
 To fit the VR battle belt, adjust **Belt below eyes (m)** (smaller raises it)
-and **Belt forward (m)** (larger brings it farther out). Both move the belt,
+and **Belt forward (m)** (default 0.0 m, range −0.5 to +0.5 m; larger brings
+it farther out). Both move the belt,
 personal card, ammo pouch and grab targets together; thigh holsters retain their
 separate controls. These developer values apply for the current session.
 

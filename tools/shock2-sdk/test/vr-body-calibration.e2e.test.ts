@@ -20,7 +20,7 @@ test("belt and holster calibration moves live targets independently and resolves
       "belt must not move thighs beyond settling tolerance");
   }
   const delta = sub(movedBelt.ammo_pouch!.center!, before.ammo_pouch!.center!);
-  assert.ok(Math.abs(Math.hypot(...delta) * 0.762 - 0.10) < 0.001, "pouch moves by ten centimetres with belt");
+  assert.ok(Math.abs(Math.hypot(...delta) * 0.762 - 0.30) < 0.001, "pouch moves by thirty centimetres with belt");
   const cardForward = quatRotate(initialPlayer.rotation, sub(movedBelt.body_gear!.personal_card.center!, before.body_gear!.personal_card.center!));
   assert.ok(Math.hypot(...sub(cardForward, delta)) < 0.001, "card follows the pouch forward");
   await game.devParams.set("vr_belt_drop", 0.65);
