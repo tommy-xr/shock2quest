@@ -382,6 +382,7 @@ fn cast_selected_power(
     if power.template_id == crate::psi_pull::POWER {
         return crate::psi_pull::resolve(world, physics, amp_entity)
             .map(|_| Effect::PsiPull {
+                hand: None,
                 amp: amp_entity,
                 cost: power.power.psi_cost,
             })

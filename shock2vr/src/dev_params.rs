@@ -308,6 +308,8 @@ dev_params! {
     AMBIENT_LIGHT_INTENSITY = Lighting::float("ambient_light_intensity", "Ambient intensity", 0.0, 0.0, 3.0, 0.05),
     /// Scale baked world lighting independently of the ambient floor and spotlights.
     LEVEL_LIGHT_INTENSITY = Lighting::float("level_light_intensity", "Level light intensity", 1.0, 0.0, 3.0, 0.05),
+    /// A trained Kinetic Redirection can be cast with the amp's empty opposite hand.
+    VR_FREE_HAND_PSI_PULL = Weapons::bool("vr_free_hand_psi_pull", "Free-hand psi pull", false),
     /// Weapon-handling test overrides only: 0 follows the character sheet,
     /// 1–6 selects a live test level without changing stats or saves. Strength
     /// affects physical gun recoil and optional weight; Agility affects recoil.

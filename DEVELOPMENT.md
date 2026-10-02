@@ -501,6 +501,21 @@ The inventory’s blocked-cell art marks the other slot when capacity is full. T
 required for gestures; recovering tracking cannot manufacture a squeeze or
 release. Socket placement still needs a seated/standing comfort pass on a headset.
 
+### Free-hand Kinetic Redirection
+
+Enable **Developer options → Weapons → Free-hand psi pull**
+(`vr_free_hand_psi_pull`, off by default). Hold a psi amp in one hand and aim the
+empty hand at a loose, pullable item; pull that hand's trigger to bring it to you.
+Kinetic Redirection must be trained, but need not be selected on the amp. A valid
+cast spends the power's authored psi cost once. Walls and ineligible objects
+block the ray; doors and panels keep their ordinary trigger interaction.
+
+Squeeze to catch the arriving item. Preparing the grip does not cancel its
+flight, and holding the trigger through the catch cannot use the item. Release
+and pull again to use it. Dropping the amp, losing tracking, or entering the cyber
+interface cancels the flight and restores the item's gravity. Uncaught items
+fall normally; the power never puts them directly into the backpack.
+
 ### Campaign difficulty
 
 New Game offers Easy, Normal (the default), Hard, and Impossible. Choose a level,
