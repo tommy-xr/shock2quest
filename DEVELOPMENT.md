@@ -1002,12 +1002,28 @@ alone does not move the pawn or generate steps.
 
 Both left and right thigh holsters are available from the start, independently
 of O/S upgrades. Pack-Rat adds three backpack slots only. Either hand can stow
-a melee weapon, compact pistol, or psi amp in either holster with a deliberate release,
+an item with an authored holster pose in either holster with a deliberate release,
 and retrieve it with a fresh squeeze.
 
 The cyber interface's left and right paperdoll arm wells show the corresponding
 holstered items. They are read-only storage indicators; the weapon selectors
 below still operate on the items actually held in each hand.
+
+Author an item's placement with `cargo dx ui --holster atek_w` (or
+`cargo run -p dark_explorer -- ui --holster atek_w`). VR Setup → **Holster**
+previews the item inside the new shell; adjust position in centimetres,
+rotation in degrees, and item length. Hand grips also offers **Edit holster pose**.
+The initial library includes the pistol, laser pistol, wrench, laser rapier /
+electro shock, crystal shard and psi amp. Each has its own pose.
+
+**Save holster poses** writes `assets/vr-holsters.json`. Restart the game and
+include the JSON when deploying to Quest. `--holster-library <path>` edits an
+alternate resource. Item definitions accept BIN world models only (with or
+without the `.bin` suffix). Add a world model to author another item; removing its
+entry disables holstering. Eligibility and rendering use this same resource,
+with no separate weapon-category allowlist. The shell is 20% smaller; its size
+is independent of item length and grab radius. The new belt includes the ammo
+pouch; its old separate mesh and glowing readout are removed.
 
 ### Belt MFD device
 
@@ -1104,7 +1120,6 @@ scan, map, body and hologram settings live in this top-level category; per-hand
 placement controls are under its **Hand grips** subcategory. Existing HTTP keys
 are unchanged.
 
-**Belt yaw (deg)** (`vr_mfd_belt_yaw`, default +13°, range ±45°) matches the
-angled buckle face in `astra-vr-belt.glb`. Adjust it live under **Tricorder**;
+**Belt yaw (deg)** (`vr_mfd_belt_yaw`, default +13°, range ±45°) adjusts the device relative to `belt.glb`. Adjust it live under **Tricorder**;
 the display, rear scanner and magnetic standoff rotate together. It affects
 only the stowed mount, leaving the saved left/right hand grips unchanged.

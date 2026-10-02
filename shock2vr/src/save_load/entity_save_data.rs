@@ -321,10 +321,7 @@ mod tests {
         data.all_entities.push(weapon.inner());
         data.holstered.insert(
             weapon.inner(),
-            crate::runtime_props::RuntimePropHolstered {
-                slot: 1,
-                held_extent: Some(0.3),
-            },
+            crate::runtime_props::RuntimePropHolstered { slot: 1 },
         );
         data.selected_ammo.insert(weapon.inner(), 2);
         data.shoulder_weapons.insert(

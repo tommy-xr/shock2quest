@@ -5,7 +5,8 @@ use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3};
 use shipyard::EntityId;
 
 pub(super) const RADIUS: f32 = 0.10 / crate::METERS_PER_WORLD_UNIT;
-const POUCH_OFFSET: f32 = 0.05;
+// The new belt includes its pouch; target its interior behind the front face.
+const POUCH_OFFSET: f32 = -0.025;
 
 pub(super) fn center_for(body: BodyPose) -> Vector3<f32> {
     body.front(

@@ -1,0 +1,112 @@
+{
+  "entries": [
+    {
+      "model": "atek_w",
+      "held_model": "atek_h",
+      "label": "Pistol",
+      "pose": {
+        "position_m": [
+          0,
+          0.04,
+          0
+        ],
+        "rotation_degrees": [
+          -90,
+          0,
+          0
+        ],
+        "length_m": 0.24
+      }
+    },
+    {
+      "model": "laser",
+      "held_model": "lasehand",
+      "label": "Laser pistol",
+      "pose": {
+        "position_m": [
+          0,
+          0.04,
+          0
+        ],
+        "rotation_degrees": [
+          0,
+          90,
+          -90
+        ],
+        "length_m": 0.24
+      }
+    },
+    {
+      "model": "wrench_w",
+      "held_model": "wrench_h",
+      "label": "Wrench",
+      "pose": {
+        "position_m": [
+          0,
+          0.08,
+          0
+        ],
+        "rotation_degrees": [
+          0,
+          0,
+          -90
+        ],
+        "length_m": 0.32
+      }
+    },
+    {
+      "model": "rapier_w",
+      "held_model": "rapier_h",
+      "label": "Laser rapier / electro shock",
+      "pose": {
+        "position_m": [
+          0,
+          0.05,
+          0
+        ],
+        "rotation_degrees": [
+          180,
+          0,
+          0
+        ],
+        "length_m": 0.26
+      }
+    },
+    {
+      "model": "shard_w",
+      "held_model": "shard_h",
+      "label": "Crystal shard",
+      "pose": {
+        "position_m": [
+          0,
+          0.06,
+          0
+        ],
+        "rotation_degrees": [
+          0,
+          0,
+          90
+        ],
+        "length_m": 0.28
+      }
+    },
+    {
+      "model": "amp_w",
+      "held_model": "amp_h",
+      "label": "Psi amp",
+      "pose": {
+        "position_m": [
+          0,
+          0.055,
+          0
+        ],
+        "rotation_degrees": [
+          0,
+          0,
+          -90
+        ],
+        "length_m": 0.16
+      }
+    }
+  ]
+}

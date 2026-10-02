@@ -5585,6 +5585,7 @@ impl MissionCore {
         });
         self.holsters.pouch_priority = pouch_weapons.map(|weapon| weapon.is_some());
         self.holsters.freeze_heading = self.ammo_pouch.near.iter().any(|near| *near);
+        self.holsters.load_poses(asset_cache);
         let holster_actions = self.holsters.update(
             &body_input,
             held,
@@ -5601,7 +5602,12 @@ impl MissionCore {
                 })
             }),
             held.map(|entity| {
-                entity.is_some_and(|entity| super::holsters::accepts(&self.world, entity))
+                entity.is_some_and(|entity| {
+                    self.holsters
+                        .poses
+                        .for_entity(&self.world, entity)
+                        .is_some()
+                })
             }),
             game_options.presentation_mode == crate::PresentationMode::Vr
                 && !self.use_mode
@@ -5854,7 +5860,7 @@ impl MissionCore {
                         Action::Store { .. } => "Weapon holstered",
                         Action::Retrieve { .. } => "Weapon drawn",
                         Action::Refuse { .. } => {
-                            "Holster accepts melee weapons and pistols, one per slot. Use a shoulder for larger weapons. Squeeze to re-grip."
+                            "Holster occupied or item has no holster pose. Use a shoulder for other weapons. Squeeze to re-grip."
                         }
                     }
                     .to_owned(),
@@ -15394,16 +15400,16 @@ impl MissionCore {
                         crate::dev_params::get(crate::dev_params::VR_BELT_DROP),
                         crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) - 0.30,
                     ));
-                let pouch_center = self.ammo_pouch.world_center(player.pos, player.rotation);
-                let mut parts = vec![("astra-vr-belt.glb", belt_center, Matrix4::from_scale(1.0))];
-                if let Some(center) = pouch_center {
-                    parts.push(("astra-vr-ammo-pouch.glb", center, Matrix4::from_scale(1.0)));
-                }
+                let mut parts = vec![("belt.glb", belt_center, Matrix4::from_scale(1.0))];
                 if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
                     let occupants = super::holsters::occupants(&self.world);
                     for (slot, center) in centers.into_iter().enumerate() {
                         if slot < super::holsters::SLOT_COUNT || occupants[slot].is_some() {
-                            parts.push(("astra-vr-holster.glb", center, Matrix4::from_scale(1.0)));
+                            parts.push((
+                                "holster.glb",
+                                center,
+                                Matrix4::from_scale(crate::vr_holster::SHELL_SCALE),
+                            ));
                         }
                     }
                 }
@@ -15425,21 +15431,6 @@ impl MissionCore {
                         );
                         scene.extend(objects);
                     }
-                }
-                if let Some(center) = pouch_center {
-                    let root = Matrix4::from_translation(center)
-                        * root_rotation
-                        * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT);
-                    let mut objects = super::body_gear_feedback::pouch(
-                        &self.body_pouch_readout(),
-                        root,
-                        asset_cache,
-                    );
-                    crate::util::tag_render_source(
-                        &mut objects,
-                        crate::util::render_source::PLAYER_HANDS,
-                    );
-                    scene.extend(objects);
                 }
                 if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
                     for (slot, item) in super::holsters::occupants(&self.world)
@@ -15472,45 +15463,16 @@ impl MissionCore {
                     let Some(bounds) = model.bounding_box() else {
                         continue;
                     };
-                    let extent = bounds.max - bounds.min;
-                    let longest = extent.x.max(extent.y).max(extent.z);
-                    if longest <= 0.0001 {
+                    let Some(entry) =
+                        entity.and_then(|id| self.holsters.poses.for_entity(&self.world, id))
+                    else {
                         continue;
-                    }
-                    let held_extent = entity
-                        .and_then(|id| {
-                            self.world
-                                .borrow::<View<crate::runtime_props::RuntimePropHolstered>>()
-                                .ok()
-                                .and_then(|slots| {
-                                    slots.get(id).ok().and_then(|slot| slot.held_extent)
-                                })
-                        })
-                        .unwrap_or(longest);
-                    let scale = held_extent.min(0.45 / crate::METERS_PER_WORLD_UNIT) / longest;
-                    let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
-                    // World meshes have different authored long axes. These
-                    // two corrections adapt the authored profiles from #1399.
-                    let name = entity
-                        .and_then(|id| {
-                            self.world
-                                .borrow::<View<PropModelName>>()
-                                .ok()
-                                .and_then(|names| {
-                                    names.get(id).ok().map(|name| name.0.to_ascii_lowercase())
-                                })
-                        })
-                        .unwrap_or_default();
-                    let orientation = match name.trim_end_matches(".bin") {
-                        "sg_w" => Matrix4::from_angle_x(cgmath::Deg(90.0)),
-                        "wrench_w" => Matrix4::from_angle_z(cgmath::Deg(-90.0)),
-                        _ => Matrix4::from_angle_x(cgmath::Deg(-90.0)),
                     };
                     let root = Matrix4::from_translation(centers[slot])
                         * self.holsters.world_rotation(player.rotation)
-                        * orientation
-                        * Matrix4::from_scale(scale)
-                        * Matrix4::from_translation(-center);
+                        * entry
+                            .pose
+                            .model_transform(bounds.min.to_vec(), bounds.max.to_vec());
                     let mut objects = model.to_scene_objects().clone();
                     // Stowed weapons are player gear too: use the same room
                     // lighting and adjustable minimum as a weapon in hand.
@@ -16335,59 +16297,12 @@ impl MissionCore {
                     });
                 }
                 VirtualHandEffect::HolsterItem { entity_id, slot } => {
-                    // Drop can swap the calibrated viewmodel for a differently
-                    // sized world mesh. Preserve its apparent size across that swap.
-                    let scale = self
-                        .world
-                        .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
-                        .ok()
-                        .and_then(|v| v.get(entity_id).ok().map(|p| p.item_scale))
-                        .unwrap_or(1.0);
-                    let model_name = self
-                        .world
-                        .borrow::<View<PropModelName>>()
-                        .ok()
-                        .and_then(|names| names.get(entity_id).ok().map(|name| name.0.clone()));
-                    // Authored header bounds can still include the removed arms.
-                    // Measure only the same visible triangles used by grip fitting.
-                    let weapon_extent = model_name
-                        .filter(|name| crate::vr_weapon_grip::supports_model(name))
-                        .and_then(|name| {
-                            asset_cache.get_opt(
-                                &dark::importers::GLOVE_WEAPON_IMPORTER,
-                                &format!("{name}.bin"),
-                            )
-                        })
-                        .and_then(|source| {
-                            let source = source.as_ref().as_ref()?;
-                            let mut points = source.triangles.iter().flatten();
-                            let first = *points.next()?;
-                            let (min, max) = points.fold((first, first), |(min, max), p| {
-                                (
-                                    Point3::new(min.x.min(p.x), min.y.min(p.y), min.z.min(p.z)),
-                                    Point3::new(max.x.max(p.x), max.y.max(p.y), max.z.max(p.z)),
-                                )
-                            });
-                            Some(max - min)
-                        });
-                    let held_extent = weapon_extent
-                        .or_else(|| {
-                            self.id_to_model
-                                .get(&entity_id)
-                                .and_then(|model| model.bounding_box())
-                                .map(|bounds| bounds.max - bounds.min)
-                        })
-                        .map(|extent| extent.x.max(extent.y).max(extent.z) * scale)
-                        .filter(|extent| extent.is_finite() && *extent > 0.0001);
                     self.detach_from_containers(entity_id);
                     self.make_un_physical(entity_id);
                     self.world.add_component(
                         entity_id,
                         (
-                            crate::runtime_props::RuntimePropHolstered {
-                                slot: slot as u8,
-                                held_extent,
-                            },
+                            crate::runtime_props::RuntimePropHolstered { slot: slot as u8 },
                             PropHasRefs(false),
                         ),
                     );

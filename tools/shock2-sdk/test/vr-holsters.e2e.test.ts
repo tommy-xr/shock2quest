@@ -73,6 +73,44 @@ for (const hand of ["left", "right"] as const) {
 }
 }
 
+for (const [name, template] of [
+  ["laser pistol", -22], ["wrench", -928], ["laser rapier", -24],
+  ["crystal shard", -28], ["psi amp", -247],
+] as const) {
+  test(`authored ${name} holster pose allows stow and retrieval`, { skip: !enabled, timeout: 180_000 }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    const item = (await game.entities.list()).entities.find(e => e.template_id === template);
+    assert.ok(item);
+    await aimVrHandAt(game, item.position, 0.2, 1);
+    await game.step({ frames: 5 });
+    assert.equal((await game.info()).player.right_hand_entity_id, item.id);
+    await reach(game, "right", 0);
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 8 });
+    assert.equal((await game.info()).player.hand_feedback?.holsters?.items[0], item.id);
+    assert.equal((await game.physics.bodies({ entityId: item.id })).bodies.length, 0);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 8 });
+    assert.equal((await game.info()).player.right_hand_entity_id, item.id);
+    assert.equal((await game.info()).player.hand_feedback?.holsters?.items[0], null);
+  });
+}
+
+test("a shotgun without an authored holster pose is refused", { skip: !enabled, timeout: 180_000 }, async () => {
+  await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  const item = (await game.entities.list()).entities.find(e => e.template_id === -19)!;
+  await aimVrHandAt(game, item.position, 0.2, 1);
+  await game.step({ frames: 5 });
+  await reach(game, "right", 0);
+  await game.input.set("right_hand.squeeze", 0);
+  await game.step({ frames: 8 });
+  const player = (await game.info()).player;
+  assert.equal(player.right_hand_entity_id, item.id);
+  assert.deepEqual(player.hand_feedback?.holsters?.items, [null, null]);
+});
+
 test("occupied holster retains the refused weapon until a deliberate regrip", { skip: !enabled, timeout: 180_000 }, async () => {
   await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
   await game.step({ frames: 30 });

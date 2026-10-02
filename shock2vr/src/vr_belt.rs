@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BeltCardPose {
-    /// Position relative to astra-vr-belt.glb's origin, in metres.
+    /// Position relative to belt.glb's origin, in metres.
     pub position_m: [f32; 3],
     /// Local X, Y, Z rotations composed in that order.
     pub rotation_degrees: [f32; 3],

@@ -85,6 +85,7 @@ mod util;
 mod virtual_hand;
 pub mod vr_belt;
 mod vr_config;
+pub mod vr_holster;
 pub mod vr_magazine;
 mod vr_psi_sway;
 mod vr_shotgun_pump;

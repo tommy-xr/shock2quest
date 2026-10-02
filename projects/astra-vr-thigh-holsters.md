@@ -1,10 +1,11 @@
 # VR thigh holsters
 
-The right thigh carries one small weapon independently of backpack capacity. Pack Rat
-adds a left thigh slot as well as its existing backpack capacity bonus. Either
-hand can use either unlocked slot. Only melee weapons, the pistol and the laser
-pistol fit; larger guns, the psi amp and ordinary pickups are excluded. A large
-gun released at the slot is refused and retained, with a prompt to use a shoulder.
+Both thigh holsters are available independently of backpack capacity and O/S
+upgrades. An item is eligible exactly when `assets/vr-holsters.json` contains
+its world-model definition. The default poses cover pistol, laser pistol,
+wrench, laser rapier / electro shock, crystal shard and psi amp. Author more
+items with `cargo dx ui --holster <world-model>` (VR Setup → Holster).
+A weapon without a pose is refused and retained, with a prompt to use a shoulder.
 
 Bring a weapon into the cyan marker, then release the grip to stow it. Reaching
 while still squeezing does not stow. A fresh squeeze with an empty hand draws
@@ -14,9 +15,9 @@ retaining the held weapon until the player deliberately squeezes again. The
 existing weapon is never swapped or discarded.
 
 The slot owns the actual entity, with no backpack duplicate or loose physics
-body. Ownership and the calibrated held size survive saves and level transitions.
-The world model is displayed barrel-down, matching the held weapon's longest
-extent, capped at 45 cm. An occupied second slot remains
+body. Ownership survives saves and level transitions.
+The world model uses its authored holster position, rotation and length, shared
+with the editor preview. An occupied second slot remains
 retrievable if Pack Rat is removed. Loading the save in flatscreen returns
 holstered items to the backpack; overflow drops visibly in front of the player.
 
@@ -34,8 +35,8 @@ Use `cargo dbgr --mission debug_interactions --vr`. Developer parameters:
 - `vr_belt_drop`: belt height below the eyes, default 0.55 m, range 0.30–0.90 m
   in 1 cm steps. The belt mesh, personal card, pouch and their grab targets move together.
 - `vr_belt_distance`: distance to the front of the belt, default 0.20 m,
-  range 0.10–0.45 m. The ammo pouch and its target follow the belt, 5 cm farther
-  forward. This compensates for the belt mesh's authored 30 cm offset.
+  range 0.10–0.45 m. The ammo pouch is built into the belt; its target is 2.5 cm behind
+  the front face. This compensates for the belt mesh's authored 30 cm offset.
 
 All placement settings take effect live, in metres, without changing hand poses
 or holstered weapon scale. Belt height/distance and thigh placement are independent.
@@ -74,10 +75,8 @@ simultaneous hands and Pack Rat gating. Shoulder-backpack tests protect the
 shared heading/refusal logic.
 
 Headset acceptance still needs standing/seated reach, ordinary arm swings, and
-weapon visibility checks. Additional per-model holstered orientation, a preferred-leg
-selector, editor controls and haptics are follow-up refinements; the current
-increment adapts the shotgun/wrench axis corrections from #1399 and uses
-developer offsets.
+weapon visibility checks. Per-model holstered position, rotation and size now live in `vr-holsters.json`
+and can be edited in dark_explorer. A preferred-leg selector remains a follow-up.
 
 ## Shoulder weapon recall
 

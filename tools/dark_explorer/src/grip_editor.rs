@@ -240,8 +240,16 @@ fn transfer_grip(
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum VrSetupMode {
+    Hands,
+    Belt,
+    Holster,
+}
+
 pub struct GripEditor {
-    pub belt_mode: bool,
+    pub mode: VrSetupMode,
+    pub holster_editor: crate::holster_editor::HolsterEditor,
     pub belt_editor: crate::belt_card_editor::BeltCardEditor,
     support_editor: crate::support_grip_editor::SupportEditor,
     support_mode: bool,
@@ -301,7 +309,8 @@ impl GripEditor {
             default_library_path()
         };
         Self {
-            belt_mode: false,
+            mode: VrSetupMode::Hands,
+            holster_editor: crate::holster_editor::HolsterEditor::new(None, None),
             belt_editor: crate::belt_card_editor::BeltCardEditor::new(None),
             support_editor: crate::support_grip_editor::SupportEditor::new(support_path),
             support_mode,
@@ -330,7 +339,7 @@ impl GripEditor {
     }
 
     pub fn open_model(&mut self, key: &str) {
-        self.belt_mode = false;
+        self.mode = VrSetupMode::Hands;
         self.model = std::path::Path::new(key)
             .file_stem()
             .unwrap_or_default()
@@ -497,7 +506,10 @@ impl GripEditor {
     }
 
     pub fn error(&self) -> Option<&str> {
-        if self.belt_mode {
+        if self.mode == VrSetupMode::Holster {
+            return self.holster_editor.error();
+        }
+        if self.mode == VrSetupMode::Belt {
             return self.belt_editor.error();
         }
         if matches!(self.model.as_str(), "amp_h" | "amp_w") {
@@ -523,7 +535,11 @@ impl GripEditor {
         let busy = self.is_busy();
         let primary_dirty = self.document.as_ref().is_ok_and(|doc| doc.dirty());
         if !self.allow_close
-            && (primary_dirty || self.support_editor.dirty() || self.belt_editor.dirty() || busy)
+            && (primary_dirty
+                || self.support_editor.dirty()
+                || self.belt_editor.dirty()
+                || self.holster_editor.dirty()
+                || busy)
             && ctx.input(|i| i.viewport().close_requested())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -552,6 +568,7 @@ impl GripEditor {
                         match primary_saved
                             .and_then(|_| self.support_editor.save())
                             .and_then(|_| self.belt_editor.save())
+                            .and_then(|_| self.holster_editor.save())
                         {
                             Ok(()) => self.allow_close = true,
                             Err(e) => self.message = e,
@@ -574,12 +591,17 @@ impl GripEditor {
     pub fn show_list(&mut self, ui: &mut egui::Ui) {
         ui.heading("VR Setup");
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.belt_mode, false, "Hand grips");
-            ui.selectable_value(&mut self.belt_mode, true, "Belt card");
+            ui.selectable_value(&mut self.mode, VrSetupMode::Hands, "Hand grips");
+            ui.selectable_value(&mut self.mode, VrSetupMode::Belt, "Belt card");
+            ui.selectable_value(&mut self.mode, VrSetupMode::Holster, "Holster");
         });
-        if self.belt_mode {
+        if self.mode == VrSetupMode::Belt {
             ui.label("Personal access card");
             ui.label("Adjust its resting pose against the battle belt. Save the pose as an asset for gameplay.");
+            return;
+        }
+        if self.mode == VrSetupMode::Holster {
+            self.holster_editor.show_list(ui);
             return;
         }
         ui.label("Grip overrides · shared glove rig");
@@ -679,8 +701,17 @@ impl GripEditor {
         frame: &mut eframe::Frame,
         preview: &mut ModelPreview,
     ) {
-        if self.belt_mode {
+        if self.mode == VrSetupMode::Belt {
             self.belt_editor.show(ui, frame, preview);
+            return;
+        }
+        if self.mode == VrSetupMode::Holster {
+            self.holster_editor.show(ui, frame, preview);
+            return;
+        }
+        if ui.button("Edit holster pose").clicked() {
+            self.holster_editor.open_model(&self.model);
+            self.mode = VrSetupMode::Holster;
             return;
         }
         if matches!(self.model.as_str(), "amp_h" | "amp_w") {

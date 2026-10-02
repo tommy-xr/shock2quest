@@ -46,6 +46,7 @@ pub enum PreviewScene {
     /// The `.bin` model alone.
     Model,
     BeltCard(shock2vr::vr_belt::BeltCardPose),
+    Holster(shock2vr::vr_holster::HolsterPose),
     /// Authored VR weapon reference, retaining its integrated hand.
     VrReference,
     Grip(
@@ -65,7 +66,8 @@ impl PreviewScene {
             PreviewScene::Model
             | PreviewScene::VrReference
             | PreviewScene::Grip(..)
-            | PreviewScene::BeltCard(..) => None,
+            | PreviewScene::BeltCard(..)
+            | PreviewScene::Holster(..) => None,
             PreviewScene::Clip(clip) | PreviewScene::Skeleton(clip) => Some(clip),
         }
     }
@@ -205,6 +207,7 @@ impl ModelPreview {
                     | PreviewScene::Grip(..)
                     | PreviewScene::VrReference
                     | PreviewScene::BeltCard(..)
+                    | PreviewScene::Holster(..)
             ) {
                 ui.checkbox(&mut self.debug_skeletons, "Skeleton");
                 ui.checkbox(&mut self.debug_hit_boxes, "Hitboxes");
@@ -426,20 +429,11 @@ impl ModelPreview {
                 use cgmath::EuclideanSpace;
                 let belt = self
                     .asset_cache
-                    .get(&dark::importers::GLB_MODELS_IMPORTER, "astra-vr-belt.glb");
-                let pouch = self.asset_cache.get(
-                    &dark::importers::GLB_MODELS_IMPORTER,
-                    "astra-vr-ammo-pouch.glb",
-                );
-                let mut objects = Vec::new();
-                for (part, offset) in [(belt, vec3(0.0, 0.0, 0.0)), (pouch, vec3(0.0, 0.0, -0.35))]
-                {
-                    let root = Matrix4::from_translation(offset / shock2vr::METERS_PER_WORLD_UNIT)
-                        * Matrix4::from_scale(1.0 / shock2vr::METERS_PER_WORLD_UNIT);
-                    for mut object in part.clone_scene_objects() {
-                        object.set_transform(root);
-                        objects.push(object);
-                    }
+                    .get(&dark::importers::GLB_MODELS_IMPORTER, "belt.glb");
+                let mut objects = belt.clone_scene_objects();
+                for object in &mut objects {
+                    object
+                        .set_transform(Matrix4::from_scale(1.0 / shock2vr::METERS_PER_WORLD_UNIT));
                 }
                 let bounds = model.bounding_box().ok_or("Card model has no bounds")?;
                 let transform = pose.transform()
@@ -455,6 +449,35 @@ impl ModelPreview {
                     vec3(-0.08, 0.0, -0.30) / shock2vr::METERS_PER_WORLD_UNIT,
                     0.35,
                 ));
+                Ok(
+                    Box::new(GripPreviewScene(engine::scene::Scene::from_objects(
+                        objects,
+                    ))) as Box<dyn ToolScene>,
+                )
+            })
+            .and_then(|r: Result<_, &str>| r.map_err(str::to_string)),
+            PreviewScene::Holster(pose) => quiet_catch(|| {
+                use cgmath::EuclideanSpace;
+                let shell = self
+                    .asset_cache
+                    .get(&dark::importers::GLB_MODELS_IMPORTER, "holster.glb");
+                let mut objects = shell.clone_scene_objects();
+                for object in &mut objects {
+                    object.set_transform(Matrix4::from_scale(
+                        shock2vr::vr_holster::SHELL_SCALE / shock2vr::METERS_PER_WORLD_UNIT,
+                    ));
+                }
+                let bounds = model.bounding_box().ok_or("Item model has no bounds")?;
+                let transform = pose.model_transform(bounds.min.to_vec(), bounds.max.to_vec());
+                for mut object in model.clone_scene_objects() {
+                    object.set_transform(transform);
+                    objects.push(object);
+                }
+                pose_bounds = Some((
+                    vec3(0.0, 0.04, 0.0) / shock2vr::METERS_PER_WORLD_UNIT,
+                    pose.length_m.max(0.24) / shock2vr::METERS_PER_WORLD_UNIT,
+                ));
+                self.grip_bounds = pose_bounds;
                 Ok(
                     Box::new(GripPreviewScene(engine::scene::Scene::from_objects(
                         objects,
@@ -799,6 +822,20 @@ impl ModelPreview {
             "top" => (-90.0, 10.0),
             "side" => (0.0, 90.0),
             _ => (-125.0, 65.0),
+        };
+        self.needs_render = true;
+    }
+
+    pub fn holster_camera(&mut self, view: &str) {
+        if let Some((center, radius)) = self.grip_bounds {
+            self.frame_bounds(center, radius, 0.25);
+        }
+        // The shell's front faces -Z, like the belt; hand grips use +Z.
+        (self.yaw, self.pitch) = match view {
+            "front" => (-90.0, 90.0),
+            "back" => (90.0, 90.0),
+            "top" => (-90.0, 0.1),
+            _ => (-45.0, 66.2),
         };
         self.needs_render = true;
     }
