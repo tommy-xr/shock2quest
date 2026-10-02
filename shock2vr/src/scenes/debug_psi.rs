@@ -187,6 +187,7 @@ impl DebugSceneHooks for PsiHooks {
             // HACK STATION: the authored security computer exposes effective
             // Cyber Affinity in the ordinary hacking board's odds readout.
             spawns.push(spawn_at(-1250, Point3::new(-2.0, 1.0, 5.0)));
+            spawns.push(spawn_at(-1886, Point3::new(2.0, 1.0, 5.0)));
             // Sense-power fixtures: visible loot, hidden loot behind the backstop,
             // and a far negative control. Stable templates allow discovery per run.
             spawns.extend([

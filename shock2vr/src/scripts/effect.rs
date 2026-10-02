@@ -393,6 +393,14 @@ pub enum Effect {
     /// world quad - emitted by `GuiScript` when its entity is frobbed. This
     /// mirrors the original engine's frob-script overlay flow
     /// (`cShockGameSrv::Keypad`). See `projects/flat-ui.md` §5.2.
+    BeginPsiHack {
+        amp: EntityId,
+        target: EntityId,
+        psi: i32,
+        cost: i32,
+    },
+    EndPsiHack,
+
     OpenPanel {
         entity: EntityId,
     },

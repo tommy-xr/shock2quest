@@ -226,6 +226,7 @@ struct CursorItem {
 /// cursor/pointer bookkeeping needed to render and hit-test them.
 pub struct FlatUiHost {
     pub(crate) device: bool,
+    pub(crate) psionic_projection: bool,
     pub(crate) scan_label: Option<String>,
     active_panel: Option<EntityId>,
     /// Panel size in panel-local pixels (from `SetUI.world_size`); `None`
@@ -341,6 +342,7 @@ impl FlatUiHost {
     pub fn new() -> FlatUiHost {
         FlatUiHost {
             device: false,
+            psionic_projection: false,
             scan_label: None,
             active_panel: None,
             panel_size_px: None,
@@ -1600,7 +1602,9 @@ impl FlatUiHost {
                 ),
             };
         }
-        Some(if self.device {
+        Some(if self.psionic_projection {
+            super::psi_hack_panel::compose(canvas, self.device_screen_source())
+        } else if self.device {
             super::mfd_device::compose(
                 canvas,
                 self.device_screen_source(),

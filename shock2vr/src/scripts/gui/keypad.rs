@@ -91,7 +91,7 @@ pub(crate) const fn base_hack_board() -> [HackNode; BOARD_WIDTH * BOARD_HEIGHT] 
 const fn base_board(context: HrmContext) -> [HackNode; BOARD_WIDTH * BOARD_HEIGHT] {
     use HackNode::{Empty as E, Free as F};
     match context {
-        HrmContext::Hack { .. } => base_hack_board(),
+        HrmContext::Hack { .. } | HrmContext::PsiHack { .. } => base_hack_board(),
         HrmContext::Repair => [
             E, F, F, F, E, //
             E, F, F, F, E, //
@@ -212,6 +212,7 @@ fn effective_hack_values(world: &World, diff: PropHackDiff, security_computer: b
 #[derive(Clone, Copy)]
 pub(crate) enum HrmContext {
     Hack { security_computer: bool },
+    PsiHack { psi: i32 },
     Modify,
     Repair,
 }
@@ -231,7 +232,7 @@ impl HrmContext {
     /// The one place each mode's board art is named.
     pub(crate) const fn art(self) -> HrmArt {
         match self {
-            HrmContext::Hack { .. } => HrmArt {
+            HrmContext::Hack { .. } | HrmContext::PsiHack { .. } => HrmArt {
                 backdrop: "hack.pcx",
                 won: "winh.pcx",
                 lost: "loseh.pcx",
@@ -268,6 +269,17 @@ struct HrmTerms {
 
 impl HrmTerms {
     fn for_context(world: &World, context: HrmContext) -> Self {
+        // shkhrm.cpp HRMSkill/HRMStat: overload is included in the supplied
+        // effective PSI; psionic hacking gets neither software nor ExperTech.
+        if let HrmContext::PsiHack { psi } = context {
+            let half = psi.max(0).saturating_add(1) / 2;
+            return Self {
+                skill: half,
+                stat: half,
+                bonus_levels: 0,
+                implant: false,
+            };
+        }
         let Ok(quest) = world.borrow::<UniqueView<QuestInfo>>() else {
             return Self {
                 skill: 0,
@@ -278,7 +290,7 @@ impl HrmTerms {
         };
         let stats = quest.player_stats();
         let skill = stats.skill_level(match context {
-            HrmContext::Hack { .. } => Skill::Hack,
+            HrmContext::Hack { .. } | HrmContext::PsiHack { .. } => Skill::Hack,
             HrmContext::Modify => Skill::Modify,
             HrmContext::Repair => Skill::Repair,
         });
@@ -343,7 +355,7 @@ const FALLBACK_HACK_TEXT: &str = "Complete the circuit to hack this computer.";
 
 /// What hacking `entity` does: its `P$HackText`, resolved against
 /// `hacktext.str`.
-fn hack_goal_text(world: &World, entity: EntityId) -> String {
+pub(super) fn hack_goal_text(world: &World, entity: EntityId) -> String {
     world
         .borrow::<View<dark::properties::PropHackText>>()
         .ok()
@@ -403,7 +415,7 @@ where
 /// final difficulty and the mine count.
 fn hrm_breakdown(world: &World, diff: PropHackDiff, context: HrmContext) -> String {
     let mode = match context {
-        HrmContext::Hack { .. } => 0,
+        HrmContext::Hack { .. } | HrmContext::PsiHack { .. } => 0,
         HrmContext::Repair => 1,
         HrmContext::Modify => 2,
     };
@@ -433,6 +445,10 @@ fn hrm_breakdown(world: &World, diff: PropHackDiff, context: HrmContext) -> Stri
             &[terms.stat, terms.stat * stat_bonus],
         ),
     ];
+    if matches!(context, HrmContext::PsiHack { .. }) {
+        lines[1] = format!("PSI skill {}: -{}%", terms.skill, terms.skill * skill_bonus);
+        lines[2] = format!("PSI stat {}: -{}%", terms.stat, terms.stat * stat_bonus);
+    }
     if terms.implant {
         lines.push(line("JargonImplant", "Exper-tech: -%d%%", &[skill_bonus]));
     }
@@ -485,7 +501,7 @@ fn board_has_potential_path(nodes: &[HackNode; BOARD_WIDTH * BOARD_HEIGHT]) -> b
 /// Numeric keypad codes take precedence over the inherited tech difficulty.
 /// Retail numeric keypads inherit from the same archetype as hack-only panels,
 /// so `P$HackDiff` alone does not distinguish the two modes.
-fn hack_diff_for_entity(world: &World, entity_id: EntityId) -> Option<PropHackDiff> {
+pub(super) fn hack_diff_for_entity(world: &World, entity_id: EntityId) -> Option<PropHackDiff> {
     let has_numeric_code = world
         .borrow::<View<PropKeypadCode>>()
         .is_ok_and(|view| view.get(entity_id).is_ok());
@@ -669,7 +685,13 @@ pub(crate) fn handle_hrm_msg(
     match msg {
         KeyPadMsg::StartHack if !matches!(new_state.phase, HackPhase::Won | HackPhase::Lost) => {
             let cost = hack_cost(diff);
-            let Some(payment) = spend_player_nanites(world, cost) else {
+            let payment = if matches!(context, HrmContext::PsiHack { .. }) {
+                (crate::scripts::player_psi_points(world) >= cost)
+                    .then_some(Effect::SpendPsiPoints { amount: cost })
+            } else {
+                spend_player_nanites(world, cost)
+            };
+            let Some(payment) = payment else {
                 new_state.phase = HackPhase::InsufficientNanites;
                 return (
                     new_state,
@@ -795,7 +817,7 @@ pub(crate) fn handle_hrm_msg(
 /// Xerxes' door-hacked line, unless the keypad authors its own sound.
 const DOOR_HACKED_SCHEMA: &str = "xer08";
 
-fn keypad_hack_success(entity_id: EntityId, world: &World) -> Effect {
+pub(super) fn keypad_hack_success(entity_id: EntityId, world: &World) -> Effect {
     let schema = world
         .borrow::<View<PropObjectSound>>()
         .ok()
@@ -811,7 +833,7 @@ fn keypad_hack_success(entity_id: EntityId, world: &World) -> Effect {
     ])
 }
 
-fn keypad_hack_critical_failure(_entity_id: EntityId, _world: &World) -> Effect {
+pub(super) fn keypad_hack_critical_failure(_entity_id: EntityId, _world: &World) -> Effect {
     Effect::NoEffect
 }
 
@@ -982,6 +1004,16 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
 #[cfg(test)]
 mod tests {
     /// An unpaid board is covered by PAYH until START is paid for.
+    #[test]
+    fn psionic_hrm_uses_half_rounded_up_psi_without_hack_training() {
+        let world = World::new();
+        let terms = HrmTerms::for_context(&world, HrmContext::PsiHack { psi: 5 });
+        assert_eq!(terms.effective_skill(), 3);
+        assert_eq!(terms.stat, 3);
+        assert!(!terms.implant);
+        assert_eq!(terms.bonus_levels, 0);
+    }
+
     #[test]
     fn an_unpaid_board_asks_for_start() {
         let diff = PropHackDiff {

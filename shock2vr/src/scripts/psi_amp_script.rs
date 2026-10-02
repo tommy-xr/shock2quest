@@ -280,6 +280,9 @@ pub(crate) fn player_psi_points(world: &World) -> i32 {
 /// player takes damage (3 per tier - PSI/Endurance mitigation comes later
 /// with player stats). The meter flashes red.
 fn burnout(world: &World, amp_entity: EntityId) -> Effect {
+    if super::gui::psi_hack::session(world).is_some() {
+        return Effect::NoEffect;
+    }
     let Some(power) = crate::psi_amp_selection::selected_power(world, amp_entity) else {
         return Effect::ClearPsiCharge {
             entity_id: amp_entity,
@@ -341,6 +344,9 @@ fn cast_selected_power(
     amp_entity: EntityId,
     effective_psi: i32,
 ) -> Effect {
+    if super::gui::psi_hack::session(world).is_some() {
+        return Effect::NoEffect;
+    }
     let Some(power) = crate::psi_amp_selection::selected_power(world, amp_entity) else {
         return Effect::NoEffect;
     };
@@ -508,6 +514,45 @@ fn cast_instant_power(
     effective_psi: i32,
 ) -> Effect {
     match power.template_id {
+        super::gui::psi_hack::POWER => {
+            if super::gui::psi_hack::session(world).is_some() {
+                return Effect::NoEffect;
+            }
+            let Some((origin, direction)) = amp_aim_ray(world, amp_entity) else {
+                return Effect::NoEffect;
+            };
+            // Historical shipped Psi30 help authors 5 feet per PSI. World
+            // coordinates load Dark feet divided by SCALE_FACTOR.
+            let range = 5.0 * effective_psi.max(0) as f32 / dark::SCALE_FACTOR;
+            let Some(hit) = physics.ray_cast2(
+                origin,
+                direction,
+                range,
+                InternalCollisionGroups::ENTITIES
+                    | InternalCollisionGroups::HITBOX
+                    | InternalCollisionGroups::SELECTABLE
+                    | InternalCollisionGroups::WORLD,
+                Some(amp_entity),
+                true,
+            ) else {
+                return Effect::NoEffect;
+            };
+            let Some(target) = hit
+                .maybe_entity_id
+                .map(|id| resolve_proxy_entity(world, id))
+            else {
+                return Effect::NoEffect;
+            };
+            if super::gui::psi_hack::target(world, target).is_none() {
+                return Effect::NoEffect;
+            }
+            Effect::BeginPsiHack {
+                amp: amp_entity,
+                target,
+                psi: effective_psi,
+                cost: power.power.psi_cost,
+            }
+        }
         psi::CODEBREAKER_TEMPLATE_ID => {
             // Retail psihelp.str Psi7: data is seconds base + seconds per PSI,
             // not keypad range. The internal Codebreaker name is historical.

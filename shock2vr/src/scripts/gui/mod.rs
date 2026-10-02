@@ -8,6 +8,7 @@ mod keypad;
 mod map;
 mod media;
 mod panel_text;
+pub(crate) mod psi_hack;
 mod psi_powers;
 mod replicator;
 pub(crate) mod research;

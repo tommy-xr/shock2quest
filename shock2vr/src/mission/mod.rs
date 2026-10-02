@@ -20,6 +20,7 @@ pub mod pathfinding_test;
 pub mod player_footsteps;
 pub mod player_trail;
 pub(crate) mod projectile_spray;
+mod psi_hack_panel;
 pub(crate) mod reload;
 mod research_overview;
 mod shoulder_backpack;

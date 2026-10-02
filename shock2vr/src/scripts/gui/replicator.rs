@@ -130,7 +130,7 @@ fn hackable(world: &World, entity_id: EntityId) -> bool {
 /// Xerxes' replicator-hacked line.
 const REPLICATOR_HACKED_SCHEMA: &str = "xer07";
 
-fn can_hack(world: &World, entity_id: EntityId) -> bool {
+pub(super) fn can_hack(world: &World, entity_id: EntityId) -> bool {
     !matches!(
         object_state(world, entity_id),
         ObjectState::Broken | ObjectState::Destroyed | ObjectState::Hacked
@@ -149,7 +149,7 @@ fn has_plug_room(world: &World, entity_id: EntityId) -> bool {
     hackable(world, entity_id) || object_state(world, entity_id) == ObjectState::Broken
 }
 
-fn replicator_hack_success(entity_id: EntityId, _world: &World) -> Effect {
+pub(super) fn replicator_hack_success(entity_id: EntityId, _world: &World) -> Effect {
     Effect::combine(vec![
         Effect::SetObjectState {
             entity_id,
@@ -159,7 +159,7 @@ fn replicator_hack_success(entity_id: EntityId, _world: &World) -> Effect {
     ])
 }
 
-fn replicator_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
+pub(super) fn replicator_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
     Effect::SetObjectState {
         entity_id,
         state: ObjectState::Broken,
