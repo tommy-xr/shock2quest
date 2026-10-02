@@ -65,7 +65,13 @@ impl SchemaTiming {
         } else {
             1.0
         };
-        sanitize(scale)
+        // Non-positive or non-finite plays as authored; the clamp keeps
+        // `Duration` arithmetic in range.
+        if scale.is_finite() && scale > 0.0 {
+            scale.clamp(0.01, 1000.0)
+        } else {
+            1.0
+        }
     }
 
     /// Factor a clip's root travel is scaled by. `clip_distance` is the clip's
@@ -84,17 +90,13 @@ impl SchemaTiming {
         } else {
             1.0
         };
-        sanitize(stretch)
-    }
-}
-
-/// Keep authored factors usable: non-positive or non-finite plays as authored,
-/// and extremes are clamped so `Duration` arithmetic stays in range.
-fn sanitize(factor: f32) -> f32 {
-    if factor.is_finite() && factor > 0.0 {
-        factor.clamp(0.05, 20.0)
-    } else {
-        1.0
+        // Zero is a valid authored stretch (travel nowhere); only a negative
+        // or non-finite value plays as authored.
+        if stretch.is_finite() && stretch >= 0.0 {
+            stretch
+        } else {
+            1.0
+        }
     }
 }
 
@@ -152,6 +154,16 @@ mod tests {
         assert_eq!(timing(FLAG_FIXED_DURATION, 3.0, 0.0).time_scale(0.0), 1.0);
         assert_eq!(timing(FLAG_FIXED_DISTANCE, 0.0, 4.0).stretch(0.0), 1.0);
         assert_eq!(timing(FLAG_TIME_WARP, f32::NAN, 0.0).time_scale(1.0), 1.0);
-        assert_eq!(timing(FLAG_TIME_WARP, 1e-30, 0.0).time_scale(1.0), 0.05);
+        assert_eq!(timing(FLAG_TIME_WARP, 1e-30, 0.0).time_scale(1.0), 0.01);
+        assert_eq!(timing(FLAG_STRETCH, 0.0, -1.0).stretch(1.0), 1.0);
+    }
+
+    #[test]
+    fn zero_and_long_distances_are_kept() {
+        assert_eq!(timing(FLAG_FIXED_DISTANCE, 0.0, 0.0).stretch(1.0), 0.0);
+        assert_eq!(
+            timing(FLAG_FIXED_DISTANCE, 0.0, 30.0).stretch(1.0 / crate::SCALE_FACTOR),
+            30.0
+        );
     }
 }
