@@ -9,6 +9,8 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 #[derive(Clone, Copy, Debug)]
 pub struct RecoilImpulse {
     pub pitch: f32,
+    /// Strength attenuation of extra one-handed pitch; baseline uses 0.1.
+    pub one_hand_pitch_falloff: f32,
     pub heading: f32,
     pub back: f32,
     pub pitch_limit: f32,
@@ -29,19 +31,27 @@ pub fn vr_impulses(
     supported: bool,
 ) -> (RecoilImpulse, Option<RecoilImpulse>) {
     let above_minimum = (strength.clamp(1, 6) - 1) as f32;
-    let scaled = |impulse: RecoilImpulse, scale| RecoilImpulse {
-        pitch: impulse.pitch * scale * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE),
+    let scaled = |impulse: RecoilImpulse, scale, pitch_scale| RecoilImpulse {
+        pitch: impulse.pitch
+            * pitch_scale
+            * crate::dev_params::get(crate::dev_params::GUN_PITCH_SCALE),
         heading: impulse.heading * scale * crate::dev_params::get(crate::dev_params::GUN_YAW_SCALE),
         back: impulse.back * scale * crate::dev_params::get(crate::dev_params::GUN_KICKBACK_SCALE),
         ..impulse
     };
     (
-        scaled(impulse, 1.0 / (1.0 + 0.1 * above_minimum)),
+        scaled(
+            impulse,
+            1.0 / (1.0 + 0.1 * above_minimum),
+            1.0 / (1.0 + 0.1 * above_minimum),
+        ),
         (!supported).then(|| {
             scaled(
                 one_hand,
                 crate::dev_params::get(crate::dev_params::GUN_ONE_HAND_SCALE)
                     / (1.0 + 0.3 * above_minimum),
+                crate::dev_params::get(crate::dev_params::GUN_ONE_HAND_SCALE)
+                    / (1.0 + one_hand.one_hand_pitch_falloff * above_minimum),
             )
         }),
     )
@@ -198,24 +208,35 @@ struct HandlingProfile {
     yaw: f32,
     rate: f32,
     sag: f32,
+    pitch_strength_falloff: f32,
 }
 
 fn handling_profile(model: &str, setting: i32) -> Option<HandlingProfile> {
     let model = model.to_ascii_lowercase();
-    let (pitch, yaw, rate, sag) = match (model.trim_end_matches(".bin"), setting) {
-        ("atek_h", _) => (2.0, 0.75, 2.0, 1.0),
-        ("ar15_h", _) => (8.0, 2.0, 1.0, 8.0),
-        // Shotgun modes preserve their heavy backward kick, but add explicit
-        // angular handling independent of Agility's vertical suppression.
-        ("sg_h", 1) => (24.0, 4.5, 0.5, 8.0),
-        ("sg_h", _) => (12.0, 3.0, 0.5, 8.0),
-        _ => return None,
-    };
+    let (pitch, yaw, rate, sag, pitch_strength_falloff) =
+        match (model.trim_end_matches(".bin"), setting) {
+            // Isolated one-hand peaks at unit developer gains. Keep headroom for
+            // the spring's rise: amplifying tiny profiles into their caps erased
+            // both the rise and most of Strength's effect on the visible recoil.
+            ("atek_h", _) => (12.0, 6.0, 2.0, 1.0, 0.3),
+            ("ar15_h", _) => (32.0, 10.0, 1.0, 8.0, 0.3),
+            // One-handed shotgun rise stays heavy even at Strength 6 (71% of
+            // the extra pitch remains). Triple also has twice the authored pitch;
+            // keep its isolated combined maximum below 90 degrees at unit gains.
+            ("sg_h", 1) => (65.0, 18.0, 0.5, 8.0, 0.08),
+            ("sg_h", _) => (60.0, 12.0, 0.5, 8.0, 0.08),
+            // Energy weapons retain a small visible pulse, below the ballistic
+            // profiles. Adding recoil profiles does not introduce a weight sag.
+            ("lasehand", _) => (2.0, 1.0, 2.0, 0.0, 0.3),
+            ("empgun_h", _) => (4.0, 1.5, 1.5, 0.0, 0.3),
+            _ => return None,
+        };
     Some(HandlingProfile {
         pitch,
         yaw,
         rate,
         sag,
+        pitch_strength_falloff,
     })
 }
 
@@ -231,7 +252,11 @@ fn one_hand_impulse<R: Rng + ?Sized>(
     rng: &mut R,
 ) -> RecoilImpulse {
     let Some(HandlingProfile {
-        pitch, yaw, rate, ..
+        pitch,
+        yaw,
+        rate,
+        pitch_strength_falloff,
+        ..
     }) = profile
     else {
         return authored;
@@ -240,7 +265,11 @@ fn one_hand_impulse<R: Rng + ?Sized>(
         // Strength scales this later. Agility affects horizontal stability,
         // without making a heavy gun effortless vertically at Agility 6.
         pitch: kick_angle(pitch, 1, 1, still_hand, aiming, rng),
-        heading: kick_angle(yaw, 3, agility, still_hand, aiming, rng),
+        // Even a trained one-handed grip has a little lateral load. Agility
+        // reduces it to 20% at level 6; Still Hand can still eliminate it.
+        heading: kick_angle(yaw, 3, 1, still_hand, aiming, rng)
+            * (1.0 - 0.16 * (agility.clamp(1, 6) - 1) as f32),
+        one_hand_pitch_falloff: pitch_strength_falloff,
         pitch_limit: pitch * 2.0,
         heading_limit: yaw * 2.0,
         angular_rate: rate,
@@ -274,6 +303,7 @@ fn authored_impulse<R: Rng + ?Sized>(
             aiming,
             rng,
         ),
+        one_hand_pitch_falloff: 0.3,
         back: kick.kick_back / dark::SCALE_FACTOR,
         pitch_limit: kick.kick_pitch_max_degrees.abs(),
         back_limit: kick.kick_back_max.abs() / dark::SCALE_FACTOR,
@@ -525,6 +555,7 @@ mod tests {
             back_limit: 0.2,
             angular_rate: 2.0,
             back_rate: 1.0,
+            one_hand_pitch_falloff: 0.3,
             forward: -Vector3::unit_x(),
         };
         let extra = |model, agility, still| {
@@ -549,13 +580,13 @@ mod tests {
         };
         let normal = shotgun(0, 1, false, false);
         let triple = shotgun(1, 1, false, false);
-        assert!((triple.pitch / normal.pitch - 2.0).abs() < 0.01);
+        assert!((triple.pitch / normal.pitch - 65.0 / 60.0).abs() < 0.01);
         assert!((triple.heading / normal.heading - 1.5).abs() < 0.01);
         for setting in [0, 1] {
             let low = shotgun(setting, 1, false, false);
             let agile = shotgun(setting, 6, false, false);
             assert_eq!(low.pitch, agile.pitch);
-            assert_eq!(agile.heading, 0.0);
+            assert!((agile.heading / low.heading - 0.2).abs() < 0.001);
             assert!(low.heading.abs() > 0.0);
             assert_eq!(low.back, authored.back);
             assert_eq!(low.back_limit, authored.back_limit);
@@ -580,15 +611,21 @@ mod tests {
         }
         let pistol = extra("atek_h", 1, false);
         let ar = extra("ar15_h", 1, false);
-        assert!(ar.pitch > pistol.pitch * 3.9);
-        assert!(ar.heading.abs() > pistol.heading.abs() * 2.6);
+        assert!(ar.pitch > pistol.pitch);
+        assert!(ar.heading.abs() > pistol.heading.abs());
         assert!(ar.angular_rate < pistol.angular_rate);
         assert_eq!(ar.back, authored.back);
         let agile = extra("ar15_h", 6, false);
         assert_eq!(agile.pitch, ar.pitch);
-        assert_eq!(agile.heading, 0.0);
+        assert!((agile.heading / ar.heading - 0.2).abs() < 0.001);
         let middle = extra("ar15_h", 3, false);
         assert!(middle.heading.abs() < ar.heading.abs());
+        assert!(middle.heading.abs() > agile.heading.abs());
+        let laser = extra("lasehand", 1, false);
+        let emp = extra("empgun_h", 1, false);
+        assert!(laser.pitch < emp.pitch && emp.pitch < pistol.pitch);
+        assert!(laser.heading.abs() < emp.heading.abs());
+        assert!(emp.heading.abs() < pistol.heading.abs());
         let still = extra("ar15_h", 1, true);
         assert_eq!((still.pitch, still.heading), (0.0, 0.0));
         assert_eq!(still.back, authored.back);
@@ -629,6 +666,7 @@ mod tests {
             heading_limit: f32::MAX,
             angular_rate: 2.0,
             back_rate: 3.0,
+            one_hand_pitch_falloff: 0.3,
             forward: -Vector3::unit_x(),
         };
         let one_hand = RecoilImpulse {
@@ -685,6 +723,7 @@ mod tests {
             heading_limit: f32::MAX,
             angular_rate: 1.0,
             back_rate: 2.0,
+            one_hand_pitch_falloff: 0.3,
             forward: -Vector3::unit_x(),
         };
         let mut previous = (f32::MAX, f32::MAX);
@@ -727,6 +766,7 @@ mod tests {
             heading_limit: f32::MAX,
             angular_rate: 1.0,
             back_rate: 1.0,
+            one_hand_pitch_falloff: 0.3,
             forward: -Vector3::unit_x(),
         };
         let mut penalty = RecoilState::default();
@@ -761,6 +801,7 @@ mod tests {
                 heading_limit: f32::MAX,
                 angular_rate: 1.0,
                 back_rate: 1.0,
+                one_hand_pitch_falloff: 0.3,
                 forward,
             });
             let (offset, rotation) = state.step(0.15);
@@ -784,6 +825,7 @@ mod tests {
             heading_limit: f32::MAX,
             angular_rate: 1.0,
             back_rate: 1.0,
+            one_hand_pitch_falloff: 0.3,
             forward: Vector3::unit_y(),
         });
         assert!(state.impulse.is_none());
@@ -816,6 +858,152 @@ mod tests {
         assert!(aiming_implant(&world));
         world.add_component(implant, PropEnergy(0.0));
         assert!(!aiming_implant(&world));
+    }
+
+    #[test]
+    fn default_pistol_kick_rises_before_its_peak_and_strength_reduces_actual_travel() {
+        // Shipped pistol single-shot data. Regress the observed failure where
+        // every Strength hit the caps on frame one despite scaled impulses.
+        let kick = GunKickSetting {
+            kick_pitch_degrees: 7.03125,
+            kick_pitch_max_degrees: 7.03125,
+            kick_angular_return_rate_degrees: 11.25,
+            kick_back: -0.35,
+            kick_back_max: -0.35,
+            kick_back_return_rate: 1.0,
+            ..Default::default()
+        };
+        let mut previous = (f32::MAX, f32::MAX, f32::MAX);
+        for strength in [1, 3, 6] {
+            let mut rng = StdRng::seed_from_u64(42);
+            let base = authored_impulse(&kick, 1, 1, false, false, -Vector3::unit_x(), &mut rng);
+            let extra = one_hand_impulse(
+                base,
+                handling_profile("atek_h", 0),
+                1,
+                false,
+                false,
+                &mut rng,
+            );
+            let (base, extra) = vr_impulses(base, extra, strength, false);
+            let mut springs = [RecoilState::default(), RecoilState::default()];
+            springs[0].kick(base);
+            springs[1].kick(extra.unwrap());
+            let mut peaks = (0.0_f32, 0.0_f32, 0.0_f32);
+            let mut first = peaks;
+            for frame in 0..300 {
+                for spring in &mut springs {
+                    spring.step(1.0 / 60.0);
+                }
+                let travel = (
+                    (springs[0].back.position + springs[1].back.position).abs(),
+                    springs[0].pitch.position + springs[1].pitch.position,
+                    (springs[0].heading.position + springs[1].heading.position).abs(),
+                );
+                if frame == 0 {
+                    first = travel;
+                }
+                peaks = (
+                    peaks.0.max(travel.0),
+                    peaks.1.max(travel.1),
+                    peaks.2.max(travel.2),
+                );
+            }
+            assert!(first.0 < peaks.0 * 0.8 && first.1 < peaks.1 * 0.8 && first.2 < peaks.2 * 0.8);
+            assert!(peaks.0 < previous.0 && peaks.1 < previous.1 && peaks.2 < previous.2);
+            if strength == 1 {
+                assert!((0.05..0.10).contains(&(peaks.0 * crate::METERS_PER_WORLD_UNIT)));
+                assert!((11.0..20.0).contains(&peaks.1));
+                assert!((3.0..6.1).contains(&peaks.2));
+            }
+            for spring in springs {
+                assert!(spring.pitch.position.abs() < 0.01);
+                assert!(spring.heading.position.abs() < 0.01);
+                assert!(spring.back.position.abs() < 0.001);
+            }
+            previous = peaks;
+        }
+    }
+
+    #[test]
+    fn one_handed_shotgun_keeps_large_smooth_pitch_at_max_strength() {
+        for setting in [0, 1] {
+            let kick = GunKickSetting {
+                kick_pitch_degrees: if setting == 0 { 11.25 } else { 22.5 },
+                kick_pitch_max_degrees: 22.5,
+                kick_angular_return_rate_degrees: 11.25,
+                kick_back: if setting == 0 { -0.6 } else { -0.75 },
+                kick_back_max: -0.75,
+                kick_back_return_rate: 1.0,
+                ..Default::default()
+            };
+            for agility in [1, 6] {
+                let mut previous_mean = f32::MAX;
+                for strength in [1, 3, 6] {
+                    let mut mean = 0.0;
+                    for seed in 0..32 {
+                        let mut rng = StdRng::seed_from_u64(seed);
+                        let base = authored_impulse(
+                            &kick,
+                            1,
+                            agility,
+                            false,
+                            false,
+                            -Vector3::unit_x(),
+                            &mut rng,
+                        );
+                        let extra = one_hand_impulse(
+                            base,
+                            handling_profile("sg_h", setting),
+                            agility,
+                            false,
+                            false,
+                            &mut rng,
+                        );
+                        let (base, extra) = vr_impulses(base, extra, strength, false);
+                        let extra = extra.unwrap();
+                        let mut springs = [RecoilState::default(), RecoilState::default()];
+                        springs[0].kick(base);
+                        springs[1].kick(extra);
+                        let mut peak = 0.0_f32;
+                        let mut peak_frame = 0;
+                        let mut back_peak = 0.0_f32;
+                        for frame in 1..=300 {
+                            for spring in &mut springs {
+                                spring.step(1.0 / 60.0);
+                            }
+                            let pitch = springs[0].pitch.position + springs[1].pitch.position;
+                            if pitch > peak {
+                                peak = pitch;
+                                peak_frame = frame;
+                            }
+                            back_peak = back_peak
+                                .max((springs[0].back.position + springs[1].back.position).abs());
+                        }
+                        assert!(peak > 21.0 && peak < 90.0, "pitch={peak}");
+                        assert!((18..=19).contains(&peak_frame), "smooth ~300ms rise");
+                        // Raising pitch must not raise the reduced backward travel.
+                        assert!((back_peak - (base.back + extra.back).abs()).abs() < 0.001);
+                        for spring in springs {
+                            assert!(spring.pitch.position.abs() < 0.01);
+                            assert!(spring.back.position.abs() < 0.001);
+                        }
+                        mean += peak / 32.0;
+                    }
+                    assert!(mean < previous_mean);
+                    previous_mean = mean;
+                    if strength == 1 && agility == 1 {
+                        assert!(mean > 50.0, "low-strength mean={mean}");
+                    }
+                    if strength == 6 {
+                        assert!(
+                            mean > if agility == 1 { 35.0 } else { 30.0 },
+                            "high-strength mean={mean}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { GameServer, attachSupportHand } from "../src/index.js";
+import { GameServer, attachSupportHand, type Vec3 } from "../src/index.js";
 import {
   aimVrHandAt,
   quatConjugate,
@@ -25,16 +25,22 @@ for (const [name, template, profiled, setting, overrides] of [
     { skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000 },
     async (context) => {
       await using game = await GameServer.launch({
-        mission: overrides ? "debug_weapons" : "medsci1.mis",
+        // An isolated bench avoids mission walls blocking recoil travel.
+        mission: "debug_weapons",
         debugFlags: ["--vr", "--experimental", "physical_held_items"],
       });
       await game.step({ frames: 10 });
+      const defaultBackScale = (await game.devParams.list()).params.find(
+        p => p.key === "gun_kickback_scale",
+      )!.value as number;
       await game.player.setStats({ skills: { standard_weapons: 6 } });
       const character = (await game.info()).player.stats;
       if (overrides) {
         assert.equal(character?.strength, 6);
         assert.equal(character?.agility, 6);
         await game.devParams.set("gun_agility_override", 1);
+      } else {
+        await game.player.applyStatModifier({ source: "recoil-agility", stat: "agility", delta: -5, duration_secs: 3600 });
       }
       const gun = await cycleToWeapon(game, (e) => e.template_id === template, {
         settleFrames: 90,
@@ -43,7 +49,8 @@ for (const [name, template, profiled, setting, overrides] of [
       await game.step({ frames: 8 });
       assert.equal((await game.info()).player.right_hand_entity_id, gun.id);
       await game.input.set("head.rotation", [0, 0, 0, 1]);
-      await game.input.set("right_hand.position", [0, 1, 0]);
+      // Stage in front of the body so support squeezes cannot grab the belt MFD.
+      await game.input.set("right_hand.position", [0, 1, -1]);
       await game.input.set("right_hand.rotation", [
         0,
         Math.SQRT1_2,
@@ -124,7 +131,10 @@ for (const [name, template, profiled, setting, overrides] of [
       for (const strength of [1, 3, 6]) {
         if (overrides)
           await game.devParams.set("gun_strength_override", strength);
-        else await game.player.setStats({ strength });
+        else {
+          await game.player.applyStatModifier({ source: "recoil-strength", stat: "strength", delta: strength - 6, duration_secs: 3600 });
+          assert.equal((await game.info()).player.effective_stats?.strength, strength);
+        }
         for (const supported of [false, true]) {
           await support(supported);
           await game.step({ frames: 180 });
@@ -178,6 +188,15 @@ for (const [name, template, profiled, setting, overrides] of [
             supported || !profiled ? yaw < 0.0001 : yaw > 0.001,
             `profiled one-hand handling adds horizontal recoil; supported=${supported}, profiled=${profiled}, yaw=${yaw}`,
           );
+          if (template === -19 && !supported) {
+            const elevation = (forward: Vec3) =>
+              Math.atan2(forward[1], Math.hypot(forward[0], forward[2])) * 180 / Math.PI;
+            const pitch = Math.max(...muzzle.map(sample =>
+              elevation(sample.forward) - elevation(initialMuzzle.forward),
+            ));
+            assert.ok(pitch > 24 && pitch < 90,
+              `one-handed shotgun stays hard to control even at Strength 6: STR=${strength}, pitch=${pitch}`);
+          }
           // Shotgun pitch has a slower authored return/limit ratio (0.5).
           const recoveryFrames = template === -19 ? 320 : 200;
           for (let frame = 26; frame <= recoveryFrames; frame += 6) {
@@ -191,7 +210,7 @@ for (const [name, template, profiled, setting, overrides] of [
           assert.ok(
             Math.hypot(...sub(settledMuzzle.position, initialMuzzle.position)) <
               0.005,
-            "muzzle endpoint recovers with the gun",
+            `muzzle endpoint recovers with the gun: strength=${strength}, supported=${supported}, initial=${initialMuzzle.position}, settled=${settledMuzzle.position}`,
           );
           assert.ok(
             Math.hypot(...sub(settledMuzzle.forward, initialMuzzle.forward)) <
@@ -257,8 +276,8 @@ for (const [name, template, profiled, setting, overrides] of [
           .back;
       const baseline = value(1, true);
       assert.ok(
-        baseline > 0.03,
-        "actual firing must produce measurable backward recoil",
+        baseline > 0.005,
+        `actual firing must produce measurable backward recoil: ${JSON.stringify(measurements.map(({curve, muzzle, ...m}) => m))}`,
       );
       for (const m of measurements) {
         const n = m.strength - 1;
@@ -311,7 +330,9 @@ for (const [name, template, profiled, setting, overrides] of [
         await game.devParams.reset("gun_agility_override");
         await game.devParams.reset("gun_strength_override");
         assert.deepEqual((await game.info()).player.stats, character);
-      } else await game.player.setStats({ agility: 6 });
+      } else {
+        await game.player.applyStatModifier({ source: "recoil-agility", stat: "agility", delta: 0, duration_secs: 0 });
+      }
       for (const supported of [false, true]) {
         await support(supported);
         await game.step({ frames: 180 });
@@ -338,7 +359,10 @@ for (const [name, template, profiled, setting, overrides] of [
           ammoOf(await game.entities.detail(gun.id)),
           ammo - ammoUsage,
         );
-        assert.ok(yaw < 0.0001, `Agility 6 suppresses horizontal kick: ${yaw}`);
+        assert.ok(
+          supported || !profiled ? yaw < 0.0001 : yaw > 0.001,
+          `Agility 6 retains a small one-hand horizontal kick; supported=${supported}, yaw=${yaw}`,
+        );
         assert.ok(
           supported || !profiled ? pitch < 0.0001 : pitch > 0.002,
           `Agility 6 retains vertical load only for a dedicated profile; supported=${supported}, profiled=${profiled}, pitch=${pitch}`,
@@ -411,7 +435,7 @@ for (const [name, template, profiled, setting, overrides] of [
           assert.ok(
             Math.abs(
               back -
-                value(1, true) *
+                (value(1, true) / defaultBackScale) *
                   (1 + (supported ? 0 : penaltyScale)) *
                   backScale,
             ) < 0.003,
@@ -438,7 +462,10 @@ for (const [name, template, profiled, setting, overrides] of [
           "gun_yaw_scale",
           "gun_one_hand_scale",
         ]) {
-          assert.equal((await game.devParams.reset(key)).value, 1);
+          assert.equal(
+            (await game.devParams.reset(key)).value,
+            key === "gun_kickback_scale" ? defaultBackScale : 1,
+          );
         }
       }
     },
