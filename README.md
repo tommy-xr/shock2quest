@@ -42,69 +42,56 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `Tab` - toggle the cyber interface ("use" mode): a cursor-driven UI over the 3D view
 - `Alt+S` / `Alt+L` - quick save / quick load
 
-#### Quest
-
-- Quest VR: press the left controller's `Menu` button to toggle the cyber
-  interface; hold it for half a second - a ring fills in front of you - to open
-  the pause menu instead. The interface also carries a `MENU` button that opens
-  it directly.
-- Quest VR: either lower face button (left `X` / right `A`) jumps, whatever
-  your hands are holding.
-- Quest VR: squeeze an empty hand near a ladder to hold it. A cyan marker
-  above the fist confirms the hold. To descend from a deck, crouch and grab
-  near the ladder's top edge, pull the held hand toward your chest to move
-  your body beyond the edge, then raise that hand to lower yourself. Open
-  the hand to release. When transferring onto a deck, keep its hand squeezed
-  while releasing the ladder. You can grip the deck with the second hand too,
-  then pull down or inward slowly with the newly placed hand to climb onto it.
-  Releasing that hand transfers support to the other held hand. No flick
-  or release is needed to finish the pull. If the deck blocks your
-  pull, the held hand keeps supporting you until you open it; relax or adjust
-  the pull to continue.
-- Quest VR: throw a held object by moving your hand and releasing the grip.
-  It inherits your hand's velocity and spin; Strength gives a modest speed
-  bonus and helps with heavier objects. Fast impacts deal at most 2 damage to
-  flesh targets or 1 to other materials, once per throw. Releasing a still hand
-  drops the item normally.
-- Quest VR: grip nanites, cyber modules, software upgrades or found access cards
-  to hold them; release anywhere to download them, with sound and haptic feedback.
-  Draw your personal access card from the belt buckle to scan credential
-  readers and machines. Release it to return it to the belt. Scanning a shop or
-  trainer opens its interface; purchases still require an explicit selection.
-- Quest VR: pass an object between hands by holding grip with the empty hand
-  within about 30 cm of the other hand, then releasing the hand carrying it.
-  The receiving hand can already be squeezed; no second squeeze is needed.
-- Quest VR: reload by hand. Pull a clip out of the cyber interface's inventory
-  strip with your free hand and bring it to the gun the other hand is holding -
-  the clip goes in and the weapon is loaded. A clip of a different ammo type
-  swaps the type over, returning the rounds already loaded to your pack.
-  While holding a clip, tap that hand's upper button (`Y` / `B`) to exchange it
-  for the next compatible ammo type in your backpack; the original clip returns
-  to the pack with its rounds intact. Insert the new clip to load that type.
-- Quest VR: rearrange inventory by gripping an item, pointing at its new
-  location, and releasing. Tall items slide up to fit the chosen column.
-  The ghost footprint previews the destination: green for placement or merging,
-  amber for automatic placement elsewhere, and red when the pack has no room
-  and releasing will drop the item into the world.
-- Quest VR: with that hand free, press an upper face button (left `Y` / right
-  `B`) to open the newest unread audio log. Press it again to close it; after
-  every log is read, it replays the most recently collected log. Holding a
-  weapon, that hand's upper button is the weapon's instead: tap and release to
-  switch a gun's fire mode, or hold for half a second to drop its loaded clip
-  into the world. A thin line fills left to right along the bottom of the cuff
-  ammo meter, which shows `EJECT` during the hold. A completed hold does not
-  also switch modes. With a psi amp, tap the same button to swap its current
-  and alternate powers, or hold for half a second to project a curved, backgroundless selector above
-  the amp. Only purchased powers appear.
-  Move that hand's stick up/down for tiers and left/right for trained powers;
-  press its upper button or trigger to confirm and close. Choosing a new power
-  makes the previous one the alternate. Each amp remembers its own pair through
-  storage, level changes and saves.
-- Directly equip a matching carried weapon with the original number-row bindings:
-  `1` Wrench, `2` Pistol, `3` Shotgun, `4` Assault Rifle, `5` Laser Pistol,
-  `6` EMP Rifle, `7` Electro Shock, `8` Grenade Launcher, `9` Stasis Field
-  Generator, `0` Fusion Cannon, `-` Crystal Shard, `=` Viral Proliferator,
+- Equip a carried weapon with the number row: `1` Wrench, `2` Pistol,
+  `3` Shotgun, `4` Assault Rifle, `5` Laser Pistol, `6` EMP Rifle,
+  `7` Electro Shock, `8` Grenade Launcher, `9` Stasis Field Generator,
+  `0` Fusion Cannon, `-` Crystal Shard, `=` Viral Proliferator,
   `\` Worm Launcher, and `` ` `` / `~` Psi Amp
+
+#### Quest VR
+
+| Control | Action |
+| --- | --- |
+| Right stick | Move |
+| Left stick left/right | Turn |
+| Crouch physically, or click the left stick | Crouch; click again to stand |
+| Lower face button: left **X** / right **A** | Jump, even with both hands full; close the cyber interface when it is open |
+| Left **Menu** | Tap to toggle the cyber interface; hold 0.5 seconds to pause |
+| Grip | Pick up and hold an item; release to drop or throw it |
+| Trigger | Use the held item, fire a gun, or cast with the psi amp; point and trigger to interact |
+
+The **upper face button** (left **Y** / right **B**) acts on what that hand holds:
+
+| Held item | Tap | Hold 0.5 seconds |
+| --- | --- | --- |
+| Gun | Switch fire mode | Eject the loaded clip |
+| Psi amp | Swap current and alternate powers | Open the power selector |
+| Ammo clip | Swap to the next compatible ammo type in your backpack | — |
+| Empty hand or other item | Open/close the newest unread audio log; replay the latest once all are read | — |
+
+**Weapons and powers.** Reload by taking a clip from the cyber interface's
+inventory strip and bringing it to the gun. Inserting another ammo type returns
+the loaded rounds to your backpack. In the amp's power selector, use that hand's
+stick up/down for tiers and left/right for purchased powers; confirm with its
+upper button or trigger. Each amp remembers its current and alternate powers.
+
+**Inventory and equipment.** Grip an inventory item, point at its destination,
+and release. The preview is green when it fits or merges, amber for automatic
+placement elsewhere, and red when releasing will drop it into the world.
+Pass an item between hands by squeezing the receiving hand nearby, then releasing
+the carrying hand. Stow a compact gun, melee weapon, or amp at either thigh by
+releasing it there; squeeze again to retrieve it.
+
+**Access and pickups.** Grip nanites, cyber modules, software upgrades, or found
+access cards, then release anywhere to download them. Draw your personal access
+card from the belt buckle to scan readers, shops, and trainers; release to return
+it to the belt. Scanning opens an interface; select purchases separately.
+
+**Climbing.** Squeeze an empty hand near a ladder or ledge to grab it, then move
+that hand to pull yourself along. A cyan marker confirms the hold. To climb onto
+a deck, keep one hand attached while placing the other on the edge, then pull
+down or inward. To descend, crouch, grip near the ladder's top, pull yourself past
+the edge, and raise the held hand to lower your body. Release grip to let go.
 
 Development builds carry additional debug keys and a Developer options screen -
 see [DEVELOPMENT.md](DEVELOPMENT.md#debug--developer-keys).
