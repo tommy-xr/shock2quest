@@ -60,7 +60,11 @@ for (const [primary, mission, triple, physical] of [
     assert.equal(ammoOf(await game.entities.detail(gun.id)), initial - roundsPerShot);
     assert.equal((await state()).phase, "Spent");
     assert.equal((await game.entities.byTemplate(-2658)).length, 0, "firing retains the shell until the rear stroke");
+    const drySequence = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
     await fire();
+    assert.equal((await game.audio.recent()).sounds.filter(s =>
+      s.sequence > drySequence && s.sample === "out_sg").length, 1,
+      "the spent action clicks on a fresh pull");
     assert.equal(ammoOf(await game.entities.detail(gun.id)), initial - roundsPerShot, "cooldown alone cannot chamber the next shot");
     await place(.5);
     await game.step({ frames: 10 });

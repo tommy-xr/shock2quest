@@ -1400,7 +1400,7 @@ pub fn play_impact_sound(
     }
 }
 
-/// A station-wide Xerxes line, non-positional like retail's schema play.
+/// A voice announcement, non-positional like retail's schema play.
 pub fn announce(source: EntityId, schema: &str) -> Effect {
     Effect::PlaySound {
         handle: AudioHandle::new(),

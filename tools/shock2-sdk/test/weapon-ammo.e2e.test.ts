@@ -51,9 +51,15 @@ test(
       "one shot consumes one round",
     );
 
+    const firingSequence = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
+
     // Drain the rest of the clip.
     for (let i = 1; i < startAmmo; i++) await fireOnce(game);
     assert.equal(ammoOf(await game.entities.detail(pistolId)), 0, "clip should be empty");
+
+    assert.equal((await game.audio.recent()).sounds.filter(s =>
+      s.sequence > firingSequence && s.sample === "bb08").length, 1,
+      "the last paid shot announces ammunition depleted once");
 
     // Baseline impact count at empty (absolute count is timing-sensitive since
     // hit-spangs eventually despawn, so we only assert it does not grow below).
@@ -66,6 +72,9 @@ test(
     const clicks = (await game.audio.recent()).sounds.filter(sound =>
       sound.sequence > soundSequence && sound.sample === "out_pist" &&
       sound.tags.some(([tag, value]) => tag === "event" && value === "outofammo"));
+    assert.equal((await game.audio.recent()).sounds.filter(s =>
+      s.sequence > soundSequence && s.sample === "bb08").length, 0,
+      "later empty pulls must not repeat the depletion announcement");
     assert.equal(clicks.length, 3, "each empty pull must resolve the authored OutofAmmo sound");
     assert.equal(ammoOf(await game.entities.detail(pistolId)), 0, "ammo stays at 0");
     assert.ok(

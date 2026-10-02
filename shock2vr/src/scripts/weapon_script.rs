@@ -57,8 +57,8 @@ use super::{
     Effect, Message, MessagePayload, Script,
     burst_fire::{BurstState, BurstStep},
     script_util::{
-        active_gun_setting, get_all_links_with_template, gun_condition, ordered_projectile_links,
-        play_environmental_sound, play_impact_sound,
+        active_gun_setting, announce, get_all_links_with_template, gun_condition,
+        ordered_projectile_links, play_environmental_sound, play_impact_sound,
     },
 };
 
@@ -270,6 +270,7 @@ fn roll_for_breakage(world: &World, entity_id: EntityId) -> Option<Effect> {
                 entity_id,
                 state: ObjectState::Broken,
             },
+            announce(entity_id, "bb04"),
             play_environmental_sound(world, entity_id, "break", vec![], AudioHandle::new()),
             Effect::ShowMessage {
                 text: weapon_breaks_message(world, entity_id),
@@ -403,9 +404,7 @@ impl Script for WeaponScript {
                     };
                 }
                 // Firing is blocked while a reload is in progress.
-                if is_reloading(world, entity_id)
-                    || crate::vr_shotgun_pump::blocks_fire(world, entity_id)
-                {
+                if is_reloading(world, entity_id) {
                     return Effect::NoEffect;
                 }
 
@@ -554,6 +553,12 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
         return ShotOutcome::NotWorking;
     }
 
+    // A spent or open shotgun action refuses a fresh pull with its authored
+    // click, even with rounds in the magazine. Broken-state feedback wins.
+    if crate::vr_shotgun_pump::blocks_fire(world, entity_id) {
+        return ShotOutcome::Empty;
+    }
+
     // Ammo gating: weapons that carry a `PropGunState` are limited by
     // their clip. A magazine that cannot pay the setting's per-shot
     // cost dry-fires (no shot/flash). Weapons without a gun state
@@ -667,6 +672,11 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
             entity_id,
             delta: -rounds,
         });
+    }
+    // Retail announces depletion on the accepted shot that spends the last
+    // rounds (shkplgun.cpp), never on ejection or later empty pulls.
+    if is_gunshot && maybe_ammo == Some(rounds) {
+        effects.push(announce(entity_id, "bb08"));
     }
     effects.extend(wear);
     // Start the setting's between-shots wait. Only a real shot
@@ -1880,6 +1890,48 @@ mod tests {
         assert_eq!(weapon_breaks_message(&world, gun), "Pistol has broken!");
     }
 
+    #[test]
+    fn depletion_announcement_only_accompanies_the_last_paid_shot() {
+        use crate::scripts::script_util::announced;
+        for (ammo, cost, expected) in [
+            (1, 1, true),
+            (3, 3, true),
+            (4, 3, false),
+            (2, 3, false),
+            (0, 1, false),
+        ] {
+            let (world, gun) = gun_world(None);
+            (&mut world
+                .borrow::<shipyard::ViewMut<dark::properties::PropGunState>>()
+                .unwrap())
+                .get(gun)
+                .unwrap()
+                .ammo = ammo;
+            let outcome = fire_one_shot(
+                &world,
+                gun,
+                &GunSettingDesc {
+                    ammo_usage: cost,
+                    ..Default::default()
+                },
+            );
+            let cues = match outcome {
+                ShotOutcome::Fired(effect) => announced(&effect),
+                ShotOutcome::Empty => announced(&dry_fire(&world, gun)),
+                _ => panic!("unexpected shot outcome"),
+            };
+            assert_eq!(
+                cues,
+                if expected {
+                    vec!["bb08".to_owned()]
+                } else {
+                    vec![]
+                },
+                "ammo={ammo}, cost={cost}"
+            );
+        }
+    }
+
     /// A broken gun is out of the fight until it is repaired: the trigger
     /// clicks and nothing leaves the barrel.
     #[test]
@@ -2016,6 +2068,10 @@ mod tests {
             panic!("a gun that always breaks must break on the shot");
         };
 
+        assert_eq!(
+            crate::scripts::script_util::announced(&effect),
+            vec!["bb04"]
+        );
         let effects = Effect::flatten(vec![effect]);
         assert!(
             effects.iter().any(|effect| matches!(

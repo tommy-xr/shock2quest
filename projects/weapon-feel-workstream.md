@@ -1064,3 +1064,23 @@ attachment and fraction. The SDK manual-slide scenario tests either hand and
 physical held items, including single-frame glove/joint agreement, ownership,
 normal support, spring return, empty lock and reload. Headset feel still needs a
 connected Quest; deterministic harness results establish geometry and behavior.
+
+### Weapon refusal and transition audio follow-up
+
+Retail `shkplgun.cpp` plays `bb04` when its reliability roll changes a gun to
+Broken, alongside `Event Break`; later pulls use `Event Broken` (`gunbrok1`).
+It plays `bb08` only when an accepted shot spends exactly the remaining ammo.
+The shared weapon script now emits both announcements, so flat and VR agree.
+Unracked/open VR shotgun pulls use the authored `OutofAmmo` click after the
+normal skill, reload and cooldown gates, without spending ammo or wearing the
+gun. Broken-state feedback takes precedence over that mechanical refusal.
+
+The psi amp now emits its authored `OutofAmmo` cue (`bb10`) on an unaffordable
+trigger pull, before either a charge or an immediate cast starts. Empty gun
+feedback is audited through runtime playback for all ten projectile weapons,
+including the laser's unusable partial charge. Holding a trigger does not repeat
+the refusal, and ejection does not announce depletion.
+
+A separate candidate is retail `shkpsi.cpp`'s `bb01` warning when paid psi points
+cross down through one fifth of maximum. No distinct jam state was found in the
+retail player-gun firing path; wear failure uses Broken.
