@@ -715,6 +715,8 @@ pub enum Link {
     /// (e.g. Standard Bullet -> Standard Clip).
     Clip,
     Corpse(CorpseOptions),
+    /// Enemy archetype -> researchable organ granting a damage bonus against it.
+    Organ,
     Flinderize(FlinderizeOptions),
     GunFlash(GunFlashOptions),
     LandingPoint,
@@ -1540,6 +1542,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_link("L$Clip", |_| Link::Clip),
         define_link("L$Miss Span", |_| Link::MissSpang),
         define_link("L$Weapon", |_| Link::Weapon),
+        define_link("L$Organ", |_| Link::Organ),
         //define_link("L$TPath", |_| Link::TPath),
     ];
 

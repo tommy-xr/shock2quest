@@ -8,17 +8,61 @@ use std::collections::HashMap;
 
 use dark::{
     properties::{
-        PropBaseTechDesc, PropChemicalNeeded, PropObjLookString, PropObjState,
+        Link, Links, PropBaseTechDesc, PropChemicalNeeded, PropObjLookString, PropObjState,
         PropRequiredTechDesc, PropResearchReport, PropResearchText, PropResearchTime,
     },
     ss2_entity_info::SystemShock2EntityInfo,
 };
 use serde::{Deserialize, Serialize};
-use shipyard::{Component, EntityId, Get, View, World};
+use shipyard::{Component, EntityId, Get, UniqueView, View, World};
 
 use crate::{
-    runtime_props::RuntimePropCanonicalTemplateId, scripts::script_util::hydrate_template_component,
+    mission::{PlayerInfo, mission_core::GlobalSkillParams},
+    quest_info::QuestInfo,
+    runtime_props::RuntimePropCanonicalTemplateId,
+    scripts::script_util::hydrate_template_component,
 };
+
+/// Retail's damage filter checks the victim's inherited Organ relation against
+/// campaign research, independently of the damage source. Run on delivery to
+/// the creature, after a limb proxy forwards its location-scaled hit, so neither
+/// the bonus nor the damage readout is applied twice. Healing and player damage
+/// do not receive the bonus.
+pub(crate) fn damage_with_research_bonus(world: &World, victim: EntityId, amount: f32) -> f32 {
+    if amount <= 0.0
+        || crate::creature::is_hit_box(world, victim)
+        || world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .is_ok_and(|player| player.entity_id == victim)
+    {
+        return amount;
+    }
+    let organ = world.borrow::<View<Links>>().ok().and_then(|links| {
+        links
+            .get(victim)
+            .ok()?
+            .to_links
+            .iter()
+            .rev()
+            .find(|link| matches!(link.link, Link::Organ))
+            .map(|link| link.to_template_id)
+    });
+    let researched = organ.is_some_and(|organ| {
+        world
+            .borrow::<UniqueView<QuestInfo>>()
+            .is_ok_and(|quests| quests.research().is_complete(organ))
+    });
+    if !researched {
+        return amount;
+    }
+    let multiplier = world
+        .borrow::<UniqueView<GlobalSkillParams>>()
+        .ok()
+        .and_then(|params| params.0.as_ref().map(|params| params.organ_damage))
+        .filter(|factor| factor.is_finite() && *factor > 0.0)
+        .unwrap_or(1.0);
+    amount * multiplier
+}
 
 /// Older campaign saves serialized carried objects before research metadata
 /// became a runtime component. Restore only the newly understood properties
@@ -290,6 +334,114 @@ mod tests {
     use shipyard::{Get, View, World};
 
     use super::*;
+
+    #[test]
+    fn organ_bonus_requires_matching_completion_and_skips_player_proxy_and_healing() {
+        use crate::creature::{HitBoxType, RuntimePropHitBox};
+        use dark::properties::ToLink;
+        use shipyard::UniqueViewMut;
+
+        let mut world = World::new();
+        let links = Links {
+            to_links: vec![ToLink {
+                to_template_id: -1095,
+                to_entity_id: None,
+                link: Link::Organ,
+            }],
+        };
+        let victim = world.add_entity(links.clone());
+        let unrelated = world.add_entity(Links::empty());
+        let player = world.add_entity(links.clone());
+        let proxy = world.add_entity((
+            links,
+            RuntimePropHitBox {
+                parent_entity_id: victim,
+                hit_box_type: HitBoxType::Head,
+                joint_id: 9,
+            },
+        ));
+        world.add_unique(PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: unrelated,
+        });
+        world.add_unique(GlobalSkillParams(Some(dark::gamesys::SkillParams {
+            inaccuracy_degrees: 0.0,
+            weapon_break_factor: 0.0,
+            research_factor: 1.0,
+            damage_modifier: 0.0,
+            organ_damage: 1.25,
+        })));
+        world.add_unique(QuestInfo::new());
+        assert_eq!(damage_with_research_bonus(&world, victim, 4.0), 4.0);
+        {
+            let mut quests = world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+            let research = quests.research_mut();
+            research.begin(-229, 1, 1);
+            research.advance(-229, 10.0, 1, 1.0, 10.0, None, 1);
+            research.begin(-1095, 1, 1);
+            research.advance(-1095, 5.0, 1, 1.0, 10.0, None, 1);
+        }
+        assert_eq!(
+            damage_with_research_bonus(&world, victim, 4.0),
+            4.0,
+            "a report bit or unrelated completed organ is not matching completion"
+        );
+        world
+            .borrow::<UniqueViewMut<QuestInfo>>()
+            .unwrap()
+            .research_mut()
+            .advance(-1095, 5.0, 1, 1.0, 10.0, None, 1);
+        assert_eq!(damage_with_research_bonus(&world, victim, 4.0), 5.0);
+        for target in [unrelated, player, proxy] {
+            assert_eq!(damage_with_research_bonus(&world, target, 4.0), 4.0);
+        }
+        for amount in [0.0, -4.0] {
+            assert_eq!(damage_with_research_bonus(&world, victim, amount), amount);
+        }
+        world
+            .borrow::<UniqueViewMut<GlobalSkillParams>>()
+            .unwrap()
+            .0 = None;
+        assert_eq!(
+            damage_with_research_bonus(&world, victim, 4.0),
+            4.0,
+            "missing gamesys parameters leave damage unchanged"
+        );
+    }
+
+    #[test]
+    fn most_specific_organ_link_overrides_inherited_research() {
+        use dark::properties::ToLink;
+
+        let mut world = World::new();
+        let victim = world.add_entity(Links {
+            to_links: [-1095, -229]
+                .map(|to_template_id| ToLink {
+                    to_template_id,
+                    to_entity_id: None,
+                    link: Link::Organ,
+                })
+                .to_vec(),
+        });
+        let mut quests = QuestInfo::new();
+        quests.research_mut().begin(-1095, 1, 1);
+        quests
+            .research_mut()
+            .advance(-1095, 10.0, 1, 1.0, 10.0, None, 0);
+        world.add_unique(quests);
+        world.add_unique(GlobalSkillParams(Some(dark::gamesys::SkillParams {
+            inaccuracy_degrees: 0.0,
+            weapon_break_factor: 0.0,
+            research_factor: 1.0,
+            damage_modifier: 0.0,
+            organ_damage: 1.25,
+        })));
+        assert_eq!(damage_with_research_bonus(&world, victim, 4.0), 4.0);
+    }
 
     fn toxin_chemicals() -> PropChemicalNeeded {
         PropChemicalNeeded {

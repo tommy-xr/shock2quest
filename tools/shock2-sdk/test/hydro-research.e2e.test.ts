@@ -212,7 +212,26 @@ test(
     // refused and remains; Antimony is consumed, reaching the second gate.
     await lootContainerItems(game, CHEMICAL_DESK, ["Chem #2"]);
     await lootContainerItems(game, CHEMICAL_DESK, ["Chem #4"]);
-    await lootContainerItems(game, CHEMICAL_DESK, ["Chem #4"]);
+    // Desk vial 665 is excluded on playable difficulties (DiffPermit 0x20).
+    // The second usable dose is the loose authored vial 546, not another
+    // icon in the desk. Collect it through the ordinary flat pickup path.
+    const [looseAntimony] = await game.entities.byTemplate(546);
+    assert.ok(looseAntimony, "Hydro 2 has its loose Antimony vial");
+    await teleportVerified(game, {
+      x: looseAntimony.position[0] - 0.6,
+      y: looseAntimony.position[1] + 0.5,
+      z: looseAntimony.position[2] + 0.4,
+    });
+    if ((await game.ui.state()).mode === "use") await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 3 });
+    await game.player.aimAt(looseAntimony.id, { hitbox: "center", visibility: "required" });
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 2 });
+    const doses = await Promise.all((await carriedItemsNamed(game, "Chem #4")).map(async item =>
+      Number((await game.entities.detail(item.entity_id)).properties.find(p => p.name === "StackCount")?.value)));
+    assert.equal(doses.reduce((a, b) => a + b, 0), 2, "both playable Antimony doses were collected");
     toxin = await carriedNamed(game, "Anti-Annelid Toxin");
     assert.ok(toxin);
     await useInventoryItem(game, toxin.entity_id);

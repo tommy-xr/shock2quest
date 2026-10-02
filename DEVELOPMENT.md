@@ -578,9 +578,10 @@ requirements and reports; completion and chemical requests play their retail
 announcements. Reload level (`DebugReloadLevel`) resets projects, held/carried
 items and every supply station, so a completed specimen can be tried again.
 
-Research progress and reports persist in normal campaign saves. The organ-based
-combat damage bonus is still missing: its gamesys multiplier is parsed, but the
-damage path does not yet check the victim's researched organ.
+Research progress and reports persist in normal campaign saves. Completing an
+organ's research applies the gamesys damage bonus against enemies linked to that
+organ, including limb hits. Toxin-A must be researched before an environmental
+regulator will accept it.
 
 #### Material effects gallery (`debug_nd_materials`)
 

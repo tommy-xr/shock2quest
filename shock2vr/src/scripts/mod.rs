@@ -1495,6 +1495,18 @@ impl ScriptWorld {
         let _ = span.enter();
         for msg in &self.message_queue {
             let to_entity_id = msg.to;
+            let researched_damage = match msg.payload {
+                MessagePayload::Damage { amount, impact } => Some(MessagePayload::Damage {
+                    amount: crate::research::damage_with_research_bonus(
+                        world,
+                        to_entity_id,
+                        amount,
+                    ),
+                    impact,
+                }),
+                _ => None,
+            };
+            let payload = researched_damage.as_ref().unwrap_or(&msg.payload);
 
             if matches!(msg.payload, MessagePayload::Slay) {
                 slayed_entities.insert(to_entity_id);
@@ -1503,12 +1515,7 @@ impl ScriptWorld {
             // Observability: trace the delivery so headless tooling (the debug
             // runtime's GET /v1/messages/recent) can see what drove scripts on
             // a given frame. High-frequency payloads are filtered out there.
-            crate::message_trace::record(
-                world,
-                time.total.as_secs_f64(),
-                to_entity_id,
-                &msg.payload,
-            );
+            crate::message_trace::record(world, time.total.as_secs_f64(), to_entity_id, payload);
             // Same choke point feeds the floating damage readouts, so they see
             // every damage path (melee contact, projectiles, hitbox-forwarded
             // hits, script injection) rather than one of them.
@@ -1516,7 +1523,7 @@ impl ScriptWorld {
                 world,
                 time.total.as_secs_f64(),
                 to_entity_id,
-                &msg.payload,
+                payload,
             ) {
                 new_damage_popups.push(popup);
             }
@@ -1541,12 +1548,10 @@ impl ScriptWorld {
                                 debug_entity(world, to_entity_id)
                             );
                         }
-                        let eff = instance.script.handle_message(
-                            to_entity_id,
-                            world,
-                            physics,
-                            &msg.payload,
-                        );
+                        let eff =
+                            instance
+                                .script
+                                .handle_message(to_entity_id, world, physics, payload);
                         produced_effects.push(eff);
                     }
                 });
