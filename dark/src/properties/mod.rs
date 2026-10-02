@@ -1048,6 +1048,8 @@ pub enum ReceptronEffect {
         duration_multiplier: u32,
         tags: String,
     },
+    /// Deliver the incoming stimulus to object scripts.
+    ScriptMessage,
     /// An effect the game does not implement yet (EnvSound, add_metaprop, toxin, ...).
     Unhandled(String),
 }
@@ -1092,6 +1094,7 @@ impl ReceptronOptions {
         let param_68 = read_i32(reader);
 
         let effect = match name.as_str() {
+            "stim_script_msg" => ReceptronEffect::ScriptMessage,
             "damage" => ReceptronEffect::Damage {
                 multiplier: param_64,
                 use_intensity: param_68 != 0,
@@ -3567,6 +3570,12 @@ mod tests {
     fn read_receptron(payload: Vec<u8>) -> ReceptronOptions {
         let mut cursor: Box<dyn ReadAndSeek> = Box::new(Cursor::new(payload));
         ReceptronOptions::read(&mut cursor, 88)
+    }
+
+    #[test]
+    fn receptron_script_message_is_a_modeled_reaction() {
+        let opts = read_receptron(receptron_payload(80, "stim_script_msg", 0.0, 0.0, 0));
+        assert_eq!(opts.effect, ReceptronEffect::ScriptMessage);
     }
 
     #[test]

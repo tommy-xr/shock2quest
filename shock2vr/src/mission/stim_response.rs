@@ -109,8 +109,42 @@ pub fn contact_stim_damage_with_bonus(
         .sum()
 }
 
-/// Resolve the last applicable freeze response. As in AISetFrozen, a new
-/// stimulus replaces the previous timer rather than adding to it.
+/// Deliver authored script-message reactions, retaining the stimulus identity and
+/// amplified intensity for script-specific interpretation. Like the shared damage
+/// resolver, apply all amplifiers before delivery and let any Abort suppress the
+/// stimulus regardless of authored order (the same armor/immunity convention).
+pub fn contact_script_stims(
+    world: &World,
+    emitter: i32,
+    victim: EntityId,
+    scale: f32,
+) -> Vec<(i32, f32)> {
+    let Ok(sources) = world.borrow::<UniqueView<GlobalContactStims>>() else {
+        return vec![];
+    };
+    let Some(stims) = sources.0.get(&emitter) else {
+        return vec![];
+    };
+    let responses = victim_receptrons(world, victim);
+    stims
+        .iter()
+        .filter_map(|(stim, intensity)| {
+            let mut delivered = false;
+            let mut amount = intensity * scale;
+            for (_, response) in responses.iter().filter(|(id, _)| id == stim) {
+                match &response.effect {
+                    ReceptronEffect::Abort => return None,
+                    ReceptronEffect::Amplify { factor } => amount *= factor,
+                    ReceptronEffect::ScriptMessage => delivered = true,
+                    _ => {}
+                }
+            }
+            (delivered && amount.is_finite() && amount > 0.0).then_some((*stim, amount))
+        })
+        .collect()
+}
+
+/// Resolve the last applicable freeze response. A new stimulus replaces the previous timer.
 pub fn contact_stim_freeze(
     world: &World,
     emitter_template: i32,
@@ -229,7 +263,7 @@ pub fn resolve_stim_damage(
             ReceptronEffect::Radiate { .. }
             | ReceptronEffect::Freeze { .. }
             | ReceptronEffect::Stun { .. } => {}
-            ReceptronEffect::Unhandled(_) => {}
+            ReceptronEffect::ScriptMessage | ReceptronEffect::Unhandled(_) => {}
         }
     }
 
@@ -263,6 +297,7 @@ pub fn resolve_stim_radiation(
             ReceptronEffect::Damage { .. }
             | ReceptronEffect::Freeze { .. }
             | ReceptronEffect::Stun { .. }
+            | ReceptronEffect::ScriptMessage
             | ReceptronEffect::Unhandled(_) => {}
         }
     }
@@ -517,6 +552,28 @@ mod tests {
                 .collect(),
         });
         (world, victim)
+    }
+
+    #[test]
+    fn script_stim_carries_scaled_intensity_and_respects_receiver_immunity() {
+        let sources = GlobalContactStims(HashMap::from([(-3394, vec![(-3395, 10.0)])]));
+        let (world, victim) = world_with_victim(
+            sources.clone(),
+            vec![(-3395, receptron(80, ReceptronEffect::ScriptMessage))],
+        );
+        assert_eq!(
+            contact_script_stims(&world, -3394, victim, 6.0),
+            vec![(-3395, 60.0)]
+        );
+        assert_eq!(contact_stim_damage(&world, -3394, victim), 0.0);
+        let (world, victim) = world_with_victim(
+            sources,
+            vec![
+                (-3395, receptron(80, ReceptronEffect::ScriptMessage)),
+                (-3395, receptron(99, ReceptronEffect::Abort)),
+            ],
+        );
+        assert!(contact_script_stims(&world, -3394, victim, 6.0).is_empty());
     }
 
     #[test]

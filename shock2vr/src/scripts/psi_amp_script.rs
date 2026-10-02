@@ -428,7 +428,16 @@ fn cast_selected_power(
             // A psi bolt is not a gun shot: the amp's fire-setting record is
             // the editor's uninitialized one (every multiplier 0), so cast at
             // the projectile's own authored damage and speed.
-            crate::runtime_props::RuntimePropShotModifiers::default(),
+            crate::runtime_props::RuntimePropShotModifiers {
+                // Charm has one projectile at every PSI level: its Contact
+                // source authors seconds per PSI, rather than a tiered bolt.
+                stim: if power.name == "PsiCharm" {
+                    effective_psi as f32
+                } else {
+                    1.0
+                },
+                ..Default::default()
+            },
         ),
     ];
     effects.extend(amp_cast_flashes(world, amp_entity));
@@ -711,6 +720,7 @@ fn cast_soma_drain(
                 },
             },
         },
+        super::charmable::player_damage(drain.target),
     ];
     if heal > 0 {
         // PlayerScript handles only Damage - there is no heal message - so

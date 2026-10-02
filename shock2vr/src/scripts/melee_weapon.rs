@@ -179,6 +179,7 @@ impl Script for HeldMeleeWeapon {
                     effects.push(crate::psi_invisibility::attack_effect(world, entity_id));
                     // Addressed to the hitbox, not the creature: forwarding it
                     // is what stamps the struck joint onto the blow.
+                    effects.push(super::charmable::player_damage(owner));
                     effects.push(contact_damage_effect(
                         *with,
                         amount * crate::melee_swing::damage_scale(world, entity_id),

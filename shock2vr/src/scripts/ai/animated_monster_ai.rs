@@ -327,6 +327,7 @@ pub struct AnimatedMonsterAI {
     /// Where the player was last seen; investigated by SearchBehavior when
     /// alertness decays after losing contact
     last_known_player_pos: Option<cgmath::Vector3<f32>>,
+    combat_team: Option<dark::properties::AITeam>,
     /// Awareness state last published to the ECS, so the component tracks
     /// the script's knowledge exactly (including forgetting) without
     /// per-frame effect churn
@@ -404,6 +405,7 @@ impl AnimatedMonsterAI {
             config: None,
             published_behavior: None,
             last_known_player_pos: None,
+            combat_team: None,
             published_awareness: None,
             door_cooldown: 0.0,
             door_wait: None,
@@ -438,6 +440,7 @@ impl AnimatedMonsterAI {
             config: None,
             published_behavior: None,
             last_known_player_pos: None,
+            combat_team: None,
             published_awareness: None,
             door_cooldown: 0.0,
             door_wait: None,
@@ -1654,24 +1657,23 @@ impl Script for AnimatedMonsterAI {
 
         // Monster rotation is set directly via Effect::SetRotation, so pose.rotation
         // already contains the heading. Pass Deg(0.0) to avoid applying it twice.
-        use super::ai_util::MONSTER_FOV_HALF_ANGLE;
         // A pinned alertness (DebugForceChase) acts as permanent sight of
         // the player: no decay, and the last-known position tracks them live
-        let is_visible = self.alertness_pinned
-            || is_player_visible_in_fov(
-                entity_id,
-                world,
-                physics,
-                Deg(0.0),
-                MONSTER_FOV_HALF_ANGLE,
-            );
-
-        // Remember where the player was last seen, for SearchBehavior
+        let team = super::ai_util::ai_team(world, entity_id);
+        if self.combat_team.is_some_and(|previous| previous != team) {
+            self.last_known_player_pos = None;
+            self.scent_goal = false;
+        }
+        self.combat_team = Some(team);
+        let target = super::ai_util::combat_target(world, physics, entity_id);
+        let is_visible = (self.alertness_pinned && target.is_some())
+            || super::ai_util::combat_target_visible(entity_id, world, physics);
         if is_visible {
-            if let Ok(player) = world.borrow::<shipyard::UniqueView<PlayerInfo>>() {
-                self.last_known_player_pos = Some(player.pos);
-                self.scent_goal = false;
-            }
+            self.last_known_player_pos = target.map(|(_, position)| position);
+            self.scent_goal = false;
+        }
+        if team == dark::properties::AITeam::Good && target.is_none() {
+            self.last_known_player_pos = None;
         }
 
         // Publish what this AI knows about its target: chase steering
@@ -1679,7 +1681,11 @@ impl Script for AnimatedMonsterAI {
         // the player's true location. Published only on change, and CLEARED
         // when the script forgets (search consumed it / fully calmed) so a
         // stale component can't hijack the true-position fallback forever.
-        let scent_effect = self.follow_local_scent(world, physics, entity_id, is_visible, delta);
+        let scent_effect = if team == dark::properties::AITeam::Good {
+            Effect::NoEffect
+        } else {
+            self.follow_local_scent(world, physics, entity_id, is_visible, delta)
+        };
         let desired_awareness = self.last_known_player_pos.map(|pos| (pos, is_visible));
         let awareness_effect = if desired_awareness != self.published_awareness {
             self.published_awareness = desired_awareness;
@@ -1867,7 +1873,7 @@ impl Script for AnimatedMonsterAI {
                 is_visible,
                 self.current_behavior.borrow().scripted_state(),
             ) {
-            orient_toward_player(world, entity_id).unwrap_or(steering_output)
+            orient_toward_player(world, physics, entity_id).unwrap_or(steering_output)
         } else {
             steering_output
         };
@@ -2506,8 +2512,12 @@ impl Script for AnimatedMonsterAI {
 }
 
 /// Steering that faces the player's current position.
-fn orient_toward_player(world: &World, entity_id: EntityId) -> Option<SteeringOutput> {
-    let player_pos = world.borrow::<UniqueView<PlayerInfo>>().ok()?.pos;
+fn orient_toward_player(
+    world: &World,
+    physics: &PhysicsWorld,
+    entity_id: EntityId,
+) -> Option<SteeringOutput> {
+    let (_, player_pos) = super::ai_util::combat_target(world, physics, entity_id)?;
     let (position, _) = get_position_and_forward(world, entity_id);
     Some(Steering::turn_to_point(
         position,
