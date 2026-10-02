@@ -15560,9 +15560,20 @@ impl MissionCore {
     /// standing-equivalent center and the player is created standing there;
     /// this drops the capsule back into the saved crouched pose before the
     /// first step (a standing capsule may not even fit, e.g. mid-crawlspace).
-    pub fn restore_saved_crouch(&mut self) {
+    /// Returns whether the player is now crouched (a top-out refuses it).
+    pub fn restore_saved_crouch(&mut self) -> bool {
         self.physics
-            .set_player_crouch(true, &mut self.player_handle);
+            .set_player_crouch(true, &mut self.player_handle)
+    }
+
+    /// Teleport into the crouched capsule, as a crouched save loads: for a
+    /// destination (`position`, the crouched body centre) with no standing
+    /// headroom. The ordinary stand-up check expands the player where it fits.
+    pub fn teleport_player_crouched(&mut self, position: Vector3<f32>) -> Result<(), String> {
+        if !self.restore_saved_crouch() {
+            return Err("cannot crouch while topping out".to_string());
+        }
+        self.teleport_player(position)
     }
 
     fn body_pouch_readout(&self) -> super::body_gear_feedback::PouchReadout {
