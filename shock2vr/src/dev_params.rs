@@ -353,6 +353,8 @@ dev_params! {
     /// fired mid-kick ride the full displacement, so sustained fire walks up.
     /// A settled gun fires exactly on the crosshair at every setting.
     FLAT_RECOIL_AIM = Recoil::float("flat_recoil_aim", "Flat aim follow", 1.0, 0.0, 1.0, 0.1),
+    /// Cosmetic camera-turn lean, layered over flat weapon clips.
+    FLAT_TURN_SWAY = Recoil::float("flat_turn_sway", "Flat turn sway", 1.0, 0.0, 3.0, 0.1),
     /// Ceiling on how fast a physically simulated held melee weapon may be
     /// driven onto its tracked-hand target, in world units per second.
     ///

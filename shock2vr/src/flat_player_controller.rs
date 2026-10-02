@@ -100,6 +100,7 @@ pub struct FlatPlayerController {
     /// uses. The camera and `last_aim` are deliberately untouched, so recoil
     /// never moves the crosshair or the shot (see `weapon_recoil::flat_impulse`).
     recoil: crate::weapon_recoil::RecoilState,
+    turn_sway: crate::flat_turn_sway::FlatTurnSway,
 }
 
 impl FlatPlayerController {
@@ -111,6 +112,7 @@ impl FlatPlayerController {
             last_aim: None,
             last_aim_bias: vec3(0.0, 0.0, 0.0).truncate(),
             recoil: crate::weapon_recoil::RecoilState::default(),
+            turn_sway: crate::flat_turn_sway::FlatTurnSway::default(),
         }
     }
 
@@ -175,6 +177,7 @@ impl FlatPlayerController {
         self.last_fire_pressed = false;
         // A new gun starts at rest: the outgoing one's kick is not its own.
         self.recoil = crate::weapon_recoil::RecoilState::default();
+        self.turn_sway = crate::flat_turn_sway::FlatTurnSway::default();
         self.last_aim_bias = vec2(0.0, 0.0);
         effects.push(VirtualHandEffect::HoldItem { entity_id });
         effects
@@ -241,6 +244,11 @@ impl FlatPlayerController {
         // Unconditional, so a kick cannot freeze mid-flight while a melee
         // weapon (or nothing) is wielded and thaw on the next gun frame.
         let kick = self.recoil.step(step_dt);
+        let sway = self.turn_sway.step(
+            look,
+            step_dt,
+            crate::dev_params::get(crate::dev_params::FLAT_TURN_SWAY),
+        );
 
         // The first visible surface is the HUD pick, irrespective of frob reach
         // or eligibility. HUDSelect is applied centrally by render_per_eye.
@@ -385,6 +393,12 @@ impl FlatPlayerController {
                     (rotation, position)
                 }
             };
+            // Apply only after recoil has resolved the gameplay ray and the
+            // clip has posed the weapon. This camera-space parent layer cannot
+            // bend aim, and rotates the complete viewmodel around the eye.
+            let visual_sway = look * sway * look.conjugate();
+            let position = camera_pos + visual_sway.rotate_vector(position - camera_pos);
+            let rotation = visual_sway * rotation;
             effects.push(VirtualHandEffect::SetPositionRotation {
                 entity_id,
                 position,

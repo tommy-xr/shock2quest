@@ -38,6 +38,7 @@ mod developer_mode;
 pub mod difficulty;
 mod flat_lean;
 mod flat_player_controller;
+mod flat_turn_sway;
 mod flat_weapon_animation;
 pub mod free_camera;
 mod glove_fit;
