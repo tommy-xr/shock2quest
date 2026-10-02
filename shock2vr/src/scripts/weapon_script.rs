@@ -912,8 +912,21 @@ pub(super) fn create_muzzle_flash(
             .contains(entity_id)
             && crate::wielded_weapon::weapon_in_hand(world, vr_config::Handedness::Left)
                 == Some(entity_id);
-        let velocity_frame =
-            frame * Matrix4::from_nonuniform_scale(if left { -1.0 } else { 1.0 }, 1.0, 1.0);
+        // Reflect model Z into launch-frame X. Use the visible model: classic
+        // VR keeps a world-model AR even though its authored viewmodel is ar15_h.
+        let model = if crate::mission::mission_core::presentation_is_vr(world) {
+            super::internal_switch_held_model::get_current_model(world, entity_id)
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let hand = if left {
+            vr_config::Handedness::Left
+        } else {
+            vr_config::Handedness::Right
+        };
+        let lateral_scale = vr_config::gun_model_frame(&model, hand).z.z;
+        let velocity_frame = frame * Matrix4::from_nonuniform_scale(lateral_scale, 1.0, 1.0);
         return Effect::CreateEntity {
             template_id: muzzle_flash_template_id,
             position: point3(0.0, 0.0, 0.0),
@@ -1179,6 +1192,47 @@ mod tests {
             assert!(
                 (forward - axis).magnitude() < 0.001,
                 "{name}: cone faces {forward:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn casing_reflection_follows_the_visible_vr_model_only() {
+        use crate::{PresentationMode, mission::mission_core::GlobalPresentationMode};
+        for (mode, model, lateral) in [
+            (PresentationMode::Vr, "ar15_h", -1.0),
+            (PresentationMode::Vr, "ar15_w", 1.0),
+            (PresentationMode::Flat, "ar15_h", 1.0),
+            (PresentationMode::Vr, "atek_h", 1.0),
+        ] {
+            let mut world = World::new();
+            world.add_unique(GlobalPresentationMode(mode));
+            let gun = world.add_entity((
+                dark::properties::PropModelName(model.to_owned()),
+                RuntimePropTransform(Matrix4::from_scale(1.0)),
+                PropPlayerGun {
+                    flags: 0,
+                    hand_model: "ar15_h".to_owned(),
+                    icon_file: String::new(),
+                    model_offset: vec3(0.0, 0.0, 0.0),
+                    fire_offset: vec3(0.0, 0.0, 0.0),
+                    heading: 0,
+                    reload_pitch: 0,
+                    reload_rate: 0,
+                    gun_type: 0,
+                },
+            ));
+            let Effect::CreateEntity {
+                root_transform,
+                options,
+                ..
+            } = create_muzzle_flash(&world, gun, -2657, &GunFlashOptions { vhot: 1, flags: 1 })
+            else {
+                panic!("casing must spawn")
+            };
+            assert_eq!(
+                options.authored_velocity_frame.unwrap(),
+                root_transform * Matrix4::from_nonuniform_scale(lateral, 1.0, 1.0)
             );
         }
     }

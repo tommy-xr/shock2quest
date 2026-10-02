@@ -476,7 +476,7 @@ impl ModelPreview {
                         .get(&dark::importers::GLOVE_WEAPON_IMPORTER, key);
                     let source = source.as_ref().as_ref().ok_or("Weapon model unavailable")?;
                     model.apply_local_transform(shock2vr::vr_weapon_grip::model_frame(
-                        source, *hand,
+                        source, key, *hand,
                     ));
                 }
                 let grip_transform = Matrix4::from_translation(grip.offset)

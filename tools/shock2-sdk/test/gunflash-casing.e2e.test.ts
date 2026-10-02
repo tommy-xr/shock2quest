@@ -78,10 +78,12 @@ for (const [weapon, casingTemplate] of [["Assault Rifle", -2657], ["Pistol", -26
         assert.ok(later[1] - initial[1] > 0.15,
           `authored upward ejection must separate from the breech: ${JSON.stringify({initial, later})}`);
         // With a level -X barrel, authored sideways speed is -0.2 world units/s;
-        // it reflects with the left-hand ejection port. Allow physics integration.
+        // it reflects with the handed port and the VR AR's model-axis scale.
+        // Allow physics integration.
         if (!pumping) {
           const sideways = later[2] - initial[2];
-          assert.ok(hand === "left" ? sideways > 0.01 : sideways < -0.01,
+          const reflected = (hand === "left") !== (vr && weapon === "Assault Rifle");
+          assert.ok(reflected ? sideways > 0.01 : sideways < -0.01,
             `casing must leave the ${hand} ejection side: ${sideways}`);
         }
         await game.step({ frames: 60 });
