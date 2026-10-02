@@ -1211,6 +1211,7 @@ mod tests {
                 dark::properties::PropModelName(model.to_owned()),
                 RuntimePropTransform(Matrix4::from_scale(1.0)),
                 PropPlayerGun {
+                    flags: 0,
                     hand_model: "ar15_h".to_owned(),
                     icon_file: String::new(),
                     model_offset: vec3(0.0, 0.0, 0.0),
