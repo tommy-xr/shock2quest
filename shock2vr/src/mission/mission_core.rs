@@ -711,6 +711,19 @@ impl PlayerLifeState {
     }
 }
 
+/// A creature's authored `P$TimeWarp`: the factor every motion's duration is
+/// scaled by (below 1.0 plays faster). Root-motion distance is unchanged, so
+/// ground speed scales by its inverse. Missing or invalid values play at the
+/// authored rate; the clamp keeps `Duration` arithmetic in range.
+fn creature_time_warp(world: &World, entity_id: EntityId) -> f32 {
+    world
+        .borrow::<View<dark::properties::PropTimeWarp>>()
+        .ok()
+        .and_then(|warps| warps.get(entity_id).ok().map(|warp| warp.0))
+        .filter(|warp| warp.is_finite() && *warp > 0.0)
+        .map_or(1.0, |warp| warp.clamp(0.1, 10.0))
+}
+
 /// Seed the death camera's fall direction from where the player died, so a
 /// replayed death topples the same way while two deaths in different places do
 /// not. The float bits are mixed rather than the value quantized: neighbouring
@@ -6981,11 +6994,13 @@ impl MissionCore {
                     };
                     let result = if let Some((_, delta, max_seconds)) = turn {
                         let options = global_context.motiondb.query_all(query.clone());
+                        // Budget the turn at the speed it will actually play.
+                        let warp = creature_time_warp(&self.world, entity_id);
                         let clips = options
                             .iter()
                             .map(|name| {
                                 let stuff = global_context.motiondb.get_motion_stuff(name.clone());
-                                (stuff.end_direction, stuff.duration)
+                                (stuff.end_direction, stuff.duration * warp)
                             })
                             .collect::<Vec<_>>();
                         dark::motion::nearest_turn_clip(delta, &clips, max_seconds)
@@ -7251,8 +7266,13 @@ impl MissionCore {
             // self.id_to_animation_player.entry(*id).and_modify(|player| {
             //     *player = AnimationPlayer::update(player, time.elapsed);
             // });
+            // The clip clock (cross-fades included) runs `1 / warp` as fast, and so
+            // does the root velocity it reports per clip-second, keeping stride and
+            // speed matched.
+            let warp = creature_time_warp(&self.world, *id);
             let (new_player, flags, events, velocity) =
-                AnimationPlayer::update(player, time.elapsed);
+                AnimationPlayer::update(player, time.elapsed.div_f32(warp));
+            let velocity = velocity / warp;
             *player = new_player;
 
             // A pivot handing its yaw over rides the fade this player is
@@ -19404,6 +19424,44 @@ mod death_motion_tests {
     fn three_frame_already_dead_pose_is_not_a_realtime_crumple() {
         assert!(!is_realtime_crumple(3.0));
         assert!(is_realtime_crumple(79.0));
+    }
+}
+
+#[cfg(test)]
+mod time_warp_tests {
+    use super::*;
+
+    fn warp_of(value: Option<f32>) -> f32 {
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        if let Some(value) = value {
+            world.add_component(entity, dark::properties::PropTimeWarp(value));
+        }
+        creature_time_warp(&world, entity)
+    }
+
+    #[test]
+    fn authored_warp_is_used() {
+        assert_eq!(warp_of(Some(0.88)), 0.88);
+    }
+
+    #[test]
+    fn missing_or_invalid_warp_plays_at_authored_rate() {
+        for value in [
+            None,
+            Some(0.0),
+            Some(-1.0),
+            Some(f32::NAN),
+            Some(f32::INFINITY),
+        ] {
+            assert_eq!(warp_of(value), 1.0);
+        }
+    }
+
+    #[test]
+    fn extreme_warp_is_clamped_into_duration_range() {
+        assert_eq!(warp_of(Some(1e-30)), 0.1);
+        assert_eq!(warp_of(Some(1e30)), 10.0);
     }
 }
 

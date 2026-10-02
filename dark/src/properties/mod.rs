@@ -1291,6 +1291,12 @@ impl Links {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPickBias(pub f32);
 
+/// Creature\Time Warp: scales the duration of every motion the creature plays.
+/// Below 1.0 is faster (the Rumbler's 0.88), above 1.0 slower; root-motion
+/// distance is unchanged, so locomotion speed scales by its inverse.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropTimeWarp(pub f32);
+
 /// AI movement turn rate, in degrees per second.
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropAITurnRate(pub f32);
@@ -2270,6 +2276,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$PickBias",
             |reader, _len| read_single(reader),
             PropPickBias,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$TimeWarp",
+            |reader, _len| read_single(reader),
+            PropTimeWarp,
             accumulator::latest,
         ),
         define_prop(
