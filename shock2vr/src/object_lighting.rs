@@ -49,7 +49,7 @@ impl<'a> ObjectLighting<'a> {
         })
     }
 
-    /// Lights for the player's own gloves and held items. They can extend into
+    /// Lights for the player's own gloves, held items and holstered weapons. They can extend into
     /// solid space, so keep the player's light set there instead of abruptly
     /// dropping to ambient-only; shader distance/cone tests still use the
     /// mesh's actual world position. Their ambient is raised to
