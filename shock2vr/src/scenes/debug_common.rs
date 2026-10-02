@@ -754,6 +754,24 @@ pub fn cube_object(
     object
 }
 
+/// [`cube_object`] shaded by face direction with a 1-unit world grid, so
+/// stacked slabs, walls and ceilings read apart.
+pub fn shaded_cube_object(
+    color: Vector3<f32>,
+    translation: Vector3<f32>,
+    scale: Vector3<f32>,
+) -> SceneObject {
+    let mut object = SceneObject::new(
+        color_material::create_shaded_grid(color),
+        Box::new(cube::create()),
+    );
+    object.set_transform(
+        Matrix4::from_translation(translation)
+            * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z),
+    );
+    object
+}
+
 /// `Effect::CreateEntity` at a world position with identity orientation - the
 /// spawn shape every populate hook wants.
 pub fn spawn_at(template_id: i32, position: Point3<f32>) -> Effect {
