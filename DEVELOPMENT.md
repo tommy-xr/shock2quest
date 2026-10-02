@@ -182,6 +182,27 @@ cargo dx ui --select obj/atek_h.bin --joint 2=-2
 cargo dx ui --select obj/ar15_h.bin --weapon-clip reload --advance 0.5 --screenshot /tmp/ar15-reload.png
 ```
 
+To adjust how the extracted pistol magazine sits in the glove, open **VR Setup
+→ Hand grips → Magazines**, or jump directly to it:
+
+```bash
+cargo dx ui --grip atek_h_magazine --grip-hand left
+cargo dx ui --grip atek_h_magazine --grip-hand right
+```
+
+`ar15_h_magazine` opens the rifle magazine. The preview uses the same extracted,
+centered mesh as the ammo pouch. First opening prepares automatic grip drafts;
+adjust position, rotation and finger curls for each hand, then **Save all edits**.
+The overrides are stored in `assets/vr-magazine-grips.json`. Restart gameplay to
+load them, and include that resource when deploying to Quest. **Save As** writes
+a separate library; copy it to that canonical path to use it in game.
+
+Magazine size follows the source weapon rather than an independent size slider.
+The editor previews the weapon scale for the opposite hand. An empty or missing
+magazine grip library keeps the existing automatic fit; normal ammo pickups and
+the gun's grip are unaffected. If you resize a weapon, review its magazine's
+finger curls again.
+
 ### Gameplay music themes
 
 Mission music is driven by `PropAmbientHacked` markers with the `MUSIC` flag.

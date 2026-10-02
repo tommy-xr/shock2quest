@@ -7,6 +7,36 @@ use dark::{
 use engine::assets::asset_cache::AssetCache;
 use shipyard::{EntityId, Get, View, World};
 
+/// Grip identities are separate from both the complete gun and the ammo pickup.
+pub fn grip_model(source: &str) -> Option<&'static str> {
+    match source {
+        "atek_h" => Some("atek_h_magazine"),
+        "ar15_h" => Some("ar15_h_magazine"),
+        _ => None,
+    }
+}
+
+pub fn grip_source(model: &str) -> Option<&'static str> {
+    match model.trim_end_matches(".bin") {
+        "atek_h_magazine" => Some("atek_h"),
+        "ar15_h_magazine" => Some("ar15_h"),
+        _ => None,
+    }
+}
+
+/// Keep the physical magazine's weapon-derived size, even if the grip was
+/// authored before that weapon's scale changed. Position is in hand space.
+pub fn prepared_grip(
+    library: &crate::vr_grip::GripLibrary,
+    source: &str,
+    hand: &str,
+    scale: f32,
+) -> Option<crate::vr_grip::ResolvedGrip> {
+    let mut grip = library.lookup(grip_model(source)?, hand)?.clone();
+    grip.item_scale = scale;
+    grip.is_valid().then_some(grip)
+}
+
 pub(crate) fn removed(world: &World, weapon: EntityId) -> bool {
     world
         .borrow::<View<dark::properties::InternalPropMagazineRemoved>>()

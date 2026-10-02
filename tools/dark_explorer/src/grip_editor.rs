@@ -284,6 +284,11 @@ impl GripEditor {
             .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()));
         let default_path = if model
             .as_ref()
+            .is_some_and(|m| shock2vr::vr_magazine::grip_source(m).is_some())
+        {
+            default_library_path().with_file_name("vr-magazine-grips.json")
+        } else if model
+            .as_ref()
             .is_some_and(|m| shock2vr::tricorder::is_model(m))
         {
             default_library_path().with_file_name("vr-tricorder-grips.json")
@@ -378,6 +383,9 @@ impl GripEditor {
             return;
         };
         let mut hints = hints.get(&self.model).cloned().unwrap_or_default();
+        if shock2vr::vr_magazine::grip_source(&self.model).is_some() {
+            hints.keep_upright = true;
+        }
         let hints_hash = hints.fingerprint();
         if family.is_some() {
             hints.pose_family = family;
@@ -390,8 +398,17 @@ impl GripEditor {
             } else {
                 Handedness::Right
             };
+            let scale = match preview.magazine_grip_scale(&key, hand) {
+                Ok(scale) => scale,
+                Err(e) => {
+                    self.message = e.into();
+                    return;
+                }
+            };
             match preview.grip_inputs(&key, hand) {
-                Ok((surface, rig, hash, guide)) => inputs.push((name, surface, rig, hash, guide)),
+                Ok((surface, rig, hash, guide)) => {
+                    inputs.push((name, surface, rig, hash, guide, scale))
+                }
                 Err(e) => {
                     self.message = e;
                     return;
@@ -406,7 +423,7 @@ impl GripEditor {
         std::thread::spawn(move || {
             let result = inputs
                 .into_iter()
-                .map(|(hand, surface, rig, surface_hash, guide)| {
+                .map(|(hand, surface, rig, surface_hash, guide, scale)| {
                     let resolved = if let Some((triangles, arms)) = guide {
                         let side = if hand == "left" {
                             Handedness::Left
@@ -417,9 +434,12 @@ impl GripEditor {
                     } else {
                         surface.resolve(&rig, &hints)
                     };
-                    let grip = resolved.ok_or_else(|| {
+                    let mut grip = resolved.ok_or_else(|| {
                         format!("No valid {hand} fit for {model}; existing drafts kept")
                     })?;
+                    if let Some(scale) = scale {
+                        grip = grip.with_item_scale(scale);
+                    }
                     Ok(BakedGripEntry {
                         model: model.clone(),
                         hand,
@@ -565,7 +585,7 @@ impl GripEditor {
         ui.label("Grip overrides · shared glove rig");
         let can_switch = !self.is_busy() && self.document.as_ref().is_ok_and(|doc| !doc.dirty());
         let mut switch = None;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(can_switch, egui::Button::new("Pickups"))
                 .clicked()
@@ -584,6 +604,12 @@ impl GripEditor {
             {
                 switch = Some(("vr-weapon-grips.json", "atek_h"));
             }
+            if ui
+                .add_enabled(can_switch, egui::Button::new("Magazines"))
+                .clicked()
+            {
+                switch = Some(("vr-magazine-grips.json", "atek_h_magazine"));
+            }
         });
         if let Some((file, model)) = switch {
             match GripDocument::load(default_library_path().with_file_name(file)) {
@@ -600,7 +626,20 @@ impl GripEditor {
         let Ok(doc) = &self.document else {
             return;
         };
-        let models: BTreeSet<_> = doc.library.entries.iter().map(|e| &e.model).collect();
+        let mut models: BTreeSet<_> = doc
+            .library
+            .entries
+            .iter()
+            .map(|e| e.model.as_str())
+            .collect();
+        if doc
+            .path
+            .file_name()
+            .is_some_and(|name| name == "vr-magazine-grips.json")
+            || shock2vr::vr_magazine::grip_source(&self.model).is_some()
+        {
+            models.extend(["atek_h_magazine", "ar15_h_magazine"]);
+        }
         egui::ScrollArea::vertical().show(ui, |ui| {
             for model in models {
                 let labels = INTERACTION_FIXTURES
@@ -613,8 +652,9 @@ impl GripEditor {
                 if !text.to_lowercase().contains(&self.search.to_lowercase()) {
                     continue;
                 }
-                if ui.selectable_label(self.model == *model, text).clicked() {
-                    self.model = model.clone();
+                if ui.selectable_label(self.model == model, text).clicked() {
+                    self.model = model.to_owned();
+                    self.prepare_missing = true;
                     self.validated = None;
                     self.camera_pending = true;
                     self.message.clear();
@@ -674,6 +714,7 @@ impl GripEditor {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(50));
         }
+        let magazine = shock2vr::vr_magazine::grip_source(&self.model).is_some();
         let mut request_fit = false;
         let doc = self.document.as_mut().unwrap();
         ui.heading(format!("{} — grip override", self.model));
@@ -681,9 +722,13 @@ impl GripEditor {
             self.support_mode = false;
             ui.label("Phone grip: support the back and curl fingers around an edge. The green rear lens emits along -Z. Save, then restart the game to load both hand poses.");
         }
+        if magazine {
+            self.support_mode = false;
+            ui.label("Extracted pouch magazine. Adjust each hand's grip, then Save and restart the game. Size follows the weapon held in the other hand.");
+        }
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.support_mode, false, "Primary grip");
-            if !shock2vr::tricorder::is_model(&self.model) {
+            if !shock2vr::tricorder::is_model(&self.model) && !magazine {
                 ui.selectable_value(&mut self.support_mode, true, "Support grip");
             }
         });
@@ -736,6 +781,16 @@ impl GripEditor {
             Handedness::Right
         };
         let key = format!("{}.bin", self.model);
+        if magazine {
+            match preview.magazine_grip_scale(&key, hand) {
+                Ok(Some(scale)) => doc.library.entries[index].grip.item_scale = scale,
+                Ok(None) => unreachable!(),
+                Err(error) => {
+                    ui.label(error);
+                    return;
+                }
+            }
+        }
         let identity = (self.model.clone(), self.hand.clone());
         if self.validated.as_ref() != Some(&identity) {
             self.hashes = match preview.grip_inputs(&key, hand) {
@@ -980,7 +1035,9 @@ impl GripEditor {
                 ui.add(egui::Slider::new(&mut self.rotation_step, 0.1..=15.0).suffix("°"));
                 ui.separator();
                 ui.label("Uniform item scale");
-                tweak_slider(ui, "×", &mut entry.grip.item_scale, 0.1..=3.0, 0.02, 2);
+                ui.add_enabled_ui(!magazine, |ui| {
+                    tweak_slider(ui, "×", &mut entry.grip.item_scale, 0.1..=3.0, 0.02, 2);
+                });
             });
         });
         if before != entry.grip {
@@ -1092,6 +1149,61 @@ mod tests {
         std::fs::write(&path, include_bytes!("../../../assets/vr-grips.json")).unwrap();
         let doc = GripDocument::load(path).unwrap();
         (dir, doc)
+    }
+
+    #[test]
+    fn magazine_opens_its_own_grip_library() {
+        let editor = GripEditor::new(
+            None,
+            Some("atek_h_magazine".into()),
+            "left".into(),
+            "oblique".into(),
+            false,
+            None,
+        );
+        assert_eq!(
+            editor.document.unwrap().path.file_name().unwrap(),
+            "vr-magazine-grips.json"
+        );
+    }
+
+    #[test]
+    fn saved_magazine_pose_reaches_runtime_without_changing_ammo_or_weapon_grips() {
+        let (_dir, mut doc) = document();
+        let original = doc.library.entries.clone();
+        for hand in ["left", "right"] {
+            let mut entry = original[0].clone();
+            entry.model = "atek_h_magazine".into();
+            entry.hand = hand.into();
+            entry.grip.offset.x = if hand == "left" { -0.12 } else { 0.15 };
+            entry.grip.curls[0] = 0.42;
+            entry.grip.item_scale = 0.55;
+            doc.library.entries.push(entry);
+        }
+        doc.save().unwrap();
+        let loaded = GripDocument::load(doc.path.clone()).unwrap();
+        for hand in ["left", "right"] {
+            let mut expected = doc.library.lookup("atek_h_magazine", hand).unwrap().clone();
+            // A weapon size edit must not make the magazine grow on insertion.
+            expected.item_scale = 0.7;
+            assert_eq!(
+                shock2vr::vr_magazine::prepared_grip(&loaded.library, "atek_h", hand, 0.7),
+                Some(expected)
+            );
+        }
+        for entry in original {
+            assert_eq!(
+                loaded.library.lookup(&entry.model, &entry.hand),
+                Some(&entry.grip)
+            );
+        }
+        assert!(
+            shock2vr::vr_magazine::prepared_grip(&loaded.library, "ar15_h", "left", 0.55).is_none()
+        );
+        assert!(
+            shock2vr::vr_magazine::prepared_grip(&loaded.library, "atek_h", "left", f32::NAN)
+                .is_none()
+        );
     }
 
     #[test]

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
+import { findRepoRoot } from "../src/server.js";
+import type { ResolvedGrip } from "../src/types.js";
 import { drawPouchAmmo } from "./helpers/ammo-pouch.js";
 import { ammoOf } from "./helpers/weapon.js";
 import { aimVrHandAtCanvas } from "./helpers/vr-hand.js";
@@ -42,6 +46,21 @@ for (const [model, template] of [["atek_h", -17], ["ar15_h", -18]] as const) {
       const grip = held.hand_grips.find(g => g.entity_id === id);
       const gunGrip = held.hand_grips.find(g => g.entity_id === gun.id);
       assert.ok(grip?.grip && grip.item_bounds && gunGrip?.grip);
+      // Alternate bundle fixtures let the same scenario exercise saved editor
+      // overrides without changing the checkout's grip resource.
+      const library = JSON.parse(readFileSync(process.env.SHOCK2_TEST_MAGAZINE_GRIPS
+        ?? join(findRepoRoot(process.cwd())!, "assets/vr-magazine-grips.json"), "utf8")) as {
+        entries: { model: string; hand: string; authored?: boolean; grip: ResolvedGrip }[];
+      };
+      const prepared = library.entries.find(e => e.model === `${model}_magazine` && e.hand === hand);
+      assert.equal(grip.source, prepared ? "prepared" : "bake");
+      if (prepared) {
+        const actual = [...Object.values(grip.grip.offset), ...Object.values(grip.grip.rotation.v), grip.grip.rotation.s, ...grip.grip.curls];
+        const expected = [...Object.values(prepared.grip.offset), ...Object.values(prepared.grip.rotation.v), prepared.grip.rotation.s, ...prepared.grip.curls];
+        actual.forEach((value, i) => assert.ok(Math.abs(value - expected[i]!) < 1e-6,
+          `saved position/rotation/curls must reach gameplay: component ${i}, actual ${value}, expected ${expected[i]}`));
+        assert.equal(grip.authored, prepared.authored ?? false);
+      }
       assert.equal(grip.grip.item_scale, gunGrip.grip.item_scale, "magazine must retain its weapon's physical size");
       const [min, max] = grip.item_bounds;
       assert.ok(Math.max(...max.map((v, i) => v - min[i]!)) < .3, "bounds must exclude the source gun and arms");

@@ -985,6 +985,17 @@ impl PlayerInteraction for VrInteraction {
                 .unwrap()
                 .entries
                 .extend(tricorder.entries);
+            if let Some(magazines) = assets
+                .get_opt(&TEXT_IMPORTER, "vr-magazine-grips.json")
+                .and_then(|text| serde_json::from_str::<crate::vr_grip::GripLibrary>(&text).ok())
+                .filter(|lib| lib.version == 1)
+            {
+                self.grip_library
+                    .as_mut()
+                    .unwrap()
+                    .entries
+                    .extend(magazines.entries);
+            }
             self.grip_hints = assets
                 .get_opt(&TEXT_IMPORTER, "astra-vr-grip-hints.json")
                 .and_then(|text| serde_json::from_str(&text).ok())
@@ -1091,7 +1102,18 @@ impl PlayerInteraction for VrInteraction {
                 let kinematics_hash = self.kinematics_hashes[index].clone();
                 let hints = self.grip_hints.entry(model.clone()).or_default();
                 let hints_hash = hints.fingerprint();
-                let resolved = if let Some(magazine) = magazine.as_ref() {
+                let prepared_magazine = magazine.as_ref().and_then(|magazine| {
+                    crate::vr_magazine::prepared_grip(
+                        self.grip_library.as_ref().unwrap(),
+                        &magazine.source,
+                        hand_name,
+                        magazine.item_scale,
+                    )
+                });
+                let has_prepared_magazine = prepared_magazine.is_some();
+                let resolved = if has_prepared_magazine {
+                    prepared_magazine
+                } else if let Some(magazine) = magazine.as_ref() {
                     self.magazine_grips
                         .entry(format!("{model}:{hand_name}"))
                         .or_insert_with(|| {
@@ -1129,7 +1151,9 @@ impl PlayerInteraction for VrInteraction {
                         .lookup(&model, hand_name)
                         .cloned()
                 };
-                let source = if bake || magazine.is_some() {
+                let source = if has_prepared_magazine {
+                    "prepared"
+                } else if bake || magazine.is_some() {
                     "bake"
                 } else if resolved.is_some() {
                     "prepared"
@@ -1158,10 +1182,17 @@ impl PlayerInteraction for VrInteraction {
                 let authored = !bake
                     && resolved.is_some()
                     && self.grip_library.as_ref().unwrap().entries.iter().any(|e| {
-                        e.model == model
+                        let mut expected = e.grip.clone();
+                        let key = if let Some(magazine) = magazine.as_ref() {
+                            expected.item_scale = magazine.item_scale;
+                            crate::vr_magazine::grip_model(&magazine.source).unwrap_or(&model)
+                        } else {
+                            &model
+                        };
+                        e.model == key
                             && e.hand == hand_name
                             && e.authored
-                            && resolved.as_ref() == Some(&e.grip)
+                            && resolved.as_ref() == Some(&expected)
                     });
                 if crate::mission::mission_core::held_item_collision_group(world, entity).is_some()
                 {

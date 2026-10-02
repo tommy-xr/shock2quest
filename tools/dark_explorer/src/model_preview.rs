@@ -351,6 +351,20 @@ impl ModelPreview {
             if shock2vr::tricorder::is_model(key) {
                 return std::rc::Rc::new(shock2vr::tricorder::model(&mut self.asset_cache));
             }
+            if let Some(source) = shock2vr::vr_magazine::grip_source(key) {
+                let magazine = self.asset_cache.get(
+                    &dark::importers::MAGAZINE_MODEL_IMPORTER,
+                    &format!("{source}.bin"),
+                );
+                return std::rc::Rc::new(
+                    magazine
+                        .as_ref()
+                        .as_ref()
+                        .expect("Magazine mesh unavailable")
+                        .model
+                        .clone(),
+                );
+            }
             if matches!(scene, PreviewScene::VrReference) {
                 return std::rc::Rc::new(
                     self.asset_cache
@@ -377,7 +391,10 @@ impl ModelPreview {
                 return;
             }
         };
-        if matches!(scene, PreviewScene::Model) && !shock2vr::tricorder::is_model(key) {
+        if matches!(scene, PreviewScene::Model)
+            && !shock2vr::tricorder::is_model(key)
+            && shock2vr::vr_magazine::grip_source(key).is_none()
+        {
             if reframe || self.object_preview.is_none() {
                 let initial_options = std::mem::take(&mut self.object_options);
                 match quiet_catch(|| {
@@ -539,7 +556,18 @@ impl ModelPreview {
                             .map(|p| pose.point(*p)),
                     );
                 }
-                let triangles = if shock2vr::tricorder::is_model(key) {
+                let triangles = if let Some(source) = shock2vr::vr_magazine::grip_source(key) {
+                    let magazine = self.asset_cache.get(
+                        &dark::importers::MAGAZINE_MODEL_IMPORTER,
+                        &format!("{source}.bin"),
+                    );
+                    magazine
+                        .as_ref()
+                        .as_ref()
+                        .ok_or("Magazine mesh unavailable")?
+                        .triangles
+                        .clone()
+                } else if shock2vr::tricorder::is_model(key) {
                     shock2vr::tricorder::triangles()
                 } else if shock2vr::vr_weapon_grip::supports_model(key) {
                     shock2vr::vr_weapon_grip::inputs(&mut self.asset_cache, key, *hand)
@@ -580,6 +608,11 @@ impl ModelPreview {
                 )
             })
             .and_then(|r: Result<_, &str>| r.map_err(str::to_string)),
+            PreviewScene::Model if shock2vr::vr_magazine::grip_source(key).is_some() => {
+                Ok(Box::new(GripPreviewScene(
+                    engine::scene::Scene::from_objects(model.clone_scene_objects()),
+                )))
+            }
             PreviewScene::Model => BinObjViewerScene::from_model(
                 key.to_string(),
                 &self.asset_cache,
@@ -689,22 +722,42 @@ impl ModelPreview {
             } else {
                 None
             };
-            let (triangles, hash, guide) = if shock2vr::tricorder::is_model(key) {
-                let triangles = shock2vr::tricorder::triangles();
-                let hash = surface_fingerprint(&triangles);
-                (triangles, hash, None)
-            } else if let Some((triangles, arms, hash)) = weapon {
-                (triangles.clone(), hash, Some((triangles, arms)))
-            } else {
-                let triangles = self
-                    .asset_cache
-                    .get(&dark::importers::GRIP_SURFACE_IMPORTER, key);
-                (
-                    triangles.as_ref().clone(),
-                    surface_fingerprint(&triangles),
-                    None,
-                )
-            };
+            let (triangles, hash, guide) =
+                if let Some(source) = shock2vr::vr_magazine::grip_source(key) {
+                    let scale = self
+                        .magazine_grip_scale(key, hand)?
+                        .ok_or("Magazine scale unavailable")?;
+                    let magazine = self.asset_cache.get(
+                        &dark::importers::MAGAZINE_MODEL_IMPORTER,
+                        &format!("{source}.bin"),
+                    );
+                    let magazine = magazine
+                        .as_ref()
+                        .as_ref()
+                        .ok_or("Magazine mesh unavailable")?;
+                    let hash = surface_fingerprint(&magazine.triangles);
+                    let triangles = magazine
+                        .triangles
+                        .iter()
+                        .map(|t| t.map(|p| p * scale))
+                        .collect();
+                    (triangles, hash, None)
+                } else if shock2vr::tricorder::is_model(key) {
+                    let triangles = shock2vr::tricorder::triangles();
+                    let hash = surface_fingerprint(&triangles);
+                    (triangles, hash, None)
+                } else if let Some((triangles, arms, hash)) = weapon {
+                    (triangles.clone(), hash, Some((triangles, arms)))
+                } else {
+                    let triangles = self
+                        .asset_cache
+                        .get(&dark::importers::GRIP_SURFACE_IMPORTER, key);
+                    (
+                        triangles.as_ref().clone(),
+                        surface_fingerprint(&triangles),
+                        None,
+                    )
+                };
             let surface = GripSurface::new(&triangles).ok_or("No usable pickup surface")?;
             if self.glove.is_none() {
                 self.glove = GloveRenderer::new(&mut self.asset_cache);
@@ -717,6 +770,24 @@ impl ModelPreview {
             Ok((surface, rig, hash, guide))
         })
         .and_then(|r: Result<_, &str>| r.map_err(str::to_string))
+    }
+
+    /// Preview a pouch magazine at the opposite hand's weapon scale. Gameplay
+    /// records that size on the ammo entity when it is drawn from the pouch.
+    pub fn magazine_grip_scale(
+        &mut self,
+        key: &str,
+        hand: Handedness,
+    ) -> Result<Option<f32>, &'static str> {
+        let Some(source) = shock2vr::vr_magazine::grip_source(key) else {
+            return Ok(None);
+        };
+        let gun_hand = if hand == Handedness::Left {
+            "right"
+        } else {
+            "left"
+        };
+        saved_weapon_scale(&mut self.asset_cache, source, gun_hand).map(Some)
     }
 
     /// Camera presets share the gallery's hand-local axes. Orbit remains free.
@@ -1089,4 +1160,57 @@ fn support_region_overlay(
         color_material::create(vec3(0.1, 0.9, 0.8)),
         Box::new(lines_mesh::create(vertices)),
     )
+}
+
+// Authoring must see weapon grip saves made earlier in this editor session.
+// Bypass the importer cache while retaining the runtime's mount precedence.
+fn saved_weapon_scale(
+    cache: &AssetCache,
+    source: &str,
+    gun_hand: &str,
+) -> Result<f32, &'static str> {
+    for file in ["vr-grips.json", "vr-weapon-grips.json"] {
+        if let Some(library) = cache.get_raw_reader(file).and_then(|reader| {
+            serde_json::from_reader::<_, shock2vr::vr_grip::GripLibrary>(reader.into_inner()).ok()
+        }) {
+            if let Some(grip) = library.lookup(source, gun_hand) {
+                return Ok(grip.item_scale);
+            }
+        }
+    }
+    Err("No prepared grip for the source weapon; prepare its grip first")
+}
+
+#[cfg(test)]
+mod magazine_tests {
+    use super::*;
+
+    #[test]
+    fn magazine_preview_reads_weapon_scale_after_a_save_in_the_same_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vr-weapon-grips.json");
+        let mut library: shock2vr::vr_grip::GripLibrary =
+            serde_json::from_str(include_str!("../../../assets/vr-weapon-grips.json")).unwrap();
+        let write = |library: &shock2vr::vr_grip::GripLibrary| {
+            std::fs::write(&path, serde_json::to_vec(library).unwrap()).unwrap();
+        };
+        write(&library);
+        let mut cache = AssetCache::new(
+            dir.path().to_string_lossy().into_owned(),
+            engine::assets::asset_paths::AssetPath::combine(vec![
+                engine::assets::asset_paths::AssetPath::folder(String::new()),
+            ]),
+        );
+        assert_eq!(saved_weapon_scale(&mut cache, "atek_h", "right"), Ok(0.55));
+        library
+            .entries
+            .iter_mut()
+            .find(|e| e.model == "atek_h" && e.hand == "right")
+            .unwrap()
+            .grip
+            .item_scale = 0.7;
+        write(&library);
+        assert_eq!(saved_weapon_scale(&mut cache, "atek_h", "right"), Ok(0.7));
+        assert_eq!(saved_weapon_scale(&mut cache, "atek_h", "left"), Ok(0.55));
+    }
 }
