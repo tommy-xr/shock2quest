@@ -53,7 +53,8 @@ impl<'a> ObjectLighting<'a> {
     /// solid space, so keep the player's light set there instead of abruptly
     /// dropping to ambient-only; shader distance/cone tests still use the
     /// mesh's actual world position. Their ambient is raised to
-    /// `held_light_floor` so they stay readable where the lamps miss them.
+    /// `held_light_floor` so they stay readable where the lamps miss them,
+    /// independently of the world ambient slider.
     pub fn at_player_position(&self, position: Vector3<f32>) -> std::rc::Rc<LightArray> {
         let position = if self.spatial.get_cell_from_position(position).is_some() {
             position
@@ -89,6 +90,14 @@ fn with_ambient_floor(mut lights: LightArray, floor: f32) -> LightArray {
             vec3(floor, floor, floor)
         };
     }
+    // The shader scales ambient after this selection. Preserve only the held
+    // floor when the scene slider dims it; brighter ambient still follows it.
+    let strongest = lights.ambient.x.max(lights.ambient.y).max(lights.ambient.z);
+    lights.ambient_intensity_floor = if strongest > 0.0 {
+        floor / strongest
+    } else {
+        0.0
+    };
     lights
 }
 
@@ -321,6 +330,33 @@ mod tests {
         assert_eq!(ambient(vec3(0.05, 0.1, 0.05)), vec3(0.3, 0.6, 0.3));
         assert_eq!(ambient(vec3(0.2, 0.8, 0.2)), vec3(0.2, 0.8, 0.2));
         assert_eq!(ambient(vec3(0.0, 0.0, 0.0)), vec3(0.6, 0.6, 0.6));
+    }
+
+    #[test]
+    fn held_floor_survives_zero_scene_ambient_without_brightening_world_objects() {
+        let world = LightArray::new().with_object_lighting(vec3(0.2, 0.8, 0.2), 0.0);
+        assert_eq!(
+            world.ambient * world.ambient_intensity(0.0),
+            vec3(0.0, 0.0, 0.0)
+        );
+        let held = with_ambient_floor(world, 0.6);
+        for (slider, expected) in [(0.0, 0.6), (0.5, 0.6), (1.0, 0.8), (2.0, 1.6)] {
+            let shaded = held.ambient * held.ambient_intensity(slider);
+            assert!((shaded - vec3(expected / 4.0, expected, expected / 4.0)).magnitude() < 1e-6);
+        }
+        let unlit = with_ambient_floor(
+            LightArray::new().with_object_lighting(vec3(0.0, 0.0, 0.0), 0.0),
+            0.6,
+        );
+        assert_eq!(
+            unlit.ambient * unlit.ambient_intensity(0.0),
+            vec3(0.6, 0.6, 0.6)
+        );
+        let disabled = with_ambient_floor(held, 0.0);
+        assert_eq!(
+            disabled.ambient * disabled.ambient_intensity(0.0),
+            vec3(0.0, 0.0, 0.0)
+        );
     }
 
     fn omni(position: Vector3<f32>, brightness: f32, radius: f32) -> WorldLight {
