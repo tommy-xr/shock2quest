@@ -847,6 +847,27 @@ fn update_player_psi_points(world: &World, update: impl FnOnce(i32) -> i32) -> b
     }
 }
 
+/// Retail PayPsiPoints warns once when a payment crosses the low-psi threshold.
+/// Refills and debug point assignment use update_player_psi_points directly.
+fn spend_player_psi_points(world: &World, amount: i32) -> Option<Effect> {
+    let player = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
+    let threshold = world
+        .borrow::<View<dark::properties::PropPsiState>>()
+        .unwrap()
+        .get(player)
+        .ok()?
+        .max_psi_points
+        .max(0)
+        / 5;
+    let mut low_psi = false;
+    update_player_psi_points(world, |current| {
+        let remaining = current.saturating_sub(amount);
+        low_psi = current > threshold && remaining <= threshold;
+        remaining
+    });
+    low_psi.then(|| crate::scripts::script_util::announce(player, "bb01"))
+}
+
 /// Apply the stateful portion of one psi-kit effect against the live world.
 /// The caller performs canonical entity teardown for [`PsiKitUseOutcome::DestroyEntity`].
 fn apply_psi_kit_use(world: &World, entity_id: EntityId, amount: i32) -> PsiKitUseOutcome {
@@ -10757,7 +10778,7 @@ impl MissionCore {
                 }
 
                 Effect::SpendPsiPoints { amount } => {
-                    update_player_psi_points(&self.world, |current| current.saturating_sub(amount));
+                    effects.extend(spend_player_psi_points(&self.world, amount));
                 }
 
                 Effect::SetPsiPoints { points } => {
@@ -11072,7 +11093,7 @@ impl MissionCore {
                         );
                         message = "Teleport marker set";
                     }
-                    update_player_psi_points(&self.world, |current| current.saturating_sub(cost));
+                    effects.extend(spend_player_psi_points(&self.world, cost));
                     effects.push_back(Effect::ShowMessage {
                         text: message.into(),
                     });
@@ -11099,7 +11120,7 @@ impl MissionCore {
                         continue;
                     };
                     self.thrown_items.cancel(target);
-                    update_player_psi_points(&self.world, |current| current.saturating_sub(cost));
+                    effects.extend(spend_player_psi_points(&self.world, cost));
                     self.psi_pull = Some(crate::psi_pull::Flight {
                         item: target,
                         amp,
@@ -16675,8 +16696,12 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
         )
     };
 
-    if outcome != crate::research::AdvanceResearchResult::Completed {
-        return Vec::new();
+    match outcome {
+        crate::research::AdvanceResearchResult::ChemicalRequired => {
+            return vec![crate::scripts::script_util::announce(entity_id, "bb05")];
+        }
+        crate::research::AdvanceResearchResult::Completed => {}
+        _ => return Vec::new(),
     }
     game_log!(INFO, "Research complete");
     // Research belongs to the archetype, not one inventory instance. A legacy
@@ -16695,6 +16720,7 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
             state: dark::properties::ObjectState::Normal,
         })
         .collect::<Vec<_>>();
+    effects.push(crate::scripts::script_util::announce(entity_id, "bb06"));
     if let Some(quest_bit) = crate::scripts::script_util::set_quest_bit_effect(world, entity_id) {
         effects.push(quest_bit);
     }
@@ -20036,6 +20062,22 @@ mod psi_kit_use_tests {
             .get(player)
             .unwrap()
             .psi_points
+    }
+
+    #[test]
+    fn low_psi_warning_follows_payments_and_rearms_after_refill() {
+        let world = world_with_player(12);
+        assert!(spend_player_psi_points(&world, 0).is_none());
+        assert!(spend_player_psi_points(&world, 1).is_none());
+        let warning = spend_player_psi_points(&world, 1).unwrap();
+        assert_eq!(crate::scripts::script_util::announced(&warning), ["bb01"]);
+        assert_eq!(player_psi_points(&world), 10);
+        assert!(spend_player_psi_points(&world, 5).is_none());
+        assert!(spend_player_psi_points(&world, 99).is_none());
+        assert_eq!(player_psi_points(&world), 0);
+        update_player_psi_points(&world, |_| 15);
+        assert!(spend_player_psi_points(&world, 8).is_some());
+        assert_eq!(player_psi_points(&world), 7);
     }
 
     fn inventory_contains(world: &World, entity_id: EntityId) -> bool {

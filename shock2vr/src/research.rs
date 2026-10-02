@@ -84,7 +84,18 @@ pub struct ResearchState {
 struct ResearchProgress {
     authored_seconds: f32,
     next_chemical: usize,
+    chemical_announced: bool,
     complete: bool,
+}
+
+impl ResearchProgress {
+    fn request_chemical(&mut self) -> AdvanceResearchResult {
+        if std::mem::replace(&mut self.chemical_announced, true) {
+            AdvanceResearchResult::WaitingForChemical
+        } else {
+            AdvanceResearchResult::ChemicalRequired
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -106,6 +117,7 @@ pub enum BeginResearchResult {
 pub enum AdvanceResearchResult {
     InProgress,
     ChemicalRequired,
+    WaitingForChemical,
     Completed,
 }
 
@@ -190,7 +202,7 @@ impl ResearchState {
             .and_then(|needed| chemical_due(progress, needed))
             .is_some()
         {
-            return AdvanceResearchResult::ChemicalRequired;
+            return progress.request_chemical();
         }
 
         let skill_above_one = (skill.max(1) - 1) as f32;
@@ -200,7 +212,7 @@ impl ResearchState {
         if let Some(threshold) = chemicals.and_then(|needed| next_threshold(progress, needed)) {
             if progress.authored_seconds >= threshold {
                 progress.authored_seconds = threshold;
-                return AdvanceResearchResult::ChemicalRequired;
+                return progress.request_chemical();
             }
         }
 
@@ -231,6 +243,7 @@ impl ResearchState {
             return false;
         };
         progress.next_chemical += 1;
+        progress.chemical_announced = false;
         true
     }
 
@@ -321,6 +334,32 @@ mod tests {
     }
 
     #[test]
+    fn chemical_requests_are_one_shot_across_wait_resume_and_save() {
+        let mut state = ResearchState::default();
+        let mut chemicals = toxin_chemicals();
+        chemicals.thresholds_secs[0] = 1;
+        state.begin(-1341, 1, 1);
+        assert_eq!(
+            state.advance(-1341, 1.0, 1, 1.0, 600.0, Some(&chemicals), 0x10),
+            AdvanceResearchResult::ChemicalRequired
+        );
+        state.suspend();
+        let mut loaded: ResearchState =
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        loaded.begin(-1341, 1, 1);
+        assert!(!loaded.provide_chemical("Chem #2", &chemicals));
+        assert_eq!(
+            loaded.advance(-1341, 90.0, 1, 1.0, 600.0, Some(&chemicals), 0x10),
+            AdvanceResearchResult::WaitingForChemical
+        );
+        assert!(loaded.provide_chemical("Chem #4", &chemicals));
+        assert_eq!(
+            loaded.advance(-1341, 90.0, 1, 1.0, 600.0, Some(&chemicals), 0x10),
+            AdvanceResearchResult::ChemicalRequired
+        );
+    }
+
+    #[test]
     fn skill_multiplier_completes_and_unlocks_report() {
         let mut state = ResearchState::default();
         assert_eq!(state.begin(-10, 1, 3), BeginResearchResult::Started);
@@ -332,6 +371,11 @@ mod tests {
         assert!(state.is_complete(-10));
         assert!(state.has_report(0x10));
         assert_eq!(state.active_template_id(), None);
+        assert_eq!(
+            state.advance(-10, 20.0, 3, 1.0, 100.0, None, 0x10),
+            AdvanceResearchResult::InProgress,
+            "completion is a transition, not a per-frame notification"
+        );
     }
 
     #[test]
