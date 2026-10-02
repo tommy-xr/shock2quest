@@ -77,6 +77,10 @@ await game.input.trigger("PathfindingTestCycle");
 
 // Continuous input channels
 await game.input.set("right_hand.trigger_value", 1.0);
+// (--vr) Hold a hand on a world point while the body moves (null releases);
+// out of arm's reach (0.7 m from the shoulder) throws an HttpError (400).
+await game.input.set("right_hand.world_target", [-6.8, 2.3, 0]);
+(await game.input.state()).right_hand.world_position; // where the game puts it
 
 // Aim through the production camera/weapon/interaction path. Creatures select
 // a classified live hitbox; doors/buttons select their nearest visible surface.

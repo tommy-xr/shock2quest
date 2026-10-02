@@ -45,6 +45,7 @@ pub fn input_channels_help() -> &'static str {
      {left,right}_hand.thumbstick [x,y], \
      {left,right}_hand.position [x,y,z] (pawn-local), \
      {left,right}_hand.rotation [x,y,z,w], \
+     {left,right}_hand.world_target [x,y,z] world, VR, within arm reach (debug runtime only; null clears), \
      crouch 0|1 (stand-up refused without headroom), \
      lean -1..1 (flat only; negative left, positive right), \
      jump 0|1 (held; launches on the grounded rising edge); \

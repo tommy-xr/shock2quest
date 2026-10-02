@@ -1,5 +1,6 @@
 mod actions;
 mod dispatcher;
+pub mod hand_target;
 mod menu_hold;
 pub mod recording;
 pub mod remote;

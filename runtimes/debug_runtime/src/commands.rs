@@ -570,6 +570,10 @@ pub struct InputHand {
     pub trigger_value: f32,
     pub squeeze_value: f32,
     pub a_value: f32,
+    /// The `world_target` this hand is held on, if any (VR only).
+    pub world_target: Option<[f32; 3]>,
+    /// Where the game puts this hand's calibrated grip point (VR only).
+    pub world_position: Option<[f32; 3]>,
 }
 
 impl Default for InputState {
@@ -603,6 +607,8 @@ impl Default for InputHand {
             trigger_value: 0.0,
             squeeze_value: 0.0,
             a_value: 0.0,
+            world_target: None,
+            world_position: None,
         }
     }
 }

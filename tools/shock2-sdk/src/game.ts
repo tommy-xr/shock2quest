@@ -13,6 +13,7 @@ import type {
   EntitySummary,
   FrameSnapshot,
   InputAction,
+  InputState,
   PathfindingStats,
   PathfindingTestStatus,
   PhysicsBodyDetail,
@@ -474,6 +475,11 @@ export class InputApi {
   async actions(): Promise<string[]> {
     const result = await this.client.get<{ actions: string[] }>("/v1/input/actions");
     return result.actions;
+  }
+
+  /** The input state fed to the game each frame. */
+  async state(): Promise<InputState> {
+    return this.client.get<InputState>("/v1/control/input");
   }
 
   /** Set a continuous input channel, e.g. set("right_hand.trigger_value", 1.0). */
