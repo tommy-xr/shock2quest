@@ -66,12 +66,18 @@ async function press(game: GameServer, objectId: number) {
 
   const button = await only(game, objectId);
   await game.entities.sendMessage(button.id, { type: "Frob" });
-  await game.step({ frames: 180 });
+  // Capture the immediate refusal before unrelated sounds can evict it from
+  // the bounded recent-audio history. Keep the original 180-frame motion check.
+  await game.step({ frames: 1 });
 
   const { sounds } = await game.audio.recent();
   const played = sounds
-    .filter((sound) => sound.sequence > since)
+    .filter(
+      (sound) =>
+        sound.sequence > since && sound.source_entity?.template_id === objectId,
+    )
     .map((sound) => sound.sample.toLowerCase());
+  await game.step({ frames: 179 });
   return {
     refused: played.includes(REFUSAL),
     liftMoved: moved(liftBefore, await liftPosition(game)),
@@ -87,6 +93,7 @@ test(
       mission: "eng1.mis",
     });
     await game.step({ frames: 10 });
+    const initialLiftPosition = await liftPosition(game);
 
     // Before: the button is PropLocked with no key, so it refuses and the lift
     // never moves.
@@ -129,7 +136,9 @@ test(
       "firing one unlock trap must not unlock unrelated locked buttons",
     );
 
-    // Control: the never-locked twin button still relays to the lift.
+    // Control: finish the previous ride before pressing the twin, so continued
+    // motion cannot falsely pass for a successful new call (a ride is <600 frames).
+    await game.step({ frames: 600 });
     const twin = await press(game, UNLOCKED_TWIN_BUTTON);
     assert.equal(twin.refused, false, "the twin button was never locked");
     assert.equal(
@@ -140,6 +149,10 @@ test(
 
     // The unlock is real game state, not session state: it must survive a
     // save/load round trip (P$Locked is a registered Dark property).
+    // Finish the twin's return trip before saving. This tests the lock state
+    // independently of elevator station/motion persistence (tracked in #746).
+    await game.step({ frames: 600 });
+    assert.deepEqual(await liftPosition(game), initialLiftPosition);
     await game.save("trap-unlock-e2e");
     await game.load("trap-unlock-e2e");
     await game.step({ frames: 10 });
