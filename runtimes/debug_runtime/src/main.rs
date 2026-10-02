@@ -1661,11 +1661,11 @@ fn process_command(
             }
         }
         RuntimeCommand::GetPlayerTrail(reply) => {
-            let samples = game
+            let (samples, events) = game
                 .debug_scene()
-                .map(|scene| scene.player_trail())
+                .map(|scene| (scene.player_trail(), scene.player_trail_events()))
                 .unwrap_or_default();
-            let _ = reply.send(json!({ "samples": samples }));
+            let _ = reply.send(json!({ "samples": samples, "events": events }));
         }
         RuntimeCommand::GetPlayerPosition(reply) => {
             if let Some(debug_scene) = game.debug_scene() {
@@ -4797,8 +4797,10 @@ async fn get_recent_audio(Query(params): Query<RecentAudioQueryParams>) -> Json<
     Json(serde_json::json!({ "sounds": sounds }))
 }
 
-/// HTTP handler for the player trail: `{ samples: [{frame, pos, state, crouched}] }`,
-/// oldest first. Empty unless the `player_trail` dev param is on.
+/// HTTP handler for the player trail: `{ samples: [{frame, time, pos, state,
+/// crouched, hands?}], events: [{frame, time, hand, kind, hold, pos}] }`, oldest
+/// first. `hands` and `events` are VR only. Empty unless the `player_trail`
+/// dev param is on.
 async fn get_player_trail(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {

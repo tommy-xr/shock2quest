@@ -82,6 +82,30 @@ export interface TrailSample {
   pos: Vec3;
   state: TrailState;
   crouched: boolean;
+  /** Each VR hand's world position (the point climbing grabs with); absent in flat. */
+  hands?: { left: Vec3; right: Vec3 };
+}
+
+/**
+ * A VR hand event on the player trail: a hold taken (`grip`) or let go
+ * (`release`), or the hold a hand vault pulled over (`top_out`), at the held
+ * surface point.
+ */
+export interface TrailEvent {
+  /** The sample frame it happened on. */
+  frame: number;
+  time: number;
+  hand: "left" | "right";
+  kind: "grip" | "release" | "top_out";
+  hold: "ladder" | "ledge";
+  pos: Vec3;
+}
+
+/** `GET /v1/player/trail`, oldest first. */
+export interface PlayerTrail {
+  samples: TrailSample[];
+  /** VR only. */
+  events: TrailEvent[];
 }
 
 export interface StepSpec {

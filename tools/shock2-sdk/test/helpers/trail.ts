@@ -15,18 +15,22 @@ export async function startTrail(game: GameServer): Promise<void> {
 }
 
 /// Save the trail as `<name>.json`, then frame it side-on (from +z, far
-/// enough back to fit its bounding box) and save `<name>.png`. Call before
-/// asserting, so a failing run still leaves its picture.
+/// enough back to fit its bounding box, VR hand paths included) and save
+/// `<name>.png`. Call before asserting, so a failing run still leaves its
+/// picture.
 export async function shootTrail(game: GameServer, name: string): Promise<void> {
   if (!shotDir) return;
   const dir = resolve(shotDir);
   mkdirSync(dir, { recursive: true });
   const trail = await game.player.trail();
   writeFileSync(join(dir, `${name}.json`), JSON.stringify(trail));
-  if (trail.length === 0) return;
-  const axis = (i: number) => trail.map((s) => s.pos[i]);
-  const lo = [0, 1, 2].map((i) => Math.min(...axis(i)));
-  const hi = [0, 1, 2].map((i) => Math.max(...axis(i)));
+  if (trail.samples.length === 0) return;
+  const points = trail.samples.flatMap((s) =>
+    s.hands ? [s.pos, s.hands.left, s.hands.right] : [s.pos],
+  );
+  // Reduce, not spread: a two-minute VR trail is ~50k points.
+  const lo = [0, 1, 2].map((i) => points.reduce((m, p) => Math.min(m, p[i]), Infinity));
+  const hi = [0, 1, 2].map((i) => points.reduce((m, p) => Math.max(m, p[i]), -Infinity));
   const centre = lo.map((v, i) => (v + hi[i]) / 2) as Vec3;
   const extent = Math.max(hi[0] - lo[0], hi[1] - lo[1], 2);
   await game.devParams.set("free_camera_cull", 1);

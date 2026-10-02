@@ -31,7 +31,7 @@ import type {
   StepSpec,
   MoveResult,
   TeleportResult,
-  TrailSample,
+  PlayerTrail,
   TransitionLevelResult,
   SaveLoadResult,
   QuestBitsResult,
@@ -105,9 +105,8 @@ export class PlayerApi {
   }
 
   /** The player trail, oldest first. Empty unless the `player_trail` dev param is on. */
-  async trail(): Promise<TrailSample[]> {
-    const result = await this.client.get<{ samples: TrailSample[] }>("/v1/player/trail");
-    return result.samples;
+  async trail(): Promise<PlayerTrail> {
+    return this.client.get<PlayerTrail>("/v1/player/trail");
   }
 
   async teleport(position: Position): Promise<TeleportResult> {
