@@ -1267,6 +1267,15 @@ export interface HandGrip {
   finger_curls: ResolvedGrip["curls"] | null;
   /** Glove pose following a physical melee body; null uses raw tracked pose. */
   glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
+  /** Pistol slide contact, independent of the ordinary two-hand support grip. */
+  slide?: {
+    attached: boolean;
+    fraction: number;
+    glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
+    controller_position: ResolvedGrip["offset"];
+    controller_rotation: ResolvedGrip["rotation"];
+    world_travel: ResolvedGrip["offset"];
+  } | null;
   /** Optional support socket on this owned item; the support hand owns no entity. */
   support: {
     hand: "left" | "right";

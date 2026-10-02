@@ -9,7 +9,13 @@ use crate::{
 
 // Nightdive joint1: 0 -> -0.25 at frame 1, at 30 fps.
 // LGMD parameter units, before the model's fitted scale.
-const OPEN: f32 = -0.25;
+pub(crate) const PISTOL_SLIDE_MOTION: crate::vr_support::SupportMotion =
+    crate::vr_support::SupportMotion {
+        parameter: 0,
+        closed: 0.0,
+        open: -0.25,
+    };
+const OPEN: f32 = PISTOL_SLIDE_MOTION.open;
 const BACK_TIME: f32 = 1.0 / 30.0;
 #[derive(Clone, Copy)]
 struct SlideProfile {
@@ -48,6 +54,7 @@ fn profile(model: &str) -> Option<ActionProfile> {
 pub(crate) struct WeaponAction {
     elapsed: Option<f32>,
     reloading: bool,
+    manual_return: Option<f32>,
 }
 
 impl WeaponAction {
@@ -105,6 +112,19 @@ impl WeaponAction {
 
     fn slide_value(&mut self, dt: f32, empty: bool, profile: SlideProfile) -> f32 {
         let hold_open = empty && profile.locks_empty;
+        if let Some(value) = &mut self.manual_return {
+            if hold_open {
+                self.manual_return = None;
+                return OPEN;
+            }
+            if dt.is_finite() && dt > 0.0 {
+                *value = (*value - OPEN * dt / (profile.cycle_time - BACK_TIME)).min(0.0);
+            }
+            if *value < 0.0 {
+                return *value;
+            }
+            self.manual_return = None;
+        }
         if let Some(elapsed) = &mut self.elapsed {
             if dt.is_finite() && dt > 0.0 {
                 *elapsed += dt;
@@ -163,6 +183,7 @@ pub(crate) fn reloaded(world: &mut World, entity: EntityId) {
             WeaponAction {
                 elapsed: Some(0.0),
                 reloading: true,
+                ..Default::default()
             },
         );
     }
@@ -179,6 +200,33 @@ pub(crate) fn fired(world: &mut World, entity: EntityId) {
             },
         );
     }
+}
+
+/// A cosmetic hand-driven override; chamber/ammo readiness is unchanged.
+/// Refreshing it while held seeds the same spring return used on release.
+pub(crate) fn move_slide(world: &mut World, entity: EntityId, fraction: f32) -> Vec<Effect> {
+    if !fraction.is_finite()
+        || crate::scripts::internal_switch_held_model::get_raw_view_model(world, entity).as_deref()
+            != Some("atek_h")
+        || enabled_profile(world, entity).is_none()
+    {
+        return Vec::new();
+    }
+    let empty = world
+        .borrow::<View<PropGunState>>()
+        .is_ok_and(|v| v.get(entity).is_ok_and(|gun| gun.ammo <= 0));
+    let value = PISTOL_SLIDE_MOTION.value(if empty { 1.0 } else { fraction.clamp(0.0, 1.0) });
+    world.add_component(
+        entity,
+        WeaponAction {
+            manual_return: Some(value),
+            ..Default::default()
+        },
+    );
+    vec![Effect::SetObjectParameters {
+        entity_id: entity,
+        parameters: vec![(PISTOL_SLIDE_MOTION.parameter, value)],
+    }]
 }
 
 pub(crate) fn advance(
@@ -214,6 +262,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn manual_slide_release_preserves_pause_and_empty_lock() {
+        let mut action = WeaponAction {
+            manual_return: Some(OPEN * 0.5),
+            ..Default::default()
+        };
+        assert_eq!(action.slide_value(0.0, false, PISTOL), OPEN * 0.5);
+        let halfway = action.slide_value(0.05, false, PISTOL);
+        assert!(halfway > OPEN * 0.5 && halfway < 0.0);
+        assert_eq!(action.slide_value(1.0, false, PISTOL), 0.0);
+        action.manual_return = Some(OPEN * 0.5);
+        assert_eq!(action.slide_value(0.0, true, PISTOL), OPEN);
+        assert_eq!(action.slide_value(1.0, true, PISTOL), OPEN);
+        assert_eq!(action.slide_value(0.0, false, PISTOL), 0.0);
+    }
+
+    #[test]
     fn stasis_has_a_supported_mechanical_profile() {
         let stasis = profile("SFG_H").expect("stasis profile");
         let mut action = WeaponAction {
@@ -235,6 +299,7 @@ mod tests {
         action = WeaponAction {
             elapsed: Some(0.0),
             reloading: true,
+            ..Default::default()
         };
         assert_eq!(
             action.parameters(0.0, false, stasis),

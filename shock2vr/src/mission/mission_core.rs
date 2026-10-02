@@ -11270,6 +11270,11 @@ impl MissionCore {
                             );
                         }
                     }
+                    // Articulation effects are applied after the update's physics
+                    // sync. Seat attached gloves on this frame's final joint pose.
+                    if self.interaction.holding_hand(entity_id).is_some() {
+                        self.interaction.synchronize_held_visuals(&self.world);
+                    }
                 }
                 Effect::SetJointTransform {
                     entity_id,
@@ -15860,6 +15865,16 @@ impl MissionCore {
         let mut deferred = Vec::new();
         for msg in msgs {
             match msg {
+                VirtualHandEffect::MoveSlide {
+                    entity_id,
+                    fraction,
+                } => {
+                    deferred.extend(crate::vr_weapon_action::move_slide(
+                        &mut self.world,
+                        entity_id,
+                        fraction,
+                    ));
+                }
                 VirtualHandEffect::MovePump {
                     entity_id,
                     motion,

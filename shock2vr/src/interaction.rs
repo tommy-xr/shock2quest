@@ -8,6 +8,8 @@
 //! Both implementations speak the same `VirtualHandEffect` language, which
 //! `mission_core` already processes in one place.
 
+mod slide;
+
 use std::{cell::RefCell, collections::HashMap};
 
 use cgmath::{InnerSpace, One, Point3, Quaternion, Rotation, Vector3, Vector4};
@@ -274,6 +276,9 @@ pub struct VrInteraction {
     fitted_grips: [Option<HeldGrip>; 2],
     support_profiles: HashMap<String, SupportProfile>,
     support: Option<SupportAttachment>,
+    slide: Option<slide::SlideAttachment>,
+    slide_reserved: Option<usize>,
+    slide_preview: Option<slide::SlideContact>,
     support_preview: Option<SupportCandidate>,
     support_pressed: [bool; 2],
     support_blocked: [bool; 2],
@@ -382,6 +387,9 @@ impl VrInteraction {
             fitted_grips: [None, None],
             support_profiles: HashMap::new(),
             support: None,
+            slide: None,
+            slide_reserved: None,
+            slide_preview: None,
             support_preview: None,
             support_pressed: [true; 2],
             support_blocked: [false; 2],
@@ -427,6 +435,7 @@ impl VrInteraction {
             hands[i].released_entity(inputs[i]).is_some_and(|entity| {
                 !ctx.reserved_releases.contains(&entity)
                     && hands[1 - i].get_held_entity().is_none()
+                    && self.slide_reserved != Some(1 - i)
                     && inputs[1 - i].squeeze_value > 0.5
                     && !self
                         .hand_climb
@@ -1310,6 +1319,7 @@ impl PlayerInteraction for VrInteraction {
                 rotation,
             });
         }
+        self.synchronize_slide(world);
         let (Some(support), Some(candidate)) = (&self.support, &self.support_preview) else {
             return;
         };
@@ -1369,7 +1379,7 @@ impl PlayerInteraction for VrInteraction {
                     "release_distance": c.profile.release_distance, "max_swing_degrees": c.profile.max_swing_degrees
                 })
             });
-            Some(serde_json::json!({"glove_pose": self.visual_hands[i], "support": support, "hand": if i == 0 {"left"} else {"right"}, "entity_id": grip.entity.inner() as i32,
+            Some(serde_json::json!({"slide": self.slide_diagnostics(grip.entity), "glove_pose": self.visual_hands[i], "support": support, "hand": if i == 0 {"left"} else {"right"}, "entity_id": grip.entity.inner() as i32,
                 "visual_trigger": visual_triggers[i], "finger_curls": grip.resolved.as_ref().map(|g| g.curls_at(visual_triggers[i])),
                 "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
@@ -1432,6 +1442,7 @@ impl PlayerInteraction for VrInteraction {
     }
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
+        let mut slide_effects = self.update_slide(ctx);
         self.update_support(ctx);
         if let Some(effects) = self.try_handoff(ctx) {
             return effects;
@@ -1518,6 +1529,7 @@ impl PlayerInteraction for VrInteraction {
         self.left_hand = left_hand;
 
         left_msgs.append(&mut right_msgs);
+        left_msgs.append(&mut slide_effects);
         left_msgs
     }
 
@@ -1577,14 +1589,16 @@ impl PlayerInteraction for VrInteraction {
             .as_mut();
 
         let mut objs = Vec::new();
-        let support_grip = self.support.as_ref().and_then(|support| {
-            let mut grip = self.fitted_grips[support.primary]
-                .as_ref()?
-                .resolved
-                .clone()?;
-            grip.curls = self.support_preview.as_ref()?.profile.curls;
-            grip.trigger_curls = self.support_preview.as_ref()?.profile.trigger_curls;
-            Some((1 - support.primary, grip))
+        let support_grip = self.slide_grip().or_else(|| {
+            self.support.as_ref().and_then(|support| {
+                let mut grip = self.fitted_grips[support.primary]
+                    .as_ref()?
+                    .resolved
+                    .clone()?;
+                grip.curls = self.support_preview.as_ref()?.profile.curls;
+                grip.trigger_curls = self.support_preview.as_ref()?.profile.trigger_curls;
+                Some((1 - support.primary, grip))
+            })
         });
         for (index, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
             let card_grip = self.body_tool_hands[index]
@@ -2114,6 +2128,117 @@ mod tests {
         input.left_hand.rotation = identity();
         input.left_hand.squeeze_value = 0.0;
         (world, entity, physics, interaction, input)
+    }
+
+    #[test]
+    fn manual_slide_tracking_pause_motion_and_ownership() {
+        use crate::runtime_props::{
+            RuntimePropGloveWeapon, RuntimePropJointTransforms, RuntimePropObjectArticulation,
+        };
+        use cgmath::{Matrix4, SquareMatrix};
+        use dark::object_articulation::{ObjectArticulation, ObjectJoint};
+        use dark::ss2_skeleton::{Bone, Skeleton};
+        let (mut world, entity, physics, mut interaction, mut input) = wrench_support_fixture();
+        interaction.fitted_grips[1].as_mut().unwrap().model = "atek_h".into();
+        let rig = ObjectArticulation {
+            skeleton: Skeleton::create_from_bones(vec![
+                Bone {
+                    joint_id: 0,
+                    parent_id: None,
+                    local_transform: Matrix4::identity(),
+                },
+                Bone {
+                    joint_id: 1,
+                    parent_id: Some(0),
+                    local_transform: Matrix4::identity(),
+                },
+            ]),
+            joints: vec![ObjectJoint {
+                index: 1,
+                parameter: 0,
+                motion_type: 2,
+                vhot_range: 0..0,
+            }],
+            vhots: Vec::new(),
+        };
+        let transforms = rig.pose(&[]);
+        world.add_component(
+            entity,
+            (
+                RuntimePropObjectArticulation(std::sync::Arc::new(rig)),
+                RuntimePropJointTransforms(transforms),
+                RuntimePropGloveWeapon {
+                    item_scale: 1.0,
+                    magazine_removed: false,
+                    magazine_anchor: None,
+                },
+            ),
+        );
+        interaction.update(&context(&world, &physics, &input));
+        interaction.synchronize_slide(&world);
+        let diagnostic = interaction.slide_diagnostics(entity).unwrap();
+        let position: Vector3<f32> =
+            serde_json::from_value(diagnostic["controller_position"].clone()).unwrap();
+        // Diagnostic controller positions undo the runtime calibration; unit inputs
+        // already are calibrated, so use the contact's glove position directly.
+        let rotation: Quaternion<f32> =
+            serde_json::from_value(diagnostic["controller_rotation"].clone()).unwrap();
+        input.left_hand.rotation = rotation;
+        input.left_hand.position = position
+            + crate::glove_fit::forward_translation(
+                rotation,
+                crate::dev_params::get(crate::dev_params::GLOVE_FORWARD_CM),
+            );
+        interaction.update(&context(&world, &physics, &input));
+        // The squeeze frame's poses, not last frame's hands, locate acquisition.
+        input.left_hand.position += vec3(1.0, 0.0, 0.0);
+        input.right_hand.position += vec3(1.0, 0.0, 0.0);
+        input.left_hand.squeeze_value = 1.0;
+        let mut ctx = context(&world, &physics, &input);
+        ctx.step_dt = 0.0;
+        assert!(
+            !interaction
+                .update(&ctx)
+                .iter()
+                .any(|e| matches!(e, VirtualHandEffect::MoveSlide { .. }))
+        );
+        assert!(
+            interaction.slide.is_some(),
+            "paused redraw consumes a grip edge"
+        );
+        input.left_hand.position.x += 0.25 / dark::SCALE_FACTOR;
+        let effects = interaction.update(&context(&world, &physics, &input));
+        assert!(effects.iter().any(
+            |e| matches!(e, VirtualHandEffect::MoveSlide { fraction, .. } if *fraction > 0.99)
+        ));
+        // Common hand translation must not count as pulling or break the grip.
+        input.left_hand.position += vec3(1.0, 0.0, 0.0);
+        input.right_hand.position += vec3(1.0, 0.0, 0.0);
+        let effects = interaction.update(&context(&world, &physics, &input));
+        assert!(effects.iter().any(
+            |e| matches!(e, VirtualHandEffect::MoveSlide { fraction, .. } if *fraction > 0.99)
+        ));
+        input.pose_tracking = Some(crate::input_context::PoseTracking {
+            head: true,
+            hands: [false, true],
+        });
+        interaction.update(&context(&world, &physics, &input));
+        assert!(interaction.slide.is_none());
+        input.pose_tracking = None;
+        interaction.update(&context(&world, &physics, &input));
+        assert!(
+            interaction.slide.is_none(),
+            "tracking recovery cannot reacquire a held squeeze"
+        );
+        input.right_hand.squeeze_value = 0.0;
+        let effects = interaction.update(&context(&world, &physics, &input));
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, VirtualHandEffect::HoldItem { .. })),
+            "a slide grip must not become a handoff"
+        );
+        assert_eq!(interaction.held_entities(), (None, None));
     }
 
     #[test]
