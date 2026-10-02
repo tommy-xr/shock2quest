@@ -488,9 +488,9 @@ next one, and the same registry is exposed over HTTP by the debug runtime
 
 **Lighting → Ambient intensity** (`ambient_light_intensity`) scales the
 mission's authored world ambient floor and the fixed `0.5` ambient contribution
-on object and creature materials. It defaults to `1`, ranges from `0` to `3`
-in `0.05` steps, and resets on app restart. `0.5` halves those contributions;
-`0` removes them. Emissive contributions and runtime spotlights remain independent.
+on object and creature materials. It defaults to `0` (disabled), ranges from
+`0` to `3` in `0.05` steps, and resets on app restart. Baked lighting and
+authored object lights provide the default illumination; `1` restores ambient. Emissive contributions and runtime spotlights remain independent.
 UI, video, and explicitly fullbright world surfaces keep their existing brightness.
 
 **Lighting → Level light intensity** (`level_light_intensity`) scales baked
