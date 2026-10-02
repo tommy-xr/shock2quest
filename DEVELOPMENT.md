@@ -557,6 +557,31 @@ belt and lets you save position and rotation to `assets/vr-belt-card.json`.
 Restart the game after saving; include that asset in your next Quest deploy.
 Hand-held card poses remain in the Hand grips editor (`--grip scipass`).
 
+#### Research lab (`debug_research`)
+
+Open `debug_research` in the Developer scene picker, or run:
+
+```bash
+cargo dbgr --mission debug_research
+cargo dbgr --mission debug_research --vr
+```
+
+The quiet lab starts with Research 6 and maxed character stats. Six labeled
+specimens range from the quick hybrid organ to Anti-Annelid toxin, monkey brain,
+arachnid organ, rumbler organ, and crystal shard. The opposite bench
+stocks five doses of each of the 19 retail chemicals, labeled by name and symbol.
+
+Pick up a specimen and use it to begin research: double-click it in the flat
+inventory, or pull the trigger while holding it in VR. Use the chemical named
+by the Research panel when progress pauses. Research uses the authored times,
+requirements and reports; completion and chemical requests play their retail
+announcements. Reload level (`DebugReloadLevel`) resets projects, held/carried
+items and every supply station, so a completed specimen can be tried again.
+
+Research progress and reports persist in normal campaign saves. The organ-based
+combat damage bonus is still missing: its gamesys multiplier is parsed, but the
+damage path does not yet check the victim's researched organ.
+
 #### Material effects gallery (`debug_nd_materials`)
 
 Run `cargo dr --mission debug_nd_materials --vr` for a walkable gallery of
