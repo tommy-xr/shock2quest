@@ -9,7 +9,7 @@
 import { HttpError } from "./client.js";
 import type { Game } from "./game.js";
 import type { ClimbHold, LadderHolds, PlayerSnapshot, Vec3 } from "./types.js";
-import { add, dot, quatRotate, scale, sub } from "./vec.js";
+import { add, dot, quatMultiply, quatRotate, scale, sub } from "./vec.js";
 import type { Hand } from "./vr-pose.js";
 
 /** A rung (each hand on its own half of the bar) or a rail (the one on the hand's side). */
@@ -144,6 +144,17 @@ export async function vrPull(
   return path;
 }
 
+/**
+ * The climber's right: the view (pawn x tracked head), not the pawn alone. The
+ * head is yawed off the pawn, so the pawn's right can lie along a ladder's
+ * normal and leave each hand's half of a rung a tie.
+ */
+export async function viewRight(game: Game): Promise<Vec3> {
+  const { player } = await game.info();
+  const view = quatMultiply(player.rotation, (await game.input.state()).head.rotation);
+  return quatRotate(view, [1, 0, 0]);
+}
+
 /** The ladder entities whose faces a column through `near` crosses from `fromY` to `toY`. */
 async function laddersAlong(game: Game, near: Vec3, fromY: number, toY: number): Promise<LadderHolds[]> {
   const ids = new Set<number>();
@@ -175,7 +186,7 @@ export async function vrClimbLadder(
   { near, untilY, hand = "right", style }: { near: Vec3; untilY: number; hand?: Hand; style?: HoldStyle },
 ): Promise<VrClimbResult> {
   const { player } = await game.info();
-  const right = quatRotate(player.rotation, [1, 0, 0]);
+  const right = await viewRight(game);
   const ladders = await laddersAlong(game, near, player.position[1] - 2, untilY + 3);
   if (ladders.length === 0) throw new Error(`vrClimbLadder: no ladder on the column through ${fmt(near)}`);
   const points = (h: Hand) =>

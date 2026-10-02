@@ -60,6 +60,8 @@ export interface InputHandState {
 export interface InputState {
   left_hand: InputHandState;
   right_hand: InputHandState;
+  /** The tracked head's pawn-local orientation. */
+  head: { rotation: Quat };
   crouch: boolean;
   jump: boolean;
   lean: number;
