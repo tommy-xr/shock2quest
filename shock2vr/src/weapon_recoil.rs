@@ -160,10 +160,7 @@ pub fn shot_impulse(world: &World, gun: EntityId) -> Option<(RecoilImpulse, Reco
             .map(|stats| stats.agility)
             .unwrap_or(1)
     };
-    // Shipped Still Hand template, verified against gamesys (power id 2).
-    let still_hand = world
-        .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
-        .is_ok_and(|powers| powers.is_active(-1107));
+    let still_hand = still_hand_active(world);
     let mut rng = rand::thread_rng();
     let aiming = aiming_implant(world);
     let authored = authored_impulse(
@@ -185,6 +182,15 @@ pub fn shot_impulse(world: &World, gun: EntityId) -> Option<(RecoilImpulse, Reco
         &mut rng,
     );
     Some((authored, extra))
+}
+
+/// Shared by gameplay recoil and authored flat firing poses. Mechanical part
+/// motion still plays while the power steadies the whole weapon's rotation.
+pub(crate) fn still_hand_active(world: &World) -> bool {
+    // Shipped Still Hand template, verified against gamesys (power id 2).
+    world
+        .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
+        .is_ok_and(|powers| powers.is_active(-1107))
 }
 
 struct HandlingProfile {

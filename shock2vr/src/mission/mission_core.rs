@@ -2762,6 +2762,7 @@ pub struct MissionCore {
     template_to_particle_riders: HashMap<i32, Vec<(i32, dark::properties::ParticleAttachOptions)>>,
     template_to_particle_attachees: HashMap<i32, Vec<i32>>,
     interaction: Box<dyn PlayerInteraction>,
+    flat_weapon_animation: crate::flat_weapon_animation::FlatWeaponAnimator,
     pub visibility_engine: Box<dyn VisibilityEngine>,
     pub pending_entity_triggers: Vec<String>,
     /// Debug-provisioned items to grab into a hand on the next update.
@@ -3745,6 +3746,10 @@ impl MissionCore {
             crate::security_alarm::SecurityAlarm::restore(crate::security_alarm::status(&world));
         let mut mission_core = MissionCore {
             interaction,
+            flat_weapon_animation: crate::flat_weapon_animation::FlatWeaponAnimator::load(
+                asset_cache,
+                game_options.presentation_mode == crate::PresentationMode::Flat,
+            ),
             environment: crate::environment_map::load(asset_cache, &mission),
             level_name: mission,
             entity_info: entity_info_rc.clone(),
@@ -5885,6 +5890,11 @@ impl MissionCore {
                 _ => None,
             }))
             .collect();
+        effects.extend(self.flat_weapon_animation.advance(
+            &mut self.world,
+            self.interaction.viewmodel_entity(),
+            time.elapsed.as_secs_f32(),
+        ));
         let mut interaction_msgs = self.interaction.update(&InteractionContext {
             physics: &self.physics,
             world: &self.world,
@@ -11923,6 +11933,7 @@ impl MissionCore {
                     drop(quests);
                 }
                 Effect::WeaponRecoil { entity_id } => {
+                    self.flat_weapon_animation.fired(&self.world, entity_id);
                     let hands = self.interaction.haptic_hands(entity_id);
                     for (hand, pulse) in hands
                         .into_iter()
@@ -11938,6 +11949,13 @@ impl MissionCore {
                         .borrow::<UniqueViewMut<crate::haptics::HapticFeedback>>()
                         .unwrap()
                         .request(hand, pulse);
+                }
+                Effect::EjectWeaponCasings { entity_id } => {
+                    if self.interaction.viewmodel_entity() == Some(entity_id) {
+                        effects.extend(Effect::flatten(vec![
+                            crate::scripts::weapon_script::eject_casings(&self.world, entity_id),
+                        ]));
+                    }
                 }
                 Effect::PlaySound {
                     handle,
@@ -14113,8 +14131,9 @@ impl MissionCore {
                         // leaves them unposed (the wrench looked mid-swing). Pose
                         // them with an AnimationPlayer: a melee weapon mid-swing
                         // uses its swing player; otherwise melee holds the static
-                        // player-melee idle (frame 0 = head-up ready stance); guns
-                        // use the empty/bind pose. No-op for static meshes.
+                        // player-melee idle (frame 0 = head-up ready stance).
+                        // Guns apply the flat timeline's scalar parameters to
+                        // this first-person mesh. No-op for static meshes.
                         // Melee poses cancel the clip's root motion: the arm is
                         // anchored to the camera by the entity transform every
                         // frame (the original engine's camSynch virtual motion),
@@ -14126,7 +14145,7 @@ impl MissionCore {
                             .as_ref()
                             .filter(|(e, _)| *e == weapon)
                             .map(|(_, p)| p.clone());
-                        let player = match (is_melee, swing_player) {
+                        let mut player = match (is_melee, swing_player) {
                             (_, Some(p)) if !sword_active => p,
                             (_, Some(_)) => AnimationPlayer::empty(),
                             (true, None) => asset_cache
@@ -14138,6 +14157,22 @@ impl MissionCore {
                                 .unwrap_or_else(AnimationPlayer::empty),
                             (false, None) => AnimationPlayer::empty(),
                         };
+                        if !is_melee {
+                            if let Some(rig) = model.object_articulation() {
+                                let poses = self
+                                    .world
+                                    .borrow::<View<crate::flat_weapon_animation::FlatWeaponPose>>()
+                                    .unwrap();
+                                if let Ok(pose) = poses.get(weapon) {
+                                    for (joint, transform) in rig.joint_transforms(&pose.parameters)
+                                    {
+                                        player = AnimationPlayer::set_additional_joint_transform(
+                                            &player, joint, transform,
+                                        );
+                                    }
+                                }
+                            }
+                        }
                         let player = if is_melee {
                             AnimationPlayer::with_root_motion_cancelled(&player)
                         } else {
@@ -17476,6 +17511,14 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         name: "FlatAim".to_string(),
                         value: aim,
                     });
+                }
+                if let Ok(poses) = self.world.borrow::<View<crate::flat_weapon_animation::FlatWeaponPose>>() {
+                    if let Ok(pose) = poses.get(id) {
+                        properties.push(DebugPropertyInfo {
+                            name: "FlatWeaponAnimation".into(),
+                            value: serde_json::to_string(pose).unwrap(),
+                        });
+                    }
                 }
                 if let Some(reticle) = reticle {
                     properties.push(DebugPropertyInfo {

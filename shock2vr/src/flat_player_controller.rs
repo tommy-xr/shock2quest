@@ -356,7 +356,34 @@ impl FlatPlayerController {
                     self.last_aim_bias = aim_bias(look, bent);
                     (origin, bent)
                 });
-                (rotation, position)
+                if let Ok(poses) =
+                    world.borrow::<View<crate::flat_weapon_animation::FlatWeaponPose>>()
+                {
+                    if let Ok(pose) = poses.get(entity_id) {
+                        // Keep the existing gameplay recoil/reticle above. The
+                        // authored visual kick replaces the spring visually,
+                        // rather than adding a second kick to the gun.
+                        let (base, position, _) = Self::gun_pose(
+                            look,
+                            camera_pos,
+                            offset,
+                            if pose.clip == Some("reload") {
+                                GUN_CARRY_PITCH_DEG
+                            } else {
+                                pitch_deg
+                            },
+                            (vec3(0.0, 0.0, 0.0), Quaternion::from_angle_x(Deg(0.0))),
+                        );
+                        (
+                            base * pose.rotation,
+                            position + base.rotate_vector(pose.translation),
+                        )
+                    } else {
+                        (rotation, position)
+                    }
+                } else {
+                    (rotation, position)
+                }
             };
             effects.push(VirtualHandEffect::SetPositionRotation {
                 entity_id,

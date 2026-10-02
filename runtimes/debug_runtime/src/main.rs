@@ -1156,7 +1156,9 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
             let render_layer = obj.render_layer();
             let first_in_layer = seen_layers.insert(render_layer);
             commands::SceneObjectSummary {
-                entity_id: tag.and_then(|t| t.entity_id),
+                // Match /entities' public IDs: a deferred effect can reuse a
+                // dead flash's slot with nonzero Shipyard generation bits.
+                entity_id: tag.and_then(|t| t.entity_id).map(|id| id as i32),
                 name: tag.and_then(|t| t.name.clone()),
                 model: tag.and_then(|t| t.model.clone()),
                 source: tag.and_then(|t| t.source.clone()),
@@ -2022,7 +2024,7 @@ fn process_command(
             let matched: Vec<&commands::SceneObjectSummary> = last_scene
                 .iter()
                 .filter(|o| match entity_id {
-                    Some(id) => o.entity_id == Some(id as u64),
+                    Some(id) => o.entity_id == Some(id),
                     None => true,
                 })
                 .filter(|o| !transparent_only || o.transparency.is_some_and(|t| t > 0.0))
