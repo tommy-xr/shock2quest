@@ -50,6 +50,7 @@ pub struct UiOptions {
     pub skeletons: bool,
     pub hitboxes: bool,
     pub articulation: bool,
+    pub object: crate::object_preview::ObjectPreviewOptions,
     /// Open the Archetypes tab with this archetype selected (name or
     /// template id), optionally playing `clip`, advanced by `advance` seconds
     /// of simulation time before a `--screenshot` capture.
@@ -505,6 +506,14 @@ impl ExplorerApp {
         }
         app.screenshot_not_before = std::time::Instant::now()
             + std::time::Duration::from_secs_f32(options.screenshot_after);
+        if options.object != crate::object_preview::ObjectPreviewOptions::default() {
+            preview_host(
+                &mut app.model_preview,
+                app.initial_overlays,
+                app.screenshot.is_some(),
+            )
+            .object_options = options.object;
+        }
         if options.model_ambient.is_some() || options.model_lights.is_some() {
             let host = preview_host(
                 &mut app.model_preview,
@@ -1694,71 +1703,79 @@ impl ExplorerApp {
         };
 
         ui.heading(&preview.key);
-        egui::Grid::new("asset_info")
-            .num_columns(2)
-            .show(ui, |ui| match &preview.origin {
-                PreviewOrigin::Mount {
-                    family,
-                    winner,
-                    shadowed,
-                } => {
-                    ui.label("Family");
-                    ui.label(family);
-                    ui.end_row();
-                    ui.label("Source");
-                    ui.label(explorer::short_source(&winner.source));
-                    ui.end_row();
-                    ui.label("Entry name");
-                    ui.label(&winner.entry_name);
-                    ui.end_row();
-                    ui.label("Size");
-                    ui.label(format!("{} bytes", preview.size));
-                    ui.end_row();
-                    if !shadowed.is_empty() {
-                        ui.label("Shadowed copies");
-                        ui.vertical(|ui| {
-                            for entry in shadowed {
-                                ui.label(format!(
-                                    "{} ({})",
-                                    explorer::short_source(&entry.source),
-                                    entry.entry_name
-                                ));
-                            }
-                        });
+        let source_info = |ui: &mut egui::Ui| {
+            egui::Grid::new("asset_info")
+                .num_columns(2)
+                .show(ui, |ui| match &preview.origin {
+                    PreviewOrigin::Mount {
+                        family,
+                        winner,
+                        shadowed,
+                    } => {
+                        ui.label("Family");
+                        ui.label(family);
                         ui.end_row();
-                    }
-                }
-                PreviewOrigin::Archive {
-                    archive,
-                    entry_name,
-                    mounted_as,
-                    shadowed_by,
-                } => {
-                    ui.label("Archive");
-                    ui.label(archive);
-                    ui.end_row();
-                    ui.label("Entry name");
-                    ui.label(entry_name);
-                    ui.end_row();
-                    ui.label("Size");
-                    ui.label(format!("{} bytes", preview.size));
-                    ui.end_row();
-                    ui.label("Status");
-                    match mounted_as {
-                        Some((family, key)) => ui.label(format!("mounted as {family}/{key}")),
-                        None => ui.label("not mounted by the game"),
-                    };
-                    ui.end_row();
-                    // The model preview resolves through the mount stack, so a
-                    // shadowed copy shows the winner's model, not this file's.
-                    if let (Some(winner), PreviewKind::Model { .. }) = (shadowed_by, &preview.kind)
-                    {
-                        ui.label("Model preview");
-                        ui.label(format!("shows the winning copy from {winner}"));
+                        ui.label("Source");
+                        ui.label(explorer::short_source(&winner.source));
                         ui.end_row();
+                        ui.label("Entry name");
+                        ui.label(&winner.entry_name);
+                        ui.end_row();
+                        ui.label("Size");
+                        ui.label(format!("{} bytes", preview.size));
+                        ui.end_row();
+                        if !shadowed.is_empty() {
+                            ui.label("Shadowed copies");
+                            ui.vertical(|ui| {
+                                for entry in shadowed {
+                                    ui.label(format!(
+                                        "{} ({})",
+                                        explorer::short_source(&entry.source),
+                                        entry.entry_name
+                                    ));
+                                }
+                            });
+                            ui.end_row();
+                        }
                     }
-                }
-            });
+                    PreviewOrigin::Archive {
+                        archive,
+                        entry_name,
+                        mounted_as,
+                        shadowed_by,
+                    } => {
+                        ui.label("Archive");
+                        ui.label(archive);
+                        ui.end_row();
+                        ui.label("Entry name");
+                        ui.label(entry_name);
+                        ui.end_row();
+                        ui.label("Size");
+                        ui.label(format!("{} bytes", preview.size));
+                        ui.end_row();
+                        ui.label("Status");
+                        match mounted_as {
+                            Some((family, key)) => ui.label(format!("mounted as {family}/{key}")),
+                            None => ui.label("not mounted by the game"),
+                        };
+                        ui.end_row();
+                        // The model preview resolves through the mount stack, so a
+                        // shadowed copy shows the winner's model, not this file's.
+                        if let (Some(winner), PreviewKind::Model { .. }) =
+                            (shadowed_by, &preview.kind)
+                        {
+                            ui.label("Model preview");
+                            ui.label(format!("shows the winning copy from {winner}"));
+                            ui.end_row();
+                        }
+                    }
+                });
+        };
+        if matches!(preview.kind, PreviewKind::Model { .. }) {
+            ui.collapsing("Asset source", source_info);
+        } else {
+            source_info(ui);
+        }
         ui.separator();
 
         match &mut preview.kind {
@@ -1817,43 +1834,45 @@ impl ExplorerApp {
                 shadowed,
                 copies,
             } => {
-                match details {
-                    Ok(details) => details.show(ui),
-                    Err(error) => {
-                        ui.label(format!("Cannot inspect mesh: {error}"));
+                ui.collapsing("Mesh details", |ui| {
+                    match details {
+                        Ok(details) => details.show(ui),
+                        Err(error) => {
+                            ui.label(format!("Cannot inspect mesh: {error}"));
+                        }
                     }
-                }
-                if !shadowed.is_empty() {
-                    ui.collapsing("Compare overridden meshes", |ui| {
-                        // First expansion pays for the reads; the cache keeps
-                        // re-opening the section free.
-                        let copies = copies.get_or_insert_with(|| {
-                            shadowed
-                                .iter()
-                                .map(|entry| {
-                                    let details = archives::read_entry(
-                                        std::path::Path::new(&entry.source),
-                                        &entry.entry_name,
-                                    )
-                                    .and_then(|bytes| {
-                                        crate::model_details::ModelDetails::inspect(&bytes)
-                                    });
-                                    (explorer::short_source(&entry.source), details)
-                                })
-                                .collect()
-                        });
-                        for (source, details) in copies.iter() {
-                            match details {
-                                Ok(details) => {
-                                    ui.label(format!("{source}: {}", details.summary()));
-                                }
-                                Err(error) => {
-                                    ui.label(format!("{source}: {error}"));
+                    if !shadowed.is_empty() {
+                        ui.collapsing("Compare overridden meshes", |ui| {
+                            // First expansion pays for the reads; the cache keeps
+                            // re-opening the section free.
+                            let copies = copies.get_or_insert_with(|| {
+                                shadowed
+                                    .iter()
+                                    .map(|entry| {
+                                        let details = archives::read_entry(
+                                            std::path::Path::new(&entry.source),
+                                            &entry.entry_name,
+                                        )
+                                        .and_then(|bytes| {
+                                            crate::model_details::ModelDetails::inspect(&bytes)
+                                        });
+                                        (explorer::short_source(&entry.source), details)
+                                    })
+                                    .collect()
+                            });
+                            for (source, details) in copies.iter() {
+                                match details {
+                                    Ok(details) => {
+                                        ui.label(format!("{source}: {}", details.summary()));
+                                    }
+                                    Err(error) => {
+                                        ui.label(format!("{source}: {error}"));
+                                    }
                                 }
                             }
-                        }
-                    });
-                }
+                        });
+                    }
+                });
                 let key = key.clone();
                 let host = preview_host(
                     &mut self.model_preview,

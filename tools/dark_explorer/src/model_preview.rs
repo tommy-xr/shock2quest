@@ -104,6 +104,8 @@ pub struct ModelPreview {
     /// (sub-object, vhot) counts of the loaded LGMD model, when it has any -
     /// what the articulation overlay would draw.
     articulation: Option<(usize, usize)>,
+    object_preview: Option<crate::object_preview::ObjectPreview>,
+    pub object_options: crate::object_preview::ObjectPreviewOptions,
     /// Suspend the per-frame wall-clock tick of an animated scene, so
     /// `advance()` is the only time source - `--screenshot` runs set this to
     /// capture a deterministic pose.
@@ -147,6 +149,8 @@ impl ModelPreview {
             debug_hit_boxes: false,
             debug_articulation: false,
             articulation: None,
+            object_preview: None,
+            object_options: Default::default(),
             paused: false,
             ambient: 0.5,
             light_strengths: [0.0; 3],
@@ -183,7 +187,9 @@ impl ModelPreview {
                 "Rendered geometry: classic LGMM mesh"
             });
         }
-        if self.animated && !self.paused {
+        if (self.animated || self.object_preview.as_ref().is_some_and(|p| p.is_playing()))
+            && !self.paused
+        {
             // Tick the playing clip with real dt and keep frames coming.
             self.needs_render = true;
             ui.ctx().request_repaint();
@@ -211,8 +217,21 @@ impl ModelPreview {
             ui.label("(drag to orbit, scroll to zoom)");
         });
 
+        let mut selected_bounds = None;
+        if let Some(preview) = &mut self.object_preview {
+            self.needs_render |= preview.show(ui, &mut self.asset_cache);
+            if preview.frame_selection {
+                selected_bounds = preview.visible_bounds();
+                preview.frame_selection = false;
+                self.needs_render = true;
+            }
+        }
+        if let Some((center, radius)) = selected_bounds {
+            self.frame_bounds(center, radius, 0.2);
+        }
+
         egui::CollapsingHeader::new("Lighting")
-            .default_open(!shock2vr::tricorder::is_model(key))
+            .default_open(self.object_preview.is_none() && !shock2vr::tricorder::is_model(key))
             .show(ui, |ui| {
                 self.needs_render |= ui
                     .add(egui::Slider::new(&mut self.ambient, 0.0..=1.0).text("Ambient"))
@@ -258,7 +277,11 @@ impl ModelPreview {
         if self.needs_render && self.scene.is_some() && self.fbo.is_some() {
             if !self.paused {
                 let dt = ui.input(|i| i.stable_dt).min(0.1);
-                if let Some(scene) = &mut self.scene {
+                if let Some(preview) = &mut self.object_preview {
+                    if preview.is_playing() {
+                        preview.advance(dt);
+                    }
+                } else if let Some(scene) = &mut self.scene {
                     scene.update(dt);
                 }
             }
@@ -354,7 +377,30 @@ impl ModelPreview {
                 return;
             }
         };
-        self.rendered_pmnm = model.is_animated().then(|| model.bind_matrices().is_some());
+        if matches!(scene, PreviewScene::Model) && !shock2vr::tricorder::is_model(key) {
+            if reframe || self.object_preview.is_none() {
+                let initial_options = std::mem::take(&mut self.object_options);
+                match quiet_catch(|| {
+                    crate::object_preview::ObjectPreview::load(
+                        key,
+                        &mut self.asset_cache,
+                        &initial_options,
+                    )
+                })
+                .and_then(|r| r)
+                {
+                    Ok(preview) => self.object_preview = preview,
+                    Err(error) => {
+                        self.error = Some(error);
+                        return;
+                    }
+                }
+            }
+        } else {
+            self.object_preview = None;
+        }
+        self.rendered_pmnm = (model.is_animated() && model.sub_objects().is_empty())
+            .then(|| model.bind_matrices().is_some());
         // Skeleton scenes frame on their posed joints; an AI mesh has no
         // bounding box for `frame_camera` to use.
         let mut pose_bounds = None;
@@ -715,6 +761,11 @@ impl ModelPreview {
     /// fixed 60 Hz increments), so `--screenshot` runs can capture a pose
     /// mid-clip.
     pub fn advance(&mut self, seconds: f32) {
+        if let Some(preview) = &mut self.object_preview {
+            preview.advance(seconds.clamp(0.0, 600.0));
+            self.needs_render = true;
+            return;
+        }
         let Some(scene) = &mut self.scene else { return };
         // Cap at 10 minutes of sim time so a typo'd --advance can't hang.
         let steps = (seconds * 60.0).round().clamp(0.0, 60.0 * 600.0) as u32;
@@ -902,7 +953,17 @@ impl ModelPreview {
         let Some(scene) = &self.scene else { return };
         // Belt-and-braces: the scene loads lazily through the asset cache at
         // render time too (its own model lookup, the grid texture).
-        let mut rendered = match quiet_catch(|| scene.render(&mut self.asset_cache)) {
+        let mut rendered = match quiet_catch(|| {
+            if let Some(preview) = &self.object_preview {
+                preview.render(
+                    self.debug_skeletons,
+                    self.debug_hit_boxes,
+                    self.debug_articulation,
+                )
+            } else {
+                scene.render(&mut self.asset_cache)
+            }
+        }) {
             Ok(rendered) => rendered,
             Err(msg) => {
                 self.scene = None;

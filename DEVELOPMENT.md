@@ -149,6 +149,39 @@ lighting, ambient/level intensity, brightness, ambient boost and wrap. This
 scene supplies synthetic object lights because it has no mission light table;
 use a real mission to test cell-based light selection.
 
+### Weapon parts and Nightdive animations in `dark_explorer`
+
+Run `cargo dx ui` and select `obj/atek_h.bin` (pistol), `obj/sg_h.bin`
+(shotgun), or `obj/ar15_h.bin` (assault rifle). **Parts and joints** and the
+Nightdive clip picker appear automatically; no articulation flag is required.
+Select `reload`, `shoot`, or `raise`, then play/pause or scrub the frame slider.
+Turn off **Whole-weapon motion** to study the mechanical parts in a fixed frame.
+This is an asset preview; clip sound, flash, and casing events do not spawn effects.
+
+Each sub-object has a visibility checkbox and **Solo** button. Sliders drive
+its authored scalar parameter (Nightdive's one-based `joint1`, `joint2`, etc.;
+this number can differ from the zero-based sub-object index). Moving a slider
+switches to manual posing. **Rest pose** resets all parameters, **Show all**
+restores geometry, and **Frame visible** fits the selected geometry to the camera.
+Hidden parents still transform visible children.
+
+Materials can be hidden or isolated too. To inspect just the pistol magazine,
+use **Solo** beside `ND-ammo1.psd`: the magazine shares `joint2` with a hand, but
+has its own material. For the AR15, use **Solo** beside sub-object
+`2: @s02_cli`, driven by `joint3`; its material is shared with the rifle body.
+These are preview selections, not exported meshes or physical inventory items.
+The optional **Articulation** checkbox overlays moving pivots and attachment
+markers; it does not enable the parts controls.
+
+The same initial states are available for reproducible screenshots:
+
+```bash
+cargo dx ui --select obj/atek_h.bin --isolate-material ND-ammo1.psd
+cargo dx ui --select obj/ar15_h.bin --isolate-joint 2
+cargo dx ui --select obj/atek_h.bin --joint 2=-2
+cargo dx ui --select obj/ar15_h.bin --weapon-clip reload --advance 0.5 --screenshot /tmp/ar15-reload.png
+```
+
 ### Gameplay music themes
 
 Mission music is driven by `PropAmbientHacked` markers with the `MUSIC` flag.

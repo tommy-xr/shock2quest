@@ -8,6 +8,7 @@ mod explorer;
 mod grip_editor;
 mod model_details;
 mod model_preview;
+mod object_preview;
 mod song_preview;
 mod support_grip_editor;
 mod ui;
@@ -115,6 +116,9 @@ enum Commands {
         /// (sub-object pivots + vhots)
         #[arg(long)]
         articulation: bool,
+
+        #[command(flatten)]
+        object: object_preview::ObjectPreviewOptions,
 
         /// Open the Archetypes tab with this archetype selected (name or template id)
         #[arg(long)]
@@ -282,6 +286,7 @@ fn main() {
             skeletons,
             hitboxes,
             articulation,
+            object,
             archetype,
             clip,
             advance,
@@ -307,6 +312,7 @@ fn main() {
             skeletons,
             hitboxes,
             articulation,
+            object,
             archetype,
             clip,
             advance,

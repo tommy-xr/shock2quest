@@ -356,14 +356,34 @@ fn field_body(record: &str, field: &str) -> Option<usize> {
 fn field_number(record: &str, field: &str) -> Option<f32> {
     let start = field_body(record, field)?;
     let value = record[start..].split([',', '}']).next()?.trim();
-    // The shipped shotgun reload writes frame offsets as `20+24`. Accept
-    // sums of numeric literals only; this is data parsing, never evaluation
-    // of the surrounding Squirrel program.
-    value.split('+').try_fold(0.0, |sum, term| {
-        let number = term.trim().parse::<f32>().ok()?;
-        let result = sum + number;
-        result.is_finite().then_some(result)
-    })
+    // Shipped clips use literal offsets: shotgun `20+24`, rifle `100-5`.
+    // Split only additive operators, preserving signs in scientific notation.
+    // Never evaluate identifiers or the surrounding Squirrel program.
+    let mut start = 0;
+    let mut sum = 0.0;
+    for end in value
+        .char_indices()
+        .filter_map(|(index, ch)| {
+            (index > 0
+                && matches!(ch, '+' | '-')
+                && !matches!(value.as_bytes()[index - 1], b'e' | b'E'))
+            .then_some(index)
+        })
+        .chain(std::iter::once(value.len()))
+    {
+        let term = value[start..end].trim();
+        let (sign, number) = match term.as_bytes().first() {
+            Some(b'-') => (-1.0, term[1..].trim()),
+            Some(b'+') => (1.0, term[1..].trim()),
+            _ => (1.0, term),
+        };
+        sum += sign * number.parse::<f32>().ok()?;
+        if !sum.is_finite() {
+            return None;
+        }
+        start = end;
+    }
+    Some(sum)
 }
 
 #[test]
@@ -373,6 +393,7 @@ fn frame_offsets_accept_literal_sums_only() {
         Some(44.0)
     );
     assert_eq!(field_number(r#"{ "frame": 33 + 24 }"#, "frame"), Some(57.0));
+    assert_eq!(field_number(r#"{ "frame": 100-5 }"#, "frame"), Some(95.0));
     for expression in ["20+", "20+offset", "20*2", "20; run()", "NaN", "inf"] {
         assert_eq!(
             field_number(&format!(r#"{{ "frame": {expression} }}"#), "frame"),
