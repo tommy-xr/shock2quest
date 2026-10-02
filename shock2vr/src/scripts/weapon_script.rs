@@ -3,7 +3,7 @@ use dark::{
     SCALE_FACTOR,
     properties::{
         GunFlashOptions, GunSettingDesc, Link, ObjectState, ProjectileOptions, PropGunReliability,
-        PropWeaponType,
+        PropPlayerGun, PropWeaponType,
     },
 };
 use engine::audio::AudioHandle;
@@ -13,12 +13,13 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::{
     mission::{
         entity_creator::CreateEntityOptions,
-        mission_core::{GlobalSkillParams, GlobalTemplateClassTags},
+        mission_core::{GlobalEntityMetadata, GlobalSkillParams, GlobalTemplateClassTags},
     },
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::{
         RuntimePropFlatAim, RuntimePropReloading, RuntimePropSelectedAmmo, RuntimePropShotCooldown,
         RuntimePropShotModifiers, RuntimePropTransform, RuntimePropVhots,
+        RuntimePropViewmodelToWorld,
     },
     util::{get_rotation_from_forward_vector, resolve_proxy_entity},
     vr_config,
@@ -506,11 +507,7 @@ impl Script for WeaponScript {
 /// cooldown gates, and decides what an `Empty` magazine means (a pull clicks; a
 /// burst just stops).
 fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -> ShotOutcome {
-    //Create muzzle flash
-    let muzzle_flashes = get_all_links_with_template(world, entity_id, |link| match link {
-        Link::GunFlash(data) => Some(*data),
-        _ => None,
-    });
+    let muzzle_flashes = weapon_flash_links(world, entity_id);
 
     // Pick the selected ammo type: guns carry several Projectile
     // links (standard / HE / AP, ...); RuntimePropSelectedAmmo indexes
@@ -803,6 +800,40 @@ fn dry_fire(world: &World, entity_id: EntityId) -> Effect {
     play_environmental_sound(world, entity_id, "outofammo", vec![], AudioHandle::new())
 }
 
+/// Fill the two gaps in the stock player-gun links. Preserve authored effects
+/// when present (including mission/mod replacements) instead of doubling them.
+fn weapon_flash_links(world: &World, weapon: EntityId) -> Vec<(i32, GunFlashOptions)> {
+    let mut links = get_all_links_with_template(world, weapon, |link| match link {
+        Link::GunFlash(data) => Some(*data),
+        _ => None,
+    });
+    let guns = world.borrow::<View<PropPlayerGun>>().unwrap();
+    let Ok(gun) = guns.get(weapon) else {
+        return links;
+    };
+    let missing = if gun.hand_model.eq_ignore_ascii_case("sg_h")
+        && !links.iter().any(|(_, options)| options.flags & 1 == 0)
+    {
+        // The named Shotgun Flash archetype in the base gamesys has no visual
+        // or lifetime. Reuse the configured conventional flash and its art.
+        Some(("assault flash", GunFlashOptions { vhot: 0, flags: 0 }))
+    } else if gun.hand_model.eq_ignore_ascii_case("atek_h")
+        && !links.iter().any(|(_, options)| options.flags & 1 != 0)
+    {
+        Some(("casing", GunFlashOptions { vhot: 1, flags: 1 }))
+    } else {
+        None
+    };
+    if let (Some((name, options)), Ok(metadata)) =
+        (missing, world.borrow::<UniqueView<GlobalEntityMetadata>>())
+    {
+        if let Some(template) = metadata.0.get(name) {
+            links.push((template.template_id, options));
+        }
+    }
+    links
+}
+
 pub(super) fn create_muzzle_flash(
     world: &World,
     entity_id: EntityId,
@@ -830,7 +861,17 @@ pub(super) fn create_muzzle_flash(
     if options.flags & 1 != 0 {
         let mut attachment = crate::weapon_muzzle::resolve(world, entity_id);
         attachment.point = vhot_offset;
-        let frame = attachment.shot_frame(transform.0);
+        let mut frame = attachment.shot_frame(transform.0);
+        let mut launch_origin = transform.0.transform_point(point3(0.0, 0.0, 0.0));
+        if let Ok(mapping) = world.borrow::<View<RuntimePropViewmodelToWorld>>() {
+            if let Ok(mapping) = mapping.get(entity_id) {
+                frame.w = mapping
+                    .0
+                    .transform_point(cgmath::Point3::from_vec(frame.w.truncate()))
+                    .to_homogeneous();
+                launch_origin = mapping.0.transform_point(launch_origin);
+            }
+        }
         // Flat stores its right-handed viewmodel in the logical left slot.
         let left = !world
             .borrow::<View<RuntimePropFlatAim>>()
@@ -853,7 +894,7 @@ pub(super) fn create_muzzle_flash(
                 transient_fx: true,
                 player_fired_projectile: true,
                 projectile_weapon: Some(entity_id),
-                projectile_launch_origin: Some(transform.0.transform_point(point3(0.0, 0.0, 0.0))),
+                projectile_launch_origin: Some(launch_origin),
                 ..CreateEntityOptions::default()
             },
         };
@@ -980,6 +1021,58 @@ fn create_projectile_launch(
 #[cfg(test)]
 mod tests {
     use cgmath::Rotation;
+
+    #[test]
+    fn missing_flash_links_are_completed_without_duplicating_authored_replacements() {
+        use crate::mission::mission_core::EntityMetadata;
+        use dark::properties::{Links, ToLink};
+        let mut world = World::new();
+        world.add_unique(GlobalEntityMetadata(
+            [("assault flash", -101), ("casing", -102)]
+                .into_iter()
+                .map(|(name, template_id)| {
+                    (
+                        name.to_owned(),
+                        EntityMetadata {
+                            template_id,
+                            obj_icon: None,
+                            obj_short_name: None,
+                            obj_name: None,
+                        },
+                    )
+                })
+                .collect(),
+        ));
+        for (model, missing_flags, expected) in [("sg_h", 0, -101), ("atek_h", 1, -102)] {
+            let gun = world.add_entity(PropPlayerGun {
+                flags: 0,
+                hand_model: model.to_owned(),
+                icon_file: String::new(),
+                model_offset: cgmath::vec3(0.0, 0.0, 0.0),
+                fire_offset: cgmath::vec3(0.0, 0.0, 0.0),
+                heading: 0,
+                reload_pitch: 0,
+                reload_rate: 0,
+                gun_type: 0,
+            });
+            assert_eq!(weapon_flash_links(&world, gun)[0].0, expected);
+            let replacement = GunFlashOptions {
+                vhot: 8,
+                flags: missing_flags,
+            };
+            world.add_component(
+                gun,
+                Links {
+                    to_links: vec![ToLink {
+                        to_template_id: -999,
+                        to_entity_id: None,
+                        link: Link::GunFlash(replacement),
+                    }],
+                },
+            );
+            assert_eq!(weapon_flash_links(&world, gun), vec![(-999, replacement)]);
+        }
+    }
 
     #[test]
     fn authored_accuracy_uses_weapon_skill_not_strength_or_sharpshooter() {

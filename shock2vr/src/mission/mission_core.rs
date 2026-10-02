@@ -6338,6 +6338,16 @@ impl MissionCore {
         ) {
             self.world
                 .add_component(weapon, RuntimePropFlatAim { origin, forward });
+            self.world.add_component(
+                weapon,
+                crate::runtime_props::RuntimePropViewmodelToWorld(
+                    crate::flat_player_controller::viewmodel_to_world(
+                        origin,
+                        player_rot * self.flat_eye.unwrap_or(neutral_eye).rotation,
+                        crate::resolve_fov_deg(crate::DEFAULT_FOV_DEG),
+                    ),
+                ),
+            );
         }
 
         // Advance the flat melee swing animation (returns to static idle on end).
