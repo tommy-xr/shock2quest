@@ -27,6 +27,9 @@ pub enum PathTarget {
     /// Path to a fixed point (e.g. a last-known position). The owning
     /// behavior decides when "arrived" - this just keeps routing there.
     Point(Vector3<f32>),
+    /// Path to an entity's live position (a scripted goto's marker or
+    /// object), re-pathing if it moves. The owning behavior decides arrival.
+    Entity(EntityId),
 }
 
 /// What the no-progress clocks saw this frame (see `advance_stall_clocks`).
@@ -213,6 +216,10 @@ impl PathFollowSteeringStrategy {
         PathFollowSteeringStrategy::new(PathTarget::Point(goal))
     }
 
+    pub fn to_entity(target: EntityId) -> PathFollowSteeringStrategy {
+        PathFollowSteeringStrategy::new(PathTarget::Entity(target))
+    }
+
     fn new(target: PathTarget) -> PathFollowSteeringStrategy {
         PathFollowSteeringStrategy {
             target,
@@ -375,6 +382,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             // The last-known target position (frozen when sight breaks),
             // not the player's true location - breaking line of sight works
             PathTarget::Player => Some(ai_util::chase_target(world, entity_id)?),
+            PathTarget::Entity(target) => Some(crate::util::get_entity_position(world, target)?),
             // Wander and Point keep their destination until the path completes
             PathTarget::Wander { .. } | PathTarget::Point(_) => None,
         };
@@ -496,7 +504,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             // Pick the goal before touching the budget: a failed (cheap)
             // wander goal pick must not consume a query slot
             let goal = match self.target {
-                PathTarget::Player => desired_goal,
+                PathTarget::Player | PathTarget::Entity(_) => desired_goal,
                 PathTarget::Wander { radius } => {
                     pick_wander_goal(&service, position, radius, &mut rand::thread_rng())
                 }

@@ -610,6 +610,13 @@ impl GotoScriptedAction {
             steering_strategies.push(Box::new(ScriptedPlayerSteering));
             GotoTarget::Player
         } else if let Some(entity) = resolve_scripted_target(world, entity_name) {
+            // Route to the target through the navigation mesh, as a scripted
+            // goto in the original does; whisker avoidance and a straight-line
+            // chase only cover the no-route case.
+            steering_strategies.insert(
+                0,
+                Box::new(steering::PathFollowSteeringStrategy::to_entity(entity)),
+            );
             steering_strategies.push(Box::new(ChaseEntitySteeringStrategy::new(entity)));
             GotoTarget::Entity(entity)
         } else {
