@@ -11278,6 +11278,10 @@ impl MissionCore {
                                     player, joint, transform,
                                 );
                             }
+                            self.world.add_component(
+                                entity_id,
+                                RuntimePropJointTransforms(model.get_joint_transforms(player)),
+                            );
                         }
                     }
                 }
@@ -11908,6 +11912,8 @@ impl MissionCore {
                             }
                         }
                         self.world
+                            .remove::<crate::vr_shotgun_pump::PumpMotion>(entity_id);
+                        self.world
                             .remove::<crate::runtime_props::RuntimePropObjectArticulation>(
                                 entity_id,
                             );
@@ -11937,6 +11943,7 @@ impl MissionCore {
                         PropModelName,
                         RuntimePropVhots,
                         crate::runtime_props::RuntimePropObjectArticulation,
+                        crate::vr_shotgun_pump::PumpMotion,
                         crate::weapon_muzzle::MuzzleFallback,
                         crate::runtime_props::RuntimePropGloveWeapon,
                     )>(entity_id);
@@ -11974,6 +11981,7 @@ impl MissionCore {
                 }
                 Effect::WeaponRecoil { entity_id } => {
                     self.flat_weapon_animation.fired(&self.world, entity_id);
+                    crate::vr_shotgun_pump::fired(&mut self.world, entity_id);
                     let hands = self.interaction.haptic_hands(entity_id);
                     for (hand, pulse) in hands
                         .into_iter()
@@ -11991,7 +11999,14 @@ impl MissionCore {
                         .request(hand, pulse);
                 }
                 Effect::EjectWeaponCasings { entity_id } => {
-                    if self.interaction.viewmodel_entity() == Some(entity_id) {
+                    if self.interaction.viewmodel_entity() == Some(entity_id)
+                        || (crate::vr_shotgun_pump::enabled(&self.world, entity_id)
+                            && [
+                                self.interaction.held_entities().0,
+                                self.interaction.held_entities().1,
+                            ]
+                            .contains(&Some(entity_id)))
+                    {
                         effects.extend(Effect::flatten(vec![
                             crate::scripts::weapon_script::eject_casings(&self.world, entity_id),
                         ]));
@@ -15904,6 +15919,18 @@ impl MissionCore {
         let mut deferred = Vec::new();
         for msg in msgs {
             match msg {
+                VirtualHandEffect::MovePump {
+                    entity_id,
+                    motion,
+                    fraction,
+                } => {
+                    deferred.extend(crate::vr_shotgun_pump::move_pump(
+                        &mut self.world,
+                        entity_id,
+                        motion,
+                        fraction,
+                    ));
+                }
                 VirtualHandEffect::OutMessage { message } => self.script_world.dispatch(message),
                 VirtualHandEffect::ApplyForce {
                     entity_id,
@@ -17621,6 +17648,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "FlatAim".to_string(),
                         value: aim,
+                    });
+                }
+                if crate::vr_shotgun_pump::enabled(&self.world, id) {
+                    let pump = crate::vr_shotgun_pump::state(&self.world, id);
+                    properties.push(DebugPropertyInfo {
+                        name: "ShotgunPump".into(),
+                        value: serde_json::to_string(&pump).unwrap(),
                     });
                 }
                 if let Some(magazine) = crate::vr_magazine::appearance(&self.world, id) {

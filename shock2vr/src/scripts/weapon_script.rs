@@ -350,7 +350,7 @@ impl Script for WeaponScript {
         };
         // A burst belongs to the pull that started it: a reload, or the gun
         // leaving the player's hands, ends it.
-        if is_reloading(world, entity_id)
+        if (is_reloading(world, entity_id) || crate::vr_shotgun_pump::blocks_fire(world, entity_id))
             || !crate::wielded_weapon::held_in_hand(world, entity_id)
             || crate::weapon_requirements::unmet_weapon_skill(world, entity_id).is_some()
         {
@@ -403,7 +403,9 @@ impl Script for WeaponScript {
                     };
                 }
                 // Firing is blocked while a reload is in progress.
-                if is_reloading(world, entity_id) {
+                if is_reloading(world, entity_id)
+                    || crate::vr_shotgun_pump::blocks_fire(world, entity_id)
+                {
                     return Effect::NoEffect;
                 }
 
@@ -632,13 +634,14 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
             .into_iter()
             .filter(|(_, options)| {
                 options.flags & 1 == 0
-                    || !world
-                        .borrow::<View<crate::flat_weapon_animation::FlatWeaponPose>>()
-                        .ok()
-                        .and_then(|poses| {
-                            poses.get(entity_id).ok().map(|pose| pose.delayed_ejection)
-                        })
-                        .unwrap_or(false)
+                    || (!crate::vr_shotgun_pump::enabled(world, entity_id)
+                        && !world
+                            .borrow::<View<crate::flat_weapon_animation::FlatWeaponPose>>()
+                            .ok()
+                            .and_then(|poses| {
+                                poses.get(entity_id).ok().map(|pose| pose.delayed_ejection)
+                            })
+                            .unwrap_or(false))
             })
             .map(|(template_id, options)| {
                 create_muzzle_flash(world, entity_id, template_id, &options)

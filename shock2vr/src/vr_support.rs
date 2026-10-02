@@ -45,6 +45,63 @@ pub struct SupportRegion {
     pub end: [f32; 3],
 }
 
+/// A support contact carried by an LGMD slider. Values use the asset's scalar
+/// units; the rig supplies the axis and the prepared grip supplies the scale.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SupportMotion {
+    pub parameter: i32,
+    pub closed: f32,
+    pub open: f32,
+}
+
+impl SupportMotion {
+    pub fn value(self, fraction: f32) -> f32 {
+        self.closed + (self.open - self.closed) * fraction
+    }
+
+    pub fn travel(
+        self,
+        rig: &dark::object_articulation::ObjectArticulation,
+    ) -> Option<Vector3<f32>> {
+        let joint = rig
+            .joints
+            .iter()
+            .find(|j| j.parameter == self.parameter && j.motion_type == 2)?;
+        let closed = rig.pose(&[(self.parameter, self.closed)]);
+        let open = rig.pose(&[(self.parameter, self.open)]);
+        Some((open.get(joint.index as usize)?.w - closed.get(joint.index as usize)?.w).truncate())
+    }
+}
+
+/// The rail is inward from the support contact toward the primary hand. Match
+/// hand separation, not a projection onto last frame's gun: steering around the
+/// primary hand must not accidentally rack the pump. The two-hand solver then
+/// aligns this anchor vector to the hand direction without stretching the gun.
+pub fn pump_fraction_from_separation(
+    closed: Vector3<f32>,
+    travel: Vector3<f32>,
+    separation: f32,
+) -> Option<f32> {
+    if !separation.is_finite()
+        || travel.magnitude2() < 1e-8
+        || closed.dot(travel) >= 0.0
+        || (closed + travel).dot(travel) >= 0.0
+    {
+        return None;
+    }
+    let mut lo = 0.0;
+    let mut hi = 1.0;
+    for _ in 0..20 {
+        let mid = (lo + hi) * 0.5;
+        if (closed + travel * mid).magnitude() > separation {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Some((lo + hi) * 0.5)
+}
+
 /// Anchor in the normalized weapon mesh used by prepared grips (before item scale).
 /// Stored in the right-primary model frame; the renderer supplies the opposite frame.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -52,6 +109,8 @@ pub struct SupportProfile {
     pub palm_anchor: [f32; 3],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<SupportRegion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<SupportMotion>,
     /// Support wrist rotation relative to the primary wrist; authored right-primary.
     #[serde(default)]
     pub rotation_degrees: [f32; 3],
@@ -66,6 +125,12 @@ pub struct SupportProfile {
 impl SupportProfile {
     pub fn is_valid(&self) -> bool {
         self.palm_anchor.iter().all(|v| v.is_finite())
+            && self.motion.is_none_or(|m| {
+                m.parameter >= 0
+                    && m.closed.is_finite()
+                    && m.open.is_finite()
+                    && (m.open - m.closed).abs() > 1e-5
+            })
             && self
                 .region
                 .as_ref()
@@ -225,6 +290,28 @@ mod tests {
     use cgmath::{Deg, One, Rotation3, vec3};
 
     #[test]
+    fn pump_travel_is_independent_of_steering_and_mirroring() {
+        for mirror in [1.0, -1.0] {
+            let closed = vec3(-0.35, -0.03, mirror * 0.01);
+            let travel = vec3(0.13, 0.0, 0.0);
+            for fraction in [0.0, 0.3, 0.7, 1.0] {
+                for yaw in [-70.0, 0.0, 70.0] {
+                    let hands = Quaternion::from_angle_y(Deg(yaw))
+                        .rotate_vector(closed + travel * fraction);
+                    let actual =
+                        pump_fraction_from_separation(closed, travel, hands.magnitude()).unwrap();
+                    assert!((actual - fraction).abs() < 1e-5);
+                }
+            }
+        }
+        assert!(
+            pump_fraction_from_separation(vec3(0.1, 0.0, 0.0), vec3(-0.2, 0.0, 0.0), 0.05)
+                .is_none(),
+            "a rail passing the primary hand is ambiguous"
+        );
+    }
+
+    #[test]
     fn support_region_projects_in_scaled_rotated_and_mirrored_model_frames() {
         let mut profile: SupportProfile = serde_json::from_value(serde_json::json!({
             "palm_anchor": [0.0,0.2,0.0], "curls":[0.5,0.5,0.5,0.5,0.5],
@@ -274,6 +361,7 @@ mod tests {
         let profile = SupportProfile {
             palm_anchor: [-0.09, 0.354, 0.02],
             region: None,
+            motion: None,
             rotation_degrees: [20.0, 15.0, -30.0],
             curls: [0.4; 5],
             trigger_curls: None,
@@ -346,6 +434,7 @@ mod tests {
         let mut profile = SupportProfile {
             palm_anchor: [0.02, 0.2, 0.0],
             region: None,
+            motion: None,
             rotation_degrees: [0.0; 3],
             curls: [0.5; 5],
             trigger_curls: None,

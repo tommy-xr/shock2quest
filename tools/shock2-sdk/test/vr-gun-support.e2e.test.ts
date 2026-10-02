@@ -131,6 +131,11 @@ for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as 
       await game.step({frames:30});
       assert.equal((await game.info()).player[empty],weapon.id,"recipient need not re-grip");
       assert.equal(ammoOf(await game.entities.detail(weapon.id)),ammoOf(beforeHandoff),"handoff ends the old trigger pull");
+      if (model === "sg_h") {
+        const pump = (await game.entities.detail(weapon.id)).properties.find(p => p.name === "ShotgunPump");
+        assert.ok(pump);
+        assert.equal(JSON.parse(pump.value).phase, "Spent", "handoff cannot bypass the required pump cycle");
+      }
     });
   }
 }

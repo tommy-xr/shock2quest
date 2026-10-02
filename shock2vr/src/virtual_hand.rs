@@ -69,6 +69,11 @@ pub struct VirtualHand {
 
 #[derive(Debug)]
 pub enum VirtualHandEffect {
+    MovePump {
+        entity_id: EntityId,
+        motion: crate::vr_support::SupportMotion,
+        fraction: f32,
+    },
     OutMessage {
         message: Message,
     },
