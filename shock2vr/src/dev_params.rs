@@ -507,11 +507,11 @@ dev_params! {
     /// an object with no light on it nearly black; raise this to lift the
     /// shadows without touching what the lamps do.
     OBJECT_LIGHT_AMBIENT_BOOST = Lighting::float("object_light_ambient", "Obj ambient", 0.0, 0.0, 0.5, 0.01),
-    /// Minimum ambient on the player's own gloves and held items. Authored
+    /// Minimum ambient on the player's gloves, held items and holstered weapons. Authored
     /// lamps are mostly downward spot cones, and a hand at chest height, seen
     /// from behind, catches almost none of them - faithful shading leaves it a
     /// black silhouette. 0 is the faithful look.
-    HELD_LIGHT_FLOOR = Lighting::float("held_light_floor", "Hands light floor", 0.6, 0.0, 1.5, 0.05),
+    HELD_LIGHT_FLOOR = Lighting::float("held_light_floor", "Held item light floor", 0.15, 0.0, 1.5, 0.05),
     /// How far light wraps past the terminator on objects. 0 is what the
     /// original did for objects - a face pointing away from a lamp gets
     /// nothing but ambient. 1 is the half-lambert it baked into *lightmaps*,

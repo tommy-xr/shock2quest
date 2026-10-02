@@ -15349,8 +15349,14 @@ impl MissionCore {
                         * Matrix4::from_scale(scale)
                         * Matrix4::from_translation(-center);
                     let mut objects = model.to_scene_objects().clone();
+                    // Stowed weapons are player gear too: use the same room
+                    // lighting and adjustable minimum as a weapon in hand.
+                    let lights = object_lights
+                        .as_ref()
+                        .map(|lighting| lighting.at_player_position(centers[slot]));
                     for object in &mut objects {
                         object.set_transform(root);
+                        object.set_lights(lights.clone());
                     }
                     crate::util::tag_render_source(
                         &mut objects,

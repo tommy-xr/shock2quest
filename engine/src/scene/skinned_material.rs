@@ -354,7 +354,7 @@ impl SkinnedMaterial {
             gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
             gl::Uniform1f(
                 uniforms.ambient_intensity_loc,
-                render_context.ambient_light_intensity,
+                lights.ambient_intensity(render_context.ambient_light_intensity),
             );
             gl::Uniform3f(
                 uniforms.emissive_tint_loc,

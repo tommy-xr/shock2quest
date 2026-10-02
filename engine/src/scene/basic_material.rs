@@ -267,7 +267,7 @@ where
                 if self.fixed_ambient {
                     1.0
                 } else {
-                    render_context.ambient_light_intensity
+                    lights.ambient_intensity(render_context.ambient_light_intensity)
                 },
             );
 
