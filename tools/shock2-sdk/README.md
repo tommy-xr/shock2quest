@@ -82,6 +82,21 @@ await game.input.set("right_hand.trigger_value", 1.0);
 await game.input.set("right_hand.world_target", [-6.8, 2.3, 0]);
 (await game.input.state()).right_hand.world_position; // where the game puts it
 
+// (--vr) Hand climbing. Each throws with the reason when a hold is out of
+// reach, grabs nothing, or a pull goes nowhere.
+import { otherHand, vrClimbLadder, vrGrab, vrPull, vrReach, vrTopOut, vrVault } from "@shock2vr/sdk";
+await vrReach(game, "left", point);             // world_target, no step
+await vrGrab(game, "right", [-6.8, 2.6, 0]);    // reach open, settle, squeeze
+await vrPull(game, "right", [0, -0.5, 0], 12);  // pawn-space controller travel; down lifts
+// Hand over hand on the ladder's own rungs ("rung", default where it has
+// any) or its rail on each hand's side ("edge"); holds come from
+// game.physics.ladder(id), which reads the ladder's model.
+const { anchor } = await vrClimbLadder(game, { near: [-6.8, 2.6, 0], untilY: 5.1 });
+// Close the free hand on a ledge - the lip or anywhere on the deck - and pull
+// until the vault starts; returns once it has landed.
+await vrTopOut(game, otherHand(anchor), [-7.3, 6.05, 0]);
+// Or pull on a hand already on a ledge: vrVault(game, hand).
+
 // Aim through the production camera/weapon/interaction path. Creatures select
 // a classified live hitbox; doors/buttons select their nearest visible surface.
 // Prefer this over hand-composing head.rotation: raw head controls are

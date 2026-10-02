@@ -20,5 +20,6 @@ export * from "./anim-metrics.js";
 export * from "./ai-reachability.js";
 export type * from "./types.js";
 export * from "./vr-pose.js";
+export * from "./vr-climb.js";
 export * from "./motion.js";
 export { quatMultiply, quatRotate } from "./vec.js";

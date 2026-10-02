@@ -241,6 +241,12 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<ClimbGripResult>,
     },
 
+    /// A ladder entity's rungs and rails, read off its model.
+    LadderHolds {
+        entity_id: i32,
+        reply: oneshot::Sender<Result<LadderHoldsResult, String>>,
+    },
+
     /// Apply a world-space impulse to a dynamic physics body (waking it) -
     /// e.g. poke a settled ragdoll to verify it wakes and reacts.
     ApplyBodyImpulse {
@@ -438,6 +444,19 @@ pub struct RagdollMetricsEntry {
 #[derive(Debug, Serialize)]
 pub struct ClimbGripResult {
     pub grip: Option<ClimbGripEntry>,
+}
+
+/// `GET /v1/physics/ladder`: a ladder's hand holds in world space.
+#[derive(Debug, Serialize)]
+pub struct LadderHoldsResult {
+    pub entity_id: i32,
+    pub model: String,
+    /// Rungs (bars or pole pegs) bottom to top, as [end, end].
+    pub rungs: Vec<[[f32; 3]; 2]>,
+    /// Rails (or the pole, or a slab's side edges), as [bottom, top].
+    pub rails: Vec<[[f32; 3]; 2]>,
+    /// The face normal; either side may be the climbing side.
+    pub normal: [f32; 3],
 }
 
 #[derive(Debug, Serialize)]

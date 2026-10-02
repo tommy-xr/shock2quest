@@ -397,6 +397,11 @@ For debugging visual/rendering changes without a full interactive session:
    # "ledge" (a walkable top more than a step above the feet - the mantle
    # hold), or null. Optional `radius` and `feet_y` (defaults to the player's).
    curl "http://127.0.0.1:8080/v1/physics/grip?x=-6.8&y=3&z=0"
+   # A ladder's rungs and rails, read off its model (its physics body is one
+   # box): rick ladders give 2 rails + a rung every 0.8, the 16' pole ladder
+   # 1 pole + side pegs. 404 with the reason for an entity with no model.
+   # Take the id from a /v1/physics/grip hit (`entity_id`) - ids change per run.
+   curl "http://127.0.0.1:8080/v1/physics/ladder?entity_id=8"
 
    # Inspect what the renderer actually drew on the last frame: per-object
    # entity/model, effective transparency, depth-write and backface-culling
