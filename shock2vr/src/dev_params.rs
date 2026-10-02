@@ -511,7 +511,7 @@ dev_params! {
     /// lamps are mostly downward spot cones, and a hand at chest height, seen
     /// from behind, catches almost none of them - faithful shading leaves it a
     /// black silhouette. 0 is the faithful look.
-    HELD_LIGHT_FLOOR = Lighting::float("held_light_floor", "Held item light floor", 0.3, 0.0, 1.5, 0.05),
+    HELD_LIGHT_FLOOR = Lighting::float("held_light_floor", "Held item light floor", 0.1, 0.0, 1.5, 0.05),
     /// How far light wraps past the terminator on objects. 0 is what the
     /// original did for objects - a face pointing away from a lamp gets
     /// nothing but ambient. 1 is the half-lambert it baked into *lightmaps*,

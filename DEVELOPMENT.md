@@ -493,7 +493,7 @@ on object and creature materials. It defaults to `0` (disabled), ranges from
 authored object lights provide the default illumination; `1` restores ambient. Emissive contributions and runtime spotlights remain independent.
 UI, video, and explicitly fullbright world surfaces keep their existing brightness.
 Gloves, held items, and VR holstered weapons share the
-**Held item light floor** (`held_light_floor`, default `0.3`), which stays
+**Held item light floor** (`held_light_floor`, default `0.1`), which stays
 active even with ambient disabled. Adjust it under **Developer options → Lighting**
 from `0` to `1.5` in `0.05` steps; changes reset on restart.
 
