@@ -413,7 +413,7 @@ dev_params! {
     VR_BELT_DISTANCE = Body::float("vr_belt_distance", "Belt forward (m)", 0.20, 0.10, 0.45, 0.01),
     VR_BELT_DROP = Body::float("vr_belt_drop", "Belt below eyes (m)", 0.55, 0.30, 0.90, 0.01),
     /// Session-only handheld experiment, also available on Quest without CLI flags.
-    VR_MFD_DEVICE = Tricorder::bool("vr_mfd_device", "MFD device prototype", false),
+    VR_MFD_DEVICE = Tricorder::bool("vr_mfd_device", "MFD device prototype", true),
     /// Positive raises the stowed device and its grab point; zero keeps the centered mount.
     VR_MFD_BELT_Y = Tricorder::float("vr_mfd_belt_y", "Belt vertical offset (m)", 0.0, -0.15, 0.20, 0.005),
     /// Matches the buckle face normal in astra-vr-belt.glb (approximately 13 degrees).

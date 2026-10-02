@@ -1,16 +1,17 @@
 # Belt MFD device spike
 
-An opt-in alternative to the personal access card from #1533. The instrument
+The default VR belt tool, replacing the personal access card from #1533. The instrument
 returns to the authored belt anchor when released. Player balances, credentials,
 logs and research stay in their existing owners; the device is a transient
 presentation, not another inventory item or a second copy of player state.
 
-Enable **Pause → Developer → Tricorder → MFD device prototype** on Quest
-or any VR runtime. The session-only `vr_mfd_device` toggle defaults off and
-is also available through the debug API. For a repeatable desktop launch, run:
+The device is enabled by default on Quest and all VR runtimes. Disable
+**Pause → Developer → Tricorder → MFD device prototype** to restore the personal
+card. The session-only `vr_mfd_device` toggle is also available through the
+debug API; `--experimental mfd_device` still forces it on. To launch, run:
 
 ```sh
-cargo dbgr --mission earth.mis --vr --experimental mfd_device
+cargo dbgr --mission earth.mis --vr
 ```
 
 For layout inspection with a mouse, the same compact canvas has a flat preview:
@@ -21,8 +22,8 @@ cargo dbgr --mission earth.mis --experimental mfd_device_preview
 
 The preview does not simulate drawing or scanning; frob a nearby object through
 the debug API to open its MFD. Both presentations use the same compact canvas.
-Normal flatscreen and VR behavior stay behind the existing paths when neither
-flag is supplied.
+Normal flatscreen behavior is unchanged; it uses the compact device canvas only
+with the explicit preview flag.
 
 ## Interaction
 

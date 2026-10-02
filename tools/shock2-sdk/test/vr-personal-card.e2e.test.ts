@@ -44,6 +44,7 @@ for (const hand of ["left", "right"] as const) {
     skip: !enabled, timeout: 180_000,
   }, async () => {
     await using game = await GameServer.launch({ mission: "earth.mis", port: 0, debugFlags: ["--vr"] });
+    await game.devParams.set("vr_mfd_device", 0); // Exercise the legacy card toggle.
     await game.step({ frames: 30 });
     const [reader] = await game.entities.byTemplate(262);
     assert.ok(reader);
