@@ -178,6 +178,9 @@ pub struct LightArray {
     pub lights: [Option<SceneLight>; 6],
     /// Light every surface receives regardless of the lights above.
     pub ambient: Vector3<f32>,
+    /// Minimum ambient multiplier reserved for readable player-held models.
+    /// Ordinary world objects leave this at zero.
+    pub ambient_intensity_floor: f32,
     /// How the lights in this array attenuate.
     pub falloff: [LightFalloff; 6],
     /// Wraps diffuse light around the terminator: 0 is plain lambert (a
@@ -203,6 +206,7 @@ impl LightArray {
         Self {
             lights: [None, None, None, None, None, None],
             ambient: Vector3::new(DEFAULT_AMBIENT, DEFAULT_AMBIENT, DEFAULT_AMBIENT),
+            ambient_intensity_floor: 0.0,
             falloff: [LightFalloff::Smooth; 6],
             lambert_wrap: 0.0,
             specular: 0.0,
@@ -211,6 +215,11 @@ impl LightArray {
             growth_veins: Default::default(),
             weapon_veins: Default::default(),
         }
+    }
+
+    /// Apply the scene slider without extinguishing a model-specific light floor.
+    pub fn ambient_intensity(&self, scene_intensity: f32) -> f32 {
+        scene_intensity.max(self.ambient_intensity_floor)
     }
 
     /// Add a light to the first available slot
@@ -281,6 +290,7 @@ impl LightArray {
         let mut merged = LightArray {
             lights: [None, None, None, None, None, None],
             ambient: self.ambient,
+            ambient_intensity_floor: self.ambient_intensity_floor,
             falloff: self.falloff,
             lambert_wrap: self.lambert_wrap,
             specular: self.specular,
@@ -498,6 +508,7 @@ mod tests {
             1.0,
         ));
         let mut object = LightArray::new().with_object_lighting(Vector3::new(0.1, 0.2, 0.3), 0.4);
+        object.ambient_intensity_floor = 0.75;
         object.add_light(PointLight {
             position: Vector3::new(2.0, 1.0, 0.0),
             color_intensity: Vector4::new(1.0, 0.0, 0.0, 1.0),
@@ -507,6 +518,8 @@ mod tests {
         assert_eq!(merged.falloff[0], LightFalloff::Smooth);
         assert_eq!(merged.falloff[1], LightFalloff::InverseDistance);
         assert_eq!(merged.ambient, object.ambient);
+        assert_eq!(merged.ambient_intensity(0.0), 0.75);
+        assert_eq!(scene.ambient_intensity(0.0), 0.0);
         assert_eq!(
             merged.get_light(0).unwrap().position(),
             scene.get_light(0).unwrap().position()

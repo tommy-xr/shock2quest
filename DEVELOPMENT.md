@@ -492,6 +492,8 @@ on object and creature materials. It defaults to `0` (disabled), ranges from
 `0` to `3` in `0.05` steps, and resets on app restart. Baked lighting and
 authored object lights provide the default illumination; `1` restores ambient. Emissive contributions and runtime spotlights remain independent.
 UI, video, and explicitly fullbright world surfaces keep their existing brightness.
+The separate **Hands light floor** (`held_light_floor`, default `0.6`) stays
+active for gloves and held items even with ambient disabled.
 
 **Lighting → Level light intensity** (`level_light_intensity`) scales baked
 world lightmaps and authored object lights, also from `0` to `3` in `0.05` steps
