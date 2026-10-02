@@ -755,6 +755,7 @@ pub enum Effect {
     PsiPull {
         amp: EntityId,
         cost: i32,
+        hand: Option<usize>,
     },
 
     PsiDrainVisual {

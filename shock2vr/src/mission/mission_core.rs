@@ -2720,6 +2720,7 @@ pub struct MissionCore {
     pub debug_lines: Vec<DebugLine>,
     psi_drain_trails: Vec<crate::psi_visuals::DrainTrail>,
     psi_pull: Option<crate::psi_pull::Flight>,
+    free_hand_psi_pull: crate::vr_psi_pull::FreeHandPull,
     healing_pulses: HashMap<EntityId, f32>,
     pub entity_info: Arc<SystemShock2EntityInfo>,
     pub physics: PhysicsWorld,
@@ -3791,6 +3792,7 @@ impl MissionCore {
             debug_lines: Vec::new(),
             psi_drain_trails: Vec::new(),
             psi_pull: None,
+            free_hand_psi_pull: Default::default(),
             healing_pulses: HashMap::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
@@ -5059,8 +5061,6 @@ impl MissionCore {
             (player_info.pos, player_info.rotation)
         };
 
-        effects.extend(self.update_psi_pull(time.elapsed));
-
         self.healing_pulses.retain(|_, age| {
             *age += time.elapsed.as_secs_f32();
             *age < 1.0
@@ -5823,6 +5823,37 @@ impl MissionCore {
                 hand.a_value = 0.0;
             }
         }
+        let held_now = self.interaction.held_entities();
+        let pull_enabled = game_options.presentation_mode == crate::PresentationMode::Vr
+            && crate::dev_params::get_bool(crate::dev_params::VR_FREE_HAND_PSI_PULL)
+            && !self.use_mode
+            && self.psi_carousel.is_none()
+            && self.player_is_alive()
+            && self.player_controls_enabled;
+        if let Some(effect) = self.free_hand_psi_pull.update(
+            &self.world,
+            &mut shoulder_input,
+            [held_now.0, held_now.1],
+            player_pos,
+            player_rot,
+            pull_enabled,
+            [
+                input_context.left_hand.trigger_value > 0.5,
+                input_context.right_hand.trigger_value > 0.5,
+            ],
+            |amp, position, forward| {
+                crate::psi_pull::resolve_ray(
+                    &self.world,
+                    &self.physics,
+                    amp,
+                    Point3::new(position.x, position.y, position.z),
+                    forward,
+                )
+                .is_some()
+            },
+        ) {
+            effects.push(effect);
+        }
         let hands_input = &shoulder_input;
 
         // Opening a hand over the inventory strip puts the item in the
@@ -6323,6 +6354,7 @@ impl MissionCore {
             }
         }
         effects.extend(self.process_virtual_hand_effects(asset_cache, interaction_msgs));
+        effects.extend(self.update_psi_pull(time.elapsed));
         self.physics
             .set_held_target_frame(player_pos, player_rot, hands_input.tracking);
         // Remember only successful shoulder deposits, after the shared storage
@@ -8334,7 +8366,19 @@ impl MissionCore {
             .id_to_physics
             .get(&item)
             .and_then(|h| self.physics.get_position(*h));
-        let destination = crate::psi_pull::amp_position(&self.world, flight.amp);
+        let destination = match flight.hand {
+            Some(hand) => self
+                .free_hand_psi_pull
+                .source(hand, flight.amp)
+                .filter(|_| {
+                    let held = self.interaction.held_entities();
+                    [held.0, held.1][hand].is_none()
+                        && crate::dev_params::get_bool(crate::dev_params::VR_FREE_HAND_PSI_PULL)
+                        && !self.use_mode
+                })
+                .map(|(position, _)| position),
+            None => crate::psi_pull::amp_position(&self.world, flight.amp),
+        };
         let valid = self.player_is_alive()
             && self.interaction.is_holding(flight.amp)
             && !self.interaction.is_holding(item)
@@ -11084,15 +11128,34 @@ impl MissionCore {
                         engine::audio::AudioHandle::new(),
                     ));
                 }
-                Effect::PsiPull { amp, cost } => {
+                Effect::PsiPull { amp, cost, hand } => {
                     if self.psi_pull.is_some()
                         || cost < 0
                         || crate::scripts::player_psi_points(&self.world) < cost
                     {
                         continue;
                     }
-                    let Some(target) = crate::psi_pull::resolve(&self.world, &self.physics, amp)
-                    else {
+                    let target = match hand {
+                        Some(hand) => self
+                            .free_hand_psi_pull
+                            .source(hand, amp)
+                            .filter(|_| {
+                                let held = self.interaction.held_entities();
+                                self.interaction.is_holding(amp)
+                                    && [held.0, held.1].get(hand).is_some_and(Option::is_none)
+                            })
+                            .and_then(|(position, forward)| {
+                                crate::psi_pull::resolve_ray(
+                                    &self.world,
+                                    &self.physics,
+                                    amp,
+                                    Point3::new(position.x, position.y, position.z),
+                                    forward,
+                                )
+                            }),
+                        None => crate::psi_pull::resolve(&self.world, &self.physics, amp),
+                    };
+                    let Some(target) = target else {
                         continue;
                     };
                     let Some(gravity) = self.physics.begin_psi_pull(target) else {
@@ -11101,6 +11164,7 @@ impl MissionCore {
                     self.thrown_items.cancel(target);
                     update_player_psi_points(&self.world, |current| current.saturating_sub(cost));
                     self.psi_pull = Some(crate::psi_pull::Flight {
+                        hand,
                         item: target,
                         amp,
                         gravity,
