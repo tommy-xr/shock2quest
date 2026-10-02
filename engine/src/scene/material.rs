@@ -55,6 +55,10 @@ pub trait Material: Any {
         0.0
     }
 
+    /// Multiply the authored emissivity for the next draw (1.0 = authored).
+    /// Materials are shared across entities, so callers reset it afterwards.
+    fn set_emissivity_scale(&mut self, _scale: f32) {}
+
     /// Replace diffuse only after a complete material plan has loaded.
     fn set_diffuse_texture(&mut self, _texture: std::rc::Rc<dyn crate::texture::TextureTrait>) {}
 

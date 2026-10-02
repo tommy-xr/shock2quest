@@ -197,6 +197,8 @@ where
     diffuse_texture: T,
     diffuse_override: Option<std::rc::Rc<dyn TextureTrait>>,
     emissivity: f32,
+    /// Per-draw multiplier from `Material::set_emissivity_scale`.
+    emissivity_scale: f32,
     transparency: f32,
     base_transparency: f32,
     additive_unlit: bool,
@@ -261,7 +263,10 @@ where
             // Set material properties
             gl::Uniform1i(uniforms.additive_unlit_loc, i32::from(self.additive_unlit));
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
-            gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
+            gl::Uniform1f(
+                uniforms.emissivity_loc,
+                self.emissivity * self.emissivity_scale,
+            );
             gl::Uniform1f(
                 uniforms.ambient_intensity_loc,
                 if self.fixed_ambient {
@@ -336,6 +341,10 @@ where
 {
     fn emissivity(&self) -> f32 {
         self.emissivity
+    }
+
+    fn set_emissivity_scale(&mut self, scale: f32) {
+        self.emissivity_scale = scale;
     }
 
     fn set_diffuse_texture(&mut self, texture: std::rc::Rc<dyn TextureTrait>) {
@@ -628,6 +637,7 @@ where
         has_initialized: false,
         diffuse_override: None,
         emissivity,
+        emissivity_scale: 1.0,
         transparency,
         base_transparency: transparency,
         additive_unlit,
@@ -653,6 +663,7 @@ where
         has_initialized: false,
         diffuse_override: None,
         emissivity,
+        emissivity_scale: 1.0,
         transparency,
         base_transparency: transparency,
         additive_unlit: false,
@@ -674,6 +685,7 @@ pub fn create_incidence(
         has_initialized: false,
         diffuse_override: None,
         emissivity: 0.0,
+        emissivity_scale: 1.0,
         transparency: 0.0,
         base_transparency: 0.0,
         additive_unlit: false,

@@ -257,6 +257,8 @@ pub struct SkinnedMaterial {
     has_initialized: bool,
     diffuse_texture: Rc<dyn TextureTrait>,
     emissivity: f32,
+    /// Per-draw multiplier from `Material::set_emissivity_scale`.
+    emissivity_scale: f32,
     transparency: f32,
     base_transparency: f32,
     /// Where the painted-on light sits, in the diffuse map's own UVs (red
@@ -351,7 +353,10 @@ impl SkinnedMaterial {
 
             // Set material properties
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
-            gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
+            gl::Uniform1f(
+                uniforms.emissivity_loc,
+                self.emissivity * self.emissivity_scale,
+            );
             gl::Uniform1f(
                 uniforms.ambient_intensity_loc,
                 lights.ambient_intensity(render_context.ambient_light_intensity),
@@ -448,6 +453,10 @@ impl SkinnedMaterial {
 impl Material for SkinnedMaterial {
     fn emissivity(&self) -> f32 {
         self.emissivity
+    }
+
+    fn set_emissivity_scale(&mut self, scale: f32) {
+        self.emissivity_scale = scale;
     }
 
     fn set_diffuse_texture(&mut self, texture: Rc<dyn TextureTrait>) {
@@ -807,6 +816,7 @@ impl SkinnedMaterial {
             diffuse_texture: texture,
             has_initialized: false,
             emissivity: 0.0,
+            emissivity_scale: 1.0,
             transparency: 0.0,
             base_transparency: 0.0,
             emissive_mask: None,
@@ -829,6 +839,7 @@ impl SkinnedMaterial {
             diffuse_texture,
             has_initialized: false,
             emissivity,
+            emissivity_scale: 1.0,
             transparency,
             base_transparency: transparency,
             emissive_mask,
