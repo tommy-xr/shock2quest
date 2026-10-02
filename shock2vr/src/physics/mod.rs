@@ -153,10 +153,10 @@ pub const PLAYER_EYE_OFFSET: f32 = 0.8;
 /// only the camera. The shorter collision profile leaves authored low routes
 /// traversable while keeping the player's feet planted during the transition.
 const PLAYER_CROUCH_HEIGHT: f32 = 2.8;
-/// Keep the crouched footprint added in #513 unchanged at 1.6 feet wide. It
-/// clears the authentic MedSci low passage while the wider standing profile
-/// does not.
-const PLAYER_CROUCH_RADIUS: f32 = 0.8;
+/// Crouching keeps the standing width: the original's spheres are 1.2 ft in
+/// both stances, crouching only moves them. One width means a crouched player
+/// can never reach a spot too tight to stand back up in.
+const PLAYER_CROUCH_RADIUS: f32 = PLAYER_STANDING_RADIUS;
 
 /// Widening search used to rescue an obstructed authored placement (a respawn
 /// marker whose capsule does not fit). The step is one standing radius, so two
@@ -984,11 +984,7 @@ impl ClimbTopOut {
             // landing stance is tracked separately by stand_on_completion.
             crouched_player_shared_shape()
         } else {
-            SharedShape::ball(if self.is_crouched {
-                PLAYER_CROUCH_RADIUS / SCALE_FACTOR
-            } else {
-                CLIMB_TOP_OUT_RADIUS
-            })
+            SharedShape::ball(CLIMB_TOP_OUT_RADIUS)
         }
     }
 }
@@ -10364,10 +10360,10 @@ mod tests {
         );
     }
 
-    /// Standing restores Dark's original 6 x 2.4-foot body, while crouch and
-    /// direct relocation retain the 2.8 x 1.6-foot profile added in #513.
+    /// Standing is the original's 6 x 2.4-foot body; crouching (and direct
+    /// relocation while crouched) shortens it to 2.8 feet at the same width.
     #[test]
-    fn player_capsule_uses_original_standing_and_existing_crouched_footprints() {
+    fn player_capsule_crouch_shortens_but_keeps_standing_width() {
         let mut world = PhysicsWorld::new();
         let mut player = world.create_player(vec3(0.0, 0.0, 0.0), EntityId::from_inner(1).unwrap());
 
@@ -10378,9 +10374,9 @@ mod tests {
         );
 
         assert!(world.set_player_crouch(true, &mut player));
-        assert_player_capsule_dimensions(&world, &player, 2.8, 1.6);
+        assert_player_capsule_dimensions(&world, &player, 2.8, 2.4);
         world.set_player_translation(vec3(1.0, 2.0, 3.0), &mut player);
-        assert_player_capsule_dimensions(&world, &player, 2.8, 1.6);
+        assert_player_capsule_dimensions(&world, &player, 2.8, 2.4);
 
         // Standing up runs a headroom query, which only has an answer once the
         // pipeline has stepped and built its broad phase.
@@ -11917,6 +11913,10 @@ mod tests {
         );
     }
 
+    /// Where a body hangs against the +X face (x = 2) of the 4-wide test
+    /// blocks: touching it, at the contact offset.
+    const HANG_X: f32 = 2.0 + (PLAYER_STANDING_RADIUS + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR;
+
     /// Grip-query fixture: the shared floor world (top at y=0, player parked
     /// far away), stepped once so the broad-phase BVH the query reads exists.
     fn grip_world() -> (PhysicsWorld, PlayerHandle) {
@@ -12151,7 +12151,7 @@ mod tests {
             false,
         );
         step(&mut world, &mut player, 1);
-        world.set_player_translation(vec3(2.4, 2.0, 0.0), &mut player);
+        world.set_player_translation(vec3(HANG_X, 2.0, 0.0), &mut player);
         world.set_player_crouch_hanging(true, &mut player);
         let mut climb = HandClimb::default();
         let mut hand = vec3(-0.38, 1.04, 0.0);
@@ -12181,7 +12181,7 @@ mod tests {
             climb.resolve_translation(requested, player.self_translation());
             let center = world.get_player_next_translation(&player);
             assert!(
-                center.x >= 2.3,
+                center.x >= HANG_X - 0.01,
                 "wall must stop the inward pull: {center:?}"
             );
             assert!(
@@ -12262,14 +12262,13 @@ mod tests {
             );
             step(&mut world, &mut player, 1);
             world.set_player_crouch(physically_crouched, &mut player);
-            world.set_player_translation(vec3(2.4, 2.4, 0.0), &mut player);
+            world.set_player_translation(vec3(HANG_X, 2.4, 0.0), &mut player);
             let grip = ClimbGrip {
                 kind: ClimbGripKind::Ledge,
                 entity_id: Some(block),
                 point: vec3(2.0, 3.0, 0.0),
                 normal: vec3(0.0, 1.0, 0.0),
             };
-            assert!(!world.standing_player_pose_is_clear(vec3(2.4, 2.4, 0.0), &player));
             // Real hand pulls are queued for the next physics step; a static
             // teleport alone misses the hand-to-vault transition. The held
             // ledge has already tucked the body without changing tracking.
@@ -12277,7 +12276,7 @@ mod tests {
                 world.set_player_crouch_hanging(true, &mut player);
             }
             world.rigid_body_set[player.character_handle].set_next_kinematic_translation(vector![
-                2.4,
+                HANG_X,
                 2.4 + pending_rise,
                 0.0
             ]);
@@ -12285,12 +12284,12 @@ mod tests {
             assert!(player.is_crouched());
             assert_eq!(
                 world.get_player_next_translation(&player),
-                vec3(2.4, 2.4 + pending_rise, 0.0),
+                vec3(HANG_X, 2.4 + pending_rise, 0.0),
                 "committing a vault must retain the queued hand pull"
             );
             assert_eq!(
                 player.top_out.unwrap().save_pose,
-                vector![2.4, 2.4 + pending_rise, 0.0],
+                vector![HANG_X, 2.4 + pending_rise, 0.0],
                 "the route must start where the queued pull will land"
             );
             let mut previous = world.get_player_translation(&player);
@@ -12305,9 +12304,13 @@ mod tests {
                 if !player.is_topping_out() {
                     break;
                 }
+                // The tuck lasts the whole route, not just its start.
+                assert_player_capsule_dimensions(&world, &player, 2.8, 2.4);
             }
             assert!(!player.is_topping_out());
             assert_eq!(player.is_crouched(), physically_crouched);
+            let landed_height = if physically_crouched { 2.8 } else { 6.0 };
+            assert_player_capsule_dimensions(&world, &player, landed_height, 2.4);
             assert!(
                 (previous.y - (3.0 + player_center_above_floor(physically_crouched))).abs() < 0.05
             );
@@ -12329,7 +12332,7 @@ mod tests {
             false,
         );
         step(&mut world, &mut player, 1);
-        world.set_player_translation(vec3(2.4, 2.4, 0.0), &mut player);
+        world.set_player_translation(vec3(HANG_X, 2.4, 0.0), &mut player);
         let grip = ClimbGrip {
             kind: ClimbGripKind::Ledge,
             entity_id: Some(block),
@@ -12371,7 +12374,7 @@ mod tests {
             false,
         );
         step(&mut world, &mut player, 1);
-        let start = vec3(2.4, 2.4, 0.0);
+        let start = vec3(HANG_X, 2.4, 0.0);
         world.set_player_translation(start, &mut player);
         assert!(world.plan_hand_top_out(
             ClimbGrip {
@@ -12399,10 +12402,7 @@ mod tests {
             }
         }
         assert!(!player.is_topping_out(), "blocked route must recover");
-        assert!(
-            player.is_crouched(),
-            "reversal must not expand into the source wall"
-        );
+        assert!(player.is_crouched(), "a reversed hand vault stays tucked");
         assert!((world.get_player_translation(&player) - start).magnitude() < 0.05);
     }
 
@@ -12420,7 +12420,7 @@ mod tests {
             false,
         );
         step(&mut world, &mut player, 1);
-        world.set_player_translation(vec3(2.6, 2.4, 0.0), &mut player);
+        world.set_player_translation(vec3(HANG_X, 2.4, 0.0), &mut player);
         let mut grip = ClimbGrip {
             kind: ClimbGripKind::Ledge,
             entity_id: Some(block),

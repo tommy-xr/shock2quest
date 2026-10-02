@@ -36,6 +36,11 @@ const STANDING = 1.244;
 const CROUCHED_HALF = 0.56;
 const STANDING_HALF = 1.2;
 
+/** Station point at a ladder's foot, clear of the wall for the standing body
+ * (walking up to the arch ladder stops at d 0.67): a climb started closer
+ * hangs with the body inside the block, and its top-out cannot be planned. */
+const LADDER_FOOT: [number, number, number] = [0.7, 1.5, 0];
+
 const CAPPED = 36;
 const SETBACK = 48;
 const RECESS = 60;
@@ -229,7 +234,7 @@ const EXITS: Exit[] = [
   ...([[LEDGE, "ledge", 5.1, 6.0], [STACK, "rung stack", 8.1, 9.0]] as const).map(
     ([lane, station, untilY, top]): Exit => ({
       name: `${station}: edge-style climb, lip top-out`,
-      lane, start: [0.45, 1.5, 0], near: [0.2, 2.6], untilY, style: "edge",
+      lane, start: LADDER_FOOT, near: [0.2, 2.6], untilY, style: "edge",
       holds: [[-0.05, top + 0.05, 0]],
       floor: top, landed: (d) => d < -0.3, where: "on top of the block",
     }),
@@ -381,7 +386,7 @@ test(
   "debug_ladder (VR) arch: up the near ladder, across the top, down the far ladder",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
-    await using game = await launchAt(ARCH, [0.45, 1.5, 0]);
+    await using game = await launchAt(ARCH, LADDER_FOOT);
     const { anchor } = await vrClimbLadder(game, { near: at(ARCH, 0.2, 2.6), untilY: 5.4 });
     const { landed } = await vrTopOut(game, otherHand(anchor), at(ARCH, -0.1, 6.45));
     assert.ok(Math.abs(landed[1] - (6.4 + STANDING)) < 0.1, `on the arch: y=${landed[1].toFixed(3)}`);

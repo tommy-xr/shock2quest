@@ -243,13 +243,9 @@ test(
 
 test(
   "debug_ladder (VR): crouch-walking into the mantle block still stands back up",
-  {
-    skip: !e2eEnabled,
-    timeout: 600_000,
-    // The crouched body is narrower than the standing one, so it walks closer
-    // to the block than a standing body fits.
-    todo: "stand-up is refused against the block (crouched radius 0.32 < standing 0.48)",
-  },
+  // Crouching keeps the standing width, so a crouched body can walk no
+  // closer to the block than a standing one fits.
+  { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await launchVr();
     await standAt(game, MANTLE_STAND);
