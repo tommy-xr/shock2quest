@@ -389,7 +389,7 @@ impl PathfindingService {
             .map(|cd| (cd.cell, cd.door))
             .collect();
         let mut effective_bits = compute_effective_bits(&path_database);
-        let boundary = NavBoundary::build(&path_database);
+        let boundary = NavBoundary::build(&path_database, &effective_bits);
         let mut portal_clearances = boundary.portal_clearances(&path_database);
         let cell_clearances = boundary.cell_clearances(&path_database);
         let bridge_links = if bridge_islands {
@@ -1577,11 +1577,16 @@ fn bucket_segments(
 }
 
 impl NavBoundary {
-    fn build(db: &PathDatabase) -> Self {
+    fn build(db: &PathDatabase, effective_bits: &[MovementBits]) -> Self {
         // Adjacency is undirected here: a seam is open floor whichever way
         // the shipped link happens to point.
         let mut linked: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
-        for link in &db.links {
+        let mut walkable = std::collections::HashSet::new();
+        for (link, bits) in db.links.iter().zip(effective_bits) {
+            if bits.contains(MovementBits::WALK) {
+                walkable.insert((link.from_cell, link.to_cell));
+                walkable.insert((link.to_cell, link.from_cell));
+            }
             linked.insert((link.from_cell, link.to_cell));
             linked.insert((link.to_cell, link.from_cell));
         }
@@ -1649,8 +1654,12 @@ impl NavBoundary {
                             Some(cell) if !cell.flags.intersects(blocked) => {}
                             _ => continue,
                         }
-                        if (oa.y - a.y).abs() > WALL_FLOOR_SPAN
-                            || (ob.y - a.y).abs() > WALL_FLOOR_SPAN
+                        // Authored walkability (including zone-pair grants)
+                        // proves this seam is open even on a steep ramp. Keep
+                        // the height fallback for non-walkable/cliff links.
+                        if !walkable.contains(&(cell_id, other_cell))
+                            && ((oa.y - a.y).abs() > WALL_FLOOR_SPAN
+                                || (ob.y - a.y).abs() > WALL_FLOOR_SPAN)
                         {
                             continue;
                         }
@@ -1864,6 +1873,55 @@ pub(crate) mod tests {
             cell_zones: Vec::new(),
             zone_pairs: Vec::new(),
         }
+    }
+
+    #[test]
+    fn linked_offset_seam_is_open_but_unlinked_and_blocked_edges_are_walls() {
+        let mut db = three_cell_db(PathCellFlags::empty());
+        // Give the middle cell its own, elevated vertices. The authored WALK
+        // link still joins the same XZ seam across this height difference.
+        let height = WALL_FLOOR_SPAN + 0.5;
+        let original = db.cells[1].vertex_indices.clone();
+        db.cells[1].vertex_indices = original
+            .into_iter()
+            .map(|index| {
+                let vertex = db.vertices[index as usize] + vec3(0.0, height, 0.0);
+                let new_index = db.vertices.len() as u32;
+                db.vertices.push(vertex);
+                new_index
+            })
+            .collect();
+        db.cells[1].center.y = height;
+        let seam = vec3(2.0, 0.0, 1.0);
+        assert!(NavBoundary::build(&db, &compute_effective_bits(&db)).clearance_at(seam) > 0.9);
+
+        // A zero-bit cliff must retain the wall; a zone-pair WALK grant
+        // makes that same authored link usable and opens the seam again.
+        db.links[0].ok_bits = MovementBits::empty();
+        assert_eq!(
+            NavBoundary::build(&db, &compute_effective_bits(&db)).clearance_at(seam),
+            0.0
+        );
+        db.cell_zones = vec![1, 2, 2];
+        db.zone_pairs.push((1, 2, MovementBits::WALK));
+        assert!(NavBoundary::build(&db, &compute_effective_bits(&db)).clearance_at(seam) > 0.9);
+
+        db.cells[1].flags = PathCellFlags::UNPATHABLE;
+        assert_eq!(
+            NavBoundary::build(&db, &compute_effective_bits(&db)).clearance_at(seam),
+            0.0
+        );
+        db.cells[1].flags = PathCellFlags::BLOCKING_OBB;
+        assert_eq!(
+            NavBoundary::build(&db, &compute_effective_bits(&db)).clearance_at(seam),
+            0.0
+        );
+        db.cells[1].flags = PathCellFlags::empty();
+        db.links.clear();
+        assert_eq!(
+            NavBoundary::build(&db, &compute_effective_bits(&db)).clearance_at(seam),
+            0.0
+        );
     }
 
     /// A wide room (0) connected to a goal room (3) two ways: a 0.2-wide
