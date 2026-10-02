@@ -133,14 +133,14 @@ pub enum ComputerMsg {
     Hack(KeyPadMsg),
 }
 
-fn can_hack(world: &World, entity_id: EntityId) -> bool {
+pub(super) fn can_hack(world: &World, entity_id: EntityId) -> bool {
     !matches!(
         object_state(world, entity_id),
         ObjectState::Broken | ObjectState::Destroyed | ObjectState::Hacked
     ) && hack_diff(world, entity_id).is_some()
 }
 
-fn security_hack_success(entity_id: EntityId, world: &World) -> Effect {
+pub(super) fn security_hack_success(entity_id: EntityId, world: &World) -> Effect {
     let milliseconds = world
         .borrow::<View<dark::properties::PropHackTime>>()
         .ok()
@@ -157,14 +157,14 @@ fn security_hack_success(entity_id: EntityId, world: &World) -> Effect {
     ])
 }
 
-fn turret_hack_success(entity_id: EntityId, _world: &World) -> Effect {
+pub(super) fn turret_hack_success(entity_id: EntityId, _world: &World) -> Effect {
     Effect::SetAITeam {
         entity_id,
         team: dark::properties::AITeam::Good,
     }
 }
 
-fn computer_hack_success(entity_id: EntityId, world: &World) -> Effect {
+pub(super) fn computer_hack_success(entity_id: EntityId, world: &World) -> Effect {
     let mut effects = get_all_links_of_type(world, entity_id, Link::Hacking)
         .into_iter()
         .map(|to| Effect::Send {
@@ -194,14 +194,14 @@ fn computer_hack_success(entity_id: EntityId, world: &World) -> Effect {
     Effect::combine(effects)
 }
 
-fn computer_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
+pub(super) fn computer_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
     Effect::SetObjectState {
         entity_id,
         state: ObjectState::Broken,
     }
 }
 
-fn security_hack_critical_failure(entity_id: EntityId, world: &World) -> Effect {
+pub(super) fn security_hack_critical_failure(entity_id: EntityId, world: &World) -> Effect {
     let mut effects = vec![
         computer_hack_critical_failure(entity_id, world),
         Effect::RaiseSecurityAlarm {

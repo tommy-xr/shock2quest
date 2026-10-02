@@ -1081,6 +1081,7 @@ impl ScriptWorld {
             "internal_map" => gui_script(Box::new(MapGui)),
             "internal_media" => gui_script(Box::new(MediaGui)),
             "internal_weapon_settings" => gui_script(Box::new(WeaponSettingsGui)),
+            "internal_psi_hack" => gui_script(Box::new(gui::psi_hack::PsiHackGui)),
             "internal_psi_powers" => gui_script(Box::new(PsiPowersGui)),
             // "internal_inventory" => Box::new(PanicOnLoadScript::new("internal_inventory")),
             "internal_explosion" => Box::new(InternalExplosion::new()),

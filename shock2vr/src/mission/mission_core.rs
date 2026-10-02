@@ -3342,6 +3342,15 @@ impl MissionCore {
             super::synthetic_panels::spawn(&mut world, "internal_psi_powers", Some("Psi Powers"));
 
         world.add_unique(PsiPowersPanelEntity(psi_powers_panel));
+        let psi_hack_host = super::synthetic_panels::spawn(
+            &mut world,
+            "internal_psi_hack",
+            Some("Psionic Hacking"),
+        );
+        world.add_unique(crate::scripts::gui::psi_hack::PsiHack {
+            host: psi_hack_host,
+            session: None,
+        });
 
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
 
@@ -5166,11 +5175,41 @@ impl MissionCore {
         self.vr_use_mode_pointer = None;
         self.device_panel = None;
         self.device_scan_pose = None;
+        if let Some(session) = crate::scripts::gui::psi_hack::session(&self.world) {
+            let host = self
+                .world
+                .borrow::<UniqueView<crate::scripts::gui::psi_hack::PsiHack>>()
+                .unwrap()
+                .host;
+            let held = [crate::Handedness::Left, crate::Handedness::Right]
+                .into_iter()
+                .any(|h| {
+                    crate::wielded_weapon::weapon_in_hand(&self.world, h) == Some(session.amp)
+                });
+            if !held
+                || !self.player_is_alive()
+                || !self.player_controls_enabled
+                || self.use_mode
+                || self.flat_ui.active_panel() != Some(host)
+                || crate::scripts::gui::psi_hack::target(&self.world, session.target).is_none()
+            {
+                self.dismiss_psi_hack();
+            }
+        }
+        let psi_session = crate::scripts::gui::psi_hack::session(&self.world);
+        let psi_hand = psi_session.and_then(|s| {
+            [crate::Handedness::Left, crate::Handedness::Right]
+                .into_iter()
+                .find(|h| crate::wielded_weapon::weapon_in_hand(&self.world, *h) == Some(s.amp))
+        });
+        let psi_projected =
+            psi_session.is_some() && game_options.presentation_mode == crate::PresentationMode::Vr;
         let device_enabled = game_options.experimental_features.contains("mfd_device")
             || crate::dev_params::get_bool(crate::dev_params::VR_MFD_DEVICE);
         self.interaction.set_body_tool_device(device_enabled);
         let device_hand = self.personal_card.hand.filter(|i| {
             device_enabled
+                && !psi_projected
                 && !self.use_mode
                 && self.player_is_alive()
                 && self.player_controls_enabled
@@ -5179,7 +5218,9 @@ impl MissionCore {
                     .is_none_or(|p| p.head && p.hands[*i])
                 && [&input_context.left_hand, &input_context.right_hand][*i].squeeze_value >= 0.5
         });
-        let device_active = device_hand.is_some()
+        self.flat_ui.psionic_projection = psi_projected;
+        let device_active = psi_projected
+            || device_hand.is_some()
             || (game_options.presentation_mode == crate::PresentationMode::Flat
                 && game_options
                     .experimental_features
@@ -5216,6 +5257,18 @@ impl MissionCore {
                     hand.rotation,
                     self.interaction.personal_card_grip(i).as_ref(),
                     i,
+                );
+            }
+        }
+
+        if psi_projected {
+            if let (Some(session), Some(hand)) = (psi_session, psi_hand) {
+                self.device_panel = super::psi_hack_panel::panel(
+                    &self.world,
+                    session.amp,
+                    hand,
+                    &player,
+                    input_context,
                 );
             }
         }
@@ -5270,6 +5323,7 @@ impl MissionCore {
         }
         self.device_scan_pose = self
             .device_panel
+            .filter(|_| !psi_projected)
             .map(|panel| super::mfd_device::scanner_pose(asset_cache, panel));
         if let Some(panel) = self.device_panel {
             let wide = crate::dev_params::get_bool(crate::dev_params::VR_MFD_MAP_WIDE);
@@ -5286,7 +5340,11 @@ impl MissionCore {
             let (left, right) = self.interaction.held_entities();
             self.device_pointer_gate.filter(
                 &mut pointer_input,
-                device_hand,
+                if psi_projected {
+                    psi_hand.map(hand_slot)
+                } else {
+                    device_hand
+                },
                 [left.is_some(), right.is_some()],
             );
             self.vr_use_mode_pointer = Some(
@@ -5298,7 +5356,14 @@ impl MissionCore {
                         carrying: [left.is_some(), right.is_some()],
                     },
                 )
-                .remap_hits(|p| layout.contains_surface(p).then_some(p)),
+                .remap_hits(|p| {
+                    let visible = if psi_projected {
+                        layout.screen.is_some_and(|v| v.dst.contains(p))
+                    } else {
+                        layout.contains_surface(p)
+                    };
+                    visible.then_some(p)
+                }),
             );
         }
         if self.vr_trigger_swallow && !self.use_mode {
@@ -5389,6 +5454,11 @@ impl MissionCore {
             // pull to safe and retain that decision until physical release,
             // so cancelling inspection cannot consume a held hypo mid-pull.
             self.vr_trigger_safe_latch = [Some(true); 2];
+        }
+        if psi_projected {
+            if let Some(hand) = psi_hand {
+                on_panel[hand_slot(hand)] = true;
+            }
         }
         let mut trigger_safe = latch_trigger_safe(
             &mut self.vr_trigger_safe_latch,
@@ -6488,7 +6558,16 @@ impl MissionCore {
                         crate::mission::flat_ui_host::vr_canvas_pointer(pass, input_context);
                     if self.flat_ui.device {
                         pointer.canvas_pos = pointer.canvas_pos.and_then(|point| {
-                            super::mfd_device::to_native(point, self.flat_ui.device_screen_source())
+                            if self.flat_ui.psionic_projection {
+                                super::mfd_device::layout(self.flat_ui.device_screen_source())
+                                    .screen
+                                    .and_then(|v| v.to_src_point(point))
+                            } else {
+                                super::mfd_device::to_native(
+                                    point,
+                                    self.flat_ui.device_screen_source(),
+                                )
+                            }
                         });
                     }
                     pointer
@@ -9305,6 +9384,28 @@ impl MissionCore {
         }
     }
 
+    fn dismiss_psi_hack(&mut self) {
+        let (host, session) = {
+            let mut hack = self
+                .world
+                .borrow::<UniqueViewMut<crate::scripts::gui::psi_hack::PsiHack>>()
+                .unwrap();
+            (hack.host, hack.session.take())
+        };
+        if let Some(session) = session {
+            if self.flat_ui.active_panel() == Some(host) {
+                self.flat_ui.close();
+            }
+            self.flat_ui.guard_held_press();
+            self.vr_trigger_swallow = true;
+            crate::psi_carousel::advance_input_epoch(&mut self.world, session.amp);
+            self.script_world.dispatch(Message {
+                to: session.amp,
+                payload: MessagePayload::CancelPsiCharge,
+            });
+        }
+    }
+
     fn dismiss_amp_carousel(&mut self) {
         if let Some(menu) = self.psi_carousel.take() {
             crate::psi_carousel::advance_input_epoch(&mut self.world, menu.amp);
@@ -9320,6 +9421,7 @@ impl MissionCore {
         {
             return;
         }
+        self.dismiss_psi_hack();
         self.dismiss_amp_carousel();
         self.psi_carousel = crate::psi_carousel::Carousel::new(&self.world, amp, hand);
         if self.psi_carousel.is_some() {
@@ -10144,6 +10246,67 @@ impl MissionCore {
                     if let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
                         quests.research_mut().suspend();
                     }
+                }
+                Effect::EndPsiHack => self.dismiss_psi_hack(),
+                Effect::BeginPsiHack {
+                    amp,
+                    target,
+                    psi,
+                    cost,
+                } => {
+                    if !self.player_is_alive()
+                        || !self.player_controls_enabled
+                        || self.use_mode
+                        || crate::scripts::gui::psi_hack::session(&self.world).is_some()
+                        || crate::scripts::gui::psi_hack::target(&self.world, target).is_none()
+                        || crate::scripts::player_psi_points(&self.world) < cost
+                    {
+                        continue;
+                    }
+                    let held = [crate::Handedness::Left, crate::Handedness::Right]
+                        .into_iter()
+                        .any(|hand| {
+                            crate::wielded_weapon::weapon_in_hand(&self.world, hand) == Some(amp)
+                        });
+                    if !held {
+                        continue;
+                    }
+                    self.dismiss_amp_carousel();
+                    self.gui.close_panel(
+                        &mut self.world,
+                        &mut self.physics,
+                        &mut self.script_world,
+                        &mut self.id_to_physics,
+                    );
+                    let host = {
+                        let mut hack = self
+                            .world
+                            .borrow::<UniqueViewMut<crate::scripts::gui::psi_hack::PsiHack>>()
+                            .unwrap();
+                        hack.session =
+                            Some(crate::scripts::gui::psi_hack::Session { amp, target, psi });
+                        hack.host
+                    };
+                    self.flat_ui.device =
+                        game_options.presentation_mode == crate::PresentationMode::Vr;
+                    self.flat_ui.psionic_projection = self.flat_ui.device;
+                    self.flat_ui.open_unbound(host);
+                    self.flat_ui.guard_held_press();
+                    self.device_pointer_gate = Default::default();
+                    // A trigger already held before the cast belongs to the old
+                    // world interaction. Swallow it until release as well as
+                    // guarding the UI edge, so it cannot frob through the board.
+                    self.vr_trigger_swallow = true;
+                    crate::psi_carousel::advance_input_epoch(&mut self.world, amp);
+                    self.script_world.dispatch(Message {
+                        to: amp,
+                        payload: MessagePayload::CancelPsiCharge,
+                    });
+                    self.script_world.dispatch(Message {
+                        to: host,
+                        payload: MessagePayload::PanelOpened,
+                    });
+                    effects.push_front(Effect::SpendPsiPoints { amount: cost });
                 }
                 Effect::OpenPanel { entity } => {
                     if self.flat_ui.utilities.has_left_panel() {
@@ -15483,11 +15646,15 @@ impl MissionCore {
         if let Some(panel) = self.device_panel.filter(|_| self.flat_ui.device) {
             let pawn_to_world =
                 Matrix4::from_translation(player.pos) * Matrix4::from(player.rotation);
-            let mut objects = super::mfd_device::body(
-                asset_cache,
-                super::mfd_device::body_frame(panel),
-                self.personal_card.hand,
-            );
+            let mut objects = if crate::scripts::gui::psi_hack::session(&self.world).is_some() {
+                Vec::new()
+            } else {
+                super::mfd_device::body(
+                    asset_cache,
+                    super::mfd_device::body_frame(panel),
+                    self.personal_card.hand,
+                )
+            };
             if let Some(model) = self
                 .flat_ui
                 .utilities
@@ -18392,6 +18559,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             state.readout = self.flat_ui.device_debug_elements(state.readout);
             state.readout_elements.clear();
             state.utilities = self.flat_ui.device_debug_elements(state.utilities);
+            if self.flat_ui.psionic_projection {
+                state.mode = "psi_hack".into();
+                state.utilities.clear();
+                state.readout.clear();
+            }
             if let Some(pointer) = &mut state.pointer {
                 pointer.canvas = if let Some(pass) = &self.vr_use_mode_pointer {
                     pass.point().map(|p| [p.x, p.y])

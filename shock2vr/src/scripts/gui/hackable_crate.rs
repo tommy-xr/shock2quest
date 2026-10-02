@@ -100,7 +100,7 @@ fn is_ruined(world: &World, entity_id: EntityId) -> bool {
 /// Whether the crate is still sealed behind a hack: authored `Locked`, with an
 /// authored difficulty to hack against. A `Locked` crate with no `P$HackDiff`
 /// could never be opened by anything, so it is not treated as sealed.
-fn can_hack(world: &World, entity_id: EntityId) -> bool {
+pub(super) fn can_hack(world: &World, entity_id: EntityId) -> bool {
     object_state(world, entity_id) == ObjectState::Locked && hack_diff(world, entity_id).is_some()
 }
 
@@ -112,7 +112,7 @@ fn is_open(world: &World, entity_id: EntityId) -> bool {
     !is_ruined(world, entity_id) && !can_hack(world, entity_id)
 }
 
-fn crate_hack_success(entity_id: EntityId, _world: &World) -> Effect {
+pub(super) fn crate_hack_success(entity_id: EntityId, _world: &World) -> Effect {
     Effect::SetObjectState {
         entity_id,
         state: ObjectState::Hacked,
@@ -121,7 +121,7 @@ fn crate_hack_success(entity_id: EntityId, _world: &World) -> Effect {
 
 /// "Critical failure destroys it" (the archetype's own `P$HackText`): the
 /// crate is ruined for the rest of the game and its loot is unrecoverable.
-fn crate_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
+pub(super) fn crate_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
     Effect::SetObjectState {
         entity_id,
         state: ObjectState::Broken,
