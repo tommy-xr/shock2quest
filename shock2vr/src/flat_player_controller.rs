@@ -774,6 +774,7 @@ mod tests {
     fn impulse() -> crate::weapon_recoil::RecoilImpulse {
         crate::weapon_recoil::RecoilImpulse {
             pitch: 8.0,
+            one_hand_pitch_falloff: 0.3,
             heading: 0.0,
             back: -0.2,
             pitch_limit: 12.0,

@@ -337,12 +337,12 @@ dev_params! {
     /// Per-axis gain for new physical gun recoil impulses (baseline and extra
     /// one-hand spring). 1 preserves the profile; 0 disables new kick on that
     /// axis. Existing displacement caps and recovery rates remain unchanged.
-    GUN_KICKBACK_SCALE = Recoil::float("gun_kickback_scale", "Back scale", 4.0, 0.0, 10.0, 0.1),
-    GUN_PITCH_SCALE = Recoil::float("gun_pitch_scale", "Pitch scale", 6.0, 0.0, 10.0, 0.1),
-    GUN_YAW_SCALE = Recoil::float("gun_yaw_scale", "Yaw scale", 5.0, 0.0, 10.0, 0.1),
+    GUN_KICKBACK_SCALE = Recoil::float("gun_kickback_scale", "Back scale", 0.3, 0.0, 10.0, 0.1),
+    GUN_PITCH_SCALE = Recoil::float("gun_pitch_scale", "Pitch scale", 1.0, 0.0, 10.0, 0.1),
+    GUN_YAW_SCALE = Recoil::float("gun_yaw_scale", "Yaw scale", 1.0, 0.0, 10.0, 0.1),
     /// Additional one-handed recoil only; support already removes this spring.
     /// Applied alongside per-axis gains after Strength, without changing weight.
-    GUN_ONE_HAND_SCALE = Recoil::float("gun_one_hand_scale", "1-hand scale", 4.0, 0.0, 10.0, 0.1),
+    GUN_ONE_HAND_SCALE = Recoil::float("gun_one_hand_scale", "1-hand scale", 1.0, 0.0, 10.0, 0.1),
     /// Flatscreen viewmodel recoil gain, applied after the per-axis gains and
     /// Strength. The flat gun is a camera-anchored viewmodel rather than a
     /// tracked object, so the same authored kick reads at a different size on
