@@ -711,6 +711,17 @@ impl PlayerLifeState {
     }
 }
 
+/// Apply a creature's authored `P$TimeWarp` to one animation tick: the clip
+/// clock runs `1 / warp` times as fast, and so does its root velocity (which the
+/// player reports per clip-second), so stride and ground speed stay matched.
+/// A missing or non-positive warp plays at the authored rate.
+fn time_warped(elapsed: Duration, warp: Option<f32>) -> (Duration, f32) {
+    match warp.filter(|warp| warp.is_finite() && *warp > 0.0) {
+        Some(warp) => (elapsed.div_f32(warp), 1.0 / warp),
+        None => (elapsed, 1.0),
+    }
+}
+
 /// Seed the death camera's fall direction from where the player died, so a
 /// replayed death topples the same way while two deaths in different places do
 /// not. The float bits are mixed rather than the value quantized: neighbouring
@@ -7171,8 +7182,14 @@ impl MissionCore {
             // self.id_to_animation_player.entry(*id).and_modify(|player| {
             //     *player = AnimationPlayer::update(player, time.elapsed);
             // });
-            let (new_player, flags, events, velocity) =
-                AnimationPlayer::update(player, time.elapsed);
+            let warp = self
+                .world
+                .borrow::<View<dark::properties::PropTimeWarp>>()
+                .ok()
+                .and_then(|warps| warps.get(*id).ok().map(|warp| warp.0));
+            let (elapsed, velocity_scale) = time_warped(time.elapsed, warp);
+            let (new_player, flags, events, velocity) = AnimationPlayer::update(player, elapsed);
+            let velocity = velocity * velocity_scale;
             *player = new_player;
 
             // A pivot handing its yaw over rides the fade this player is
@@ -19036,6 +19053,35 @@ mod death_motion_tests {
     fn three_frame_already_dead_pose_is_not_a_realtime_crumple() {
         assert!(!is_realtime_crumple(3.0));
         assert!(is_realtime_crumple(79.0));
+    }
+}
+
+#[cfg(test)]
+mod time_warp_tests {
+    use super::time_warped;
+    use std::time::Duration;
+
+    #[test]
+    fn warp_below_one_plays_faster_and_moves_faster() {
+        let (elapsed, scale) = time_warped(Duration::from_millis(100), Some(0.5));
+        assert_eq!(elapsed, Duration::from_millis(200));
+        assert_eq!(scale, 2.0);
+    }
+
+    #[test]
+    fn missing_or_invalid_warp_plays_at_authored_rate() {
+        for warp in [
+            None,
+            Some(0.0),
+            Some(-1.0),
+            Some(f32::NAN),
+            Some(f32::INFINITY),
+        ] {
+            assert_eq!(
+                time_warped(Duration::from_millis(100), warp),
+                (Duration::from_millis(100), 1.0)
+            );
+        }
     }
 }
 
