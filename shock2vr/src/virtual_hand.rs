@@ -1248,7 +1248,11 @@ mod tests {
         assert!(!shows_hand_visual(&world, Some(gun)));
         world.add_component(
             gun,
-            crate::runtime_props::RuntimePropGloveWeapon { item_scale: 0.7 },
+            crate::runtime_props::RuntimePropGloveWeapon {
+                item_scale: 0.7,
+                magazine_removed: false,
+                magazine_anchor: None,
+            },
         );
         assert!(shows_hand_visual(&world, Some(gun)));
         world.remove::<crate::runtime_props::RuntimePropGloveWeapon>(gun);
