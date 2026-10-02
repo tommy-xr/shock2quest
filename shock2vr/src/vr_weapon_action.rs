@@ -26,6 +26,7 @@ const PISTOL: SlideProfile = SlideProfile {
 enum ActionProfile {
     Slide(SlideProfile),
     Fusion,
+    Stasis,
 }
 
 fn profile(model: &str) -> Option<ActionProfile> {
@@ -38,6 +39,7 @@ fn profile(model: &str) -> Option<ActionProfile> {
             locks_empty: false,
         })),
         "fsn_h" => Some(ActionProfile::Fusion),
+        "sfg_h" => Some(ActionProfile::Stasis),
         _ => None,
     }
 }
@@ -45,12 +47,41 @@ fn profile(model: &str) -> Option<ActionProfile> {
 #[derive(Component, Clone, Copy, Default)]
 pub(crate) struct WeaponAction {
     elapsed: Option<f32>,
+    reloading: bool,
 }
 
 impl WeaponAction {
     fn parameters(&mut self, dt: f32, empty: bool, profile: ActionProfile) -> Vec<(i32, f32)> {
         match profile {
             ActionProfile::Slide(profile) => vec![(0, self.slide_value(dt, empty, profile))],
+            ActionProfile::Stasis => {
+                let Some(elapsed) = &mut self.elapsed else {
+                    return vec![(0, 0.0), (1, 0.0), (2, 0.0)];
+                };
+                if dt.is_finite() && dt > 0.0 {
+                    *elapsed += dt;
+                }
+                let frame = *elapsed * 30.0;
+                // The shipped shoot declares 30 frames but the cylinder's
+                // return key is at 35. Finish the mechanical return explicitly.
+                let rotation = -30.0 * (1.0 - phase(frame, 30.0, 35.0));
+                let cylinder = if self.reloading {
+                    -0.8 + 0.9 * phase(frame, 10.0, 11.0) - 0.1 * phase(frame, 11.0, 25.0)
+                } else {
+                    -0.8 * phase(frame, 14.0, 15.0) + 0.9 * phase(frame, 20.0, 21.0)
+                        - 0.1 * phase(frame, 21.0, 25.0)
+                };
+                let slide = if self.reloading {
+                    0.0
+                } else {
+                    -0.2 * phase(frame, 0.0, 1.0) + 0.2 * phase(frame, 1.0, 8.0)
+                };
+                if frame >= 35.0 {
+                    self.elapsed = None;
+                    return vec![(0, 0.0), (1, 0.0), (2, 0.0)];
+                }
+                vec![(0, rotation), (1, cylinder), (2, slide)]
+            }
             ActionProfile::Fusion => {
                 // Nightdive's shoot: holder -160, core +160 degrees, both
                 // return at frame 29/30 Hz with quadratic ease-out. There is
@@ -106,6 +137,7 @@ fn enabled_profile(world: &World, entity: EntityId) -> Option<ActionProfile> {
     let required: &[(i32, u8)] = match profile {
         ActionProfile::Slide(_) => &[(0, 2)],
         ActionProfile::Fusion => &[(0, 1), (1, 1)],
+        ActionProfile::Stasis => &[(0, 1), (1, 2), (2, 2)],
     };
     required
         .iter()
@@ -117,10 +149,35 @@ fn enabled_profile(world: &World, entity: EntityId) -> Option<ActionProfile> {
         .then_some(profile)
 }
 
+// Nightdive uses quadratic ease-out between its scalar joint keys.
+fn phase(frame: f32, start: f32, end: f32) -> f32 {
+    let t = ((frame - start) / (end - start)).clamp(0.0, 1.0);
+    t * (2.0 - t)
+}
+
+/// Called only after ammunition was actually transferred into the weapon.
+pub(crate) fn reloaded(world: &mut World, entity: EntityId) {
+    if matches!(enabled_profile(world, entity), Some(ActionProfile::Stasis)) {
+        world.add_component(
+            entity,
+            WeaponAction {
+                elapsed: Some(0.0),
+                reloading: true,
+            },
+        );
+    }
+}
+
 /// Called only for an accepted shot, never a dry fire or a cooldown refusal.
 pub(crate) fn fired(world: &mut World, entity: EntityId) {
     if enabled_profile(world, entity).is_some() {
-        world.add_component(entity, WeaponAction { elapsed: Some(0.0) });
+        world.add_component(
+            entity,
+            WeaponAction {
+                elapsed: Some(0.0),
+                ..Default::default()
+            },
+        );
     }
 }
 
@@ -157,9 +214,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stasis_has_a_supported_mechanical_profile() {
+        let stasis = profile("SFG_H").expect("stasis profile");
+        let mut action = WeaponAction {
+            elapsed: Some(0.0),
+            ..Default::default()
+        };
+        let kick = action.parameters(1.0 / 30.0, false, stasis);
+        assert_eq!(kick, vec![(0, -30.0), (1, 0.0), (2, -0.2)]);
+        assert_eq!(action.parameters(0.0, false, stasis), kick);
+        let opened = action.parameters(14.0 / 30.0, false, stasis);
+        assert!((opened[1].1 + 0.8).abs() < 1e-5);
+        assert_eq!(opened[2].1, 0.0);
+        let beyond_declared_clip = action.parameters(17.0 / 30.0, false, stasis);
+        assert!(beyond_declared_clip[0].1 < 0.0 && beyond_declared_clip[0].1 > -30.0);
+        assert_eq!(
+            action.parameters(1.0, true, stasis),
+            vec![(0, 0.0), (1, 0.0), (2, 0.0)]
+        );
+        action = WeaponAction {
+            elapsed: Some(0.0),
+            reloading: true,
+        };
+        assert_eq!(
+            action.parameters(0.0, false, stasis),
+            vec![(0, -30.0), (1, -0.8), (2, 0.0)]
+        );
+        assert_eq!(
+            action.parameters(2.0, false, stasis),
+            vec![(0, 0.0), (1, 0.0), (2, 0.0)]
+        );
+    }
+
+    #[test]
     fn fusion_has_a_supported_mechanical_profile() {
         let fusion = profile("FSN_H").expect("fusion profile");
-        let mut action = WeaponAction { elapsed: Some(0.0) };
+        let mut action = WeaponAction {
+            elapsed: Some(0.0),
+            ..Default::default()
+        };
         assert_eq!(
             action.parameters(0.0, false, fusion),
             vec![(0, -160.0), (1, 160.0)]
@@ -184,7 +277,10 @@ mod tests {
         let Some(ActionProfile::Slide(rifle)) = profile("AR15_H") else {
             panic!("the AR15 must enable its slide")
         };
-        let mut slide = WeaponAction { elapsed: Some(0.0) };
+        let mut slide = WeaponAction {
+            elapsed: Some(0.0),
+            ..Default::default()
+        };
         assert_eq!(slide.slide_value(BACK_TIME, true, rifle), OPEN);
         assert!(
             slide.slide_value(6.0 / 30.0, true, rifle) < -0.001,
@@ -197,7 +293,10 @@ mod tests {
 
     #[test]
     fn accepted_shot_cycles_only_the_slide_and_pause_does_not_advance_it() {
-        let mut slide = WeaponAction { elapsed: Some(0.0) };
+        let mut slide = WeaponAction {
+            elapsed: Some(0.0),
+            ..Default::default()
+        };
         assert_eq!(slide.slide_value(0.0, false, PISTOL), 0.0);
         assert!((slide.slide_value(BACK_TIME, false, PISTOL) - OPEN).abs() < 1e-6);
         assert_eq!(slide.slide_value(0.0, false, PISTOL), OPEN);
@@ -209,7 +308,10 @@ mod tests {
 
     #[test]
     fn last_round_locks_back_until_ammo_is_loaded() {
-        let mut slide = WeaponAction { elapsed: Some(0.0) };
+        let mut slide = WeaponAction {
+            elapsed: Some(0.0),
+            ..Default::default()
+        };
         assert_eq!(slide.slide_value(0.0, true, PISTOL), 0.0);
         assert_eq!(slide.slide_value(BACK_TIME, true, PISTOL), OPEN);
         assert_eq!(slide.slide_value(1.0, true, PISTOL), OPEN);
