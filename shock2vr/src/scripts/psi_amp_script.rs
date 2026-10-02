@@ -108,22 +108,21 @@ impl Script for PsiAmpScript {
                     game_log!(INFO, "Psi power {} is not trained", power.name);
                     return Effect::NoEffect;
                 }
+                // Retail's OutofAmmo event resolves to the insufficient-psi
+                // voice cue. Refuse once on the trigger edge, before either a
+                // charge or an immediate cast can begin.
+                if player_psi_points(world) < power.power.psi_cost {
+                    return play_environmental_sound(
+                        world,
+                        entity_id,
+                        "outofammo",
+                        vec![],
+                        AudioHandle::new(),
+                    );
+                }
                 // Both presentations show the per-amp charge on their shared
                 // ammo readout, so the same trigger timing applies in VR.
                 if power.overloadable {
-                    // No points, no charge: gate up front so a broke caster
-                    // can't charge into a burnout (which spends points and
-                    // deals damage) they couldn't afford as a cast.
-                    if player_psi_points(world) < power.power.psi_cost {
-                        game_log!(
-                            INFO,
-                            "Not enough psi points for {} ({} < {})",
-                            power.name,
-                            player_psi_points(world),
-                            power.power.psi_cost
-                        );
-                        return Effect::NoEffect;
-                    }
                     // Nor charge a cast that resolves to nothing right now (a
                     // heal at full health, a drain with nothing in its sights):
                     // over-holding it would burn out for a cast worth nothing.

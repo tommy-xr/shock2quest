@@ -20,6 +20,7 @@ export type InputAction =
   | "EquipWormLauncher"
   | "EquipPsiAmp"
   | "CycleAmmo"
+  | "EjectClip"
   | "CycleGunSetting"
   | "Reload"
   | "CyclePsiPower"
