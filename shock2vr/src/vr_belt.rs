@@ -1,5 +1,5 @@
-//! Authored resting card pose shared by dark_explorer and gameplay.
-use cgmath::{Deg, Matrix4, Vector3};
+//! Authored resting belt-tool poses shared by dark_explorer and gameplay.
+use cgmath::{Deg, Matrix4, Quaternion, Rotation3, Vector3};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -19,11 +19,18 @@ impl Default for BeltCardPose {
     }
 }
 impl BeltCardPose {
+    pub fn mfd_default() -> Self {
+        Self {
+            position_m: [-0.13, 0.025, -0.27],
+            rotation_degrees: [0.0, 30.0, 0.0],
+        }
+    }
+
     pub fn parse(text: &str) -> Result<Self, String> {
         let pose: Self = serde_json::from_str(text).map_err(|e| e.to_string())?;
         if !pose.is_valid() {
             return Err(
-                "Card pose must contain finite, bounded position and rotation values".into(),
+                "Belt pose must contain finite, bounded position and rotation values".into(),
             );
         }
         Ok(pose)
@@ -38,9 +45,12 @@ impl BeltCardPose {
                 .all(|v| v.is_finite() && v.abs() <= 180.0)
     }
     pub fn rotation(&self) -> Matrix4<f32> {
-        Matrix4::from_angle_x(Deg(self.rotation_degrees[0]))
-            * Matrix4::from_angle_y(Deg(self.rotation_degrees[1]))
-            * Matrix4::from_angle_z(Deg(self.rotation_degrees[2]))
+        Matrix4::from(self.orientation())
+    }
+    pub fn orientation(&self) -> Quaternion<f32> {
+        Quaternion::from_angle_x(Deg(self.rotation_degrees[0]))
+            * Quaternion::from_angle_y(Deg(self.rotation_degrees[1]))
+            * Quaternion::from_angle_z(Deg(self.rotation_degrees[2]))
     }
     pub fn transform(&self) -> Matrix4<f32> {
         Matrix4::from_translation(Vector3::from(self.position_m) / crate::METERS_PER_WORLD_UNIT)
@@ -72,6 +82,10 @@ mod tests {
         );
         assert!(
             BeltCardPose::parse(r#"{"position_m":[0,0,2],"rotation_degrees":[0,0,0]}"#).is_err()
+        );
+        assert_eq!(
+            BeltCardPose::parse(include_str!("../../assets/vr-belt-mfd.json")).unwrap(),
+            BeltCardPose::mfd_default()
         );
         assert_eq!(
             BeltCardPose::parse(include_str!("../../assets/vr-belt-card.json")).unwrap(),

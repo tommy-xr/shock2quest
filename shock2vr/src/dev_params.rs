@@ -407,6 +407,7 @@ dev_params! {
     VR_GLOVE_SPHERES = Interaction::bool("vr_glove_spheres", "Glove contact spheres", false),
     VR_GLOVE_RADIUS = Body::float("vr_glove_radius", "Glove contact radius (m)", 0.1, 0.02, 0.1, 0.005),
     VR_AMMO_POUCH_ZONES = Interaction::bool("vr_ammo_pouch_zones", "Ammo pouch zone", false),
+    VR_PLAYER_COLLIDER = Body::bool("vr_player_collider", "Player collision capsule", false),
     VR_HOLSTER_ZONES = Interaction::bool("vr_holster_zones", "Holster zones", false),
     /// Actual front of the curved belt, including the asset's authored offset.
     /// The pouch and personal card follow both belt settings with their grab targets.
@@ -416,8 +417,8 @@ dev_params! {
     VR_MFD_DEVICE = Tricorder::bool("vr_mfd_device", "MFD device prototype", true),
     /// Positive raises the stowed device and its grab point; zero keeps the centered mount.
     VR_MFD_BELT_Y = Tricorder::float("vr_mfd_belt_y", "Belt vertical offset (m)", 0.0, -0.15, 0.20, 0.005),
-    /// Adjusts the device yaw relative to the battle belt.
-    VR_MFD_BELT_YAW = Tricorder::float("vr_mfd_belt_yaw", "Belt yaw (deg)", 13.0, -45.0, 45.0, 1.0),
+    /// Session adjustment on top of the authored vr-belt-mfd.json mount.
+    VR_MFD_BELT_YAW = Tricorder::float("vr_mfd_belt_yaw", "Belt yaw offset (deg)", 0.0, -45.0, 45.0, 1.0),
     VR_MFD_FOCUS_SCAN = Tricorder::bool("vr_mfd_focus_scan", "MFD scan automatically on focus", true),
     VR_MFD_MAP_WIDE = Tricorder::bool("vr_mfd_map_wide", "MFD map: wider panel above", false),
     VR_MFD_BODY = Tricorder::float("vr_mfd_body", "MFD body: 0 card, 1 upgrade, 2 magazine, 3 frame", 3.0, 0.0, 3.0, 1.0),

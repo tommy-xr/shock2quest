@@ -51,6 +51,12 @@ enum Commands {
     },
     /// Open a windowed asset browser (tree + search + preview)
     Ui {
+        /// Edit the tricorder's resting belt pose, with a player collision reference
+        #[arg(long, conflicts_with = "belt_card")]
+        belt_mfd: bool,
+        /// Tricorder belt pose JSON (defaults to assets/vr-belt-mfd.json)
+        #[arg(long)]
+        belt_mfd_library: Option<std::path::PathBuf>,
         /// Edit the personal card's resting position and rotation on the battle belt
         #[arg(long)]
         belt_card: bool,
@@ -275,6 +281,8 @@ fn main() {
         Commands::Find { pattern, limit } => find(pattern, limit),
         Commands::Ui {
             belt_card,
+            belt_mfd,
+            belt_mfd_library,
             belt_card_library,
             holster,
             holster_library,
@@ -303,6 +311,8 @@ fn main() {
             select_entry,
         } => ui::run(ui::UiOptions {
             belt_card,
+            belt_mfd,
+            belt_mfd_library,
             belt_card_library,
             holster,
             holster_library,

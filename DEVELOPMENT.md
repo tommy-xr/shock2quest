@@ -555,10 +555,15 @@ and **Belt forward (m)** (larger brings it farther out). Both move the belt,
 personal card, ammo pouch and grab targets together; thigh holsters retain their
 separate controls. These developer values apply for the current session.
 
-For persistent card placement **relative to the belt**, use
-`cargo dx ui --belt-card` (VR Setup → Belt card). The editor previews the actual
-belt and lets you save position and rotation to `assets/vr-belt-card.json`.
-Restart the game after saving; include that asset in your next Quest deploy.
+For persistent tool placement **relative to the belt**, use
+`cargo dx ui --belt-mfd` (VR Setup → Belt tool). The editor previews the actual
+belt and tricorder, and saves position and rotation to `assets/vr-belt-mfd.json`.
+Use `--belt-card` for the legacy card and `assets/vr-belt-card.json`.
+The **Player collision capsule** checkbox shows the standing or crouched collision
+envelope against the mount. In game, **Developer → Body → Player collision capsule**
+(`vr_player_collider`) shows the live collider, including crouching. Its 36.6 cm
+radius represents collision clearance, not torso geometry.
+Restart the game after saving; include the saved asset in your next Quest deploy.
 Hand-held card poses remain in the Hand grips editor (`--grip scipass`).
 
 #### Research lab (`debug_research`)
@@ -1102,10 +1107,10 @@ including query chrome, instructions, resource wells and utility buttons.
 leaving the glove unchanged; each hand saves its own scale. The preview is
 read-only and uses zero balances.
 
-On the belt, the device stays upright at its original mount with a 1.5 cm
-magnetic standoff. The screen faces the player and shows live balances; the
-rear lens faces outward. Its rear
-lens passively queries named objects as the player moves: a target shows its
+On the belt, the device stays upright close to the belt, using the independent
+mount in `assets/vr-belt-mfd.json` (13 cm left, 2.5 cm up, 27 cm forward, 30° yaw).
+The screen faces the player and shows live balances; the rear lens faces outward.
+Its rear lens passively queries named objects as the player moves: a target shows its
 query icon/name/description, and moving away restores the idle screen. This
 preview never activates readers, opens action panels, consumes chemicals or
 claims the UI pointer. Drawing removes the belt screen and enables the normal
@@ -1120,6 +1125,7 @@ scan, map, body and hologram settings live in this top-level category; per-hand
 placement controls are under its **Hand grips** subcategory. Existing HTTP keys
 are unchanged.
 
-**Belt yaw (deg)** (`vr_mfd_belt_yaw`, default +13°, range ±45°) adjusts the device relative to `belt.glb`. Adjust it live under **Tricorder**;
-the display, rear scanner and magnetic standoff rotate together. It affects
+**Belt yaw offset (deg)** (`vr_mfd_belt_yaw`, default 0°, range ±45°) adds a
+session-only rotation to the authored mount. Adjust it live under **Tricorder**;
+the display and rear scanner rotate together. It affects
 only the stowed mount, leaving the saved left/right hand grips unchanged.

@@ -54,6 +54,7 @@ pub mod pathfinding;
 pub mod paths;
 pub mod pause_menu;
 mod physics;
+pub use physics::player_collision_shape;
 pub mod player_stats;
 mod psi;
 mod psi_defenses;

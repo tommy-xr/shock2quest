@@ -15493,6 +15493,16 @@ impl MissionCore {
         }
 
         if options.presentation_mode == crate::PresentationMode::Vr
+            && crate::dev_params::get_bool(crate::dev_params::VR_PLAYER_COLLIDER)
+        {
+            let mut outline = self
+                .physics
+                .debug_entity_collider_lines(player.entity_id, vec3(1.0, 0.6, 0.1));
+            crate::util::tag_render_source(&mut outline, "player_collider");
+            scene.extend(outline);
+        }
+
+        if options.presentation_mode == crate::PresentationMode::Vr
             && crate::dev_params::get_bool(crate::dev_params::VR_BACKPACK_ZONES)
         {
             scene.extend(self.shoulder_backpack.render(player.pos, player.rotation));

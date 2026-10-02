@@ -311,7 +311,7 @@ impl GripEditor {
         Self {
             mode: VrSetupMode::Hands,
             holster_editor: crate::holster_editor::HolsterEditor::new(None, None),
-            belt_editor: crate::belt_card_editor::BeltCardEditor::new(None),
+            belt_editor: crate::belt_card_editor::BeltCardEditor::new(None, true),
             support_editor: crate::support_grip_editor::SupportEditor::new(support_path),
             support_mode,
             curl_editor: CurlPoseEditor::default(),
@@ -592,12 +592,12 @@ impl GripEditor {
         ui.heading("VR Setup");
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.mode, VrSetupMode::Hands, "Hand grips");
-            ui.selectable_value(&mut self.mode, VrSetupMode::Belt, "Belt card");
+            ui.selectable_value(&mut self.mode, VrSetupMode::Belt, "Belt tool");
             ui.selectable_value(&mut self.mode, VrSetupMode::Holster, "Holster");
         });
         if self.mode == VrSetupMode::Belt {
-            ui.label("Personal access card");
-            ui.label("Adjust its resting pose against the battle belt. Save the pose as an asset for gameplay.");
+            ui.label("Tricorder / personal access card");
+            ui.label("Adjust the resting tool pose against the battle belt and player collision capsule. Save the pose as an asset for gameplay.");
             return;
         }
         if self.mode == VrSetupMode::Holster {

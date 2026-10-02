@@ -513,7 +513,7 @@ test("tricorder belt height moves the screen, scanner and grab point together", 
   await game.devParams.set("vr_mfd_belt_yaw", 30);
   await game.step({ frames: 3 });
   assert.deepEqual((await game.ui.state()).panel_pose, held, "belt tuning leaves the held grip unchanged");
-  await game.devParams.set("vr_mfd_belt_yaw", 13);
+  await game.devParams.set("vr_mfd_belt_yaw", 0);
   await game.input.set("left_hand.squeeze", 0);
   await game.step({ frames: 3 });
   const restored = await center();
