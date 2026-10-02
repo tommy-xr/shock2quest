@@ -34,6 +34,7 @@ pub(super) struct PersonalCard {
     pub hand: Option<usize>,
     belt_yaw: f32,
     rest_pose: crate::vr_belt::BeltCardPose,
+    mfd_rest_pose: crate::vr_belt::BeltCardPose,
     pose_loaded: bool,
     bit_textures: OnceCell<[Rc<dyn engine::texture::TextureTrait>; 2]>,
     pub blocked: [bool; 2],
@@ -56,6 +57,7 @@ impl Default for PersonalCard {
             hand: None,
             belt_yaw: 0.0,
             rest_pose: Default::default(),
+            mfd_rest_pose: crate::vr_belt::BeltCardPose::mfd_default(),
             pose_loaded: false,
             bit_textures: OnceCell::new(),
             blocked: [false; 2],
@@ -78,13 +80,16 @@ impl PersonalCard {
             return;
         }
         self.pose_loaded = true;
-        if let Some(text) = assets.get_opt(
-            &engine::assets::text_importer::TEXT_IMPORTER,
-            "vr-belt-card.json",
-        ) {
-            match crate::vr_belt::BeltCardPose::parse(&text) {
-                Ok(pose) => self.rest_pose = pose,
-                Err(error) => eprintln!("Invalid vr-belt-card.json; using default: {error}"),
+        for (name, target) in [
+            ("vr-belt-card.json", &mut self.rest_pose),
+            ("vr-belt-mfd.json", &mut self.mfd_rest_pose),
+        ] {
+            if let Some(text) = assets.get_opt(&engine::assets::text_importer::TEXT_IMPORTER, name)
+            {
+                match crate::vr_belt::BeltCardPose::parse(&text) {
+                    Ok(pose) => *target = pose,
+                    Err(error) => eprintln!("Invalid {name}; using default: {error}"),
+                }
             }
         }
     }
@@ -110,16 +115,22 @@ impl PersonalCard {
     ) -> bool {
         self.center = body.map(|body| {
             self.belt_yaw = body.yaw;
+            let pose = if self.device_mode {
+                &self.mfd_rest_pose
+            } else {
+                &self.rest_pose
+            };
             body.front(
                 crate::dev_params::get(crate::dev_params::VR_BELT_DROP),
                 crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) - 0.30,
             ) + (Matrix4::from_angle_y(cgmath::Rad(-body.yaw))
-                * ((Vector3::from(self.rest_pose.position_m)
-                    // A small magnetic standoff at the original belt mount.
-                    // Keep the grab center on the rendered device.
+                * ((Vector3::from(pose.position_m)
                     + if self.device_mode {
-                        Quaternion::from_angle_y(cgmath::Deg(crate::dev_params::get(crate::dev_params::VR_MFD_BELT_YAW)))
-                            .rotate_vector(vec3(0.0, crate::dev_params::get(crate::dev_params::VR_MFD_BELT_Y), -0.015))
+                        vec3(
+                            0.0,
+                            crate::dev_params::get(crate::dev_params::VR_MFD_BELT_Y),
+                            0.0,
+                        )
                     } else {
                         vec3(0.0, 0.0, 0.0)
                     })
@@ -236,7 +247,9 @@ impl PersonalCard {
         self.center.map(|center| {
             super::mfd_device::stowed_panel(
                 pawn + rotation.rotate_vector(center),
-                rotation * Quaternion::from_angle_y(cgmath::Rad(-self.belt_yaw)),
+                rotation
+                    * Quaternion::from_angle_y(cgmath::Rad(-self.belt_yaw))
+                    * self.mfd_rest_pose.orientation(),
                 crate::dev_params::get(crate::dev_params::VR_MFD_BELT_YAW),
             )
         })
@@ -492,6 +505,43 @@ mod tests {
             Some(0),
             "edited resting center remains grabbable"
         );
+    }
+
+    #[test]
+    fn authored_tricorder_pose_matches_editor_and_grab_target() {
+        let (mut card, mut input, mut body) = fixture();
+        card.device_mode = true;
+        body.yaw = 0.7;
+        card.mfd_rest_pose.position_m = [-0.14, 0.03, -0.26];
+        card.mfd_rest_pose.rotation_degrees = [10.0, 25.0, -5.0];
+        card.update(&input, Some(body), [true; 2], true);
+        let pawn = vec3(2.0, 0.5, -1.0);
+        let rotation = Quaternion::from_angle_y(cgmath::Deg(30.0));
+        let root = Matrix4::from_translation(
+            pawn + rotation.rotate_vector(body.front(
+                crate::dev_params::get(crate::dev_params::VR_BELT_DROP),
+                crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) - 0.30,
+            )),
+        ) * Matrix4::from(rotation)
+            * Matrix4::from_angle_y(cgmath::Rad(-body.yaw));
+        let expected = root * card.mfd_rest_pose.transform();
+        let panel = card.stowed_device_panel(pawn, rotation).unwrap();
+        let actual = Matrix4::from_translation(panel.center) * Matrix4::from(panel.rotation);
+        for (a, b) in [actual.x, actual.y, actual.z, actual.w]
+            .into_iter()
+            .zip([expected.x, expected.y, expected.z, expected.w])
+        {
+            assert!(
+                (a - b).magnitude() < 0.00001,
+                "editor and runtime MFD frames must agree"
+            );
+        }
+        input.left_hand.position = card.center.unwrap();
+        card.update(&input, Some(body), [true; 2], true);
+        input.left_hand.squeeze_value = 1.0;
+        card.update(&input, Some(body), [true; 2], true);
+        assert_eq!(card.hand, Some(0), "authored MFD center remains grabbable");
+        assert!(card.stowed_device_panel(pawn, rotation).is_none());
     }
 
     #[test]

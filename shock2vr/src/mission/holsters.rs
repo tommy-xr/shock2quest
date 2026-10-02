@@ -4,7 +4,7 @@ use crate::{
     input_context::InputContext, runtime_props::RuntimePropHolstered, vr_support::GripPose,
 };
 use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, vec3};
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
+use shipyard::{EntityId, IntoIter, IntoWithId, View, World};
 
 const SCALE: f32 = crate::METERS_PER_WORLD_UNIT;
 fn radius() -> f32 {
@@ -33,46 +33,40 @@ mod tests {
     }
 
     #[test]
-    fn psi_amp_fits_without_being_a_pistol() {
-        let mut world = World::new();
-        let amp = world.add_entity((dark::properties::PropTemplateId { template_id: -247 },));
-        world.add_unique(super::super::mission_core::GlobalTemplateClassTags(
-            std::collections::HashMap::from([(
-                -247,
-                std::collections::HashMap::from([("weapontype".to_owned(), "psiamp".to_owned())]),
-            )]),
-        ));
-        assert!(accepts(&world, amp));
-    }
-
-    #[test]
-    fn only_melee_and_compact_pistols_fit() {
-        let mut world = World::new();
-        let melee = world.add_entity((dark::properties::PropLimbModel("wrench_h".to_owned()),));
-        assert!(accepts(&world, melee));
-        for (model, expected) in [
-            ("atek_h", true),
-            ("LASEHAND.BIN", true),
-            ("shotg_h", false),
-            ("assault", false),
-            ("fusion_h", false),
-            ("worm_h", false),
-        ] {
-            let gun = world.add_entity((dark::properties::PropPlayerGun {
-                flags: 0,
-                hand_model: model.to_owned(),
-                icon_file: String::new(),
-                model_offset: vec3(0.0, 0.0, 0.0),
-                fire_offset: vec3(0.0, 0.0, 0.0),
-                heading: 0,
-                reload_pitch: 0,
-                reload_rate: 0,
-                gun_type: 0,
-            },));
-            assert_eq!(accepts(&world, gun), expected, "{model}");
-        }
-        let item = world.add_entity(());
-        assert!(!accepts(&world, item));
+    fn an_authored_non_weapon_can_use_the_same_release_gesture() {
+        let (mut holsters, mut input, ids) = setup();
+        input.right_hand.position = holsters.centers.unwrap()[0];
+        input.right_hand.squeeze_value = 1.0;
+        let held = [None, Some(ids[0])];
+        holsters.update(
+            &input,
+            held,
+            [true; 2],
+            [None; 2],
+            2,
+            [false; 2],
+            [false, true],
+            true,
+            0.016,
+        );
+        input.right_hand.squeeze_value = 0.0;
+        assert_eq!(
+            holsters.update(
+                &input,
+                held,
+                [true; 2],
+                [None; 2],
+                2,
+                [false; 2],
+                [false, true],
+                true,
+                0.016
+            )[1],
+            Some(Action::Store {
+                entity: ids[0],
+                slot: 0
+            })
+        );
     }
 
     #[test]
@@ -334,6 +328,8 @@ mod tests {
 }
 
 pub(super) struct Holsters {
+    pub poses: crate::vr_holster::HolsterLibrary,
+    poses_loaded: bool,
     pub body_pose: Option<super::body_inventory::BodyPose>,
     pub freeze_heading: bool,
     pub pouch_priority: [bool; 2],
@@ -349,6 +345,8 @@ pub(super) struct Holsters {
 impl Default for Holsters {
     fn default() -> Self {
         Self {
+            poses: Default::default(),
+            poses_loaded: false,
             body_pose: None,
             freeze_heading: false,
             pouch_priority: [false; 2],
@@ -363,7 +361,7 @@ impl Default for Holsters {
     }
 }
 
-/// Slots are right (default), then left (Pack Rat). Hand arrays are left/right.
+/// Slots are right/left; hand arrays are left/right.
 pub(super) fn occupants(world: &World) -> [Option<EntityId>; 2] {
     let mut slots = [None; 2];
     let holstered = world.borrow::<View<RuntimePropHolstered>>().unwrap();
@@ -375,26 +373,28 @@ pub(super) fn occupants(world: &World) -> [Option<EntityId>; 2] {
     slots
 }
 
-/// The thigh slots accept melee arms, compact pistols, and psi amps.
-pub(super) fn accepts(world: &World, entity: EntityId) -> bool {
-    super::mission_core::is_melee_weapon(world, entity)
-        || crate::wielded_weapon::is_psi_amp(world, entity)
-        || world
-            .borrow::<View<dark::properties::PropPlayerGun>>()
-            .is_ok_and(|guns| {
-                guns.get(entity).is_ok_and(|gun| {
-                    matches!(
-                        gun.hand_model.to_ascii_lowercase().trim_end_matches(".bin"),
-                        "atek_h" | "lasehand"
-                    )
-                })
-            })
-}
-
 /// Both thigh holsters are standard equipment, independent of O/S upgrades.
 pub(super) const SLOT_COUNT: usize = 2;
 
 impl Holsters {
+    pub fn load_poses(&mut self, assets: &mut engine::assets::asset_cache::AssetCache) {
+        if self.poses_loaded {
+            return;
+        }
+        self.poses_loaded = true;
+        if let Some(text) = assets.get_opt(
+            &engine::assets::text_importer::TEXT_IMPORTER,
+            crate::vr_holster::RESOURCE,
+        ) {
+            match crate::vr_holster::HolsterLibrary::parse(&text) {
+                Ok(poses) => self.poses = poses,
+                Err(error) => {
+                    eprintln!("Invalid holster definitions; holstering disabled: {error}")
+                }
+            }
+        }
+    }
+
     pub fn update(
         &mut self,
         input: &InputContext,
@@ -473,10 +473,10 @@ impl Holsters {
             self.near[i] = (tracked
                 && !at_pouch
                 && !self.shoulder_priority[i]
-                && (held[i].is_none() || weapons[i]))
+                && (held[i].is_none() || weapons[i] || eligible[i]))
                 .then(|| {
                     (0..2)
-                        // Stored items remain retrievable if their perk is removed.
+                        // Stored items remain retrievable even when a slot is disabled.
                         .filter(|s| {
                             (*s < count || slots[*s].is_some())
                                 && (hand.position - centers[*s]).magnitude2()

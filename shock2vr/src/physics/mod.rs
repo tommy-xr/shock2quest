@@ -267,6 +267,21 @@ fn crouched_player_capsule() -> Capsule {
     )
 }
 
+/// Canonical standing/crouched capsule for asset-authoring previews, in world units.
+/// Runtime debug drawing instead reads the live collider, including transient shapes.
+pub fn player_collision_shape(crouched: bool) -> dark::hit_box::HitBoxShape {
+    let capsule = if crouched {
+        crouched_player_capsule()
+    } else {
+        standing_player_capsule()
+    };
+    dark::hit_box::HitBoxShape::Capsule {
+        a: nvec_to_cgmath(capsule.segment.a.coords),
+        b: nvec_to_cgmath(capsule.segment.b.coords),
+        radius: capsule.radius,
+    }
+}
+
 /// The player's crouched collision capsule, in world units.
 fn crouched_player_shared_shape() -> SharedShape {
     SharedShape::new(crouched_player_capsule())

@@ -6,6 +6,7 @@ mod archives;
 mod belt_card_editor;
 mod explorer;
 mod grip_editor;
+mod holster_editor;
 mod model_details;
 mod model_preview;
 mod object_preview;
@@ -50,12 +51,24 @@ enum Commands {
     },
     /// Open a windowed asset browser (tree + search + preview)
     Ui {
+        /// Edit the tricorder's resting belt pose, with a player collision reference
+        #[arg(long, conflicts_with = "belt_card")]
+        belt_mfd: bool,
+        /// Tricorder belt pose JSON (defaults to assets/vr-belt-mfd.json)
+        #[arg(long)]
+        belt_mfd_library: Option<std::path::PathBuf>,
         /// Edit the personal card's resting position and rotation on the battle belt
         #[arg(long)]
         belt_card: bool,
         /// Card pose JSON to edit (defaults to assets/vr-belt-card.json)
         #[arg(long)]
         belt_card_library: Option<std::path::PathBuf>,
+        /// Edit an item's pose inside the holster (e.g. atek_w or atek_h)
+        #[arg(long)]
+        holster: Option<String>,
+        /// Holster definitions JSON (defaults to assets/vr-holsters.json)
+        #[arg(long)]
+        holster_library: Option<std::path::PathBuf>,
         /// Open VR Grips with this prepared pickup model selected (e.g. mug)
         #[arg(long)]
         grip: Option<String>,
@@ -268,7 +281,11 @@ fn main() {
         Commands::Find { pattern, limit } => find(pattern, limit),
         Commands::Ui {
             belt_card,
+            belt_mfd,
+            belt_mfd_library,
             belt_card_library,
+            holster,
+            holster_library,
             grip,
             grip_hand,
             grip_support,
@@ -294,7 +311,11 @@ fn main() {
             select_entry,
         } => ui::run(ui::UiOptions {
             belt_card,
+            belt_mfd,
+            belt_mfd_library,
             belt_card_library,
+            holster,
+            holster_library,
             grip,
             grip_hand,
             grip_support,

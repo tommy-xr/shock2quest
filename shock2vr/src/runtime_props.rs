@@ -478,8 +478,6 @@ pub struct RuntimePropLastFiredProjectile(pub i32);
 #[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct RuntimePropHolstered {
     pub slot: u8,
-    /// Longest extent of the calibrated held mesh, in world units.
-    pub held_extent: Option<f32>,
 }
 
 /// Last weapon stored at a shoulder, still owned by the normal backpack.

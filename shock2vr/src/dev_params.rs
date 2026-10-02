@@ -407,17 +407,18 @@ dev_params! {
     VR_GLOVE_SPHERES = Interaction::bool("vr_glove_spheres", "Glove contact spheres", false),
     VR_GLOVE_RADIUS = Body::float("vr_glove_radius", "Glove contact radius (m)", 0.1, 0.02, 0.1, 0.005),
     VR_AMMO_POUCH_ZONES = Interaction::bool("vr_ammo_pouch_zones", "Ammo pouch zone", false),
+    VR_PLAYER_COLLIDER = Body::bool("vr_player_collider", "Player collision capsule", false),
     VR_HOLSTER_ZONES = Interaction::bool("vr_holster_zones", "Holster zones", false),
     /// Actual front of the curved belt, including the asset's authored offset.
     /// The pouch and personal card follow both belt settings with their grab targets.
-    VR_BELT_DISTANCE = Body::float("vr_belt_distance", "Belt forward (m)", 0.20, 0.10, 0.45, 0.01),
+    VR_BELT_DISTANCE = Body::float("vr_belt_distance", "Belt forward (m)", 0.0, -0.5, 0.5, 0.01),
     VR_BELT_DROP = Body::float("vr_belt_drop", "Belt below eyes (m)", 0.55, 0.30, 0.90, 0.01),
     /// Session-only handheld experiment, also available on Quest without CLI flags.
     VR_MFD_DEVICE = Tricorder::bool("vr_mfd_device", "MFD device prototype", true),
     /// Positive raises the stowed device and its grab point; zero keeps the centered mount.
     VR_MFD_BELT_Y = Tricorder::float("vr_mfd_belt_y", "Belt vertical offset (m)", 0.0, -0.15, 0.20, 0.005),
-    /// Matches the buckle face normal in astra-vr-belt.glb (approximately 13 degrees).
-    VR_MFD_BELT_YAW = Tricorder::float("vr_mfd_belt_yaw", "Belt yaw (deg)", 13.0, -45.0, 45.0, 1.0),
+    /// Session adjustment on top of the authored vr-belt-mfd.json mount.
+    VR_MFD_BELT_YAW = Tricorder::float("vr_mfd_belt_yaw", "Belt yaw offset (deg)", 0.0, -45.0, 45.0, 1.0),
     VR_MFD_FOCUS_SCAN = Tricorder::bool("vr_mfd_focus_scan", "MFD scan automatically on focus", true),
     VR_MFD_MAP_WIDE = Tricorder::bool("vr_mfd_map_wide", "MFD map: wider panel above", false),
     VR_MFD_BODY = Tricorder::float("vr_mfd_body", "MFD body: 0 card, 1 upgrade, 2 magazine, 3 frame", 3.0, 0.0, 3.0, 1.0),
@@ -444,7 +445,7 @@ dev_params! {
     VR_DOWNLOAD_PARTICLES = Body::bool("vr_download_particles", "Download particles", false),
     VR_HOLSTER_DROP = Body::float("vr_holster_drop", "Holster below eyes (m)", 0.78, 0.55, 1.1, 0.02),
     VR_HOLSTER_SIDE = Body::float("vr_holster_side", "Holster side (m)", 0.23, 0.16, 0.40, 0.01),
-    VR_HOLSTER_FORWARD = Body::float("vr_holster_forward", "Holster forward (m)", 0.04, -0.20, 0.30, 0.01),
+    VR_HOLSTER_FORWARD = Body::float("vr_holster_forward", "Holster forward (m)", -0.16, -0.5, 0.5, 0.01),
 
     /// VR support target/radius (cyan; green when attached) and tracked palm (amber).
     VR_SUPPORT_GRIPS = Interaction::bool("vr_support_grips", "Support grips", false),

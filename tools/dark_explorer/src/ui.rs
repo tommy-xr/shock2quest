@@ -28,7 +28,11 @@ const GRID_TILE_CAP: usize = 400;
 const THUMBS_PER_FRAME: usize = 6;
 
 pub struct UiOptions {
+    pub holster: Option<String>,
+    pub holster_library: Option<PathBuf>,
     pub belt_card: bool,
+    pub belt_mfd: bool,
+    pub belt_mfd_library: Option<PathBuf>,
     pub belt_card_library: Option<PathBuf>,
     pub grip: Option<String>,
     pub grip_hand: String,
@@ -364,7 +368,11 @@ struct MountIndex {
 
 impl ExplorerApp {
     fn new(options: UiOptions) -> ExplorerApp {
-        let grip_tab = options.belt_card || options.grip.is_some() || options.grip_support;
+        let grip_tab = options.belt_mfd
+            || options.belt_card
+            || options.holster.is_some()
+            || options.grip.is_some()
+            || options.grip_support;
         let mut app = ExplorerApp {
             grip_editor: crate::grip_editor::GripEditor::new(
                 options.grip_library,
@@ -407,9 +415,23 @@ impl ExplorerApp {
             selected_entry: None,
             archive_results: None,
         };
-        app.grip_editor.belt_mode = options.belt_card;
-        app.grip_editor.belt_editor =
-            crate::belt_card_editor::BeltCardEditor::new(options.belt_card_library);
+        app.grip_editor.mode = if options.holster.is_some() {
+            crate::grip_editor::VrSetupMode::Holster
+        } else if options.belt_card || options.belt_mfd {
+            crate::grip_editor::VrSetupMode::Belt
+        } else {
+            crate::grip_editor::VrSetupMode::Hands
+        };
+        app.grip_editor.holster_editor =
+            crate::holster_editor::HolsterEditor::new(options.holster_library, options.holster);
+        app.grip_editor.belt_editor = crate::belt_card_editor::BeltCardEditor::new(
+            if options.belt_card {
+                options.belt_card_library
+            } else {
+                options.belt_mfd_library
+            },
+            !options.belt_card,
+        );
         if let Some(archetype) = options.archetype {
             // Fail loudly, like --select: a `--screenshot` run that quietly
             // captured an empty preview would still exit 0 otherwise.

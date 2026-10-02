@@ -1,9 +1,6 @@
 //! Read-only body gear feedback. Inventory ownership stays in the pouch/holsters.
-use cgmath::{Deg, Matrix4, Vector3, vec3};
-use engine::{
-    assets::asset_cache::AssetCache,
-    scene::{self, SceneObject},
-};
+use cgmath::{Deg, Matrix4, vec3};
+use engine::scene::{self, SceneObject};
 use shipyard::{EntityId, World};
 
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
@@ -62,16 +59,6 @@ impl PouchReadout {
             near: near[taking],
         }
     }
-
-    fn color(&self) -> Vector3<f32> {
-        match self.state {
-            PouchState::Inactive => vec3(0.018, 0.025, 0.03),
-            PouchState::Ready if self.near => vec3(0.1, 0.9, 0.3),
-            PouchState::Ready => vec3(0.04, 0.22, 0.18),
-            PouchState::Empty => vec3(0.55, 0.24, 0.025),
-            PouchState::Refused => vec3(0.95, 0.06, 0.025),
-        }
-    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -107,78 +94,6 @@ fn lit_segments(fraction: f32) -> usize {
     } else {
         0
     }
-}
-
-thread_local! {
-    // Reuse one small annulus geometry; changing state changes only its color.
-    static RING: std::rc::Rc<Box<dyn scene::Geometry>> = {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        for i in 0..=48 {
-            let angle = i as f32 * std::f32::consts::TAU / 48.0;
-            for radius in [0.43, 0.5] {
-                vertices.push(scene::VertexPosition { position: vec3(angle.cos()*radius, angle.sin()*radius, 0.0) });
-            }
-            if i < 48 { let a = i*2; indices.extend([a, a+2, a+1, a+1, a+2, a+3]); }
-        }
-        std::rc::Rc::new(Box::new(scene::indexed_mesh::create(vertices, indices)))
-    };
-}
-
-/// `root` maps metre-local part coordinates into world space.
-pub(super) fn pouch(
-    readout: &PouchReadout,
-    root: Matrix4<f32>,
-    assets: &mut AssetCache,
-) -> Vec<SceneObject> {
-    // A small badge just above the mouth tilts toward the player's eye.
-    let plate =
-        root * Matrix4::from_translation(vec3(0.0, 0.117, 0.0)) * Matrix4::from_angle_x(Deg(-60.0));
-    let mut ring = RING.with(|geometry| {
-        SceneObject::create(
-            std::cell::RefCell::new(scene::color_material::create(readout.color())),
-            geometry.clone(),
-        )
-    });
-    ring.set_transform(plate * Matrix4::from_scale(0.08));
-    let mut objects = vec![ring];
-    if let Some(name) = &readout.icon {
-        if let Some(texture) = assets.get_ext_opt(
-            &dark::importers::TEXTURE_IMPORTER,
-            name,
-            &engine::texture::TextureOptions {
-                wrap: false,
-                transparent_index_0: true,
-                ..Default::default()
-            },
-        ) {
-            // Keep the complete icon inside the circular rim without cropping.
-            let width = texture.width() as f32;
-            let height = texture.height() as f32;
-            let longest = width.max(height).max(1.0);
-            let texture: std::rc::Rc<dyn engine::texture::TextureTrait> = texture;
-            let mut icon = SceneObject::new(
-                scene::basic_material::create_with_fixed_ambient(texture, 1.0, 0.0),
-                // PCX rows start at the top; retain the outward geometry winding
-                // and reverse V so the complete authored icon reads upright.
-                Box::new(scene::quad::create_with_uv(
-                    cgmath::vec2(0.0, 1.0),
-                    cgmath::vec2(1.0, 0.0),
-                )),
-            );
-            icon.set_transform(
-                plate
-                    * Matrix4::from_translation(vec3(0.0, 0.0, 0.001))
-                    * Matrix4::from_nonuniform_scale(
-                        0.05 * width / longest,
-                        0.05 * height / longest,
-                        1.0,
-                    ),
-            );
-            objects.push(icon);
-        }
-    }
-    objects
 }
 
 pub(super) fn holster(readout: &HolsterReadout, root: Matrix4<f32>) -> Vec<SceneObject> {

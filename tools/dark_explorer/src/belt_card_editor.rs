@@ -1,4 +1,4 @@
-//! Author the personal card's resting pose against the actual battle belt.
+//! Author the tricorder or personal card's resting pose against the actual battle belt.
 use crate::{
     grip_editor::{default_library_path, persist_json, tweak_slider},
     model_preview::{ModelPreview, PreviewScene},
@@ -29,11 +29,11 @@ impl Document {
     }
     fn write(&mut self, path: PathBuf, new_file: bool) -> Result<(), String> {
         if !self.pose.is_valid() {
-            return Err("Cannot save invalid card pose".into());
+            return Err("Cannot save invalid belt pose".into());
         }
         if !new_file && std::fs::read(&self.path).map_err(|e| e.to_string())? != self.bytes {
             return Err(
-                "Card resource changed on disk. Use Save As to preserve your draft.".into(),
+                "Belt resource changed on disk. Use Save As to preserve your draft.".into(),
             );
         }
         let path = if path.is_absolute() {
@@ -55,16 +55,26 @@ impl Document {
 
 pub struct BeltCardEditor {
     document: Result<Document, String>,
+    mfd: bool,
+    show_player: bool,
+    crouched: bool,
     message: String,
     save_as: Option<String>,
     camera: Option<String>,
 }
 impl BeltCardEditor {
-    pub fn new(path: Option<PathBuf>) -> Self {
+    pub fn new(path: Option<PathBuf>, mfd: bool) -> Self {
         Self {
-            document: Document::load(
-                path.unwrap_or_else(|| default_library_path().with_file_name("vr-belt-card.json")),
-            ),
+            mfd,
+            show_player: true,
+            crouched: false,
+            document: Document::load(path.unwrap_or_else(|| {
+                default_library_path().with_file_name(if mfd {
+                    "vr-belt-mfd.json"
+                } else {
+                    "vr-belt-card.json"
+                })
+            })),
             message: String::new(),
             save_as: None,
             camera: Some("front".into()),
@@ -89,8 +99,32 @@ impl BeltCardEditor {
         frame: &mut eframe::Frame,
         preview: &mut ModelPreview,
     ) {
-        ui.heading("Personal card — resting pose");
-        ui.label("Position the card on the buckle. This changes its resting model and grab target; hand grips stay independent.");
+        let mut mfd = self.mfd;
+        ui.add_enabled_ui(!self.dirty(), |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut mfd, true, "Tricorder");
+                ui.selectable_value(&mut mfd, false, "Personal card");
+            });
+        });
+        if mfd != self.mfd {
+            *self = Self::new(None, mfd);
+        }
+        ui.heading(if self.mfd {
+            "Tricorder — belt mount"
+        } else {
+            "Personal card — belt mount"
+        });
+        ui.label("Position the tool against the belt. Its saved pose also places the resting grab target.");
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.show_player, "Player collision capsule");
+            ui.add_enabled(
+                self.show_player,
+                egui::Checkbox::new(&mut self.crouched, "Crouched"),
+            );
+        });
+        if self.show_player {
+            ui.small("Amber: game collision envelope (36.6 cm radius), not torso geometry. Uses the default standing/crouched eye height and belt fit.");
+        }
         let doc = match &mut self.document {
             Ok(doc) => doc,
             Err(e) => {
@@ -100,7 +134,7 @@ impl BeltCardEditor {
         };
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(doc.dirty(), egui::Button::new("Save card pose *"))
+                .add_enabled(doc.dirty(), egui::Button::new("Save belt pose *"))
                 .clicked()
             {
                 self.message = match doc.write(doc.path.clone(), false) {
@@ -111,7 +145,11 @@ impl BeltCardEditor {
             if ui.button("Save As…").clicked() {
                 self.save_as = Some(
                     doc.path
-                        .with_file_name("vr-belt-card.custom.json")
+                        .with_file_name(if self.mfd {
+                            "vr-belt-mfd.custom.json"
+                        } else {
+                            "vr-belt-card.custom.json"
+                        })
                         .display()
                         .to_string(),
                 );
@@ -123,7 +161,11 @@ impl BeltCardEditor {
                 doc.pose = doc.saved.clone();
             }
             if ui.button("Reset to default").clicked() {
-                doc.pose = BeltCardPose::default();
+                doc.pose = if self.mfd {
+                    BeltCardPose::mfd_default()
+                } else {
+                    BeltCardPose::default()
+                };
             }
         });
         if let Some(path) = &mut self.save_as {
@@ -138,7 +180,14 @@ impl BeltCardEditor {
                 match doc.write(PathBuf::from(path.as_str()), true) {
                     Ok(()) => {
                         self.save_as = None;
-                        self.message = "Saved a new card resource. Copy it to assets/vr-belt-card.json to use in game.".into();
+                        self.message = format!(
+                            "Saved a new resource. Copy it to assets/{} to use in game.",
+                            if self.mfd {
+                                "vr-belt-mfd.json"
+                            } else {
+                                "vr-belt-card.json"
+                            }
+                        );
                     }
                     Err(e) => self.message = e,
                 }
@@ -178,12 +227,21 @@ impl BeltCardEditor {
             }
             ui.label("Drag to orbit · scroll to zoom");
         });
-        let scene = PreviewScene::BeltCard(doc.pose.clone());
-        preview.prepare("scipass.bin", &scene);
+        let scene = PreviewScene::Belt {
+            pose: doc.pose.clone(),
+            mfd: self.mfd,
+            player: self.show_player.then_some(self.crouched),
+        };
+        let model = if self.mfd {
+            "tricorder.bin"
+        } else {
+            "scipass.bin"
+        };
+        preview.prepare(model, &scene);
         if let Some(view) = self.camera.take() {
             preview.belt_camera(&view);
         }
-        preview.show(ui, frame, "scipass.bin", &scene);
+        preview.show(ui, frame, model, &scene);
     }
 }
 

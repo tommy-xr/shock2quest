@@ -20,7 +20,7 @@ test("belt and holster calibration moves live targets independently and resolves
       "belt must not move thighs beyond settling tolerance");
   }
   const delta = sub(movedBelt.ammo_pouch!.center!, before.ammo_pouch!.center!);
-  assert.ok(Math.abs(Math.hypot(...delta) * 0.762 - 0.10) < 0.001, "pouch moves by ten centimetres with belt");
+  assert.ok(Math.abs(Math.hypot(...delta) * 0.762 - 0.30) < 0.001, "pouch moves by thirty centimetres with belt");
   const cardForward = quatRotate(initialPlayer.rotation, sub(movedBelt.body_gear!.personal_card.center!, before.body_gear!.personal_card.center!));
   assert.ok(Math.hypot(...sub(cardForward, delta)) < 0.001, "card follows the pouch forward");
   await game.devParams.set("vr_belt_drop", 0.65);
@@ -37,12 +37,15 @@ test("belt and holster calibration moves live targets independently and resolves
   }
   await game.devParams.set("vr_belt_drop", 0.55);
   await game.step({ frames: 3 });
-  await game.devParams.set("vr_holster_forward", -0.10);
+  await game.devParams.set("vr_holster_forward", -0.50);
   await game.step({ frames: 3 });
   const movedThighs = (await game.info()).player.hand_feedback!;
   assert.ok(Math.hypot(...sub(movedThighs.ammo_pouch!.center!, movedBelt.ammo_pouch!.center!)) * 0.762 < 0.001,
     "thighs must not move pouch beyond settling tolerance");
-  assert.ok(Math.abs(Math.hypot(...sub(movedThighs.holsters!.centers![0], movedBelt.holsters!.centers![0])) * 0.762 - 0.14) < 0.001);
+  assert.ok(Math.abs(Math.hypot(...sub(movedThighs.holsters!.centers![0], movedBelt.holsters!.centers![0])) * 0.762 - 0.34) < 0.001, "holsters move 34 cm from the rearward default to the expanded rear limit");
+
+  await game.devParams.set("vr_holster_forward", -0.16);
+  await game.step({ frames: 3 });
 
   const rack = (await game.entities.list()).entities;
   const wrench = rack.find(e => e.template_id === -928)!;

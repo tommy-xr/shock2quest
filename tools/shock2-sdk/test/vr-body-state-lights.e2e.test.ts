@@ -4,7 +4,7 @@ import { GameServer } from "../src/index.js";
 import { aimVrHandAt, quatConjugate, quatRotate, sub } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
-test("pouch badge reports available selected ammo; holster readout follows its stored gun", { skip: !enabled, timeout: 180_000 }, async () => {
+test("pouch diagnostics report available selected ammo; holster readout follows its stored gun", { skip: !enabled, timeout: 180_000 }, async () => {
   await using game = await GameServer.launch({mission:"debug_interactions", debugFlags:["--vr"]});
   await game.step({frames:30});
   let gear = (await game.info()).player.hand_feedback?.body_gear;
@@ -17,7 +17,7 @@ test("pouch badge reports available selected ammo; holster readout follows its s
   gear=(await game.info()).player.hand_feedback?.body_gear;
   assert.equal(gear?.pouch.weapon,pistol.id);
   assert.equal(gear?.pouch.state,"empty");
-  assert.ok(gear?.pouch.icon, "selected type remains visible even without stock");
+  assert.ok(gear?.pouch.icon, "diagnostics retain selected type even without stock");
   const icon=gear.pouch.icon;
   await game.player.spawnItem(-31);
   await game.step({frames:5});
