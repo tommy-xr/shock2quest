@@ -10,8 +10,10 @@ Explosive, Electricity, Cold, Droid Fusion and Energy Stim. The implementation
 reads those links, including inherited links; it has no damage-type table.
 Psycho-reflective Screen still applies its uniform factor once to final Damage,
 including untyped damage. Immolate still contributes its fire immunity once.
-Neither existing consumer is duplicated by the new registry. Energy Reflection
-is the only newly enrolled power; tier-five PsiShield remains separate work.
+Neither existing consumer is duplicated by the registry. Tier-five
+Psycho-reflective Aura (`PsiShield`, -1019) also contributes its nine authored
+Amplify 0.4 filters while active. Both defenses filter typed stimuli before
+damage; untyped damage is unchanged.
 
 ## Authored-data corrections to #1276
 

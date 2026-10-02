@@ -12,10 +12,10 @@ use crate::{
     psi::{ActivePsiPowers, GlobalPsiPowers},
 };
 
-/// Energy Reflection. Only enroll verified defenses here: the tier-five
-/// PsiShield has separate parity work. Screen already scales final Damage,
-/// and Immolate contributes its filters through its existing consumer below.
+/// Verified defenses that use their authored stimulus filters. Screen already
+/// scales final Damage, and Immolate has its existing consumer below.
 const ENERGY_REFLECTION_TEMPLATE_ID: i32 = -3153;
+const PSYCHO_REFLECTIVE_AURA_TEMPLATE_ID: i32 = -1019;
 
 #[derive(Unique, Default)]
 pub struct PowerReceptrons(Vec<(i32, Vec<(i32, ReceptronOptions)>)>);
@@ -35,7 +35,10 @@ impl PowerReceptrons {
                 .0
                 .iter()
                 .filter_map(|power| {
-                    if power.template_id != ENERGY_REFLECTION_TEMPLATE_ID {
+                    if !matches!(
+                        power.template_id,
+                        ENERGY_REFLECTION_TEMPLATE_ID | PSYCHO_REFLECTIVE_AURA_TEMPLATE_ID
+                    ) {
                         return None;
                     }
                     let mut ancestors =
@@ -251,6 +254,59 @@ mod tests {
     }
 
     #[test]
+    fn aura_filters_all_nine_authored_stims_without_widening_other_defenses() {
+        let (world, player, other) = world();
+        let covered = [-2753, -373, -388, -377, -375, -376, -385, -3058, -1145];
+        let mut info = SystemShock2EntityInfo::empty();
+        info.template_to_links.insert(
+            PSYCHO_REFLECTIVE_AURA_TEMPLATE_ID,
+            TemplateLinks {
+                to_links: covered
+                    .map(|stim| ToTemplateLink {
+                        to_template_id: stim,
+                        link: Link::Receptron(ReceptronOptions {
+                            order: 79,
+                            effect: ReceptronEffect::Amplify { factor: 0.4 },
+                        }),
+                    })
+                    .into(),
+            },
+        );
+        *world.borrow::<UniqueViewMut<PowerReceptrons>>().unwrap() =
+            PowerReceptrons::from_hierarchy(
+                &info,
+                &GlobalPsiPowers(vec![power(PSYCHO_REFLECTIVE_AURA_TEMPLATE_ID)]),
+                &HashMap::new(),
+            );
+        world.borrow::<UniqueViewMut<ActivePsiPowers>>().unwrap().0 = vec![ActivePsiPower {
+            template_id: PSYCHO_REFLECTIVE_AURA_TEMPLATE_ID,
+            name: "PsiShield".into(),
+            remaining_secs: 1.0,
+        }];
+        for stim in covered.into_iter().chain([-374, -389, -386]) {
+            let mut responses = active_receptrons(&world, player);
+            responses.push(receiver(
+                stim,
+                ReceptronEffect::Damage {
+                    multiplier: 2.0,
+                    use_intensity: true,
+                },
+            ));
+            assert_eq!(
+                resolve_stim_damage(&responses, stim, 10.0),
+                Some(if covered.contains(&stim) { 8.0 } else { 20.0 })
+            );
+        }
+        assert!(active_receptrons(&world, other).is_empty());
+        world
+            .borrow::<UniqueViewMut<ActivePsiPowers>>()
+            .unwrap()
+            .0
+            .clear();
+        assert!(active_receptrons(&world, player).is_empty());
+    }
+
+    #[test]
     fn inherited_filters_load_but_existing_consumers_are_not_duplicated() {
         let mut info = SystemShock2EntityInfo::empty();
         let links = authored()
@@ -266,7 +322,7 @@ mod tests {
             power(POWER),
             power(IMMOLATE_TEMPLATE_ID),
             power(PSYCHO_REFLECTIVE_SCREEN_TEMPLATE_ID),
-            power(-1019), // Tier-five PsiShield is deliberately not enrolled.
+            power(-1019),
         ]);
         let hierarchy = HashMap::from([
             (POWER, vec![-9000]),
@@ -275,7 +331,9 @@ mod tests {
             (PSYCHO_REFLECTIVE_SCREEN_TEMPLATE_ID, vec![-9000]),
         ]);
         let registry = PowerReceptrons::from_hierarchy(&info, &powers, &hierarchy);
-        assert_eq!(registry.0.len(), 1);
+        assert_eq!(registry.0.len(), 2);
+        assert_eq!(registry.0[1].0, -1019);
+        assert_eq!(registry.0[1].1.len(), 2);
         assert_eq!(registry.0[0].0, POWER);
         assert_eq!(registry.0[0].1.len(), 2);
     }
