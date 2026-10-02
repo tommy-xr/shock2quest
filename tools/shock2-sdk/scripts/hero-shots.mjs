@@ -225,7 +225,7 @@ async function captureShot(shot) {
     const provenance = {
       mission: shot.mission,
       lighting: (await game.devParams.list()).params
-        .filter((param) => param.key === "ambient_light_intensity")
+        .filter((param) => ["ambient_light_intensity", "held_light_floor"].includes(param.key))
         .map(({ key, value, default: defaultValue }) => ({ key, value, default: defaultValue })),
       player: shot.player,
       subject: shot.subject ?? `template ${shot.spawnMonster}`,
