@@ -795,6 +795,7 @@ export interface PlayerSnapshot {
     implant_sockets?: {
       centers: [Vec3 | null, Vec3 | null];
       enabled_slots: number;
+      locked: [boolean, boolean];
       items: [number | null, number | null];
       near: [boolean, boolean];
     };

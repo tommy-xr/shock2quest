@@ -23,26 +23,31 @@ async function reachSocket(game: GameServer, slot: number, hand: "left" | "right
   assert.fail("opposite palm must reach the socket");
 }
 
-test("physical wristband implant preserves identity, energy and save state through install and removal", {
+for (const slot of [0, 1] as const) {
+const hand = slot === 0 ? "right" : "left";
+const heldField = hand === "left" ? "wielded_entity_id" : "right_hand_entity_id";
+test(`physical wristband implant in slot ${slot} preserves identity, energy and save state through install and removal`, {
   skip: process.env.SHOCK2_E2E !== "1", timeout: 300_000,
 }, async () => {
   await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: ["--vr"] });
   await game.step({ frames: 30 });
-  await game.input.set("right_hand.squeeze", 1);
-  const spawned = await game.player.spawnItem(-101, { hand: "right" });
+  await game.input.set(`${hand}_hand.squeeze`, 1);
+  const spawned = await game.player.spawnItem(-101, { hand });
   const implant = { id: spawned.entity_id };
   await game.step({ frames: 5 });
-  assert.equal((await game.info()).player.right_hand_entity_id, implant.id);
+  assert.equal((await game.info()).player[heldField], implant.id);
   const prop = async (id: number, name: string) => (await game.entities.detail(id)).properties.find(p => p.name === name)?.value;
   const energy = await prop(implant.id, "Energy");
+  assert.deepEqual((await game.info()).player.hand_feedback?.implant_sockets?.locked, [false, false]);
   const strength = (await game.info()).player.effective_stats!.strength;
-  await reachSocket(game, 0, "right", 1);
+  await reachSocket(game, slot, hand, 1);
   assert.equal(await prop(implant.id, "ImplantSlot"), undefined, "passing through a socket never equips");
-  await game.input.set("right_hand.squeeze", 0);
+  await game.input.set(`${hand}_hand.squeeze`, 0);
   await game.step({ frames: 8 });
-  assert.equal((await game.info()).player.right_hand_entity_id, null);
-  assert.equal(await prop(implant.id, "ImplantSlot"), "0");
+  assert.equal((await game.info()).player[heldField], null);
+  assert.equal(await prop(implant.id, "ImplantSlot"), String(slot));
   assert.equal((await game.info()).player.effective_stats?.strength, strength + 1);
+  assert.deepEqual((await game.info()).player.hand_feedback?.implant_sockets?.locked, [slot !== 0, slot !== 1]);
   assert.equal(await prop(implant.id, "Energy"), energy);
   assert.equal((await game.physics.bodies({ entityId: implant.id })).bodies.length, 0);
   assert.equal((await game.player.inventory()).items.filter(i => i.entity_id === implant.id).length, 1);
@@ -52,13 +57,16 @@ test("physical wristband implant preserves identity, energy and save state throu
   await game.step({ frames: 5 });
   assert.equal((await game.info()).player.effective_stats?.strength, strength + 1, "bonus survives save/load");
   const [restored] = await game.entities.byTemplate(-101);
-  assert.equal(await prop(restored.id, "ImplantSlot"), "0");
+  assert.equal(await prop(restored.id, "ImplantSlot"), String(slot));
   assert.equal(await prop(restored.id, "Energy"), energy);
-  await reachSocket(game, 0, "right", 0);
-  await game.input.set("right_hand.squeeze", 1);
+  await reachSocket(game, slot, hand, 0);
+  await game.input.set(`${hand}_hand.squeeze`, 1);
   await game.step({ frames: 8 });
-  assert.equal((await game.info()).player.right_hand_entity_id, restored.id);
+  assert.equal((await game.info()).player[heldField], restored.id);
   assert.equal(await prop(restored.id, "ImplantSlot"), undefined);
   assert.equal((await game.info()).player.effective_stats?.strength, strength);
+  assert.deepEqual((await game.info()).player.hand_feedback?.implant_sockets?.locked, [false, false]);
   assert.equal(await prop(restored.id, "Energy"), energy);
 });
+
+}

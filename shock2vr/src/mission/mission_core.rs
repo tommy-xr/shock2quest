@@ -15250,6 +15250,50 @@ impl MissionCore {
                     self.implant_sockets
                         .render(asset_cache, &self.world, socket_frames),
                 );
+                // Fit the original implant mesh above the charge bar inside the well.
+                // It is the same carried entity, with no duplicate physics or ownership.
+                for (slot, entity) in crate::implants::equipped(&self.world)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let Some((frame, model)) =
+                        socket_frames[slot].zip(entity.and_then(|id| self.id_to_model.get(&id)))
+                    else {
+                        continue;
+                    };
+                    let Some(bounds) = model.bounding_box() else {
+                        continue;
+                    };
+                    let extent = bounds.max - bounds.min;
+                    let longest = extent.x.max(extent.y).max(extent.z);
+                    if longest <= 0.0001 {
+                        continue;
+                    }
+                    let width = crate::hud::virtual_arms::IMPLANT_SLOT_WIDTH;
+                    let scale = width * 0.62 / longest;
+                    let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
+                    let root = frame
+                        * Matrix4::from_translation(vec3(
+                            0.0,
+                            width * 0.08,
+                            width * 0.05 + extent.z * scale * 0.5,
+                        ))
+                        * Matrix4::from_scale(scale)
+                        * Matrix4::from_translation(-center);
+                    let lights = object_lights
+                        .as_ref()
+                        .map(|lighting| lighting.at_player_position(frame.w.truncate()));
+                    let mut objects = model.to_scene_objects().clone();
+                    for object in &mut objects {
+                        object.set_transform(root);
+                        object.set_lights(lights.clone());
+                    }
+                    crate::util::tag_render_source(
+                        &mut objects,
+                        crate::util::render_source::PLAYER_HANDS,
+                    );
+                    scene.extend(objects);
+                }
             }
             scene.extend(
                 self.holsters
@@ -18112,6 +18156,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             object.insert("implant_sockets".to_owned(), serde_json::json!({
                 "centers": self.interaction.implant_socket_frames(&self.world).map(|frame| frame.map(|f| { let p = f.w.truncate(); [p.x, p.y, p.z] })),
                 "enabled_slots": crate::implants::capacity(&self.world),
+                "locked": ([0, 1].map(|slot| crate::implants::socket_locked(&self.world, slot))),
                 "items": crate::implants::equipped(&self.world).map(|item| item.map(|id| id.inner() as i32)),
                 "near": self.implant_sockets.near,
             }));

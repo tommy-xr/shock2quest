@@ -70,7 +70,15 @@ impl Sockets {
                         let duplicate = actions.iter().any(|action| matches!(action,
                             Some(Action::Install { entity: other, .. })
                                 if crate::implants::kind(world, *other) == crate::implants::kind(world, entity)));
-                        let validation = if duplicate {
+                        let pending = actions
+                            .iter()
+                            .filter(|action| matches!(action, Some(Action::Install { .. })))
+                            .count();
+                        let validation = if occupants.iter().flatten().count() + pending
+                            >= crate::implants::capacity(world)
+                        {
+                            Err("Remove the other implant or acquire Cybernetically Enhanced.")
+                        } else if duplicate {
                             Err("Two implants of the same type cannot be equipped together.")
                         } else {
                             crate::implants::validate_socket(world, entity, slot)
@@ -190,8 +198,29 @@ mod tests {
     }
 
     #[test]
+    fn simultaneous_releases_reserve_the_single_available_implant() {
+        let (mut world, a, mut input) = fixture();
+        let b = world.add_entity((PropImplantDesc(1), PropEnergy(100.0)));
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .left_hand_entity_id = Some(b);
+        let mut s = Sockets::default();
+        input.left_hand.squeeze_value = 1.0;
+        input.right_hand.squeeze_value = 1.0;
+        update(&mut s, &world, &input, [Some(b), Some(a)]);
+        input.left_hand.squeeze_value = 0.0;
+        input.right_hand.squeeze_value = 0.0;
+        let actions = update(&mut s, &world, &input, [Some(b), Some(a)]);
+        assert!(matches!(actions[0], Some(Action::Install { entity, slot: 1 }) if entity == b));
+        assert!(matches!(actions[1], Some(Action::Refuse { .. })));
+        assert!(s.retained.keep_grip(1));
+    }
+
+    #[test]
     fn locked_socket_refuses_and_tracking_recovery_cannot_invent_a_release() {
-        let (world, implant, mut input) = fixture();
+        let (mut world, implant, mut input) = fixture();
+        world.add_component(implant, RuntimePropImplantSlot(0));
         let mut s = Sockets::default();
         let held = [Some(implant), None];
         input.left_hand.squeeze_value = 1.0;
