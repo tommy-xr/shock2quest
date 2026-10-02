@@ -2,7 +2,7 @@
 //! retain their backpack ownership, energy, script state and save identity.
 use super::body_inventory::RetainedRelease;
 use crate::input_context::InputContext;
-use cgmath::{InnerSpace, Matrix4, Vector3, vec3};
+use cgmath::{InnerSpace, Matrix4, Vector3};
 use shipyard::{EntityId, World};
 
 #[derive(Clone, Copy)]
@@ -95,49 +95,23 @@ impl Sockets {
 
     pub fn render(
         &self,
+        asset_cache: &mut engine::assets::asset_cache::AssetCache,
         world: &World,
         frames: [Option<Matrix4<f32>>; 2],
     ) -> Vec<engine::scene::SceneObject> {
-        use engine::scene::{SceneObject, color_material, cube};
-        let capacity = crate::implants::capacity(world);
-        let occupants = crate::implants::equipped(world);
+        use crate::hud::virtual_arms::{BIO_BAND_RADIUS, IMPLANT_SLOT_WIDTH};
         let mut objects = Vec::new();
         for (slot, frame) in frames.into_iter().enumerate() {
             let Some(frame) = frame else {
                 continue;
             };
-            let color = if self.retained.keep_grip(1 - slot) && self.near[1 - slot] {
-                vec3(1.0, 0.2, 0.1)
-            } else if slot >= capacity {
-                vec3(0.15, 0.15, 0.15)
-            } else if self.near[1 - slot] {
-                vec3(0.1, 0.8, 0.6)
-            } else if occupants[slot].is_some_and(|id| crate::implants::energy(world, id) <= 0.0) {
-                vec3(0.8, 0.35, 0.05)
-            } else if occupants[slot].is_some() {
-                vec3(0.1, 0.45, 0.6)
-            } else {
-                vec3(0.25, 0.35, 0.4)
-            };
-            // A recessed plate with four raised rails; its opening is also the grab target.
-            for (offset, size) in [
-                (vec3(0.0, 0.0, -0.006), vec3(0.072, 0.082, 0.008)),
-                (vec3(-0.033, 0.0, 0.0), vec3(0.006, 0.082, 0.012)),
-                (vec3(0.033, 0.0, 0.0), vec3(0.006, 0.082, 0.012)),
-                (vec3(0.0, -0.038, 0.0), vec3(0.06, 0.006, 0.012)),
-                (vec3(0.0, 0.038, 0.0), vec3(0.06, 0.006, 0.012)),
-            ] {
-                // Fullbright surfaces need explicit contrast to reveal the recess.
-                let tint = if offset.z < 0.0 { color * 0.25 } else { color };
-                let mut object =
-                    SceneObject::new(color_material::create(tint), Box::new(cube::create()));
-                object.set_transform(
-                    frame
-                        * Matrix4::from_translation(offset)
-                        * Matrix4::from_nonuniform_scale(size.x, size.y, size.z),
-                );
-                objects.push(object);
-            }
+            let canvas = crate::hud::implant_slot::canvas(world, slot);
+            objects.extend(canvas.render_world_space_bent(
+                asset_cache,
+                frame * Matrix4::from_scale(IMPLANT_SLOT_WIDTH),
+                BIO_BAND_RADIUS / IMPLANT_SLOT_WIDTH,
+                0.0003 / IMPLANT_SLOT_WIDTH,
+            ));
         }
         crate::util::tag_render_source(&mut objects, crate::util::render_source::PLAYER_HANDS);
         objects
@@ -150,7 +124,7 @@ mod tests {
     use crate::{
         mission::PlayerInfo, quest_info::QuestInfo, runtime_props::RuntimePropImplantSlot,
     };
-    use cgmath::Quaternion;
+    use cgmath::{Quaternion, vec3};
     use dark::properties::{Link, Links, PropEnergy, PropImplantDesc, ToLink, WrappedEntityId};
 
     fn fixture() -> (World, EntityId, InputContext) {

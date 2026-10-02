@@ -5825,7 +5825,7 @@ impl MissionCore {
                 hand.a_value = 0.0;
             }
         }
-        let socket_frames = self.interaction.implant_socket_frames();
+        let socket_frames = self.interaction.implant_socket_frames(&self.world);
         let socket_palms = std::array::from_fn(|i| {
             crate::virtual_hand::hand_world_position(
                 player_pos,
@@ -15244,45 +15244,12 @@ impl MissionCore {
                         .render(asset_cache, player.pos, player.rotation),
                 );
             }
-            let socket_frames = self.interaction.implant_socket_frames();
-            scene.extend(self.implant_sockets.render(&self.world, socket_frames));
-            for (slot, entity) in crate::implants::equipped(&self.world)
-                .into_iter()
-                .enumerate()
-            {
-                let Some((frame, model)) = socket_frames[slot].zip(
-                    entity
-                        .filter(|id| !self.interaction.is_holding(*id))
-                        .and_then(|id| self.id_to_model.get(&id)),
-                ) else {
-                    continue;
-                };
-                let Some(bounds) = model.bounding_box() else {
-                    continue;
-                };
-                let extent = bounds.max - bounds.min;
-                let longest = extent.x.max(extent.y).max(extent.z);
-                if longest <= 0.0001 {
-                    continue;
-                }
-                let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
-                let root = frame
-                    * Matrix4::from_translation(vec3(0.0, 0.0, 0.012))
-                    * Matrix4::from_scale(0.055 / longest)
-                    * Matrix4::from_translation(-center);
-                let mut objects = model.to_scene_objects().clone();
-                let lights = object_lights
-                    .as_ref()
-                    .map(|lighting| lighting.at_player_position(frame.w.truncate()));
-                for object in &mut objects {
-                    object.set_transform(root);
-                    object.set_lights(lights.clone());
-                }
-                crate::util::tag_render_source(
-                    &mut objects,
-                    crate::util::render_source::PLAYER_HANDS,
+            let socket_frames = self.interaction.implant_socket_frames(&self.world);
+            if !self.use_mode {
+                scene.extend(
+                    self.implant_sockets
+                        .render(asset_cache, &self.world, socket_frames),
                 );
-                scene.extend(objects);
             }
             scene.extend(
                 self.holsters
@@ -18143,7 +18110,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .diagnostics(&self.world, player.pos, player.rotation),
             );
             object.insert("implant_sockets".to_owned(), serde_json::json!({
-                "centers": self.interaction.implant_socket_frames().map(|frame| frame.map(|f| { let p = f.w.truncate(); [p.x, p.y, p.z] })),
+                "centers": self.interaction.implant_socket_frames(&self.world).map(|frame| frame.map(|f| { let p = f.w.truncate(); [p.x, p.y, p.z] })),
                 "enabled_slots": crate::implants::capacity(&self.world),
                 "items": crate::implants::equipped(&self.world).map(|item| item.map(|id| id.inner() as i32)),
                 "near": self.implant_sockets.near,

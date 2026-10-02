@@ -1,3 +1,4 @@
+pub(crate) mod implant_slot;
 use engine::assets::asset_cache::AssetCache;
 use shipyard::{Unique, UniqueView, World};
 

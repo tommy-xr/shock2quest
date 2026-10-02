@@ -1917,13 +1917,14 @@ fn mirrored_arm_rect(strip: Rect) -> Rect {
 
 /// The two authored implant sockets below the paperdoll's chest.
 fn implant_readout_rects(strip: Rect) -> [Rect; 2] {
-    let scale = strip.w / 636.0;
+    let scale = strip.w / crate::hud::implant_slot::INVENTORY_SIZE.x;
     [0, 1].map(|slot| {
+        let well = crate::hud::implant_slot::inventory_well(slot);
         Rect::new(
-            strip.x + (563.0 + slot as f32 * 36.0) * scale,
-            strip.y + 84.0 * scale,
-            34.0 * scale,
-            34.0 * scale,
+            strip.x + well.x * scale,
+            strip.y + well.y * scale,
+            well.w * scale,
+            well.h * scale,
         )
     })
 }

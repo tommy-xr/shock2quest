@@ -93,7 +93,7 @@ a deck, keep one hand attached while placing the other on the edge, then pull
 down or inward. To descend, crouch, grip near the ladder's top, pull yourself past
 the edge, and raise the held hand to lower your body. Release grip to let go.
 
-**Implants.** Bring a held implant to the socket on the opposite forearm and
+**Implants.** Bring a held implant to the slot on the side of the opposite wristband and
 release grip to install it. Squeeze with the empty opposite hand to remove it.
 The left socket is available from the start; Cybernetically Enhanced unlocks the
 right socket. Installed implants keep their backpack slot and need power to

@@ -23,7 +23,7 @@ async function reachSocket(game: GameServer, slot: number, hand: "left" | "right
   assert.fail("opposite palm must reach the socket");
 }
 
-test("physical forearm implant preserves identity, energy and save state through install and removal", {
+test("physical wristband implant preserves identity, energy and save state through install and removal", {
   skip: process.env.SHOCK2_E2E !== "1", timeout: 300_000,
 }, async () => {
   await using game = await GameServer.launch({ mission: "medsci1.mis", debugFlags: ["--vr"] });
@@ -50,6 +50,7 @@ test("physical forearm implant preserves identity, energy and save state through
   assert.ok((await game.save(save)).success);
   assert.ok((await game.load(save)).success);
   await game.step({ frames: 5 });
+  assert.equal((await game.info()).player.effective_stats?.strength, strength + 1, "bonus survives save/load");
   const [restored] = await game.entities.byTemplate(-101);
   assert.equal(await prop(restored.id, "ImplantSlot"), "0");
   assert.equal(await prop(restored.id, "Energy"), energy);

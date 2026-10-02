@@ -445,8 +445,10 @@ selection rather than a shared setting.
 
 ### VR implant sockets
 
-The existing powered implant system has physical sockets just behind each wrist.
-Release a held implant at the **opposite forearm** to install it; squeeze there
+The existing powered implant system has a slot on the side of each wristband,
+between its front and back health/psi readouts. It reuses the inventory’s open
+implant well and shows the installed implant’s inventory icon.
+Release a held implant at the **opposite wristband slot** to install it; squeeze there
 with an empty hand to remove the original item. The left socket is available
 from the start. **Cybernetically Enhanced** unlocks the right socket. Full,
 locked, duplicate-type, unresearched, and unpowered inserts are refused.
@@ -454,8 +456,8 @@ locked, duplicate-type, unresearched, and unpowered inserts are refused.
 Installed implants retain their backpack cells, energy, and script timers, so
 the existing inventory controls, recharge stations, saves, and deck transitions
 continue to apply. Inserting also requires backpack room; a refused release
-keeps the implant in hand until you squeeze again. Socket rails turn red for a
-refusal and amber for an installed implant without power. Tracked poses are
+keeps the implant in hand until you squeeze again and reports the refusal.
+The inventory’s blocked-cell art marks the locked second slot. Tracked poses are
 required for gestures; recovering tracking cannot manufacture a squeeze or
 release. Socket placement still needs a seated/standing comfort pass on a headset.
 
