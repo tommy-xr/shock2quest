@@ -12,7 +12,7 @@ mod slide;
 
 use std::{cell::RefCell, collections::HashMap};
 
-use cgmath::{InnerSpace, Matrix4, One, Point3, Quaternion, Rotation, Vector3, Vector4, vec3};
+use cgmath::{InnerSpace, Matrix4, One, Point3, Quaternion, Rotation, Vector3, Vector4};
 use engine::{
     assets::asset_cache::AssetCache,
     scene::{SceneObject, light::SpotLight},
