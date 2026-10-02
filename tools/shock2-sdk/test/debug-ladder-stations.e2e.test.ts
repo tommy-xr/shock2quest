@@ -205,10 +205,11 @@ async function climbToStall(run: Run, maxFrames: number, minY: number, still = 2
 
 test(
   "debug_ladder ceiling-capped ladder: head stays under the ceiling, jumping off lands on the corridor",
-  // rick1 Ladder 530/532. Main: the top-out fires through the 10.0 ceiling
-  // (cap y 10.59, mission 42.49) and the jump lands on the 9.6 roof
-  // (y 10.84, mission 42.84) - outside the level.
-  { skip: !e2eEnabled, timeout: 300_000, todo: "#1770 rick1 Ladder 532" },
+  // rick1 Ladder 530/532 (#1770). The climb stops with the head under the
+  // 10.0 ceiling (cap y 8.76) and the jump lands in the corridor. Before the
+  // fix the top-out crossed the ceiling (cap y 10.59, mission 42.49) and the
+  // jump landed on the 9.6 roof (y 10.84, mission 42.84), outside the level.
+  { skip: !e2eEnabled, timeout: 300_000 },
   async () => {
     await using game = await launch();
     await startTrail(game);
