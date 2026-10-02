@@ -274,6 +274,11 @@ pub enum MessagePayload {
     SensorEndIntersect {
         with: EntityId,
     },
+    /// Authored AI motion reaction; zero duration plays one motion.
+    Stun {
+        duration_seconds: f32,
+        tags: String,
+    },
     /// Native AI freeze reaction; negative duration is indefinite.
     Freeze {
         duration_seconds: f32,
