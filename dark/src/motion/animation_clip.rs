@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, rc::Rc, time::Duration};
 
 use cgmath::{Deg, Matrix4, Vector3};
 
@@ -15,7 +15,8 @@ pub struct AnimationClip {
     pub end_rotation: Deg<f32>,
     pub sliding_velocity: Vector3<f32>,
     pub translation: Vector3<f32>,
-    pub joint_to_frame: HashMap<JointId, Vec<Matrix4<f32>>>,
+    /// Shared, so a retimed copy (`with_timing`) does not duplicate keyframes.
+    pub joint_to_frame: Rc<HashMap<JointId, Vec<Matrix4<f32>>>>,
     pub root_transforms: Vec<Matrix4<f32>>, // root transforms per frame
     /// Full per-frame root positions (scaled); drives per-frame root-motion
     /// velocity. Empty for clips without a root stream (e.g. GLB clips).
@@ -64,7 +65,7 @@ impl AnimationClip {
             num_frames,
             duration,
             blend_length: Duration::from_millis(motion_stuff.blend_length as u64),
-            joint_to_frame,
+            joint_to_frame: Rc::new(joint_to_frame),
             root_transforms: motion_clip.root_transforms.clone(),
             root_positions: motion_clip.root_positions.clone(),
             time_per_frame,
@@ -74,6 +75,21 @@ impl AnimationClip {
             end_rotation,
             name: Some(mps_motion.name.clone()), // Use motion name for traditional SS2 animations
         }
+    }
+
+    /// This clip played under a schema's timing: `time_scale` multiplies its
+    /// duration and `stretch` its root travel (see `SchemaTiming`). The pose is
+    /// untouched; only the clock and the travel that drives movement change.
+    pub fn with_timing(&self, time_scale: f32, stretch: f32) -> AnimationClip {
+        let mut clip = self.clone();
+        clip.time_per_frame = self.time_per_frame.mul_f32(time_scale);
+        clip.duration = self.duration.mul_f32(time_scale);
+        clip.translation = self.translation * stretch;
+        clip.sliding_velocity = self.sliding_velocity * (stretch / time_scale);
+        for position in &mut clip.root_positions {
+            *position *= stretch;
+        }
+        clip
     }
 
     /// Instantaneous root-motion velocity at `frame`: the rate implied by
@@ -96,5 +112,40 @@ impl AnimationClip {
             (self.root_positions[f0 + 1] - self.root_positions[f0])
                 / self.time_per_frame.as_secs_f32(),
         )
+    }
+
+    /// Root travel between two playback positions, in frames, along the
+    /// per-frame root stream. Past the final frame the trailing stride
+    /// continues (as in `root_velocity_at`), and a looping clip carries whole
+    /// cycles across the wrap. `None` when the clip has no root stream.
+    pub fn root_travel(&self, from: f32, to: f32, looping: bool) -> Option<Vector3<f32>> {
+        if self.root_positions.len() < 2 {
+            return None;
+        }
+        Some(self.root_position(to, looping) - self.root_position(from, looping))
+    }
+
+    fn root_position(&self, pos: f32, looping: bool) -> Vector3<f32> {
+        let positions = &self.root_positions;
+        let last = positions.len() - 1;
+        let frames = positions.len() as f32;
+        let trailing = positions[last] - positions[last - 1];
+        let within = |pos: f32| {
+            if pos >= last as f32 {
+                positions[last] + trailing * (pos - last as f32)
+            } else {
+                let frame = pos.floor() as usize;
+                let t = pos - frame as f32;
+                positions[frame] + (positions[frame + 1] - positions[frame]) * t
+            }
+        };
+        let pos = pos.max(0.0);
+        if looping && pos >= frames {
+            let cycles = (pos / frames).floor();
+            let cycle_travel = positions[last] - positions[0] + trailing;
+            cycle_travel * cycles + within(pos - cycles * frames)
+        } else {
+            within(pos.min(frames))
+        }
     }
 }

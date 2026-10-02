@@ -14,7 +14,6 @@ pub use motion_clip::*;
 pub use motion_info::*;
 pub use motion_query::*;
 pub use motion_schema::*;
-use rand::{Rng, thread_rng};
 pub use turn_clips::*;
 
 use crate::{
@@ -39,6 +38,17 @@ pub struct MotionDB {
 
     // Dictionary to resolve values -> strings for animation names
     tag_value_to_animations: HashMap<i32, Vec<String>>,
+
+    // Each schema's playback modifiers, keyed like `tag_value_to_animations`
+    tag_value_to_timing: HashMap<i32, SchemaTiming>,
+}
+
+/// One clip a motion query can play, with the timing of the schema that offered
+/// it (a clip shared by several schemas plays differently in each).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MotionOption {
+    pub name: String,
+    pub timing: SchemaTiming,
 }
 
 impl MotionDB {
@@ -132,7 +142,7 @@ impl MotionDB {
 
         let mut tag_value_to_animation_name = HashMap::new();
         let mut tag_value_to_animations = HashMap::new();
-        let mut tag_value_to_motion_schema = HashMap::new();
+        let mut tag_value_to_timing = HashMap::new();
         let schemas = read_u32(reader);
         trace!("motion_schema_count: {schemas}");
         for i in 0..schemas {
@@ -157,7 +167,7 @@ impl MotionDB {
                 .join(", ");
 
             tag_value_to_animation_name.insert(i as i32, summary_str);
-            tag_value_to_motion_schema.insert(i as i32, schema);
+            tag_value_to_timing.insert(i as i32, schema.timing());
             tag_value_to_animations.insert(i as i32, animations);
         }
 
@@ -175,9 +185,17 @@ impl MotionDB {
             tag_databases,
             tag_name_map: name_map,
             tag_value_to_animations,
+            tag_value_to_timing,
         }
     }
     fn query_options(&self, query: &MotionQuery) -> Vec<String> {
+        self.query_timed_options(query)
+            .into_iter()
+            .map(|option| option.name)
+            .collect()
+    }
+
+    fn query_timed_options(&self, query: &MotionQuery) -> Vec<MotionOption> {
         info!("motion_query: {:?}", query);
         let creature_type = query.creature_type;
 
@@ -200,44 +218,28 @@ impl MotionDB {
 
         let options = query_result
             .into_iter()
-            .filter_map(|idx| self.tag_value_to_animations.get(&idx))
+            .filter_map(|idx| {
+                let timing = self.tag_value_to_timing.get(&idx).copied()?;
+                let names = self.tag_value_to_animations.get(&idx)?;
+                Some(names.iter().map(move |name| MotionOption {
+                    name: name.clone(),
+                    timing,
+                }))
+            })
             .flatten()
-            .cloned()
-            .collect::<Vec<String>>();
+            .collect::<Vec<MotionOption>>();
 
         info!("options: {:?}", options);
         options
     }
 
-    ///
-    /// query the motion database
-    ///
-    /// Returns a string containing the name of the animation
-    pub fn query(&self, query: MotionQuery) -> Option<String> {
-        let options = self.query_options(&query);
-
-        if options.is_empty() {
-            return None;
-        }
-
-        match query.selection_strategy {
-            MotionQuerySelectionStrategy::Random => {
-                let mut rng = thread_rng();
-                let idx = rng.gen_range(0..options.len());
-
-                let opt = options[idx].clone();
-                info!("querying - got: {}", opt);
-                Some(opt)
-            }
-            MotionQuerySelectionStrategy::Sequential(seq) => {
-                let idx = (seq as usize) % options.len();
-                Some(options[idx].clone())
-            }
-        }
-    }
-
     pub fn query_all(&self, query: MotionQuery) -> Vec<String> {
         self.query_options(&query)
+    }
+
+    /// Every clip the query matches, each with its schema's timing.
+    pub fn query_all_timed(&self, query: MotionQuery) -> Vec<MotionOption> {
+        self.query_timed_options(&query)
     }
 
     /// Get all available tag names

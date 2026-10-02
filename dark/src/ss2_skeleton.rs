@@ -593,7 +593,7 @@ pub fn animate(
                 None => current,
             }
         };
-        let animations = &animation_clip.joint_to_frame;
+        let animations = animation_clip.joint_to_frame.as_ref();
         for key in animations {
             let (joint, frames) = key;
             animation_transforms.insert(*joint, sample(frames));
@@ -714,7 +714,7 @@ mod tests {
             end_rotation: Deg(0.0),
             sliding_velocity: Vector3::new(0.0, 0.0, 0.0),
             translation: Vector3::new(0.0, 0.0, 0.0),
-            joint_to_frame,
+            joint_to_frame: std::rc::Rc::new(joint_to_frame),
             root_transforms: vec![Matrix4::from_translation(Vector3::new(0.0, 10.0, 0.0))],
             root_positions: Vec::new(),
             motion_flags: Vec::new(),
@@ -751,14 +751,14 @@ mod tests {
             Matrix4::from_translation(Vector3::new(0.0, -0.5, 0.0)),
         ];
         clip.root_positions = vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, -0.5, 0.0)];
-        clip.joint_to_frame = HashMap::from([
+        clip.joint_to_frame = std::rc::Rc::new(HashMap::from([
             (0, vec![Matrix4::identity(); 2]),
             (
                 1,
                 vec![Matrix4::identity(), Matrix4::from_angle_z(Deg(180.0))],
             ),
             (2, vec![Matrix4::identity(); 2]),
-        ]);
+        ]));
 
         let live_floor = -2.25;
         let grounded = ground_terminal_pose_to_floor(&skeleton, &clip, live_floor);
@@ -841,14 +841,14 @@ mod tests {
         // Two keyframes for the child joint: translation steps (2,0,0) ->
         // (4,0,0); rotation identity -> 90 deg yaw. Root static both frames.
         clip.num_frames = 2;
-        clip.joint_to_frame.insert(
+        std::rc::Rc::make_mut(&mut clip.joint_to_frame).insert(
             0,
             vec![
                 Matrix4::from_translation(Vector3::new(5.0, 0.0, 0.0)),
                 Matrix4::from_translation(Vector3::new(5.0, 0.0, 0.0)),
             ],
         );
-        clip.joint_to_frame.insert(
+        std::rc::Rc::make_mut(&mut clip.joint_to_frame).insert(
             1,
             vec![
                 Matrix4::from_translation(Vector3::new(2.0, 0.0, 0.0)),
@@ -892,9 +892,9 @@ mod tests {
         // FINAL frame with fraction 0.5 and wrap on must head back toward
         // frame 0: lerp((4,0,0), (2,0,0), 0.5) = (3,0,0).
         clip.num_frames = 2;
-        clip.joint_to_frame
+        std::rc::Rc::make_mut(&mut clip.joint_to_frame)
             .insert(0, vec![Matrix4::identity(), Matrix4::identity()]);
-        clip.joint_to_frame.insert(
+        std::rc::Rc::make_mut(&mut clip.joint_to_frame).insert(
             1,
             vec![
                 Matrix4::from_translation(Vector3::new(2.0, 0.0, 0.0)),
