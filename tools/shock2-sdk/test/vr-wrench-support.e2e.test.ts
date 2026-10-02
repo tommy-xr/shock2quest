@@ -8,27 +8,28 @@ const vector = (v: ResolvedGrip["offset"]): Vec3 => [v.x, v.y, v.z];
 const quaternion = (q: ResolvedGrip["rotation"]): Quat => [...vector(q.v), q.s];
 const distance = (a: Vec3, b: Vec3) => Math.hypot(...sub(a,b));
 
+for (const [model, template] of [["wrench_h", -928], ["rapier_h", -24], ["shard_h", -28]] as const)
 for (const primary of ["right", "left"] as const) {
-  test(`wrench support (${primary} primary): near grab, rigid steering, release and separation break`,
+  test(`${model} support (${primary} primary): near grab, rigid steering, release and separation break`,
     { skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000 }, async () => {
       await using game = await GameServer.launch({mission:"debug_interactions", debugFlags:["--vr"]});
       await game.input.set("head.rotation",[0,0,0,1]);
       await game.step({frames:90});
-      const wrench = (await game.entities.list()).entities.find(e => e.template_id === -928)!;
+      const weapon = (await game.entities.list()).entities.find(e => e.template_id === template)!;
       const other = primary === "right" ? "left" : "right";
       const owned = primary === "right" ? "right_hand_entity_id" : "wielded_entity_id";
       const empty = primary === "right" ? "wielded_entity_id" : "right_hand_entity_id";
-      await game.player.teleport({x:wrench.position[0],y:1,z:0});
+      await game.player.teleport({x:weapon.position[0],y:1,z:0});
       // Keep the head facing forward: the pickup target is off to the side,
       // and turning toward it puts the support fixture in a shoulder bag.
-      await aimVrHandAt(game, wrench.position, .2, 1, 0, {hand:primary, lookAtTarget:false});
+      await aimVrHandAt(game, weapon.position, .2, 1, 0, {hand:primary, lookAtTarget:false});
       await game.input.set(`${primary}_hand.position`, [0,1,-.5]);
       await game.input.set(`${primary}_hand.rotation`, [0,0,0,1]);
       await game.input.set(`${other}_hand.squeeze`, 0);
       await game.step({frames:90});
       const grip = async (): Promise<HandGrip> => (await game.info()).player.hand_grips.find(g => g.hand === primary)!;
       const before = await grip();
-      assert.ok(before?.support, "wrench publishes its prepared support socket");
+      assert.ok(before?.support, "weapon publishes its prepared support socket");
       const itemScale = before.grip!.item_scale;
       const place = async (position: Vec3, rotation = quaternion(before.support!.controller_rotation)) => {
         const player = (await game.info()).player;
@@ -50,7 +51,7 @@ for (const primary of ["right", "left"] as const) {
       await game.step({frames:15});
       assert.equal((await grip()).support!.attached,true, JSON.stringify({before:before.support, support:(await grip()).support}));
       const state = (await game.info()).player;
-      assert.equal(state[owned],wrench.id);
+      assert.equal(state[owned],weapon.id);
       assert.equal(state[empty],null,"support does not own a second entity");
       assert.equal(state.hand_grips.length,1);
       // Move only the supporting controller sideways; scale and the primary palm stay fixed.
@@ -66,7 +67,7 @@ for (const primary of ["right", "left"] as const) {
       const root = vector(steered.support!.model_position);
       const palm = add(root,quatRotate(q,vector(steered.support!.primary_anchor)));
       assert.ok(distance(palm,vector(before.support.primary_palm)) < .0001,"model keeps primary anchor exact");
-      for (const draw of (await game.scene.objects({entityId:wrench.id})).objects) {
+      for (const draw of (await game.scene.objects({entityId:weapon.id})).objects) {
         for (const scale of draw.scale) assert.ok(Math.abs(scale-itemScale) < 1e-5,"weapon never stretches");
       }
       await game.input.set(`${other}_hand.trigger`,0);
@@ -75,7 +76,7 @@ for (const primary of ["right", "left"] as const) {
       const releasing = await grip();
       assert.equal(releasing.support!.attached,false);
       assert.ok(releasing.support!.blend > 0,"support release blends instead of snapping");
-      assert.equal((await game.info()).player[owned],wrench.id);
+      assert.equal((await game.info()).player[owned],weapon.id);
       await game.step({frames:60});
       assert.ok(distance(vector((await grip()).support!.model_position),vector(before.support.model_position)) < .001);
       // Over-separation ends support; moving back while squeezed does not reattach.
@@ -102,13 +103,13 @@ for (const primary of ["right", "left"] as const) {
       await game.step({frames:1});
       const released = (await game.info()).player;
       assert.equal(released[owned],null);
-      assert.equal(released[empty],wrench.id,"nearby squeezed support hand receives the same wrench");
+      assert.equal(released[empty],weapon.id,"nearby squeezed support hand receives the same weapon");
       assert.equal(released.hand_grips.length,1);
-      const bodies = (await game.physics.bodies({entityId:wrench.id})).bodies;
+      const bodies = (await game.physics.bodies({entityId:weapon.id})).bodies;
       assert.ok(bodies.length > 0);
-      assert.ok(bodies.every(body=>body.body_type === "kinematic"),"wrench stays held through handoff");
+      assert.ok(bodies.every(body=>body.body_type === "kinematic"),"weapon stays held through handoff");
       await game.step({frames:5});
-      assert.equal((await game.info()).player[empty],wrench.id);
+      assert.equal((await game.info()).player[empty],weapon.id);
     });
 }
 
