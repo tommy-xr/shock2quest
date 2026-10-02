@@ -229,7 +229,9 @@ pub fn resolve_stim_damage(
                     flat_damage += multiplier;
                 }
             }
-            ReceptronEffect::Radiate { .. } | ReceptronEffect::Freeze { .. } => {}
+            ReceptronEffect::Radiate { .. }
+            | ReceptronEffect::Freeze { .. }
+            | ReceptronEffect::Stun { .. } => {}
             ReceptronEffect::Unhandled(_) => {}
         }
     }
@@ -263,6 +265,7 @@ pub fn resolve_stim_radiation(
             }
             ReceptronEffect::Damage { .. }
             | ReceptronEffect::Freeze { .. }
+            | ReceptronEffect::Stun { .. }
             | ReceptronEffect::Unhandled(_) => {}
         }
     }
@@ -639,4 +642,99 @@ pub fn hazard_effects(
         });
     }
     effects
+}
+
+/// Authored Stun is a motion action, not Freeze and not a flee request.
+pub fn contact_stim_stun(
+    world: &World,
+    emitter: i32,
+    victim: EntityId,
+    scale: f32,
+) -> Option<(f32, String)> {
+    let sources = world.borrow::<UniqueView<GlobalContactStims>>().ok()?;
+    let receivers = victim_receptrons(world, victim);
+    sources
+        .0
+        .get(&emitter)?
+        .iter()
+        .filter_map(|(stim, intensity)| resolve_stim_stun(&receivers, *stim, intensity * scale))
+        .last()
+}
+
+fn resolve_stim_stun(
+    receivers: &[(i32, ReceptronOptions)],
+    stim: i32,
+    intensity: f32,
+) -> Option<(f32, String)> {
+    if !intensity.is_finite() || intensity <= 0.0 {
+        return None;
+    }
+    let mut ordered = receivers
+        .iter()
+        .filter(|(id, _)| *id == stim)
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|(_, options)| options.order);
+    let mut intensity = intensity;
+    let mut result = None;
+    for (_, options) in ordered {
+        match &options.effect {
+            ReceptronEffect::Abort => return None,
+            ReceptronEffect::Amplify { factor } => intensity *= factor,
+            ReceptronEffect::Stun {
+                duration_multiplier,
+                tags,
+            } => {
+                let seconds = intensity * *duration_multiplier as f32;
+                if seconds.is_finite() && seconds >= 0.0 {
+                    result = Some((seconds, tags.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod stun_tests {
+    use super::*;
+    #[test]
+    fn authored_stun_obeys_receiver_immunity_order_and_intensity() {
+        let stun = (
+            1,
+            ReceptronOptions {
+                order: 84,
+                effect: ReceptronEffect::Stun {
+                    duration_multiplier: 1,
+                    tags: "stun".into(),
+                },
+            },
+        );
+        assert_eq!(
+            resolve_stim_stun(&[stun.clone()], 1, 20.0),
+            Some((20.0, "stun".into()))
+        );
+        assert_eq!(resolve_stim_stun(&[stun.clone()], 2, 20.0), None);
+        assert_eq!(resolve_stim_stun(&[], 1, 20.0), None);
+        assert_eq!(resolve_stim_stun(&[stun.clone()], 1, 0.0), None);
+        let amp = (
+            1,
+            ReceptronOptions {
+                order: 80,
+                effect: ReceptronEffect::Amplify { factor: 0.5 },
+            },
+        );
+        assert_eq!(
+            resolve_stim_stun(&[stun.clone(), amp], 1, 20.0),
+            Some((10.0, "stun".into()))
+        );
+        let abort = (
+            1,
+            ReceptronOptions {
+                order: 0,
+                effect: ReceptronEffect::Abort,
+            },
+        );
+        assert_eq!(resolve_stim_stun(&[stun, abort], 1, 20.0), None);
+    }
 }

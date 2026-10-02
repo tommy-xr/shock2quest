@@ -282,7 +282,15 @@ pub(crate) fn locomotion_scale_for_heading_error(delta: Deg<f32>) -> f32 {
     }
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct StunState {
+    remaining: f32,
+    single_motion: bool,
+    tags: String,
+}
+
 pub struct AnimatedMonsterAI {
+    stun: Option<StunState>,
     /// Last locally acquired scent identity, never a global player-route cursor.
     scent_cursor: Option<u64>,
     scent_goal: bool,
@@ -340,8 +348,40 @@ pub struct AnimatedMonsterAI {
 }
 
 impl AnimatedMonsterAI {
+    fn stun_animation(&self, entity_id: EntityId) -> Effect {
+        let Some(stun) = &self.stun else {
+            return Effect::NoEffect;
+        };
+        let tags = stun
+            .tags
+            .split(',')
+            .filter_map(|tag| {
+                let mut parts = tag.split_whitespace();
+                let name = parts.next()?;
+                Some(
+                    match parts.next().and_then(|value| value.parse::<i32>().ok()) {
+                        Some(value) => MotionQueryItem::with_value(name, value),
+                        None => MotionQueryItem::new(name),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        // Hybrids key Stun directly; humans, monkeys, midwives and rumblers
+        // put the same reaction beneath the Stalled context in motiondb.
+        Effect::PlayAnimationBySchema {
+            entity_id,
+            motion_queries: vec![tags.clone(), {
+                let mut stalled = tags;
+                stalled.push(MotionQueryItem::new("stalled"));
+                stalled
+            }],
+            selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
+        }
+    }
+
     pub fn idle() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
+            stun: None,
             is_dead: false,
             alertness_pinned: false,
             death_elapsed: 0.0,
@@ -374,6 +414,7 @@ impl AnimatedMonsterAI {
 
     pub fn new() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
+            stun: None,
             is_dead: false,
             alertness_pinned: false,
             death_elapsed: 0.0,
@@ -891,6 +932,12 @@ impl AnimatedMonsterAI {
         entity_id: EntityId,
     ) -> Effect {
         let sync_effect = self.force_alertness_state(level, world, physics, entity_id);
+        // Perception may update while Stun owns the motion. Do not restart its
+        // clip on footsteps or damage: that could postpone the expiry boundary
+        // forever under sustained noise.
+        if self.stun.is_some() {
+            return sync_effect;
+        }
         let is_locomotion = self.current_behavior.borrow().is_locomotion();
         let selection_strategy = self.next_selection(is_locomotion);
         // Play (replace), never queue, on a behavior change: queueing pushes
@@ -919,6 +966,7 @@ impl AnimatedMonsterAI {
     /// re-dispatch queued when no crumple motion is found), so the crumple
     /// and death sound play only once.
     fn enter_death(&mut self, world: &World, entity_id: EntityId) -> Effect {
+        self.stun = None;
         self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
         self.is_dead = true;
         // Anchor the ragdoll-handoff timer to the crumple's actual start
@@ -991,7 +1039,11 @@ impl AnimatedMonsterAI {
     /// most one frame of lag (e.g. handle_message changes, or the
     /// AIWatchObj early-return, publish on the next update)
     fn publish_behavior(&mut self, entity_id: EntityId) -> Effect {
-        let behavior_name = self.current_behavior.borrow().name();
+        let behavior_name = if self.stun.is_some() {
+            "Stunned"
+        } else {
+            self.current_behavior.borrow().name()
+        };
         if self.published_behavior != Some(behavior_name) {
             self.published_behavior = Some(behavior_name);
             Effect::SetAIProperty {
@@ -1371,8 +1423,9 @@ impl Script for AnimatedMonsterAI {
     }
     fn save_state(&self) -> Result<crate::scripts::ScriptState, crate::scripts::ScriptStateError> {
         crate::scripts::ScriptState::encode(
-            2,
+            3,
             &(
+                &self.stun,
                 &self.combat_frustration,
                 self.scent_cursor,
                 self.scent_goal,
@@ -1394,11 +1447,22 @@ impl Script for AnimatedMonsterAI {
         _: &crate::scripts::ScriptRestoreContext<'_>,
     ) -> Result<(), crate::scripts::ScriptStateError> {
         (
+            self.stun,
             self.combat_frustration,
             self.scent_cursor,
             self.scent_goal,
             self.last_known_player_pos,
-        ) = saved.decode(2, "shock2vr.animated_combat")?;
+        ) = saved.decode(3, "shock2vr.animated_combat")?;
+        if self
+            .stun
+            .as_ref()
+            .is_some_and(|stun| !stun.remaining.is_finite())
+        {
+            return Err(crate::scripts::ScriptStateError::InvalidPayload {
+                script_key: "shock2vr.animated_combat".into(),
+                message: "non-finite stun timer".into(),
+            });
+        }
         Ok(())
     }
     fn initialize_after_hydration(
@@ -1408,6 +1472,13 @@ impl Script for AnimatedMonsterAI {
         _hydrated: bool,
     ) -> Effect {
         let initialized = self.initialize(entity, world);
+        if self.stun.is_some() && !self.is_dead {
+            return Effect::combine(vec![
+                initialized,
+                self.stun_animation(entity),
+                self.publish_behavior(entity),
+            ]);
+        }
         if !self.is_dead && self.config.is_some() {
             if let Some(goal) = self.last_known_player_pos {
                 self.current_behavior = Box::new(RefCell::new(SearchBehavior::for_scent(goal)));
@@ -1494,6 +1565,7 @@ impl Script for AnimatedMonsterAI {
         // behavior so introspection shows "Dead", and release a sensor the
         // ray was intersecting at death so its end-intersect isn't stranded.
         if self.is_dead || is_killed(entity_id, world) {
+            self.stun = None;
             // A corpse recreated by save/load also latches is_dead so stale
             // animation completions stay inert, but initialize() pre-marks
             // its handoff as emitted: it must not ragdoll-ify from whatever
@@ -1534,6 +1606,12 @@ impl Script for AnimatedMonsterAI {
             ]);
         }
 
+        if let Some(stun) = self.stun.as_mut() {
+            stun.remaining -= time.elapsed.as_secs_f32();
+            // Dark ends the high-priority motion at an action boundary, rather
+            // than snapping out of the pose at an arbitrary timer tick.
+            return self.publish_behavior(entity_id);
+        }
         let delta = time.elapsed.as_secs_f32();
 
         // Monster rotation is set directly via Effect::SetRotation, so pose.rotation
@@ -1872,6 +1950,54 @@ impl Script for AnimatedMonsterAI {
         physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
+        if let MessagePayload::Stun {
+            duration_seconds,
+            tags,
+        } = msg
+        {
+            if !self.is_dead
+                && !is_killed(entity_id, world)
+                && duration_seconds.is_finite()
+                && *duration_seconds >= 0.0
+            {
+                self.stun = Some(StunState {
+                    remaining: *duration_seconds,
+                    single_motion: *duration_seconds == 0.0,
+                    tags: tags.clone(),
+                });
+                self.turn_clip = None;
+                self.took_damage = false;
+                return Effect::combine(vec![
+                    self.stun_animation(entity_id),
+                    self.publish_behavior(entity_id),
+                ]);
+            }
+            return Effect::NoEffect;
+        }
+        if let Some(stun) = self.stun.as_ref() {
+            match msg {
+                MessagePayload::AnimationCompleted => {
+                    if !stun.single_motion && stun.remaining > 0.0 {
+                        return self.stun_animation(entity_id);
+                    }
+                    self.stun = None;
+                    self.took_damage = false;
+                    let motion_queries = self.current_behavior.borrow().animation_queries();
+                    return Effect::combine(vec![
+                        Effect::PlayAnimationBySchema {
+                            entity_id,
+                            motion_queries,
+                            selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
+                        },
+                        self.publish_behavior(entity_id),
+                    ]);
+                }
+                MessagePayload::AnimationFlagTriggered { .. } | MessagePayload::Collided { .. } => {
+                    return Effect::NoEffect;
+                }
+                _ => {}
+            }
+        }
         {
             self.current_behavior
                 .borrow_mut()
@@ -1959,10 +2085,14 @@ impl Script for AnimatedMonsterAI {
                     )));
                     let is_locomotion = self.current_behavior.borrow().is_locomotion();
                     let selection_strategy = self.next_selection(is_locomotion);
-                    Effect::PlayAnimationBySchema {
-                        entity_id,
-                        motion_queries: self.current_behavior.borrow().animation_queries(),
-                        selection_strategy,
+                    if self.stun.is_some() {
+                        Effect::NoEffect
+                    } else {
+                        Effect::PlayAnimationBySchema {
+                            entity_id,
+                            motion_queries: self.current_behavior.borrow().animation_queries(),
+                            selection_strategy,
+                        }
                     }
                 } else {
                     Effect::NoEffect
@@ -2011,10 +2141,14 @@ impl Script for AnimatedMonsterAI {
                     )));
                     let is_locomotion = self.current_behavior.borrow().is_locomotion();
                     let selection_strategy = self.next_selection(is_locomotion);
-                    Effect::PlayAnimationBySchema {
-                        entity_id,
-                        motion_queries: self.current_behavior.borrow().animation_queries(),
-                        selection_strategy,
+                    if self.stun.is_some() {
+                        Effect::NoEffect
+                    } else {
+                        Effect::PlayAnimationBySchema {
+                            entity_id,
+                            motion_queries: self.current_behavior.borrow().animation_queries(),
+                            selection_strategy,
+                        }
                     }
                 } else {
                     Effect::NoEffect
@@ -2422,6 +2556,192 @@ mod tests {
             total: std::time::Duration::from_millis(100),
         };
         Effect::flatten(vec![monster.update(entity_id, world, &physics, &time)])
+    }
+
+    #[test]
+    fn stun_recast_expiry_and_save_round_trip() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let physics = PhysicsWorld::new();
+        let mut ai = AnimatedMonsterAI::new();
+        ai.initialize(entity, &world);
+        let cast = MessagePayload::Stun {
+            duration_seconds: 20.0,
+            tags: "stun".into(),
+        };
+        let effect = ai.handle_message(entity, &world, &physics, &cast);
+        assert!(
+            Effect::flatten(vec![effect])
+                .iter()
+                .any(|e| matches!(e, Effect::PlayAnimationBySchema { .. }))
+        );
+        ai.update(
+            entity,
+            &world,
+            &physics,
+            &Time {
+                elapsed: std::time::Duration::from_secs(7),
+                ..Time::default()
+            },
+        );
+        assert_eq!(ai.stun.as_ref().unwrap().remaining, 13.0);
+        ai.handle_message(entity, &world, &physics, &cast);
+        assert_eq!(
+            ai.stun.as_ref().unwrap().remaining,
+            20.0,
+            "recast replaces, never stacks"
+        );
+        ai.update(
+            entity,
+            &world,
+            &physics,
+            &Time {
+                elapsed: std::time::Duration::from_secs(4),
+                ..Time::default()
+            },
+        );
+        let saved = ai.save_state().unwrap();
+        let mut restored = AnimatedMonsterAI::new();
+        restored
+            .restore_state(
+                &saved,
+                &crate::scripts::ScriptRestoreContext::new(&std::collections::HashMap::new()),
+            )
+            .unwrap();
+        restored.initialize_after_hydration(entity, &world, true);
+        assert_eq!(restored.stun.as_ref().unwrap().remaining, 16.0);
+        restored.update(
+            entity,
+            &world,
+            &physics,
+            &Time {
+                elapsed: std::time::Duration::from_secs(17),
+                ..Time::default()
+            },
+        );
+        assert!(restored.stun.is_some(), "finish at a motion boundary");
+        restored.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::AnimationCompleted,
+        );
+        assert!(restored.stun.is_none());
+    }
+
+    #[test]
+    fn stun_blocks_attack_flags_and_death_clears_it() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let physics = PhysicsWorld::new();
+        let mut ai = AnimatedMonsterAI::new();
+        ai.initialize(entity, &world);
+        ai.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::Stun {
+                duration_seconds: 20.0,
+                tags: "stun".into(),
+            },
+        );
+        assert!(matches!(
+            ai.handle_message(
+                entity,
+                &world,
+                &physics,
+                &MessagePayload::AnimationFlagTriggered {
+                    motion_flags: MotionFlags::FIRE | MotionFlags::MELEE_CONTACT_START
+                }
+            ),
+            Effect::NoEffect
+        ));
+        ai.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::Damage {
+                amount: 100.0,
+                impact: None,
+            },
+        );
+        assert!(ai.stun.is_none());
+        ai.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::Stun {
+                duration_seconds: 20.0,
+                tags: "stun".into(),
+            },
+        );
+        assert!(ai.stun.is_none(), "dead actors cannot be stunned");
+    }
+
+    #[test]
+    fn damage_and_noise_do_not_restart_stun_motion_or_timer() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let physics = PhysicsWorld::new();
+        let mut ai = AnimatedMonsterAI::new();
+        ai.initialize(entity, &world);
+        ai.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::Stun {
+                duration_seconds: 1.0,
+                tags: "stun".into(),
+            },
+        );
+        for _ in 0..20 {
+            step(&mut ai, &world, entity);
+            for msg in [
+                MessagePayload::Damage {
+                    amount: 1.0,
+                    impact: None,
+                },
+                MessagePayload::HeardNoise {
+                    origin: vec3(0.0, 0.0, 10.0),
+                },
+            ] {
+                let effects =
+                    Effect::flatten(vec![ai.handle_message(entity, &world, &physics, &msg)]);
+                assert!(!effects.iter().any(|effect| matches!(
+                    effect,
+                    Effect::PlayAnimationBySchema { .. } | Effect::QueueAnimationBySchema { .. }
+                )));
+            }
+        }
+        ai.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::AnimationCompleted,
+        );
+        assert!(ai.stun.is_none());
+    }
+
+    #[test]
+    fn zero_duration_stun_plays_once() {
+        let (world, entity) = world_with_monster_and_player(Deg(180.0));
+        let physics = PhysicsWorld::new();
+        let mut ai = AnimatedMonsterAI::new();
+        ai.initialize(entity, &world);
+        ai.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::Stun {
+                duration_seconds: 0.0,
+                tags: "stun".into(),
+            },
+        );
+        assert!(ai.stun.is_some());
+        ai.handle_message(
+            entity,
+            &world,
+            &physics,
+            &MessagePayload::AnimationCompleted,
+        );
+        assert!(ai.stun.is_none());
     }
 
     #[test]

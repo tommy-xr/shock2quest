@@ -79,6 +79,28 @@ pub(crate) fn projectile_contact_effects(
     } else {
         Effect::combine(vec![damage, hazard])
     };
+    let damage = if let Some((duration_seconds, tags)) =
+        crate::mission::stim_response::contact_stim_stun(
+            world,
+            template,
+            receiver,
+            crate::runtime_props::RuntimePropShotModifiers::of(world, projectile).stim,
+        ) {
+        Effect::combine(vec![
+            damage,
+            Effect::Send {
+                msg: Message {
+                    to: receiver,
+                    payload: MessagePayload::Stun {
+                        duration_seconds,
+                        tags,
+                    },
+                },
+            },
+        ])
+    } else {
+        damage
+    };
     if let Some(duration_seconds) = crate::mission::stim_response::contact_stim_freeze(
         world,
         template,

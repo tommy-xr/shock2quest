@@ -1037,8 +1037,12 @@ pub enum ReceptronEffect {
     Radiate { multiplier: f32 },
     /// Freeze an AI for the incoming intensity times this duration multiplier.
     Freeze { duration_multiplier: i32 },
-    /// An effect the game does not implement yet (EnvSound, add_metaprop,
-    /// Stun, toxin, ...).
+    /// Interrupt AI actions with the authored motion for intensity × multiplier seconds.
+    Stun {
+        duration_multiplier: u32,
+        tags: String,
+    },
+    /// An effect the game does not implement yet (EnvSound, add_metaprop, toxin, ...).
     Unhandled(String),
 }
 
@@ -1091,6 +1095,15 @@ impl ReceptronOptions {
             "Freeze" => ReceptronEffect::Freeze {
                 duration_multiplier: param_56_bits as i32,
             },
+            "Stun" => {
+                reader.seek(io::SeekFrom::Start(60)).unwrap();
+                let bytes = read_bytes(reader, len.saturating_sub(60) as usize);
+                let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+                ReceptronEffect::Stun {
+                    duration_multiplier: param_56_bits,
+                    tags: String::from_utf8_lossy(&bytes[..end]).into_owned(),
+                }
+            }
             "radiate" => ReceptronEffect::Radiate {
                 multiplier: param_56,
             },
@@ -3262,6 +3275,23 @@ pub fn define_link_with_versioned_data<TData: 'static + fmt::Debug + Send + Sync
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn authored_stun_reads_integer_multiplier_and_motion_tags() {
+        use super::*;
+        let mut bytes = vec![0u8; 88];
+        bytes[16..20].copy_from_slice(b"Stun");
+        bytes[56..60].copy_from_slice(&1u32.to_le_bytes());
+        bytes[60..64].copy_from_slice(b"stun");
+        let mut reader: Box<dyn ReadAndSeek> = Box::new(std::io::Cursor::new(bytes));
+        assert_eq!(
+            ReceptronOptions::read(&mut reader, 88).effect,
+            ReceptronEffect::Stun {
+                duration_multiplier: 1,
+                tags: "stun".into()
+            }
+        );
+    }
+
     use super::*;
 
     #[test]
