@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer, type Vec3 } from "../src/index.js";
 import { aimVrHandAt, quatConjugate, quatRotate, sub } from "./helpers/vr-hand.js";
-import { ammoOf, cycleToWeapon } from "./helpers/weapon.js";
+import { ammoOf, cycleToWeapon, pullTrigger } from "./helpers/weapon.js";
 
 for (const [weapon, template, locksEmpty] of [["pistol", -17, true], ["AR15", -18, false]] as const) {
   for (const hand of ["left", "right"] as const) {
@@ -32,12 +32,7 @@ for (const [weapon, template, locksEmpty] of [["pistol", -17, true], ["AR15", -1
       };
       const closed = await slidePosition();
       const travel = async () => Math.hypot(...sub(await slidePosition(), closed));
-      const pull = async () => {
-        await game.input.set(`${hand}_hand.trigger`, 1);
-        await game.step({ frames: 1 });
-        await game.input.set(`${hand}_hand.trigger`, 0);
-        await game.step({ frames: 1 });
-      };
+      const pull = () => pullTrigger(game, hand);
       const initial = ammoOf(await game.entities.detail(gun.id));
       assert.ok(initial > 1);
       await pull();

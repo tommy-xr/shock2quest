@@ -59,10 +59,10 @@ export async function waitForShotReady(game: GameServer): Promise<void> {
  * stepping a frame for each so the next pull is a fresh edge. Does NOT wait out
  * the gun's between-shots interval - use `fireOnce` unless the point is a pull
  * that lands too early. */
-export async function pullTrigger(game: GameServer): Promise<void> {
-  await game.input.set("right_hand.trigger", 1.0);
+export async function pullTrigger(game: GameServer, hand: "left" | "right" = "right"): Promise<void> {
+  await game.input.set(`${hand}_hand.trigger`, 1.0);
   await game.step({ frames: 1 });
-  await game.input.set("right_hand.trigger", 0.0);
+  await game.input.set(`${hand}_hand.trigger`, 0.0);
   await game.step({ frames: 1 });
 }
 

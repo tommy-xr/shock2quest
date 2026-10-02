@@ -87,7 +87,7 @@ pub mod vr_belt;
 mod vr_config;
 mod vr_magazine;
 mod vr_shotgun_pump;
-mod vr_weapon_slide;
+mod vr_weapon_action;
 pub mod weapon_modification;
 mod weapon_muzzle;
 pub mod weapon_recoil;

@@ -24,6 +24,7 @@ function makeSample(overrides: Partial<AnimationState>): AnimationState {
     position: [0, 0, 0],
     rotation: [0, 0, 0, 1],
     joints: [[0, 0, 0]],
+    joint_axes: [],
     ...overrides,
   };
 }
