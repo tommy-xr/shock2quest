@@ -31,7 +31,7 @@ Use `cargo dbgr --mission debug_interactions --vr`. Developer parameters:
 - `vr_holster_drop`: vertical offset below the tracked head, default 0.78 m,
   range 0.55–1.10 m. Reduce this when testing seated reach.
 - `vr_holster_side`: lateral offset, default 0.23 m, range 0.16–0.40 m.
-- `vr_holster_forward`: forward/back offset, default 0.04 m, range −0.20–0.30 m.
+- `vr_holster_forward`: forward/back offset, default −0.16 m, range −0.50–0.50 m.
 - `vr_belt_drop`: belt height below the eyes, default 0.55 m, range 0.30–0.90 m
   in 1 cm steps. The belt mesh, personal card, pouch and their grab targets move together.
 - `vr_belt_distance`: distance to the front of the belt, default 0.20 m,

@@ -554,7 +554,10 @@ To fit the VR battle belt, adjust **Belt below eyes (m)** (smaller raises it)
 and **Belt forward (m)** (default 0.0 m, range −0.5 to +0.5 m; larger brings
 it farther out). Both move the belt,
 personal card, ammo pouch and grab targets together; thigh holsters retain their
-separate controls. These developer values apply for the current session.
+separate controls. **Holster forward (m)** (`vr_holster_forward`) defaults to
+−0.16 m and spans −0.5 to +0.5 m in 1 cm steps; negative values move both
+thigh holsters and their grab targets rearward. These developer values apply
+for the current session.
 
 For persistent tool placement **relative to the belt**, use
 `cargo dx ui --belt-mfd` (VR Setup → Belt tool). The editor previews the actual
