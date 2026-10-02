@@ -31,6 +31,7 @@ pub mod creature;
 pub mod damage_overlay;
 pub mod data_files;
 pub mod death_camera;
+pub mod debug_trail;
 pub mod dev_params;
 mod developer_mode;
 pub mod difficulty;

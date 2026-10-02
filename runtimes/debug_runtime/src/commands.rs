@@ -126,6 +126,9 @@ pub enum RuntimeCommand {
     /// Get current player position
     GetPlayerPosition(oneshot::Sender<Vector3<f32>>),
 
+    /// Get the player trail samples (`player_trail` dev param).
+    GetPlayerTrail(oneshot::Sender<serde_json::Value>),
+
     /// Get the free (debug) camera's state: detached, and the pose it is
     /// rendering from when it is.
     GetCameraState(oneshot::Sender<CameraStateSnapshot>),

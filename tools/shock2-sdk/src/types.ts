@@ -48,6 +48,19 @@ export interface Position {
   z: number;
 }
 
+/** What the character controller was doing on a player-trail frame. */
+export type TrailState = "supported" | "climbing" | "top_out" | "airborne";
+
+/** One `GET /v1/player/trail` sample (the `player_trail` dev param must be on). */
+export interface TrailSample {
+  /** Recorded-frame counter since the trail was last cleared. */
+  frame: number;
+  /** The position `/v1/player/position` reports. */
+  pos: Vec3;
+  state: TrailState;
+  crouched: boolean;
+}
+
 export interface StepSpec {
   frames?: number;
   /** humantime duration string, e.g. "5s" or "250ms" */

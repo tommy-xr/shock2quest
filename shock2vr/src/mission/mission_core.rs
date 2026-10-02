@@ -2787,6 +2787,8 @@ pub struct MissionCore {
     /// their footsteps are derived from how far they walked - see
     /// [`crate::mission::player_footsteps`].
     player_footsteps: crate::mission::player_footsteps::PlayerFootsteps,
+    /// Debug overlay of the player's recent path (`player_trail` dev param).
+    debug_trail: crate::debug_trail::DebugTrail,
 
     /// First-person animation for the flat melee viewmodel: the wielded melee
     /// entity and its motion player (loops the player-melee idle; a swing is
@@ -3790,6 +3792,7 @@ impl MissionCore {
             debug_pose_index: 0,
             debug_weapon_index: 0,
             player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),
+            debug_trail: Default::default(),
             flat_melee_anim: None,
             thrown_items: Default::default(),
             use_mode: false,
@@ -4804,6 +4807,24 @@ impl MissionCore {
         player_info.left_hand_entity_id = left_hand_entity_id;
         player_info.right_hand_entity_id = right_hand_entity_id;
         drop(player_info);
+
+        // One trail sample per simulated frame (a paused frame moved nobody);
+        // switching the trail off clears it even while paused.
+        if !crate::dev_params::get_bool(crate::dev_params::PLAYER_TRAIL) {
+            self.debug_trail.clear();
+        } else if !time.elapsed.is_zero() {
+            self.debug_trail.record(
+                time.elapsed.as_secs_f32(),
+                crate::dev_params::get(crate::dev_params::PLAYER_TRAIL_SECONDS),
+                new_character_pos,
+                crate::debug_trail::TrailMotion::classify(
+                    self.player_handle.is_grounded(),
+                    self.player_handle.is_climbing(),
+                    self.player_handle.is_topping_out(),
+                ),
+                self.player_handle.is_crouched(),
+            );
+        }
 
         // Sample the attachment that drove this physics step. Input is resolved
         // later below; a same-frame release can still downgrade before dispatch.
@@ -15109,6 +15130,9 @@ impl MissionCore {
             scene.extend(inventory_objs);
         }
 
+        // Player trail: shared world pass, so flat and VR draw the same lines.
+        scene.extend(self.debug_trail.render());
+
         // Render debug physics
         if crate::dev_params::get_bool(crate::dev_params::DEBUG_PHYSICS) {
             let debug_render = &self.physics.debug_render();
@@ -17728,6 +17752,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         }
 
         result
+    }
+
+    fn player_trail(&self) -> Vec<crate::debug_trail::TrailSample> {
+        self.debug_trail.samples().copied().collect()
     }
 
     fn player_position(&self) -> cgmath::Vector3<f32> {
