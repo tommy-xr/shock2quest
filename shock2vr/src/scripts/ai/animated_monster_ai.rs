@@ -2919,7 +2919,7 @@ mod tests {
             end_rotation: Deg(0.0),
             sliding_velocity: vec3(0.0, 0.0, 0.0),
             translation: vec3(0.0, 0.0, 0.0),
-            joint_to_frame: std::collections::HashMap::new(),
+            joint_to_frame: std::rc::Rc::new(std::collections::HashMap::new()),
             root_transforms: Vec::new(),
             root_positions: Vec::new(),
             motion_flags: Vec::new(),

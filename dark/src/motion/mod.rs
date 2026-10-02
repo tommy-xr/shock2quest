@@ -14,7 +14,6 @@ pub use motion_clip::*;
 pub use motion_info::*;
 pub use motion_query::*;
 pub use motion_schema::*;
-use rand::{Rng, thread_rng};
 pub use turn_clips::*;
 
 use crate::{
@@ -232,33 +231,6 @@ impl MotionDB {
 
         info!("options: {:?}", options);
         options
-    }
-
-    ///
-    /// query the motion database
-    ///
-    /// Returns a string containing the name of the animation
-    pub fn query(&self, query: MotionQuery) -> Option<String> {
-        let options = self.query_options(&query);
-
-        if options.is_empty() {
-            return None;
-        }
-
-        match query.selection_strategy {
-            MotionQuerySelectionStrategy::Random => {
-                let mut rng = thread_rng();
-                let idx = rng.gen_range(0..options.len());
-
-                let opt = options[idx].clone();
-                info!("querying - got: {}", opt);
-                Some(opt)
-            }
-            MotionQuerySelectionStrategy::Sequential(seq) => {
-                let idx = (seq as usize) % options.len();
-                Some(options[idx].clone())
-            }
-        }
     }
 
     pub fn query_all(&self, query: MotionQuery) -> Vec<String> {

@@ -6979,10 +6979,14 @@ impl MissionCore {
 
                     if let Some(clip) = maybe_clip {
                         // The schema's authored time warp / fixed duration and
-                        // stretch / fixed distance (most schemas have none),
-                        // measured on the authored clip before any grounding.
+                        // stretch / fixed distance (most schemas have none).
                         let time_scale = timing.time_scale(clip.duration.as_secs_f32());
                         let stretch = timing.stretch(clip.translation.magnitude());
+                        let clip = if time_scale != 1.0 || stretch != 1.0 {
+                            Rc::new(clip.with_timing(time_scale, stretch))
+                        } else {
+                            clip
+                        };
                         // The live pose is already registered against the
                         // walk surface. Preserve its lowest-joint depth as the
                         // creature-specific floor convention: CAL bind depth
@@ -7013,11 +7017,6 @@ impl MissionCore {
                                 ))
                             }
                             _ => clip,
-                        };
-                        let clip = if time_scale != 1.0 || stretch != 1.0 {
-                            Rc::new(clip.with_timing(time_scale, stretch))
-                        } else {
-                            clip
                         };
                         self.failed_animation_queries.remove(&entity_id);
                         if turn.is_some() {

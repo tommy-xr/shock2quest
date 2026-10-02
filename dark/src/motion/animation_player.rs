@@ -343,20 +343,7 @@ impl AnimationPlayer {
             (updated_player, motion_flags, vec![], vec3(0.0, 0.0, 0.0))
         } else {
             let (current_clip, flags) = maybe_current_clip.unwrap();
-            // Move at the rate the mocap root actually moves this frame -
-            // the clip-average (`sliding_velocity`) integrates to the same
-            // endpoint but smears non-uniform motion (a death keeps gliding
-            // at constant speed while the body is already down). The value is
-            // a rate (units/sec) keyed to the clip's own frame time, so it is
-            // independent of the render/physics refresh. Sampled from the
-            // frame at the start of the tick: whenever the tick is shorter
-            // than a clip frame (true at 60/90/120Hz against 30fps clips) it
-            // crosses at most one frame, so multi-frame advance only happens
-            // on a hitch and briefly commanding the first frame's rate isn't
-            // worth averaging over.
-            let velocity = current_clip
-                .root_velocity_at(player.current_frame)
-                .unwrap_or(current_clip.sliding_velocity);
+            let looping = matches!(flags, AnimationFlags::Loop);
             let mut next_frame = player.current_frame;
             let time_per_frame = current_clip.time_per_frame.as_secs_f32();
             // The ramp anchor: everything up to rotation_pos has already been
@@ -393,6 +380,29 @@ impl AnimationPlayer {
             } else {
                 next_frame as f32
             };
+            // Move at the rate the mocap root actually moves over this tick -
+            // the clip-average (`sliding_velocity`) integrates to the same
+            // endpoint but smears non-uniform motion (a death keeps gliding
+            // at constant speed while the body is already down). The rate
+            // (units/sec) is keyed to the clip's own frame time, so it is
+            // independent of the refresh rate, and it averages every frame the
+            // tick crosses - a schema- or creature-warped clip can cross several.
+            let start_pos = if time_per_frame > f32::EPSILON {
+                player.current_frame as f32 + player.remaining_time / time_per_frame
+            } else {
+                player.current_frame as f32
+            };
+            let end_pos = if looping {
+                raw_end_pos
+            } else {
+                raw_end_pos.min(current_clip.num_frames as f32)
+            };
+            let velocity = current_clip
+                .root_travel(start_pos, end_pos, looping)
+                .filter(|_| end_pos > start_pos)
+                .map(|travel| travel / ((end_pos - start_pos) * time_per_frame))
+                .or_else(|| current_clip.root_velocity_at(player.current_frame))
+                .unwrap_or(current_clip.sliding_velocity);
 
             let motion_flags = {
                 let mut output = MotionFlags::empty();
@@ -724,7 +734,7 @@ mod tests {
             end_rotation: Deg(0.0),
             sliding_velocity: vec3(1.0, 0.0, 0.0) / 0.3,
             translation: vec3(1.0, 0.0, 0.0),
-            joint_to_frame: HashMap::new(),
+            joint_to_frame: Rc::new(HashMap::new()),
             root_transforms: Vec::new(),
             root_positions: vec![
                 vec3(0.0, 0.0, 0.0),
@@ -745,6 +755,25 @@ mod tests {
 
         let (_, _, _, velocity) = AnimationPlayer::update(&player, Duration::from_millis(50));
         assert!((velocity.x - 30.0).abs() < 1e-3, "got {velocity:?}");
+    }
+
+    #[test]
+    fn ticks_crossing_several_frames_move_by_the_travel_covered() {
+        // A 5x-warped looping walk: each 50ms tick crosses 2.5 frames, so
+        // sampling one frame per tick would misreport the stride.
+        let clip = Rc::new(clip_with_root_motion().with_timing(0.2, 1.0));
+        let mut player = AnimationPlayer::from_animation(clip);
+        let mut travelled = vec3(0.0, 0.0, 0.0);
+        let tick = Duration::from_millis(50);
+        // 4 ticks = 200ms = 10 warped frames: three 3-frame cycles plus the
+        // first (moving) frame of the next.
+        for _ in 0..4 {
+            let (next, _, _, velocity) = AnimationPlayer::update(&player, tick);
+            travelled += velocity * tick.as_secs_f32();
+            player = next;
+        }
+        // Each cycle covers the authored unit plus the trailing stride (zero here).
+        assert!((travelled.x - 4.0).abs() < 1e-3, "got {travelled:?}");
     }
 
     #[test]
