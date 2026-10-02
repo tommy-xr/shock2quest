@@ -1,8 +1,8 @@
 {
-  "revision": "09131232bcda572232491f1020ccee3932c453d4",
+  "revision": "c28ea81a022deac02b6361127f21b55a863f09e4",
   "dirty": false,
-  "runtimeSha256": "16702f681cb2a4a14092b14e6efe218093276e170868d82762edb5c4f256d151",
-  "capturedAt": "2026-10-02T18:18:52.000Z",
+  "runtimeSha256": "dcf7e0c4e3d20c63f5fdba84ca98051952881ef22a6d1d8fa666e900df1b4912",
+  "capturedAt": "2026-10-02T18:41:49.393Z",
   "mission": "hydro1.mis",
   "lighting": [
     {
@@ -12,8 +12,8 @@
     },
     {
       "key": "held_light_floor",
-      "value": 0.30000001192092896,
-      "default": 0.30000001192092896
+      "value": 0.10000000149011612,
+      "default": 0.10000000149011612
     }
   ],
   "player": [
