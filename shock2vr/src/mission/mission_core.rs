@@ -15291,7 +15291,7 @@ impl MissionCore {
                         continue;
                     }
                     let width = crate::hud::virtual_arms::IMPLANT_SLOT_WIDTH;
-                    // Seat the underside in the bed, fitting the tapered cavity while
+                    // Seat the underside in the square bed with its prongs in the connector,
                     // retaining the model's real thickness above the surrounding lip.
                     let scale = width * crate::hud::implant_slot::model_scale(extent);
                     let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
