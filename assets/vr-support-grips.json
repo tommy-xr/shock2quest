@@ -111,6 +111,28 @@
     "release_distance": 0.12,
     "max_swing_degrees": 75.0
   },
+  "rapier_h": {
+    "palm_anchor": [
+      -0.016,
+      -0.04,
+      -0.05
+    ],
+    "rotation_degrees": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "curls": [
+      0.29166666,
+      0.45833334,
+      0.41666666,
+      0.5833333,
+      0.6666667
+    ],
+    "grab_radius": 0.07,
+    "release_distance": 0.12,
+    "max_swing_degrees": 75.0
+  },
   "sg_h": {
     "motion": { "parameter": 0, "closed": 0.0, "open": -0.6 },
     "palm_anchor": [
@@ -129,6 +151,28 @@
       0.55,
       0.6,
       0.65
+    ],
+    "grab_radius": 0.07,
+    "release_distance": 0.12,
+    "max_swing_degrees": 75.0
+  },
+  "shard_h": {
+    "palm_anchor": [
+      -0.016,
+      -0.04,
+      -0.025
+    ],
+    "rotation_degrees": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "curls": [
+      0.8333333,
+      0.5416667,
+      0.5,
+      0.5416667,
+      0.5833333
     ],
     "grab_radius": 0.07,
     "release_distance": 0.12,

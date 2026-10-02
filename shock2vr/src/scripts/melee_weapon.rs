@@ -750,7 +750,7 @@ mod tests {
     }
 
     #[test]
-    fn wrench_contact_damage_uses_the_swing_latch_and_current_release() {
+    fn supported_melee_contact_damage_uses_the_swing_latch_and_current_release() {
         for (model, support, released, scale) in [
             ("wrench_h", vec![false], false, 0.5),
             ("wrench_h", vec![true], false, 1.0),
@@ -758,9 +758,14 @@ mod tests {
             ("wrench_h", vec![true, false], false, 0.5),
             ("wrench_h", vec![true], true, 0.5),
             ("wrench_w", vec![false], false, 1.0),
-            // No support socket yet (#1768), so no way to avoid the penalty.
-            ("rapier_h", vec![false], false, 1.0),
-            ("shard_h", vec![false], false, 1.0),
+            ("rapier_h", vec![false], false, 0.5),
+            ("rapier_h", vec![true], false, 1.0),
+            ("rapier_h", vec![false, true], false, 0.5),
+            ("rapier_h", vec![true], true, 0.5),
+            ("shard_h", vec![false], false, 0.5),
+            ("shard_h", vec![true], false, 1.0),
+            ("shard_h", vec![false, true], false, 0.5),
+            ("shard_h", vec![true], true, 0.5),
             // One-handed by design.
             ("psword_h", vec![false], false, 1.0),
         ] {

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub fn supports_model(model: &str) -> bool {
     matches!(
         model,
-        "wrench_h" | "atek_h" | "ar15_h" | "sg_h" | "fsn_h" | "al_h"
+        "wrench_h" | "rapier_h" | "shard_h" | "atek_h" | "ar15_h" | "sg_h" | "fsn_h" | "al_h"
     )
 }
 
