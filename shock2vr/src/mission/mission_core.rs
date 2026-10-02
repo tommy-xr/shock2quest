@@ -11738,11 +11738,13 @@ impl MissionCore {
                                     .and_then(|model| {
                                         model.as_ref().as_ref().map(|m| {
                                             use cgmath::Transform;
-                                            self.interaction
-                                                .holding_hand(entity_id)
-                                                .unwrap_or(crate::Handedness::Right)
-                                                .gun_mirror()
-                                                .transform_vector(m.source_center)
+                                            crate::vr_config::gun_model_frame(
+                                                &model_name,
+                                                self.interaction
+                                                    .holding_hand(entity_id)
+                                                    .unwrap_or(crate::Handedness::Right),
+                                            )
+                                            .transform_vector(m.source_center)
                                         })
                                     }),
                                 },
@@ -11762,14 +11764,13 @@ impl MissionCore {
                             .interaction
                             .holding_hand(entity_id)
                             .unwrap_or(crate::vr_config::Handedness::Right);
-                        // A gun in the LEFT hand: reflect across the gun,
-                        // muzzle vhots included, so the baked hand is a left
-                        // hand and the shot still leaves the reflected barrel.
+                        // Apply the VR model-axis scale and handedness together,
+                        // including muzzle vhots so shots leave the visible barrel.
                         // Melee rigs mirror in their own frame below. The
                         // model's authored bounding box is left as-is: a held
                         // gun is unphysical, and nothing frames it by that box.
                         if vr_held && !is_melee_weapon(&self.world, entity_id) {
-                            let mirror = hand.gun_mirror();
+                            let mirror = crate::vr_config::gun_model_frame(&model_name, hand);
                             new_model.apply_local_transform(mirror);
                             for vhot in vhots.iter_mut() {
                                 vhot.point = mirror.transform_point(vhot.point);
@@ -11955,7 +11956,10 @@ impl MissionCore {
                                 .cloned()
                                 .unwrap_or_else(AnimationPlayer::empty);
                             if let Some(bounds) = vr_held_source.as_ref().and_then(|source| {
-                                source.posed_weapon_bounds(&player, hand.gun_mirror())
+                                source.posed_weapon_bounds(
+                                    &player,
+                                    crate::vr_config::gun_model_frame(&model_name, hand),
+                                )
                             }) {
                                 let cm = crate::METERS_PER_WORLD_UNIT * 100.0;
                                 tracing::info!(

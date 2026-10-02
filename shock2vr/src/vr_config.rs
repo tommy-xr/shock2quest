@@ -70,6 +70,26 @@ impl Handedness {
     }
 }
 
+/// Model-axis scale for held VR guns. The AR's local Z runs across its
+/// receiver: reflecting only that axis exposes its bolt to the holding eye.
+/// Uniform grip scale still controls size; flat and world models do not use this.
+pub fn gun_model_scale(model: &str) -> Vector3<f32> {
+    if model
+        .trim_end_matches(".bin")
+        .eq_ignore_ascii_case("ar15_h")
+    {
+        vec3(1.0, 1.0, -1.0)
+    } else {
+        vec3(1.0, 1.0, 1.0)
+    }
+}
+
+/// Shared VR mesh/attachment frame, including the other hand's reflection.
+pub fn gun_model_frame(model: &str, hand: Handedness) -> cgmath::Matrix4<f32> {
+    let scale = gun_model_scale(model);
+    hand.gun_mirror() * cgmath::Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z)
+}
+
 /// The index a hand occupies in a `[_; 2]` of per-hand state.
 ///
 /// One conversion, crate-wide, so per-hand arrays built in one module can be
@@ -719,6 +739,30 @@ mod tests {
             "a reflection, so the winding must flip"
         );
         assert_eq!(Handedness::Right.gun_mirror(), Matrix4::identity());
+    }
+
+    #[test]
+    fn vr_ar_scale_swaps_the_bolt_side_without_reversing_barrel_or_up() {
+        use cgmath::{SquareMatrix, Transform};
+        for hand in [Handedness::Left, Handedness::Right] {
+            let ar = gun_model_frame("ar15_h.bin", hand);
+            assert_eq!(
+                ar.transform_vector(vec3(-1.0, 0.0, 0.0)),
+                vec3(-1.0, 0.0, 0.0)
+            );
+            assert_eq!(
+                ar.transform_vector(vec3(0.0, 1.0, 0.0)),
+                vec3(0.0, 1.0, 0.0)
+            );
+            assert_eq!(
+                ar.transform_vector(vec3(0.0, 0.0, 1.0)),
+                -hand.gun_mirror().transform_vector(vec3(0.0, 0.0, 1.0))
+            );
+            assert_eq!(ar.determinant() < 0.0, hand == Handedness::Right);
+            for other in ["atek_h", "sg_h", "fsn_h", "ar15"] {
+                assert_eq!(gun_model_frame(other, hand), hand.gun_mirror());
+            }
+        }
     }
 
     /// The left grip is the right grip with its thumb-side component

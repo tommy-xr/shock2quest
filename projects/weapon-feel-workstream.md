@@ -1084,3 +1084,14 @@ the refusal, and ejection does not announce depletion.
 A separate candidate is retail `shkpsi.cpp`'s `bb01` warning when paid psi points
 cross down through one fifth of maximum. No distinct jam state was found in the
 retail player-gun firing path; wear failure uses Broken.
+
+### VR AR receiver reflection
+
+Held `ar15_h` uses model-axis scale `[1, 1, -1]` in VR. The gun's -X barrel and
++Y up axes are preserved while its bolt/ejection side faces inward toward the
+player. This composes with the existing other-hand reflection. Runtime meshes,
+muzzle/vhot attachments, magazine socket, physical bounds and Explorer's VR
+preview/fitting use the same frame. The uniform grip scale still controls size;
+authored hand poses and glove handedness remain independent of the gun-only
+reflection. Casing velocity follows the actual visible model, including the
+classic world-model fallback. Flat viewmodels keep their authored geometry.

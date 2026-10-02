@@ -120,7 +120,7 @@ pub(crate) fn get_raw_view_model(world: &World, entity_id: EntityId) -> Option<S
     }
 }
 
-fn get_current_model(world: &World, entity_id: EntityId) -> Option<String> {
+pub(super) fn get_current_model(world: &World, entity_id: EntityId) -> Option<String> {
     let v_model_name = world
         .borrow::<View<dark::properties::PropModelName>>()
         .unwrap();

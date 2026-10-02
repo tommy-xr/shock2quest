@@ -37,7 +37,11 @@ pub fn is_melee(name: &str) -> bool {
 
 /// Guns stay in their authored barrel frame. Melee uses the posed fist/weapon
 /// joints, matching the gameplay correction before its contact-origin split.
-pub fn model_frame(source: &dark::importers::GloveWeaponModel, hand: Handedness) -> Matrix4<f32> {
+pub fn model_frame(
+    source: &dark::importers::GloveWeaponModel,
+    name: &str,
+    hand: Handedness,
+) -> Matrix4<f32> {
     if let Some(arm) = source
         .melee_joints
         .as_ref()
@@ -46,7 +50,7 @@ pub fn model_frame(source: &dark::importers::GloveWeaponModel, hand: Handedness)
         Matrix4::from_translation(vr_config::melee_contact_offset_scaled(arm, 1.0))
             * vr_config::melee_wield_pose_correction_scaled(arm, 1.0, hand)
     } else {
-        hand.gun_mirror()
+        vr_config::gun_model_frame(name, hand)
     }
 }
 
@@ -55,8 +59,8 @@ pub fn model_frame(source: &dark::importers::GloveWeaponModel, hand: Handedness)
 pub fn model_mirror(cache: &mut AssetCache, name: &str) -> Option<Matrix4<f32>> {
     let source = cache.get_opt(&GLOVE_WEAPON_IMPORTER, name)?;
     let source = source.as_ref().as_ref()?;
-    let right = model_frame(source, Handedness::Right);
-    let left = model_frame(source, Handedness::Left);
+    let right = model_frame(source, name, Handedness::Right);
+    let left = model_frame(source, name, Handedness::Left);
     Some(left * right.invert()?)
 }
 
@@ -69,24 +73,31 @@ pub fn inputs(
 ) -> Option<(Vec<[Point3<f32>; 3]>, Vec<Point3<f32>>, String)> {
     let source = cache.get_opt(&GLOVE_WEAPON_IMPORTER, name)?;
     let source = source.as_ref().as_ref()?;
-    let mirror = model_frame(source, hand);
+    let mirror = model_frame(source, name, hand);
     let triangles: Vec<_> = source
         .triangles
         .iter()
         .map(|t| {
             let t = t.map(|p| mirror.transform_point(p));
-            if hand == Handedness::Left {
+            if mirror.determinant() < 0.0 {
                 [t[0], t[2], t[1]]
             } else {
                 t
             }
         })
         .collect();
+    // The authored arm remains a handed fit guide. A gun-only reflection
+    // must not turn that guide (or the replacement glove) into the other hand.
+    let arm_frame = if source.melee_joints.is_some() {
+        mirror
+    } else {
+        hand.gun_mirror()
+    };
     let arms: Vec<_> = source
         .arm_triangles
         .iter()
         .flatten()
-        .map(|p| mirror.transform_point(*p))
+        .map(|p| arm_frame.transform_point(*p))
         .collect();
     let mut fingerprint_geometry = triangles.clone();
     fingerprint_geometry.extend(arms.chunks_exact(3).map(|p| [p[0], p[1], p[2]]));
