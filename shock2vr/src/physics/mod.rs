@@ -4890,6 +4890,50 @@ impl PhysicsWorld {
             .is_some_and(|body| body.is_sleeping())
     }
 
+    /// Validate a placed solid volume against terrain and live physical objects.
+    /// Sensors (selection proxies/triggers) do not occupy space. Read body poses
+    /// directly so kinematic doors moved since the last step are checked too.
+    pub fn placement_box_is_clear(
+        &self,
+        center: Vector3<f32>,
+        rotation: Quaternion<f32>,
+        size: Vector3<f32>,
+        ignored: &[EntityId],
+    ) -> bool {
+        let orientation = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+            rotation.s,
+            rotation.v.x,
+            rotation.v.y,
+            rotation.v.z,
+        ));
+        let pose = Isometry::from_parts(Translation::from(vec_to_nvec(center)), orientation);
+        let shape = Cuboid::new(vec_to_nvec(size) * 0.5);
+        let groups = (InternalCollisionGroups::WORLD
+            | InternalCollisionGroups::ENTITIES
+            | InternalCollisionGroups::HITBOX)
+            .bits;
+        !self.collider_set.iter().any(|(_, collider)| {
+            if !collider.is_enabled()
+                || collider.is_sensor()
+                || collider.collision_groups().memberships.bits() & groups == 0
+                || ignored
+                    .iter()
+                    .any(|id| collider.user_data == id.inner() as u128)
+            {
+                return false;
+            }
+            let other_pose = collider
+                .parent()
+                .and_then(|h| self.rigid_body_set.get(h))
+                .map(|body| {
+                    body.position() * collider.position_wrt_parent().copied().unwrap_or_default()
+                })
+                .unwrap_or(*collider.position());
+            rapier3d::parry::query::intersection_test(&pose, &shape, &other_pose, collider.shape())
+                .unwrap_or(true)
+        })
+    }
+
     /// Exact overlap of two entities' authored colliders, including sensors.
     pub fn entities_overlap(&self, first: EntityId, second: EntityId) -> bool {
         let bodies = self

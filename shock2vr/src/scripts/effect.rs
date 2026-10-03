@@ -715,6 +715,13 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    /// Validate and create the authored solid barrier, charging only a successful placement.
+    PsiBarrier {
+        amp: EntityId,
+        cost: i32,
+        hit_points: i32,
+    },
+
     CreateEntity {
         template_id: i32,
         position: Point3<f32>,

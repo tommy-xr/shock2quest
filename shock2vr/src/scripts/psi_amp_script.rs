@@ -514,6 +514,11 @@ fn cast_instant_power(
     effective_psi: i32,
 ) -> Effect {
     match power.template_id {
+        super::force_wall::POWER => Effect::PsiBarrier {
+            amp: amp_entity,
+            cost: power.power.psi_cost,
+            hit_points: super::force_wall::hit_points(power.power.data, effective_psi),
+        },
         super::gui::psi_hack::POWER => {
             if super::gui::psi_hack::session(world).is_some() {
                 return Effect::NoEffect;
@@ -929,6 +934,30 @@ mod tests {
     use crate::psi::{GlobalPsiPowers, PsiPowerSelection};
     use crate::quest_info::QuestInfo;
     use cgmath::{point3, vec3};
+
+    #[test]
+    fn force_wall_cast_is_dispatched_instead_of_silently_doing_nothing() {
+        let mut world = World::new();
+        let amp = world.add_entity(());
+        let power = PsiPowerInfo {
+            template_id: -3162,
+            name: "ForceWall".into(),
+            display_name: None,
+            power: dark::properties::PropPsiPower {
+                power_id: 37,
+                activation_type: 2,
+                psi_cost: 5,
+                data: [150.0, 50.0, 5.0, 0.0],
+            },
+            projectiles: vec![],
+            overloadable: true,
+            duration: None,
+        };
+        assert!(!matches!(
+            cast_instant_power(&world, &PhysicsWorld::new(), amp, &power, 6),
+            Effect::NoEffect
+        ));
+    }
 
     #[test]
     fn power_psi_prevents_burnout_damage_but_keeps_cost_and_failed_cast() {

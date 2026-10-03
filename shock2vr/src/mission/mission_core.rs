@@ -11435,6 +11435,95 @@ impl MissionCore {
                         engine::audio::AudioHandle::new(),
                     ));
                 }
+                Effect::PsiBarrier {
+                    amp,
+                    cost,
+                    hit_points,
+                } => {
+                    if cost < 0 || crate::scripts::player_psi_points(&self.world) < cost {
+                        continue;
+                    }
+                    let Some((muzzle, aim)) = crate::scripts::amp_aim_ray(&self.world, amp) else {
+                        continue;
+                    };
+                    let forward = vec3(aim.x, 0.0, aim.z);
+                    if !forward.magnitude2().is_finite() || forward.magnitude2() < 0.0001 {
+                        continue;
+                    }
+                    let forward = forward.normalize();
+                    let Some(dimensions) = crate::scripts::script_util::hydrate_template_component::<
+                        dark::properties::PropPhysDimensions,
+                    >(
+                        crate::scripts::force_wall::STRUCTURE,
+                        &self.entity_info,
+                    ) else {
+                        continue;
+                    };
+                    let size = vec3(
+                        dimensions.size.x.abs(),
+                        dimensions.size.y.abs(),
+                        dimensions.size.z.abs(),
+                    );
+                    let player = self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .unwrap()
+                        .clone();
+                    // Port placement policy: upright at the caster's feet, with a 0.5-world-unit
+                    // gap beyond their capsule or held muzzle. Retail's data[2] is the HP baseline, NOT distance.
+                    // The authored fwall OBB is thin along local X, so rotate X onto the aim.
+                    let orientation = crate::scripts::force_wall::upright_rotation(forward);
+                    let distance = crate::scripts::force_wall::clearance_distance(
+                        (vec3(muzzle.x, muzzle.y, muzzle.z) - player.pos).dot(forward),
+                        size.x * 0.5,
+                    );
+                    let mut center = player.pos + forward * distance;
+                    center.y = player.pos.y
+                        - crate::physics::player_center_above_floor(
+                            self.player_handle.is_crouched(),
+                        )
+                        + size.y * 0.5
+                        + 0.02;
+                    let ignored: Vec<_> = [
+                        Some(player.entity_id),
+                        Some(amp),
+                        player.left_hand_entity_id,
+                        player.right_hand_entity_id,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                    if crate::psi_pull::route_blocked(&self.physics, player.pos, center, &ignored)
+                        || !self
+                            .physics
+                            .placement_box_is_clear(center, orientation, size, &ignored)
+                    {
+                        effects.push_back(Effect::ShowMessage {
+                            text: "Barrier placement blocked".into(),
+                        });
+                        continue;
+                    }
+                    let position = center - orientation * dimensions.offset0;
+                    self.create_entity_with_position(
+                        asset_cache,
+                        crate::scripts::force_wall::STRUCTURE,
+                        Point3::new(position.x, position.y, position.z),
+                        orientation,
+                        Matrix4::identity(),
+                        CreateEntityOptions {
+                            hit_points_override: Some(hit_points),
+                            ..Default::default()
+                        },
+                    );
+                    effects.extend(spend_player_psi_points(&self.world, cost));
+                    effects.push_back(crate::scripts::script_util::play_environmental_sound(
+                        &self.world,
+                        amp,
+                        "shoot",
+                        vec![],
+                        engine::audio::AudioHandle::new(),
+                    ));
+                }
                 Effect::PsiPull { amp, cost } => {
                     if self.psi_pull.is_some()
                         || cost < 0
