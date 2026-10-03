@@ -63,7 +63,7 @@ export const MODES = [
     title: "MFD",
     blurb: "Jack in: inventory, map, logs and stats float in front of you.",
     hot: { L: ["menu", "upper"], R: ["trigger", "grip", "upper"] },
-    clip: null,
+    clip: "mfd",
     rows: [
       ["Menu tap", "Jack in / out"],
       ["Menu hold", "Pause"],

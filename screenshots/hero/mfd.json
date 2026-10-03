@@ -1,0 +1,1008 @@
+{
+  "mission": "medsci1.mis",
+  "presentation": "Vr",
+  "revision": "865eff445fb60369ee157d73df277ec27033be7e",
+  "assetRoot": "/Users/bryan/ss2-25th",
+  "runtimeSha256": "c25638aae896fbd2f4db494f0d45d05a3fe985b908c3d5c474e092371edee452",
+  "assetFiles": [
+    "sshock2.kpf",
+    "mods/400.kpf",
+    "mods/patch_ext.kpf",
+    "mods/scp.kpf",
+    "mods/shtup.kpf",
+    "mods/sshock2ee.kpf"
+  ],
+  "lighting": {
+    "ambient_light_intensity": 0.9,
+    "level_light_intensity": 2,
+    "fov_override_deg": 60
+  },
+  "stagingTeleport": [
+    16,
+    1,
+    17
+  ],
+  "headLook": [
+    90,
+    0
+  ],
+  "stagedItems": [
+    "Wrench",
+    "Pistol",
+    "Med Patch",
+    "Small Standard Clip"
+  ],
+  "input": {
+    "menu": "MenuButton held 8 frames then released",
+    "source": [
+      22.316218999999997,
+      64.255953
+    ],
+    "target": [
+      220.75370299999997,
+      64.255953
+    ],
+    "framesPerSample": 4
+  },
+  "evidence": {
+    "entity": 2044,
+    "before": [
+      5.779762,
+      16.063988,
+      33.072914,
+      96.38393
+    ],
+    "preview": [
+      204.21725,
+      16.063988,
+      33.072914,
+      96.38393
+    ],
+    "after": [
+      204.21725,
+      16.063988,
+      33.072914,
+      96.38393
+    ],
+    "noWorldBodyAfterDeposit": true
+  },
+  "video": {
+    "file": "mfd.mp4",
+    "fps": 15,
+    "frames": 45,
+    "resolution": [
+      960,
+      540
+    ]
+  },
+  "still": "mfd.png",
+  "gif": "mfd.gif",
+  "samples": [
+    {
+      "phase": "closed",
+      "mode": "shooter",
+      "pointer": null,
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "closed",
+      "mode": "shooter",
+      "pointer": null,
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "closed",
+      "mode": "shooter",
+      "pointer": null,
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "menu-short-press",
+      "mode": "shooter",
+      "pointer": null,
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "menu-short-press",
+      "mode": "shooter",
+      "pointer": null,
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "open",
+      "mode": "use",
+      "pointer": {
+        "canvas": null,
+        "pressed": false,
+        "grabbing": false,
+        "hand": null
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "open",
+      "mode": "use",
+      "pointer": {
+        "canvas": null,
+        "pressed": false,
+        "grabbing": false,
+        "hand": null
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "open",
+      "mode": "use",
+      "pointer": {
+        "canvas": null,
+        "pressed": false,
+        "grabbing": false,
+        "hand": null
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "open",
+      "mode": "use",
+      "pointer": {
+        "canvas": null,
+        "pressed": false,
+        "grabbing": false,
+        "hand": null
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "open",
+      "mode": "use",
+      "pointer": {
+        "canvas": null,
+        "pressed": false,
+        "grabbing": false,
+        "hand": null
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "point",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          22.316113,
+          64.255875
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "point",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          22.316113,
+          64.255875
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "point",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          22.316113,
+          64.255875
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "point",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          22.316113,
+          64.255875
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "point",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          22.316113,
+          64.255875
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "grip",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          22.316113,
+          64.255875
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          5.779762,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.009030878,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "grip",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          22.316113,
+          64.255875
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          5.779762,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.009030878,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "grip",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          22.316113,
+          64.255875
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          5.779762,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.009030878,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "grip",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          22.316113,
+          64.255875
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          5.779762,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.009030878,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          42.159958,
+          64.25594
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": null
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          62.003708,
+          64.25594
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": null
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          81.847496,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": null
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          101.691246,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": null
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          121.534996,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          104.998505,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.16406016,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          141.3787,
+          64.25594
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          138.07143,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.2157366,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          161.2225,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          138.07143,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.2157366,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          181.06625,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          171.14435,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.26741305,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          200.90991,
+          64.2559
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          171.14435,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.26741305,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          204.21725,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.31908947,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "ghost-footprint",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          204.21725,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.31908947,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "ghost-footprint",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          204.21725,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.31908947,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "ghost-footprint",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          204.21725,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.31908947,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "ghost-footprint",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          204.21725,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.31908947,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "ghost-footprint",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          204.21725,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.31908947,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "ghost-footprint",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          204.21725,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.31908947,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "ghost-footprint",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": true,
+        "hand": "right"
+      },
+      "held": 2044,
+      "preview": {
+        "kind": "image",
+        "texture": "iface/resprog.pcx",
+        "text": null,
+        "label": "RELEASE TO PLACE",
+        "entity_id": null,
+        "rect": [
+          204.21725,
+          16.063988,
+          33.072914,
+          96.38393
+        ],
+        "screen_rect": [
+          0.31908947,
+          0.03346664,
+          0.05167643,
+          0.20079985
+        ]
+      }
+    },
+    {
+      "phase": "release",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "release",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "release",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "release",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "release",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "release",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "release",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "release",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    },
+    {
+      "phase": "release",
+      "mode": "use",
+      "pointer": {
+        "canvas": [
+          220.75371,
+          64.25599
+        ],
+        "pressed": false,
+        "grabbing": false,
+        "hand": "right"
+      },
+      "held": null,
+      "preview": null
+    }
+  ]
+}
