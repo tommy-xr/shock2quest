@@ -160,17 +160,27 @@ if (values.replay) {
 const shots = values.only ? SHOTS.filter((s) => s.name === values.only) : SHOTS;
 if (shots.length === 0) throw new Error(`no shot named '${values.only}'`);
 
-for (const shot of shots) {
-  // AI timing jitters between runs, so a take can fail its checks: retry it.
-  for (let take = 1; ; take++) {
-    try {
-      await captureShot(shot);
-      break;
-    } catch (error) {
-      if (!(error instanceof assert.AssertionError) || take === 3) throw error;
-      console.log(`${shot.name}: take ${take} failed (${error.message}); retrying`);
+// faceTarget steers continuously. Isolate capture preferences from the user's
+// default snap turning and comfort mask, without changing their saved settings.
+const captureSettings = { vr: { turning: "Smooth", vignette: "Off" } };
+const settingsDir = await mkdtemp(resolve(tmpdir(), "hero-settings-"));
+process.env.SHOCK2_SETTINGS_PATH = resolve(settingsDir, "user-settings.json");
+await writeFile(process.env.SHOCK2_SETTINGS_PATH, JSON.stringify(captureSettings));
+try {
+  for (const shot of shots) {
+    // AI timing jitters between runs, so a take can fail its checks: retry it.
+    for (let take = 1; ; take++) {
+      try {
+        await captureShot(shot);
+        break;
+      } catch (error) {
+        if (!(error instanceof assert.AssertionError) || take === 3) throw error;
+        console.log(`${shot.name}: take ${take} failed (${error.message}); retrying`);
+      }
     }
   }
+} finally {
+  await rm(settingsDir, { recursive: true, force: true });
 }
 
 async function captureShot(shot) {
@@ -180,6 +190,8 @@ async function captureShot(shot) {
     repoRoot,
   });
   try {
+    // Turning arms after a neutral stick frame on a fresh settings load.
+    await game.step({ frames: 1 });
     if (shot.stats) await game.player.setStats(shot.stats);
     let subject;
     if (shot.subject) {
@@ -224,6 +236,7 @@ async function captureShot(shot) {
     console.log(`${shot.name}: ${result.full_path} ${result.resolution.join("x")}`);
     const provenance = {
       mission: shot.mission,
+      settings: captureSettings,
       lighting: (await game.devParams.list()).params
         .filter((param) => ["ambient_light_intensity", "held_light_floor"].includes(param.key))
         .map(({ key, value, default: defaultValue }) => ({ key, value, default: defaultValue })),
