@@ -90,7 +90,7 @@ pub enum HackableCrateMsg {
 
 /// A critical failure ruined the crate: its loot is gone and it never opens
 /// again.
-fn is_ruined(world: &World, entity_id: EntityId) -> bool {
+pub(crate) fn is_ruined(world: &World, entity_id: EntityId) -> bool {
     matches!(
         object_state(world, entity_id),
         ObjectState::Broken | ObjectState::Destroyed

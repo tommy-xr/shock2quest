@@ -223,6 +223,14 @@ pub fn to_save_data_with_scripts(
         .map(|(id, _)| id.inner())
         .filter(|id| !entities_to_filter.contains(id))
         .partition(|id| held_entities.contains(id));
+    let (held_searched, world_searched): (Vec<_>, Vec<_>) = world
+        .borrow::<View<crate::runtime_props::RuntimePropSearched>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .map(|(id, _)| id.inner())
+        .filter(|id| !entities_to_filter.contains(id))
+        .partition(|id| held_entities.contains(id));
     let raw_amp_selections = world
         .borrow::<View<crate::psi_amp_selection::AmpSelection>>()
         .unwrap()
@@ -336,6 +344,7 @@ pub fn to_save_data_with_scripts(
         amp_selections: world_amp_selections,
         selected_ammo: world_selected_ammo,
         hazard_equipment: world_hazard_equipment,
+        searched: world_searched,
         implant_slots: world_implants,
         holstered: world_holstered,
         shoulder_weapons: world_shoulders,
@@ -359,6 +368,7 @@ pub fn to_save_data_with_scripts(
         amp_selections: held_amp_selections,
         selected_ammo: held_selected_ammo,
         hazard_equipment: held_hazard_equipment,
+        searched: held_searched,
         implant_slots: held_implants,
         holstered: held_holstered,
         shoulder_weapons: held_shoulders,

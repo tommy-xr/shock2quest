@@ -489,6 +489,11 @@ pub struct RuntimePropHolstered {
 #[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct RuntimePropShoulderWeapon(pub u8);
 
+/// The player has opened this object's panel at least once (e.g. searched a
+/// crate). Saved, so an emptied crate stays dark across save/load.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropSearched;
+
 /// Explicitly worn armor; saved with its item and effective only while carried.
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropHazardEquipment;

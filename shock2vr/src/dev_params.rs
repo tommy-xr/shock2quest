@@ -513,8 +513,9 @@ dev_params! {
     /// from behind, catches almost none of them - faithful shading leaves it a
     /// black silhouette. 0 is the faithful look.
     HELD_LIGHT_FLOOR = Lighting::float("held_light_floor", "Held item light floor", 0.15, 0.0, 1.5, 0.05),
-    /// Held items show their state in their authored glow (the psi amp's
-    /// strip tracks psi points). Off keeps every glow at full strength.
+    /// Items show their state in their authored glow: the held psi amp tracks
+    /// psi, high-tech guns their ammo, and a searched, emptied crate goes
+    /// dark. Off keeps every glow at full strength.
     EMISSIVE_CUES = Lighting::bool("emissive_cues", "Emissive cues", true),
     /// Below 15% charge the cue's glow intermittently cuts out entirely.
     EMISSIVE_CUE_FLICKER = Lighting::bool("emissive_cue_flicker", "Cue low flicker", false),

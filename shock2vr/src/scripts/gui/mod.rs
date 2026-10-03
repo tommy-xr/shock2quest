@@ -2,7 +2,7 @@ mod computer;
 mod container;
 mod elevator;
 mod gamepig;
-mod hackable_crate;
+pub(crate) mod hackable_crate;
 mod hrm_plug;
 mod keypad;
 mod map;

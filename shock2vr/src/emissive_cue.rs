@@ -6,7 +6,19 @@
 use dark::properties::{Link, Links, PropGunState, PropWeaponType};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
-use crate::{dev_params, time::Time};
+use crate::{
+    dev_params, mission::mission_core::GlobalTemplateHierarchy, runtime_props::RuntimePropSearched,
+    time::Time,
+};
+
+/// Crates and lockers, whose glow reports their contents. Desks run the same
+/// loot script, but their glow is a console screen, so they are left out.
+const LOOT_CONTAINER_TEMPLATES: [i32; 4] = [
+    -122,  // Crate #1
+    -941,  // Small Trioptimum Crate
+    -1303, // Locker
+    -1886, // Hackable Crate (and the SuperCrate below it)
+];
 
 /// Glow left at a sliver of charge, so "low" still reads as "on".
 const FLOOR: f32 = 0.25;
@@ -24,16 +36,37 @@ pub(crate) fn held_scale(world: &World, item: EntityId) -> Option<f32> {
     Some(glow(fraction, secs, flicker))
 }
 
-/// Emissivity scale for an item in the world: a loot container that holds
-/// nothing goes dark, so a searched crate reads as searched from across the room.
+/// Emissivity scale for an item in the world: a searched loot container with
+/// nothing left to take (emptied, or ruined by a failed hack) goes dark, so it
+/// reads as searched from across the room. Unsearched ones keep their glow,
+/// so it never gives away which crates are worth opening.
 pub(crate) fn world_scale(world: &World, entity: EntityId) -> Option<f32> {
     if !dev_params::get_bool(dev_params::EMISSIVE_CUES) {
         return None;
     }
-    let is_loot_container = ["containerscript", "hackablecrate"]
-        .iter()
-        .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script));
-    (is_loot_container && !contains_anything(world, entity)).then_some(0.0)
+    let searched = world
+        .borrow::<View<RuntimePropSearched>>()
+        .is_ok_and(|searched| searched.contains(entity));
+    if !searched || !is_loot_container(world, entity) {
+        return None;
+    }
+    let spent = !contains_anything(world, entity)
+        || crate::scripts::gui::hackable_crate::is_ruined(world, entity);
+    spent.then_some(0.0)
+}
+
+fn is_loot_container(world: &World, entity: EntityId) -> bool {
+    let Some(template) = crate::scripts::script_util::entity_class_template_id(world, entity)
+    else {
+        return false;
+    };
+    world
+        .borrow::<UniqueView<GlobalTemplateHierarchy>>()
+        .is_ok_and(|h| {
+            LOOT_CONTAINER_TEMPLATES
+                .iter()
+                .any(|&loot| h.is_or_descends_from(template, loot))
+        })
 }
 
 fn contains_anything(world: &World, container: EntityId) -> bool {
@@ -160,9 +193,11 @@ mod tests {
     }
 
     /// An entity running `script` that holds `items` things.
-    fn container(script: &str, items: usize) -> (World, EntityId) {
-        use dark::properties::{PropScripts, ToLink, WrappedEntityId};
+    /// A searched-or-not entity of `template` holding `items` things.
+    fn container(template: i32, items: usize, searched: bool) -> (World, EntityId) {
+        use dark::properties::{PropTemplateId, ToLink, WrappedEntityId};
         let mut world = World::new();
+        world.add_unique(GlobalTemplateHierarchy(std::collections::HashMap::new()));
         let to_links = (0..items)
             .map(|_| ToLink {
                 to_template_id: 0,
@@ -171,26 +206,31 @@ mod tests {
             })
             .collect();
         let entity = world.add_entity((
-            PropScripts {
-                scripts: vec![script.to_owned()],
-                inherits: true,
+            PropTemplateId {
+                template_id: template,
             },
             Links { to_links },
         ));
+        if searched {
+            world.add_component(entity, RuntimePropSearched);
+        }
         (world, entity)
     }
 
     #[test]
     fn only_an_emptied_loot_container_goes_dark() {
-        let (world, full) = container("ContainerScript", 1);
+        const LOCKER: i32 = -1303;
+        const DESK: i32 = -119;
+        let (world, full) = container(LOCKER, 1, true);
         assert_eq!(world_scale(&world, full), None);
-        let (world, empty) = container("ContainerScript", 0);
-        assert_eq!(world_scale(&world, empty), Some(0.0));
-        let (world, crate_) = container("HackableCrate", 0);
-        assert_eq!(world_scale(&world, crate_), Some(0.0));
-        // Anything else that happens to hold nothing keeps its glow.
-        let (world, console) = container("StdButton", 0);
-        assert_eq!(world_scale(&world, console), None);
+        let (world, emptied) = container(LOCKER, 0, true);
+        assert_eq!(world_scale(&world, emptied), Some(0.0));
+        // Unsearched never gives away that it is empty.
+        let (world, unsearched) = container(LOCKER, 0, false);
+        assert_eq!(world_scale(&world, unsearched), None);
+        // A desk's glow is its screen, not its contents.
+        let (world, desk) = container(DESK, 0, true);
+        assert_eq!(world_scale(&world, desk), None);
     }
 
     #[test]
