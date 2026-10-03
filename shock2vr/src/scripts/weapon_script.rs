@@ -74,7 +74,7 @@ fn get_ammotype_from_projectile_template(
 /// Rounds one shot consumes in this fire setting: the laser pistol spends 3 per
 /// normal shot and 20 per overcharge. A shot always costs at least one round,
 /// so a setting a gun never authored cannot make it free to fire.
-fn rounds_per_shot(setting: &GunSettingDesc) -> i32 {
+pub(crate) fn rounds_per_shot(setting: &GunSettingDesc) -> i32 {
     setting.ammo_usage.max(1)
 }
 
