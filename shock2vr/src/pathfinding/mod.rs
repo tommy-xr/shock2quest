@@ -653,7 +653,8 @@ impl PathfindingService {
         // dropped too: this is a question about reachability, and the route it
         // answers with is the one the AI will take once the crossings lapse.
         let unexcluded = NavAvoidance::default();
-        let (cell_path, _) = self.cell_path_avoiding(start, goal, movement_bits, &unexcluded)?;
+        let (cell_path, _) =
+            self.cell_path_avoiding(start, goal, movement_bits, &unexcluded, false)?;
         // The route the goal is reachable by crosses at least one of THIS
         // query's excluded crossings (otherwise the excluded search would have
         // found it); wait for the last of those, not for the whole level's
@@ -799,31 +800,47 @@ impl PathfindingService {
     /// original engine raycasts to the floor for the same reason -
     /// AIFindClosestCell in aipthloc.cpp).
     pub fn cell_from_position(&self, pos: Vector3<f32>) -> Option<u32> {
-        let mut best: Option<(u32, f32)> = None;
-        for (idx, cell) in self.path_database.cells.iter().enumerate() {
-            if self.point_in_cell(pos, cell) {
-                let dy = (pos.y - cell.center.y).abs();
-                if best.map(|(_, best_dy)| dy < best_dy).unwrap_or(true) {
-                    best = Some((idx as u32, dy));
-                }
-            }
-        }
-        best.map(|(idx, _)| idx)
+        self.cells_containing(pos)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(idx, _)| idx)
     }
 
     /// Every cell containing `pos` in the XZ plane - one per floor stacked
     /// there - nearest floor height first (the first is `cell_from_position`).
     fn cells_under(&self, pos: Vector3<f32>) -> Vec<u32> {
-        let mut cells = self
-            .path_database
+        let mut cells = self.cells_containing(pos).collect::<Vec<_>>();
+        cells.sort_by(|a, b| a.1.total_cmp(&b.1));
+        cells.into_iter().map(|(idx, _)| idx).collect()
+    }
+
+    /// The cells containing `pos` in the XZ plane, each with its floor's
+    /// height distance from `pos`.
+    fn cells_containing(&self, pos: Vector3<f32>) -> impl Iterator<Item = (u32, f32)> + '_ {
+        self.path_database
             .cells
             .iter()
             .enumerate()
-            .filter(|(_, cell)| self.point_in_cell(pos, cell))
-            .map(|(idx, cell)| (idx as u32, (pos.y - cell.center.y).abs()))
-            .collect::<Vec<_>>();
-        cells.sort_by(|a, b| a.1.total_cmp(&b.1));
-        cells.into_iter().map(|(idx, _)| idx).collect()
+            .filter(move |(_, cell)| self.point_in_cell(pos, cell))
+            .map(move |(idx, cell)| (idx as u32, (pos.y - cell.center.y).abs()))
+    }
+
+    /// The height of `cell`'s floor plane at `x`/`z` (its center height when
+    /// the cell is degenerate).
+    fn floor_height_at(&self, cell: u32, x: f32, z: f32) -> f32 {
+        let cell = &self.path_database.cells[cell as usize];
+        let vertex = |i: usize| {
+            self.path_database
+                .vertices
+                .get(*cell.vertex_indices.get(i)? as usize)
+                .copied()
+        };
+        if let (Some(a), Some(b), Some(c)) = (vertex(0), vertex(1), vertex(2)) {
+            let normal = (b - a).cross(c - a);
+            if normal.y.abs() > f32::EPSILON {
+                return a.y - (normal.x * (x - a.x) + normal.z * (z - a.z)) / normal.y;
+            }
+        }
+        cell.center.y
     }
 
     /// Find path from start position to goal position using A* algorithm
@@ -852,13 +869,26 @@ impl PathfindingService {
         movement_bits: MovementBits,
         avoid: &NavAvoidance,
     ) -> Option<Vec<Vector3<f32>>> {
+        let (cell_path, _) = self.cell_path_avoiding(start, goal, movement_bits, avoid, false)?;
+        Some(self.waypoints_for_cell_path(&cell_path, start, goal, movement_bits))
+    }
+
+    /// `find_path_avoiding` for a goal that may sit over a floor the AI cannot
+    /// reach - a scripted goto's marker floating over an upper floor: when the
+    /// floor nearest the goal has no route, the other floors stacked under it
+    /// are tried, nearest first, and the route ends on that floor beneath the
+    /// goal. Chase and patrol keep the exact floor (`find_path_avoiding`).
+    pub fn find_path_to_any_floor_avoiding(
+        &self,
+        start: Vector3<f32>,
+        goal: Vector3<f32>,
+        movement_bits: MovementBits,
+        avoid: &NavAvoidance,
+    ) -> Option<Vec<Vector3<f32>>> {
         let (cell_path, other_floor) =
-            self.cell_path_avoiding(start, goal, movement_bits, avoid)?;
-        // A route to another floor under the goal ends on that floor
+            self.cell_path_avoiding(start, goal, movement_bits, avoid, true)?;
         let end = if other_floor {
-            let floor = self.path_database.cells[*cell_path.last()? as usize]
-                .center
-                .y;
+            let floor = self.floor_height_at(*cell_path.last()?, goal.x, goal.z);
             Vector3::new(goal.x, floor, goal.z)
         } else {
             goal
@@ -867,36 +897,45 @@ impl PathfindingService {
     }
 
     /// The cell path `find_path_avoiding` follows: A* under `avoid`, then the
-    /// stressed second pass, per floor under the goal. The flag is set when the
-    /// route ends on a floor other than the one nearest the goal. One place, so a caller asking whether a goal is
+    /// stressed second pass. One place, so a caller asking whether a goal is
     /// reachable at all cannot drift from the caller asking for the route.
     /// Every pass through here counts in `PathfindingStats`, including a
     /// reachability re-run - it is a real search on the worker either way.
+    /// With `any_floor`, the floors stacked under the goal are tried nearest
+    /// first, and the flag reports a route that ends on another floor.
     fn cell_path_avoiding(
         &self,
         start: Vector3<f32>,
         goal: Vector3<f32>,
         movement_bits: MovementBits,
         avoid: &NavAvoidance,
+        any_floor: bool,
     ) -> Option<(Vec<u32>, bool)> {
         self.queries.fetch_add(1, Ordering::Relaxed);
-        let start_cell = self.cell_from_position(start)?;
-        // Floors stacked under the goal are tried nearest-height first, so a
-        // marker floating over an unreachable upper floor still routes to the
-        // floor beneath it that the AI can walk.
-        for (floor, goal_cell) in self.cells_under(goal).into_iter().enumerate() {
+        let start_cell = self.cell_from_position(start);
+        let floors = if any_floor {
+            self.cells_under(goal)
+        } else {
+            self.cell_from_position(goal).into_iter().collect()
+        };
+        // A failed pathfind is retried with the stressed condition added
+        // (small creatures excepted), so a calm AI still reaches goals whose
+        // only route crosses stressed-gated links.
+        let retry_stressed = !movement_bits.contains(MovementBits::SMALL_CREATURE)
+            && !movement_bits.contains(MovementBits::STRESSED);
+        let mut retried = false;
+        for (floor, goal_cell) in floors.into_iter().enumerate() {
+            let Some(start_cell) = start_cell else { break };
             if let Some(cells) =
                 self.cell_path_with_bits(start_cell, goal_cell, movement_bits, avoid)
             {
                 return Some((cells, floor > 0));
             }
-            // Second pass: a failed pathfind is retried with the stressed
-            // condition added (small creatures excepted), so a calm AI still
-            // reaches goals whose only route crosses stressed-gated links.
-            if !movement_bits.contains(MovementBits::SMALL_CREATURE)
-                && !movement_bits.contains(MovementBits::STRESSED)
-            {
-                self.stressed_retries.fetch_add(1, Ordering::Relaxed);
+            if retry_stressed {
+                if !retried {
+                    retried = true;
+                    self.stressed_retries.fetch_add(1, Ordering::Relaxed);
+                }
                 if let Some(cells) = self.cell_path_with_bits(
                     start_cell,
                     goal_cell,
@@ -2690,6 +2729,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn floor_height_follows_a_sloped_cell() {
+        // Cell 2 spans x 4..6; raise its x = 6 edge into a ramp
+        let mut db = three_cell_db(PathCellFlags::empty());
+        for vertex in [6, 7] {
+            db.vertices[vertex].y = 2.0;
+        }
+        let service = service(db);
+        assert!((service.floor_height_at(2, 5.0, 1.0) - 1.0).abs() < 1e-4);
+        assert!((service.floor_height_at(2, 5.5, 0.5) - 1.5).abs() < 1e-4);
+    }
+
+    #[test]
     fn goal_over_an_unreachable_floor_routes_to_the_floor_beneath() {
         // Cells 0 -> 1 -> 2, plus an unconnected floor directly above cell 2
         let mut db = three_cell_db(PathCellFlags::empty());
@@ -2710,11 +2761,19 @@ pub(crate) mod tests {
 
         // A marker floating over the upper floor: that floor is nearest, but
         // only the floor beneath is reachable
+        let goal = vec3(5.0, 11.0, 1.0);
+        assert!(
+            service
+                .find_path(vec3(1.0, 0.0, 1.0), goal, MovementBits::WALK)
+                .is_none(),
+            "chase and patrol keep the exact floor: it has no route"
+        );
         let path = service
-            .find_path(
+            .find_path_to_any_floor_avoiding(
                 vec3(1.0, 0.0, 1.0),
-                vec3(5.0, 11.0, 1.0),
+                goal,
                 MovementBits::WALK,
+                &NavAvoidance::default(),
             )
             .expect("the floor beneath the marker is reachable");
         let end = *path.last().unwrap();

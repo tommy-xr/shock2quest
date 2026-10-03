@@ -538,6 +538,9 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         goal,
                         movement_bits: MovementBits::WALK,
                         now_seconds: time.total.as_secs_f32(),
+                        // A scripted goto's marker may float over a floor
+                        // the actor cannot reach; it walks beneath it instead
+                        any_floor: matches!(self.target, PathTarget::Entity(_)),
                     });
                 }
                 // Budget exhausted: defer to a later frame, cooldown untouched
