@@ -67,6 +67,12 @@ pub struct AmbientAudioState {
 /// Abstract game scene that can be rendered and updated
 /// Supports missions, cutscenes, UI screens, debug scenes, etc.
 pub trait GameScene {
+    /// The placement shared by consecutive frontend screens. Gameplay keeps
+    /// the default; only an open pause overlay carries placement out of a mission.
+    fn frontend_panel_anchor(&mut self) -> Option<&mut crate::ui::FrontendPanelAnchor> {
+        None
+    }
+
     /// Main update that handles all scene-specific logic including:
     /// - Player movement and physics
     /// - Collision handling

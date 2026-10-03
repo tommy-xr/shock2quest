@@ -1989,8 +1989,10 @@ impl Game {
             }
             Some(PauseAction::Resume) => self.close_pause_menu(true),
             Some(PauseAction::QuitToMainMenu) => {
-                self.close_pause_menu(true);
+                // Keep the overlay open through the swap so the new menu
+                // inherits its placement before the pause session ends.
                 self.handle_global_effect(GlobalEffect::ShowMainMenu);
+                self.close_pause_menu(true);
             }
             // A cheat acts on the paused scene and leaves the overlay up, so
             // several can be fired before resuming. The page describes what a
@@ -2521,7 +2523,20 @@ impl Game {
     /// Replace the active scene, giving the outgoing one a chance to release
     /// what it owns beyond its own frame (see [`GameScene::on_exit`]). Every
     /// scene swap goes through here so that hook cannot be forgotten.
-    fn set_active_scene(&mut self, scene: Box<dyn GameScene>) {
+    fn set_active_scene(&mut self, mut scene: Box<dyn GameScene>) {
+        if let Some(next) = scene.frontend_panel_anchor() {
+            let previous = if self.pause_menu.is_open() {
+                Some(self.pause_menu.panel_anchor())
+            } else {
+                self.active_game_scene.frontend_panel_anchor()
+            };
+            if let Some(previous) = previous {
+                // Navigation changes the canvas, not where it hangs. Move the
+                // whole anchor, including any recenter timer/ease, before the
+                // new scene can render or read the latest head pose.
+                *next = std::mem::take(previous);
+            }
+        }
         self.weapon_buttons.cancel(self.active_game_scene.world());
         self.active_game_scene.on_exit(&mut self.audio_context);
         self.audio_context.stop_ambient_sounds();

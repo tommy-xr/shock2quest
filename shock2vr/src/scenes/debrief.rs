@@ -207,6 +207,10 @@ impl DebriefScene {
 }
 
 impl GameScene for DebriefScene {
+    fn frontend_panel_anchor(&mut self) -> Option<&mut crate::ui::FrontendPanelAnchor> {
+        Some(self.menu.panel_anchor())
+    }
+
     fn update(
         &mut self,
         time: &Time,

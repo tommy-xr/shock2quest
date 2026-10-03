@@ -159,6 +159,10 @@ impl Default for LoadingScene {
 }
 
 impl GameScene for LoadingScene {
+    fn frontend_panel_anchor(&mut self) -> Option<&mut crate::ui::FrontendPanelAnchor> {
+        Some(&mut self.panel_anchor)
+    }
+
     fn update(
         &mut self,
         time: &Time,

@@ -263,6 +263,10 @@ impl Default for GameOverScene {
 }
 
 impl GameScene for GameOverScene {
+    fn frontend_panel_anchor(&mut self) -> Option<&mut crate::ui::FrontendPanelAnchor> {
+        Some(self.menu.panel_anchor())
+    }
+
     fn update(
         &mut self,
         time: &Time,

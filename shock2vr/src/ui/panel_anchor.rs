@@ -14,7 +14,7 @@
 //!   re-places it, eased rather than teleported.
 //!
 //! The math lives in free functions so it is unit-testable without a runtime;
-//! [`FrontendPanelAnchor`] is the small amount of state a scene keeps.
+//! [`FrontendPanelAnchor`] is the state carried between consecutive frontend scenes.
 
 use std::time::Duration;
 
@@ -168,8 +168,8 @@ struct Ease {
 
 /// The stateful half: place on entry, world-lock, lazily recenter.
 ///
-/// A frontend scene owns one, feeds it the head pose every update, and both
-/// hit-tests and renders against the panel it returns - so the ray and the art
+/// Consecutive frontend scenes pass one anchor along and feed it the head pose.
+/// Each hit-tests and renders against the panel it returns - so the ray and the art
 /// can never disagree about where the menu is.
 #[derive(Debug, Clone, Default)]
 pub struct FrontendPanelAnchor {
