@@ -835,6 +835,8 @@ pub enum Effect {
         impact: Option<crate::scripts::DamageImpact>,
     },
 
+    /// Play the matching clip next, replacing any clip still playing, over the
+    /// incoming clip's authored blend (see `AnimationPlayer::queue_animation`).
     QueueAnimationBySchema {
         // ActorType, MotActorTags get inferred from the entity id
         entity_id: EntityId,
@@ -845,9 +847,9 @@ pub enum Effect {
         motion_queries: Vec<Vec<MotionQueryItem>>,
     },
 
-    /// Like `QueueAnimationBySchema`, but interrupts the playing animation
-    /// immediately (cross-fading from its current pose) and clears the
-    /// queue instead of pushing on top of it. Used for reactions that must
+    /// Like `QueueAnimationBySchema`, but an interruption: the cross-fade
+    /// from the current pose is floored so even a zero-blend clip doesn't pop
+    /// (see `AnimationPlayer::play_animation`). Used for reactions that must
     /// not wait for the in-flight clip, e.g. death.
     PlayAnimationBySchema {
         entity_id: EntityId,

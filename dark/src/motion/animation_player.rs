@@ -142,9 +142,6 @@ impl AnimationPlayer {
         player: &AnimationPlayer,
         animation: Rc<AnimationClip>,
     ) -> AnimationPlayer {
-        let new_animation =
-            immutable::List::new().push_front((animation.clone(), AnimationFlags::PlayOnce));
-
         // Fade from the playing clip, or - when the queue already drained (the
         // normal case for AI clips, whose completion handler queues the next
         // clip one tick after the previous one finished) - from the frozen
@@ -152,34 +149,16 @@ impl AnimationPlayer {
         // fallback a clip's authored blend_length only ever applied to
         // interruptions, so e.g. idle cycling (500ms authored) hard-popped.
         let duration = animation.blend_length.as_secs_f32();
-        let blend_state = if duration > f32::EPSILON {
-            player
-                .blend_from()
-                .map(|(from_clip, from_frame, from_looping)| BlendState {
-                    from_clip,
-                    from_frame,
-                    from_looping,
-                    duration,
-                    elapsed: 0.0,
-                })
-        } else {
-            None
-        };
-
-        AnimationPlayer {
-            additional_joint_transforms: player.additional_joint_transforms.clone(),
-            animation: new_animation,
-            last_animation: None,
-            current_frame: 0,
-            // Preserve the sub-frame playback remainder (including the
-            // overshoot carried across the previous clip's completion) so a
-            // queued continuation keeps the clip cadence instead of
-            // restarting the frame clock at every seam.
-            remaining_time: player.remaining_time,
-            blend_state,
-            rotation_pos: 0.0,
-            cancel_root_motion: player.cancel_root_motion,
-        }
+        // Preserve the sub-frame playback remainder (including the overshoot
+        // carried across the previous clip's completion) so a queued
+        // continuation keeps the clip cadence instead of restarting the frame
+        // clock at every seam.
+        Self::start_clip(
+            player,
+            animation,
+            (duration > f32::EPSILON).then_some(duration),
+            player.remaining_time,
+        )
     }
 
     /// The pose a new clip should cross-fade from: the playing queue head at
@@ -228,25 +207,38 @@ impl AnimationPlayer {
         // Known limit: an interrupt landing mid-blend fades from the head
         // clip's pure pose, not the blended one on screen - a small pop
         // proportional to how fresh the interrupted blend was.
-        let blend_state = player
-            .blend_from()
-            .map(|(from_clip, from_frame, from_looping)| BlendState {
-                from_clip,
-                from_frame,
-                from_looping,
-                duration: animation
-                    .blend_length
-                    .as_secs_f32()
-                    .max(MIN_INTERRUPT_BLEND_SECS),
-                elapsed: 0.0,
-            });
+        let duration = animation
+            .blend_length
+            .as_secs_f32()
+            .max(MIN_INTERRUPT_BLEND_SECS);
+        Self::start_clip(player, animation, Some(duration), 0.0)
+    }
 
+    /// `animation` as the only clip, cross-fading from the pose on screen over
+    /// `blend_seconds` (a hard cut when `None`).
+    fn start_clip(
+        player: &AnimationPlayer,
+        animation: Rc<AnimationClip>,
+        blend_seconds: Option<f32>,
+        remaining_time: f32,
+    ) -> AnimationPlayer {
+        let blend_state = blend_seconds.and_then(|duration| {
+            player
+                .blend_from()
+                .map(|(from_clip, from_frame, from_looping)| BlendState {
+                    from_clip,
+                    from_frame,
+                    from_looping,
+                    duration,
+                    elapsed: 0.0,
+                })
+        });
         AnimationPlayer {
             additional_joint_transforms: player.additional_joint_transforms.clone(),
             animation: immutable::List::new().push_front((animation, AnimationFlags::PlayOnce)),
             last_animation: None,
             current_frame: 0,
-            remaining_time: 0.0,
+            remaining_time,
             blend_state,
             rotation_pos: 0.0,
             cancel_root_motion: player.cancel_root_motion,
@@ -864,13 +856,22 @@ mod tests {
         let (player, _, _, _) = AnimationPlayer::update(&player, tick);
         // "idle" is mid-play when the next clip arrives
         let mut player = AnimationPlayer::queue_animation(&player, named("stride"));
+        let mut completions = 0;
         for _ in 0..20 {
-            player = AnimationPlayer::update(&player, tick).0;
+            let (next, _, events, _) = AnimationPlayer::update(&player, tick);
+            completions += events
+                .iter()
+                .filter(|event| matches!(event, AnimationEvent::Completed))
+                .count();
+            player = next;
             if let Some((clip, _)) = player.animation.first() {
                 assert_eq!(clip.name.as_deref(), Some("stride"), "idle resurfaced");
             }
         }
         assert!(player.animation.is_empty());
+        // One completion for the stride; a resurfaced idle reported a second,
+        // which the AI took as another finished action
+        assert_eq!(completions, 1);
     }
 
     #[test]
