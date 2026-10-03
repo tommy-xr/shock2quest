@@ -1,0 +1,1028 @@
+{
+  "mission": "medsci1.mis",
+  "presentation": "Vr",
+  "revision": "676158604c90ce3da0338624e9ae852e1f287565",
+  "runtimeSha256": "9cbfea53da0afd68c44b56f743f9e218312d5a5cf5f8bf4d4cb8735778cbeb02",
+  "assetRoot": "/Users/bryan/ss2-25th",
+  "assetFiles": [
+    "sshock2.kpf",
+    "mods/400.kpf",
+    "mods/patch_ext.kpf",
+    "mods/scp.kpf",
+    "mods/shtup.kpf",
+    "mods/sshock2ee.kpf"
+  ],
+  "lighting": {
+    "ambient_light_intensity": 0.9,
+    "level_light_intensity": 2,
+    "fov_override_deg": 85
+  },
+  "stagingTeleport": [
+    16,
+    1,
+    17
+  ],
+  "lookAt": [
+    11,
+    2,
+    17
+  ],
+  "stagedPosition": [
+    15.99938,
+    -0.3560003,
+    17.000057
+  ],
+  "input": {
+    "phases": [
+      {
+        "name": "walk",
+        "count": 9,
+        "right": [
+          0,
+          0.25
+        ],
+        "left": [
+          0,
+          0
+        ],
+        "crouch": 0
+      },
+      {
+        "name": "strafe-and-turn",
+        "count": 9,
+        "right": [
+          -0.16,
+          0
+        ],
+        "left": [
+          0.18,
+          0
+        ],
+        "crouch": 0
+      },
+      {
+        "name": "crouch",
+        "count": 8,
+        "right": [
+          0,
+          0
+        ],
+        "left": [
+          0,
+          0
+        ],
+        "crouch": 1
+      },
+      {
+        "name": "stand",
+        "count": 4,
+        "right": [
+          0,
+          0
+        ],
+        "left": [
+          -0.36,
+          0
+        ],
+        "crouch": 0
+      },
+      {
+        "name": "jump",
+        "count": 15,
+        "right": [
+          0,
+          0
+        ],
+        "left": [
+          0,
+          0
+        ],
+        "crouch": 0
+      }
+    ],
+    "jumpAction": "LeftHandLowerButton (Quest X; resolves to Jump)",
+    "framesPerSample": 4
+  },
+  "evidence": {
+    "forwardDistance": 1.289303000038779,
+    "strafeDistance": 0.9368369377912052,
+    "standingEye": 1.04,
+    "crouchedEye": 0.48000002,
+    "standingY": -0.3560001,
+    "peakJumpY": 1.9596841,
+    "endJumpY": -0.356
+  },
+  "video": {
+    "file": "movement.mp4",
+    "fps": 15,
+    "frames": 45,
+    "resolution": [
+      960,
+      540
+    ]
+  },
+  "still": "movement.png",
+  "gif": "movement.gif",
+  "samples": [
+    {
+      "frame": 4,
+      "phase": "walk",
+      "position": [
+        15.878452,
+        -0.35575607,
+        17.00009
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6768012,
+        0,
+        0.736166
+      ]
+    },
+    {
+      "frame": 8,
+      "phase": "walk",
+      "position": [
+        15.7173,
+        -0.355994,
+        17.000093
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6768012,
+        0,
+        0.736166
+      ]
+    },
+    {
+      "frame": 12,
+      "phase": "walk",
+      "position": [
+        15.556143,
+        -0.35612378,
+        17.000093
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6768012,
+        0,
+        0.736166
+      ]
+    },
+    {
+      "frame": 16,
+      "phase": "walk",
+      "position": [
+        15.394985,
+        -0.35599995,
+        17.000093
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6768012,
+        0,
+        0.736166
+      ]
+    },
+    {
+      "frame": 20,
+      "phase": "walk",
+      "position": [
+        15.233814,
+        -0.35600004,
+        17.000053
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6768012,
+        0,
+        0.736166
+      ]
+    },
+    {
+      "frame": 24,
+      "phase": "walk",
+      "position": [
+        15.072647,
+        -0.35577396,
+        17.00009
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6768012,
+        0,
+        0.736166
+      ]
+    },
+    {
+      "frame": 28,
+      "phase": "walk",
+      "position": [
+        14.911483,
+        -0.35600004,
+        17.00009
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6768012,
+        0,
+        0.736166
+      ]
+    },
+    {
+      "frame": 32,
+      "phase": "walk",
+      "position": [
+        14.750324,
+        -0.35600004,
+        17.000116
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6768012,
+        0,
+        0.736166
+      ]
+    },
+    {
+      "frame": 36,
+      "phase": "walk",
+      "position": [
+        14.589149,
+        -0.35599962,
+        17.0001
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6768012,
+        0,
+        0.736166
+      ]
+    },
+    {
+      "frame": 40,
+      "phase": "strafe-and-turn",
+      "position": [
+        14.547878,
+        -0.35600007,
+        16.920101
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855863,
+        0,
+        0.7279917
+      ]
+    },
+    {
+      "frame": 44,
+      "phase": "strafe-and-turn",
+      "position": [
+        14.544359,
+        -0.35588002,
+        16.81348
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.69427264,
+        0,
+        0.71971256
+      ]
+    },
+    {
+      "frame": 48,
+      "phase": "strafe-and-turn",
+      "position": [
+        14.538328,
+        -0.3560001,
+        16.706963
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.70285904,
+        0,
+        0.7113297
+      ]
+    },
+    {
+      "frame": 52,
+      "phase": "strafe-and-turn",
+      "position": [
+        14.52969,
+        -0.35600004,
+        16.600616
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.71134424,
+        0,
+        0.7028445
+      ]
+    },
+    {
+      "frame": 56,
+      "phase": "strafe-and-turn",
+      "position": [
+        14.518532,
+        -0.35600007,
+        16.494558
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.71972704,
+        0,
+        0.69425803
+      ]
+    },
+    {
+      "frame": 60,
+      "phase": "strafe-and-turn",
+      "position": [
+        14.504797,
+        -0.35600007,
+        16.3888
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.72800624,
+        0,
+        0.68557155
+      ]
+    },
+    {
+      "frame": 64,
+      "phase": "strafe-and-turn",
+      "position": [
+        14.488527,
+        -0.35600007,
+        16.283384
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.73618054,
+        0,
+        0.6767864
+      ]
+    },
+    {
+      "frame": 68,
+      "phase": "strafe-and-turn",
+      "position": [
+        14.469761,
+        -0.35572058,
+        16.178408
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.74424887,
+        0,
+        0.66790384
+      ]
+    },
+    {
+      "frame": 72,
+      "phase": "strafe-and-turn",
+      "position": [
+        14.448488,
+        -0.35600007,
+        16.073883
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.75221,
+        0,
+        0.65892506
+      ]
+    },
+    {
+      "frame": 76,
+      "phase": "crouch",
+      "position": [
+        14.448504,
+        -0.99600005,
+        16.073877
+      ],
+      "cameraOffset": [
+        0,
+        0.48000002,
+        0
+      ],
+      "rotation": [
+        0,
+        0.75221,
+        0,
+        0.65892506
+      ]
+    },
+    {
+      "frame": 80,
+      "phase": "crouch",
+      "position": [
+        14.448505,
+        -0.99575025,
+        16.07387
+      ],
+      "cameraOffset": [
+        0,
+        0.48000002,
+        0
+      ],
+      "rotation": [
+        0,
+        0.75221,
+        0,
+        0.65892506
+      ]
+    },
+    {
+      "frame": 84,
+      "phase": "crouch",
+      "position": [
+        14.448507,
+        -0.9957239,
+        16.073824
+      ],
+      "cameraOffset": [
+        0,
+        0.48000002,
+        0
+      ],
+      "rotation": [
+        0,
+        0.75221,
+        0,
+        0.65892506
+      ]
+    },
+    {
+      "frame": 88,
+      "phase": "crouch",
+      "position": [
+        14.448538,
+        -0.99600005,
+        16.073803
+      ],
+      "cameraOffset": [
+        0,
+        0.48000002,
+        0
+      ],
+      "rotation": [
+        0,
+        0.75221,
+        0,
+        0.65892506
+      ]
+    },
+    {
+      "frame": 92,
+      "phase": "crouch",
+      "position": [
+        14.448516,
+        -0.99622756,
+        16.073818
+      ],
+      "cameraOffset": [
+        0,
+        0.48000002,
+        0
+      ],
+      "rotation": [
+        0,
+        0.75221,
+        0,
+        0.65892506
+      ]
+    },
+    {
+      "frame": 96,
+      "phase": "crouch",
+      "position": [
+        14.448538,
+        -0.9960001,
+        16.073801
+      ],
+      "cameraOffset": [
+        0,
+        0.48000002,
+        0
+      ],
+      "rotation": [
+        0,
+        0.75221,
+        0,
+        0.65892506
+      ]
+    },
+    {
+      "frame": 100,
+      "phase": "crouch",
+      "position": [
+        14.448538,
+        -0.9960001,
+        16.073801
+      ],
+      "cameraOffset": [
+        0,
+        0.48000002,
+        0
+      ],
+      "rotation": [
+        0,
+        0.75221,
+        0,
+        0.65892506
+      ]
+    },
+    {
+      "frame": 104,
+      "phase": "crouch",
+      "position": [
+        14.448538,
+        -0.9960001,
+        16.073801
+      ],
+      "cameraOffset": [
+        0,
+        0.48000002,
+        0
+      ],
+      "rotation": [
+        0,
+        0.75221,
+        0,
+        0.65892506
+      ]
+    },
+    {
+      "frame": 108,
+      "phase": "stand",
+      "position": [
+        14.448538,
+        -0.3560001,
+        16.073801
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.7361807,
+        0,
+        0.67678654
+      ]
+    },
+    {
+      "frame": 112,
+      "phase": "stand",
+      "position": [
+        14.448538,
+        -0.3560001,
+        16.073801
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.71972734,
+        0,
+        0.69425833
+      ]
+    },
+    {
+      "frame": 116,
+      "phase": "stand",
+      "position": [
+        14.448538,
+        -0.3560001,
+        16.073801
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.70285946,
+        0,
+        0.7113302
+      ]
+    },
+    {
+      "frame": 120,
+      "phase": "stand",
+      "position": [
+        14.448538,
+        -0.3560001,
+        16.073801
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 124,
+      "phase": "jump",
+      "position": [
+        14.448538,
+        0.19066657,
+        16.073801
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 128,
+      "phase": "jump",
+      "position": [
+        14.448538,
+        0.85733336,
+        16.073801
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 132,
+      "phase": "jump",
+      "position": [
+        14.448538,
+        1.4528891,
+        16.073801
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 136,
+      "phase": "jump",
+      "position": [
+        14.448538,
+        1.9596841,
+        16.073803
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 140,
+      "phase": "jump",
+      "position": [
+        14.448538,
+        1.933454,
+        16.073868
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 144,
+      "phase": "jump",
+      "position": [
+        14.448538,
+        1.8356762,
+        16.073868
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 148,
+      "phase": "jump",
+      "position": [
+        14.448538,
+        1.6667873,
+        16.073868
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 152,
+      "phase": "jump",
+      "position": [
+        14.448538,
+        1.4267873,
+        16.073868
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 156,
+      "phase": "jump",
+      "position": [
+        14.448538,
+        1.1156762,
+        16.073868
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 160,
+      "phase": "jump",
+      "position": [
+        14.448538,
+        0.73345387,
+        16.073868
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 164,
+      "phase": "jump",
+      "position": [
+        14.448538,
+        0.28012037,
+        16.073868
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 168,
+      "phase": "jump",
+      "position": [
+        14.448538,
+        -0.2443243,
+        16.073868
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 172,
+      "phase": "jump",
+      "position": [
+        14.448524,
+        -0.3560001,
+        16.073864
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 176,
+      "phase": "jump",
+      "position": [
+        14.448532,
+        -0.35599995,
+        16.073898
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    },
+    {
+      "frame": 180,
+      "phase": "jump",
+      "position": [
+        14.448545,
+        -0.356,
+        16.073912
+      ],
+      "cameraOffset": [
+        0,
+        1.04,
+        0
+      ],
+      "rotation": [
+        0,
+        0.6855868,
+        0,
+        0.7279923
+      ]
+    }
+  ]
+}
