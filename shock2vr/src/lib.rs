@@ -25,6 +25,8 @@ mod psi_carousel;
 pub mod save_load;
 pub mod scenes;
 pub mod time;
+pub mod user_settings;
+pub mod vr_comfort;
 mod weapon_button_hold;
 
 pub mod career;

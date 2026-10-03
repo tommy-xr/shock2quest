@@ -53,12 +53,16 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 | Control | Action |
 | --- | --- |
 | Right stick | Move |
-| Left stick left/right | Turn |
+| Left stick left/right | Turn (30° snap by default; center the stick between turns) |
 | Crouch physically, or click the left stick | Crouch; click again to stand |
 | Lower face button: left **X** / right **A** | Jump, even with both hands full; close the cyber interface when it is open |
 | Left **Menu** | Tap to toggle the cyber interface; hold 0.5 seconds to pause |
 | Grip | Pick up and hold an item; release to drop or throw it |
 | Trigger | Use the held item, fire a gun, or cast with the psi amp; point and trigger to interact |
+
+**Options → Comfort / Controls** configures the movement vignette and snap or
+smooth turning in both VR and flatscreen. Settings persist across sessions. Options is available from the
+main menu and while paused.
 
 The **upper face button** (left **Y** / right **B**) acts on what that hand holds:
 

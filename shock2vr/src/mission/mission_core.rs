@@ -2743,6 +2743,7 @@ pub const PLAYER_TURN_RATE: f32 = 2.0;
 pub const PLAYER_MOVE_SPEED: f32 = 25.0;
 
 pub struct MissionCore {
+    vr_comfort: crate::vr_comfort::VrComfort,
     pub level_name: String,
     /// What reflective materials see; `None` without a 25AE capture.
     environment: Option<Rc<engine::texture::CubeTexture>>,
@@ -3799,6 +3800,7 @@ impl MissionCore {
         let security_alarm =
             crate::security_alarm::SecurityAlarm::restore(crate::security_alarm::status(&world));
         let mut mission_core = MissionCore {
+            vr_comfort: Default::default(),
             interaction,
             flat_weapon_animation: crate::flat_weapon_animation::FlatWeaponAnimator::load(
                 asset_cache,
@@ -4448,6 +4450,10 @@ impl MissionCore {
         if self.use_mode || !self.player_is_alive() {
             self.dismiss_amp_carousel();
         }
+        let turn_stick_captured = self
+            .psi_carousel
+            .as_ref()
+            .is_some_and(|menu| menu.hand == crate::Handedness::Left);
         if let Some(mut menu) = self.psi_carousel.take() {
             let held = crate::wielded_weapon::weapon_in_hand(&self.world, menu.hand);
             let tracked = input_context
@@ -4578,12 +4584,47 @@ impl MissionCore {
         }
         let input_context = &tracked_input;
 
-        let additional_rotation = cgmath::Quaternion::from_axis_angle(
-            cgmath::vec3(0.0, 1.0, 0.0),
-            cgmath::Rad(input_context.left_hand.thumbstick.x * delta_time * PLAYER_TURN_RATE),
-        );
+        let vr_settings = crate::user_settings::get().vr;
+        let mut turn_radians = if turn_stick_captured
+            || (self.psi_powers_open
+                && self.psi_navigation_hand(game_options.presentation_mode)
+                    == crate::vr_config::Handedness::Left)
+        {
+            self.vr_comfort.disarm_turn();
+            0.0
+        } else {
+            self.vr_comfort.turn_radians(
+                input_context.left_hand.thumbstick.x,
+                delta_time,
+                vr_settings,
+            )
+        };
+        let mut new_rotation = player.rotation
+            * cgmath::Quaternion::from_axis_angle(
+                cgmath::vec3(0.0, 1.0, 0.0),
+                cgmath::Rad(turn_radians),
+            );
+        if game_options.presentation_mode == crate::PresentationMode::Vr && turn_radians != 0.0 {
+            let shift = crate::vr_comfort::turn_origin_shift(
+                player.rotation,
+                new_rotation,
+                input_context.head.position,
+            );
+            if !self
+                .physics
+                .try_shift_player_for_turn(shift, &mut self.player_handle)
+            {
+                new_rotation = player.rotation;
+                turn_radians = 0.0;
+            }
+        }
 
-        let new_rotation = player.rotation * additional_rotation;
+        self.vr_comfort.update_vignette(
+            input_context.right_hand.thumbstick,
+            turn_radians,
+            delta_time,
+            vr_settings,
+        );
 
         let dir = new_rotation * input_context.head.rotation;
         let facing = dir.rotate_vector(cgmath::vec3(0.0, 0.0, -1.0));
@@ -14560,6 +14601,14 @@ impl MissionCore {
         options: &crate::GameOptions,
     ) -> Vec<SceneObject> {
         let mut ret = vec![];
+        if !self.use_mode {
+            if let Some(layer) =
+                self.vr_comfort
+                    .render(view, projection, crate::user_settings::get().vr)
+            {
+                ret.push(layer);
+            }
+        }
         if let Some(environment) = self
             .environment
             .as_ref()
@@ -21180,6 +21229,7 @@ impl crate::game_scene::GameScene for MissionCore {
     }
 
     fn cancel_transient_input(&mut self) {
+        self.vr_comfort.reset();
         self.dismiss_amp_carousel();
         crate::vr_psi_sway::suspend(&self.world);
     }

@@ -483,6 +483,38 @@ an existing campaign from a runtime launched with a different choice. The generi
 quest-bit API cannot change it. The choice drives authored player pools, trainer
 and replicator prices, mission object masks, and Easy ecology and hypo bonuses.
 
+### Player options
+
+**Options** on the main menu, New Game screen, and pause menu uses retail's
+`OPTIONS.PCX`, `OPTIONSR.BIN`, and `OPTIONTR.BIN`. Comfort controls occupy the
+full-width rows from `OPTIONAR.BIN`. Flat and VR render the same canvas and apply the same comfort preferences.
+On desktop, WASD triggers the movement vignette and Left/Right arrows use the
+selected turn mode; mouse-look stays direct.
+
+- **Comfort:** movement vignette Off/Low/Medium/High (default Low), separate
+  switches for stick movement and smooth turning (both default On), and reset.
+  The soft black border fades in over 0.2 seconds and out over 0.4 seconds.
+  Physical head movement and snap turns do not activate it. It is hidden while
+  paused or using the cyber interface.
+- **Controls:** Snap/Smooth turning (default Snap), 30/45/60 degree snap angles
+  (default 30), smooth speeds of 45/60/90/120/180 degrees per second (default
+  90), and reset. Snap turning requires centering the stick before each turn.
+  Entering a scene, resuming, or changing turn settings also requires centering
+  before turning. Turns pivot around the tracked head; a turn is rejected if
+  shifting the capsule to preserve that pivot would cross geometry. The movement
+  and turning sticks keep their existing mapping.
+- Audio and Display tabs are disabled until their controls are implemented.
+
+Click or point-and-trigger a value to cycle it. Changes save immediately to
+`user-settings.json` in the game data directory, independently of campaign
+saves. Failed writes keep the prior values and display an error. **Done**
+returns to the screen that opened Options; from pause, the mission stays paused
+until **Continue**. Developer mode has its own bottom-left pause entry.
+
+Automated tests can set `SHOCK2_SETTINGS_PATH` to an isolated JSON file; its
+parent directory must exist. This keeps test settings out of the user's profile.
+The reference-grid comfort overlay remains a separate follow-up.
+
 ### Developer options
 
 The main menu's bottom-left build label shows `dev | <commit>` for local builds

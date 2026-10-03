@@ -35,7 +35,8 @@ for (const difficulty of ["easy","normal","hard","impossible"] as const) {
       // Starting without another choice must use the Normal default.
     } else await click(game,newGameEntry(difficulty));
     await click(game,newGameEntry("options"));
-    assert.equal((await game.info()).mission,"main_menu","unimplemented Options does not leave the selection page");
+    assert.equal((await game.info()).mission,"main_menu","Options keeps the pending campaign alive");
+    await click(game,[320/640,436/480]); // Done returns to the selected difficulty.
     await click(game,newGameEntry("start"));
     assert.equal((await game.info()).mission,"cs1.avi");
     await finishIntro(game);
