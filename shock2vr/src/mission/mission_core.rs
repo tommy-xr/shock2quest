@@ -7377,7 +7377,7 @@ impl MissionCore {
                     if let Some(clip) = maybe_clip {
                         // The schema's authored time warp / fixed duration and
                         // stretch / fixed distance (most schemas have none).
-                        let time_scale = timing.time_scale(clip.duration.as_secs_f32());
+                        let time_scale = timing.time_scale(clip.play_duration(false).as_secs_f32());
                         let stretch = timing.stretch(clip.translation.magnitude());
                         let clip = if time_scale != 1.0 || stretch != 1.0 {
                             Rc::new(clip.with_timing(time_scale, stretch))
@@ -14799,10 +14799,18 @@ impl MissionCore {
                             .filter(|(e, _)| *e == weapon)
                             .map(|(_, p)| {
                                 let state = p.snapshot();
+                                // Frames the swing plays across: a one-shot
+                                // ends on its last keyframe
                                 let frames = state
                                     .queue
                                     .first()
-                                    .map(|c| c.num_frames)
+                                    .map(|c| {
+                                        if c.looping {
+                                            c.num_frames
+                                        } else {
+                                            c.num_frames.saturating_sub(1)
+                                        }
+                                    })
                                     .unwrap_or(1)
                                     .max(1);
                                 -65.0

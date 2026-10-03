@@ -344,16 +344,10 @@ impl AnimationPlayer {
         } else {
             let (current_clip, flags) = maybe_current_clip.unwrap();
             let looping = matches!(flags, AnimationFlags::Loop);
-            // Frames the clip plays across. A loop wraps from its last keyframe
-            // back to the first; a one-shot ends ON its last keyframe rather than
-            // holding it for another frame period, so a chained clip (the next
-            // stride) picks up without a frozen pose or a skating root at every
-            // seam. A single-keyframe pose still lasts one frame.
-            let span = if looping {
-                current_clip.num_frames
-            } else {
-                current_clip.num_frames.saturating_sub(1).max(1)
-            };
+            // A one-shot ends ON its last keyframe rather than holding it for
+            // another frame period, so a chained clip (the next stride) picks up
+            // without a frozen pose or a skating root at every seam.
+            let span = current_clip.play_frames(looping);
             let mut next_frame = player.current_frame;
             let time_per_frame = current_clip.time_per_frame.as_secs_f32();
             // The ramp anchor: everything up to rotation_pos has already been
@@ -784,6 +778,44 @@ mod tests {
         }
         // Each cycle covers the authored unit plus the trailing stride (zero here).
         assert!((travelled.x - 4.0).abs() < 1e-3, "got {travelled:?}");
+    }
+
+    #[test]
+    fn a_fixed_duration_schema_completes_at_its_authored_duration() {
+        // Fixed duration (flag 0x2) of 3 s on a three-keyframe, 100 ms clip
+        let timing = crate::motion::MotionSchema {
+            archetype_index: 0,
+            schema_id: 0,
+            flags: 0x2,
+            time_modifier: 3.0,
+            dist_modifier: 0.0,
+            motion_index_list: Vec::new(),
+        }
+        .timing();
+        let clip = clip_with_root_motion();
+        let time_scale = timing.time_scale(clip.play_duration(false).as_secs_f32());
+        let mut player = AnimationPlayer::queue_animation(
+            &AnimationPlayer::empty(),
+            Rc::new(clip.with_timing(time_scale, 1.0)),
+        );
+        let tick = Duration::from_millis(50);
+        let mut elapsed = Duration::ZERO;
+        loop {
+            let (next, _, events, _) = AnimationPlayer::update(&player, tick);
+            elapsed += tick;
+            player = next;
+            if events
+                .iter()
+                .any(|event| matches!(event, AnimationEvent::Completed))
+            {
+                break;
+            }
+            assert!(elapsed < Duration::from_secs(10), "never completed");
+        }
+        assert!(
+            (elapsed.as_secs_f32() - 3.0).abs() < 0.06,
+            "completed after {elapsed:?}"
+        );
     }
 
     #[test]
