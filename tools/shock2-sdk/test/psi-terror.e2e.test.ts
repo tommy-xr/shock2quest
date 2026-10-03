@@ -10,6 +10,10 @@ const enabled = process.env.SHOCK2_E2E === "1";
 async function prop(game: GameServer, id: number, name: string) {
   return (await game.entities.detail(id)).properties.find(p => p.name === name)?.value;
 }
+async function assertFx(game: GameServer, count: number) {
+  assert.equal((await game.entities.byTemplate(-608)).length, count, "Stun Cloud lifetime follows the motion");
+  assert.equal((await game.entities.byTemplate(-2406)).length, count, "Tinkling Lights lifetime follows the motion");
+}
 async function aim(game: GameServer, id: number, vr: boolean) {
   if (vr) {
     const target = await game.entities.detail(id);
@@ -42,6 +46,7 @@ for (const vr of [false, true]) {
   assert.equal((await game.info()).player.psi_points, psi - 3);
   assert.equal(Number(await prop(game, target.id, "HitPoints")), 12);
   assert.equal(await prop(game, target.id, "AIBehavior"), "Stunned");
+  await assertFx(game, 1);
   assert.equal((await game.entities.animation(target.id))?.clip, "ogsrwnd3");
   await game.step({ frames: 540 });
   assert.equal(await prop(game, target.id, "AIBehavior"), "Stunned");
@@ -50,9 +55,18 @@ for (const vr of [false, true]) {
   await game.step({ frames: 720 });
   assert.equal((await game.info()).player.psi_points, psi - 6);
   assert.equal(await prop(game, target.id, "AIBehavior"), "Stunned", "recast replaces the 20-second timer");
+  await assertFx(game, 1); // Recasting must not duplicate the attachments.
   await game.step({ frames: 660 });
   assert.notEqual(await prop(game, target.id, "AIBehavior"), "Stunned", "recovery after timer and motion boundary");
   assert.equal(Number(await prop(game, target.id, "HitPoints")), 12);
+  await assertFx(game, 0);
+  await aim(game, target.id, vr);
+  await fireOnce(game);
+  await game.step({ frames: 60 });
+  await assertFx(game, 1);
+  await game.entities.sendMessage(target.id, { type: "Damage", amount: 100 });
+  await game.step({ frames: 3 });
+  await assertFx(game, 0); // Death/corpse conversion cannot strand cosmetic children.
  });
 }
 
@@ -84,16 +98,20 @@ test("Terror saves remaining time and robots ignore its real impact", { skip: !e
     await fireOnce(game);
     await game.step({ frames: 360 });
     assert.equal(await prop(game, target.id, "AIBehavior"), "Stunned");
+    await assertFx(game, 1);
     await game.save(slot);
     await game.load(slot);
     await game.step({ frames: 1 });
     [target] = await game.entities.byTemplate(-397);
     assert.ok(target);
     assert.equal(await prop(game, target.id, "AIBehavior"), "Stunned");
+    await assertFx(game, 1); // Recreated once from saved AI state.
     await game.step({ frames: 600 });
     assert.equal(await prop(game, target.id, "AIBehavior"), "Stunned");
     await game.step({ frames: 360 });
     assert.notEqual(await prop(game, target.id, "AIBehavior"), "Stunned", "saved remaining time is preserved, not restarted");
+
+    await assertFx(game, 0);
 
     const [droid] = await game.entities.byTemplate(593);
     assert.ok(droid);
@@ -108,5 +126,6 @@ test("Terror saves remaining time and robots ignore its real impact", { skip: !e
     assert.equal((await game.info()).player.psi_points, psi - 3);
     assert.equal(await prop(game, droid.id, "HitPoints"), hp);
     assert.notEqual(await prop(game, droid.id, "AIBehavior"), "Stunned", "Robots do not inherit Stunable");
+    await assertFx(game, 0);
   } finally { await unlink(path).catch(() => {}); }
 });

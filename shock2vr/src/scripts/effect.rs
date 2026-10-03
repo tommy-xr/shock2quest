@@ -715,6 +715,12 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    /// StunFX presentation follows the AI motion lifetime, including restoration.
+    SetStunFx {
+        entity_id: EntityId,
+        active: bool,
+    },
+
     /// Validate and create the authored solid barrier, charging only a successful placement.
     PsiBarrier {
         amp: EntityId,

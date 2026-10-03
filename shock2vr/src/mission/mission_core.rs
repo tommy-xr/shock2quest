@@ -13471,6 +13471,68 @@ impl MissionCore {
                     }
                 }
 
+                Effect::SetStunFx { entity_id, active } => {
+                    // StunFX (Stunned metaproperty) owns these two authored
+                    // particle groups. Keep this cosmetic lifecycle alongside
+                    // the AI's saved Stun motion, rather than replacing live
+                    // scripts when a metaproperty is recomposed.
+                    let children = self.world.run(
+                        |fx: View<crate::runtime_props::RuntimePropStunFx>,
+                         attachments: View<RuntimePropAttachment>| {
+                            (&fx, &attachments)
+                                .iter()
+                                .with_id()
+                                .filter(|(_, (_, attachment))| attachment.parent == entity_id)
+                                .map(|(id, _)| id)
+                                .collect::<Vec<_>>()
+                        },
+                    );
+                    if !active {
+                        for child in children {
+                            self.remove_entity(child);
+                        }
+                        continue;
+                    }
+                    if !children.is_empty() {
+                        continue;
+                    }
+                    let position = self
+                        .world
+                        .borrow::<View<PropPosition>>()
+                        .ok()
+                        .and_then(|positions| positions.get(entity_id).ok().cloned());
+                    let Some(position) = position else {
+                        continue;
+                    };
+                    for name in ["stun cloud", "tinkling lights"] {
+                        let Some(template) = self
+                            .template_name_to_template_id
+                            .get(name)
+                            .map(|metadata| metadata.template_id)
+                        else {
+                            continue;
+                        };
+                        let fx = self.create_entity_with_position(
+                            asset_cache,
+                            template,
+                            Point3::from_vec(position.position),
+                            position.rotation,
+                            Matrix4::identity(),
+                            CreateEntityOptions {
+                                attach_to: Some(entity_id),
+                                ..CreateEntityOptions::default()
+                            },
+                        );
+                        self.make_un_physical(fx.entity_id);
+                        self.world.add_component(
+                            fx.entity_id,
+                            (
+                                crate::runtime_props::RuntimePropStunFx,
+                                RuntimePropDoNotSerialize,
+                            ),
+                        );
+                    }
+                }
                 Effect::SetMetaProperty {
                     entity_id,
                     name,

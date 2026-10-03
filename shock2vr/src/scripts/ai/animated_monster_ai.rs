@@ -1045,13 +1045,25 @@ impl AnimatedMonsterAI {
             self.current_behavior.borrow().name()
         };
         if self.published_behavior != Some(behavior_name) {
+            let was_stunned = self.published_behavior == Some("Stunned");
+            let stunned = self.stun.is_some();
             self.published_behavior = Some(behavior_name);
-            Effect::SetAIProperty {
-                entity_id,
-                update: crate::scripts::AIPropertyUpdate::Behavior {
-                    name: behavior_name.to_string(),
+            Effect::combine(vec![
+                Effect::SetAIProperty {
+                    entity_id,
+                    update: crate::scripts::AIPropertyUpdate::Behavior {
+                        name: behavior_name.to_string(),
+                    },
                 },
-            }
+                if was_stunned != stunned {
+                    Effect::SetStunFx {
+                        entity_id,
+                        active: stunned,
+                    }
+                } else {
+                    Effect::NoEffect
+                },
+            ])
         } else {
             Effect::NoEffect
         }
@@ -2569,8 +2581,14 @@ mod tests {
             tags: "stun".into(),
         };
         let effect = ai.handle_message(entity, &world, &physics, &cast);
+        let effects = Effect::flatten(vec![effect]);
         assert!(
-            Effect::flatten(vec![effect])
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::SetStunFx { active: true, .. }))
+        );
+        assert!(
+            effects
                 .iter()
                 .any(|e| matches!(e, Effect::PlayAnimationBySchema { .. }))
         );
@@ -2584,7 +2602,12 @@ mod tests {
             },
         );
         assert_eq!(ai.stun.as_ref().unwrap().remaining, 13.0);
-        ai.handle_message(entity, &world, &physics, &cast);
+        let recast = ai.handle_message(entity, &world, &physics, &cast);
+        assert!(
+            !Effect::flatten(vec![recast])
+                .iter()
+                .any(|e| matches!(e, Effect::SetStunFx { .. }))
+        );
         assert_eq!(
             ai.stun.as_ref().unwrap().remaining,
             20.0,
@@ -2607,7 +2630,12 @@ mod tests {
                 &crate::scripts::ScriptRestoreContext::new(&std::collections::HashMap::new()),
             )
             .unwrap();
-        restored.initialize_after_hydration(entity, &world, true);
+        let hydrated = restored.initialize_after_hydration(entity, &world, true);
+        assert!(
+            Effect::flatten(vec![hydrated])
+                .iter()
+                .any(|e| matches!(e, Effect::SetStunFx { active: true, .. }))
+        );
         assert_eq!(restored.stun.as_ref().unwrap().remaining, 16.0);
         restored.update(
             entity,
@@ -2619,13 +2647,18 @@ mod tests {
             },
         );
         assert!(restored.stun.is_some(), "finish at a motion boundary");
-        restored.handle_message(
+        let recovered = restored.handle_message(
             entity,
             &world,
             &physics,
             &MessagePayload::AnimationCompleted,
         );
         assert!(restored.stun.is_none());
+        assert!(
+            Effect::flatten(vec![recovered])
+                .iter()
+                .any(|e| matches!(e, Effect::SetStunFx { active: false, .. }))
+        );
     }
 
     #[test]
