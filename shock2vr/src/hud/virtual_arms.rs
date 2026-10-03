@@ -230,23 +230,44 @@ pub(crate) const IMPLANT_SLOT_WIDTH: f32 = BIO_WIDTH * 34.0 / 128.0 * 1.75;
 /// Wrist-frame +Z points out of the glove's back; +Y points toward its fingers.
 /// Bio faces dorsally, scaled alike in x and z so it can bend around the
 /// wrist. Ammo caps the cuff opening and faces back along the forearm,
-/// rotated counterclockwise in its face plane to fit inside the rim.
+/// rolled in its face plane so its text stays upright.
 fn wrist_panel_transform(
     root: Matrix4<f32>,
     canvas_size: cgmath::Vector2<f32>,
     ammo: bool,
 ) -> Matrix4<f32> {
     let width = if ammo { 0.058 } else { BIO_WIDTH };
-    let mount = if ammo {
-        Matrix4::from_translation(vec3(0.0, -0.033, -0.005))
-            * Matrix4::from_angle_x(Deg(90.0))
-            * Matrix4::from_angle_z(Deg(90.0))
+    let placed = if ammo {
+        roll_upright(
+            root * Matrix4::from_translation(vec3(0.0, -0.026, -0.005))
+                * Matrix4::from_angle_x(Deg(90.0)),
+        )
     } else {
-        Matrix4::from_translation(vec3(0.0, -0.015, 0.04))
+        root * Matrix4::from_translation(vec3(0.0, -0.015, 0.04))
     };
     let depth = if ammo { 1.0 } else { width };
-    root * mount
-        * Matrix4::from_nonuniform_scale(width, width * canvas_size.y / canvas_size.x, depth)
+    placed * Matrix4::from_nonuniform_scale(width, width * canvas_size.y / canvas_size.x, depth)
+}
+
+/// Keep `m`'s origin and facing (+Z), but roll about that facing so +Y is as
+/// close to world up as it can be. Near a vertical facing "up" is undefined
+/// and would spin with small sway, so the correction fades back to `m`'s own
+/// roll there (e.g. an arm hanging at the side).
+fn roll_upright(m: Matrix4<f32>) -> Matrix4<f32> {
+    use cgmath::InnerSpace;
+    let normal = m.z.truncate().normalize();
+    let own = m.y.truncate().normalize();
+    let upright = cgmath::Vector3::unit_y() - normal * normal.y;
+    if upright.magnitude2() < 1e-6 {
+        return m;
+    }
+    let upright = upright.normalize();
+    let t = ((normal.y.abs() - 0.85) / (0.97 - 0.85)).clamp(0.0, 1.0);
+    let keep = t * t * (3.0 - 2.0 * t);
+    let angle = normal.dot(own.cross(upright)).atan2(own.dot(upright)) * (1.0 - keep);
+    let up = own * angle.cos() + normal.cross(own) * angle.sin();
+    let right = up.cross(normal);
+    Matrix4::from_cols(right.extend(0.0), up.extend(0.0), normal.extend(0.0), m.w)
 }
 
 /// Get player health percentage (0.0 to 1.0)
@@ -472,6 +493,41 @@ mod tests {
                     - 128.0 / 44.0)
                     .abs()
                     < 0.0001
+            );
+        }
+    }
+
+    #[test]
+    fn ammo_readout_stays_upright_however_the_wrist_rolls() {
+        let size = cgmath::vec2(94.0, 64.0);
+        for roll in [0.0, 37.0, 90.0, 180.0, 250.0] {
+            // A forearm pointing forward (-Z), rolled about itself.
+            let root = Matrix4::from_angle_z(Deg(roll)) * Matrix4::from_angle_x(Deg(-90.0));
+            let transform = wrist_panel_transform(root, size, true);
+            let up = transform.y.truncate().normalize();
+            assert!(up.y > 0.999, "roll {roll}: up {up:?}");
+            assert!(transform.determinant() > 0.0);
+        }
+    }
+
+    #[test]
+    fn ammo_readout_does_not_spin_when_the_forearm_passes_vertical() {
+        let size = cgmath::vec2(94.0, 64.0);
+        // Swing a rolled forearm up through vertical in small steps; the
+        // readout's up must move smoothly, not flip.
+        let up_at = |pitch: f32| {
+            let root = Matrix4::from_angle_x(Deg(pitch))
+                * Matrix4::from_angle_z(Deg(30.0))
+                * Matrix4::from_angle_x(Deg(-90.0));
+            let transform = wrist_panel_transform(root, size, true);
+            assert!(transform.determinant() > 0.0);
+            transform.y.truncate().normalize()
+        };
+        for step in 0..200 {
+            let pitch = 40.0 + step as f32 * 0.5;
+            assert!(
+                up_at(pitch).dot(up_at(pitch + 0.5)) > 0.99,
+                "pitch {pitch}: jumped"
             );
         }
     }

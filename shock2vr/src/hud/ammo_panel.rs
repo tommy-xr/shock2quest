@@ -549,10 +549,11 @@ pub(crate) fn build_wrist_canvas(readout: &AmmoReadout) -> UiCanvas {
     if readout.is_empty() {
         return canvas;
     }
-    canvas.image(
-        Rect::new(0.0, 0.0, WRIST_CROP.w, WRIST_CROP.h),
-        "AMMOBACK.PCX",
-    );
+    // A flat plate: the backdrop art's frame reads as clutter once the panel
+    // floats free of the cuff rim.
+    canvas
+        .fill(Rect::new(0.0, 0.0, WRIST_CROP.w, WRIST_CROP.h), [4, 16, 12])
+        .opacity(0.7);
     let passive = AmmoReadout {
         show_buttons: false,
         ..readout.clone()
@@ -575,7 +576,7 @@ mod tests {
             let wrist = build_wrist_canvas(&readout);
             assert_eq!(wrist.size(), vec2(94.0, 64.0));
             assert!(
-                matches!(&wrist.elements()[0], crate::ui::UiElement::Image { texture, kind: crate::ui::ImageKind::Ui, .. } if texture == "AMMOBACK.PCX")
+                matches!(&wrist.elements()[0], crate::ui::UiElement::Fill { alpha, .. } if *alpha < 1.0)
             );
             let passive = AmmoReadout {
                 show_buttons: false,
