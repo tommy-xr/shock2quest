@@ -2744,6 +2744,7 @@ pub const PLAYER_MOVE_SPEED: f32 = 25.0;
 
 pub struct MissionCore {
     vr_comfort: crate::vr_comfort::VrComfort,
+    reference_grid: crate::reference_grid::ReferenceGrid,
     pub level_name: String,
     /// What reflective materials see; `None` without a 25AE capture.
     environment: Option<Rc<engine::texture::CubeTexture>>,
@@ -3800,6 +3801,7 @@ impl MissionCore {
             crate::security_alarm::SecurityAlarm::restore(crate::security_alarm::status(&world));
         let mut mission_core = MissionCore {
             vr_comfort: Default::default(),
+            reference_grid: Default::default(),
             interaction,
             flat_weapon_animation: crate::flat_weapon_animation::FlatWeaponAnimator::load(
                 asset_cache,
@@ -4718,6 +4720,7 @@ impl MissionCore {
             .prepare(&self.physics, time.elapsed.as_secs_f32());
         // The hold a hand vault starts from this frame, for the player trail.
         let mut vault_hold = None;
+        let mut comfort_displacement = vec3(0.0, 0.0, 0.0);
         let (new_character_pos, collision_events) = if time.elapsed.is_zero() {
             (
                 self.physics.get_player_translation(&self.player_handle),
@@ -4830,17 +4833,41 @@ impl MissionCore {
                 new_rotation,
                 input_context.tracking,
             );
+            // Sample after stance and turn-origin corrections, around the
+            // actual physics step, so passive platform carry is included while
+            // physical tracking and pose conversion cannot activate the grid.
+            let before_move = self.physics.get_player_translation(&self.player_handle);
             let moved = profile!(
                 "shock2.update.physics",
                 self.physics
                     .update_player_movement(request, &mut self.player_handle)
             );
+            comfort_displacement = moved.0 - before_move;
             if let Some(requested) = hand_climb.translation {
                 self.interaction
                     .resolve_hand_climb(requested, self.player_handle.self_translation());
             }
             moved
         };
+
+        self.reference_grid.update(
+            comfort_displacement,
+            input_context.right_hand.thumbstick.magnitude() > 0.15
+                || (vr_settings.turning == crate::user_settings::TurnMode::Smooth
+                    && turn_radians.abs() > 0.0001),
+            delta_time,
+            vr_settings.reference_grid,
+        );
+        let stance = self.player_handle.tracking_is_crouched();
+        let center = crate::physics::player_center_above_floor(stance);
+        self.reference_grid.stage_floor = input_context
+            .tracking
+            .map(|tracking| {
+                tracking
+                    .with_stance(center, crate::physics::player_eye_cap_above_center(stance))
+                    .stage_to_pawn(vec3(0.0, 0.0, 0.0))
+            })
+            .unwrap_or_else(|| vec3(0.0, -center, 0.0));
 
         if !time.elapsed.is_zero() {
             // Player footsteps, paced by the distance the player just walked
@@ -14368,6 +14395,13 @@ impl MissionCore {
     ) -> Vec<SceneObject> {
         let mut ret = vec![];
         if !self.use_mode {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            ret.extend(self.reference_grid.render(
+                asset_cache,
+                player.pos,
+                player.rotation,
+                crate::user_settings::get().vr,
+            ));
             if let Some(layer) =
                 self.vr_comfort
                     .render(view, projection, crate::user_settings::get().vr)
@@ -20873,6 +20907,7 @@ impl crate::game_scene::GameScene for MissionCore {
 
     fn cancel_transient_input(&mut self) {
         self.vr_comfort.reset();
+        self.reference_grid.reset();
         self.dismiss_amp_carousel();
         crate::vr_psi_sway::suspend(&self.world);
     }

@@ -22,6 +22,7 @@ pub mod particle_effects;
 mod psi_amp_readout;
 pub mod psi_amp_selection;
 mod psi_carousel;
+pub mod reference_grid;
 pub mod save_load;
 pub mod scenes;
 pub mod time;

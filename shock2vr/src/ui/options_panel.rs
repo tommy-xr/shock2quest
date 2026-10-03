@@ -15,13 +15,14 @@ const FRAME: [Rect; 2] = [
     Rect::new(244.0, 408.0, 152.0, 56.0),
     Rect::new(20.0, 67.0, 601.0, 335.0),
 ];
-// Retail audio's five full-width rows are also suitable for comfort controls.
-const ROWS: [Rect; 5] = [
+// Keep retail audio's five rows; extend its pitch for one additional control.
+const ROWS: [Rect; 6] = [
     Rect::new(93.0, 73.0, 481.0, 23.0),
     Rect::new(93.0, 102.0, 481.0, 23.0),
     Rect::new(93.0, 130.0, 481.0, 23.0),
     Rect::new(93.0, 158.0, 481.0, 23.0),
     Rect::new(93.0, 187.0, 481.0, 23.0),
+    Rect::new(93.0, 216.0, 481.0, 23.0),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,10 +54,21 @@ impl OptionsLayout {
             let layout = assets.get_opt(&UI_LAYOUT_IMPORTER, name);
             resolve_menu_rects(layout.as_deref().map(|r| r.as_slice()), fallback)
         };
+        // Only the first five OPTIONAR rects are full-width option rows;
+        // later retail widgets have different geometry. Extend the final row
+        // using the authored pitch, rather than borrowing an unrelated rect.
+        let mut rows = read("OPTIONAR.BIN", &ROWS[..5]);
+        let last = rows[4];
+        rows.push(Rect::new(
+            last.x,
+            last.y + last.y - rows[3].y,
+            last.w,
+            last.h,
+        ));
         Self {
             tabs: read("OPTIONTR.BIN", &TABS),
             frame: read("OPTIONSR.BIN", &FRAME),
-            rows: read("OPTIONAR.BIN", &ROWS),
+            rows,
         }
     }
 }
@@ -79,7 +91,8 @@ impl OptionsPanel {
                 return Some(OptionsEvent::Tab(i));
             }
         }
-        for (i, rect) in layout.rows.iter().take(4).enumerate() {
+        let count = if self.tab == 0 { 6 } else { 4 };
+        for (i, rect) in layout.rows.iter().take(count).enumerate() {
             if rect.contains(point) {
                 return Some(OptionsEvent::Row(i));
             }
@@ -109,10 +122,14 @@ impl OptionsPanel {
             (0, 0) => vr.vignette = vr.vignette.next(),
             (0, 1) => vr.vignette_movement = !vr.vignette_movement,
             (0, 2) => vr.vignette_turning = !vr.vignette_turning,
-            (0, 3) => {
+            (0, 3) => vr.reference_grid = vr.reference_grid.next(),
+            (0, 4) => vr.grid_opacity = cycle(vr.grid_opacity, &[0.15, 0.3, 0.5]),
+            (0, 5) => {
                 vr.vignette = defaults.vignette;
                 vr.vignette_movement = defaults.vignette_movement;
                 vr.vignette_turning = defaults.vignette_turning;
+                vr.reference_grid = defaults.reference_grid;
+                vr.grid_opacity = defaults.grid_opacity;
             }
             (1, 0) => {
                 vr.turning = if vr.turning == TurnMode::Snap {
@@ -167,6 +184,8 @@ impl OptionsPanel {
                     "While smooth turning: {}",
                     on_off(settings.vignette_turning)
                 ),
+                format!("Reference grid: {}", settings.reference_grid.label()),
+                format!("Grid opacity: {:.0}%", settings.grid_opacity * 100.0),
                 "Reset comfort defaults".to_owned(),
             ]
         } else {

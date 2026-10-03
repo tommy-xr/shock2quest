@@ -114,7 +114,7 @@ for (const vr of [false, true]) {
     const click = vr ? vrClickCanvasPoint : clickCanvas;
     const debugFlags = vr ? ["--vr"] : [];
     const saved = async () => JSON.parse(await readFile(path, "utf8")) as {
-      vr: { vignette: string; turning: string; snap_angle: number };
+      vr: { vignette: string; turning: string; snap_angle: number; reference_grid: string; grid_opacity: number };
     };
     try {
       {
@@ -123,6 +123,10 @@ for (const vr of [false, true]) {
         await click(game, [490, 202]);
         await click(game, [333, 84]); // Low -> Medium
         assert.equal((await saved()).vr.vignette, "Medium");
+        await click(game, [333, 169]); // Off -> During movement
+        await click(game, [333, 198]); // 30 -> 50 percent
+        assert.equal((await saved()).vr.reference_grid, "DuringMovement");
+        assert.equal((await saved()).vr.grid_opacity, 0.5);
         await click(game, [240, 36]);
         await click(game, [333, 113]); // 30 -> 45 degrees
         assert.equal((await saved()).vr.snap_angle, 45);
@@ -140,6 +144,11 @@ for (const vr of [false, true]) {
         // This process must start with the previous process's Medium setting.
         await click(game, [333, 84]);
         assert.equal((await saved()).vr.vignette, "High");
+        assert.equal((await saved()).vr.reference_grid, "DuringMovement");
+        assert.equal((await saved()).vr.grid_opacity, 0.5);
+        await click(game, [333, 227]); // Reset comfort, keeping turning settings
+        assert.equal((await saved()).vr.reference_grid, "Off");
+        assert.equal((await saved()).vr.grid_opacity, 0.3);
         assert.equal((await saved()).vr.snap_angle, 45);
         await click(game, DONE);
         assert.equal((await game.info()).paused, true);

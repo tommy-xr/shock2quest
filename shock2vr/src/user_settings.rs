@@ -52,6 +52,32 @@ impl VignetteStrength {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReferenceGridMode {
+    #[default]
+    Off,
+    DuringMovement,
+    Always,
+}
+
+impl ReferenceGridMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::DuringMovement,
+            Self::DuringMovement => Self::Always,
+            Self::Always => Self::Off,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::DuringMovement => "During movement",
+            Self::Always => "Always",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VrSettings {
@@ -61,6 +87,8 @@ pub struct VrSettings {
     pub vignette: VignetteStrength,
     pub vignette_movement: bool,
     pub vignette_turning: bool,
+    pub reference_grid: ReferenceGridMode,
+    pub grid_opacity: f32,
 }
 
 impl Default for VrSettings {
@@ -72,6 +100,8 @@ impl Default for VrSettings {
             vignette: VignetteStrength::Low,
             vignette_movement: true,
             vignette_turning: true,
+            reference_grid: ReferenceGridMode::Off,
+            grid_opacity: 0.3,
         }
     }
 }
@@ -84,6 +114,9 @@ pub struct UserSettings {
 
 impl UserSettings {
     fn normalized(mut self) -> Self {
+        if ![0.15, 0.3, 0.5].contains(&self.vr.grid_opacity) {
+            self.vr.grid_opacity = VrSettings::default().grid_opacity;
+        }
         if ![30.0, 45.0, 60.0].contains(&self.vr.snap_angle) {
             self.vr.snap_angle = 30.0;
         }
@@ -168,6 +201,8 @@ mod tests {
         let mut value = store.value;
         value.vr.turning = TurnMode::Smooth;
         value.vr.snap_angle = 60.0;
+        value.vr.reference_grid = ReferenceGridMode::DuringMovement;
+        value.vr.grid_opacity = 0.5;
         value.vr.vignette = VignetteStrength::High;
         store.save(value).unwrap();
         assert_eq!(SettingsStore::load(path).value, value);
@@ -187,7 +222,11 @@ mod tests {
     fn missing_fields_and_invalid_values_use_defaults() {
         let root = TempDir::new("user-settings-invalid");
         let path = root.path().join("settings.json");
-        fs::write(&path, r#"{"vr":{"snap_angle":-5,"smooth_speed":999}}"#).unwrap();
+        fs::write(
+            &path,
+            r#"{"vr":{"snap_angle":-5,"smooth_speed":999,"grid_opacity":99}}"#,
+        )
+        .unwrap();
         assert_eq!(
             SettingsStore::load(path.clone()).value,
             UserSettings::default()
