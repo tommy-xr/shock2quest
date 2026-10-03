@@ -21,7 +21,7 @@ export const MODES = [
     title: "Climbing",
     blurb: "Ladders and ledges are climbed hand over hand.",
     hot: { L: ["grip"], R: ["grip"] },
-    clip: null,
+    clip: "climb",
     rows: [
       ["Grip near a ladder", "Hold on — a cyan marker confirms"],
       ["Pull toward chest", "Climb"],
