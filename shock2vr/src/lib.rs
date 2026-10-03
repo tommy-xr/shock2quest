@@ -39,6 +39,7 @@ pub mod debug_trail;
 pub mod dev_params;
 mod developer_mode;
 pub mod difficulty;
+mod emissive_cue;
 mod flat_lean;
 mod flat_player_controller;
 mod flat_turn_sway;

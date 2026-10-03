@@ -14978,12 +14978,14 @@ impl MissionCore {
                         source: Some("viewmodel".to_owned()),
                         ..Default::default()
                     });
+                    let emissivity_scale = crate::emissive_cue::held_scale(&self.world, weapon);
                     for obj in scene_objs {
                         let mut o = obj.clone();
                         o.set_transform(xform);
                         o.set_projection_override(Some(viewmodel_projection));
                         o.set_lights(weapon_lights.clone());
                         o.set_debug_tag(Some(weapon_tag.clone()));
+                        o.set_emissivity_scale(emissivity_scale);
                         crate::psi_invisibility::apply(&mut o, invisibility);
                         ret.push(o);
                     }
@@ -15597,11 +15599,15 @@ impl MissionCore {
                 } else {
                     visual_xform
                 };
+                let emissivity_scale = held
+                    .then(|| crate::emissive_cue::held_scale(&self.world, *entity_id))
+                    .flatten();
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(visual_xform);
                     xformed_obj.set_debug_tag(Some(debug_tag.clone()));
                     xformed_obj.set_lights(entity_lights.clone());
+                    xformed_obj.set_emissivity_scale(emissivity_scale);
                     if options.debug_skeletons && is_animated_model {
                         xformed_obj.set_depth_write(false);
                         xformed_obj.set_skinned_transparency(Some(0.35));

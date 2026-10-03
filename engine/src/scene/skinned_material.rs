@@ -91,6 +91,8 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         // Material properties
         uniform sampler2D texture1;
         uniform float emissivity;
+        // Darkens a glow part's lit colour along with its glow (see `lit_scale`).
+        uniform float litScale;
         uniform float ambientIntensity;
         uniform float transparency;
         uniform vec3 silhouetteColor;
@@ -206,7 +208,7 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             for (int i = 0; i < 6; i++) {
                 light += calculateSpotlight(i, worldPos, normal, vec3(1.0), specular, power);
             }
-            finalColor += texColor.rgb * light;
+            finalColor += texColor.rgb * light * litScale;
             vec4 shaded = applyShine(vec4(finalColor, texColor.a * (1.0 - transparency)), light, specular, 1.0 - transparency, texCoord, worldPos, normal);
 
             fragColor = applyMaterialPass(applyIncidence(shaded, texColor, worldPos, worldNormal), texColor, worldPos, worldNormal);
@@ -225,6 +227,7 @@ struct UnifiedUniforms {
 
     // Material properties
     emissivity_loc: i32,
+    lit_scale_loc: i32,
     ambient_intensity_loc: i32,
     transparency_loc: i32,
     emissive_tint_loc: i32,
@@ -257,6 +260,8 @@ pub struct SkinnedMaterial {
     has_initialized: bool,
     diffuse_texture: Rc<dyn TextureTrait>,
     emissivity: f32,
+    /// Per-draw multiplier from `Material::set_emissivity_scale`.
+    emissivity_scale: f32,
     transparency: f32,
     base_transparency: f32,
     /// Where the painted-on light sits, in the diffuse map's own UVs (red
@@ -351,7 +356,14 @@ impl SkinnedMaterial {
 
             // Set material properties
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
-            gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
+            gl::Uniform1f(
+                uniforms.emissivity_loc,
+                self.emissivity * self.emissivity_scale,
+            );
+            gl::Uniform1f(
+                uniforms.lit_scale_loc,
+                super::material::lit_scale(self.emissivity, self.emissivity_scale),
+            );
             gl::Uniform1f(
                 uniforms.ambient_intensity_loc,
                 lights.ambient_intensity(render_context.ambient_light_intensity),
@@ -448,6 +460,10 @@ impl SkinnedMaterial {
 impl Material for SkinnedMaterial {
     fn emissivity(&self) -> f32 {
         self.emissivity
+    }
+
+    fn set_emissivity_scale(&mut self, scale: f32) {
+        self.emissivity_scale = scale;
     }
 
     fn set_diffuse_texture(&mut self, texture: Rc<dyn TextureTrait>) {
@@ -552,6 +568,10 @@ impl Material for SkinnedMaterial {
                     emissivity_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("emissivity").as_ptr(),
+                    ),
+                    lit_scale_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("litScale").as_ptr(),
                     ),
                     transparency_loc: gl::GetUniformLocation(
                         shader.gl_id,
@@ -807,6 +827,7 @@ impl SkinnedMaterial {
             diffuse_texture: texture,
             has_initialized: false,
             emissivity: 0.0,
+            emissivity_scale: 1.0,
             transparency: 0.0,
             base_transparency: 0.0,
             emissive_mask: None,
@@ -829,6 +850,7 @@ impl SkinnedMaterial {
             diffuse_texture,
             has_initialized: false,
             emissivity,
+            emissivity_scale: 1.0,
             transparency,
             base_transparency: transparency,
             emissive_mask,

@@ -149,6 +149,9 @@ pub struct SceneObject {
     /// a lasting material-level override would bleed between entities; instead
     /// this is applied to the material only around this object's own draw.
     pub transparency_override: Option<f32>,
+    /// Per-object emissivity multiplier, scoped to this draw like
+    /// `transparency_override` (e.g. a psi amp's glow tracking psi points).
+    emissivity_scale: Option<f32>,
     /// Authored SRC_COLOR/ONE light accumulation, scoped to this draw.
     pub blend_mode: BlendMode,
     /// Front-face winding used to cull backfaces for this object. Most engine
@@ -406,6 +409,7 @@ impl SceneObject {
             render_layer: RenderLayer::World,
             projection_override: None,
             transparency_override: None,
+            emissivity_scale: None,
             blend_mode: BlendMode::Alpha,
             debug_tag: None,
             backface_culling: None,
@@ -463,6 +467,9 @@ impl SceneObject {
                 .borrow_mut()
                 .set_transparency_override(Some(t));
         }
+        if let Some(scale) = self.emissivity_scale {
+            self.material.borrow_mut().set_emissivity_scale(scale);
+        }
         if self.material.borrow().draw_opaque(
             &render_context,
             view,
@@ -481,6 +488,9 @@ impl SceneObject {
         }
         if self.transparency_override.is_some() {
             self.material.borrow_mut().set_transparency_override(None);
+        }
+        if self.emissivity_scale.is_some() {
+            self.material.borrow_mut().set_emissivity_scale(1.0);
         }
 
         if !self.depth_write {
@@ -516,6 +526,9 @@ impl SceneObject {
                 .borrow_mut()
                 .set_transparency_override(Some(t));
         }
+        if let Some(scale) = self.emissivity_scale {
+            self.material.borrow_mut().set_emissivity_scale(scale);
+        }
         let prepared = self.material.borrow().draw_transparent(
             &render_context,
             view,
@@ -536,6 +549,9 @@ impl SceneObject {
         if self.transparency_override.is_some() {
             self.material.borrow_mut().set_transparency_override(None);
         }
+        if self.emissivity_scale.is_some() {
+            self.material.borrow_mut().set_emissivity_scale(1.0);
+        }
     }
 
     fn draw_material_stack(
@@ -555,6 +571,7 @@ impl SceneObject {
                 material.initialize(engine.is_opengl_es);
             }
             material.set_transparency_override(self.effective_transparency());
+            material.set_emissivity_scale(self.emissivity_scale.unwrap_or(1.0));
             let xform = self.transform * self.local_transform;
             let prepared = material.draw_opaque(context, view, &xform, &self.skinning_data, lights)
                 || material.draw_transparent(context, view, &xform, &self.skinning_data, lights);
@@ -569,6 +586,7 @@ impl SceneObject {
                 self.draw_geometry_with_blend(true, pass.blend);
             }
             material.set_transparency_override(None);
+            material.set_emissivity_scale(1.0);
         }
         unsafe {
             // Restore the renderer's phase state, not this object's override.
@@ -633,6 +651,7 @@ impl SceneObject {
             render_layer: RenderLayer::World,
             projection_override: None,
             transparency_override: None,
+            emissivity_scale: None,
             blend_mode: BlendMode::Alpha,
             debug_tag: None,
             backface_culling: None,
@@ -654,6 +673,7 @@ impl SceneObject {
             render_layer: self.render_layer,
             projection_override: self.projection_override,
             transparency_override: self.transparency_override,
+            emissivity_scale: self.emissivity_scale,
             blend_mode: self.blend_mode,
             debug_tag: self.debug_tag.clone(),
             backface_culling: self.backface_culling,
@@ -818,6 +838,11 @@ impl SceneObject {
     /// objects sharing the same material are unaffected.
     pub fn set_transparency(&mut self, transparency: Option<f32>) {
         self.transparency_override = transparency;
+    }
+
+    /// Scale this object's authored emissivity, or restore it with `None`.
+    pub fn set_emissivity_scale(&mut self, scale: Option<f32>) {
+        self.emissivity_scale = scale;
     }
 }
 

@@ -55,6 +55,10 @@ pub trait Material: Any {
         0.0
     }
 
+    /// Multiply the authored emissivity for the next draw (1.0 = authored).
+    /// Materials are shared across entities, so callers reset it afterwards.
+    fn set_emissivity_scale(&mut self, _scale: f32) {}
+
     /// Replace diffuse only after a complete material plan has loaded.
     fn set_diffuse_texture(&mut self, _texture: std::rc::Rc<dyn crate::texture::TextureTrait>) {}
 
@@ -69,6 +73,19 @@ pub trait Material: Any {
     /// for debug inspection only. `None` for materials without transparency.
     fn transparency(&self) -> Option<f32> {
         None
+    }
+}
+
+/// Multiplier on the *lit* colour of a glowing material under an emissivity
+/// scale, so a dimmed glow part reads as an unpowered lamp rather than a
+/// cyan surface lit by the room. Non-glowing materials are never darkened.
+pub fn lit_scale(emissivity: f32, emissivity_scale: f32) -> f32 {
+    /// Lit colour left on a fully unpowered glow part.
+    const UNPOWERED: f32 = 0.15;
+    if emissivity > 0.0 {
+        UNPOWERED + (1.0 - UNPOWERED) * emissivity_scale.clamp(0.0, 1.0)
+    } else {
+        1.0
     }
 }
 
@@ -104,5 +121,12 @@ mod tests {
         let world_normal = normal_matrix(&world) * normal;
 
         assert!(world_tangent.dot(world_normal).abs() < 1e-5);
+    }
+
+    #[test]
+    fn only_glow_parts_darken_with_their_glow() {
+        assert_eq!(lit_scale(0.0, 0.0), 1.0);
+        assert_eq!(lit_scale(1.0, 1.0), 1.0);
+        assert!(lit_scale(1.0, 0.0) < 0.2);
     }
 }

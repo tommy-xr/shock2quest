@@ -513,6 +513,11 @@ dev_params! {
     /// from behind, catches almost none of them - faithful shading leaves it a
     /// black silhouette. 0 is the faithful look.
     HELD_LIGHT_FLOOR = Lighting::float("held_light_floor", "Held item light floor", 0.15, 0.0, 1.5, 0.05),
+    /// Held items show their state in their authored glow (the psi amp's
+    /// strip tracks psi points). Off keeps every glow at full strength.
+    EMISSIVE_CUES = Lighting::bool("emissive_cues", "Emissive cues", true),
+    /// Below 15% charge the cue's glow intermittently cuts out entirely.
+    EMISSIVE_CUE_FLICKER = Lighting::bool("emissive_cue_flicker", "Cue low flicker", false),
     /// How far light wraps past the terminator on objects. 0 is what the
     /// original did for objects - a face pointing away from a lamp gets
     /// nothing but ambient. 1 is the half-lambert it baked into *lightmaps*,
