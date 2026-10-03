@@ -1,9 +1,9 @@
 //! Item state read off the glow of a held item's authored emissive parts
 //! (the 25AE models give them their own material slot), e.g. the psi amp's
 //! strip dims as psi points drain and the fusion cannon's tubes as it
-//! empties. Only scales emissivity the art already has, so models without a
-//! glowing part are unaffected.
-use dark::properties::{PropGunState, PropWeaponType};
+//! empties; a looted crate's lights go out. Only scales emissivity the art
+//! already has, so models without a glowing part are unaffected.
+use dark::properties::{Link, Links, PropGunState, PropWeaponType};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{dev_params, time::Time};
@@ -22,6 +22,29 @@ pub(crate) fn held_scale(world: &World, item: EntityId) -> Option<f32> {
     let secs = world.borrow::<UniqueView<Time>>().ok()?.total.as_secs_f32();
     let flicker = dev_params::get_bool(dev_params::EMISSIVE_CUE_FLICKER);
     Some(glow(fraction, secs, flicker))
+}
+
+/// Emissivity scale for an item in the world: a loot container that holds
+/// nothing goes dark, so a searched crate reads as searched from across the room.
+pub(crate) fn world_scale(world: &World, entity: EntityId) -> Option<f32> {
+    if !dev_params::get_bool(dev_params::EMISSIVE_CUES) {
+        return None;
+    }
+    let is_loot_container = ["containerscript", "hackablecrate"]
+        .iter()
+        .any(|script| crate::scripts::script_util::entity_has_script(world, entity, script));
+    (is_loot_container && !contains_anything(world, entity)).then_some(0.0)
+}
+
+fn contains_anything(world: &World, container: EntityId) -> bool {
+    world.borrow::<View<Links>>().is_ok_and(|links| {
+        links.get(container).is_ok_and(|links| {
+            links
+                .to_links
+                .iter()
+                .any(|link| matches!(link.link, Link::Contains(_)))
+        })
+    })
 }
 
 /// How full `item` is, for the items whose glow reports it.
@@ -134,6 +157,40 @@ mod tests {
         );
         let (world, standard) = gun(STANDARD, 5);
         assert_eq!(charge_fraction(&world, standard), None);
+    }
+
+    /// An entity running `script` that holds `items` things.
+    fn container(script: &str, items: usize) -> (World, EntityId) {
+        use dark::properties::{PropScripts, ToLink, WrappedEntityId};
+        let mut world = World::new();
+        let to_links = (0..items)
+            .map(|_| ToLink {
+                to_template_id: 0,
+                to_entity_id: Some(WrappedEntityId(world.add_entity(()))),
+                link: Link::Contains(0),
+            })
+            .collect();
+        let entity = world.add_entity((
+            PropScripts {
+                scripts: vec![script.to_owned()],
+                inherits: true,
+            },
+            Links { to_links },
+        ));
+        (world, entity)
+    }
+
+    #[test]
+    fn only_an_emptied_loot_container_goes_dark() {
+        let (world, full) = container("ContainerScript", 1);
+        assert_eq!(world_scale(&world, full), None);
+        let (world, empty) = container("ContainerScript", 0);
+        assert_eq!(world_scale(&world, empty), Some(0.0));
+        let (world, crate_) = container("HackableCrate", 0);
+        assert_eq!(world_scale(&world, crate_), Some(0.0));
+        // Anything else that happens to hold nothing keeps its glow.
+        let (world, console) = container("StdButton", 0);
+        assert_eq!(world_scale(&world, console), None);
     }
 
     #[test]

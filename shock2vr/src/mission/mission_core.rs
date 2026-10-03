@@ -15599,9 +15599,11 @@ impl MissionCore {
                 } else {
                     visual_xform
                 };
-                let emissivity_scale = held
-                    .then(|| crate::emissive_cue::held_scale(&self.world, *entity_id))
-                    .flatten();
+                let emissivity_scale = if held {
+                    crate::emissive_cue::held_scale(&self.world, *entity_id)
+                } else {
+                    crate::emissive_cue::world_scale(&self.world, *entity_id)
+                };
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(visual_xform);
