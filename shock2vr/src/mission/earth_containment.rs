@@ -20,6 +20,8 @@ const MAX_DENSITY: f32 = 6.0;
 const EGG_SITE_COUNT: usize = 8;
 const DENSE: f32 = 4.0;
 const MAX_HATCHLINGS: usize = 24;
+const MAX_SWARMERS: usize = 3;
+const SWARMER_POD: i32 = -1332;
 const NAMES: [&str; 3] = ["SUBWAY", "STREET", "UPSTAIRS"];
 const CIRCULATORS: [[f32; 3]; 2] = [[0.0, 2.8, 11.75], [21.0, 22.0, 31.95]];
 // The first four sites concentrate traps around services and their approaches;
@@ -236,6 +238,9 @@ struct Zone {
     density: f32,
     next_egg: f32,
     next_site: usize,
+    // A saved mix, independent of occupied sites: five grubs, two swarmers,
+    // and one black egg per eight successful births. Never reroll on load.
+    next_kind: u8,
     shown: i32,
 }
 impl Zone {
@@ -288,6 +293,7 @@ impl Default for Containment {
                 density: 0.0,
                 next_egg: 0.0,
                 next_site: 0,
+                next_kind: 0,
                 shown: -1,
             }),
             growth_allowed: false,
@@ -380,16 +386,24 @@ impl Containment {
             .map(|(id, template)| (template.template_id, id))
             .collect();
         let player = world.borrow::<UniqueView<PlayerInfo>>().ok().map(|p| p.pos);
-        let mut hatchlings = (&tags, &hp, &ais)
+        let (mut hatchlings, mut swarmers) = (&tags, &hp, &ais)
             .iter()
             .filter(|(tag, hp, _)| is_containment_type(tag.0) && hp.hit_points > 0)
-            .count();
+            .fold((0, 0), |(total, swarmers), (_, _, ai)| {
+                (
+                    total + 1,
+                    swarmers + usize::from(ai.0.eq_ignore_ascii_case("swarmer")),
+                )
+            });
         let mut eggs: [Vec<EntityId>; 3] = Default::default();
         for (id, (tag, model)) in (&tags, &models).iter().with_id() {
             if !is_containment_type(tag.0) {
                 continue;
             }
-            if model.0.eq_ignore_ascii_case("eggcl") || model.0.eq_ignore_ascii_case("eggop") {
+            if ["eggcl", "eggop", "fpod"]
+                .iter()
+                .any(|name| model.0.eq_ignore_ascii_case(name))
+            {
                 eggs[(tag.0 - ECOLOGY) as usize].push(id);
             }
         }
@@ -432,22 +446,41 @@ impl Containment {
                 let open = models
                     .get(*pod)
                     .is_ok_and(|m| m.0.eq_ignore_ascii_case("eggop"));
+                let swarmer = ids.get(*pod).is_ok_and(|id| id.template_id == SWARMER_POD);
                 if open {
                     self.shells.entry(pod.inner()).or_insert(0.0);
                 } else if hatchlings < MAX_HATCHLINGS
+                    && (!swarmer || swarmers < MAX_SWARMERS)
                     && player.is_some_and(|player| {
                         positions
                             .get(*pod)
                             .is_ok_and(|pos| (pos.position - player).magnitude2() < 4.0 * 4.0)
                     })
                 {
-                    effects.push(Effect::Send {
-                        msg: Message {
-                            to: *pod,
-                            payload: MessagePayload::TurnOn { from: *pod },
-                        },
-                    });
+                    if models
+                        .get(*pod)
+                        .is_ok_and(|m| m.0.eq_ignore_ascii_case("fpod"))
+                    {
+                        // Golden Egg has no retail hatch script or open model.
+                        // Only containment-tagged eggs get this payload; burst
+                        // via the authored gas/debris links after using its pose.
+                        effects.push(Effect::SpawnEcologyEntity {
+                            template_name: "Baby Arachnid".into(),
+                            spawn_point: *pod,
+                            ecology_type: Some(ECOLOGY + index as i32),
+                            goto_player: true,
+                        });
+                        effects.push(Effect::SlayEntity { entity_id: *pod });
+                    } else {
+                        effects.push(Effect::Send {
+                            msg: Message {
+                                to: *pod,
+                                payload: MessagePayload::TurnOn { from: *pod },
+                            },
+                        });
+                    }
                     hatchlings += 1; // reserve births emitted by this batch
+                    swarmers += usize::from(swarmer);
                 }
             }
             // More of the surveyed routes become traps as growth thickens.
@@ -485,12 +518,22 @@ impl Containment {
                         continue;
                     }
                     effects.push(Effect::SpawnEcologyEntity {
-                        template_name: "Grub Floor Pod".into(),
+                        template_name: match zone.next_kind {
+                            2 | 5 => "Swarmer Floor Pod",
+                            // Baby spiders enter the wave roster at wave five.
+                            // Denser growth is required even in diagnostic mode.
+                            7 if zone.density >= DENSE + 1.0 && (quick || wave >= 5) => {
+                                "Golden Egg"
+                            }
+                            _ => "Grub Floor Pod",
+                        }
+                        .into(),
                         spawn_point: *marker,
                         ecology_type: Some(ECOLOGY + index as i32),
                         goto_player: false,
                     });
                     zone.next_site = (site + 1) % EGG_SITE_COUNT;
+                    zone.next_kind = (zone.next_kind + 1) % 8;
                     zone.next_egg = egg_interval;
                     break;
                 }
@@ -876,5 +919,163 @@ mod tests {
         loaded.update(&world, 1.0, true, false, 4);
         assert_eq!(loaded.zones[0].protection, 0.0);
         assert_eq!(loaded.zones[1].protection, 30.0);
+    }
+
+    #[test]
+    fn pod_mix_includes_swarmers_and_rare_black_eggs_and_resumes_after_load() {
+        let (world, _) = fixture();
+        let mut state = Containment::default();
+        state.zones[0].protection = 0.0;
+        state.zones[0].density = MAX_DENSITY;
+        let mut spawned = Vec::new();
+        for _ in 0..16 {
+            state.zones[0].next_egg = 0.0;
+            let effects = state.update(&world, 1.0, true, false, 5);
+            spawned.extend(effects.into_iter().filter_map(|e| match e {
+                Effect::SpawnEcologyEntity { template_name, .. } => Some(template_name),
+                _ => None,
+            }));
+            state = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        }
+        assert_eq!(
+            spawned.iter().filter(|s| *s == "Grub Floor Pod").count(),
+            10
+        );
+        assert_eq!(
+            spawned.iter().filter(|s| *s == "Swarmer Floor Pod").count(),
+            4
+        );
+        assert_eq!(spawned.iter().filter(|s| *s == "Golden Egg").count(), 2);
+        assert_eq!(spawned[..8], spawned[8..]);
+    }
+
+    #[test]
+    fn black_eggs_hatch_during_rest_but_dead_eggs_and_campaign_eggs_do_not() {
+        let (mut world, _) = fixture();
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .pos = vec3(0.0, 1.6, 0.0);
+        let mut live = None;
+        for (tag, health) in [(ECOLOGY, 10), (ECOLOGY, 0), (20, 10)] {
+            let egg = world.add_entity((
+                PropEcoType(tag),
+                PropModelName("fpod".into()),
+                PropHitPoints { hit_points: health },
+                PropPosition {
+                    position: vec3(0.0, 1.6, 0.0),
+                    cell: u16::MAX,
+                    rotation: Quaternion::from_angle_y(Deg(0.0)),
+                },
+            ));
+            if tag == ECOLOGY && health > 0 {
+                live = Some(egg);
+            }
+        }
+        let mut state = Containment::default();
+        let effects = state.update(&world, 1.0, false, false, 5);
+        let births: Vec<_> = effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::SpawnEcologyEntity {
+                    template_name,
+                    spawn_point,
+                    ecology_type,
+                    ..
+                } => Some((template_name.as_str(), *spawn_point, *ecology_type)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            births,
+            vec![("Baby Arachnid", live.unwrap(), Some(ECOLOGY))]
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .filter(
+                    |e| matches!(e, Effect::SlayEntity { entity_id } if Some(*entity_id) == live)
+                )
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn black_eggs_require_later_waves_and_thicker_growth() {
+        for (wave, density, quick, expected) in [
+            (4, MAX_DENSITY, false, "Grub Floor Pod"),
+            (5, DENSE, false, "Grub Floor Pod"),
+            (5, DENSE + 1.0, false, "Golden Egg"),
+            (1, DENSE + 1.0, true, "Golden Egg"),
+        ] {
+            let (world, _) = fixture();
+            let mut state = Containment::default();
+            state.zones[0].protection = 0.0;
+            state.zones[0].density = density;
+            state.zones[0].next_kind = 7;
+            assert!(state.update(&world, 0.5, true, quick, wave).iter().any(|effect|
+                matches!(effect, Effect::SpawnEcologyEntity { template_name, .. } if template_name == expected)));
+        }
+    }
+
+    #[test]
+    fn swarm_cap_leaves_room_for_spiders_but_all_births_share_total_capacity() {
+        for grubs in [0, MAX_HATCHLINGS - 3] {
+            let (mut world, _) = fixture();
+            world
+                .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+                .unwrap()
+                .pos = vec3(0.0, 1.6, 0.0);
+            for (model, template) in [
+                ("eggcl", SWARMER_POD),
+                ("eggcl", SWARMER_POD),
+                ("fpod", -3474),
+            ] {
+                world.add_entity((
+                    PropEcoType(ECOLOGY),
+                    PropModelName(model.into()),
+                    PropTemplateId {
+                        template_id: template,
+                    },
+                    PropHitPoints { hit_points: 10 },
+                    PropPosition {
+                        position: vec3(0.0, 1.6, 0.0),
+                        cell: u16::MAX,
+                        rotation: Quaternion::from_angle_y(Deg(0.0)),
+                    },
+                ));
+            }
+            for ai in std::iter::repeat_n("Swarmer", MAX_SWARMERS - 1)
+                .chain(std::iter::repeat_n("Grub", grubs))
+            {
+                world.add_entity((
+                    PropEcoType(ECOLOGY),
+                    PropAI(ai.into()),
+                    PropHitPoints { hit_points: 10 },
+                ));
+            }
+            let effects = Containment::default().update(&world, 1.0, false, false, 5);
+            assert_eq!(
+                effects
+                    .iter()
+                    .filter(|e| matches!(
+                        e,
+                        Effect::Send {
+                            msg: Message {
+                                payload: MessagePayload::TurnOn { .. },
+                                ..
+                            }
+                        }
+                    ))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                egg_spawns(&effects),
+                usize::from(grubs == 0),
+                "spider birth must also reserve total capacity"
+            );
+        }
     }
 }

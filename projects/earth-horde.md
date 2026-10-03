@@ -64,13 +64,13 @@ locked training rooms are excluded. Growth is cosmetic and does not prevent
 using the machines. Wall eggs remain a follow-up.
 
 Density reaches its maximum after 180 eligible unprotected combat seconds. At 120 seconds,
-the zone can produce a GrubEgg every 45 combat seconds, up to four pods. At
+the zone can produce an egg every 45 combat seconds, up to four pods. At
 150 seconds the cap rises to six and the interval drops to 30 seconds; at maximum
 density it reaches eight pods with a 15-second interval. Each new spawn uses the
 current interval; an already running countdown completes normally. Eight floor
 sites per zone prioritize services before extending along routes. Approaching within four world units hatches an existing pod even during
-rest, using the normal egg animation, sound, and grub behavior. Rest pauses
-new egg production and deterioration, but does not make existing traps safe.
+rest, using the normal pod animation and sound, or bursting a black shell into
+its authored gas and fragments. Rest pauses new egg production and deterioration, but does not make existing traps safe.
 Eggs can be destroyed normally.
 
 New runs begin with Toxin-A research completed. Buy ready-to-use Anti-Annelid
@@ -80,10 +80,11 @@ vial against the cabinet. Each vial protects
 that device’s level for another 180 combat seconds, immediately stops new eggs, and
 clears accumulated patches over up to 12 seconds (recovery also runs during rest).
 The cabinet changes from inactive `air_reof` to active `air_re`. Existing eggs
-and grubs remain; servicing a circulator does not erase those threats.
+and hatchlings remain; servicing a circulator does not erase those threats.
 
-Containment grubs have a separate global living limit of 24. They never consume
-the director's 15 wave-enemy slots and are not required to complete a wave.
+Containment grubs, swarmers, and baby spiders share a separate global living
+limit of 24; at most three containment swarms can be alive at once. A swarmer
+pod waits unopened while that cap is full. They never consume the director's 15 wave-enemy slots and are not required to complete a wave.
 Hatching reserves available capacity within each batch. Open shells expire after
 30 seconds; dead containment creatures join the existing end-of-rest corpse
 cleanup. Saved runs retain each zone's protection, density, egg cadence, and
@@ -91,9 +92,18 @@ shell lifetime. The short `earth_horde_test` alias accelerates depletion, growth
 and egg production tenfold and bypasses the wave gate for diagnostics, while
 keeping recovery/hatching rules.
 
-The first pass deliberately uses floor GrubEggs. Wall-mounted growth reuses the
-Hydro meshes with wall-facing transforms; wall eggs and additional payloads can
-follow once pacing has been playtested.
+Each zone follows a saved eight-egg cycle: five Grub Floor Pods, two Swarmer
+Floor Pods, and one black egg (the Rick1 `Golden Egg` / `fpod` asset). The black
+slot remains a grub until wave 5 and density 5; the diagnostic alias bypasses
+only the wave gate. Occupied sites do not advance the mix, and save/load resumes
+it. Black eggs burst on approach into one Baby Arachnid. Destroying an unopened
+black egg prevents the hatch. This behavior is limited to containment-tagged
+eggs; campaign Golden Eggs retain their original behavior. Swarms keep their
+normal twenty-second lifetime. All three payloads inherit the zone's ecology
+tag, stay outside wave completion accounting, and share its hatchling budget.
+
+Wall-mounted growth reuses the Hydro meshes with wall-facing transforms;
+wall eggs and goo payloads remain follow-ups.
 
 ## Pacing prototype controls
 
