@@ -40,6 +40,19 @@ test(
       "active mission should now be eng1",
     );
 
+    assert.equal(
+      (await game.scene.objects()).objects.filter(object => object.source === "loading_screen").length,
+      0,
+      "the default immediate warp must also finish the loading presentation",
+    );
+
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 1 });
+    assert.equal((await game.info()).paused, true, "the very next input must reach the new mission");
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 1 });
+    assert.equal((await game.info()).paused, false);
+
     // The new level is live: step it and confirm the player has a finite
     // position (a broken transition would leave no player / a crashed runtime).
     await game.step({ frames: 30 });

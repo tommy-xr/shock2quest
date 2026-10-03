@@ -1443,12 +1443,14 @@ fn present_screen(
         PlacedContent::Bar { texture, fill } => {
             let texture =
                 asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options(ImageKind::Ui));
-            SceneObject::screen_space_clipped_quad(
+            let mut object = SceneObject::screen_space_clipped_quad(
                 texture.clone() as Rc<dyn TextureTrait>,
                 vec2(rect.x, rect.y),
                 vec2(rect.w, rect.h),
                 *fill,
-            )
+            );
+            object.set_transparency(Some(1.0 - element.alpha));
+            object
         }
         PlacedContent::Fill { color } => SceneObject::screen_space_color_quad(
             vec2(rect.x, rect.y),
@@ -1516,7 +1518,9 @@ fn present_world(
                 texture.clone() as Rc<dyn TextureTrait>,
                 *fill,
             );
-            SceneObject::new(material, Box::new(engine::scene::quad::create()))
+            let mut object = SceneObject::new(material, Box::new(engine::scene::quad::create()));
+            object.set_transparency(Some(1.0 - alpha));
+            object
         }
         PlacedContent::Fill { color } => {
             // The same conversion the screen presenter uses, so the two cannot

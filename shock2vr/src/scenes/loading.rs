@@ -15,12 +15,14 @@
 //! `debug_loading` scene; a real transition sets it from the deferred-transition
 //! checkpoints (`Game::update` via `set_progress`).
 
+use std::rc::Rc;
+
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
 use dark::{importers::UI_LAYOUT_IMPORTER, map::MapRect};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
-    scene::{SceneObject, light::SpotLight},
+    scene::{SceneObject, SceneObjectDebugTag, light::SpotLight},
 };
 use shipyard::{EntityId, UniqueViewMut, World};
 
@@ -31,7 +33,10 @@ use crate::{
     mission::GlobalContext,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    ui::{FrontendCanvasPresenter, FrontendPanelAnchor, Rect, ScaleMode, UiCanvas},
+    ui::{
+        FrontendCanvasPresenter, FrontendPanelAnchor, Rect, ScaleMode, UiCanvas,
+        entry_ramp::{EntryExitRamp, RampParams},
+    },
 };
 
 /// The loading art is authored on the original 640x480 `LOADING.PCX` canvas.
@@ -70,12 +75,27 @@ fn layout_rect(layout: Option<&[MapRect]>, index: usize, fallback: Rect) -> Rect
 
 /// Demo sweep period (seconds) for the `debug_loading` scene: fill 0->1, repeat.
 const DEMO_FILL_SECS: f32 = 4.0;
+const LOADING_FADE: RampParams = RampParams {
+    attack_secs: 0.2,
+    release_secs: 0.25,
+};
+
+fn tag_objects(objects: &mut [SceneObject]) {
+    let tag = Rc::new(SceneObjectDebugTag {
+        source: Some("loading_screen".to_owned()),
+        ..Default::default()
+    });
+    for object in objects {
+        object.set_debug_tag(Some(Rc::clone(&tag)));
+    }
+}
 
 pub struct LoadingScene {
     world: World,
     scene_name: String,
     /// Load progress in 0..=1 (drives the bar fill).
     progress: f32,
+    fade: EntryExitRamp,
     /// Total elapsed seconds (drives the rotation, independent of progress).
     elapsed_secs: f32,
     /// When true, `progress` is swept from `elapsed_secs` for visual inspection.
@@ -98,7 +118,10 @@ impl LoadingScene {
     fn build(demo: bool) -> Self {
         let world = super::ui_scene_world();
 
+        let mut fade = EntryExitRamp::new();
+        fade.open(LOADING_FADE);
         Self {
+            fade,
             world,
             scene_name: "loading".to_owned(),
             progress: 0.0,
@@ -111,10 +134,34 @@ impl LoadingScene {
     /// Set the load progress (0..=1). Driven by the deferred transition's checkpoints.
     pub fn set_progress(&mut self, progress: f32) {
         self.progress = progress.clamp(0.0, 1.0);
+        if self.progress >= 1.0 {
+            // The build checkpoint must be fully legible even in a zero-dt
+            // debug pump or on a display faster than the minimum frame hold.
+            self.fade.update(LOADING_FADE.attack_secs);
+        }
+    }
+
+    /// Keep the completed panel across the scene swap, then release it over
+    /// the destination. Its anchor stays in tracked play space; Game applies
+    /// the new pawn transform just as it does for the pause panel.
+    pub(crate) fn take_exit(&mut self) -> Self {
+        let mut exit = std::mem::take(self);
+        exit.fade.close();
+        exit
+    }
+
+    pub(crate) fn advance_exit(&mut self, seconds: f32) -> bool {
+        self.fade.update(seconds);
+        self.fade.is_settled_closed()
     }
 
     /// The `meters/LOADA_NN.PCX` frame name for the current rotation phase.
     fn current_disc_frame(&self) -> String {
+        // A deliberate resting pose, already presented before the synchronous
+        // GPU build. Never leave the compositor holding an arbitrary mid-spin.
+        if self.progress >= 1.0 {
+            return "meters/LOADA_01.PCX".to_owned();
+        }
         let frame = ((self.elapsed_secs * LOADA_FPS) as u32 % LOADA_FRAME_COUNT) + 1;
         format!("meters/LOADA_{frame:02}.PCX")
     }
@@ -133,13 +180,19 @@ impl LoadingScene {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
 
         // 1. Full-screen backdrop.
-        canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
+        canvas
+            .image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE)
+            .opacity(self.fade.eased());
 
         // 2. Rotating center disc (cycled LOADA frames).
-        canvas.image(disc_rect, &self.current_disc_frame());
+        canvas
+            .image(disc_rect, &self.current_disc_frame())
+            .opacity(self.fade.eased());
 
         // 3. Progress bar fill (clipped 0..1).
-        canvas.bar(bar_rect, PROGRESS_TEXTURE, self.progress);
+        canvas
+            .bar(bar_rect, PROGRESS_TEXTURE, self.progress)
+            .opacity(self.fade.eased());
 
         canvas
     }
@@ -177,6 +230,7 @@ impl GameScene for LoadingScene {
             time.elapsed,
         );
 
+        self.fade.update(time.elapsed.as_secs_f32());
         self.elapsed_secs += time.elapsed.as_secs_f32();
         if self.demo {
             self.progress = (self.elapsed_secs / DEMO_FILL_SECS).rem_euclid(1.0);
@@ -193,8 +247,9 @@ impl GameScene for LoadingScene {
         let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
         let panel = self.panel_anchor.panel();
         let canvas = self.build_canvas_from_cache(asset_cache);
-        let objects = FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE)
+        let mut objects = FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE)
             .render_world_space(asset_cache, &canvas, &panel, None);
+        tag_objects(&mut objects);
         (objects, vec3(0.0, 0.0, 0.0), identity)
     }
 
@@ -207,11 +262,10 @@ impl GameScene for LoadingScene {
         options: &GameOptions,
     ) -> Vec<SceneObject> {
         let canvas = self.build_canvas_from_cache(asset_cache);
-        FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE).render_screen_space(
-            asset_cache,
-            &canvas,
-            screen_size,
-        )
+        let mut objects = FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE)
+            .render_screen_space(asset_cache, &canvas, screen_size);
+        tag_objects(&mut objects);
+        objects
     }
 
     fn handle_effects(
@@ -253,6 +307,29 @@ impl GameScene for LoadingScene {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loading_enters_transparently() {
+        let scene = LoadingScene::new();
+        let canvas = scene.build_canvas(None);
+        for element in canvas.elements() {
+            match element {
+                crate::ui::UiElement::Image { alpha, .. }
+                | crate::ui::UiElement::Bar { alpha, .. } => assert_eq!(*alpha, 0.0),
+                _ => panic!("unexpected loading element"),
+            }
+        }
+    }
+
+    #[test]
+    fn completed_transfer_settles_the_disc_before_building() {
+        let mut scene = LoadingScene::new();
+        scene.set_progress(1.0);
+        assert_eq!(scene.fade.eased(), 1.0);
+        let settled = scene.current_disc_frame();
+        scene.elapsed_secs = 0.7;
+        assert_eq!(scene.current_disc_frame(), settled);
+    }
 
     #[test]
     fn set_progress_clamps() {

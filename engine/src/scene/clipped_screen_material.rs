@@ -35,6 +35,7 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
         in vec2 texCoord;
 
         uniform sampler2D texture1;
+        uniform float opacity;
         uniform float clipX;  // 0.0 to 1.0 - anything past this X coord is clipped
 
         void main() {
@@ -53,7 +54,7 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
                 discard;
             }
 
-            fragColor = texColor;  // Full-bright output
+            fragColor = vec4(texColor.rgb, texColor.a * opacity);  // Full-bright output
         }
 "#;
 
@@ -62,6 +63,7 @@ struct ClippedScreenUniforms {
     view_loc: i32,
     projection_loc: i32,
     clip_x_loc: i32,
+    opacity_loc: i32,
 }
 
 static CLIPPED_SCREEN_SHADER: OnceCell<(ShaderProgram, ClippedScreenUniforms)> = OnceCell::new();
@@ -77,6 +79,7 @@ where
     // render context's screen size (pixels, origin top-left) and ignore the 3D
     // camera. The world matrix then positions the quad directly in pixels.
     screen_space: bool,
+    transparency: f32,
 }
 
 impl<T> ClippedScreenMaterial<T>
@@ -126,6 +129,7 @@ where
 
             // Set clipping value
             gl::Uniform1f(uniforms.clip_x_loc, self.clip_percentage);
+            gl::Uniform1f(uniforms.opacity_loc, 1.0 - self.transparency);
         }
     }
 }
@@ -134,6 +138,14 @@ impl<T> Material for ClippedScreenMaterial<T>
 where
     T: Deref<Target = dyn TextureTrait> + 'static,
 {
+    fn set_transparency_override(&mut self, transparency: Option<f32>) {
+        self.transparency = transparency.unwrap_or(0.0).clamp(0.0, 1.0);
+    }
+
+    fn transparency(&self) -> Option<f32> {
+        Some(self.transparency)
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -170,6 +182,7 @@ where
                         shader.gl_id,
                         c_str!("projection").as_ptr(),
                     ),
+                    opacity_loc: gl::GetUniformLocation(shader.gl_id, c_str!("opacity").as_ptr()),
                     clip_x_loc: gl::GetUniformLocation(shader.gl_id, c_str!("clipX").as_ptr()),
                 };
 
@@ -188,6 +201,9 @@ where
         _skinning_data: &[Matrix4<f32>],
         _lights: &LightArray,
     ) -> bool {
+        if self.transparency > 0.0 {
+            return false;
+        }
         self.draw_unified(render_context, view_matrix, world_matrix);
         true
     }
@@ -200,7 +216,10 @@ where
         _skinning_data: &[Matrix4<f32>],
         _lights: &LightArray,
     ) -> bool {
-        // Clipped screen materials can be rendered as transparent for proper blending
+        if self.transparency <= 0.0 || self.transparency >= 1.0 {
+            return false;
+        }
+        // Draw a faded bar exactly once, in the blending pass.
         self.draw_unified(render_context, view_matrix, world_matrix);
         true
     }
@@ -215,6 +234,7 @@ where
         has_initialized: false,
         clip_percentage: clip_percentage.clamp(0.0, 1.0),
         screen_space: false,
+        transparency: 0.0,
     })
 }
 
@@ -230,5 +250,33 @@ where
         has_initialized: false,
         clip_percentage: clip_percentage.clamp(0.0, 1.0),
         screen_space: true,
+        transparency: 0.0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::rc::Rc;
+
+    struct TestTexture;
+    impl TextureTrait for TestTexture {
+        fn bind0(&self, _: &EngineRenderContext) {}
+        fn bind1(&self, _: &EngineRenderContext) {}
+        fn bind_to(&self, _: &EngineRenderContext, _: u32) {}
+    }
+
+    #[test]
+    fn clipped_bars_honor_and_reset_canvas_opacity_in_both_presentations() {
+        let texture: Rc<dyn TextureTrait> = Rc::new(TestTexture);
+        for mut material in [
+            create(texture.clone(), 0.5),
+            create_screen_space(texture.clone(), 0.5),
+        ] {
+            material.set_transparency_override(Some(0.75));
+            assert_eq!(material.transparency(), Some(0.75));
+            material.set_transparency_override(None);
+            assert_eq!(material.transparency(), Some(0.0));
+        }
+    }
 }
