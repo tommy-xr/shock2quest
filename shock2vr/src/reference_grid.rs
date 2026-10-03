@@ -1,10 +1,9 @@
 //! A physical-play-space reference that travels with artificial locomotion,
 //! while remaining independent of head position and orientation.
 use crate::ui::entry_ramp::{EntryExitRamp, RampParams};
-use crate::ui::{HOLOGRAM_TILE_TEXTURE, ImageKind, UiCanvas, UiElement};
 use crate::user_settings::{ReferenceGridMode, VrSettings};
-use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Vector3, vec2, vec3};
-use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
+use cgmath::{InnerSpace, Matrix4, Quaternion, Vector3, vec3};
+use engine::scene::SceneObject;
 
 const FADE: RampParams = RampParams {
     attack_secs: 0.25,
@@ -68,7 +67,6 @@ impl ReferenceGrid {
 
     pub fn render(
         &self,
-        assets: &mut AssetCache,
         pawn_position: Vector3<f32>,
         pawn_rotation: Quaternion<f32>,
         settings: VrSettings,
@@ -76,39 +74,30 @@ impl ReferenceGrid {
         if settings.reference_grid == ReferenceGridMode::Off || self.fade.is_settled_closed() {
             return Vec::new();
         }
-        // Use the existing luminous, mipmapped SHODAN grid art. One quad, no
-        // new shader or texture, at half-metre spacing in physical stage space.
-        let mut canvas = UiCanvas::new(vec2(1.0, 1.0));
-        canvas.push(UiElement::Image {
-            position: vec2(0.0, 0.0),
-            size: vec2(1.0, 1.0),
-            texture: HOLOGRAM_TILE_TEXTURE.to_owned(),
-            alpha: settings.grid_opacity * self.fade.eased(),
-            kind: ImageKind::Hologram {
-                tiles_x: 16,
-                tiles_y: 16,
-            },
-        });
-        let mut objects = canvas.render_world_space(
-            assets,
-            floor_transform(pawn_position, pawn_rotation, self.stage_floor),
-            None,
-            None,
-            0.0,
+        let mut object = SceneObject::new(
+            engine::scene::vignette_material::create_grid(
+                vec3(90.0 / 255.0, 226.0 / 255.0, 1.0),
+                settings.grid_opacity * self.fade.eased(),
+                GRID_METERS / settings.grid_spacing,
+            ),
+            Box::new(engine::scene::cube::create()),
         );
-        for object in &mut objects {
-            object.set_depth_write(false);
-            object.set_backface_culling(None);
-            object.set_render_layer(engine::scene::RenderLayer::SceneOverlay);
-            object.set_debug_tag(Some(crate::util::render_source_tag(
-                "comfort_reference_grid",
-            )));
-        }
-        objects
+        object.set_transform(cage_transform(
+            pawn_position,
+            pawn_rotation,
+            self.stage_floor,
+        ));
+        object.set_depth_write(false);
+        object.set_backface_culling(None);
+        object.set_render_layer(engine::scene::RenderLayer::SceneOverlay);
+        object.set_debug_tag(Some(crate::util::render_source_tag(
+            "comfort_reference_grid",
+        )));
+        vec![object]
     }
 }
 
-fn floor_transform(
+fn cage_transform(
     position: Vector3<f32>,
     rotation: Quaternion<f32>,
     stage_floor: Vector3<f32>,
@@ -117,14 +106,14 @@ fn floor_transform(
     Matrix4::from_translation(position)
         * Matrix4::from(rotation)
         * Matrix4::from_translation(stage_floor)
-        * Matrix4::from_angle_x(Deg(-90.0))
-        * Matrix4::from_nonuniform_scale(size, size, 1.0)
+        * Matrix4::from_translation(vec3(0.0, size * 0.5, 0.0))
+        * Matrix4::from_scale(size)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::{Rotation3, SquareMatrix};
+    use cgmath::{Deg, Rotation3, SquareMatrix};
 
     #[test]
     fn passive_vertical_and_horizontal_rides_activate_without_stick_input() {
@@ -198,7 +187,7 @@ mod tests {
         let eye =
             Matrix4::from_translation(vec3(0.3, 0.8, -0.2)) * Matrix4::from_angle_z(Deg(30.0));
         let reference = eye.invert().unwrap()
-            * floor_transform(
+            * cage_transform(
                 vec3(0.0, 0.0, 0.0),
                 Quaternion::from_angle_y(Deg(0.0)),
                 floor,
@@ -207,7 +196,7 @@ mod tests {
             let rotation = Quaternion::from_angle_y(Deg(yaw));
             let pawn = Matrix4::from_translation(position) * Matrix4::from(rotation);
             let camera_space =
-                (pawn * eye).invert().unwrap() * floor_transform(position, rotation, floor);
+                (pawn * eye).invert().unwrap() * cage_transform(position, rotation, floor);
             for column in 0..4 {
                 assert!((camera_space[column] - reference[column]).magnitude() < 1e-5);
             }
@@ -216,7 +205,7 @@ mod tests {
         // anchored to the stage, not glued to the head.
         let shifted_eye = Matrix4::from_translation(vec3(0.5, 0.0, 0.0)) * eye;
         let shifted = shifted_eye.invert().unwrap()
-            * floor_transform(
+            * cage_transform(
                 vec3(0.0, 0.0, 0.0),
                 Quaternion::from_angle_y(Deg(0.0)),
                 floor,

@@ -14397,7 +14397,6 @@ impl MissionCore {
         if !self.use_mode {
             let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             ret.extend(self.reference_grid.render(
-                asset_cache,
                 player.pos,
                 player.rotation,
                 crate::user_settings::get().vr,

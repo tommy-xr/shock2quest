@@ -9,16 +9,9 @@ use cgmath::{Matrix4, Vector3};
 use once_cell::sync::OnceCell;
 use std::any::Any;
 
-/// A flat quad that is transparent in the middle and tinted at the rim.
-///
-/// The falloff is computed per-fragment from the quad's own UVs rather than
-/// baked into a texture, because the layer this material exists for is a
-/// *view-locked* quad: it is sized by an angular ratio, so where the rim lands
-/// is a property of the geometry, and the two radii below are the only knobs.
-/// A texture would have to be regenerated whenever those radii changed, and a
-/// textured world-space material in this engine either alpha-*cuts* (see
-/// `basic_material`'s `discard`) or is screen-space only - neither of which can
-/// draw a soft ramp in the world.
+/// A radial comfort mask. The default draws a tinted rim on a view-locked
+/// quad. `create_grid` uses the same soft central opening on a stage-fixed
+/// cube, drawing only thin antialiased grid lines around the periphery.
 const VERTEX_SHADER_SOURCE: &str = r#"
         layout (location = 0) in vec3 inPos;
         layout (location = 1) in vec2 inTex;
@@ -28,10 +21,13 @@ const VERTEX_SHADER_SOURCE: &str = r#"
         uniform mat4 projection;
 
         out vec2 texCoord;
+        out vec3 viewPosition;
 
         void main() {
             texCoord = inTex;
-            gl_Position = projection * view * world * vec4(inPos, 1.0);
+            vec4 position = view * world * vec4(inPos, 1.0);
+            viewPosition = position.xyz;
+            gl_Position = projection * position;
         }
 "#;
 
@@ -41,6 +37,9 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
         out vec4 fragColor;
 
         in vec2 texCoord;
+        in vec3 viewPosition;
+        uniform mat4 projection;
+        uniform float gridCells;
 
         uniform vec3 color;
         uniform float intensity;
@@ -49,12 +48,24 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
 
         void main() {
             float radius = length(texCoord - vec2(0.5, 0.5)) * 2.0;
+            float pattern = 1.0;
+            if (gridCells > 0.0) {
+                // Cube UVs keep the pattern fixed to the stage. Only the
+                // aperture follows the eye, retaining a clear aiming area.
+                vec2 cell = texCoord * gridCells;
+                vec2 distanceToLine = abs(fract(cell + 0.5) - 0.5);
+                vec2 pixels = distanceToLine / max(fwidth(cell), vec2(0.00001));
+                vec2 lines = 1.0 - smoothstep(vec2(0.35), vec2(1.35), pixels);
+                pattern = max(lines.x, lines.y);
+                vec2 tangent = viewPosition.xy / max(-viewPosition.z, 0.0001);
+                radius = length(tangent * vec2(projection[0][0], projection[1][1]));
+            }
             float span = max(outerRadius - innerRadius, 0.0001);
             float t = clamp((radius - innerRadius) / span, 0.0, 1.0);
             // Smoothstep, so the rim has no visible banding edge where it
             // meets the clear centre.
             float ramp = t * t * (3.0 - 2.0 * t);
-            fragColor = vec4(color, ramp * intensity);
+            fragColor = vec4(color, pattern * ramp * intensity);
         }
 "#;
 
@@ -66,6 +77,7 @@ struct Uniforms {
     intensity_loc: i32,
     inner_radius_loc: i32,
     outer_radius_loc: i32,
+    grid_cells_loc: i32,
 }
 
 static SHADER_PROGRAM: OnceCell<(ShaderProgram, Uniforms)> = OnceCell::new();
@@ -79,6 +91,7 @@ pub struct VignetteMaterial {
     /// tint starts, and where it reaches full [`intensity`](Self::intensity).
     inner_radius: f32,
     outer_radius: f32,
+    grid_cells: f32,
 }
 
 impl Material for VignetteMaterial {
@@ -125,6 +138,10 @@ impl Material for VignetteMaterial {
                     inner_radius_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("innerRadius").as_ptr(),
+                    ),
+                    grid_cells_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("gridCells").as_ptr(),
                     ),
                     outer_radius_loc: gl::GetUniformLocation(
                         shader.gl_id,
@@ -177,6 +194,7 @@ impl Material for VignetteMaterial {
             gl::Uniform1f(uniforms.intensity_loc, self.intensity);
             gl::Uniform1f(uniforms.inner_radius_loc, self.inner_radius);
             gl::Uniform1f(uniforms.outer_radius_loc, self.outer_radius);
+            gl::Uniform1f(uniforms.grid_cells_loc, self.grid_cells);
         }
         true
     }
@@ -194,5 +212,19 @@ pub fn create(
         intensity: intensity.clamp(0.0, 1.0),
         inner_radius,
         outer_radius,
+        grid_cells: 0.0,
+    })
+}
+
+/// Thin procedural cage lines with a soft, gaze-centered clear opening.
+/// `cells` is the number of equal grid intervals along each cube face.
+pub fn create_grid(color: Vector3<f32>, intensity: f32, cells: f32) -> Box<dyn Material> {
+    Box::new(VignetteMaterial {
+        has_initialized: false,
+        color,
+        intensity: intensity.clamp(0.0, 1.0),
+        inner_radius: 0.5,
+        outer_radius: 0.85,
+        grid_cells: cells.max(1.0),
     })
 }

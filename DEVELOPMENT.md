@@ -472,8 +472,10 @@ selected turn mode; mouse-look stays direct.
   Physical head movement and snap turns do not activate it. It is hidden while
   paused or using the cyber interface.
 - **Reference grid:** Off (default), During movement, or Always; opacity
-  15/30/50% (default 30%). A holographic floor grid uses 0.5-metre cells over an
-  8-metre square fixed to the physical tracking stage, not the head. It follows
+  15/30/50% (default 30%), and line spacing 0.5/1/2 metres (default 1). A
+  holographic 8-metre cube surrounds the player with floor, walls, and ceiling.
+  Its lines stay fixed to the physical tracking stage, with a soft clear window
+  in the centre of the view for aiming and reading. The cage follows
   artificial locomotion so it remains a stable reference during game motion.
   During movement includes stick travel/smooth turns, elevators, trams, and
   falls. Physical head motion and snap-turn origin corrections do not activate
@@ -497,7 +499,9 @@ until **Continue**. Developer mode has its own bottom-left pause entry.
 
 Automated tests can set `SHOCK2_SETTINGS_PATH` to an isolated JSON file; its
 parent directory must exist. This keeps test settings out of the user's profile.
-The reference grid reuses the existing mipmapped SHODAN hologram texture.
+The reference grid draws thin cyan lines with derivative antialiasing on one
+transparent cube. It shares the comfort-mask shader; only the soft central
+opening follows the eye, while the lines remain fixed in tracking space.
 
 ### Developer options
 
