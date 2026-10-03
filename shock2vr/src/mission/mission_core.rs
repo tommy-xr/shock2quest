@@ -7247,8 +7247,8 @@ impl MissionCore {
 
     /// Resolve tag-based motion queries for `entity_id` (tried in order,
     /// first match wins) and hand the clip to `apply`
-    /// (`AnimationPlayer::queue_animation` to push on the queue,
-    /// `AnimationPlayer::play_animation` to interrupt and replace it). When
+    /// (`AnimationPlayer::queue_animation` to play it next,
+    /// `AnimationPlayer::play_animation` to interrupt). When
     /// no query matches, dispatches `AnimationCompleted` so the requesting
     /// script isn't left waiting on a clip that never started.
     fn apply_animation_by_schema(
