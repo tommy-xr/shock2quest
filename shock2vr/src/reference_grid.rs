@@ -9,7 +9,6 @@ const FADE: RampParams = RampParams {
     attack_secs: 0.25,
     release_secs: 0.5,
 };
-const GRID_METERS: f32 = 8.0;
 
 pub struct ReferenceGrid {
     fade: EntryExitRamp,
@@ -78,7 +77,7 @@ impl ReferenceGrid {
             engine::scene::vignette_material::create_grid(
                 vec3(90.0 / 255.0, 226.0 / 255.0, 1.0),
                 settings.grid_opacity * self.fade.eased(),
-                GRID_METERS / settings.grid_spacing,
+                settings.grid_size / settings.grid_spacing,
             ),
             Box::new(engine::scene::cube::create()),
         );
@@ -86,6 +85,7 @@ impl ReferenceGrid {
             pawn_position,
             pawn_rotation,
             self.stage_floor,
+            settings.grid_size,
         ));
         object.set_depth_write(false);
         object.set_backface_culling(None);
@@ -101,8 +101,9 @@ fn cage_transform(
     position: Vector3<f32>,
     rotation: Quaternion<f32>,
     stage_floor: Vector3<f32>,
+    size_meters: f32,
 ) -> Matrix4<f32> {
-    let size = GRID_METERS / crate::METERS_PER_WORLD_UNIT;
+    let size = size_meters / crate::METERS_PER_WORLD_UNIT;
     Matrix4::from_translation(position)
         * Matrix4::from(rotation)
         * Matrix4::from_translation(stage_floor)
@@ -191,12 +192,13 @@ mod tests {
                 vec3(0.0, 0.0, 0.0),
                 Quaternion::from_angle_y(Deg(0.0)),
                 floor,
+                10.0,
             );
         for (position, yaw) in [(vec3(10.0, 0.0, -20.0), 45.0), (vec3(0.0, 20.0, 0.0), 90.0)] {
             let rotation = Quaternion::from_angle_y(Deg(yaw));
             let pawn = Matrix4::from_translation(position) * Matrix4::from(rotation);
             let camera_space =
-                (pawn * eye).invert().unwrap() * cage_transform(position, rotation, floor);
+                (pawn * eye).invert().unwrap() * cage_transform(position, rotation, floor, 10.0);
             for column in 0..4 {
                 assert!((camera_space[column] - reference[column]).magnitude() < 1e-5);
             }
@@ -209,6 +211,7 @@ mod tests {
                 vec3(0.0, 0.0, 0.0),
                 Quaternion::from_angle_y(Deg(0.0)),
                 floor,
+                10.0,
             );
         assert!((shifted.w - reference.w).magnitude() > 0.4);
     }

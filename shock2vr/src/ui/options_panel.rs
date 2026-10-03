@@ -16,7 +16,7 @@ const FRAME: [Rect; 2] = [
     Rect::new(20.0, 67.0, 601.0, 335.0),
 ];
 // Keep retail audio's five rows; extend its pitch for additional controls.
-const ROWS: [Rect; 7] = [
+const ROWS: [Rect; 8] = [
     Rect::new(93.0, 73.0, 481.0, 23.0),
     Rect::new(93.0, 102.0, 481.0, 23.0),
     Rect::new(93.0, 130.0, 481.0, 23.0),
@@ -24,6 +24,7 @@ const ROWS: [Rect; 7] = [
     Rect::new(93.0, 187.0, 481.0, 23.0),
     Rect::new(93.0, 216.0, 481.0, 23.0),
     Rect::new(93.0, 245.0, 481.0, 23.0),
+    Rect::new(93.0, 274.0, 481.0, 23.0),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,7 +62,7 @@ impl OptionsLayout {
         let mut rows = read("OPTIONAR.BIN", &ROWS[..5]);
         let last = rows[4];
         let pitch = last.y - rows[3].y;
-        for step in 1..=2 {
+        for step in 1..=(ROWS.len() - 5) {
             rows.push(Rect::new(
                 last.x,
                 last.y + pitch * step as f32,
@@ -95,7 +96,7 @@ impl OptionsPanel {
                 return Some(OptionsEvent::Tab(i));
             }
         }
-        let count = if self.tab == 0 { 7 } else { 4 };
+        let count = if self.tab == 0 { ROWS.len() } else { 4 };
         for (i, rect) in layout.rows.iter().take(count).enumerate() {
             if rect.contains(point) {
                 return Some(OptionsEvent::Row(i));
@@ -129,13 +130,15 @@ impl OptionsPanel {
             (0, 3) => vr.reference_grid = vr.reference_grid.next(),
             (0, 4) => vr.grid_opacity = cycle(vr.grid_opacity, &[0.15, 0.3, 0.5]),
             (0, 5) => vr.grid_spacing = cycle(vr.grid_spacing, &[0.5, 1.0, 2.0]),
-            (0, 6) => {
+            (0, 6) => vr.grid_size = cycle(vr.grid_size, &[8.0, 10.0, 12.0, 16.0]),
+            (0, 7) => {
                 vr.vignette = defaults.vignette;
                 vr.vignette_movement = defaults.vignette_movement;
                 vr.vignette_turning = defaults.vignette_turning;
                 vr.reference_grid = defaults.reference_grid;
                 vr.grid_opacity = defaults.grid_opacity;
                 vr.grid_spacing = defaults.grid_spacing;
+                vr.grid_size = defaults.grid_size;
             }
             (1, 0) => {
                 vr.turning = if vr.turning == TurnMode::Snap {
@@ -193,6 +196,7 @@ impl OptionsPanel {
                 format!("Reference grid: {}", settings.reference_grid.label()),
                 format!("Grid opacity: {:.0}%", settings.grid_opacity * 100.0),
                 format!("Grid spacing: {} m", settings.grid_spacing),
+                format!("Grid size: {} m", settings.grid_size),
                 "Reset comfort defaults".to_owned(),
             ]
         } else {

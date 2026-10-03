@@ -473,7 +473,9 @@ selected turn mode; mouse-look stays direct.
   paused or using the cyber interface.
 - **Reference grid:** Off (default), During movement, or Always; opacity
   15/30/50% (default 30%), and line spacing 0.5/1/2 metres (default 1). A
-  holographic 8-metre cube surrounds the player with floor, walls, and ceiling.
+  holographic cube surrounds the player with floor, walls, and ceiling. Its size
+  is adjustable to 8/10/12/16 metres per side (default 10), independently of line
+  spacing; resizing keeps the floor at the same height.
   Its lines stay fixed to the physical tracking stage, with a soft clear window
   in the centre of the view for aiming and reading. The cage follows
   artificial locomotion so it remains a stable reference during game motion.

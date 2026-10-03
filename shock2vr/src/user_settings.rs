@@ -90,6 +90,7 @@ pub struct VrSettings {
     pub reference_grid: ReferenceGridMode,
     pub grid_opacity: f32,
     pub grid_spacing: f32,
+    pub grid_size: f32,
 }
 
 impl Default for VrSettings {
@@ -104,6 +105,7 @@ impl Default for VrSettings {
             reference_grid: ReferenceGridMode::Off,
             grid_opacity: 0.3,
             grid_spacing: 1.0,
+            grid_size: 10.0,
         }
     }
 }
@@ -116,6 +118,9 @@ pub struct UserSettings {
 
 impl UserSettings {
     fn normalized(mut self) -> Self {
+        if ![8.0, 10.0, 12.0, 16.0].contains(&self.vr.grid_size) {
+            self.vr.grid_size = VrSettings::default().grid_size;
+        }
         if ![0.5, 1.0, 2.0].contains(&self.vr.grid_spacing) {
             self.vr.grid_spacing = VrSettings::default().grid_spacing;
         }
@@ -209,6 +214,7 @@ mod tests {
         value.vr.reference_grid = ReferenceGridMode::DuringMovement;
         value.vr.grid_opacity = 0.5;
         value.vr.grid_spacing = 2.0;
+        value.vr.grid_size = 16.0;
         value.vr.vignette = VignetteStrength::High;
         store.save(value).unwrap();
         assert_eq!(SettingsStore::load(path).value, value);
@@ -230,7 +236,7 @@ mod tests {
         let path = root.path().join("settings.json");
         fs::write(
             &path,
-            r#"{"vr":{"snap_angle":-5,"smooth_speed":999,"grid_opacity":99,"grid_spacing":-1}}"#,
+            r#"{"vr":{"snap_angle":-5,"smooth_speed":999,"grid_opacity":99,"grid_spacing":-1,"grid_size":0}}"#,
         )
         .unwrap();
         assert_eq!(

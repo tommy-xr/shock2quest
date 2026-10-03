@@ -114,7 +114,7 @@ for (const vr of [false, true]) {
     const click = vr ? vrClickCanvasPoint : clickCanvas;
     const debugFlags = vr ? ["--vr"] : [];
     const saved = async () => JSON.parse(await readFile(path, "utf8")) as {
-      vr: { vignette: string; turning: string; snap_angle: number; reference_grid: string; grid_opacity: number; grid_spacing: number };
+      vr: { vignette: string; turning: string; snap_angle: number; reference_grid: string; grid_opacity: number; grid_spacing: number; grid_size: number };
     };
     try {
       {
@@ -126,9 +126,11 @@ for (const vr of [false, true]) {
         await click(game, [333, 169]); // Off -> During movement
         await click(game, [333, 198]); // 30 -> 50 percent
         await click(game, [333, 227]); // 1 -> 2 metres
+        await click(game, [333, 256]); // 10 -> 12 metre cage
         assert.equal((await saved()).vr.reference_grid, "DuringMovement");
         assert.equal((await saved()).vr.grid_opacity, 0.5);
         assert.equal((await saved()).vr.grid_spacing, 2);
+        assert.equal((await saved()).vr.grid_size, 12);
         await click(game, [240, 36]);
         await click(game, [333, 113]); // 30 -> 45 degrees
         assert.equal((await saved()).vr.snap_angle, 45);
@@ -149,10 +151,12 @@ for (const vr of [false, true]) {
         assert.equal((await saved()).vr.reference_grid, "DuringMovement");
         assert.equal((await saved()).vr.grid_opacity, 0.5);
         assert.equal((await saved()).vr.grid_spacing, 2);
-        await click(game, [333, 256]); // Reset comfort, keeping turning settings
+        assert.equal((await saved()).vr.grid_size, 12);
+        await click(game, [333, 285]); // Reset comfort, keeping turning settings
         assert.equal((await saved()).vr.reference_grid, "Off");
         assert.equal((await saved()).vr.grid_opacity, 0.3);
         assert.equal((await saved()).vr.grid_spacing, 1);
+        assert.equal((await saved()).vr.grid_size, 10);
         assert.equal((await saved()).vr.snap_angle, 45);
         await click(game, DONE);
         assert.equal((await game.info()).paused, true);
