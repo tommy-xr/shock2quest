@@ -406,6 +406,10 @@ impl PauseMenu {
         self.page = PauseMenuPage::HordeReport;
     }
 
+    pub(crate) fn panel_anchor(&mut self) -> &mut crate::ui::FrontendPanelAnchor {
+        self.menu.panel_anchor()
+    }
+
     /// Open the menu in front of the player.
     ///
     /// The panel anchor is reset so the menu is placed from the head pose it is

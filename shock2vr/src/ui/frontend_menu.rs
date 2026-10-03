@@ -319,6 +319,10 @@ impl<A: Copy + PartialEq> FrontendMenu<A> {
         self.vr_pointer_visuals.glove_fit = fit;
     }
 
+    pub(crate) fn panel_anchor(&mut self) -> &mut FrontendPanelAnchor {
+        &mut self.panel_anchor
+    }
+
     pub fn panel(&self) -> WorldPanel {
         self.panel_anchor.panel()
     }

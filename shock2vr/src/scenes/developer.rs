@@ -624,6 +624,10 @@ impl Default for DeveloperScene {
 }
 
 impl GameScene for DeveloperScene {
+    fn frontend_panel_anchor(&mut self) -> Option<&mut crate::ui::FrontendPanelAnchor> {
+        Some(self.menu.panel_anchor())
+    }
+
     fn update(
         &mut self,
         time: &Time,

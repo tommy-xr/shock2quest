@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
+import { pauseEntry, vrClickCanvasPoint } from "./helpers/frontend-menu.js";
 
 // The VR frontend panel is placed ONCE, from the head pose, and then
 // world-locked: turning the head moves it in view instead of dragging it along.
@@ -220,6 +221,75 @@ test(
       await hovers(game, 0, LOAD_GAME),
       false,
       "and leave the position it was originally placed from",
+    );
+  },
+);
+
+// Negative-first: a fresh LoadGameScene used to replace the panel from the
+// turned/leaned head, so its Done button no longer occupied the original ray.
+test(
+  "VR menu navigation preserves the panel placement through Load Game and Back",
+  { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run" },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "main_menu",
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 10 });
+
+    const click = (point: [number, number]) =>
+      vrClickCanvasPoint(game, [point[0] * CANVAS_W, point[1] * CANVAS_H]);
+
+    // Both changes stay below lazy recenter thresholds. Navigating should
+    // retain the same placement even though the current tracked pose differs.
+    await game.input.set("head.look", [30, 0]);
+    await game.input.set("head.position", [0, PLAYER_EYE_HEIGHT_WORLD + 0.2, 0.25]);
+    await click(LOAD_GAME);
+    assert.equal((await game.info()).mission, "load_game");
+
+    const done: [number, number] = [(527 + 95 / 2) / CANVAS_W, (405 + 62 / 2) / CANVAS_H];
+    await click(done);
+    assert.equal(
+      (await game.info()).mission,
+      "main_menu",
+      "Load Game's Done button must retain the original world position",
+    );
+
+    await game.input.set("head.look", [-20, 0]);
+    await game.input.set("head.position", [0, PLAYER_EYE_HEIGHT_WORLD - 0.15, -0.2]);
+    await click(LOAD_GAME);
+    assert.equal(
+      (await game.info()).mission,
+      "load_game",
+      "Back must restore the main menu at the same world position",
+    );
+  },
+);
+
+test(
+  "VR Quit to Main Menu preserves the open pause panel placement",
+  { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run" },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "debug_minimal",
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 10 });
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 10 });
+    assert.equal((await game.info()).paused, true);
+
+    await game.input.set("head.look", [30, 0]);
+    await game.input.set("head.position", [0, PLAYER_EYE_HEIGHT_WORLD + 0.2, 0.25]);
+    await vrClickCanvasPoint(game, pauseEntry(4));
+    assert.equal((await game.info()).mission, "main_menu");
+    assert.equal((await game.info()).paused, false);
+
+    await vrClickCanvasPoint(game, [LOAD_GAME[0] * CANVAS_W, LOAD_GAME[1] * CANVAS_H]);
+    assert.equal(
+      (await game.info()).mission,
+      "load_game",
+      "the main menu must keep the pause panel's world position",
     );
   },
 );
