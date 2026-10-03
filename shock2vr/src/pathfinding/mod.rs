@@ -717,6 +717,26 @@ impl PathfindingService {
             .and_then(|steering| steering.get(&entity).copied())
     }
 
+    /// Whether `entity`'s current route - from `position` through the
+    /// waypoints still ahead - passes within `radius` of `point` (see
+    /// `route_passes_near`). `None` when it is not following a route.
+    pub fn route_ahead_passes_near(
+        &self,
+        entity: u64,
+        position: Vector3<f32>,
+        point: Vector3<f32>,
+        radius: f32,
+    ) -> Option<bool> {
+        let steering = self.ai_steering(entity)?;
+        if steering.path_len == 0 {
+            return None;
+        }
+        let paths = self.ai_paths.lock().ok()?;
+        let waypoints = &paths.get(&entity)?.waypoints;
+        let ahead = &waypoints[steering.next_waypoint.min(waypoints.len())..];
+        Some(route_passes_near(position, ahead, point, radius))
+    }
+
     /// Snapshot of every AI's latest recorded path
     pub fn ai_paths(&self) -> Vec<(u64, AiPathRecord)> {
         self.ai_paths
@@ -1766,6 +1786,31 @@ impl NavBoundary {
     }
 }
 
+/// Whether the route `start` -> `waypoints` passes within `radius` of
+/// `point` in the XZ plane, on its floor (a segment end within a few feet of
+/// the point's height).
+fn route_passes_near(
+    start: Vector3<f32>,
+    waypoints: &[Vector3<f32>],
+    point: Vector3<f32>,
+    radius: f32,
+) -> bool {
+    const FLOOR_TOLERANCE: f32 = 6.0 / SCALE_FACTOR;
+    let near = |a: Vector3<f32>, b: Vector3<f32>| {
+        let closest = closest_point_on_segment_xz(a, b, point);
+        let on_floor = (point.y - a.y).abs().min((point.y - b.y).abs()) <= FLOOR_TOLERANCE;
+        on_floor && (closest.x - point.x).hypot(closest.z - point.z) <= radius
+    };
+    if waypoints.is_empty() {
+        return near(start, start);
+    }
+    std::iter::once(start)
+        .chain(waypoints.iter().copied())
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|segment| near(segment[0], segment[1]))
+}
+
 /// Closest point to `target` on segment `a`-`b`, in the XZ plane (only x/z
 /// are meaningful in the result - callers that need y should not use this).
 fn closest_point_on_segment_xz(
@@ -2690,6 +2735,21 @@ pub(crate) mod tests {
             service.blocked_links(BYSTANDER, 0.0).contains(&(1, 2)),
             "a surviving AI keeps its own exclusions"
         );
+    }
+
+    #[test]
+    fn a_route_passes_near_a_point_beside_it_on_its_floor() {
+        let start = vec3(0.0, 0.0, 0.0);
+        let route = [vec3(10.0, 0.0, 0.0), vec3(10.0, 0.0, 10.0)];
+        // Beside the first leg, and beside the second
+        assert!(route_passes_near(start, &route, vec3(5.0, 0.0, 1.0), 1.5));
+        assert!(route_passes_near(start, &route, vec3(11.0, 0.0, 5.0), 1.5));
+        // A door off to the side, or the same spot a floor up, is not on it
+        assert!(!route_passes_near(start, &route, vec3(5.0, 0.0, 4.0), 1.5));
+        assert!(!route_passes_near(start, &route, vec3(5.0, 10.0, 0.0), 1.5));
+        // No waypoints ahead: only where the AI stands
+        assert!(route_passes_near(start, &[], vec3(1.0, 0.0, 0.0), 1.5));
+        assert!(!route_passes_near(start, &[], vec3(3.0, 0.0, 0.0), 1.5));
     }
 
     #[test]

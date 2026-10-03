@@ -42,6 +42,9 @@ const DOOR_INTERACT_RANGE: f32 = 12.0 / SCALE_FACTOR;
 /// doesn't open ones off to the side while passing.
 const DOOR_FACING_MIN_DOT: f32 = 0.2;
 const DOOR_FACING_RANGE: f32 = 5.0 / SCALE_FACTOR;
+/// How near its route a door must be for a scripted walk to open it (the
+/// door cell's center lies within this of the remaining path)
+const DOOR_ON_ROUTE_RADIUS: f32 = 4.0 / SCALE_FACTOR;
 /// How often a pursuing AI polls for a blocking door. The scan (a linear
 /// cell lookup plus a small graph BFS) runs at this rate, not every frame.
 const DOOR_POLL_INTERVAL: f32 = 0.3;
@@ -1075,8 +1078,8 @@ impl AnimatedMonsterAI {
     fn update_door_wait(&mut self, world: &World, entity_id: EntityId, time: &Time) -> Option<f32> {
         let (door_ent, waited) = self.door_wait?;
         // Only a behavior that opens doors waits at one; anything else (a
-        // scripted performance takes over, the AI calms down) walks away from
-        // the doorway rather than holding.
+        // scripted Wait or Play takes over, the AI calms down) walks away
+        // from the doorway rather than holding.
         if !self.current_behavior.borrow().opens_doors() {
             self.door_wait = None;
             return None;
@@ -1302,8 +1305,9 @@ impl AnimatedMonsterAI {
         frustration_gesture(entity_id)
     }
 
-    /// While pursuing, open the (unlocked) door gating the AI's route so it
-    /// can follow the player through, or give up at a locked one. The graph
+    /// For a behavior that opens doors (pursuit, investigation, a scripted
+    /// walk), open the (unlocked) door gating the AI's route so it gets
+    /// through, or - pursuing - give up at a locked one. The graph
     /// treats doors as passable, so the AI paths straight at a closed door
     /// and its body is blocked - this is what actually gets it through.
     fn handle_doors(
@@ -1348,6 +1352,8 @@ impl AnimatedMonsterAI {
             return Effect::NoEffect;
         };
 
+        let scripted =
+            self.current_behavior.borrow().scripted_state() != ScriptedState::NotScripted;
         for (door_obj, door_center) in doors {
             let (dx, dz) = (door_center.x - pos.x, door_center.z - pos.z);
             let dist = (dx * dx + dz * dz).sqrt();
@@ -1365,6 +1371,19 @@ impl AnimatedMonsterAI {
                     continue;
                 }
             }
+            // A scripted walk opens only doors on its own route: a scene may
+            // keep a door it passes shut, or open that door itself (a Frob
+            // toggles it). Without a route, nearness decides as for pursuit.
+            if scripted
+                && service.route_ahead_passes_near(
+                    entity_id.inner(),
+                    pos,
+                    door_center,
+                    DOOR_ON_ROUTE_RADIUS,
+                ) == Some(false)
+            {
+                continue;
+            }
             let Some(door_ent) = id_map.0.get(&door_obj).map(|w| w.0) else {
                 continue;
             };
@@ -1377,7 +1396,7 @@ impl AnimatedMonsterAI {
             if script_util::is_entity_locked(world, door_ent) {
                 // A scripted walk is not a pursuit to give up: it just cannot
                 // open this door (its route, or its timeout, decides the rest)
-                if self.current_behavior.borrow().scripted_state() != ScriptedState::NotScripted {
+                if scripted {
                     continue;
                 }
                 // Can't follow through a locked door: show frustration and
@@ -1938,7 +1957,7 @@ impl Script for AnimatedMonsterAI {
         );
         let behavior_publish_effect = self.publish_behavior(entity_id);
 
-        // Open a door blocking the pursuit (or give up at a locked one)
+        // Open a door in the way (or, pursuing, give up at a locked one)
         let door_effect = self.handle_doors(world, physics, entity_id, time);
 
         Effect::combine(vec![
