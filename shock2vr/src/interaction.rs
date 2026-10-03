@@ -12,7 +12,7 @@ mod slide;
 
 use std::{cell::RefCell, collections::HashMap};
 
-use cgmath::{InnerSpace, One, Point3, Quaternion, Rotation, Vector3, Vector4};
+use cgmath::{InnerSpace, Matrix4, One, Point3, Quaternion, Rotation, Vector3, Vector4};
 use engine::{
     assets::asset_cache::AssetCache,
     scene::{SceneObject, light::SpotLight},
@@ -166,6 +166,11 @@ pub trait PlayerInteraction {
         _lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<SceneObject> {
         Vec::new()
+    }
+
+    /// Forearm sockets use the same calibrated, collision-resolved wrists as the HUD.
+    fn implant_socket_frames(&self, _world: &World) -> [Option<Matrix4<f32>>; 2] {
+        [None; 2]
     }
 
     /// Hand-mounted spotlights (`hand_spotlights` dev param).
@@ -891,6 +896,41 @@ impl VrInteraction {
 }
 
 impl PlayerInteraction for VrInteraction {
+    fn implant_socket_frames(&self, world: &World) -> [Option<Matrix4<f32>>; 2] {
+        use crate::hud::virtual_arms::{BIO_BAND_RADIUS, GLOVE_PALM_LIFT, implant_socket_frame};
+        let mut glove = self.glove_renderer.borrow_mut();
+        let Some(Some(renderer)) = glove.as_mut() else {
+            return [None; 2];
+        };
+        let tracked = self.hand_poses();
+        std::array::from_fn(|i| {
+            let pose = self.visual_hands[i].unwrap_or(tracked[i]);
+            if !pose.is_tracked() {
+                return None;
+            }
+            let hand = if i == 0 {
+                Handedness::Left
+            } else {
+                Handedness::Right
+            };
+            let held = crate::wielded_weapon::held_by_hand(world, hand);
+            let (root, lift) = if crate::virtual_hand::shows_hand_visual(world, held) {
+                (
+                    Matrix4::from_translation(pose.position)
+                        * Matrix4::from(pose.rotation)
+                        * renderer.wrist_frame(hand),
+                    GLOVE_PALM_LIFT,
+                )
+            } else {
+                let (wrist, radius) = held
+                    .filter(|&amp| crate::wielded_weapon::is_psi_amp(world, amp))
+                    .and_then(|amp| crate::psi_amp_readout::wrist(world, amp, hand))?;
+                (wrist * Matrix4::from_scale(radius / BIO_BAND_RADIUS), 0.0)
+            };
+            Some(implant_socket_frame(root, hand, lift))
+        })
+    }
+
     fn body_palm_positions(&self, input: &InputContext) -> [Option<Vector3<f32>>; 2] {
         let Some(rig) = &self.grip_kinematics else {
             return [None; 2];

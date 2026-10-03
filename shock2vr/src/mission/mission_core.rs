@@ -2953,6 +2953,7 @@ pub struct MissionCore {
     vr_clip_insert_engaged: [bool; 2],
     shoulder_backpack: super::shoulder_backpack::ShoulderBackpack,
     holsters: super::holsters::Holsters,
+    implant_sockets: super::implant_sockets::Sockets,
     ammo_pouch: super::ammo_pouch::AmmoPouch,
     personal_card: super::personal_card::PersonalCard,
     device_panel: Option<crate::ui::WorldPanel>,
@@ -3874,6 +3875,7 @@ impl MissionCore {
             body_hand_contacts: [None; 2],
             download_release_disarmed: [false; 2],
             holsters: Default::default(),
+            implant_sockets: Default::default(),
             ammo_pouch: Default::default(),
             personal_card: Default::default(),
             device_panel: None,
@@ -5559,11 +5561,44 @@ impl MissionCore {
         // the back of the glove. Keep the original input for weapon controls.
         let mut body_input = hands_input.clone();
         self.body_hand_contacts = self.interaction.body_palm_positions(hands_input);
+        let socket_frames = self.interaction.implant_socket_frames(&self.world);
+        let socket_palms = std::array::from_fn(|i| {
+            crate::virtual_hand::hand_world_position(
+                player_pos,
+                player_rot,
+                self.body_hand_contacts[i].unwrap_or(
+                    [
+                        input_context.left_hand.position,
+                        input_context.right_hand.position,
+                    ][i],
+                ),
+            )
+        });
+        let implant_actions = self.implant_sockets.update(
+            &self.world,
+            hands_input,
+            held,
+            socket_palms,
+            socket_frames,
+            std::array::from_fn(|i| {
+                held[i].is_some_and(|id| crate::implants::kind(&self.world, id).is_some())
+                    || self.interaction.hand_available_for_body_slot(
+                        [crate::Handedness::Left, crate::Handedness::Right][i],
+                    )
+            }),
+            game_options.presentation_mode == crate::PresentationMode::Vr
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
+        );
         for (i, hand) in [&mut body_input.left_hand, &mut body_input.right_hand]
             .into_iter()
             .enumerate()
         {
-            if let Some(palm) = self.body_hand_contacts[i] {
+            // A reachable implant owns the grip before shoulder/belt gestures can queue a draw.
+            if self.implant_sockets.reserved[i] {
+                hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+            } else if let Some(palm) = self.body_hand_contacts[i] {
                 hand.position = palm;
             } else {
                 hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
@@ -5939,6 +5974,40 @@ impl MissionCore {
                 hand.a_value = 0.0;
             }
         }
+        for (i, action) in implant_actions.iter().enumerate() {
+            let hand = if i == 0 {
+                &mut shoulder_input.left_hand
+            } else {
+                &mut shoulder_input.right_hand
+            };
+            // Body storage may retain a consumed grip from a previous frame.
+            // Held implants keep their UI-safe grip; empty socket hands remove
+            // through the explicit action, never through an ordinary world grab.
+            if self.implant_sockets.reserved[i] {
+                hand.squeeze_value = if held[i].is_some() {
+                    [&hands_input.left_hand, &hands_input.right_hand][i].squeeze_value
+                } else {
+                    0.0
+                };
+            }
+            if self.implant_sockets.retained.keep_grip(i) {
+                hand.squeeze_value = 1.0;
+            }
+            if matches!(action, Some(super::implant_sockets::Action::Remove { .. })) {
+                hand.squeeze_value = 0.0;
+            }
+            if let Some(super::implant_sockets::Action::Refuse { reason }) = action {
+                effects.push(Effect::ShowMessage {
+                    text: format!("{reason} Squeeze again to release the implant."),
+                });
+                effects.push(Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    source: None,
+                    name: "repfail".to_owned(),
+                    spatial: false,
+                });
+            }
+        }
         let hands_input = &shoulder_input;
 
         // Opening a hand over the inventory strip puts the item in the
@@ -6029,9 +6098,13 @@ impl MissionCore {
 
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
-        let reserved_releases: Vec<_> = store
+        let reserved_releases: Vec<_> = implant_actions
             .iter()
-            .map(|(entity, _)| *entity)
+            .filter_map(|action| match action {
+                Some(super::implant_sockets::Action::Install { entity, .. }) => Some(*entity),
+                _ => None,
+            })
+            .chain(store.iter().map(|(entity, _)| *entity))
             .chain(collect.iter().copied())
             .chain(holster_actions.iter().filter_map(|action| match action {
                 Some(super::holsters::Action::Store { entity, .. }) => Some(*entity),
@@ -6442,6 +6515,39 @@ impl MissionCore {
                     });
                 }
                 super::holsters::Action::Refuse { .. } => {}
+            }
+        }
+        for (hand, action) in implant_actions.into_iter().enumerate() {
+            match action {
+                Some(super::implant_sockets::Action::Install { entity, slot }) => {
+                    interaction_msgs.retain(|effect| !matches!(effect, VirtualHandEffect::OutMessage { message }
+                        if matches!(message.payload, MessagePayload::ProvideForConsumption { entity: offered } if offered == entity)));
+                    for effect in &mut interaction_msgs {
+                        if matches!(effect, VirtualHandEffect::DropItem { entity_id, .. }
+                            | VirtualHandEffect::StoreItem { entity_id }
+                            | VirtualHandEffect::StoreItemAtCell { entity_id, .. } if *entity_id == entity)
+                        {
+                            *effect = VirtualHandEffect::InstallImplant {
+                                entity_id: entity,
+                                slot,
+                                hand,
+                            };
+                        }
+                    }
+                }
+                Some(super::implant_sockets::Action::Remove { entity }) => {
+                    effects.push(Effect::UnequipImplant { entity_id: entity });
+                    effects.push(Effect::GrabEntity {
+                        entity_id: entity,
+                        hand: if hand == 0 {
+                            crate::Handedness::Left
+                        } else {
+                            crate::Handedness::Right
+                        },
+                        current_parent_id: None,
+                    });
+                }
+                _ => {}
             }
         }
         effects.extend(self.process_virtual_hand_effects(asset_cache, interaction_msgs));
@@ -9703,6 +9809,24 @@ impl MissionCore {
                     }
                     self.refresh_implant_effects();
                 }
+                Effect::EquipImplant { entity_id, slot } => {
+                    match crate::implants::validate_socket(
+                        &self.world,
+                        entity_id,
+                        usize::from(slot),
+                    ) {
+                        Ok(()) => {
+                            self.world.add_component(
+                                entity_id,
+                                crate::runtime_props::RuntimePropImplantSlot(slot),
+                            );
+                            self.refresh_implant_effects();
+                        }
+                        Err(reason) => effects.push_back(Effect::ShowMessage {
+                            text: reason.to_owned(),
+                        }),
+                    }
+                }
                 Effect::UnequipImplant { entity_id } => {
                     if self
                         .world
@@ -9730,6 +9854,15 @@ impl MissionCore {
                     self.world
                         .add_component(entity_id, dark::properties::PropEnergy(after));
                     if (before > 0.0) != (after > 0.0) {
+                        // Retail BaseImplant uses bb07 when its power runs out.
+                        // Announce the committed edge once, not each depleted frame.
+                        if after == 0.0
+                            && crate::implants::equipped(&self.world).contains(&Some(entity_id))
+                        {
+                            effects.push_back(crate::scripts::script_util::announce(
+                                entity_id, "bb07",
+                            ));
+                        }
                         self.refresh_implant_effects();
                     }
                 }
@@ -15382,6 +15515,61 @@ impl MissionCore {
                         .render(asset_cache, player.pos, player.rotation),
                 );
             }
+            let socket_frames = self.interaction.implant_socket_frames(&self.world);
+            if !self.use_mode {
+                scene.extend(self.implant_sockets.render(
+                    asset_cache,
+                    &self.world,
+                    socket_frames,
+                    object_lights.as_ref(),
+                ));
+                // Mount the solid implant on the wristband surface, outside the UI well.
+                // It is the same carried entity, with no duplicate physics or ownership.
+                for (slot, entity) in crate::implants::equipped(&self.world)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let Some((frame, model)) =
+                        socket_frames[slot].zip(entity.and_then(|id| self.id_to_model.get(&id)))
+                    else {
+                        continue;
+                    };
+                    let Some(bounds) = model.bounding_box() else {
+                        continue;
+                    };
+                    let extent = bounds.max - bounds.min;
+                    let footprint = extent.x.max(extent.y);
+                    if footprint <= 0.0001 {
+                        continue;
+                    }
+                    let width = crate::hud::virtual_arms::IMPLANT_SLOT_WIDTH;
+                    // Seat the underside in the narrow bed with its prongs in the connector,
+                    // retaining the model's real thickness above the surrounding lip.
+                    let scale = width * crate::hud::implant_slot::model_scale(extent);
+                    let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
+                    let root = frame
+                        * Matrix4::from_translation(vec3(
+                            0.0,
+                            0.0,
+                            0.0005 + extent.z * scale * 0.5,
+                        ))
+                        * Matrix4::from_scale(scale)
+                        * Matrix4::from_translation(-center);
+                    let lights = object_lights
+                        .as_ref()
+                        .map(|lighting| lighting.at_player_position(frame.w.truncate()));
+                    let mut objects = model.to_scene_objects().clone();
+                    for object in &mut objects {
+                        object.set_transform(root);
+                        object.set_lights(lights.clone());
+                    }
+                    crate::util::tag_render_source(
+                        &mut objects,
+                        crate::util::render_source::PLAYER_HANDS,
+                    );
+                    scene.extend(objects);
+                }
+            }
             scene.extend(
                 self.holsters
                     .render(&self.world, player.pos, player.rotation),
@@ -16324,6 +16512,67 @@ impl MissionCore {
                         to: entity_id,
                         payload: MessagePayload::Drop,
                     });
+                }
+                VirtualHandEffect::InstallImplant {
+                    entity_id,
+                    slot,
+                    hand,
+                } => {
+                    let inventory = self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .unwrap()
+                        .inventory_entity_id;
+                    let valid = crate::implants::validate_socket(&self.world, entity_id, slot);
+                    if valid.is_ok()
+                        && self
+                            .drop_entity_into_container(inventory, entity_id)
+                            .is_some()
+                    {
+                        // Preserve the normal Drop-before-equip order in the script queue.
+                        self.script_world.dispatch(Message {
+                            to: entity_id,
+                            payload: MessagePayload::Drop,
+                        });
+                        self.script_world.dispatch(Message {
+                            to: entity_id,
+                            payload: MessagePayload::EquipImplant { slot: slot as u8 },
+                        });
+                        deferred.push(Effect::HandHaptic {
+                            hand: if hand == 0 {
+                                crate::Handedness::Left
+                            } else {
+                                crate::Handedness::Right
+                            },
+                            pulse: crate::haptics::HapticPulse {
+                                amplitude: 0.4,
+                                duration_ms: 60,
+                            },
+                        });
+                        deferred.push(Effect::PlaySound {
+                            handle: AudioHandle::new(),
+                            source: None,
+                            name: "bset".to_owned(),
+                            spatial: false,
+                        });
+                    } else {
+                        self.implant_sockets.retained.retain(hand, entity_id);
+                        deferred.push(Effect::GrabEntity {
+                            entity_id,
+                            hand: if hand == 0 {
+                                crate::Handedness::Left
+                            } else {
+                                crate::Handedness::Right
+                            },
+                            current_parent_id: None,
+                        });
+                        deferred.push(Effect::ShowMessage {
+                            text: format!(
+                                "{} Squeeze again to release the implant.",
+                                valid.err().unwrap_or("The backpack is full.")
+                            ),
+                        });
+                    }
                 }
                 VirtualHandEffect::StoreItem { entity_id } => {
                     let sound = inventory_transfer_sound(&self.world, entity_id);
@@ -18134,6 +18383,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 self.holsters
                     .diagnostics(&self.world, player.pos, player.rotation),
             );
+            object.insert("implant_sockets".to_owned(), serde_json::json!({
+                "centers": self.interaction.implant_socket_frames(&self.world).map(|frame| frame.map(|f| { let p = f.w.truncate(); [p.x, p.y, p.z] })),
+                "enabled_slots": crate::implants::capacity(&self.world),
+                "locked": ([0, 1].map(|slot| crate::implants::socket_locked(&self.world, slot))),
+                "items": crate::implants::equipped(&self.world).map(|item| item.map(|id| id.inner() as i32)),
+                "near": self.implant_sockets.near,
+            }));
             object.insert(
                 "haptics".to_owned(),
                 serde_json::to_value(

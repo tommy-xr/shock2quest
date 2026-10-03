@@ -133,6 +133,11 @@ pub enum VirtualHandEffect {
         cell: (usize, usize),
     },
     /// A claimed body-slot release. Dispatches Drop but never creates a loose body.
+    InstallImplant {
+        entity_id: EntityId,
+        slot: usize,
+        hand: usize,
+    },
     HolsterItem {
         entity_id: EntityId,
         slot: usize,

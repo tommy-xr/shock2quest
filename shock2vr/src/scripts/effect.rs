@@ -254,6 +254,10 @@ pub enum Effect {
     ToggleImplant {
         entity_id: EntityId,
     },
+    EquipImplant {
+        entity_id: EntityId,
+        slot: u8,
+    },
     UnequipImplant {
         entity_id: EntityId,
     },

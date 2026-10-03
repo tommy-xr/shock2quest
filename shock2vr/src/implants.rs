@@ -22,7 +22,8 @@ pub fn equipped(world: &World) -> [Option<EntityId>; 2] {
     let slots = world.borrow::<View<RuntimePropImplantSlot>>().unwrap();
     for id in crate::scripts::script_util::player_carried_items(world) {
         if let Ok(slot) = slots.get(id) {
-            if usize::from(slot.0) < capacity(world) {
+            if usize::from(slot.0) < items.len() && items.iter().flatten().count() < capacity(world)
+            {
                 items[usize::from(slot.0)] = Some(id);
             }
         }
@@ -93,11 +94,36 @@ pub fn toggle_slot(world: &World, entity: EntityId) -> Result<Option<u8>, &'stat
     {
         return Err("Two implants of the same type cannot be equipped together.");
     }
-    current[..capacity(world)]
+    if current.iter().flatten().count() >= capacity(world) {
+        return Err("Remove an implant before equipping another.");
+    }
+    current
         .iter()
         .position(Option::is_none)
         .map(|slot| Some(slot as u8))
         .ok_or("Remove an implant before equipping another.")
+}
+
+/// Capacity limits simultaneous implants, not which wrist can host the first.
+/// An occupied socket stays accessible so its implant can always be removed.
+pub fn socket_locked(world: &World, slot: usize) -> bool {
+    let current = equipped(world);
+    slot >= current.len()
+        || (current[slot].is_none() && current.iter().flatten().count() >= capacity(world))
+}
+
+/// Validate a physical socket while preserving the ordinary equip rules.
+pub fn validate_socket(world: &World, entity: EntityId, slot: usize) -> Result<(), &'static str> {
+    if socket_locked(world, slot) {
+        return Err("Remove the other implant or acquire Cybernetically Enhanced.");
+    }
+    if toggle_slot(world, entity)?.is_none() {
+        return Err("Remove this implant before moving it.");
+    }
+    if equipped(world)[slot].is_some() {
+        return Err("Remove the implant in this socket first.");
+    }
+    Ok(())
 }
 
 pub fn effective_stats(world: &World) -> Option<PlayerStats> {
@@ -185,6 +211,30 @@ mod tests {
             assert_eq!(toggle_slot(&world, a), Ok(None));
         }
     }
+    #[test]
+    fn either_wrist_can_host_the_single_implant_and_lock_the_other() {
+        for slot in 0..2 {
+            let (mut world, a, b, _) = fixture(false);
+            assert!(!socket_locked(&world, 0) && !socket_locked(&world, 1));
+            assert_eq!(validate_socket(&world, a, slot), Ok(()));
+            world.add_component(a, RuntimePropImplantSlot(slot as u8));
+            assert_eq!(equipped(&world)[slot], Some(a));
+            assert_eq!(effective_stats(&world).unwrap().strength, 2);
+            assert!(!socket_locked(&world, slot));
+            assert!(socket_locked(&world, 1 - slot));
+            assert!(validate_socket(&world, b, 1 - slot).is_err());
+            assert!(toggle_slot(&world, b).is_err());
+            assert_eq!(toggle_slot(&world, a), Ok(None));
+            world.remove::<(RuntimePropImplantSlot,)>(a);
+            assert!(!socket_locked(&world, 0) && !socket_locked(&world, 1));
+            assert_eq!(validate_socket(&world, b, 1 - slot), Ok(()));
+        }
+        let (mut world, a, b, _) = fixture(true);
+        world.add_component(a, RuntimePropImplantSlot(1));
+        assert!(!socket_locked(&world, 0));
+        assert_eq!(validate_socket(&world, b, 0), Ok(()));
+    }
+
     #[test]
     fn power_and_ownership_control_bonuses_without_changing_training() {
         let (mut world, a, b, _) = fixture(true);

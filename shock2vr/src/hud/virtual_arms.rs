@@ -206,9 +206,26 @@ fn wrist_hologram_transform(
 
 const BIO_WIDTH: f32 = 0.085;
 /// The bio band wraps a cylinder about the wrist axis, just outside the cuff.
-const BIO_BAND_RADIUS: f32 = 0.045;
+pub(crate) const BIO_BAND_RADIUS: f32 = 0.045;
 /// The glove's cuff stands further off the wrist on the palm side.
-const GLOVE_PALM_LIFT: f32 = 0.02;
+pub(crate) const GLOVE_PALM_LIFT: f32 = 0.02;
+
+/// Pinky side of the same bracelet. Rendering and grab
+/// targeting share this frame, including the thicker palm side of the glove.
+pub(crate) fn implant_socket_frame(
+    root: Matrix4<f32>,
+    hand: Handedness,
+    palm_lift: f32,
+) -> Matrix4<f32> {
+    let side = if hand == Handedness::Left { -1.0 } else { 1.0 };
+    root * Matrix4::from_translation(vec3(
+        side * (BIO_BAND_RADIUS + 0.008),
+        -0.015,
+        -palm_lift * 0.5,
+    )) * Matrix4::from_angle_y(Deg(side * 90.0))
+}
+
+pub(crate) const IMPLANT_SLOT_WIDTH: f32 = BIO_WIDTH * 34.0 / 128.0 * 1.75;
 
 /// Wrist-frame +Z points out of the glove's back; +Y points toward its fingers.
 /// Bio faces dorsally, scaled alike in x and z so it can bend around the

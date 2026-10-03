@@ -20,8 +20,9 @@ use crate::{
 const AMP_SPHERE_CENTER: Point3<f32> = Point3::new(-0.42, 0.094, -0.04);
 const AMP_SPHERE_RADIUS: f32 = 0.155;
 /// The baked forearm's axis at the wrist, in model space; the forearm runs
-/// along model +x. Placed from captures of the 25AE mesh, like the radius below.
-const AMP_WRIST_CENTER: Point3<f32> = Point3::new(-0.08, -0.12, -0.10);
+/// along model +x. Mount toward the elbow so the pinky-side implant well
+/// clears the authored cable inlet. This frame drives both bio bands and the socket.
+const AMP_WRIST_CENTER: Point3<f32> = Point3::new(0.08, -0.12, -0.10);
 /// Bands at this radius sit just off the forearm's skin, palm and back.
 const AMP_FOREARM_RADIUS: f32 = 0.15;
 const ICON_SIZE: f32 = 0.05;

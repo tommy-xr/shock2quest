@@ -272,7 +272,7 @@ pub struct FlatUiHost {
     holster_items: [Option<CursorItem>; 2],
     implant_items: [Option<CursorItem>; 2],
     implant_energy: [f32; 2],
-    implant_capacity: usize,
+    implant_locked: [bool; 2],
     hand_ammo: [crate::hud::ammo_panel::AmmoReadout; 2],
     selected_ammo: Option<EntityId>,
     pub(crate) utilities: super::mfd_utilities::MfdUtilities,
@@ -360,7 +360,7 @@ impl FlatUiHost {
             holster_items: [None, None],
             implant_items: [None, None],
             implant_energy: [0.0; 2],
-            implant_capacity: 1,
+            implant_locked: [false; 2],
             hand_ammo: Default::default(),
             selected_ammo: None,
             utilities: Default::default(),
@@ -508,7 +508,7 @@ impl FlatUiHost {
             id.map(|id| crate::implants::energy(world, id))
                 .unwrap_or(0.0)
         });
-        self.implant_capacity = crate::implants::capacity(world);
+        self.implant_locked = [0, 1].map(|slot| crate::implants::socket_locked(world, slot));
         let [held, holstered, implanted] = [items, holsters, implants].map(|items| {
             items.map(|entity| {
                 let entity = entity.filter(|entity| {
@@ -573,7 +573,7 @@ impl FlatUiHost {
             let name = self.implant_items[slot]
                 .as_ref()
                 .and_then(|i| i.label.as_deref())
-                .unwrap_or(if slot < self.implant_capacity {
+                .unwrap_or(if !self.implant_locked[slot] {
                     "Use an implant in your inventory to equip it"
                 } else {
                     "Requires Cybernetically Enhanced"
@@ -1524,7 +1524,7 @@ impl FlatUiHost {
                         HAlign::Center,
                         VAlign::Middle,
                     );
-                } else if slot >= self.implant_capacity {
+                } else if self.implant_locked[slot] {
                     // Same "unavailable" art as the backpack's locked cells.
                     canvas.image(well, "iface/block.pcx");
                 }
@@ -1725,7 +1725,7 @@ impl FlatUiHost {
                             kind: "readout".to_owned(),
                             texture: item.and_then(|i| i.icon.clone()),
                             text: Some(item.and_then(|i| i.label.clone()).unwrap_or_else(|| {
-                                if slot < self.implant_capacity {
+                                if !self.implant_locked[slot] {
                                     "Empty"
                                 } else {
                                     "Locked"
@@ -1922,13 +1922,14 @@ fn mirrored_arm_rect(strip: Rect) -> Rect {
 
 /// The two authored implant sockets below the paperdoll's chest.
 fn implant_readout_rects(strip: Rect) -> [Rect; 2] {
-    let scale = strip.w / 636.0;
+    let scale = strip.w / crate::hud::implant_slot::INVENTORY_SIZE.x;
     [0, 1].map(|slot| {
+        let well = crate::hud::implant_slot::inventory_well(slot);
         Rect::new(
-            strip.x + (563.0 + slot as f32 * 36.0) * scale,
-            strip.y + 84.0 * scale,
-            34.0 * scale,
-            34.0 * scale,
+            strip.x + well.x * scale,
+            strip.y + well.y * scale,
+            well.w * scale,
+            well.h * scale,
         )
     })
 }
