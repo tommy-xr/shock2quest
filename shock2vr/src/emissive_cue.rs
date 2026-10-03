@@ -1,11 +1,12 @@
 //! Item state read off the glow of a held item's authored emissive parts
 //! (the 25AE models give them their own material slot), e.g. the psi amp's
-//! strip dims as psi points drain and the fusion cannon's tubes as it empties. Only scales emissivity the art already
-//! has, so models without a glowing part are unaffected.
-use dark::properties::PropGunState;
+//! strip dims as psi points drain and the fusion cannon's tubes as it
+//! empties. Only scales emissivity the art already has, so models without a
+//! glowing part are unaffected.
+use dark::properties::{PropGunState, PropWeaponType};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
-use crate::{dev_params, mission::mission_core::GlobalTemplateHierarchy, time::Time};
+use crate::{dev_params, time::Time};
 
 /// Glow left at a sliver of charge, so "low" still reads as "on".
 const FLOOR: f32 = 0.25;
@@ -44,25 +45,23 @@ fn charge_fraction(world: &World, item: EntityId) -> Option<f32> {
     }
     // Too little left for one more shot reads as empty (the laser pistol
     // spends 3 a shot, so it can stall at 2).
-    if ammo < setting.ammo_usage.max(1) {
+    if ammo < crate::scripts::weapon_script::rounds_per_shot(&setting) {
         return Some(0.0);
     }
     Some(ammo as f32 / setting.clip as f32)
 }
 
-/// Energy (laser pistol, EMP rifle) and Heavy (fusion cannon) weapons: the
-/// high-tech guns. Standard guns (e.g. the assault rifle) keep their glow.
+/// Energy (laser pistol, EMP rifle) and Heavy (fusion cannon; the grenade
+/// launcher and stasis gun too, but their art has no glow) weapon types.
+/// Standard guns (e.g. the assault rifle) keep their glow.
 fn is_high_tech_gun(world: &World, item: EntityId) -> bool {
-    const ENERGY: i32 = -14;
-    const HEAVY: i32 = -15;
-    let Some(template) = crate::scripts::script_util::entity_class_template_id(world, item) else {
-        return false;
-    };
+    const ENERGY: i32 = 1;
+    const HEAVY: i32 = 2;
     world
-        .borrow::<UniqueView<GlobalTemplateHierarchy>>()
-        .is_ok_and(|h| {
-            h.is_or_descends_from(template, ENERGY) || h.is_or_descends_from(template, HEAVY)
-        })
+        .borrow::<View<PropWeaponType>>()
+        .ok()
+        .and_then(|types| types.get(item).ok().map(|t| t.0))
+        .is_some_and(|t| t == ENERGY || t == HEAVY)
 }
 
 /// Quadratic above a floor - the glow saturates on top of the lit colour, so
@@ -86,27 +85,22 @@ fn glow(fraction: f32, secs: f32, flicker: bool) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dark::properties::{GunSettingDesc, PropBaseGunDesc, PropTemplateId};
-    use std::collections::HashMap;
+    use dark::properties::{GunSettingDesc, PropBaseGunDesc};
 
-    /// A gun of `template` (whose parent is `class`) holding `ammo` of a
-    /// 20-round clip.
-    fn gun(class: i32, ammo: i32) -> (World, EntityId) {
-        let template = -1000;
+    const STANDARD: i32 = 0;
+    const ENERGY: i32 = 1;
+    const HEAVY: i32 = 2;
+
+    /// A gun of `weapon_type` holding `ammo` of a 20-round clip, 3 a shot.
+    fn gun(weapon_type: i32, ammo: i32) -> (World, EntityId) {
         let mut world = World::new();
-        world.add_unique(GlobalTemplateHierarchy(HashMap::from([(
-            template,
-            vec![class],
-        )])));
         let setting = GunSettingDesc {
             clip: 20,
             ammo_usage: 3,
             ..GunSettingDesc::default()
         };
         let gun = world.add_entity((
-            PropTemplateId {
-                template_id: template,
-            },
+            PropWeaponType(weapon_type),
             PropGunState {
                 ammo,
                 condition: 100.0,
@@ -123,13 +117,22 @@ mod tests {
 
     #[test]
     fn high_tech_guns_report_their_clip_and_standard_guns_do_not() {
-        let (world, energy) = gun(-14, 5);
+        let (world, energy) = gun(ENERGY, 5);
         assert_eq!(charge_fraction(&world, energy), Some(0.25));
-        let (world, heavy) = gun(-15, 20);
+        let (world, heavy) = gun(HEAVY, 20);
         assert_eq!(charge_fraction(&world, heavy), Some(1.0));
-        let (world, stalled) = gun(-14, 2);
+        // One shot's worth still fires; less reads empty.
+        let (world, last_shot) = gun(ENERGY, 3);
+        assert_eq!(charge_fraction(&world, last_shot), Some(0.15));
+        let (world, stalled) = gun(ENERGY, 2);
         assert_eq!(charge_fraction(&world, stalled), Some(0.0));
-        let (world, standard) = gun(-13, 5);
+        // Over capacity (debug scenes load 50 into a 40 clip) is clamped by `glow`.
+        let (world, overfull) = gun(HEAVY, 30);
+        assert_eq!(
+            charge_fraction(&world, overfull).map(|f| glow(f, 0.0, false)),
+            Some(1.0)
+        );
+        let (world, standard) = gun(STANDARD, 5);
         assert_eq!(charge_fraction(&world, standard), None);
     }
 
