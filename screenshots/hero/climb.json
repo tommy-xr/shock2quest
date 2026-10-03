@@ -1,0 +1,544 @@
+{
+  "mission": "medsci1.mis",
+  "presentation": "Vr",
+  "revision": "676158604c90ce3da0338624e9ae852e1f287565",
+  "runtimeSha256": "9cbfea53da0afd68c44b56f743f9e218312d5a5cf5f8bf4d4cb8735778cbeb02",
+  "assetRoot": "/Users/bryan/ss2-25th",
+  "lighting": {
+    "ambient_light_intensity": 0.9,
+    "level_light_intensity": 2
+  },
+  "stagingTeleport": [
+    -17.54,
+    -4.5,
+    14.65
+  ],
+  "preroll": {
+    "untilY": -3.4,
+    "anchor": "right",
+    "endedAt": [
+      -17.5245,
+      -3.3251896,
+      14.920099
+    ]
+  },
+  "recordedClimb": {
+    "near": [
+      -17.54,
+      -4,
+      14.5
+    ],
+    "untilY": -2,
+    "anchor": "left",
+    "firstY": -3.7211897,
+    "lastY": -1.9711897
+  },
+  "mantle": {
+    "hand": "right",
+    "hold": [
+      -17.35,
+      -1.5,
+      14.05
+    ],
+    "landed": [
+      -17.271662,
+      -0.35600007,
+      13.657746
+    ],
+    "gripsAfter": 0
+  },
+  "video": {
+    "file": "climb.mp4",
+    "fps": 15,
+    "frames": 33
+  },
+  "gif": "climb.gif",
+  "samplesDir": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-samples",
+  "samples": [
+    {
+      "frame": 0,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0000.png",
+      "phase": "first-grip",
+      "position": [
+        -17.5245,
+        -3.3251896,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 4,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0001.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.5245,
+        -3.7211897,
+        14.9203
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 8,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0002.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.5245,
+        -3.554523,
+        14.9203
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 12,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0003.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.5245,
+        -3.3878562,
+        14.9203
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 16,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0004.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.524103,
+        -3.2211897,
+        14.920286
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 20,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0005.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.523806,
+        -3.2211897,
+        14.920277
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 24,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0006.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.523806,
+        -3.054523,
+        14.920277
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 28,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0007.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.523806,
+        -2.8878565,
+        14.920277
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 32,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0008.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.523806,
+        -2.7211897,
+        14.920277
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 36,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0009.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.523806,
+        -2.7211897,
+        14.920277
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 40,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0010.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.523806,
+        -2.554523,
+        14.920277
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 44,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0011.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.523806,
+        -2.3878565,
+        14.920277
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 48,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0012.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.523806,
+        -2.2211897,
+        14.920277
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 52,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0013.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.523806,
+        -2.2211897,
+        14.920277
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 56,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0014.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.523806,
+        -2.054523,
+        14.920277
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 60,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0015.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.523806,
+        -1.929523,
+        14.920277
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 64,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0016.png",
+      "phase": "hand-over-hand",
+      "position": [
+        -17.523806,
+        -1.869523,
+        14.920277
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ledge"
+        }
+      ],
+      "vaulting": false
+    },
+    {
+      "frame": 68,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0017.png",
+      "phase": "mantle",
+      "position": [
+        -17.523806,
+        -1.6828563,
+        14.920277
+      ],
+      "grips": [],
+      "vaulting": true
+    },
+    {
+      "frame": 72,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0018.png",
+      "phase": "mantle",
+      "position": [
+        -17.523806,
+        -1.4161894,
+        14.920277
+      ],
+      "grips": [],
+      "vaulting": true
+    },
+    {
+      "frame": 76,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0019.png",
+      "phase": "mantle",
+      "position": [
+        -17.523806,
+        -1.1495225,
+        14.920277
+      ],
+      "grips": [],
+      "vaulting": true
+    },
+    {
+      "frame": 80,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0020.png",
+      "phase": "mantle",
+      "position": [
+        -17.523806,
+        -0.8828558,
+        14.920277
+      ],
+      "grips": [],
+      "vaulting": true
+    },
+    {
+      "frame": 84,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0021.png",
+      "phase": "mantle",
+      "position": [
+        -17.523806,
+        -0.6161891,
+        14.920277
+      ],
+      "grips": [],
+      "vaulting": true
+    },
+    {
+      "frame": 88,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0022.png",
+      "phase": "mantle",
+      "position": [
+        -17.523806,
+        -0.35600007,
+        14.920277
+      ],
+      "grips": [],
+      "vaulting": true
+    },
+    {
+      "frame": 92,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0023.png",
+      "phase": "mantle",
+      "position": [
+        -17.471582,
+        -0.35600007,
+        14.658775
+      ],
+      "grips": [],
+      "vaulting": true
+    },
+    {
+      "frame": 96,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0024.png",
+      "phase": "mantle",
+      "position": [
+        -17.41936,
+        -0.35600007,
+        14.397274
+      ],
+      "grips": [],
+      "vaulting": true
+    },
+    {
+      "frame": 100,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0025.png",
+      "phase": "mantle",
+      "position": [
+        -17.367132,
+        -0.35600007,
+        14.135773
+      ],
+      "grips": [],
+      "vaulting": true
+    },
+    {
+      "frame": 104,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0026.png",
+      "phase": "mantle",
+      "position": [
+        -17.314905,
+        -0.35600007,
+        13.874271
+      ],
+      "grips": [],
+      "vaulting": true
+    },
+    {
+      "frame": 108,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0027.png",
+      "phase": "mantle",
+      "position": [
+        -17.271662,
+        -0.35600007,
+        13.657746
+      ],
+      "grips": [],
+      "vaulting": true
+    },
+    {
+      "frame": 112,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0028.png",
+      "phase": "landed",
+      "position": [
+        -17.271662,
+        -0.35600007,
+        13.657746
+      ],
+      "grips": [],
+      "vaulting": false
+    },
+    {
+      "frame": 116,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0029.png",
+      "phase": "landed",
+      "position": [
+        -17.271662,
+        -0.35600007,
+        13.657746
+      ],
+      "grips": [],
+      "vaulting": false
+    },
+    {
+      "frame": 120,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0030.png",
+      "phase": "landed",
+      "position": [
+        -17.271662,
+        -0.35600007,
+        13.657746
+      ],
+      "grips": [],
+      "vaulting": false
+    },
+    {
+      "frame": 124,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0031.png",
+      "phase": "landed",
+      "position": [
+        -17.271662,
+        -0.35600007,
+        13.657746
+      ],
+      "grips": [],
+      "vaulting": false
+    },
+    {
+      "frame": 128,
+      "image": "/var/folders/0m/_rt6msl90g72tqlnw4mcbnf80000gn/T/issue-1745-climb-zaOBZQ/0032.png",
+      "phase": "landed",
+      "position": [
+        -17.271662,
+        -0.35600007,
+        13.657746
+      ],
+      "grips": [],
+      "vaulting": false
+    }
+  ]
+}
