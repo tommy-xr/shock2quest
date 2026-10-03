@@ -492,6 +492,10 @@ on object and creature materials. It defaults to `0` (disabled), ranges from
 `0` to `3` in `0.05` steps, and resets on app restart. Baked lighting and
 authored object lights provide the default illumination; `1` restores ambient. Emissive contributions and runtime spotlights remain independent.
 UI, video, and explicitly fullbright world surfaces keep their existing brightness.
+Debug galleries supply fixed key and fill lights for models without a custom
+lighting rig, so props, creatures, and viewmodels remain visible at zero ambient.
+These lights follow **Object lighting**, **Obj light** (`object_light_brightness`), and
+**Level light intensity**; scenes with their own lamps retain those lamps.
 Gloves, held items, and VR holstered weapons share the
 **Held item light floor** (`held_light_floor`, default `0.15`), which stays
 active even with ambient disabled. Adjust it under **Developer options → Lighting**

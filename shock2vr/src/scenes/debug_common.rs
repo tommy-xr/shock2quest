@@ -12,14 +12,14 @@ use engine::{
     audio::AudioContext,
     scene::{
         SceneObject, basic_material, color_material, create_plane_with_uv_scale, cube,
-        light::SpotLight,
+        light::{LightArray, PointLight, SpotLight},
     },
 };
 use rapier3d::prelude::{Collider, ColliderBuilder, Isometry, SharedShape};
 use shipyard::EntityId;
 
 use crate::{
-    GameOptions,
+    GameOptions, dev_params,
     game_scene::{DebugPlayerStatsRequest, DebugSkillLevelsRequest, DebuggableScene, GameScene},
     input_context::InputContext,
     mission::{
@@ -38,6 +38,47 @@ use crate::{
 
 /// A box of debug geometry: (color, center, size) in world units.
 pub type DebugBox = (Vector3<f32>, Vector3<f32>, Vector3<f32>);
+
+/// Debug galleries have no world-rep light table. Give their models a fixed
+/// key and fill light so setting ambient to zero still leaves shape and texture
+/// visible. Apply after scene hooks, preserving any purpose-built lighting rig.
+/// Per-eye viewmodels use world-space lighting too and need the same pass.
+fn apply_debug_lighting(objects: &mut [SceneObject]) {
+    if !dev_params::get_bool(dev_params::OBJECT_LIGHTING) {
+        return;
+    }
+    let ambient = 0.5 + dev_params::get(dev_params::OBJECT_LIGHT_AMBIENT_BOOST);
+    let mut lights = LightArray::new()
+        .with_object_lighting(
+            vec3(ambient, ambient, ambient),
+            dev_params::get(dev_params::OBJECT_LIGHT_WRAP),
+        )
+        .with_specular(dev_params::get(dev_params::OBJECT_SPECULAR))
+        .with_veins(
+            crate::object_lighting::growth_vein_tuning(),
+            crate::object_lighting::weapon_vein_tuning(),
+        );
+    let brightness = dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS)
+        * dev_params::get(dev_params::LEVEL_LIGHT_INTENSITY);
+    // Broad, neutral lamps cover the standard 48-unit floor. They stay fixed
+    // in the scene when the player turns or walks, unlike a head-mounted lamp.
+    for (position, intensity) in [
+        (vec3(-18.0, 24.0, 12.0), 18.0),
+        (vec3(20.0, 12.0, -16.0), 10.0),
+    ] {
+        lights.add_light(PointLight {
+            position,
+            color_intensity: cgmath::vec4(1.0, 1.0, 1.0, intensity * brightness),
+            range: 150.0,
+        });
+    }
+    let lights = std::rc::Rc::new(lights);
+    for object in objects {
+        if object.lights().is_none() {
+            object.set_lights(Some(lights.clone()));
+        }
+    }
+}
 
 /// Visuals plus one compound collider for a list of boxes. Every piece is a
 /// (visual, collider) pair built from the same box so the two cannot drift:
@@ -274,7 +315,9 @@ impl GameScene for DebugScene {
         asset_cache: &mut AssetCache,
         options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        self.core.render(asset_cache, options)
+        let (mut objects, position, rotation) = self.core.render(asset_cache, options);
+        apply_debug_lighting(&mut objects);
+        (objects, position, rotation)
     }
 
     fn render_per_eye(
@@ -285,8 +328,11 @@ impl GameScene for DebugScene {
         screen_size: Vector2<f32>,
         options: &GameOptions,
     ) -> Vec<SceneObject> {
-        self.core
-            .render_per_eye(asset_cache, view, projection, screen_size, options)
+        let mut objects =
+            self.core
+                .render_per_eye(asset_cache, view, projection, screen_size, options);
+        apply_debug_lighting(&mut objects);
+        objects
     }
 
     fn finish_render(
@@ -505,6 +551,7 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
             asset_cache,
             options,
         );
+        apply_debug_lighting(&mut scene_objects);
         (scene_objects, camera_position, camera_rotation)
     }
 
@@ -516,8 +563,11 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
         screen_size: Vector2<f32>,
         options: &GameOptions,
     ) -> Vec<SceneObject> {
-        self.core
-            .render_per_eye(asset_cache, view, projection, screen_size, options)
+        let mut objects =
+            self.core
+                .render_per_eye(asset_cache, view, projection, screen_size, options);
+        apply_debug_lighting(&mut objects);
+        objects
     }
 
     fn finish_render(
