@@ -133,13 +133,17 @@ impl AnimationPlayer {
         }
     }
 
+    /// Play `animation` next, fading over its own authored blend length. The
+    /// AI queues its next clip once the previous one completes, so the queue
+    /// has normally drained; a clip still playing (a completion reported for a
+    /// request that resolved to no clip) is faded out and dropped, not kept
+    /// underneath to resurface when the new clip ends.
     pub fn queue_animation(
         player: &AnimationPlayer,
         animation: Rc<AnimationClip>,
     ) -> AnimationPlayer {
-        let new_animation = player
-            .animation
-            .push_front((animation.clone(), AnimationFlags::PlayOnce));
+        let new_animation =
+            immutable::List::new().push_front((animation.clone(), AnimationFlags::PlayOnce));
 
         // Fade from the playing clip, or - when the queue already drained (the
         // normal case for AI clips, whose completion handler queues the next
@@ -211,11 +215,10 @@ impl AnimationPlayer {
             })
     }
 
-    /// Play `animation` immediately, replacing the whole queue (unlike
-    /// `queue_animation`, which pushes on top and lets interrupted clips
-    /// resume later). Cross-fades from the interrupted pose over the clip's
-    /// authored blend length, floored so a zero-blend clip doesn't pop when
-    /// it cuts a clip mid-play.
+    /// Play `animation` immediately as an interruption: cross-fades from the
+    /// interrupted pose over the clip's authored blend length, floored so a
+    /// zero-blend clip doesn't pop when it cuts a clip mid-play (unlike
+    /// `queue_animation`, which honors the authored length exactly).
     pub fn play_animation(
         player: &AnimationPlayer,
         animation: Rc<AnimationClip>,
@@ -847,6 +850,27 @@ mod tests {
         // holding it while the root keeps moving
         assert_eq!(completed_at, Some(4));
         assert!((travelled - 2.0).abs() < 1e-3, "travelled {travelled}");
+    }
+
+    #[test]
+    fn a_clip_queued_over_a_playing_one_never_lets_it_resurface() {
+        let named = |name: &str| {
+            let mut clip = (*clip_with_root_motion()).clone();
+            clip.name = Some(name.to_owned());
+            Rc::new(clip)
+        };
+        let tick = Duration::from_millis(50);
+        let player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), named("idle"));
+        let (player, _, _, _) = AnimationPlayer::update(&player, tick);
+        // "idle" is mid-play when the next clip arrives
+        let mut player = AnimationPlayer::queue_animation(&player, named("stride"));
+        for _ in 0..20 {
+            player = AnimationPlayer::update(&player, tick).0;
+            if let Some((clip, _)) = player.animation.first() {
+                assert_eq!(clip.name.as_deref(), Some("stride"), "idle resurfaced");
+            }
+        }
+        assert!(player.animation.is_empty());
     }
 
     #[test]
