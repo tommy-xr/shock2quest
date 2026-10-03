@@ -1074,10 +1074,10 @@ impl AnimatedMonsterAI {
     /// the AI is holding this frame.
     fn update_door_wait(&mut self, world: &World, entity_id: EntityId, time: &Time) -> Option<f32> {
         let (door_ent, waited) = self.door_wait?;
-        // Only a pursuing behavior opens doors, so only a pursuing behavior
-        // waits at one; anything else (a scripted performance takes over, the
-        // AI calms down) walks away from the doorway rather than holding.
-        if !matches!(self.current_behavior.borrow().name(), "Chase" | "Search") {
+        // Only a behavior that opens doors waits at one; anything else (a
+        // scripted performance takes over, the AI calms down) walks away from
+        // the doorway rather than holding.
+        if !self.current_behavior.borrow().opens_doors() {
             self.door_wait = None;
             return None;
         }
@@ -1317,9 +1317,9 @@ impl AnimatedMonsterAI {
         if self.door_cooldown > 0.0 {
             return Effect::NoEffect;
         }
-        // Only actively-pursuing behaviors bother with doors (cheap check
-        // left off the cooldown so a state change is noticed promptly)
-        if !matches!(self.current_behavior.borrow().name(), "Chase" | "Search") {
+        // Only behaviors that open doors bother with them (cheap check left
+        // off the cooldown so a state change is noticed promptly)
+        if !self.current_behavior.borrow().opens_doors() {
             return Effect::NoEffect;
         }
         // The scan below (cell_from_position is O(cells) + a graph BFS) runs
@@ -1375,6 +1375,11 @@ impl AnimatedMonsterAI {
             }
 
             if script_util::is_entity_locked(world, door_ent) {
+                // A scripted walk is not a pursuit to give up: it just cannot
+                // open this door (its route, or its timeout, decides the rest)
+                if self.current_behavior.borrow().scripted_state() != ScriptedState::NotScripted {
+                    continue;
+                }
                 // Can't follow through a locked door: show frustration and
                 // give up the pursuit (drop to a wander), so the player can't
                 // lure the AI into off-limits areas. Forget the last-known

@@ -44,6 +44,10 @@ impl Behavior for ChaseBehavior {
         "Chase"
     }
 
+    fn opens_doors(&self) -> bool {
+        true
+    }
+
     fn turn_speed(&self) -> Deg<f32> {
         Deg(360.0)
     }
