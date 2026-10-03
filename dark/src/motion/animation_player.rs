@@ -344,6 +344,16 @@ impl AnimationPlayer {
         } else {
             let (current_clip, flags) = maybe_current_clip.unwrap();
             let looping = matches!(flags, AnimationFlags::Loop);
+            // Frames the clip plays across. A loop wraps from its last keyframe
+            // back to the first; a one-shot ends ON its last keyframe rather than
+            // holding it for another frame period, so a chained clip (the next
+            // stride) picks up without a frozen pose or a skating root at every
+            // seam. A single-keyframe pose still lasts one frame.
+            let span = if looping {
+                current_clip.num_frames
+            } else {
+                current_clip.num_frames.saturating_sub(1).max(1)
+            };
             let mut next_frame = player.current_frame;
             let time_per_frame = current_clip.time_per_frame.as_secs_f32();
             // The ramp anchor: everything up to rotation_pos has already been
@@ -362,7 +372,7 @@ impl AnimationPlayer {
             // playthrough applies exactly the authored rotation.
             let direction_delta = |end_pos: f32, events: &mut Vec<AnimationEvent>| {
                 if current_clip.end_rotation != Deg(0.0) && current_clip.num_frames > 0 {
-                    let fraction = (end_pos - prev_pos).max(0.0) / current_clip.num_frames as f32;
+                    let fraction = (end_pos - prev_pos).max(0.0) / span as f32;
                     if fraction > 0.0 {
                         events.push(AnimationEvent::DirectionChanged(Deg(current_clip
                             .end_rotation
@@ -395,7 +405,7 @@ impl AnimationPlayer {
             let end_pos = if looping {
                 raw_end_pos
             } else {
-                raw_end_pos.min(current_clip.num_frames as f32)
+                raw_end_pos.min(span as f32)
             };
             let velocity = current_clip
                 .root_travel(start_pos, end_pos, looping)
@@ -414,7 +424,7 @@ impl AnimationPlayer {
                 output
             };
 
-            if next_frame >= current_clip.num_frames {
+            if next_frame >= span {
                 let mut events = Vec::new();
 
                 events.push(AnimationEvent::Completed);
@@ -447,7 +457,7 @@ impl AnimationPlayer {
                         // Final ramp segment: up to the clip's exact end
                         // (hitch overshoot doesn't over-rotate, matching the
                         // sub-frame carry below).
-                        direction_delta(current_clip.num_frames as f32, &mut events);
+                        direction_delta(span as f32, &mut events);
                         let last_animation = player.animation.first().map(|m| m.0.clone());
                         let animation = player.animation.drop_first().unwrap_or_default();
                         // Carry the sub-frame remainder past the final frame
@@ -774,6 +784,37 @@ mod tests {
         }
         // Each cycle covers the authored unit plus the trailing stride (zero here).
         assert!((travelled.x - 4.0).abs() < 1e-3, "got {travelled:?}");
+    }
+
+    #[test]
+    fn a_one_shot_ends_on_its_last_keyframe_without_skating_past_it() {
+        // Three keyframes walking one unit each: two frame periods of motion
+        let mut stride = (*clip_with_root_motion()).clone();
+        stride.root_positions = vec![
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 0.0, 0.0),
+            vec3(2.0, 0.0, 0.0),
+        ];
+        let mut player =
+            AnimationPlayer::queue_animation(&AnimationPlayer::empty(), Rc::new(stride));
+        let tick = Duration::from_millis(50);
+        let mut travelled = 0.0;
+        let mut completed_at = None;
+        for tick_index in 1..=8 {
+            let (next, _, events, velocity) = AnimationPlayer::update(&player, tick);
+            travelled += velocity.x * tick.as_secs_f32();
+            let completed = events
+                .iter()
+                .any(|event| matches!(event, AnimationEvent::Completed));
+            if completed_at.is_none() && completed {
+                completed_at = Some(tick_index);
+            }
+            player = next;
+        }
+        // Reaching the last keyframe (200 ms) is the end: no extra frame period
+        // holding it while the root keeps moving
+        assert_eq!(completed_at, Some(4));
+        assert!((travelled - 2.0).abs() < 1e-3, "travelled {travelled}");
     }
 
     #[test]
