@@ -485,6 +485,10 @@ pub struct PropGunSettingHeader2(pub String);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropObjName(pub String);
 
+/// Authored use hint beneath the selection brackets, resolved in HUDUSE.STR.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropHUDUse(pub String);
+
 /// How the original Shock UI substitutes placeholders in an object's localized
 /// long/short name (`P$NameType` / `ObjNameType`).
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -2193,6 +2197,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$HUDUse",
+            read_variable_length_string,
+            PropHUDUse,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$ObjName",
             read_variable_length_string,
             PropObjName,
@@ -3296,6 +3306,27 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn hud_use_is_registered_as_a_variable_length_string() {
+        let (definitions, _, _) = get::<Cursor<Vec<u8>>>();
+        let definition = definitions
+            .into_iter()
+            .find(|property| property.name() == "P$HUDUse")
+            .expect("HUDUse must parse the authored use hint");
+        let raw = b"containers\0";
+        let mut bytes = (raw.len() as u32).to_le_bytes().to_vec();
+        bytes.extend_from_slice(raw);
+        let len = bytes.len() as u32;
+        let mut cursor = Cursor::new(bytes);
+        let property = definition.read(&mut cursor, len);
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        property.initialize(&mut world, entity);
+        assert_eq!(cursor.position(), u64::from(len));
+        let hints = world.borrow::<View<PropHUDUse>>().unwrap();
+        assert_eq!(hints.get(entity).unwrap().0, "containers");
+    }
 
     #[test]
     fn object_name_type_reads_retail_variants_and_preserves_unknown_values() {
