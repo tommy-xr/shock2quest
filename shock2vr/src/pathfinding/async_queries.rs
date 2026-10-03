@@ -33,6 +33,9 @@ pub struct PathQueryRequest {
     /// steering-reported blocked crossings (see
     /// `PathfindingService::report_blocked_link`)
     pub now_seconds: f32,
+    /// Accept a floor stacked under the goal when its own has no route (see
+    /// `PathfindingService::find_path_to_any_floor_avoiding`)
+    pub any_floor: bool,
 }
 
 /// The computed route (or lack of one) for an entity's latest request
@@ -90,22 +93,30 @@ impl AsyncPathfinding {
                     // grinding on it, without cutting the crossing out from
                     // under every other AI
                     let avoid = service.avoidance(request.entity, request.now_seconds);
-                    let path = service
-                        .find_path_avoiding(
+                    let path = if request.any_floor {
+                        service.find_path_to_any_floor_avoiding(
                             request.start,
                             request.goal,
                             request.movement_bits,
                             &avoid,
                         )
-                        .or_else(|| {
-                            outcome = AiPathOutcome::Partial;
-                            service.find_path_toward_avoiding(
-                                request.start,
-                                request.goal,
-                                request.movement_bits,
-                                &avoid,
-                            )
-                        });
+                    } else {
+                        service.find_path_avoiding(
+                            request.start,
+                            request.goal,
+                            request.movement_bits,
+                            &avoid,
+                        )
+                    }
+                    .or_else(|| {
+                        outcome = AiPathOutcome::Partial;
+                        service.find_path_toward_avoiding(
+                            request.start,
+                            request.goal,
+                            request.movement_bits,
+                            &avoid,
+                        )
+                    });
                     let waypoints = match path {
                         Some(waypoints) => waypoints,
                         None => {
@@ -228,6 +239,7 @@ mod tests {
             goal: cgmath::vec3(5.0, 0.0, 1.0),
             movement_bits: MovementBits::WALK,
             now_seconds: 0.0,
+            any_floor: false,
         }));
         let response = wait_for_result(&async_pf, 7).expect("worker must respond");
         assert_eq!(response.outcome, AiPathOutcome::Full);
@@ -254,6 +266,7 @@ mod tests {
             goal: cgmath::vec3(500.0, 0.0, 500.0),
             movement_bits: MovementBits::WALK,
             now_seconds: 0.0,
+            any_floor: false,
         }));
         let response = wait_for_result(&async_pf, 9).expect("worker must respond");
         assert_ne!(response.outcome, AiPathOutcome::Full);
@@ -285,6 +298,7 @@ mod tests {
             goal: cgmath::vec3(5.0, 0.0, 1.0),
             movement_bits: MovementBits::WALK,
             now_seconds: 1.0,
+            any_floor: false,
         }));
         let response = wait_for_result(&async_pf, 11).expect("worker must respond");
         assert_eq!(response.outcome, AiPathOutcome::Partial);
@@ -308,6 +322,7 @@ mod tests {
             goal: cgmath::vec3(5.0, 0.0, 1.0),
             movement_bits: MovementBits::WALK,
             now_seconds: 1.0,
+            any_floor: false,
         }));
         let response = wait_for_result(&async_pf, 12).expect("worker must respond");
         assert_eq!(
@@ -343,6 +358,7 @@ mod tests {
             goal: cgmath::vec3(21.0, 0.0, 1.0),
             movement_bits: MovementBits::WALK,
             now_seconds: 0.0,
+            any_floor: false,
         }));
         let response = wait_for_result(&async_pf, 31).expect("worker must respond");
         assert_ne!(response.outcome, AiPathOutcome::Full);
@@ -357,6 +373,7 @@ mod tests {
             goal: cgmath::vec3(5.0, 0.0, 1.0),
             movement_bits: MovementBits::WALK,
             now_seconds: 0.0,
+            any_floor: false,
         }));
         let response = wait_for_result(&async_pf, 32).expect("worker must respond");
         assert_ne!(response.outcome, AiPathOutcome::Full);
@@ -384,6 +401,7 @@ mod tests {
             goal: cgmath::vec3(5.0, 0.0, 1.0),
             movement_bits: MovementBits::WALK,
             now_seconds: 1.0,
+            any_floor: false,
         }));
         let response = wait_for_result(&async_pf, 21).expect("worker must respond");
         assert_eq!(response.outcome, AiPathOutcome::Full);
