@@ -613,11 +613,12 @@ const MIN_LOADING_FRAMES: u32 = 24;
 /// "% Transfer Completed" with no numeric readout, so a stepped fill is faithful.
 const PROGRESS_PARSING: f32 = 0.25;
 const PROGRESS_PARSE_DONE: f32 = 0.65;
-/// Shown just before the blocking build, which submits no frames; the bar sits here
+/// Transfer complete: shown before the blocking build, which submits no frames.
+/// The bar sits here
 /// until the built mission swaps in. It stays visible only because the build blocks
 /// presentation, so the last rendered frame persists (the desktop window keeps it,
 /// the Quest compositor reprojects it).
-const PROGRESS_BUILDING: f32 = 0.9;
+const PROGRESS_BUILDING: f32 = 1.0;
 /// Frames the parse-done fill is held (and rendered) before the build is allowed to
 /// start. A deliberate ~0.2s (at 60fps) added to every transition: without at least
 /// one rendered frame per later checkpoint, `finish_transition` would run the same
@@ -665,6 +666,8 @@ pub struct Game {
     active_game_scene: Box<dyn GameScene>,
     /// Set while a deferred transition is in flight (loading screen showing).
     pending_transition: Option<PendingTransition>,
+    /// Completed loading panel releasing over the new mission.
+    loading_exit: Option<LoadingScene>,
     /// Set while a cutscene stands in for the scene that queued the transition
     /// following it. See [`PreservedSceneState`].
     preserved_scene_state: Option<PreservedSceneState>,
@@ -867,6 +870,13 @@ impl Game {
     /// while otherwise idle.
     pub fn has_pending_transition(&self) -> bool {
         self.pending_transition.is_some()
+    }
+
+    /// Finish the presentation of an already-built level without advancing
+    /// its simulation. The debug runtime's immediate-transition mode uses this
+    /// after pumping the loader; deferred/shipping transitions release normally.
+    pub fn finish_loading_presentation(&mut self) {
+        self.loading_exit = None;
     }
 
     /// Model name, world holds and face normal of the ladder entity `id` (see
@@ -1244,7 +1254,13 @@ impl Game {
             *status = pending.hazards;
             status.reset_ambient();
         }
+        let loading_exit = self
+            .active_game_scene
+            .as_any_mut()
+            .and_then(|scene| scene.downcast_mut::<LoadingScene>())
+            .map(LoadingScene::take_exit);
         self.set_active_scene(Box::new(mission));
+        self.loading_exit = loading_exit;
         self.campaign_completed = false;
 
         for entity_name in pending.entities_to_trigger {
@@ -1559,6 +1575,7 @@ impl Game {
             audio_context,
             active_game_scene,
             pending_transition: None,
+            loading_exit: None,
             preserved_scene_state: None,
             global_context: Arc::new(global_context),
             last_env_sound: None,
@@ -1671,6 +1688,19 @@ impl Game {
                 .and_then(|scene| scene.downcast_mut::<LoadingScene>())
             {
                 scene.set_progress(progress);
+            }
+        }
+
+        // Present the destination while the completed panel releases. Keep
+        // gameplay and queued inputs suspended until the player can see it;
+        // tracked head motion still reaches the renderer above.
+        if let Some(exit) = self.loading_exit.as_mut() {
+            if exit.advance_exit(delta_time) {
+                self.loading_exit = None;
+            } else {
+                self.time_suspended += time.elapsed;
+                actions.clear_triggered();
+                return;
             }
         }
 
@@ -2522,6 +2552,7 @@ impl Game {
     /// what it owns beyond its own frame (see [`GameScene::on_exit`]). Every
     /// scene swap goes through here so that hook cannot be forgotten.
     fn set_active_scene(&mut self, scene: Box<dyn GameScene>) {
+        self.loading_exit = None;
         self.weapon_buttons.cancel(self.active_game_scene.world());
         self.active_game_scene.on_exit(&mut self.audio_context);
         self.audio_context.stop_ambient_sounds();
@@ -2801,6 +2832,15 @@ impl Game {
             ));
         }
 
+        if let Some(exit) = self.loading_exit.as_mut() {
+            let (mut objects, _, _) = exit.render(&mut self.asset_cache, &self.options);
+            for object in &mut objects {
+                object.set_transform(pawn_to_world * object.get_transform());
+                object.set_render_layer(RenderLayer::SystemOverlay);
+            }
+            scene.extend(objects);
+        }
+
         let mut pause_objects = self.pause_menu.render(
             &mut self.asset_cache,
             &self.options,
@@ -2879,6 +2919,20 @@ impl Game {
             if object.render_layer() == RenderLayer::World {
                 object.set_render_layer(RenderLayer::SceneUi);
             }
+        }
+
+        if let Some(exit) = self.loading_exit.as_mut() {
+            let mut objects = exit.render_per_eye(
+                &mut self.asset_cache,
+                view,
+                projection,
+                screen_size,
+                &self.options,
+            );
+            for object in &mut objects {
+                object.set_render_layer(RenderLayer::SystemOverlay);
+            }
+            objs.extend(objects);
         }
 
         let mut pause_objects =
@@ -3050,7 +3104,7 @@ mod tests {
 
     /// The build checkpoint must actually render: the last frame before
     /// `transition_ready` fires shows PROGRESS_BUILDING. Weakening `ready`'s
-    /// strict `>` to `>=` would silently delete the 0.9 state (#1005).
+    /// strict `>` to `>=` would silently delete the completed state (#1005).
     #[test]
     fn the_build_fill_renders_before_the_transition_finishes() {
         let done = MIN_LOADING_FRAMES; // parse finished after the minimum display

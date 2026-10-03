@@ -1226,6 +1226,9 @@ fn complete_pending_transition(
         pumped += 1;
         thread::sleep(Duration::from_secs_f32(FIXED_STEP_DT));
     }
+    if !game.has_pending_transition() {
+        game.finish_loading_presentation();
+    }
 }
 
 fn process_command(
