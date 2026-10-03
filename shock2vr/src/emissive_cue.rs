@@ -32,14 +32,22 @@ fn charge_fraction(world: &World, item: EntityId) -> Option<f32> {
     if !is_high_tech_gun(world, item) {
         return None;
     }
-    let capacity = crate::scripts::script_util::active_gun_setting(world, item)?.clip;
+    let setting = crate::scripts::script_util::active_gun_setting(world, item)?;
     let ammo = world
         .borrow::<View<PropGunState>>()
         .ok()?
         .get(item)
         .ok()?
         .ammo;
-    (capacity > 0).then(|| ammo as f32 / capacity as f32)
+    if setting.clip <= 0 {
+        return None;
+    }
+    // Too little left for one more shot reads as empty (the laser pistol
+    // spends 3 a shot, so it can stall at 2).
+    if ammo < setting.ammo_usage.max(1) {
+        return Some(0.0);
+    }
+    Some(ammo as f32 / setting.clip as f32)
 }
 
 /// Energy (laser pistol, EMP rifle) and Heavy (fusion cannon) weapons: the
@@ -92,6 +100,7 @@ mod tests {
         )])));
         let setting = GunSettingDesc {
             clip: 20,
+            ammo_usage: 3,
             ..GunSettingDesc::default()
         };
         let gun = world.add_entity((
@@ -118,6 +127,8 @@ mod tests {
         assert_eq!(charge_fraction(&world, energy), Some(0.25));
         let (world, heavy) = gun(-15, 20);
         assert_eq!(charge_fraction(&world, heavy), Some(1.0));
+        let (world, stalled) = gun(-14, 2);
+        assert_eq!(charge_fraction(&world, stalled), Some(0.0));
         let (world, standard) = gun(-13, 5);
         assert_eq!(charge_fraction(&world, standard), None);
     }
