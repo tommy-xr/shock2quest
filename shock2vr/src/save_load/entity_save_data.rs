@@ -32,6 +32,9 @@ pub struct EntitySaveData {
     /// Equipped hazard armor/implant identities; remapped with carried entities.
     #[serde(default)]
     pub hazard_equipment: Vec<u64>,
+    /// Objects whose panel the player has opened; remapped like hazard gear.
+    #[serde(default)]
+    pub searched: Vec<u64>,
     pub implant_slots: HashMap<u64, crate::runtime_props::RuntimePropImplantSlot>,
     /// Current/alternate power templates, owned and remapped with each amp.
     #[serde(default)]
@@ -86,6 +89,7 @@ impl EntitySaveData {
             links: HashMap::new(),
             death_poses: HashMap::new(),
             hazard_equipment: Vec::new(),
+            searched: Vec::new(),
             implant_slots: HashMap::new(),
             amp_selections: HashMap::new(),
             selected_ammo: HashMap::new(),
@@ -169,6 +173,13 @@ impl EntitySaveData {
                 }
             }
         }
+        for id in &self.searched {
+            if let Some(old) = EntityId::from_inner(*id) {
+                if let Some(new) = old_entity_id_to_new_entity_id.get(&old) {
+                    world.add_component(*new, crate::runtime_props::RuntimePropSearched);
+                }
+            }
+        }
         for (old_entity_id, death_pose) in &self.death_poses {
             let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
             if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
@@ -249,6 +260,37 @@ mod tests {
     use crate::scripts::{SavedScriptState, ScriptState, ScriptStateIdentity};
     use dark::properties::{Link, ToLink};
     use shipyard::{Get, View};
+
+    #[test]
+    fn a_searched_container_stays_searched_across_a_save() {
+        use crate::mission::{GlobalTemplateIdMap, PlayerInfo};
+        use crate::runtime_props::{RuntimePropDoNotSerialize, RuntimePropSearched};
+        let mut world = World::new();
+        let player = world.add_entity(RuntimePropDoNotSerialize);
+        let inventory = world.add_entity(());
+        let searched = world.add_entity(RuntimePropSearched);
+        let unsearched = world.add_entity(());
+        world.add_unique(GlobalTemplateIdMap(HashMap::new()));
+        world.add_unique(PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            inventory_entity_id: inventory,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+        });
+        let (saved, _) = crate::save_load::to_save_data(&world);
+        let encoded = serde_json::to_string(&saved).unwrap();
+        let decoded: EntitySaveData = serde_json::from_str(&encoded).unwrap();
+        let mut restored = World::new();
+        for _ in 0..20 {
+            restored.add_entity(());
+        }
+        let (_, remapped) = decoded.instantiate(&mut restored);
+        let markers = restored.borrow::<View<RuntimePropSearched>>().unwrap();
+        assert!(markers.contains(remapped[&searched]));
+        assert!(!markers.contains(remapped[&unsearched]));
+    }
 
     #[test]
     fn player_projectile_ownership_round_trips_without_marking_enemy_shots() {

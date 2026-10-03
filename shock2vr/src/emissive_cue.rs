@@ -1,12 +1,24 @@
 //! Item state read off the glow of a held item's authored emissive parts
 //! (the 25AE models give them their own material slot), e.g. the psi amp's
 //! strip dims as psi points drain and the fusion cannon's tubes as it
-//! empties. Only scales emissivity the art already has, so models without a
-//! glowing part are unaffected.
-use dark::properties::{PropGunState, PropWeaponType};
+//! empties; a looted crate's lights go out. Only scales emissivity the art
+//! already has, so models without a glowing part are unaffected.
+use dark::properties::{Link, Links, PropGunState, PropWeaponType};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
-use crate::{dev_params, time::Time};
+use crate::{
+    dev_params, mission::mission_core::GlobalTemplateHierarchy, runtime_props::RuntimePropSearched,
+    time::Time,
+};
+
+/// Crates and lockers, whose glow reports their contents. Desks run the same
+/// loot script, but their glow is a console screen, so they are left out.
+const LOOT_CONTAINER_TEMPLATES: [i32; 4] = [
+    -122,  // Crate #1
+    -941,  // Small Trioptimum Crate
+    -1303, // Locker
+    -1886, // Hackable Crate (and the SuperCrate below it)
+];
 
 /// Glow left at a sliver of charge, so "low" still reads as "on".
 const FLOOR: f32 = 0.25;
@@ -22,6 +34,50 @@ pub(crate) fn held_scale(world: &World, item: EntityId) -> Option<f32> {
     let secs = world.borrow::<UniqueView<Time>>().ok()?.total.as_secs_f32();
     let flicker = dev_params::get_bool(dev_params::EMISSIVE_CUE_FLICKER);
     Some(glow(fraction, secs, flicker))
+}
+
+/// Emissivity scale for an item in the world: a searched loot container with
+/// nothing left to take (emptied, or ruined by a failed hack) goes dark, so it
+/// reads as searched from across the room. Unsearched ones keep their glow,
+/// so it never gives away which crates are worth opening.
+pub(crate) fn world_scale(world: &World, entity: EntityId) -> Option<f32> {
+    if !dev_params::get_bool(dev_params::EMISSIVE_CUES) {
+        return None;
+    }
+    let searched = world
+        .borrow::<View<RuntimePropSearched>>()
+        .is_ok_and(|searched| searched.contains(entity));
+    if !searched || !is_loot_container(world, entity) {
+        return None;
+    }
+    let spent = !contains_anything(world, entity)
+        || crate::scripts::gui::hackable_crate::is_ruined(world, entity);
+    spent.then_some(0.0)
+}
+
+fn is_loot_container(world: &World, entity: EntityId) -> bool {
+    let Some(template) = crate::scripts::script_util::entity_class_template_id(world, entity)
+    else {
+        return false;
+    };
+    world
+        .borrow::<UniqueView<GlobalTemplateHierarchy>>()
+        .is_ok_and(|h| {
+            LOOT_CONTAINER_TEMPLATES
+                .iter()
+                .any(|&loot| h.is_or_descends_from(template, loot))
+        })
+}
+
+fn contains_anything(world: &World, container: EntityId) -> bool {
+    world.borrow::<View<Links>>().is_ok_and(|links| {
+        links.get(container).is_ok_and(|links| {
+            links
+                .to_links
+                .iter()
+                .any(|link| matches!(link.link, Link::Contains(_)))
+        })
+    })
 }
 
 /// How full `item` is, for the items whose glow reports it.
@@ -134,6 +190,47 @@ mod tests {
         );
         let (world, standard) = gun(STANDARD, 5);
         assert_eq!(charge_fraction(&world, standard), None);
+    }
+
+    /// An entity running `script` that holds `items` things.
+    /// A searched-or-not entity of `template` holding `items` things.
+    fn container(template: i32, items: usize, searched: bool) -> (World, EntityId) {
+        use dark::properties::{PropTemplateId, ToLink, WrappedEntityId};
+        let mut world = World::new();
+        world.add_unique(GlobalTemplateHierarchy(std::collections::HashMap::new()));
+        let to_links = (0..items)
+            .map(|_| ToLink {
+                to_template_id: 0,
+                to_entity_id: Some(WrappedEntityId(world.add_entity(()))),
+                link: Link::Contains(0),
+            })
+            .collect();
+        let entity = world.add_entity((
+            PropTemplateId {
+                template_id: template,
+            },
+            Links { to_links },
+        ));
+        if searched {
+            world.add_component(entity, RuntimePropSearched);
+        }
+        (world, entity)
+    }
+
+    #[test]
+    fn only_an_emptied_loot_container_goes_dark() {
+        const LOCKER: i32 = -1303;
+        const DESK: i32 = -119;
+        let (world, full) = container(LOCKER, 1, true);
+        assert_eq!(world_scale(&world, full), None);
+        let (world, emptied) = container(LOCKER, 0, true);
+        assert_eq!(world_scale(&world, emptied), Some(0.0));
+        // Unsearched never gives away that it is empty.
+        let (world, unsearched) = container(LOCKER, 0, false);
+        assert_eq!(world_scale(&world, unsearched), None);
+        // A desk's glow is its screen, not its contents.
+        let (world, desk) = container(DESK, 0, true);
+        assert_eq!(world_scale(&world, desk), None);
     }
 
     #[test]

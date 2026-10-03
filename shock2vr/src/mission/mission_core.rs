@@ -10577,6 +10577,8 @@ impl MissionCore {
                     effects.push_front(Effect::SpendPsiPoints { amount: cost });
                 }
                 Effect::OpenPanel { entity } => {
+                    self.world
+                        .add_component(entity, crate::runtime_props::RuntimePropSearched);
                     if self.flat_ui.utilities.has_left_panel() {
                         self.flat_ui.utilities = Default::default();
                     }
@@ -15599,9 +15601,16 @@ impl MissionCore {
                 } else {
                     visual_xform
                 };
-                let emissivity_scale = held
-                    .then(|| crate::emissive_cue::held_scale(&self.world, *entity_id))
-                    .flatten();
+                // Only models with authored glow can show a cue; skip the
+                // lookups for everything else (nearly every entity).
+                let glows = scene_objs
+                    .iter()
+                    .any(|o| o.material.borrow().emissivity() > 0.0);
+                let emissivity_scale = match (glows, held) {
+                    (false, _) => None,
+                    (true, true) => crate::emissive_cue::held_scale(&self.world, *entity_id),
+                    (true, false) => crate::emissive_cue::world_scale(&self.world, *entity_id),
+                };
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(visual_xform);
