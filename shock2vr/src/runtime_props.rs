@@ -151,6 +151,10 @@ pub struct RuntimePropObjectArticulation(
 #[derive(Component)]
 pub struct RuntimePropDoNotSerialize;
 
+/// Cosmetic child owned by the StunFX lifecycle; recreated from saved AI state.
+#[derive(Component)]
+pub struct RuntimePropStunFx;
+
 // RuntimePropProxyEntity - pointer to the parent entity (for example, hitboxes use this to point to the parent entity)
 #[derive(Component)]
 pub struct RuntimePropProxyEntity(pub shipyard::EntityId);
