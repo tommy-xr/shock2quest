@@ -120,6 +120,11 @@ impl Behavior for ScriptedSequenceBehavior {
         self.current_scripted_action.borrow().is_locomotion()
     }
 
+    /// A scripted walk (a goto) opens the doors on its way, like pursuit.
+    fn opens_doors(&self) -> bool {
+        self.is_locomotion()
+    }
+
     fn steer(
         &mut self,
         current_heading: Deg<f32>,

@@ -201,6 +201,10 @@ pub struct PathFollowSteeringStrategy {
     /// Escalations spent on the current stall incident; reset once the body
     /// actually moves
     stall_escalations: u32,
+    /// Bumped whenever `path` is replaced or cleared, so the route published
+    /// to the service is refreshed only when it changes
+    path_version: u64,
+    published_path_version: Option<u64>,
 }
 
 impl PathFollowSteeringStrategy {
@@ -238,11 +242,14 @@ impl PathFollowSteeringStrategy {
             whiskers: WhiskerAvoidance::new(),
             stall_route_cells: None,
             stall_escalations: 0,
+            path_version: 0,
+            published_path_version: None,
         }
     }
 
     fn clear_path(&mut self) {
         self.path.clear();
+        self.path_version += 1;
         self.next_waypoint = 0;
         self.path_goal = None;
         self.reset_stall();
@@ -421,6 +428,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                             .then_some(response.exclusion_expires_at)
                             .flatten();
                         self.path = response.waypoints;
+                        self.path_version += 1;
                         self.path_goal = Some(response.goal);
                         // waypoint 0 is the position the query started from
                         self.next_waypoint = 1;
@@ -557,6 +565,10 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
 
         self.next_waypoint = advance_waypoint(position, &self.path, self.next_waypoint);
 
+        if self.published_path_version != Some(self.path_version) {
+            self.published_path_version = Some(self.path_version);
+            service.record_ai_followed_route(entity_id.inner(), self.path.clone());
+        }
         service.record_ai_steering(
             entity_id.inner(),
             crate::pathfinding::AiSteeringDebug {
@@ -564,6 +576,9 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 path_len: self.path.len(),
                 target: self.path.get(self.next_waypoint).copied(),
                 stall_seconds: self.stall_seconds,
+                published_at: time.total.as_secs_f32(),
+                awaiting_route: self.path.is_empty()
+                    && async_pathfinding.is_pending(entity_id.inner()),
             },
         );
 

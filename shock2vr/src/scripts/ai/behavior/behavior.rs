@@ -114,6 +114,12 @@ pub trait Behavior {
         false
     }
 
+    /// Whether the AI opens an unlocked door in its way, and waits for it to
+    /// swing clear: pursuit, investigation and a scripted walk do.
+    fn opens_doors(&self) -> bool {
+        false
+    }
+
     /// Whether an alertness level change may replace this behavior. False for
     /// a behavior counting down a commitment it must not restart (see
     /// `SelfDestructBehavior`).

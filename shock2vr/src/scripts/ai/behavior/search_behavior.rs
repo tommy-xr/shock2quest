@@ -104,6 +104,10 @@ impl Behavior for SearchBehavior {
         "Search"
     }
 
+    fn opens_doors(&self) -> bool {
+        true
+    }
+
     fn steer(
         &mut self,
         current_heading: Deg<f32>,
