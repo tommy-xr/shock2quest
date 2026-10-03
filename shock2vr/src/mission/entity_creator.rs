@@ -1412,7 +1412,7 @@ fn create_physics_representation_with_options(
         // Only *fixtures* read their authored shape here. A MOVE frob is a
         // carryable item, and those keep the dynamic model-bounds body they
         // have always had: an item's authored sphere is a point-sized marble
-        // (the Wrench's is 0.046 across) that Dark rests through its own
+        // (the Wrench's is 0.092 across) that Dark rests through its own
         // sleep/support bookkeeping, which this port does not model - dropped
         // into rapier it starts unsupported and sinks through the surface the
         // item was authored on (see the Korenchin Log and Modify Soft V2 in
@@ -1884,10 +1884,8 @@ fn live_creature_shape_for_height(
     // Dark drives a live creature's sphere submodels from animated joints and
     // applies the creature descriptor's per-submodel radii (`SetPhysSubModScale`),
     // rather than using the animation model's visual width as collision. The
-    // instantiated P$PhysDims mirrors those radii. This importer's historical
-    // representation stores each Dark radius at half its scaled value, so the
-    // conversion is deliberately scoped to live-creature SPHERE models; loose
-    // props keep their existing parser/physics semantics.
+    // instantiated P$PhysDims mirrors those radii, already converted into
+    // world units by the property reader.
     let imported_radii = [dimensions.radius0, dimensions.radius1];
     let declared_radii = &imported_radii[..phys_type.num_submodels as usize];
     if declared_radii
@@ -1896,7 +1894,7 @@ fn live_creature_shape_for_height(
     {
         return fallback();
     }
-    let radius = declared_radii.iter().copied().fold(0.0, f32::max) * 2.0;
+    let radius = declared_radii.iter().copied().fold(0.0, f32::max);
     let segment_height = full_height - radius * 2.0;
     if !radius.is_finite() || radius <= 0.0 || !segment_height.is_finite() {
         return fallback();
@@ -2206,8 +2204,8 @@ mod tests {
                 is_special: true,
             },
             PropPhysDimensions {
-                radius0: 0.3,
-                radius1: 0.3,
+                radius0: 0.6,
+                radius1: 0.6,
                 offset0: Vector3::zero(),
                 offset1: Vector3::zero(),
                 size: Vector3::zero(),
@@ -2257,7 +2255,7 @@ mod tests {
                 tool_action: FrobFlag::empty(),
             },
             sphere_type(2),
-            sphere_dimensions(0.16, 0.2),
+            sphere_dimensions(0.32, 0.4),
         ));
         let model = Model::from_glb(
             vec![],
@@ -2305,7 +2303,7 @@ mod tests {
             &baby,
             Some(0.71),
             Some(&sphere_type(2)),
-            Some(&sphere_dimensions(0.16, 0.2)),
+            Some(&sphere_dimensions(0.32, 0.4)),
         ));
         assert!((radius - 0.4).abs() < 0.001);
         assert!((segment - 0.01).abs() < 0.001);
@@ -2387,7 +2385,7 @@ mod tests {
     fn live_creature_shape_uses_largest_declared_sphere_radius() {
         let rumbler = get_creature_definition(3).unwrap();
         let two_spheres = sphere_type(2);
-        let dimensions = sphere_dimensions(0.25, 0.3);
+        let dimensions = sphere_dimensions(0.5, 0.6);
         let (radius, segment_height) = capsule(live_creature_shape(
             &rumbler,
             Some(&two_spheres),
@@ -2411,7 +2409,7 @@ mod tests {
             (Some(sphere_type(3)), Some(sphere_dimensions(0.3, 0.3))),
             (Some(sphere_type(2)), Some(sphere_dimensions(0.3, 0.0))),
             (Some(sphere_type(2)), Some(sphere_dimensions(0.3, f32::NAN))),
-            (Some(sphere_type(2)), Some(sphere_dimensions(0.7, 0.7))),
+            (Some(sphere_type(2)), Some(sphere_dimensions(1.4, 1.4))),
             (Some(obb), Some(sphere_dimensions(0.3, 0.3))),
             (Some(sphere_type(2)), None),
         ];
@@ -2430,10 +2428,10 @@ mod tests {
     #[test]
     fn shipped_creature_sphere_radii_match_original_descriptor_envelopes() {
         for (creature_type, imported, expected_radius) in [
-            (0, [0.2, 0.24], 0.48),
-            (3, [0.3, 0.3], 0.6),
-            (4, [0.39, 0.0], 0.78),
-            (6, [0.16, 0.2], 0.4),
+            (0, [0.4, 0.48], 0.48),
+            (3, [0.6, 0.6], 0.6),
+            (4, [0.78, 0.0], 0.78),
+            (6, [0.32, 0.4], 0.4),
         ] {
             let creature = get_creature_definition(creature_type).unwrap();
             let num_submodels = if imported[1] > 0.0 { 2 } else { 1 };
@@ -2454,7 +2452,7 @@ mod tests {
     /// same offset serves debug spawns and missions.
     #[test]
     fn arachnid_capsules_stand_on_the_leg_tips() {
-        for (creature_type, imported, leg_tips) in [(6, [0.16, 0.2], -0.38), (8, [0.08, 0.1], -0.2)]
+        for (creature_type, imported, leg_tips) in [(6, [0.32, 0.4], -0.38), (8, [0.16, 0.2], -0.2)]
         {
             let creature = get_creature_definition(creature_type).unwrap();
             let dimensions = sphere_dimensions(imported[0], imported[1]);
