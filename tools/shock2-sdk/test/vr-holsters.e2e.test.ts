@@ -62,6 +62,7 @@ for (const hand of ["left", "right"] as const) {
     assert.deepEqual((await game.info()).player.hand_feedback?.holsters?.items, slot === 0 ? [item.id, null] : [null, item.id]);
     assert.equal((await game.player.inventory()).items.find(i => i.entity_id === item.id), undefined);
     assert.equal((await game.physics.bodies({ entityId: item.id })).bodies.length, 0);
+    assert.ok((await game.info()).player.hand_feedback!.anticipation[hand === "left" ? 0 : 1].curls[2] > 0.1, "occupied holster prepares the empty hand without drawing");
     await game.input.set(`${hand}_hand.trigger`, 1);
     await game.input.set(`${hand}_hand.squeeze`, 1);
     await game.step({ frames: 90 });

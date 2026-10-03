@@ -233,6 +233,9 @@ pub trait PlayerInteraction {
         false
     }
 
+    /// Available body-slot contents, resolved by the same pass that owns retrieval.
+    fn set_body_anticipation(&mut self, _targets: [Option<EntityId>; 2]) {}
+
     fn set_body_tool_device(&mut self, _device: bool) {}
 
     fn personal_card_grip(&self, _hand: usize) -> Option<crate::vr_grip::ResolvedGrip> {
@@ -294,6 +297,9 @@ pub struct VrInteraction {
     body_tool_device: bool,
     visual_hands: [Option<GripPose>; 2],
     step_dt: f32,
+    anticipation: [crate::hand_anticipation::HandAnticipation; 2],
+    body_anticipation: [Option<EntityId>; 2],
+    climb_anticipation: [bool; 2],
 }
 
 struct SupportAttachment {
@@ -405,6 +411,9 @@ impl VrInteraction {
             body_tool_device: false,
             visual_hands: [None, None],
             step_dt: 0.0,
+            anticipation: Default::default(),
+            body_anticipation: [None; 2],
+            climb_anticipation: [false; 2],
         }
     }
 }
@@ -500,6 +509,69 @@ impl VrInteraction {
         ];
         effects.append(&mut pose_effects);
         Some(effects)
+    }
+
+    fn update_anticipation(&mut self, ctx: &InteractionContext) {
+        use crate::{hand_anticipation::Target, hand_feedback::HandAffordance};
+        use shipyard::{Get, View};
+        // The climb prepass can be skipped during a mantle; never retain its target.
+        let climb = std::mem::take(&mut self.climb_anticipation);
+        for (i, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
+            let tracked = ctx.input.pose_tracking.is_none_or(|p| p.head && p.hands[i])
+                && (GripPose {
+                    position: hand.get_position(),
+                    rotation: hand.get_rotation(),
+                })
+                .is_tracked();
+            if !tracked
+                || hand.get_held_entity().is_some()
+                || self.support_blocked[i]
+                || self.body_tool_hands[i]
+            {
+                self.anticipation[i] = Default::default();
+                continue;
+            }
+            let object = self.body_anticipation[i].or_else(|| hand.nearby_grab_target());
+            // Climbing resolves before ordinary pickup rays, so a nearby rung
+            // wins even when that hand points through it at a loose item.
+            let target = if climb[i] {
+                Target::Grab([1.0; 5])
+            } else if let Some(entity) = object {
+                // Weapons change from their world mesh to the authored hand mesh
+                // on pickup; prepare the same grip that will be visible then.
+                let model = ctx
+                    .world
+                    .borrow::<View<dark::properties::PropPlayerGun>>()
+                    .ok()
+                    .and_then(|guns| guns.get(entity).ok().map(|g| g.hand_model.to_lowercase()))
+                    .or_else(|| {
+                        ctx.world
+                            .borrow::<View<dark::properties::PropLimbModel>>()
+                            .ok()
+                            .and_then(|models| models.get(entity).ok().map(|m| m.0.to_lowercase()))
+                    })
+                    .or_else(|| {
+                        ctx.world
+                            .borrow::<View<dark::properties::PropModelName>>()
+                            .ok()
+                            .and_then(|models| models.get(entity).ok().map(|m| m.0.to_lowercase()))
+                    });
+                let curls = model
+                    .and_then(|model| {
+                        self.grip_library
+                            .as_ref()?
+                            .lookup(&model, if i == 0 { "left" } else { "right" })
+                            .map(|grip| grip.curls)
+                    })
+                    .unwrap_or([0.85, 0.6, 0.9, 0.9, 0.9]);
+                Target::Grab(curls)
+            } else if hand.affordance() == HandAffordance::Frobbable {
+                Target::Point
+            } else {
+                Target::None
+            };
+            self.anticipation[i].update(target, ctx.step_dt);
+        }
     }
 
     fn hand_poses(&self) -> [GripPose; 2] {
@@ -1389,8 +1461,12 @@ impl PlayerInteraction for VrInteraction {
         self.synchronize_slide(world);
     }
 
+    fn set_body_anticipation(&mut self, targets: [Option<EntityId>; 2]) {
+        self.body_anticipation = targets;
+    }
+
     fn hand_feedback_diagnostics(&self) -> serde_json::Value {
-        serde_json::json!({"left": self.left_hand.feedback_diagnostics(), "right": self.right_hand.feedback_diagnostics()})
+        serde_json::json!({"left": self.left_hand.feedback_diagnostics(), "right": self.right_hand.feedback_diagnostics(), "anticipation": self.anticipation})
     }
 
     fn grip_diagnostics(&self) -> serde_json::Value {
@@ -1447,6 +1523,25 @@ impl PlayerInteraction for VrInteraction {
                     && !self.body_tool_hands[index],
             }
         };
+        self.climb_anticipation = std::array::from_fn(|i| {
+            let hand = [&self.left_hand, &self.right_hand][i];
+            let input = [&ctx.input.left_hand, &ctx.input.right_hand][i];
+            hand_input(i, hand, input).is_empty
+                && ctx.input.pose_tracking.is_none_or(|p| p.head && p.hands[i])
+                && (GripPose {
+                    position: input.position,
+                    rotation: input.rotation,
+                })
+                .is_tracked()
+                && ctx
+                    .physics
+                    .climbable_grip_at(
+                        hand_world_position(ctx.pawn_pos, ctx.pawn_rotation, input.position),
+                        crate::physics::CLIMB_GRIP_RADIUS,
+                        ctx.feet_y,
+                    )
+                    .is_some()
+        });
         self.hand_climb.update(
             ctx.pawn_pos,
             ctx.pawn_rotation,
@@ -1575,6 +1670,7 @@ impl PlayerInteraction for VrInteraction {
             };
         self.left_hand = left_hand;
 
+        self.update_anticipation(ctx);
         left_msgs.append(&mut right_msgs);
         left_msgs.append(&mut slide_effects);
         left_msgs
@@ -1675,6 +1771,7 @@ impl PlayerInteraction for VrInteraction {
                     )
                 }),
                 self.visual_hands[index],
+                Some(&self.anticipation[index]),
                 lighting,
             ));
         }
@@ -2110,6 +2207,40 @@ mod tests {
             support_enabled: true,
             reserved_releases: &[],
         }
+    }
+
+    #[test]
+    fn body_anticipation_is_visual_only_and_clears_on_tracking_loss() {
+        let mut world = World::new();
+        let entity = grabbable(&mut world);
+        let physics = PhysicsWorld::new();
+        let mut input = InputContext::default();
+        input.left_hand.rotation = identity();
+        input.right_hand.rotation = identity();
+        let mut interaction = VrInteraction::new();
+        // Updating suppressed hands sets the tracked transform without inventing a target.
+        interaction.right_hand = interaction.right_hand.update_suppressed(
+            vec3(0.0, 0.0, 0.0),
+            identity(),
+            &input.right_hand,
+        );
+        interaction.set_body_anticipation([None, Some(entity)]);
+        for _ in 0..30 {
+            interaction.update_anticipation(&context(&world, &physics, &input));
+        }
+        let feedback = interaction.hand_feedback_diagnostics();
+        assert!(feedback["anticipation"][1]["curls"][2].as_f64().unwrap() > 0.45);
+        assert_eq!(interaction.held_entities(), (None, None));
+        assert_eq!(input.right_hand.squeeze_value, 0.0);
+        input.pose_tracking = Some(crate::input_context::PoseTracking {
+            head: true,
+            hands: [true, false],
+        });
+        interaction.update_anticipation(&context(&world, &physics, &input));
+        assert_eq!(
+            interaction.hand_feedback_diagnostics()["anticipation"][1]["curls"],
+            serde_json::json!([0.0, 0.0, 0.0, 0.0, 0.0])
+        );
     }
 
     fn step_physics(physics: &mut PhysicsWorld) {

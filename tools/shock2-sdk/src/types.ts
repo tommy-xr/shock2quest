@@ -772,6 +772,8 @@ export interface PlayerSnapshot {
     affordance: "None" | "Grabbable" | "Frobbable" | "Blocked";
     light: "Off" | "Green" | "Amber" | "Red";
   }> & {
+    /** Visual-only pose preparation, left then right; never changes input or ownership. */
+    anticipation: { curls: number[]; point: number }[];
     /** Rendered pouch selection and per-weapon holster ammo state. */
     body_gear?: {
       personal_card: {

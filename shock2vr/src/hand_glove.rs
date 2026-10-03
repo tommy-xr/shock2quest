@@ -256,6 +256,7 @@ impl GloveRenderer {
         trigger_value: f32,
         squeeze_value: f32,
         holding: bool,
+        anticipation: Option<&crate::hand_anticipation::HandAnticipation>,
         fitted: Option<(FingerAmounts, f32)>,
         light: HandLight,
         lights: Option<Rc<engine::scene::light::LightArray>>,
@@ -294,7 +295,10 @@ impl GloveRenderer {
                 pinky: amounts.pinky * (1.0 - t) + fitted.pinky * t,
             };
         }
-        let pose = self.open.blend_per_finger(&self.fist, &amounts);
+        let pose = match anticipation.filter(|_| !holding && fitted.is_none()) {
+            Some(preview) => preview.pose(&self.open, &self.point, &self.fist, amounts),
+            None => self.open.blend_per_finger(&self.fist, &amounts),
+        };
         let materials = if lights.is_some() {
             &self.lit_materials
         } else {

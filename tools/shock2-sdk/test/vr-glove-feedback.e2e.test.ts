@@ -54,3 +54,40 @@ test("VR mission exposes glove feedback through the mission wrapper", {skip: !en
   await game.step({frames: 1});
   assert.ok((await game.info()).player.hand_feedback);
 });
+
+
+test("VR anticipation eases toward available interactions without operating them", {skip: !enabled, timeout: 180_000}, async () => {
+  await using game = await GameServer.launch({mission: "debug_interactions", debugFlags: ["--vr"]});
+  await game.step({frames: 30});
+  const buttons = await game.entities.byTemplate(-201);
+  const ready = buttons.find(b => b.name === "Feedback ready button")!;
+  const locked = buttons.find(b => b.name === "Feedback locked button")!;
+  await aimVrHandAt(game, ready.position, 0.35);
+  const early = (await game.info()).player.hand_feedback!.anticipation[1].point;
+  assert.ok(early > 0 && early < 0.4, `eases in: ${early}`);
+  await game.step({frames: 30});
+  let player = (await game.info()).player;
+  assert.ok(player.hand_feedback!.anticipation[1].point > 0.6);
+  assert.equal(player.right_hand_entity_id, null);
+  await aimVrHandAt(game, locked.position, 0.35);
+  const leaving = (await game.info()).player.hand_feedback!.anticipation[1].point;
+  assert.ok(leaving > 0.2 && leaving < 0.6, `eases out: ${leaving}`);
+  await game.step({frames: 60});
+  assert.ok((await game.info()).player.hand_feedback!.anticipation[1].point < 0.001);
+  const [mug] = await game.entities.byTemplate(-1221);
+  await game.player.teleport({x: mug.position[0] + 0.6, y: 1, z: 0});
+  await game.step({frames: 30});
+  await aimVrHandAt(game, mug.position, 1.0);
+  await game.step({frames: 30});
+  assert.ok((await game.info()).player.hand_feedback!.anticipation[1].curls.every(c => c < 0.001), "distant pickups do not prepare a grab");
+  await aimVrHandAt(game, mug.position, 0.35);
+  await game.step({frames: 30});
+  player = (await game.info()).player;
+  assert.ok(player.hand_feedback!.anticipation[1].curls.some(c => c > 0.1));
+  assert.equal(player.right_hand_entity_id, null, "anticipation must not acquire the mug");
+  await game.input.set("right_hand.squeeze", 1);
+  await game.step({frames: 3});
+  player = (await game.info()).player;
+  assert.equal(player.right_hand_entity_id, mug.id);
+  assert.deepEqual(player.hand_feedback!.anticipation[1].curls, [0, 0, 0, 0, 0]);
+});

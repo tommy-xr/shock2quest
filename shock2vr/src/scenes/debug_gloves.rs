@@ -117,6 +117,7 @@ impl DebugSceneHooks for GloveFitHooks {
                 input.squeeze_value,
                 false,
                 None,
+                None,
                 HandLight::Off,
                 None,
             );
