@@ -51,6 +51,7 @@ for (const hand of ["left", "right"] as const) {
     await game.step({ frames: 3 });
     assert.equal((await game.info()).player[owner], null, "reach alone must not draw");
     const pickupsBefore = (await game.audio.recent()).sounds.filter(s => s.sample === "pickup").length;
+    assert.ok((await game.info()).player.hand_feedback!.anticipation[i].curls[2] > 0.1, "available pouch prepares an empty hand");
     await game.input.set(`${hand}_hand.squeeze`, 1);
     await game.step({ frames: 8 });
     assert.equal((await game.audio.recent()).sounds.filter(s => s.sample === "pickup").length, pickupsBefore,

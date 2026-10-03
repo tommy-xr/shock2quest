@@ -5706,6 +5706,18 @@ impl MissionCore {
                 && self.player_is_alive()
                 && self.player_controls_enabled,
         );
+        let holster_contents = super::holsters::occupants(&self.world);
+        self.interaction
+            .set_body_anticipation(std::array::from_fn(|i| {
+                if !pouch_available[i] || held[i].is_some() {
+                    return None;
+                }
+                if self.ammo_pouch.near[i] {
+                    self.ammo_pouch.offers[i].map(|offer| offer.reserve)
+                } else {
+                    self.holsters.near[i].and_then(|slot| holster_contents[slot])
+                }
+            }));
         let shoulder_slots = self.shoulder_backpack.near_slot;
         let inventory = self
             .world

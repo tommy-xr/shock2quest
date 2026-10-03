@@ -75,6 +75,10 @@ the loaded rounds to your backpack. In the amp's power selector, use that hand's
 stick up/down for tiers and left/right for purchased powers; confirm with its
 upper button or trigger. Each amp remembers its current and alternate powers.
 
+Empty hands ease toward a partial point at usable controls or a partial grip
+near reachable items, occupied holsters, stocked ammo pouches, and climbing holds.
+These previews only pose the fingers; squeeze or pull the trigger to interact.
+
 **Inventory and equipment.** Grip an inventory item, point at its destination,
 and release. The preview is green when it fits or merges, amber for automatic
 placement elsewhere, and red when releasing will drop it into the world.

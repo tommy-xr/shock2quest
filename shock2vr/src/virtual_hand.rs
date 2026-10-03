@@ -525,6 +525,7 @@ impl VirtualHand {
         glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
         grip: Option<(&crate::vr_grip::ResolvedGrip, f32)>,
         visual_pose: Option<crate::vr_support::GripPose>,
+        anticipation: Option<&crate::hand_anticipation::HandAnticipation>,
         lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<SceneObject> {
         let hand_pose = visual_pose.unwrap_or(crate::vr_support::GripPose {
@@ -548,6 +549,7 @@ impl VirtualHand {
                     self.trigger_value,
                     self.squeeze_value,
                     self.get_held_entity().is_some(),
+                    anticipation,
                     grip.map(|(grip, blend)| (grip.finger_amounts_at(self.trigger_value), blend)),
                     self.feedback.light(),
                     hand_lights,
@@ -578,6 +580,22 @@ impl VirtualHand {
         }
 
         scene_objects
+    }
+
+    /// Use the already-resolved hit, including occlusion, for a nearby pickup preview.
+    pub(crate) fn nearby_grab_target(&self) -> Option<EntityId> {
+        let hit = self.raytrace_hit.as_ref()?;
+        let distance = (hit.hit_point
+            - cgmath::Point3::new(self.position.x, self.position.y, self.position.z))
+        .magnitude();
+        (self.feedback.observed == HandAffordance::Grabbable
+            && distance * crate::METERS_PER_WORLD_UNIT <= 0.45)
+            .then_some(hit.maybe_entity_id)
+            .flatten()
+    }
+
+    pub(crate) fn affordance(&self) -> HandAffordance {
+        self.feedback.observed
     }
 
     pub(crate) fn feedback_diagnostics(&self) -> serde_json::Value {

@@ -43,6 +43,7 @@ mod flat_weapon_animation;
 pub mod free_camera;
 mod glove_fit;
 mod gui;
+pub mod hand_anticipation;
 mod hand_feedback;
 mod hand_glove;
 mod hud;

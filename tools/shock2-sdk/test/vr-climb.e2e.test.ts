@@ -352,3 +352,15 @@ for (const style of ["rung", "edge"] as const) {
     },
   );
 }
+
+
+test("VR hand anticipates a reachable ladder without starting a climb", { skip: !e2eEnabled, timeout: 180_000 }, async () => {
+  await using game = await launchVr();
+  await standAtTheLadder(game);
+  await game.input.set("right_hand.world_target", LADDER_HOLD);
+  await game.input.set("right_hand.squeeze", 0);
+  await game.step({frames: 30});
+  const player = (await game.info()).player;
+  assert.equal(player.climb.grips.length, 0);
+  assert.ok(player.hand_feedback!.anticipation[1].curls[2] > 0.5);
+});

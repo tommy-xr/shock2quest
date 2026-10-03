@@ -1,5 +1,5 @@
 //! Glove feedback adapted from Fable #1373/#1376. Input and feedback use
-//! the same resolved ray target; feedback never drives finger poses.
+//! the same resolved ray target, also used by visual hand anticipation.
 use crate::hand_glove::HandLight;
 use cgmath::InnerSpace;
 use shipyard::{EntityId, Get, View, World};
