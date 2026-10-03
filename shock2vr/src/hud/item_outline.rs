@@ -40,12 +40,11 @@ const LOG_UNSET: u32 = 33;
 /// Side of each corner-bracket glyph, in screen pixels.
 const BRACKET_SIZE: f32 = 8.0;
 
-/// Line height of the rollover label, in screen pixels.
-const LABEL_HEIGHT: f32 = 10.0;
+/// Existing screen inset for health-bar extents, in screen pixels.
+const HEALTH_BAR_MARGIN: f32 = 18.0;
 
-/// Screen inset for the hover label: the bracket it sits beside plus the line
-/// of text drawn above it.
-const LABEL_MARGIN: f32 = BRACKET_SIZE + LABEL_HEIGHT;
+/// Line height of the use hint below the brackets, in screen pixels.
+const LABEL_HEIGHT: f32 = 10.0;
 
 pub(crate) fn format_stack_aware_item_name(item_name: &str, stack_count: Option<i32>) -> String {
     match stack_count {
@@ -189,8 +188,8 @@ fn resolve_symname_fallback(
 /// condition word), plus whatever its working order adds on the end. `None`
 /// when the object has no name to show.
 ///
-/// The single name resolution the interface has: the rollover label beside the
-/// HUD brackets and the inventory bar's mini-frame name line both read it, so
+/// The single name resolution the interface has: the top-centre rollover frame
+/// and the inventory bar's mini-frame name line both read it, so
 /// one object cannot be called two different things in two places.
 pub fn resolve_item_name(
     asset_cache: &mut AssetCache,
@@ -293,67 +292,66 @@ fn append_object_state(name: String, suffix: Option<&str>) -> String {
     }
 }
 
+/// Fixed rollover mini-frame from `shkiface.cpp::ShockMiniFrameInit`.
+/// Unlike frontend screens, this overlay has no *R.BIN layout: its 255x17
+/// overlay rect and the 12px / 10px text band are authored in the original
+/// source. The actual `FRAME.PCX` bitmap is 256x16 (not `minifram.pcx`).
+fn mini_frame_canvas(screen_size: Vector2<f32>, name: Option<&str>) -> crate::ui::UiCanvas {
+    use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
+    let mut canvas = UiCanvas::new(screen_size);
+    let x = if screen_size.x == 640.0 {
+        192.0
+    } else {
+        ((screen_size.x - 255.0) / 2.0).floor()
+    };
+    canvas.image(Rect::new(x, 0.0, 256.0, 16.0), "frame.pcx");
+    if let Some(name) = name {
+        canvas.text_native_fit(
+            Rect::new(x + 12.0, 0.0, 239.0, 10.0),
+            name,
+            "mainfont.fon",
+            HAlign::Left,
+            VAlign::Middle,
+        );
+    }
+    canvas
+}
+
+/// Draw once per eye, from the active rollover (never the damaged-object list).
+/// The same resolved canvas is used by flat and VR; object bounds have no role
+/// in placing either the frame or its name.
 pub fn draw_item_name(
     asset_cache: &mut AssetCache,
-    bounds: Aabb3<f32>,
-    entity_id: EntityId,
+    entity_id: Option<EntityId>,
+    fallback_name: Option<&str>,
     world: &World,
-    view: Matrix4<f32>,
-    projection: Matrix4<f32>,
     screen_size: Vector2<f32>,
     debug_show_ids: bool,
 ) -> Vec<SceneObject> {
-    let Some(item_name) = resolve_item_name(asset_cache, world, entity_id) else {
-        return vec![];
-    };
-
-    let aabb = bounds;
-    let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
-    // Clamped like the brackets, plus the line of text the label sits on.
-    let extents = clamp_extents_to_screen(
-        project_aabb3(&aabb, view, projection, screen_size),
-        screen_size,
-        LABEL_MARGIN,
-    );
-
-    let v_prop_hitpoints = world.borrow::<View<PropHitPoints>>().unwrap();
-    let hit_points = v_prop_hitpoints.get(entity_id).map(|hp| hp.hit_points).ok();
-    let template_id = debug_show_ids.then(|| {
-        world
-            .borrow::<View<PropTemplateId>>()
-            .unwrap()
-            .get(entity_id)
-            .map(|prop| prop.template_id.to_string())
-            .unwrap_or_else(|_| "runtime".to_owned())
+    let name = entity_id.and_then(|entity_id| {
+        let item_name = resolve_item_name(asset_cache, world, entity_id)?;
+        let hit_points = world
+            .borrow::<View<PropHitPoints>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|hp| hp.hit_points));
+        let template_id = debug_show_ids.then(|| {
+            world
+                .borrow::<View<PropTemplateId>>()
+                .unwrap()
+                .get(entity_id)
+                .map(|prop| prop.template_id.to_string())
+                .unwrap_or_else(|_| "runtime".to_owned())
+        });
+        let debug_identity = template_id
+            .as_deref()
+            .map(|template_id| (template_id, entity_id.inner()));
+        Some(format_hover_label(&item_name, hit_points, debug_identity))
     });
-    let debug_identity = template_id
-        .as_deref()
-        .map(|template_id| (template_id, entity_id.inner()));
-    let text_content = format_hover_label(&item_name, hit_points, debug_identity);
-
-    // Above the rect, and lifted by a further bar-height only when this entity
-    // actually draws one - an ordinary item with no health bar keeps the label
-    // tight to its brackets rather than floating a gap above nothing.
-    //
-    // This position is ours, not the original's: there the rollover name is
-    // not anchored to the rect at all, but drawn in a fixed frame at the top
-    // centre of the screen, and the slot below the rect belongs to a separate
-    // "HUD Use" hint string ("Search container"). Keeping the name by the
-    // object is the interim.
-    let label_lift = match health_bar_fill(world, entity_id) {
-        Some(_) => HP_BAR_HEIGHT + LABEL_HEIGHT,
-        None => LABEL_HEIGHT,
-    };
-    let text_obj_0_0 = SceneObject::screen_space_text(
-        &text_content,
-        font.clone(),
-        10.0,
-        0.5,
-        extents.min.x,
-        extents.min.y - label_lift,
-    );
-
-    vec![text_obj_0_0]
+    mini_frame_canvas(screen_size, name.as_deref().or(fallback_name)).render_screen_space(
+        asset_cache,
+        screen_size,
+        crate::ui::ScaleMode::Stretch,
+    )
 }
 
 #[cfg(test)]
@@ -381,6 +379,24 @@ mod tests {
     }
 
     #[test]
+    fn rollover_frame_keeps_authored_size_and_recenters_for_wide_screens() {
+        use crate::ui::{Rect, UiElement};
+        for (width, x) in [(640.0, 192.0), (800.0, 272.0), (1920.0, 832.0)] {
+            let canvas = mini_frame_canvas(vec2(width, 600.0), Some("A hybrid"));
+            assert_eq!(canvas.elements()[0].rect(), Rect::new(x, 0.0, 256.0, 16.0));
+            let text = &canvas.elements()[1];
+            assert_eq!(text.rect(), Rect::new(x + 12.0, 0.0, 239.0, 10.0));
+            assert!(matches!(
+                text,
+                UiElement::Text {
+                    fit_to_rect: true,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
     fn hud_use_is_left_aligned_below_brackets_and_keeps_the_right_margin() {
         let rect = extents((200.0, 100.0), (350.0, 300.0));
         assert_eq!(hud_use_position(rect, 120.0, 800.0), vec2(200.0, 304.0));
@@ -388,6 +404,16 @@ mod tests {
         assert_eq!(
             hud_use_position(right_edge, 120.0, 800.0),
             vec2(670.0, 304.0)
+        );
+    }
+
+    #[test]
+    fn rollover_frame_remains_when_nothing_is_selected() {
+        use crate::ui::UiElement;
+        let canvas = mini_frame_canvas(SCREEN, None);
+        assert_eq!(canvas.element_count(), 1);
+        assert!(
+            matches!(&canvas.elements()[0], UiElement::Image { texture, .. } if texture == "frame.pcx")
         );
     }
 
@@ -807,9 +833,7 @@ fn hit_point_pool(world: &World, entity_id: EntityId) -> Option<(i32, u32)> {
 
 /// The bar's fill ratio when `entity_id` will draw one at all, else `None`.
 ///
-/// The single answer to "is there a bar here?", so the label's offset in
-/// [`draw_item_name`] and the bar itself cannot disagree about whether the
-/// strip above the rect is occupied.
+/// The strip above the selection rect belongs exclusively to this bar.
 fn health_bar_fill(world: &World, entity_id: EntityId) -> Option<f32> {
     if !shows_hit_points(world, entity_id) {
         return None;
@@ -833,12 +857,12 @@ pub fn draw_health_bar(
         return vec![];
     };
 
-    // The same resolved bounds the brackets and the label frame, so the bar
+    // The same resolved bounds the brackets frame, so the bar
     // cannot sit over a different volume than the outline it caps.
     let extents = clamp_extents_to_screen(
         project_aabb3(&bounds, view, projection, screen_size),
         screen_size,
-        LABEL_MARGIN,
+        HEALTH_BAR_MARGIN,
     );
 
     // Nearest sampling, unlike the rest of the HUD: the remastered bar art is
