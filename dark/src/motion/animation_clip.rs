@@ -77,6 +77,22 @@ impl AnimationClip {
         }
     }
 
+    /// Frames the clip plays across: a loop wraps from its last keyframe back
+    /// to the first, a one-shot ends ON its last keyframe (a single-keyframe
+    /// pose still lasts one frame).
+    pub fn play_frames(&self, looping: bool) -> u32 {
+        if looping {
+            self.num_frames
+        } else {
+            self.num_frames.saturating_sub(1).max(1)
+        }
+    }
+
+    /// How long the clip plays (`play_frames` frame periods).
+    pub fn play_duration(&self, looping: bool) -> Duration {
+        self.time_per_frame * self.play_frames(looping)
+    }
+
     /// This clip played under a schema's timing: `time_scale` multiplies its
     /// duration and `stretch` its root travel (see `SchemaTiming`). The pose is
     /// untouched; only the clock and the travel that drives movement change.
@@ -145,7 +161,8 @@ impl AnimationClip {
             let cycle_travel = positions[last] - positions[0] + trailing;
             cycle_travel * cycles + within(pos - cycles * frames)
         } else {
-            within(pos.min(frames))
+            // A one-shot ends on its last keyframe (see `play_frames`)
+            within(pos.min(last as f32))
         }
     }
 }
