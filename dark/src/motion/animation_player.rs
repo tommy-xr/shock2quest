@@ -230,7 +230,11 @@ impl AnimationPlayer {
                     from_frame,
                     from_looping,
                     duration,
-                    elapsed: 0.0,
+                    // The fade has run as long as the clip has: a seam's
+                    // carried remainder already advanced the new clip, so a
+                    // fade starting at zero would show the old pose unchanged
+                    // for the seam's first frame.
+                    elapsed: remaining_time,
                 })
         });
         AnimationPlayer {
@@ -842,6 +846,22 @@ mod tests {
         // holding it while the root keeps moving
         assert_eq!(completed_at, Some(4));
         assert!((travelled - 2.0).abs() < 1e-3, "travelled {travelled}");
+    }
+
+    #[test]
+    fn a_seams_carried_time_advances_its_fade_too() {
+        // A clip finishes 10 ms into a tick; the next one is queued with
+        // that remainder already played
+        let mut drained = AnimationPlayer::from_completed_animation(clip_with_root_motion());
+        drained.remaining_time = 0.01;
+        let mut next = (*clip_with_root_motion()).clone();
+        next.blend_length = Duration::from_millis(100);
+        let player = AnimationPlayer::queue_animation(&drained, Rc::new(next));
+        assert!(
+            (player.blend_alpha_now() - blend_alpha(0.1)).abs() < 1e-6,
+            "the fade should already be 10% in, got {}",
+            player.blend_alpha_now()
+        );
     }
 
     #[test]
