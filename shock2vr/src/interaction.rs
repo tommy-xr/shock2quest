@@ -1898,6 +1898,17 @@ impl PlayerInteraction for VrInteraction {
             if let Some(s) = self.support.as_ref().filter(|s| s.active) {
                 supported[1 - s.primary] = Some(s.entity);
             }
+            // Each wrist names its own hand's pick. The hand holding the
+            // tricorder already shows its lens target on the device.
+            let names = std::array::from_fn(|i| {
+                [&self.left_hand, &self.right_hand][i]
+                    .get_raytraced_entity()
+                    .filter(|_| !(self.body_tool_device && self.body_tool_hands[i]))
+                    .filter(|&entity| crate::hud::is_hud_selectable(world, entity))
+                    .and_then(|entity| {
+                        crate::hud::rollover_label(asset_cache, world, entity, false)
+                    })
+            });
             objs.append(&mut create_wrist_hud_panels(
                 asset_cache,
                 world,
@@ -1905,6 +1916,7 @@ impl PlayerInteraction for VrInteraction {
                 visible,
                 frames,
                 supported,
+                names,
             ));
         }
         objs

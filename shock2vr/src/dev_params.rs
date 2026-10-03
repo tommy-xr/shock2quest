@@ -413,6 +413,10 @@ dev_params! {
     /// The pouch and personal card follow both belt settings with their grab targets.
     VR_BELT_DISTANCE = Body::float("vr_belt_distance", "Belt forward (m)", 0.0, -0.5, 0.5, 0.01),
     VR_BELT_DROP = Body::float("vr_belt_drop", "Belt below eyes (m)", 0.55, 0.30, 0.90, 0.01),
+    /// Prototype mounts for each wrist's rollover name: a hologram held upright
+    /// over the glove (like the hazard panel), or wrapped round it (like the bio band).
+    VR_ROLLOVER_NAME_WRAPPED = Hands::bool("vr_rollover_name_wrapped", "Rollover name", false, "Upright", "Wrapped"),
+    VR_ROLLOVER_NAME_WIDTH = Hands::float("vr_rollover_name_width", "Rollover name width (m)", 0.12, 0.06, 0.24, 0.005),
     /// Session-only handheld experiment, also available on Quest without CLI flags.
     VR_MFD_DEVICE = Tricorder::bool("vr_mfd_device", "MFD device prototype", true),
     /// Positive raises the stowed device and its grab point; zero keeps the centered mount.
