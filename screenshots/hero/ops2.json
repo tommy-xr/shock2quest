@@ -1,8 +1,27 @@
 {
-  "revision": "83e46240974ae3419897281e91178bff012b1b72",
+  "revision": "ea34f7a74f67e5a94151fd90f1db9aa152f3ad9a",
   "dirty": false,
-  "capturedAt": "2026-09-26T23:20:24.297Z",
+  "runtimeSha256": "5799abc90484136038decf80be77d8cc5468ffc060e50c580eddb09320099b95",
+  "capturedAt": "2026-10-03T23:47:13.482Z",
   "mission": "ops2.mis",
+  "settings": {
+    "vr": {
+      "turning": "Smooth",
+      "vignette": "Off"
+    }
+  },
+  "lighting": [
+    {
+      "key": "ambient_light_intensity",
+      "value": 0,
+      "default": 0
+    },
+    {
+      "key": "held_light_floor",
+      "value": 0.15000000596046448,
+      "default": 0.15000000596046448
+    }
+  ],
   "player": [
     65.5,
     -7.3,
