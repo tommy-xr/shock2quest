@@ -6,9 +6,9 @@ use dark::{
         resolve_symbolic_name,
     },
     properties::{
-        ObjectNameType, ObjectState, PropHUDSelect, PropHitPoints, PropLog, PropMaxHitPoints,
-        PropObjName, PropObjShortName, PropObjectNameType, PropShowHP, PropStackCount, PropSymName,
-        PropTemplateId,
+        ObjectNameType, ObjectState, PropHUDSelect, PropHUDUse, PropHitPoints, PropLog,
+        PropMaxHitPoints, PropObjName, PropObjShortName, PropObjectNameType, PropShowHP,
+        PropStackCount, PropSymName, PropTemplateId,
     },
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
@@ -338,8 +338,8 @@ pub fn draw_item_name(
     // This position is ours, not the original's: there the rollover name is
     // not anchored to the rect at all, but drawn in a fixed frame at the top
     // centre of the screen, and the slot below the rect belongs to a separate
-    // "HUD Use" hint string ("Search container") that this port does not yet
-    // read. Keeping the name by the object is the interim.
+    // "HUD Use" hint string ("Search container"). Keeping the name by the
+    // object is the interim.
     let label_lift = match health_bar_fill(world, entity_id) {
         Some(_) => HP_BAR_HEIGHT + LABEL_HEIGHT,
         None => LABEL_HEIGHT,
@@ -363,6 +363,33 @@ mod tests {
     use super::*;
 
     const SCREEN: Vector2<f32> = Vector2::new(800.0, 600.0);
+
+    #[test]
+    fn hud_use_resolves_the_authored_key_without_a_generic_hint() {
+        let strings = HashMap::from([("containers".into(), "Search container".into())]);
+        assert_eq!(
+            resolve_hud_use(Some("Containers: \"old text\""), &strings).as_deref(),
+            Some("Search container")
+        );
+        assert_eq!(
+            resolve_hud_use(Some("missing: \"Use custom device\""), &strings).as_deref(),
+            Some("Use custom device")
+        );
+        for raw in [None, Some(""), Some("missing")] {
+            assert_eq!(resolve_hud_use(raw, &strings), None);
+        }
+    }
+
+    #[test]
+    fn hud_use_is_left_aligned_below_brackets_and_keeps_the_right_margin() {
+        let rect = extents((200.0, 100.0), (350.0, 300.0));
+        assert_eq!(hud_use_position(rect, 120.0, 800.0), vec2(200.0, 304.0));
+        let right_edge = extents((740.0, 100.0), (790.0, 300.0));
+        assert_eq!(
+            hud_use_position(right_edge, 120.0, 800.0),
+            vec2(670.0, 304.0)
+        );
+    }
 
     fn extents(min: (f32, f32), max: (f32, f32)) -> Aabb2<f32> {
         Aabb2 {
@@ -837,9 +864,30 @@ pub fn draw_health_bar(
     )]
 }
 
+/// HUDUse is opt-in: a missing property must not borrow the object's name or
+/// show a generic pickup/use prompt. Authored inline fallbacks follow ObjName.
+fn resolve_hud_use(
+    raw: Option<&str>,
+    strings: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    raw.map(|raw| resolve_localized_property_string(raw, strings))
+        .filter(|text| !text.is_empty())
+}
+
+/// Original HUD use slot: left-aligned, four pixels below the selection rect,
+/// moving left only when needed to preserve the ten-pixel right margin.
+fn hud_use_position(extents: Aabb2<f32>, text_width: f32, screen_width: f32) -> Vector2<f32> {
+    vec2(
+        extents.min.x.min(screen_width - text_width - 10.0),
+        extents.max.y + 4.0,
+    )
+}
+
 pub fn draw_item_outline(
     asset_cache: &mut AssetCache,
     bounds: Aabb3<f32>,
+    entity_id: EntityId,
+    world: &World,
     view: Matrix4<f32>,
     projection: Matrix4<f32>,
     screen_size: Vector2<f32>,
@@ -875,12 +923,30 @@ pub fn draw_item_outline(
         vec2(extents.max.x, extents.max.y),
         size,
     );
-    vec![
+    let mut objects = vec![
         top_left_brack_obj,
         bottom_left_brack_obj,
         bottom_right_brack_obj,
         top_right_brack_obj,
-    ]
+    ];
+    let hints = world.borrow::<View<PropHUDUse>>().unwrap();
+    if let Ok(raw) = hints.get(entity_id) {
+        let strings = asset_cache.get(&STRINGS_IMPORTER, "huduse.str");
+        if let Some(hint) = resolve_hud_use(Some(&raw.0), &strings) {
+            let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
+            let width = engine::measure_text_width(&**font, &hint, LABEL_HEIGHT);
+            let position = hud_use_position(extents, width, screen_size.x);
+            objects.push(SceneObject::screen_space_text(
+                &hint,
+                font,
+                LABEL_HEIGHT,
+                0.5,
+                position.x,
+                position.y,
+            ));
+        }
+    }
+    objects
 }
 
 /// Keep a projected extent on screen, so an object bigger than the view still

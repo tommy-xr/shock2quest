@@ -14760,6 +14760,8 @@ impl MissionCore {
             ret.extend(draw_item_outline(
                 asset_cache,
                 bounds,
+                hit_entity,
+                &self.world,
                 view,
                 projection,
                 screen_size,
@@ -18275,6 +18277,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
                 // Build properties list
                 let mut properties = Vec::new();
+
+                if let Ok(hint) = self
+                    .world
+                    .borrow::<View<dark::properties::PropHUDUse>>()
+                    .unwrap()
+                    .get(id)
+                {
+                    properties.push(DebugPropertyInfo {
+                        name: "HUDUse".into(),
+                        value: hint.0.clone(),
+                    });
+                }
 
                 // Add position
                 properties.push(DebugPropertyInfo {
