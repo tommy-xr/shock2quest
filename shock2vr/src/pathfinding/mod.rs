@@ -220,6 +220,11 @@ pub struct AiSteeringDebug {
     pub target: Option<Vector3<f32>>,
     /// Seconds without progress toward the current waypoint
     pub stall_seconds: f32,
+    /// Mission time (seconds) this was published - a record from an earlier
+    /// frame belongs to steering that is no longer running
+    pub published_at: f32,
+    /// No route yet, and the first one has been asked for
+    pub awaiting_route: bool,
 }
 
 /// Why an AI is deliberately standing still this frame. A hold is a decision,
@@ -308,6 +313,9 @@ pub struct PathfindingService {
     ai_paths: std::sync::Mutex<HashMap<u64, AiPathRecord>>,
     /// Live steering state per AI (what it is actually following right now)
     ai_steering: std::sync::Mutex<HashMap<u64, AiSteeringDebug>>,
+    /// The route each AI's path follower adopted (`AiSteeringDebug` indexes
+    /// into it), as opposed to the latest one computed for it
+    ai_followed_routes: std::sync::Mutex<HashMap<u64, Vec<Vector3<f32>>>>,
     /// Whether each AI is deliberately holding position, published by its
     /// script each frame before it steers (see `MovementHold`)
     movement_holds: std::sync::Mutex<HashMap<u64, MovementHold>>,
@@ -422,6 +430,7 @@ impl PathfindingService {
             relaxed: bridge_islands,
             ai_paths: std::sync::Mutex::new(HashMap::new()),
             ai_steering: std::sync::Mutex::new(HashMap::new()),
+            ai_followed_routes: std::sync::Mutex::new(HashMap::new()),
             movement_holds: std::sync::Mutex::new(HashMap::new()),
             blocked_links: std::sync::Mutex::new(HashMap::new()),
             blocked_cells: std::sync::Mutex::new(HashMap::new()),
@@ -455,6 +464,9 @@ impl PathfindingService {
         }
         if let Ok(mut steering) = self.ai_steering.lock() {
             steering.retain(|&entity, _| keep(entity));
+        }
+        if let Ok(mut routes) = self.ai_followed_routes.lock() {
+            routes.retain(|&entity, _| keep(entity));
         }
         if let Ok(mut holds) = self.movement_holds.lock() {
             holds.retain(|&entity, _| keep(entity));
@@ -691,6 +703,14 @@ impl PathfindingService {
         }
     }
 
+    /// Publish the route an AI's path follower adopted (empty when it
+    /// dropped it); its `AiSteeringDebug::next_waypoint` indexes into this.
+    pub fn record_ai_followed_route(&self, entity: u64, route: Vec<Vector3<f32>>) {
+        if let Ok(mut routes) = self.ai_followed_routes.lock() {
+            routes.insert(entity, route);
+        }
+    }
+
     /// Publish whether an AI is deliberately standing still. Written by the
     /// AI script before it steers, read by the path follower's stall
     /// accounting (see `MovementHold`).
@@ -717,23 +737,28 @@ impl PathfindingService {
             .and_then(|steering| steering.get(&entity).copied())
     }
 
-    /// Whether `entity`'s current route - from `position` through the
-    /// waypoints still ahead - passes within `radius` of `point` (see
-    /// `route_passes_near`). `None` when it is not following a route.
+    /// Whether the route `entity`'s path follower is following this frame
+    /// (`now`) - from `position` through the waypoints still ahead - passes
+    /// within `radius` of `point` (see `route_passes_near`). `Some(false)`
+    /// while its first route is still being computed; `None` when no path
+    /// follower steered it this frame or it has no route to follow.
     pub fn route_ahead_passes_near(
         &self,
         entity: u64,
+        now: f32,
         position: Vector3<f32>,
         point: Vector3<f32>,
         radius: f32,
     ) -> Option<bool> {
-        let steering = self.ai_steering(entity)?;
+        let steering = self
+            .ai_steering(entity)
+            .filter(|steering| steering.published_at == now)?;
         if steering.path_len == 0 {
-            return None;
+            return steering.awaiting_route.then_some(false);
         }
-        let paths = self.ai_paths.lock().ok()?;
-        let waypoints = &paths.get(&entity)?.waypoints;
-        let ahead = &waypoints[steering.next_waypoint.min(waypoints.len())..];
+        let routes = self.ai_followed_routes.lock().ok()?;
+        let route = routes.get(&entity)?;
+        let ahead = &route[steering.next_waypoint.min(route.len())..];
         Some(route_passes_near(position, ahead, point, radius))
     }
 
@@ -2719,6 +2744,8 @@ pub(crate) mod tests {
                 path_len: 1,
                 target: None,
                 stall_seconds: 0.0,
+                published_at: 0.0,
+                awaiting_route: false,
             },
         );
         stall_twice(&service, 7, 0, 1, 0.0);
@@ -2734,6 +2761,45 @@ pub(crate) mod tests {
         assert!(
             service.blocked_links(BYSTANDER, 0.0).contains(&(1, 2)),
             "a surviving AI keeps its own exclusions"
+        );
+    }
+
+    #[test]
+    fn a_route_check_trusts_only_this_frames_follower() {
+        let service = service(three_cell_db(PathCellFlags::empty()));
+        let steering = |published_at: f32, path_len: usize, awaiting_route: bool| AiSteeringDebug {
+            next_waypoint: 1,
+            path_len,
+            target: None,
+            stall_seconds: 0.0,
+            published_at,
+            awaiting_route,
+        };
+        let here = vec3(0.0, 0.0, 0.0);
+        let door = vec3(5.0, 0.0, 0.0);
+        service.record_ai_followed_route(7, vec![here, vec3(10.0, 0.0, 0.0)]);
+
+        service.record_ai_steering(7, steering(1.0, 2, false));
+        assert_eq!(
+            service.route_ahead_passes_near(7, 1.0, here, door, 1.0),
+            Some(true)
+        );
+        // Steering from an earlier frame is not this frame's route
+        assert_eq!(
+            service.route_ahead_passes_near(7, 2.0, here, door, 1.0),
+            None
+        );
+        // Waiting on its first route: open nothing yet
+        service.record_ai_steering(7, steering(3.0, 0, true));
+        assert_eq!(
+            service.route_ahead_passes_near(7, 3.0, here, door, 1.0),
+            Some(false)
+        );
+        // No route and none coming: the caller falls back to nearness
+        service.record_ai_steering(7, steering(4.0, 0, false));
+        assert_eq!(
+            service.route_ahead_passes_near(7, 4.0, here, door, 1.0),
+            None
         );
     }
 

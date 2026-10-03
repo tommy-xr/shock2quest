@@ -1373,10 +1373,12 @@ impl AnimatedMonsterAI {
             }
             // A scripted walk opens only doors on its own route: a scene may
             // keep a door it passes shut, or open that door itself (a Frob
-            // toggles it). Without a route, nearness decides as for pursuit.
+            // toggles it). With no route to follow (or direct steering),
+            // nearness decides as for pursuit.
             if scripted
                 && service.route_ahead_passes_near(
                     entity_id.inner(),
+                    time.total.as_secs_f32(),
                     pos,
                     door_center,
                     DOOR_ON_ROUTE_RADIUS,
@@ -4370,6 +4372,8 @@ mod tests {
                 path_len: 3,
                 target: Some(vec3(0.0, 0.0, 5.0)),
                 stall_seconds: seconds,
+                published_at: 0.0,
+                awaiting_route: false,
             },
         );
         world.add_unique(GlobalPathfinding(Some(service)));
