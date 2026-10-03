@@ -496,6 +496,19 @@ selected turn mode; mouse-look stays direct.
   The soft black border fades in over 0.2 seconds and out over 0.4 seconds.
   Physical head movement and snap turns do not activate it. It is hidden while
   paused or using the cyber interface.
+- **Reference grid:** Off (default), During movement, or Always; opacity
+  15/30/50% (default 30%), and line spacing 0.5/1/2 metres (default 1). A
+  holographic cube surrounds the player with floor, walls, and ceiling. Its size
+  is adjustable to 8/10/12/16 metres per side (default 10), independently of line
+  spacing; resizing keeps the floor at the same height.
+  Its lines stay fixed to the physical tracking stage, with a soft clear window
+  in the centre of the view for aiming and reading. The cage follows
+  artificial locomotion so it remains a stable reference during game motion.
+  During movement includes stick travel/smooth turns, elevators, trams, and
+  falls. Physical head motion and snap-turn origin corrections do not activate
+  it. Passive motion must exceed 0.08 world units/sec for 0.05 seconds to filter
+  contact jitter. Entry/release fades last 0.25/0.5 seconds. It is available in
+  flatscreen for testing and hidden while paused or using the cyber interface.
 - **Controls:** Snap/Smooth turning (default Snap), 30/45/60 degree snap angles
   (default 30), smooth speeds of 45/60/90/120/180 degrees per second (default
   90), and reset. Snap turning requires centering the stick before each turn.
@@ -513,7 +526,9 @@ until **Continue**. Developer mode has its own bottom-left pause entry.
 
 Automated tests can set `SHOCK2_SETTINGS_PATH` to an isolated JSON file; its
 parent directory must exist. This keeps test settings out of the user's profile.
-The reference-grid comfort overlay remains a separate follow-up.
+The reference grid draws thin cyan lines with derivative antialiasing on one
+transparent cube. It shares the comfort-mask shader; only the soft central
+opening follows the eye, while the lines remain fixed in tracking space.
 
 ### Developer options
 
