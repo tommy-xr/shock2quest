@@ -9697,6 +9697,15 @@ impl MissionCore {
                     self.world
                         .add_component(entity_id, dark::properties::PropEnergy(after));
                     if (before > 0.0) != (after > 0.0) {
+                        // Retail BaseImplant uses bb07 when its power runs out.
+                        // Announce the committed edge once, not each depleted frame.
+                        if after == 0.0
+                            && crate::implants::equipped(&self.world).contains(&Some(entity_id))
+                        {
+                            effects.push_back(crate::scripts::script_util::announce(
+                                entity_id, "bb07",
+                            ));
+                        }
                         self.refresh_implant_effects();
                     }
                 }

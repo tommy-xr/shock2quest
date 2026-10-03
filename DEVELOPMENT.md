@@ -452,6 +452,8 @@ implant's two prongs fully, leaving only a narrow seam against the body. Native 
 art marks an empty socket; the installed implant's solid model seats inside the
 rim. A separate strip below the housing shows live charge relative to its
 Maintenance-based recharge capacity.
+At zero charge, the bonus stops and the retail `bb07` voice cue plays once.
+The implant stays installed; recharging restores its bonus without reinsertion.
 Release a held implant at the **opposite wristband slot** to install it; squeeze there
 with an empty hand to remove the original item. Either wrist accepts the first
 implant, then the other locks until it is removed. **Cybernetically Enhanced**
