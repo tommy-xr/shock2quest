@@ -61,7 +61,7 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 | Trigger | Use the held item, fire a gun, or cast with the psi amp; point and trigger to interact |
 
 **Options → Comfort / Controls** configures the movement vignette and snap or
-smooth turning. Settings persist across sessions. Options is available from the
+smooth turning in both VR and flatscreen. Settings persist across sessions. Options is available from the
 main menu and while paused.
 
 The **upper face button** (left **Y** / right **B**) acts on what that hand holds:

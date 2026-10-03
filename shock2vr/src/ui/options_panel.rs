@@ -202,7 +202,7 @@ impl OptionsPanel {
         let body = layout.frame[1];
         canvas.text(
             Rect::new(body.x + 16.0, body.y + body.h - 66.0, body.w - 32.0, 24.0),
-            "VR settings - click a value to change it",
+            "Click a value to change it",
             "mainfont.fon",
             14.0,
             HAlign::Center,
@@ -213,7 +213,7 @@ impl OptionsPanel {
             if self.error {
                 "Could not save settings. Previous values kept."
             } else {
-                "Saved automatically. Applies in VR only."
+                "Saved automatically."
             },
             "mainfont.fon",
             14.0,

@@ -1,4 +1,4 @@
-//! VR-only artificial turn input and movement vignette. Physical tracking is
+//! Artificial turn input and movement vignette for both presentations. Physical tracking is
 //! never filtered, slowed, or used as a reason to restrict the view.
 use crate::ui::entry_ramp::{EntryExitRamp, RampParams};
 use crate::user_settings::{TurnMode, VignetteStrength, VrSettings};

@@ -4583,23 +4583,19 @@ impl MissionCore {
         let input_context = &tracked_input;
 
         let vr_settings = crate::user_settings::get().vr;
-        let mut turn_radians = if game_options.presentation_mode == crate::PresentationMode::Vr {
-            if turn_stick_captured
-                || (self.psi_powers_open
-                    && self.psi_navigation_hand(game_options.presentation_mode)
-                        == crate::vr_config::Handedness::Left)
-            {
-                self.vr_comfort.disarm_turn();
-                0.0
-            } else {
-                self.vr_comfort.turn_radians(
-                    input_context.left_hand.thumbstick.x,
-                    delta_time,
-                    vr_settings,
-                )
-            }
+        let mut turn_radians = if turn_stick_captured
+            || (self.psi_powers_open
+                && self.psi_navigation_hand(game_options.presentation_mode)
+                    == crate::vr_config::Handedness::Left)
+        {
+            self.vr_comfort.disarm_turn();
+            0.0
         } else {
-            input_context.left_hand.thumbstick.x * delta_time * PLAYER_TURN_RATE
+            self.vr_comfort.turn_radians(
+                input_context.left_hand.thumbstick.x,
+                delta_time,
+                vr_settings,
+            )
         };
         let mut new_rotation = player.rotation
             * cgmath::Quaternion::from_axis_angle(
@@ -4621,14 +4617,12 @@ impl MissionCore {
             }
         }
 
-        if game_options.presentation_mode == crate::PresentationMode::Vr {
-            self.vr_comfort.update_vignette(
-                input_context.right_hand.thumbstick,
-                turn_radians,
-                delta_time,
-                vr_settings,
-            );
-        }
+        self.vr_comfort.update_vignette(
+            input_context.right_hand.thumbstick,
+            turn_radians,
+            delta_time,
+            vr_settings,
+        );
 
         let dir = new_rotation * input_context.head.rotation;
         let facing = dir.rotate_vector(cgmath::vec3(0.0, 0.0, -1.0));
@@ -14373,7 +14367,7 @@ impl MissionCore {
         options: &crate::GameOptions,
     ) -> Vec<SceneObject> {
         let mut ret = vec![];
-        if options.presentation_mode == crate::PresentationMode::Vr && !self.use_mode {
+        if !self.use_mode {
             if let Some(layer) =
                 self.vr_comfort
                     .render(view, projection, crate::user_settings::get().vr)

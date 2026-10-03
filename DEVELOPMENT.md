@@ -462,8 +462,9 @@ and replicator prices, mission object masks, and Easy ecology and hypo bonuses.
 
 **Options** on the main menu, New Game screen, and pause menu uses retail's
 `OPTIONS.PCX`, `OPTIONSR.BIN`, and `OPTIONTR.BIN`. Comfort controls occupy the
-full-width rows from `OPTIONAR.BIN`. Flat and VR render the same canvas; this
-first set of preferences changes VR gameplay only.
+full-width rows from `OPTIONAR.BIN`. Flat and VR render the same canvas and apply the same comfort preferences.
+On desktop, WASD triggers the movement vignette and Left/Right arrows use the
+selected turn mode; mouse-look stays direct.
 
 - **Comfort:** movement vignette Off/Low/Medium/High (default Low), separate
   switches for stick movement and smooth turning (both default On), and reset.

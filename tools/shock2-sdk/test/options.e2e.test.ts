@@ -10,7 +10,7 @@ const enabled = process.env.SHOCK2_E2E === "1";
 const DONE: [number, number] = [320, 436];
 
 for (const vr of [false, true]) {
-  test(`Comfort effects stay scoped to artificial VR movement (${vr ? "VR" : "flat"})`, {
+  test(`Comfort effects follow artificial movement and turning (${vr ? "VR" : "flat"})`, {
     skip: !enabled && "set SHOCK2_E2E=1 to run",
   }, async () => {
     const root = await mkdtemp(join(tmpdir(), "shock2-comfort-test-"));
@@ -28,13 +28,13 @@ for (const vr of [false, true]) {
       assert.equal((await mask()).length, 0, "physical head motion must not activate the vignette");
       await game.input.set("right_hand.thumbstick", [0, 1]);
       await game.step({ frames: 20 });
-      assert.equal((await mask()).length > 0, vr);
+      assert.ok((await mask()).length > 0);
       await game.input.set("right_hand.thumbstick", [0, 0]);
       await game.step({ frames: 30 });
       assert.equal((await mask()).length, 0);
-      if (vr) {
+      {
         const rotation = async () => (await game.info()).player.rotation;
-        await game.input.set("head.position", [0.5, 0.72, -0.2]);
+        if (vr) await game.input.set("head.position", [0.5, 0.72, -0.2]);
         await game.step({ frames: 3 });
         const eye = async () => {
           const p = (await game.info()).player;
@@ -69,7 +69,34 @@ for (const vr of [false, true]) {
         const returned = await rotation();
         assert.ok(returned.every((value, i) => Math.abs(value - before[i]!) < 1e-5));
         assert.equal((await mask()).length, 0, "snap turns do not trigger the mask");
+
       }
+    } finally {
+      if (previous === undefined) delete process.env.SHOCK2_SETTINGS_PATH;
+      else process.env.SHOCK2_SETTINGS_PATH = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`Smooth turning activates the vignette (${vr ? "VR" : "flat"})`, {
+    skip: !enabled && "set SHOCK2_E2E=1 to run",
+  }, async () => {
+    const root = await mkdtemp(join(tmpdir(), "shock2-smooth-test-"));
+    const path = join(root, "settings.json");
+    const previous = process.env.SHOCK2_SETTINGS_PATH;
+    process.env.SHOCK2_SETTINGS_PATH = path;
+    await writeFile(path, JSON.stringify({ vr: { turning: "Smooth", vignette: "High" } }));
+    try {
+      await using game = await GameServer.launch({ mission: "debug_minimal", debugFlags: vr ? ["--vr"] : [] });
+      await game.step({ frames: 10 });
+      const before = (await game.info()).player.rotation;
+      await game.input.set("left_hand.thumbstick", [1, 0]);
+      await game.step({ frames: 30 });
+      const after = (await game.info()).player.rotation;
+      const dot = before.reduce((sum, value, i) => sum + value * after[i]!, 0);
+      const angle = 2 * Math.acos(Math.min(1, Math.abs(dot))) * 180 / Math.PI;
+      assert.ok(Math.abs(angle - 45) < 0.05, `expected smooth 90 degrees/sec, got ${angle}`);
+      assert.ok((await game.scene.fromSource("vr_comfort_vignette")).length > 0);
     } finally {
       if (previous === undefined) delete process.env.SHOCK2_SETTINGS_PATH;
       else process.env.SHOCK2_SETTINGS_PATH = previous;
@@ -99,6 +126,8 @@ for (const vr of [false, true]) {
         await click(game, [240, 36]);
         await click(game, [333, 113]); // 30 -> 45 degrees
         assert.equal((await saved()).vr.snap_angle, 45);
+        await click(game, [333, 84]); // Snap -> Smooth
+        assert.equal((await saved()).vr.turning, "Smooth");
         await click(game, DONE);
         assert.equal((await game.info()).mission, "main_menu");
       }
