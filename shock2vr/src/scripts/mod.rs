@@ -66,6 +66,7 @@ mod picture_swap;
 pub mod player_script;
 mod psi_amp_script;
 pub(crate) use psi_amp_script::{amp_aim_ray, player_psi_points};
+pub(crate) mod force_wall;
 mod psi_kit;
 mod psi_mine;
 mod psi_sword;
@@ -1262,6 +1263,7 @@ impl ScriptWorld {
             // Keycard in watt's office
             "minigameboy" => gui_script(Box::new(GamePigGui)),
             "minigamecart" => Box::new(NoopScript::new()),
+            "forcewallstructure" => Box::new(force_wall::ForceWallStructure::default()),
             "forcedoor" => Box::new(UnimplementedScript::new(&script_name)),
             "wormpilescript" => Box::new(UnimplementedScript::new(&script_name)),
             "traptoxincleanse" => Box::new(hazard_objects::HazardObject::Cleanse(true)),
