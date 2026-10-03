@@ -4495,6 +4495,57 @@ impl PhysicsWorld {
         nvec_to_cgmath(character_body.next_position().translation.vector)
     }
 
+    /// Shift the tracking origin for an artificial turn about the physical
+    /// head. Preserve jump/fall state and pending movement; reject the whole
+    /// turn when its capsule sweep would cross geometry. Held targets follow
+    /// through `rebase_held_targets`, using this corrected origin.
+    pub fn try_shift_player_for_turn(
+        &mut self,
+        delta: Vector3<f32>,
+        player: &mut PlayerHandle,
+    ) -> bool {
+        if !delta.x.is_finite() || !delta.z.is_finite() || delta.y != 0.0 {
+            return false;
+        }
+        if delta.magnitude2() <= 1e-12 {
+            return true;
+        }
+        // A top-out owns an authored world-space route until it lands.
+        if player.is_topping_out() {
+            return false;
+        }
+        let body = &self.rigid_body_set[player.character_handle];
+        let shape = self.collider_set[body.colliders()[0]].shape();
+        let shift = vec_to_nvec(delta);
+        let current = *body.position();
+        let next = *body.next_position();
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            player_pose_filter(player.character_handle),
+        );
+        for from in [current.translation.vector, next.translation.vector] {
+            if !shape_sweep_is_clear(&queries, from, from + shift, shape)
+                || shape_intersects(&queries, from + shift, shape)
+            {
+                return false;
+            }
+        }
+        let body = &mut self.rigid_body_set[player.character_handle];
+        let mut moved = current;
+        moved.translation.vector += shift;
+        body.set_position(moved, true);
+        let mut pending = next;
+        pending.translation.vector += shift;
+        body.set_next_kinematic_position(pending);
+        if let Some(previous) = &mut self.last_player_translation {
+            *previous += delta;
+        }
+        self.refresh_player_support(player);
+        true
+    }
+
     fn top_out_save_pose_is_clear(
         &self,
         player_handle: &PlayerHandle,
@@ -10373,6 +10424,42 @@ mod tests {
             (height - expected_height).abs() < 1.0e-5 && (width - expected_width).abs() < 1.0e-5,
             "expected {expected_height} x {expected_width} SS2 feet, got {height} x {width}"
         );
+    }
+
+    #[test]
+    fn turn_origin_shift_preserves_pending_motion_and_airborne_state() {
+        let mut world = PhysicsWorld::new();
+        let mut player = world.create_player(vec3(0.0, 5.0, 0.0), EntityId::from_inner(1).unwrap());
+        let current = world.get_player_translation(&player);
+        let pending = current + vec3(0.0, -0.1, 0.2);
+        world.rigid_body_set[player.character_handle]
+            .set_next_kinematic_translation(vec_to_nvec(pending));
+        player.jump_velocity = Some(-3.0);
+        player.air_velocity = vector![1.0, 0.0, 2.0];
+        let fall_reference = player.fatal_fall.reference_y;
+        world.last_player_translation = Some(current);
+        let shift = vec3(0.2, 0.0, -0.3);
+        assert!(world.try_shift_player_for_turn(shift, &mut player));
+        assert_eq!(world.get_player_translation(&player), current + shift);
+        assert_eq!(world.get_player_next_translation(&player), pending + shift);
+        assert_eq!(world.last_player_translation, Some(current + shift));
+        assert_eq!(player.jump_velocity, Some(-3.0));
+        assert_eq!(player.air_velocity, vector![1.0, 0.0, 2.0]);
+        assert_eq!(player.fatal_fall.reference_y, fall_reference);
+    }
+
+    #[test]
+    fn turn_origin_shift_cannot_cross_a_wall_even_with_a_clear_destination() {
+        let mut world = PhysicsWorld::new();
+        let mut player = world.create_player(vec3(0.0, 3.0, 0.0), EntityId::from_inner(1).unwrap());
+        slab(&mut world, 2, [1.0, -10.0, -10.0], [1.1, 10.0, 10.0]);
+        step(&mut world, &mut player, 1);
+        let current = world.get_player_translation(&player);
+        let pending = world.get_player_next_translation(&player);
+        assert!(!world.try_shift_player_for_turn(vec3(3.0, 0.0, 0.0), &mut player));
+        assert_eq!(world.get_player_translation(&player), current);
+        assert_eq!(world.get_player_next_translation(&player), pending);
+        assert!(world.try_shift_player_for_turn(vec3(-0.2, 0.0, 0.0), &mut player));
     }
 
     /// Standing is the original's 6 x 2.4-foot body; crouching (and direct

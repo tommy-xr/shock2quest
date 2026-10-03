@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import {
   DEV_ACTION,
+  PAUSE_DEVELOPER,
   DEV_DONE,
   clickCanvas as click,
   pauseEntry,
@@ -19,7 +20,6 @@ import {
 // because nothing claims that rect on the pause host.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-const PAUSE_DEVELOPER = pauseEntry(3);
 const PAUSE_CONTINUE = pauseEntry(0);
 
 // The rows run down the developer frame's list pane (GAMELODR.BIN rect 1:
@@ -27,11 +27,11 @@ const PAUSE_CONTINUE = pauseEntry(0);
 // the shipped cheats fit one page: no scroll gutter, and a row spans the full
 // pane width.
 const row = (index: number): [number, number] => [261 + 202 / 2, 54 + index * 19 + 19 / 2];
-const RAIN_WEAPONS = row(0);
-const RAIN_MODULES = row(1);
-const HUNT_ME = row(2);
-const CALM_ALL = row(4);
-const MAX_STATS = row(5);
+const RAIN_WEAPONS = row(1);
+const RAIN_MODULES = row(2);
+const HUNT_ME = row(3);
+const CALM_ALL = row(5);
+const MAX_STATS = row(6);
 
 /**
  * Open the Cheats page from a running mission, click one row, close back out
@@ -83,7 +83,7 @@ test(
     await game.step({ frames: 10 });
     assert.equal((await game.info()).paused, true);
 
-    // Root -> Developer (the repurposed Options slot) -> Cheats.
+    // Root -> Developer (the separate Developer entry) -> Cheats.
     await click(game, PAUSE_DEVELOPER);
     await click(game, DEV_ACTION);
     assert.equal((await game.info()).paused, true, "the page turn must not resume");

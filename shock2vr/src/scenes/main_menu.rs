@@ -107,6 +107,8 @@ const FALLBACK_BUTTON_PITCH: f32 = 76.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
+    Options,
+    OptionsEvent(crate::ui::options_panel::OptionsEvent),
     NewGame,
     ChooseDifficulty(dark::gamesys::Difficulty),
     StartGame,
@@ -166,7 +168,7 @@ const NEW_GAME_ITEMS: &[FrontendMenuItem<MenuAction>] = &[
     FrontendMenuItem {
         string_key: "options",
         fallback_label: "Options",
-        action: None,
+        action: Some(MenuAction::Options),
         label_override: None,
     },
     FrontendMenuItem {
@@ -199,7 +201,7 @@ const MENU_ITEMS: &[FrontendMenuItem<MenuAction>] = &[
     FrontendMenuItem {
         string_key: "options",
         fallback_label: "Options",
-        action: None,
+        action: Some(MenuAction::Options),
         label_override: None,
     },
     FrontendMenuItem {
@@ -346,6 +348,7 @@ enum NewRun {
 }
 
 pub struct MainMenuScene {
+    options_panel: Option<crate::ui::options_panel::OptionsPanel>,
     world: World,
     scene_name: String,
     menu: FrontendMenu<MenuAction>,
@@ -363,6 +366,7 @@ impl MainMenuScene {
         let world = super::ui_scene_world();
 
         Self {
+            options_panel: None,
             world,
             scene_name: "main_menu".to_owned(),
             choosing_difficulty: None,
@@ -413,6 +417,20 @@ impl MainMenuScene {
             self.version_clicks = 0;
         }
         match action {
+            Some(MenuAction::Options) => {
+                self.options_panel = Some(Default::default());
+                Vec::new()
+            }
+            Some(MenuAction::OptionsEvent(event)) => {
+                if self
+                    .options_panel
+                    .as_mut()
+                    .is_some_and(|panel| panel.activate(event))
+                {
+                    self.options_panel = None;
+                }
+                Vec::new()
+            }
             Some(MenuAction::BuildInfo) => {
                 if !self.developer_enabled && self.register_version_click() {
                     match crate::developer_mode::set_enabled(true) {
@@ -481,6 +499,9 @@ impl MainMenuScene {
         asset_cache: &mut AssetCache,
         pointer_canvas: Option<Vector2<f32>>,
     ) -> UiCanvas {
+        if let Some(panel) = &self.options_panel {
+            return panel.canvas(asset_cache, pointer_canvas);
+        }
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
 
         if self.choosing_difficulty.is_some() {
@@ -503,8 +524,6 @@ impl MainMenuScene {
                 let opacity = if index == 0 || selected {
                     HOVER_OPACITY
                 } else if item.action.is_none() {
-                    // Retail's Options slot is visible but unavailable until a
-                    // real options screen exists; it cannot discard this selection.
                     DISABLED_OPACITY
                 } else if pointer_canvas.is_some_and(|point| rect.contains(point)) {
                     HOVER_OPACITY
@@ -614,6 +633,19 @@ impl GameScene for MainMenuScene {
         }
         if let Some(anims) = &mut self.anims {
             anims.advance(time.elapsed.as_secs_f32());
+        }
+
+        if let Some(panel) = &self.options_panel {
+            let layout = crate::ui::options_panel::OptionsLayout::load(asset_cache);
+            let resolve = |point| panel.hit(&layout, point).map(MenuAction::OptionsEvent);
+            let action = self.menu.update(
+                time.elapsed,
+                input_context,
+                game_options.presentation_mode,
+                resolve,
+                resolve,
+            );
+            return self.handle_action(action);
         }
 
         let rects = if self.choosing_difficulty.is_some() {
@@ -776,8 +808,8 @@ mod tests {
         );
         assert_eq!(
             difficulty_hit(center(6), &NEW_GAME_RECTS),
-            None,
-            "unimplemented Options is disabled"
+            Some(MenuAction::Options),
+            "Options keeps the selected run on the parent page"
         );
     }
 
@@ -991,12 +1023,29 @@ mod tests {
     }
 
     #[test]
-    fn options_slot_is_inert_until_options_are_implemented() {
+    fn options_slot_opens_the_options_panel() {
         // Developer moved to NETMAIN's dedicated bottom-left slot.
         let rects = menu_rects(None);
         assert!(rects[2].contains(vec2(512.0, 202.0)));
         let (action, _, _) = resolve_click(pointer_at(0.8, 0.4208, true), false, SCREEN, &rects);
-        assert_eq!(action, None);
+        assert_eq!(action, Some(MenuAction::Options));
+    }
+
+    #[test]
+    fn options_returns_to_the_selected_run_and_difficulty() {
+        let mut menu = MainMenuScene::new();
+        menu.handle_action(Some(MenuAction::Survive));
+        menu.handle_action(Some(MenuAction::ChooseDifficulty(
+            dark::gamesys::Difficulty::Hard,
+        )));
+        menu.handle_action(Some(MenuAction::Options));
+        assert!(menu.options_panel.is_some());
+        menu.handle_action(Some(MenuAction::OptionsEvent(
+            crate::ui::options_panel::OptionsEvent::Done,
+        )));
+        assert!(menu.options_panel.is_none());
+        assert_eq!(menu.choosing_difficulty, Some(NewRun::Horde));
+        assert_eq!(menu.difficulty, dark::gamesys::Difficulty::Hard);
     }
 
     #[test]
@@ -1050,7 +1099,7 @@ mod tests {
         // Missing key and empty value both fall back to the shipped English.
         assert_eq!(labels[1], "Load Game");
         assert_eq!(labels[4], "Survive");
-        // Options remains inert; the extra Multiplayer slot reads Developer.
+        // Options keeps its own slot; the extra Multiplayer slot reads Developer.
         assert_eq!(labels[2], "Options");
         assert_eq!(labels[6], "Developer");
     }
@@ -1161,7 +1210,10 @@ mod tests {
         let point = rects[6].center();
         assert_eq!(hit(point, &rects, false), None);
         assert_eq!(hit(point, &rects, true), Some(MenuAction::Developer));
-        assert_eq!(hit(rects[2].center(), &rects, true), None);
+        assert_eq!(
+            hit(rects[2].center(), &rects, true),
+            Some(MenuAction::Options)
+        );
         // Once unlocked, the footer never acts as a build-label target.
         assert_ne!(
             hit(BUILD_INFO_RECT.center(), &rects, true),

@@ -66,6 +66,7 @@ const LAYOUT_FILE: &str = "SIMR.BIN";
 const LABELS_FILE: &str = "SIM.STR";
 /// The same display font the main menu uses (`res/intrface/METAFONT.FON`).
 const MENU_FONT: &str = "metafont.fon";
+const DEVELOPER_RECT: Rect = Rect::new(14.0, 440.0, 170.0, 30.0);
 /// Baseline pitch for a label that asks for more than one line: METAFONT's
 /// 20px cell plus a little leading. Splitting the 76px button rect evenly
 /// instead would push a two-line label off the top and bottom of its art.
@@ -120,6 +121,7 @@ pub enum PauseAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseMenuPage {
     Root,
+    Options,
     HordeReport,
     Developer,
     /// The Developer screen's [`cheats_panel`] page. It lives here rather than
@@ -133,12 +135,14 @@ enum PauseMenuPage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseMenuEntry {
     Action(PauseAction),
+    Options,
     /// Switch to the Developer page.
     Developer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseMenuTarget {
+    Options(crate::ui::options_panel::OptionsEvent),
     HordeReport(bool),
     Root(PauseMenuEntry),
     Developer(dev_params_panel::DevParamsEvent),
@@ -170,13 +174,11 @@ const MENU_ITEMS: &[FrontendMenuItem<PauseMenuEntry>] = &[
         action: None,
         label_override: None,
     },
-    // The Options slot hosts the Developer page while no real options screen
-    // exists, matching the main menu's slot.
     FrontendMenuItem {
         string_key: "options",
         fallback_label: "Options",
-        action: Some(PauseMenuEntry::Developer),
-        label_override: Some("Developer"),
+        action: Some(PauseMenuEntry::Options),
+        label_override: None,
     },
     FrontendMenuItem {
         string_key: "quit",
@@ -241,6 +243,9 @@ fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
 /// highlight go through this, so the two can never disagree about where an
 /// entry is - or about which entries are live at all.
 fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<PauseMenuEntry> {
+    if DEVELOPER_RECT.contains(point) {
+        return Some(PauseMenuEntry::Developer);
+    }
     hit_menu_item(point, MENU_ITEMS, rects, |_| true)
 }
 
@@ -253,6 +258,9 @@ fn target_at(
     point: Vector2<f32>,
 ) -> Option<PauseMenuTarget> {
     match page {
+        // Options resolves its authored layout in update, independently of
+        // the Developer panel's geometry passed to this helper.
+        PauseMenuPage::Options => None,
         PauseMenuPage::Root => hit(point, rects).map(PauseMenuTarget::Root),
         PauseMenuPage::HordeReport => crate::ui::horde_report::continue_at(
             point,
@@ -309,6 +317,7 @@ fn resolve_click(
 
 /// The pause overlay. Closed by default; [`PauseMenu::open`] arms it.
 pub struct PauseMenu {
+    options_panel: crate::ui::options_panel::OptionsPanel,
     horde_report: Option<(u32, crate::horde_stats::HordeBattleStats)>,
     open: bool,
     /// Which page the overlay is showing; reset to the root on every open.
@@ -344,6 +353,7 @@ impl Default for PauseMenu {
 impl PauseMenu {
     pub fn new() -> Self {
         Self {
+            options_panel: Default::default(),
             open: false,
             horde_report: None,
             page: PauseMenuPage::Root,
@@ -465,6 +475,21 @@ impl PauseMenu {
             return None;
         }
 
+        if self.page == PauseMenuPage::Options {
+            self.head = (input_context.head.position, input_context.head.rotation);
+            let layout = crate::ui::options_panel::OptionsLayout::load(asset_cache);
+            let panel = &self.options_panel;
+            let resolve = |point| panel.hit(&layout, point).map(PauseMenuTarget::Options);
+            let target = self.menu.update(
+                elapsed,
+                input_context,
+                options.presentation_mode,
+                resolve,
+                resolve,
+            );
+            return self.handle_target(target);
+        }
+
         let rects = self.rects(asset_cache);
         // The Developer page's rows ride the backdrop's authored widget rects,
         // so they follow the layout file rather than hardcoded numbers.
@@ -510,6 +535,13 @@ impl PauseMenu {
         pressed: bool,
         rects: &[Rect],
     ) -> Option<PauseAction> {
+        if self.page == PauseMenuPage::Options {
+            let layout = crate::ui::options_panel::OptionsLayout::default();
+            let panel = &self.options_panel;
+            let resolve = |point| panel.hit(&layout, point).map(PauseMenuTarget::Options);
+            let target = self.menu.resolve_pointer(point, pressed, resolve, resolve);
+            return self.handle_target(target);
+        }
         let page = self.page;
         let panel_rects = self.panel_rects;
         let navigation = *self.navigation.lock().unwrap();
@@ -525,6 +557,12 @@ impl PauseMenu {
 
     fn handle_target(&mut self, target: Option<PauseMenuTarget>) -> Option<PauseAction> {
         match target {
+            Some(PauseMenuTarget::Options(event)) => {
+                if self.options_panel.activate(event) {
+                    self.page = PauseMenuPage::Root;
+                }
+                None
+            }
             Some(PauseMenuTarget::HordeReport(continue_run)) => Some(if continue_run {
                 PauseAction::ContinueHorde
             } else {
@@ -546,6 +584,11 @@ impl PauseMenu {
     /// Developer entry switches pages inside the overlay.
     fn handle_root_entry(&mut self, entry: Option<PauseMenuEntry>) -> Option<PauseAction> {
         match entry {
+            Some(PauseMenuEntry::Options) => {
+                self.options_panel = Default::default();
+                self.page = PauseMenuPage::Options;
+                None
+            }
             Some(PauseMenuEntry::Action(action)) => Some(action),
             Some(PauseMenuEntry::Developer) => {
                 self.page = PauseMenuPage::Developer;
@@ -717,6 +760,9 @@ impl PauseMenu {
         asset_cache: &mut AssetCache,
         pointer_canvas: Option<Vector2<f32>>,
     ) -> UiCanvas {
+        if self.page == PauseMenuPage::Options {
+            return self.options_panel.canvas(asset_cache, pointer_canvas);
+        }
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
         if let Some((wave, stats)) = &self.horde_report {
             let continue_rect = self
@@ -802,15 +848,25 @@ impl PauseMenu {
             .and_then(|p| hit(p, &rects))
             .filter(|entry| developer_enabled || *entry != PauseMenuEntry::Developer);
 
+        if developer_enabled {
+            canvas
+                .text_native_fit(
+                    DEVELOPER_RECT,
+                    "Developer",
+                    MENU_FONT,
+                    HAlign::Center,
+                    VAlign::Middle,
+                )
+                .opacity(if hovered == Some(PauseMenuEntry::Developer) {
+                    HOVER_OPACITY
+                } else {
+                    IDLE_OPACITY
+                });
+        }
+
         for ((item, rect), label) in MENU_ITEMS.iter().zip(&rects).zip(&labels) {
-            let locked_developer =
-                item.action == Some(PauseMenuEntry::Developer) && !developer_enabled;
-            let label = if locked_developer {
-                "Options"
-            } else {
-                label.as_str()
-            };
-            let opacity = if item.action.is_none() || locked_developer {
+            let label = label.as_str();
+            let opacity = if item.action.is_none() {
                 DISABLED_OPACITY
             } else if item.action == hovered {
                 HOVER_OPACITY
@@ -913,12 +969,7 @@ mod tests {
     #[test]
     fn clicking_the_developer_slot_switches_pages_without_reaching_game() {
         let rects = menu_rects(None);
-        let (entry, _, _) = resolve_click(
-            pointer_at(rects[OPTIONS_INDEX], true),
-            false,
-            SCREEN,
-            &rects,
-        );
+        let (entry, _, _) = resolve_click(pointer_at(DEVELOPER_RECT, true), false, SCREEN, &rects);
         assert_eq!(entry, Some(PauseMenuEntry::Developer));
 
         let mut menu = PauseMenu::new();
@@ -930,6 +981,42 @@ mod tests {
         assert_eq!(menu.handle_root_entry(entry), None);
         assert_eq!(menu.page, PauseMenuPage::Developer);
         assert!(menu.is_open());
+    }
+
+    #[test]
+    fn options_done_returns_to_pause_without_resuming_the_mission() {
+        let mut menu = PauseMenu::new();
+        menu.open();
+        assert_eq!(menu.handle_root_entry(Some(PauseMenuEntry::Options)), None);
+        assert_eq!(menu.page, PauseMenuPage::Options);
+        assert!(menu.suspends_scene());
+        assert_eq!(
+            menu.handle_target(Some(PauseMenuTarget::Options(
+                crate::ui::options_panel::OptionsEvent::Done
+            ))),
+            None
+        );
+        assert_eq!(menu.page, PauseMenuPage::Root);
+        assert!(menu.suspends_scene());
+    }
+
+    #[test]
+    fn holding_done_cannot_click_through_to_quit() {
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.handle_root_entry(Some(PauseMenuEntry::Options));
+        let rects = menu_rects(None);
+        menu.consume_pointer(None, false, &rects);
+        assert_eq!(
+            menu.consume_pointer(Some(vec2(320.0, 436.0)), true, &rects),
+            None
+        );
+        assert_eq!(menu.page, PauseMenuPage::Root);
+        assert_eq!(
+            menu.consume_pointer(Some(rects[QUIT_INDEX].center()), true, &rects),
+            None
+        );
+        assert!(menu.suspends_scene());
     }
 
     #[test]
@@ -1099,7 +1186,7 @@ mod tests {
         menu.open();
         menu.menu.set_last_pressed(false);
 
-        let developer = rects[OPTIONS_INDEX].center();
+        let developer = DEVELOPER_RECT.center();
         assert_eq!(menu.consume_pointer(Some(developer), true, &rects), None);
         assert_eq!(menu.page, PauseMenuPage::Developer);
         // Still held on the next frame: the edge is already spent, so no
@@ -1179,9 +1266,8 @@ mod tests {
         assert_eq!(labels[RESUME_INDEX], "Continue");
         assert_eq!(labels[SAVE_INDEX], "Save Game");
         assert_eq!(labels[QUIT_INDEX], "Quit to \\nMain Menu");
-        // The repurposed Options slot reads what it does, whatever the
-        // string table says.
-        assert_eq!(labels[OPTIONS_INDEX], "Developer");
+        // Options uses the original string again; Developer has its own entry.
+        assert_eq!(labels[OPTIONS_INDEX], "Options");
     }
 
     #[test]
@@ -1203,7 +1289,7 @@ mod tests {
                 "Continue",
                 "Save Game",
                 "Load Game",
-                "Developer",
+                "Options",
                 "Quit to \\nMain Menu"
             ]
         );
@@ -1362,7 +1448,7 @@ mod tests {
         assert_eq!(hit(rects[SAVE_INDEX].center(), &rects), None);
         assert_eq!(
             hit(rects[OPTIONS_INDEX].center(), &rects),
-            Some(PauseMenuEntry::Developer)
+            Some(PauseMenuEntry::Options)
         );
         assert_eq!(
             hit(rects[QUIT_INDEX].center(), &rects),

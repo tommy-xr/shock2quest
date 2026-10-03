@@ -41,12 +41,14 @@ export async function clickMenuEntry(game: GameServer, index: number): Promise<v
 /**
  * The pause overlay's entries, in CANVAS pixels. SIMR.BIN stacks five 179x76
  * buttons at x=400, top 20, on a 92px pitch, in screen order: 0 "Continue",
- * 1 "Save", 2 "Load", 3 the repurposed Options/Developer slot, 4 "Quit".
+ * 1 "Save", 2 "Load", 3 "Options", 4 "Quit".
  *
  * Canvas pixels, not normalized, so it composes with `clickCanvas` like every
  * other point constant - the two copies this replaced had diverged on exactly
  * that, one normalized and one not, under the same name.
  */
+export const PAUSE_DEVELOPER: [number, number] = [99, 455];
+
 export const pauseEntry = (index: number): [number, number] => [
   400 + 179 / 2,
   20 + index * 92 + 76 / 2,

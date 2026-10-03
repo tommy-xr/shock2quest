@@ -42,6 +42,7 @@ mod frontend_presentation;
 mod frontend_sfx;
 pub mod horde_report;
 pub mod list_scroll;
+pub mod options_panel;
 mod panel_anchor;
 mod pointer_visual;
 mod ui_anim;

@@ -5,6 +5,7 @@ import { GameServer } from "../src/index.js";
 import type { SceneObjectSummary } from "../src/types.js";
 import {
   DEV_ACTION,
+  PAUSE_DEVELOPER,
   DEV_DONE,
   clickCanvas as click,
   norm,
@@ -25,10 +26,10 @@ const DEVELOPER_BUTTON: [number, number] = [88, 444];
 const DEVELOPER_ENTRY = norm(...DEVELOPER_BUTTON);
 
 // Camera & view is root category row 5. Its first parameter is
-// panel_distance. Compact single-line entries fit without a scroll gutter.
+// panel_distance. The camera list scrolls, so arrow centers leave its 32px gutter clear.
 const CAMERA_CATEGORY: [number, number] = [330, 54 + 5 * 28 + 12];
-const ROW0_INCREMENT: [number, number] = [449, 66];
-const ROW0_DECREMENT: [number, number] = [407, 66];
+const ROW0_INCREMENT: [number, number] = [425, 66];
+const ROW0_DECREMENT: [number, number] = [383, 66];
 
 // The upper framed button (`GAMELODR.BIN` rect 2 - the load screen's "Load"
 // frame): the debug-scene launcher's door on the parameters page, and the
@@ -53,7 +54,6 @@ const sceneRow = (index: number): [number, number] => [330, 54 + index * 19 + 9]
 const DEBUG_MINIMAL_ROW = 2;
 const MEDSCI1_ROW = 9;
 
-const PAUSE_DEVELOPER = pauseEntry(3);
 
 async function paramValue(game: GameServer, key: string): Promise<number> {
   const { params } = await game.devParams.list();
@@ -186,7 +186,7 @@ test(
     await game.step({ frames: 10 });
     assert.equal((await game.info()).paused, true);
 
-    // The repurposed Options slot turns the overlay's page - the mission
+    // The separate Developer entry turns the overlay's page - the mission
     // stays loaded and paused underneath.
     await click(game, PAUSE_DEVELOPER);
     assert.equal((await game.info()).paused, true, "the page turn must not resume");
@@ -369,7 +369,7 @@ for (const vr of [false, true]) {
       await press(category(0)); // Hands & gloves
       const locked = (await game.devParams.list()).params.find(p => p.key === "glove_forward_cm");
       assert.equal(locked?.locked, true);
-      await press([449, 66]);
+      await press([425, 66]);
       assert.equal(await paramValue(game, "glove_forward_cm"), -14.5);
       await game.devParams.set("glove_forward_cm", -15);
       assert.equal(await paramValue(game, "glove_forward_cm"), -15);

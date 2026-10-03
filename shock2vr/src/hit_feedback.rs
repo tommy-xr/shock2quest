@@ -313,6 +313,26 @@ pub fn vignette_layer(
     intensity: f32,
     source: &str,
 ) -> SceneObject {
+    vignette_layer_at_pose(
+        view_extents,
+        Matrix4::from_translation(eye_position)
+            * Matrix4::from(crate::util::get_rotation_from_forward_vector(-eye_forward)),
+        color,
+        intensity,
+        (CLEAR_FIELD_FRACTION, FULL_FIELD_FRACTION),
+        source,
+    )
+}
+
+/// Shared geometry for damage feedback and configurable VR comfort masks.
+pub fn vignette_layer_at_pose(
+    view_extents: (f32, f32),
+    eye_pose: Matrix4<f32>,
+    color: Vector3<f32>,
+    intensity: f32,
+    radii: (f32, f32),
+    source: &str,
+) -> SceneObject {
     let (horizontal, vertical) = view_extents;
     let width = 2.0 * LAYER_DISTANCE * horizontal * COVERAGE_MARGIN;
     let height = 2.0 * LAYER_DISTANCE * vertical * COVERAGE_MARGIN;
@@ -323,16 +343,14 @@ pub fn vignette_layer(
             // The quad is `COVERAGE_MARGIN` wider than the picture, so the
             // edge of the picture sits at `1 / COVERAGE_MARGIN` in the shader's
             // radius units and the fractions scale down to match.
-            CLEAR_FIELD_FRACTION / COVERAGE_MARGIN,
-            FULL_FIELD_FRACTION / COVERAGE_MARGIN,
+            radii.0 / COVERAGE_MARGIN,
+            radii.1 / COVERAGE_MARGIN,
         ),
         Box::new(engine::scene::quad::create()),
     );
     object.set_transform(
-        Matrix4::from_translation(eye_position + eye_forward * LAYER_DISTANCE)
-            // The quad's +Z faces the viewer once it is turned to look back
-            // along the gaze.
-            * Matrix4::from(crate::util::get_rotation_from_forward_vector(-eye_forward))
+        eye_pose
+            * Matrix4::from_translation(vec3(0.0, 0.0, -LAYER_DISTANCE))
             * Matrix4::from_nonuniform_scale(width, height, 1.0),
     );
     // Translucent: writing depth here would let the layer occlude anything
