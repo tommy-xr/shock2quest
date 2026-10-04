@@ -19,7 +19,33 @@ Each GLB embeds its color, normal and metallic/roughness maps, resized from
 before resizing and its emissive factor is zero. The holster base color is
 darkened to 61% brightness to match the belt's average texture luminance while
 retaining its worn detail. PBR maps are retained for editing; gameplay currently uses
-only base color.
+only base color. The shared outfit finish below is applied after this source matching.
+
+## Shared charcoal finish
+
+All three assets then receive **85% contrast and 55% brightness** on base color,
+in that order, to sit closer to the hacker's dark outfit. Lower contrast softens
+the pale baked scratches; the brightness pass darkens panels and wear together.
+Normal and metallic/roughness images, UVs, material settings, and geometry are
+unchanged. Texture resolution remains 1024×1024.
+
+These are the preparation script's defaults. To experiment, regenerate from the
+original exports (never feed the prepared assets back through the geometry pass):
+
+```sh
+python3 tools/prepare_vr_body_gear.py \
+  --belt '/path/to/original-belt.glb' \
+  --holster '/path/to/original-holster.glb' \
+  --backpack '/path/to/backpack_triangle_3k.glb' \
+  --gear-brightness 0.55 --gear-contrast 0.85 \
+  --output-dir /tmp/charcoal-gear
+```
+
+The comparison pass used brightness 0.75 (light), 0.55 (charcoal), and 0.40
+(near-black), each with contrast 0.85 under identical runtime lighting. To reproduce
+the previous finish, use `--gear-brightness 1 --gear-contrast 1`.
+
+## Belt and holster placement
 
 Geometry retains the source topology (belt: 2,962 triangles; holster: 2,946).
 Placement is baked into the vertices for consistent gameplay/editor loading:
@@ -43,8 +69,9 @@ python3 tools/prepare_vr_body_gear.py --backpack /path/to/backpack_triangle_3k.g
 Both embedded maps are 1024×1024 (source: 2048² base color and 4096²
 metallic/roughness). Only base color receives the tonal adjustment: 90% contrast,
 then 60% brightness. This matches the belt/holster's charcoal finish while keeping
-the UV layout and wear marks. The material map is only resized. The packed GLB
-is approximately 2.9 MB, down from 18.1 MB.
+the UV layout and wear marks. The shared charcoal finish is then applied to base
+color. The material map is only resized. The packed GLB is approximately 2.5 MB,
+down from 18.1 MB.
 
 The original topology is retained, normalized to 44 cm height (32.4 cm wide,
 24.2 cm deep). Its contact surface is at Z=0, centre height at Y=0, and front
