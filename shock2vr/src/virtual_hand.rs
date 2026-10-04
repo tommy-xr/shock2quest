@@ -1,6 +1,6 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
-use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, Zero, point3, vec3};
+use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, Zero, point3, vec3};
 use dark::{
     SCALE_FACTOR,
     properties::{FrobFlag, PropFrobInfo, PropModelName},
@@ -516,8 +516,7 @@ impl VirtualHand {
         (hand, effs)
     }
 
-    /// Render the hand (skin + forearm) for this hand, plus the raycast-hit
-    /// debug cube. The hand renderer is owned by the caller (`VrInteraction`)
+    /// Render the hand (skin + forearm) for this hand. The hand renderer is owned by the caller (`VrInteraction`)
     /// so its cached state is shared between both hands.
     pub fn render(
         &self,
@@ -564,21 +563,6 @@ impl VirtualHand {
             crate::psi_invisibility::apply(object, invisibility);
         }
 
-        let hit_color = self.color_from_state();
-
-        // Show ray trace hit
-        if let Some(rayhit) = &self.raytrace_hit {
-            let cm = engine::scene::color_material::create(hit_color);
-            let transform = Matrix4::from_translation(vec3(
-                rayhit.hit_point.x,
-                rayhit.hit_point.y,
-                rayhit.hit_point.z,
-            )) * Matrix4::from_scale(0.05);
-            let mut new_obj = SceneObject::new(cm, Box::new(engine::scene::cube::create()));
-            new_obj.set_transform(transform);
-            scene_objects.push(new_obj);
-        }
-
         scene_objects
     }
 
@@ -601,17 +585,6 @@ impl VirtualHand {
     pub(crate) fn feedback_diagnostics(&self) -> serde_json::Value {
         serde_json::json!({"target": self.get_raytraced_entity().map(|id| id.inner() as i32),
             "affordance": self.feedback.observed, "light": format!("{:?}", self.feedback.light())})
-    }
-
-    fn color_from_state(&self) -> Vector3<f32> {
-        if self.trigger_value < 0.1 && self.squeeze_value < 0.1 {
-            vec3(1.0, 1.0, 1.0)
-        } else {
-            let r = self.trigger_value;
-            let b = self.squeeze_value;
-            let g = 0.0;
-            vec3(r, g, b)
-        }
     }
 }
 
