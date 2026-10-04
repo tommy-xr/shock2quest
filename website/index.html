@@ -26,7 +26,7 @@ nav.top .links a:not(.social):hover{color:var(--cyan)}
 .social:hover{color:var(--cyan)}
 .social svg{width:18px;height:18px}
 /* Hero: full-bleed gameplay, copy left, install card right. */
-.hero{position:relative;min-height:100vh;padding:96px 5vw 48px;display:grid;grid-template-columns:1.1fr minmax(340px,440px);gap:5vw;align-items:center;overflow:hidden}
+.hero{position:relative;min-height:100vh;padding:96px 5vw 48px;display:grid;grid-template-columns:minmax(0,640px);gap:5vw;align-items:center;overflow:hidden}
 .hero .bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}
 .hero::after{content:"";position:absolute;inset:0;z-index:1;background:linear-gradient(90deg,rgba(5,11,13,.9) 0,rgba(5,11,13,.45) 55%,rgba(5,11,13,.7)),linear-gradient(0deg,var(--bg),transparent 25%)}
 .hero > *:not(.bg){position:relative;z-index:2;min-width:0}
@@ -45,6 +45,7 @@ h1 span{color:var(--cyan)}
 .card li{counter-increment:s;padding:10px 0 12px 38px;position:relative;border-top:1px solid #12303a}
 .card li::before{content:"0" counter(s);position:absolute;left:0;top:10px;font:14px "Share Tech Mono",monospace;color:var(--cyan)}
 .card li b{display:block}
+.install{max-width:720px}
 .card .req{font-size:13px;color:var(--dim);margin:0 0 10px}
 .code{position:relative;margin-top:6px;background:#020607;border:1px solid var(--line);padding:8px 64px 8px 10px;font:12px/1.5 "Share Tech Mono",monospace;white-space:pre;overflow-x:auto}
 .code button{position:absolute;top:5px;right:5px;background:var(--line);color:var(--fg);border:none;font:11px "Share Tech Mono",monospace;padding:3px 8px;cursor:pointer}
@@ -84,10 +85,10 @@ footer{max-width:1160px;margin:60px auto 0;padding:24px 20px 40px;border-top:1px
 <body>
 <nav class="top">
   <div class="brand">SHOCK2<b>QUEST</b></div>
-  <div class="links"><a href="#feeds">Feeds</a><a href="#equipment">Equipment</a><a href="#controls">Controls</a><a href="#disclosure">Disclosure</a><span id="social"></span></div>
+  <div class="links"><a href="#feeds">Feeds</a><a href="#equipment">Equipment</a><a href="#controls">Controls</a><a href="#install">Install</a><a href="#disclosure">Disclosure</a><span id="social"></span></div>
 </nav>
 
-<header class="hero" id="install">
+<header class="hero">
   <video class="bg" src="../screenshots/hero/ops2.mp4" poster="../screenshots/hero/ops2.png" autoplay muted loop playsinline aria-hidden="true"></video>
   <div>
     <div class="kicker">Unofficial fan project · Meta Quest</div>
@@ -96,20 +97,6 @@ footer{max-width:1160px;margin:60px auto 0;padding:24px 20px 40px;border-top:1px
     <div class="ctas"><a class="btn" data-l="release" href="#">Download APK</a><a class="btn ghost" href="#controls">See the controls</a></div>
     <div class="ver"><i></i><span data-version>Checking latest build…</span></div>
   </div>
-  <aside class="card">
-    <div class="kicker">Install</div>
-    <h2>Sideload in three steps</h2>
-    <p class="req">Quest in Developer Mode · <span class="mono">adb</span> · System Shock 2: 25th Anniversary Remaster (<a data-l="gog" href="#">GOG</a> / <a data-l="steam" href="#">Steam</a>)</p>
-    <ol>
-      <li><b>Download the APK</b><a data-l="release" href="#">Latest release ↗</a></li>
-      <li><b>Install it over USB</b><div class="code">adb install -r shock2quest-&lt;version&gt;.apk</div></li>
-      <li><b>Copy your game files</b><div class="code">adb shell mkdir -p /sdcard/shock2quest/mods
-adb push *.kpf /sdcard/shock2quest/
-adb push mods/*.kpf /sdcard/shock2quest/mods/
-adb push cutscenes /sdcard/shock2quest/</div></li>
-    </ol>
-    <p class="req" style="margin:8px 0 0">Launch from Unknown Sources. Windows commands and updating: <a data-l="install" href="#">INSTALL.md</a></p>
-  </aside>
 </header>
 
 <section id="feeds">
@@ -178,6 +165,23 @@ adb push cutscenes /sdcard/shock2quest/</div></li>
       <div class="clip" id="clip"></div>
       <div class="rows" id="rows"></div>
     </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="kicker">Install</div>
+  <h2 class="sec">Sideload in three steps.</h2>
+  <div class="card install">
+    <p class="req">Quest in Developer Mode · <span class="mono">adb</span> · System Shock 2: 25th Anniversary Remaster (<a data-l="gog" href="#">GOG</a> / <a data-l="steam" href="#">Steam</a>)</p>
+    <ol>
+      <li><b>Download the APK</b><a data-l="release" href="#">Latest release ↗</a></li>
+      <li><b>Install it over USB</b><div class="code">adb install -r shock2quest-&lt;version&gt;.apk</div></li>
+      <li><b>Copy your game files</b><div class="code">adb shell mkdir -p /sdcard/shock2quest/mods
+adb push *.kpf /sdcard/shock2quest/
+adb push mods/*.kpf /sdcard/shock2quest/mods/
+adb push cutscenes /sdcard/shock2quest/</div></li>
+    </ol>
+    <p class="req" style="margin:8px 0 0">Launch from Unknown Sources. Windows commands and updating: <a data-l="install" href="#">INSTALL.md</a></p>
   </div>
 </section>
 
