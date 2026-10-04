@@ -25,6 +25,7 @@ use rapier3d::{
 use shipyard::EntityId;
 
 use crate::game_scene::PlayerSavePoseError;
+use crate::ladder_holds::LadderHolds;
 
 use physics_events::*;
 
@@ -2731,6 +2732,13 @@ impl CollisionGroup {
 /// surface a tracked hand is resting on, small enough that it only finds the
 /// one face the hand is actually against.
 pub const CLIMB_GRIP_RADIUS: f32 = 0.15;
+/// How far from a ladder's modelled rung or rail the fist may touch the
+/// ladder and still close on it (about 15 cm): roughly a fist's radius plus
+/// a bar's half-thickness. Measured from the contact point on the ladder's
+/// box, so how far the hand stands off the face does not eat into it. A Rick
+/// ladder's rungs are 0.8 apart, which leaves the middle 0.4 between two of
+/// them empty.
+pub const LADDER_HOLD_REACH: f32 = 0.2;
 /// Extra reach around a lip (about 23 cm), separate from direct ladder contact.
 /// The raised approach must be clear, so this cannot reach through a wall.
 pub const CLIMB_LIP_REACH: f32 = 0.3;
@@ -3485,6 +3493,11 @@ pub struct PhysicsWorld {
     // entities, keyed by owner. Contact detection only needs the CLIMBABLE
     // group membership; the hand grip query needs to know WHICH face.
     climbable_sides: HashMap<EntityId, u32>,
+
+    // World-space rungs and rails of climbables whose model yielded any (see
+    // `set_ladder_holds`). A climbable without an entry is held anywhere on
+    // its authored faces.
+    ladder_holds: HashMap<EntityId, LadderHolds>,
 
     // Short-lived recovery state created only while a living, gravity-driven
     // creature is touching the side of horizontally-moving kinematic terrain.
@@ -5934,6 +5947,7 @@ impl PhysicsWorld {
         }
         self.entity_id_to_body.remove(&entity_id);
         self.climbable_sides.remove(&entity_id);
+        self.ladder_holds.remove(&entity_id);
         self.live_creature_sweep_recovery.remove(&entity_id);
         self.pending_player_push_velocity.remove(&entity_id);
     }
@@ -6175,6 +6189,7 @@ impl PhysicsWorld {
             // event_handler: Box::new(event_handler),
             entity_id_to_body: HashMap::new(),
             climbable_sides: HashMap::new(),
+            ladder_holds: HashMap::new(),
             live_creature_sweep_recovery: HashMap::new(),
             pending_player_push_velocity: HashMap::new(),
             kinematic_attachments: HashMap::new(),
@@ -6672,6 +6687,15 @@ impl PhysicsWorld {
         self.climbable_sides.insert(entity_id, sides);
     }
 
+    /// A climbable's modelled rungs and rails, in the world. Its physics body
+    /// is one box, so without them a hand closing on air between two rungs
+    /// would hold; with them [`Self::climbable_grip_at`] takes a ladder hold
+    /// only within [`LADDER_HOLD_REACH`] of one, snapped onto it. Held in the
+    /// world as placed at creation: ladders are static terrain.
+    pub fn set_ladder_holds(&mut self, entity_id: EntityId, holds: LadderHolds) {
+        self.ladder_holds.insert(entity_id, holds);
+    }
+
     /// What, if anything, a hand at `point` can hold onto.
     ///
     /// Probes a ball of `radius` and returns the nearest qualifying contact.
@@ -6680,7 +6704,8 @@ impl PhysicsWorld {
     /// rejects grabs on its top and bottom caps; a **Ledge** is any other
     /// solid, player-blocking surface whose face is walkable and sits more
     /// than a step above `feet_y` - the mantle-emulation hold. A wall face,
-    /// and the floor the player is standing on, offer neither.
+    /// and the floor the player is standing on, offer neither. A ladder with
+    /// modelled holds ([`Self::set_ladder_holds`]) is held only next to one.
     /// If direct contact fails, a bounded clear approach can hook a nearby
     /// ledge lip or an authored ladder side around its top cap. The returned
     /// point/normal belong to that actual surface, never the refused cap.
@@ -6762,6 +6787,7 @@ impl PhysicsWorld {
                 .memberships
                 .intersects(InternalCollisionGroups::CLIMBABLE.bits.into());
             let entity_id = EntityId::from_inner(collider.user_data as u64);
+            let mut held = vec3(contact.point2.x, contact.point2.y, contact.point2.z);
             let kind = if is_climbable {
                 // A climbable with no recorded mask is grippable all over;
                 // refusing it would make it silently unclimbable by hand.
@@ -6774,6 +6800,12 @@ impl PhysicsWorld {
                     // for it - a refused face does not fall through to the
                     // ledge rule and come back as a hold anyway.
                     continue;
+                }
+                if let Some(holds) = entity_id.and_then(|id| self.ladder_holds.get(&id)) {
+                    let Some(on_hold) = holds.nearest_hold(held, LADDER_HOLD_REACH) else {
+                        continue;
+                    };
+                    held = on_hold;
                 }
                 ClimbGripKind::Ladder
             } else {
@@ -6789,7 +6821,7 @@ impl PhysicsWorld {
                     ClimbGrip {
                         kind,
                         entity_id,
-                        point: vec3(contact.point2.x, contact.point2.y, contact.point2.z),
+                        point: held,
                         normal: vec3(outward.x, outward.y, outward.z),
                     },
                 ));
@@ -6879,13 +6911,22 @@ impl PhysicsWorld {
                 {
                     continue;
                 }
+                // A modelled ladder is hooked only next to one of its holds
+                // (a rail's top), and the grip lands on that hold.
+                let mut point = nvec_to_cgmath(contact.coords);
+                if let Some(holds) = entity_id.and_then(|id| self.ladder_holds.get(&id)) {
+                    let Some(on_hold) = holds.nearest_hold(point, LADDER_HOLD_REACH) else {
+                        continue;
+                    };
+                    point = on_hold;
+                }
                 if hook.as_ref().is_none_or(|(nearest, _)| distance < *nearest) {
                     hook = Some((
                         distance,
                         ClimbGrip {
                             kind: ClimbGripKind::Ladder,
                             entity_id,
-                            point: nvec_to_cgmath(contact.coords),
+                            point,
                             normal: nvec_to_cgmath(hit.normal),
                         },
                     ));
@@ -12226,6 +12267,51 @@ mod tests {
                 .climbable_grip_at(vec3(-5.0, 3.0, -0.5), CLIMB_GRIP_RADIUS, 0.0)
                 .is_none(),
             "the opposite edge has no bit"
+        );
+    }
+
+    /// With its modelled holds set, a ladder is held only near a rung or rail
+    /// - including hooked from above its cap - and the grip lands on it.
+    #[test]
+    fn a_ladder_with_modelled_holds_is_held_only_on_them() {
+        let (mut world, mut player) = grip_world();
+        let ladder = add_yawed_ladder(&mut world, &mut player, Some(27));
+        // `add_yawed_ladder`'s box as a Rick ladder: rails along its narrow
+        // edges, a rung every 0.8.
+        world.set_ladder_holds(
+            ladder,
+            LadderHolds {
+                rungs: (0..8)
+                    .map(|i| {
+                        let y = 0.4 + 0.8 * i as f32;
+                        [vec3(-5.0, y, -0.4), vec3(-5.0, y, 0.4)]
+                    })
+                    .collect(),
+                rails: [-0.4, 0.4]
+                    .map(|z| [vec3(-5.0, 0.0, z), vec3(-5.0, 6.4, z)])
+                    .to_vec(),
+            },
+        );
+        let grip = |hand| world.climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 0.0);
+        let close = |a: Vector3<f32>, b: Vector3<f32>| (a - b).magnitude() < 1e-4;
+
+        assert!(
+            grip(vec3(-4.85, 3.2, 0.0)).is_none(),
+            "the face between two rungs is air"
+        );
+        let rung = grip(vec3(-4.85, 2.85, 0.1)).expect("a hand on a rung holds it");
+        assert_eq!(rung.kind, ClimbGripKind::Ladder);
+        assert!(close(rung.point, vec3(-5.0, 2.8, 0.1)), "{:?}", rung.point);
+        let rail = grip(vec3(-4.85, 3.2, 0.36)).expect("a hand on a rail holds it");
+        assert!(close(rail.point, vec3(-5.0, 3.2, 0.4)), "{:?}", rail.point);
+
+        // Above the cap, the top rung is out of reach but a rail's end is not.
+        assert!(grip(vec3(-5.0, 6.45, 0.0)).is_none());
+        let top = grip(vec3(-5.0, 6.45, 0.38)).expect("hook a rail's top from above");
+        assert!(
+            close(top.point, vec3(-5.0, top.point.y, 0.4)) && top.point.y > 6.3,
+            "on the rail just under the cap: {:?}",
+            top.point
         );
     }
 

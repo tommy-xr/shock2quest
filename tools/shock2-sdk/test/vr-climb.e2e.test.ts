@@ -15,7 +15,7 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 /** At the ledge station's ladder, on the floor: close enough for arm's reach. */
 const STAND: Vec3 = [-6.3, 1.5, 0];
 /** A rung of the ledge ladder, within a standing player's reach. */
-const LADDER_HOLD: Vec3 = [-6.8, 2.6, 0];
+const LADDER_HOLD: Vec3 = [-6.8, 2.0, 0];
 /** Against the ladder: the climb helpers' holds stay in reach all the way up. */
 const CLIMB_STAND: Vec3 = [-6.48, 1.5, 0];
 /** The plain, non-climbable wall station. */
@@ -97,8 +97,9 @@ test(
     await using game = await launchVr();
     await standAtTheLadder(game, CLIMB_STAND);
 
-    const rightHold: Vec3 = [-6.8, 2.3, 0];
-    const leftHold: Vec3 = [-6.8, 2.7, 0];
+    const rightHold: Vec3 = [-6.8, 2.0, 0];
+    // The left rail (+z for a climber facing -x), above the right hand.
+    const leftHold: Vec3 = [-6.8, 2.5, 0.38];
 
     // Right hand on, then the left higher up: the last hand to grab drives.
     await vrGrab(game, "right", rightHold);

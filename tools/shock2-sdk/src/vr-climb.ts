@@ -112,8 +112,9 @@ export async function vrGrab(game: Game, hand: Hand, point: Vec3): Promise<Climb
   const hold = (await game.info()).player.climb.grips.find((grip) => grip.hand === hand);
   if (!hold) {
     const probe = (await game.physics.grip(point)).grip;
+    const actual = (await game.input.state())[`${hand}_hand`].world_position;
     throw new Error(
-      `vrGrab: the ${hand} hand closed on nothing at ${fmt(point)} (grip probe there: ${probe?.kind ?? "none"})`,
+      `vrGrab: the ${hand} hand closed on nothing at ${fmt(point)} (hand at ${actual ? fmt(actual) : "?"}; grip probe there: ${probe?.kind ?? "none"})`,
     );
   }
   return hold;
