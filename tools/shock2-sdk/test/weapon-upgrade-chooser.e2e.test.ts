@@ -5,6 +5,7 @@ import { clickUpgradeControl } from "./helpers/weapon-upgrades.js";
 import { property, openSettings, elements } from "./helpers/hrm.js";
 import { carriedNaniteTotal } from "./helpers/nanites.js";
 
+import { clickElement } from "./helpers/os-upgrade.js";
 import { ammoOf } from "./helpers/weapon.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
@@ -25,8 +26,24 @@ for (const vr of [false, true]) {
     const cash = await carriedNaniteTotal(game);
     const choices = ["ExtendedCapacity", "LowMaintenanceI", "LowMaintenanceII", "AlternateFire"];
     for (let tier = 0; tier < choices.length; tier++) {
-      const device = await game.player.spawnItem(-1488);
-      await game.entities.sendMessage(device.entity_id, { type: "Frob" });
+      const device = await game.player.spawnItem(-1488, tier === 0 && vr ? { hand: "left" } : undefined);
+      if (tier === 0 && vr) {
+        // Activate the physical device with the free hand's real trigger.
+        await game.input.set("left_hand.squeeze", 1);
+        await game.input.set("left_hand.trigger", 1);
+        await game.step({ frames: 2 });
+        await game.input.set("left_hand.trigger", 0);
+      } else if (tier === 0) {
+        // Inventory use is a double-click, not a debug Frob injection.
+        await game.input.trigger("ToggleUseMode");
+        await game.step({ frames: 3 });
+        const item = (await game.ui.state()).strip?.elements.find(e => e.entity_id === device.entity_id && e.kind === "button");
+        assert.ok(item, "the carried device appears in the inventory strip");
+        await clickElement(game, item);
+        await clickElement(game, item);
+      } else {
+        await game.entities.sendMessage(device.entity_id, { type: "Frob" });
+      }
       await game.step({ frames: 20 });
       if (tier === 0) {
         await clickUpgradeControl(game, "upgrade_Laser");
@@ -38,13 +55,20 @@ for (const vr of [false, true]) {
         await game.step({ frames: 3 });
       }
       await clickUpgradeControl(game, `upgrade_${choices[tier]}`);
-      assert.ok((await elements(game)).some(e => e.text?.includes("use 1 device")));
+      const preview = await elements(game);
+      assert.ok(preview.some(e => e.text?.includes("use 1 device")), JSON.stringify({ tier, text: preview.filter(e => e.text).map(e => e.text) }));
       await clickUpgradeControl(game, "upgrade_confirm");
       assert.equal(await property(game, gun, "Modification"), String(tier + 1));
       assert.ok(!(await game.entities.byTemplate(-1488)).some(e => e.id === device.entity_id), "exactly the selected device was consumed");
       assert.equal(await carriedNaniteTotal(game), cash, "device installation never charges nanites");
       assert.equal(ammoOf(await game.entities.detail(gun)), ammo, "installation creates no ammunition");
       assert.equal(await property(game, gun, "GunDescription"), base);
+      if (vr && tier === 0) {
+        // Let go after the held device disappears; otherwise the empty hand
+        // can support-grip the pistol as the ray helper repositions it.
+        await game.input.set("left_hand.squeeze", 0);
+        await game.step({ frames: 2 });
+      }
     }
     const spare = await game.player.spawnItem(-1488);
     await game.entities.sendMessage(spare.entity_id, { type: "Frob" });

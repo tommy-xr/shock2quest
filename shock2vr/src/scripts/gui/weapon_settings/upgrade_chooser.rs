@@ -13,28 +13,22 @@ fn button(
     label: &str,
     text: &str,
     rect: Rect,
-    cursor: &Option<GuiCursor>,
+    selected: bool,
 ) -> Vec<GuiComponent<WeaponSettingsGuiMsg>> {
-    let hovered = cursor.as_ref().is_some_and(|c| {
-        c.position.x >= rect.x
-            && c.position.x < rect.x + rect.w
-            && c.position.y >= rect.y
-            && c.position.y < rect.y + rect.h
-    });
     vec![
-        GuiComponent::Fill {
-            position: origin_of(rect),
-            size: extent_of(rect),
-            color: if hovered { [0, 85, 70] } else { [0, 48, 42] },
-            alpha: 1.0,
-        },
         gui::button(msg)
             .with_rect(rect)
             .with_label(label)
-            .with_alpha(0.0),
+            .with_image(if selected {
+                "iface/tbut11.pcx"
+            } else {
+                "iface/tbutmax.pcx"
+            })
+            .with_hover(ButtonHoverBehavior::Texture("iface/tbut11.pcx".into()))
+            .with_alpha(1.0),
         super::super::PanelText::text(
             text,
-            Rect::new(rect.x + 4.0, rect.y + 3.0, rect.w - 8.0, rect.h - 4.0),
+            Rect::new(rect.x + 5.0, rect.y + 4.0, rect.w - 19.0, rect.h - 6.0),
         ),
     ]
 }
@@ -43,28 +37,46 @@ pub(super) fn draw(
     world: &World,
     weapon: EntityId,
     chooser: &UpgradeChooser,
-    cursor: &Option<GuiCursor>,
+    _cursor: &Option<GuiCursor>,
 ) -> Vec<GuiComponent<WeaponSettingsGuiMsg>> {
     use super::super::PanelText;
     let upgrades = installation::state(world, weapon);
+    // Keep the retail MODIFY bezel at its authored 188x296 size. Replace only
+    // the board and goal wells; the shared canvas owns all placement in flat/VR.
     let mut out = vec![
+        gui::image("iface/modify.pcx")
+            .with_rect(Rect::new(0.0, 0.0, 188.0, 296.0))
+            .with_alpha(1.0),
         GuiComponent::Fill {
-            position: vec2(0.0, 0.0),
-            size: vec2(PANEL_W, PANEL_H),
-            color: [0, 35, 32],
+            position: vec2(13.0, 42.0),
+            size: vec2(142.0, 135.0),
+            color: [0, 58, 47],
+            alpha: 1.0,
+        },
+        // The old board's cost tab extends past its main well.
+        GuiComponent::Fill {
+            position: vec2(155.0, 148.0),
+            size: vec2(21.0, 29.0),
+            color: [0, 58, 47],
+            alpha: 1.0,
+        },
+        GuiComponent::Fill {
+            position: vec2(13.0, 181.0),
+            size: vec2(163.0, 107.0),
+            color: [0, 36, 28],
             alpha: 1.0,
         },
         PanelText::text(
-            &format!(
-                "{} - tier {}/4",
-                if chooser.payment == Payment::Modify {
-                    "MODIFY"
-                } else {
-                    "DEVICE"
-                },
-                upgrades.tier()
-            ),
-            Rect::new(8.0, 8.0, 172.0, 15.0),
+            &format!("UPGRADES  {}/4", upgrades.tier()),
+            Rect::new(18.0, 14.0, 134.0, 12.0),
+        ),
+        PanelText::text(
+            if chooser.payment == Payment::Modify {
+                "Modify skill"
+            } else {
+                "French-Epstein device"
+            },
+            Rect::new(18.0, 28.0, 134.0, 11.0),
         ),
     ];
     for (i, choice) in WeaponUpgrade::ALL.into_iter().enumerate() {
@@ -88,8 +100,8 @@ pub(super) fn draw(
                     " (later)"
                 }
             ),
-            Rect::new(6.0, 30.0 + i as f32 * 20.0, 176.0, 19.0),
-            cursor,
+            Rect::new(14.0, 44.0 + i as f32 * 19.0, 140.0, 18.0),
+            chooser.selected == Some(choice),
         ));
         if !installed && !installation::AVAILABLE.contains(&choice) {
             if let Some(GuiComponent::Text { alpha, .. }) = out.last_mut() {
@@ -110,7 +122,7 @@ pub(super) fn draw(
     out.extend(PanelText::paragraph(
         world,
         &info,
-        Rect::new(10.0, 176.0, 168.0, 65.0),
+        Rect::new(17.0, 185.0, 154.0, 53.0),
     ));
     if let Some(choice) = chooser.selected {
         let confirmation = match chooser.payment {
@@ -126,13 +138,13 @@ pub(super) fn draw(
                 WeaponSettingsGuiMsg::ConfirmUpgrade,
                 "upgrade_confirm",
                 &text,
-                Rect::new(6.0, 245.0, 176.0, 22.0),
-                cursor,
+                Rect::new(15.0, 242.0, 158.0, 21.0),
+                false,
             )),
             Err(reason) if reason != info => out.extend(PanelText::paragraph(
                 world,
                 &reason,
-                Rect::new(10.0, 242.0, 168.0, 29.0),
+                Rect::new(17.0, 240.0, 154.0, 25.0),
             )),
             Err(_) => {}
         }
@@ -141,8 +153,8 @@ pub(super) fn draw(
         WeaponSettingsGuiMsg::CancelUpgrade,
         "upgrade_cancel",
         "Back",
-        Rect::new(6.0, 275.0, 58.0, 22.0),
-        cursor,
+        Rect::new(15.0, 267.0, 54.0, 21.0),
+        false,
     ));
     let switch = match chooser.payment {
         Payment::Modify => {
@@ -155,8 +167,8 @@ pub(super) fn draw(
             WeaponSettingsGuiMsg::UpgradePayment(payment),
             "upgrade_payment",
             text,
-            Rect::new(68.0, 275.0, 114.0, 22.0),
-            cursor,
+            Rect::new(73.0, 267.0, 100.0, 21.0),
+            false,
         ));
     }
     out
