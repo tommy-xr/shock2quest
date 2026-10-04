@@ -9,7 +9,9 @@ import { teleportVerified } from "./helpers/teleport.js";
 // debug_ladder stations (see shock2vr/src/scenes/debug_ladder.rs). The two
 // classes must be told apart on the SHIPPED geometry: an authored ladder face
 // is a Ladder, a block top above the feet is a Ledge, and a plain wall and
-// the floor are nothing. A hand above a thin ladder cap can hook its side.
+// the floor are nothing. A ladder is held only on its modelled rungs and
+// rails, so the face between two rungs is nothing too. A hand above a thin
+// ladder cap can hook a rail's top.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 type Probe = {
@@ -20,15 +22,19 @@ type Probe = {
 
 const PROBES: Probe[] = [
   // The ledge station's 16' ladder: model bounds put its near face at
-  // x ≈ -6.83, its top cap at y = 6.4.
-  { name: "ledge ladder face", point: [-6.8, 3.0, 0], expected: "ladder" },
+  // x ≈ -6.83, its top cap at y = 6.4; rungs every 0.8 from 0.4, rails at
+  // z = ±0.4.
+  { name: "ledge ladder rung", point: [-6.8, 2.8, 0], expected: "ladder" },
+  { name: "ledge ladder rail", point: [-6.8, 3.2, 0.38], expected: "ladder" },
+  { name: "ledge ladder face between rungs", point: [-6.8, 3.2, 0], expected: null },
   {
     // The scene's ladders inherit the Ladders template's mask 27 - the four
     // vertical sides, no caps.
-    name: "hook an authored side from above the ladder cap",
-    point: [-6.9, 6.45, 0],
+    name: "hook a rail's top from above the ladder cap",
+    point: [-6.9, 6.45, 0.4],
     expected: "ladder",
   },
+  { name: "above the cap between the rails", point: [-6.9, 6.45, 0], expected: null },
   // The block the ladder leans on: near face x = -7, top y = 6.
   { name: "ledge block lip", point: [-7.2, 6.05, 0], expected: "ledge" },
   // The ladderless mantle block: top y = 3.
@@ -68,7 +74,7 @@ test(
 
     // A ladder grip identifies its entity and faces the player (+X here);
     // a ledge grip faces up.
-    const ladder = (await game.physics.grip([-6.8, 3.0, 0])).grip!;
+    const ladder = (await game.physics.grip([-6.8, 2.8, 0])).grip!;
     assert.ok(ladder.entity_id !== null, "a ladder grip names its entity");
     assert.ok(
       ladder.normal[0] > 0.9,
@@ -90,7 +96,7 @@ test(
 );
 
 test(
-  "medsci1: a shipped ladder's broad face is a Ladder grip",
+  "medsci1: a shipped ladder's rungs are Ladder grips, the gaps between them are not",
   { skip: !e2eEnabled, timeout: 300_000 },
   async () => {
     await using game = await GameServer.launch({ mission: "medsci1.mis" });
@@ -101,32 +107,31 @@ test(
     assert.ok(entities.length > 0, "medsci1 should place Rick Ladder 16s");
 
     // These instances override the template's 27 with 54 (the broad faces
-    // plus both caps). Either mask must grip the broad face, so probe a ring
-    // around each ladder's own origin and require a Ladder somewhere on it.
+    // plus both caps). Either mask must grip a rung on the broad face, so
+    // probe a ring around each ladder's second rung.
     const RING = 0.12;
-    const kinds = new Set<string>();
-    for (const ladder of entities) {
+    const mid = (a: Vec3, b: Vec3): Vec3 => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+    for (const entity of entities) {
+      const ladder = await game.physics.ladder(entity.id);
+      const rung = mid(...ladder.rungs[1]);
+      const kinds = new Set<string>();
       for (const [dx, dz] of [
         [RING, 0],
         [-RING, 0],
         [0, RING],
         [0, -RING],
       ]) {
-        const { grip } = await game.physics.grip([
-          ladder.position[0] + dx,
-          ladder.position[1],
-          ladder.position[2] + dz,
-        ]);
+        const { grip } = await game.physics.grip([rung[0] + dx, rung[1], rung[2] + dz]);
         if (grip?.kind) kinds.add(grip.kind);
       }
+      assert.ok(kinds.has("ladder"), `expected a Ladder grip on ${entity.id}'s rung, saw ${[...kinds]}`);
+
+      const gap = mid(rung, mid(...ladder.rungs[2]));
+      const { grip } = await game.physics.grip(gap);
+      assert.notEqual(grip?.kind, "ladder", `${entity.id}: the gap between two rungs is no hold`);
     }
-    assert.ok(
-      kinds.has("ladder"),
-      `expected a Ladder grip on a shipped ladder, saw ${[...kinds]}`,
-    );
   },
 );
-
 
 test("debug_ladder (VR): a hand below the mantle corner can hold and pull", {
   skip: !e2eEnabled, timeout: 300_000,

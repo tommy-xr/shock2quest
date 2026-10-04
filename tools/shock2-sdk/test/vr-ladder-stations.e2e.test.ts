@@ -296,6 +296,10 @@ test(
   async () => {
     await using game = await launchAt(MIDMOUNT);
     const rungs = Array.from({ length: 11 }, (_, i) => at(MIDMOUNT, 0.25, 0.8 * i, -0.1));
+    // A falling hand trails its world point by a frame of the fall, more than
+    // a rung's grip reach absorbs, so the catch takes a rail.
+    const stack = await game.physics.ladder((await game.physics.grip(rungs[5])).grip!.entity_id!);
+    const rails = stack.rails.flatMap(([bottom]) => rungs.map(([x, y]): Vec3 => [x, y, bottom[2]]));
     const start = await player(game);
     await game.input.lookAtWorldPoint([-17, start.position[1] + 0.5, MIDMOUNT]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
@@ -304,15 +308,15 @@ test(
     let caught: Vec3 | null = null;
     for (let frame = 0; frame < 120 && !caught; frame += 1) {
       await game.step({ frames: 1 });
-      for (const rung of [...rungs].reverse()) {
-        if (await reachable(game, "right", rung)) {
-          caught = rung;
+      for (const rail of [...rails].sort((a, b) => b[1] - a[1])) {
+        if (await reachable(game, "right", rail)) {
+          caught = rail;
           break;
         }
       }
     }
     await game.input.set("right_hand.thumbstick", [0, 0]);
-    assert.ok(caught, "a rung came within reach");
+    assert.ok(caught, "a rail came within reach");
     assert.equal((await vrGrab(game, "right", caught)).kind, "ladder");
     assert.ok((await player(game)).position[1] > start.position[1] - 1.5, "caught high on the stack");
 
@@ -392,7 +396,7 @@ test(
     assert.ok(Math.abs(landed[1] - (6.4 + STANDING)) < 0.1, `on the arch: y=${landed[1].toFixed(3)}`);
 
     // Walk to the far edge (the far ladder stands at d -2.1), crouch, and
-    // hook the far ladder just under its cap.
+    // hook a rail of the far ladder just under its cap.
     await game.input.lookAtWorldPoint([-20, landed[1] + 1, ARCH]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
     for (let f = 0; f < 120 && (await player(game)).position[0] > -8.6; f += 1) {
@@ -403,7 +407,9 @@ test(
     await game.input.set("crouch", 1);
     await game.step({ frames: 5 });
     const hookable: Vec3[] = [];
-    for (const y of [6.45, 6.35]) for (const d of [-2.05, -2.1, -2.15]) hookable.push(at(ARCH, d, y));
+    for (const w of [-0.4, 0.4]) {
+      for (const y of [6.45, 6.35]) for (const d of [-2.05, -2.1, -2.15]) hookable.push(at(ARCH, d, y, w));
+    }
     assert.equal((await vrGrab(game, "right", await firstReachable(game, "right", hookable))).kind, "ladder");
 
     // Swing out past the edge, lower onto the ladder, then down hand over hand.
@@ -412,7 +418,7 @@ test(
     await game.input.set("crouch", 0);
     const body = await player(game);
     assert.equal(body.climb.grips.length, 1, "swung onto the far ladder");
-    const far = await game.physics.ladder((await game.physics.grip(at(ARCH, -2.15, 3))).grip!.entity_id!);
+    const far = await game.physics.ladder((await game.physics.grip(at(ARCH, -2.15, 2.8))).grip!.entity_id!);
     const right = await viewRight(game);
     const holds = {
       left: ladderHoldPoints(far, "left", "rung", body.position, right),
