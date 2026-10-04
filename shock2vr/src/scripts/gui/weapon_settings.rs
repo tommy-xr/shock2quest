@@ -200,8 +200,6 @@ fn has_plug_room(world: &World, weapon: EntityId) -> bool {
 /// What the open HRM board is doing to the gun.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum HrmJob {
-    /// Modifying from this level; a change of level mid-board aborts it.
-    Modify(i32),
     Upgrade(WeaponUpgrade, usize),
     Repair,
 }
@@ -209,7 +207,7 @@ enum HrmJob {
 impl HrmJob {
     fn context(self) -> HrmContext {
         match self {
-            HrmJob::Modify(_) | HrmJob::Upgrade(..) => HrmContext::Modify,
+            HrmJob::Upgrade(..) => HrmContext::Modify,
             HrmJob::Repair => HrmContext::Repair,
         }
     }
@@ -220,7 +218,6 @@ impl HrmJob {
         weapon: EntityId,
     ) -> Result<dark::properties::PropHackDiff, String> {
         match self {
-            HrmJob::Modify(_) => weapon_modification::quote(world, weapon),
             HrmJob::Upgrade(choice, tier) => {
                 crate::weapon_installation::quote(world, weapon, choice, tier)
             }
@@ -384,10 +381,14 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             let goal = match job {
                 // The level the board was opened at: after a win the gun
                 // already carries the next one.
-                HrmJob::Modify(level) => weapon_modification::description(world, weapon, *level),
                 HrmJob::Upgrade(choice, _) => format!(
-                    "{}\n+8% dmg, -5% wear.",
-                    crate::weapon_installation::label(*choice)
+                    "{}\n{}",
+                    crate::weapon_installation::label(*choice),
+                    if crate::weapon_modification::scales_damage(world, weapon) {
+                        "+8% dmg, -5% wear."
+                    } else {
+                        "-5% wear. Stasis unchanged."
+                    }
                 ),
                 HrmJob::Repair => repair_goal(world),
             };
@@ -654,12 +655,8 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                     Err(text) => (state.clone(), Effect::ShowMessage { text }),
                 };
             }
-            WeaponSettingsGuiMsg::Modify | WeaponSettingsGuiMsg::Repair => {
-                let job = if matches!(msg, WeaponSettingsGuiMsg::Repair) {
-                    HrmJob::Repair
-                } else {
-                    HrmJob::Modify(weapon_modification::level(world, weapon).unwrap_or(-1))
-                };
+            WeaponSettingsGuiMsg::Repair => {
+                let job = HrmJob::Repair;
                 return match job.quote(world, weapon) {
                     Ok(diff) => (
                         WeaponSettingsGuiState {
@@ -679,9 +676,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                     return (state.clone(), Effect::NoEffect);
                 }
                 let quote = job.quote(world, weapon);
-                let level_changed = matches!(job, HrmJob::Modify(level)
-                    if weapon_modification::level(world, weapon) != Some(*level));
-                if level_changed || quote.is_err() {
+                if quote.is_err() {
                     return (
                         WeaponSettingsGuiState::default(),
                         Effect::ShowMessage {
@@ -698,41 +693,6 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                         critical_failure: |entity_id, _| Effect::SetObjectState {
                             entity_id,
                             state: dark::properties::ObjectState::Broken,
-                        },
-                    },
-                    HrmJob::Modify(_) => HackOutcomeEffects {
-                        success: |entity_id, world| {
-                            Effect::combine(vec![
-                                Effect::ShowMessage {
-                                    text: super::PanelText::hrm(
-                                        world,
-                                        "ModifyResult1",
-                                        "Modification completed!",
-                                        &[],
-                                    ),
-                                },
-                                Effect::ModifyWeapon {
-                                    entity_id,
-                                    expected_level: weapon_modification::level(world, entity_id)
-                                        .unwrap_or(-1),
-                                },
-                            ])
-                        },
-                        critical_failure: |entity_id, world| {
-                            Effect::combine(vec![
-                                Effect::ShowMessage {
-                                    text: super::PanelText::hrm(
-                                        world,
-                                        "ModifyResult2",
-                                        "Modification Failed!",
-                                        &[],
-                                    ),
-                                },
-                                Effect::SetObjectState {
-                                    entity_id,
-                                    state: dark::properties::ObjectState::Broken,
-                                },
-                            ])
                         },
                     },
                     HrmJob::Repair => HackOutcomeEffects {
@@ -1050,6 +1010,39 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn paid_stasis_board_never_promises_damage() {
+        use dark::properties::PropHackDiff;
+
+        let (mut world, weapon) = pistol_world(0);
+        world.add_component(
+            weapon,
+            PropScripts {
+                scripts: vec!["StasisModify".into()],
+                inherits: false,
+            },
+        );
+        let state = WeaponSettingsGuiState {
+            board: Some((
+                HrmJob::Upgrade(WeaponUpgrade::ExtendedCapacity, 1),
+                PropHackDiff {
+                    success_chance: 20,
+                    critical_chance: 4,
+                    cost: 3.0,
+                },
+                HackState {
+                    phase: HackPhase::Won,
+                    ..HackState::default()
+                },
+            )),
+            ..Default::default()
+        };
+        let components = WeaponSettingsGui.get_components(&None, EntityId::dead(), &world, &state);
+        let goal = texts(&components).join(" ");
+        assert!(goal.contains("Stasis unchanged"), "{goal}");
+        assert!(!goal.contains("dmg"), "{goal}");
+    }
+
     /// Repair and modify boards draw their own backdrop and result overlays,
     /// not the hack board's.
     #[test]
@@ -1093,7 +1086,7 @@ mod tests {
                 "payr.pcx",
             ),
             (
-                HrmJob::Modify(1),
+                HrmJob::Upgrade(WeaponUpgrade::LowMaintenanceI, 1),
                 "modify.pcx",
                 "winm.pcx",
                 "losem.pcx",

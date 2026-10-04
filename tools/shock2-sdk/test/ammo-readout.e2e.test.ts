@@ -1,4 +1,4 @@
-import { unlockPistolAlternateFire } from "./helpers/weapon-upgrades.js";
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -56,7 +56,7 @@ test(
     // The pistol is the first weapon DebugCycleWeapon hands out.
     await game.input.trigger("DebugCycleWeapon");
     await game.step({ frames: 5 });
-    await unlockPistolAlternateFire(game);
+    await unlockWeaponAlternateFire(game);
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
 

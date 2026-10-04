@@ -9868,12 +9868,6 @@ impl MissionCore {
                         rooms.0.clear();
                     }
                 }
-                Effect::ModifyWeapon {
-                    entity_id,
-                    expected_level,
-                } => {
-                    crate::weapon_modification::apply(&mut self.world, entity_id, expected_level);
-                }
                 Effect::InstallWeaponUpgrade {
                     entity_id,
                     choice,

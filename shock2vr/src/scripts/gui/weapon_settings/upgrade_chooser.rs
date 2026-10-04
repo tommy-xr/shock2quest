@@ -90,7 +90,7 @@ pub(super) fn draw(
             Rect::new(18.0, 28.0, 134.0, 11.0),
         ),
     ];
-    for (i, choice) in WeaponUpgrade::ALL
+    for (i, choice) in installation::available(world, weapon)
         .into_iter()
         .filter(|choice| !upgrades.has(*choice))
         .filter(|choice| {
@@ -102,24 +102,11 @@ pub(super) fn draw(
         out.extend(button(
             WeaponSettingsGuiMsg::ChooseUpgrade(choice),
             &format!("upgrade_{choice:?}"),
-            &format!(
-                "{}{}",
-                installation::label(choice),
-                if installation::AVAILABLE.contains(&choice) {
-                    ""
-                } else {
-                    " (later)"
-                }
-            ),
+            installation::label(choice),
             Rect::new(14.0, 44.0 + i as f32 * 19.0, 140.0, 18.0),
             chooser.selected == Some(choice),
             cursor,
         ));
-        if !installation::AVAILABLE.contains(&choice) {
-            if let Some(GuiComponent::Text { alpha, .. }) = out.last_mut() {
-                *alpha = 0.45;
-            }
-        }
     }
     let info = match chooser.selected {
         Some(choice) if upgrades.has(choice) => {

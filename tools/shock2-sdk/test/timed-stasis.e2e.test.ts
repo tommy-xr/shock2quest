@@ -1,3 +1,4 @@
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
@@ -35,6 +36,7 @@ for (const scenario of ["refresh", "save", "area", "death"] as const) {
         await cycleToWeapon(game, (e) => e.template_id === -25);
       }
       if (scenario === "area") {
+        await unlockWeaponAlternateFire(game);
         await game.input.trigger("CycleGunSetting");
         await game.step({ frames: 2 });
       }

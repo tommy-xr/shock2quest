@@ -30,7 +30,7 @@ for (const vr of [false, true]) for (const row of cases) {
       await game.step({ frames: 3 });
     }
     if (row.setting) {
-      if (row.weaponTemplate === -17 || row.weaponTemplate === -18) await unlockWeaponAlternateFire(game);
+      await unlockWeaponAlternateFire(game);
       await game.input.trigger("CycleGunSetting");
       await game.step({ frames: 2 });
     }

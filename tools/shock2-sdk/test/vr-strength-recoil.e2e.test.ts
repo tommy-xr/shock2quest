@@ -1,3 +1,4 @@
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -48,6 +49,7 @@ for (const [name, template, profiled, setting, overrides] of [
       await aimVrHandAt(game, gun.position!, 0.45, 1);
       await game.step({ frames: 8 });
       assert.equal((await game.info()).player.right_hand_entity_id, gun.id);
+      if (setting) await unlockWeaponAlternateFire(game);
       await game.input.set("head.rotation", [0, 0, 0, 1]);
       // Stage in front of the body so support squeezes cannot grab the belt MFD.
       await game.input.set("right_hand.position", [0, 1, -1]);
@@ -168,7 +170,7 @@ for (const [name, template, profiled, setting, overrides] of [
               (sample) =>
                 sample.position[1] > initialMuzzle.position[1] + 0.005,
             ),
-            "authored pitch raises the live muzzle endpoint",
+            `authored pitch raises the live muzzle endpoint: ${JSON.stringify({ strength, supported, initialMuzzle, peak: Math.max(...muzzle.map(s => s.position[1])) })}`,
           );
           assert.ok(
             muzzle.some(
