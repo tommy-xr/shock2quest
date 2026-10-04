@@ -251,6 +251,11 @@ pub trait PlayerInteraction {
         [None; 2]
     }
 
+    /// Final visible glove cuffs, in world space (left, right).
+    fn body_wrist_frames(&self) -> [Option<Matrix4<f32>>; 2] {
+        [None; 2]
+    }
+
     /// Wield `entity_id` as the first-person weapon (flat); no-op for VR.
     fn wield(&mut self, _entity_id: EntityId) -> Vec<VirtualHandEffect> {
         Vec::new()
@@ -269,6 +274,7 @@ pub trait PlayerInteraction {
 
 /// VR interaction: two motion-controller hands.
 pub struct VrInteraction {
+    body_hand_tracking: [bool; 2],
     left_hand: VirtualHand,
     right_hand: VirtualHand,
     /// Lazily initialized on first render (needs the asset cache). The outer
@@ -390,6 +396,7 @@ impl VrInteraction {
             left_hand: VirtualHand::new(Handedness::Left),
             right_hand: VirtualHand::new(Handedness::Right),
             glove_renderer: RefCell::new(None),
+            body_hand_tracking: [false; 2],
             hand_climb: crate::vr_climb::HandClimb::default(),
             grip_kinematics: None,
             grip_geometry: HashMap::new(),
@@ -968,6 +975,26 @@ impl VrInteraction {
 }
 
 impl PlayerInteraction for VrInteraction {
+    fn body_wrist_frames(&self) -> [Option<Matrix4<f32>>; 2] {
+        let mut glove = self.glove_renderer.borrow_mut();
+        let Some(Some(renderer)) = glove.as_mut() else {
+            return [None; 2];
+        };
+        let tracked = self.hand_poses();
+        std::array::from_fn(|i| {
+            let pose = self.visual_hands[i].unwrap_or(tracked[i]);
+            (self.body_hand_tracking[i] && pose.is_tracked()).then(|| {
+                Matrix4::from_translation(pose.position)
+                    * Matrix4::from(pose.rotation)
+                    * renderer.wrist_frame(if i == 0 {
+                        Handedness::Left
+                    } else {
+                        Handedness::Right
+                    })
+            })
+        })
+    }
+
     fn implant_socket_frames(&self, world: &World) -> [Option<Matrix4<f32>>; 2] {
         use crate::hud::virtual_arms::{BIO_BAND_RADIUS, GLOVE_PALM_LIFT, implant_socket_frame};
         let mut glove = self.glove_renderer.borrow_mut();
@@ -1584,6 +1611,8 @@ impl PlayerInteraction for VrInteraction {
     }
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
+        self.body_hand_tracking =
+            std::array::from_fn(|i| ctx.input.pose_tracking.is_none_or(|p| p.head && p.hands[i]));
         let mut slide_effects = self.update_slide(ctx);
         self.update_support(ctx);
         if let Some(effects) = self.try_handoff(ctx) {
