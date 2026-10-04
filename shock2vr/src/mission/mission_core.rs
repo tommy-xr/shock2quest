@@ -9870,6 +9870,18 @@ impl MissionCore {
                 } => {
                     crate::weapon_modification::apply(&mut self.world, entity_id, expected_level);
                 }
+                Effect::InstallWeaponUpgrade {
+                    entity_id,
+                    choice,
+                    expected_tier,
+                } => {
+                    effects.push_front(crate::weapon_installation::install(
+                        &mut self.world,
+                        entity_id,
+                        choice,
+                        expected_tier,
+                    ));
+                }
                 Effect::ToggleImplant { entity_id } => {
                     match crate::implants::toggle_slot(&self.world, entity_id) {
                         Ok(Some(slot)) => {

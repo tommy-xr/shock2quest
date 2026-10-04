@@ -251,6 +251,11 @@ pub enum Effect {
         entity_id: EntityId,
         expected_level: i32,
     },
+    InstallWeaponUpgrade {
+        entity_id: EntityId,
+        choice: crate::weapon_upgrades::WeaponUpgrade,
+        expected_tier: usize,
+    },
     ToggleImplant {
         entity_id: EntityId,
     },

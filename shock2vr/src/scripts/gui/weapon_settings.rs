@@ -34,6 +34,9 @@ use crate::scripts::script_util;
 use crate::ui::Rect;
 use crate::weapon_modification;
 use crate::weapon_repair;
+use crate::weapon_upgrades::WeaponUpgrade;
+mod upgrade_chooser;
+use upgrade_chooser::UpgradeChooser;
 
 /// A panel-local rect's upper-left corner / extent, as the component builders
 /// want them.
@@ -153,6 +156,7 @@ pub struct WeaponSettingsGui;
 #[derive(Clone, Debug, Default)]
 pub struct WeaponSettingsGuiState {
     board: Option<(HrmJob, dark::properties::PropHackDiff, HackState)>,
+    chooser: Option<UpgradeChooser>,
 }
 
 /// The plug the settings panel raises for `weapon`, if any, with its button's
@@ -188,13 +192,14 @@ fn has_plug_room(world: &World, weapon: EntityId) -> bool {
 enum HrmJob {
     /// Modifying from this level; a change of level mid-board aborts it.
     Modify(i32),
+    Upgrade(WeaponUpgrade, usize),
     Repair,
 }
 
 impl HrmJob {
     fn context(self) -> HrmContext {
         match self {
-            HrmJob::Modify(_) => HrmContext::Modify,
+            HrmJob::Modify(_) | HrmJob::Upgrade(..) => HrmContext::Modify,
             HrmJob::Repair => HrmContext::Repair,
         }
     }
@@ -206,6 +211,9 @@ impl HrmJob {
     ) -> Result<dark::properties::PropHackDiff, String> {
         match self {
             HrmJob::Modify(_) => weapon_modification::quote(world, weapon),
+            HrmJob::Upgrade(choice, tier) => {
+                crate::weapon_installation::quote(world, weapon, choice, tier)
+            }
             HrmJob::Repair => weapon_repair::quote(world, weapon),
         }
     }
@@ -218,6 +226,9 @@ pub enum WeaponSettingsGuiMsg {
     /// Eject the magazine back to the backpack.
     Unload,
     Modify,
+    ChooseUpgrade(WeaponUpgrade),
+    ConfirmUpgrade,
+    CancelUpgrade,
     Repair,
     Board(KeyPadMsg),
 }
@@ -332,6 +343,9 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             };
         };
 
+        if let Some(chooser) = &state.chooser {
+            return upgrade_chooser::draw(world, weapon, chooser);
+        }
         if let Some((job, diff, board)) = &state.board {
             let shown_diff = if matches!(board.phase, HackPhase::Won | HackPhase::Lost) {
                 *diff
@@ -342,6 +356,10 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 // The level the board was opened at: after a win the gun
                 // already carries the next one.
                 HrmJob::Modify(level) => weapon_modification::description(world, weapon, *level),
+                HrmJob::Upgrade(choice, _) => format!(
+                    "Install {}. +8% base damage, -5% base wear.",
+                    crate::weapon_installation::label(*choice)
+                ),
                 HrmJob::Repair => repair_goal(world),
             };
             return board_components(world, *job, shown_diff, board, &goal);
@@ -474,7 +492,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             return None;
         }
         Some(plug_sidecar(
-            state.board.is_none() && plug_for(world, weapon).is_some(),
+            state.board.is_none() && state.chooser.is_none() && plug_for(world, weapon).is_some(),
         ))
     }
 
@@ -489,6 +507,49 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             return (state.clone(), Effect::NoEffect);
         };
         match msg {
+            WeaponSettingsGuiMsg::Modify
+                if crate::weapon_installation::supported(world, weapon) =>
+            {
+                return (
+                    WeaponSettingsGuiState {
+                        chooser: Some(UpgradeChooser {
+                            tier: crate::weapon_installation::state(world, weapon).tier(),
+                            selected: None,
+                        }),
+                        ..Default::default()
+                    },
+                    Effect::NoEffect,
+                );
+            }
+            WeaponSettingsGuiMsg::ChooseUpgrade(choice) => {
+                let mut next = state.clone();
+                if let Some(chooser) = &mut next.chooser {
+                    chooser.selected = Some(*choice);
+                }
+                return (next, Effect::NoEffect);
+            }
+            WeaponSettingsGuiMsg::CancelUpgrade => {
+                return (WeaponSettingsGuiState::default(), Effect::NoEffect);
+            }
+            WeaponSettingsGuiMsg::ConfirmUpgrade => {
+                let Some(chooser) = &state.chooser else {
+                    return (state.clone(), Effect::NoEffect);
+                };
+                let Some(choice) = chooser.selected else {
+                    return (state.clone(), Effect::NoEffect);
+                };
+                let job = HrmJob::Upgrade(choice, chooser.tier);
+                return match job.quote(world, weapon) {
+                    Ok(diff) => (
+                        WeaponSettingsGuiState {
+                            board: Some((job, diff, HackState::default())),
+                            ..Default::default()
+                        },
+                        Effect::NoEffect,
+                    ),
+                    Err(text) => (state.clone(), Effect::ShowMessage { text }),
+                };
+            }
             WeaponSettingsGuiMsg::Modify | WeaponSettingsGuiMsg::Repair => {
                 let job = if matches!(msg, WeaponSettingsGuiMsg::Repair) {
                     HrmJob::Repair
@@ -499,6 +560,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                     Ok(diff) => (
                         WeaponSettingsGuiState {
                             board: Some((job, diff, HackState::default())),
+                            ..Default::default()
                         },
                         Effect::NoEffect,
                     ),
@@ -527,6 +589,13 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 }
                 let diff = quote.unwrap();
                 let outcomes = match job {
+                    HrmJob::Upgrade(..) => HackOutcomeEffects {
+                        success: |_, _| Effect::NoEffect,
+                        critical_failure: |entity_id, _| Effect::SetObjectState {
+                            entity_id,
+                            state: dark::properties::ObjectState::Broken,
+                        },
+                    },
                     HrmJob::Modify(_) => HackOutcomeEffects {
                         success: |entity_id, world| {
                             Effect::combine(vec![
@@ -567,11 +636,24 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                         critical_failure: weapon_repair::critical_failure,
                     },
                 };
-                let (board, effect) =
+                let (board, mut effect) =
                     handle_hrm_msg(weapon, world, board, msg, diff, job.context(), outcomes);
+                if board.phase == HackPhase::Won {
+                    if let HrmJob::Upgrade(choice, expected_tier) = *job {
+                        effect = Effect::combine(vec![
+                            effect,
+                            Effect::InstallWeaponUpgrade {
+                                entity_id: weapon,
+                                choice,
+                                expected_tier,
+                            },
+                        ]);
+                    }
+                }
                 return (
                     WeaponSettingsGuiState {
                         board: Some((*job, diff, board)),
+                        ..Default::default()
                     },
                     effect,
                 );
@@ -738,6 +820,35 @@ mod tests {
     /// A Broken gun raises the repair plug in the modify plug's place, and
     /// its button opens the board on the repair art.
     #[test]
+    fn pistol_modify_opens_a_choice_before_any_paid_board() {
+        let (mut world, weapon) = pistol_world(0);
+        world.add_component(
+            weapon,
+            PropScripts {
+                scripts: vec!["PistolModify".into()],
+                inherits: false,
+            },
+        );
+        let (state, effect) = WeaponSettingsGui.handle_msg(
+            EntityId::dead(),
+            &world,
+            &WeaponSettingsGuiState::default(),
+            &WeaponSettingsGuiMsg::Modify,
+        );
+        assert!(
+            matches!(effect, Effect::NoEffect),
+            "opening must not spend or install"
+        );
+        let drawn = WeaponSettingsGui.get_components(&None, EntityId::dead(), &world, &state);
+        assert!(drawn.iter().any(|c| matches!(c,
+            GuiComponent::Button { label: Some(label), .. } if label == "upgrade_ExtendedCapacity"
+        )), "Modify must offer a choice before opening the paid board");
+        assert!(!drawn.iter().any(|c| matches!(c,
+            GuiComponent::Button { label: Some(label), .. } if label == "start-hack"
+        )));
+    }
+
+    #[test]
     fn a_broken_gun_offers_repair_instead_of_modify() {
         use dark::properties::{ObjectState, PropHackDiff, PropObjState, PropRepairDiff};
 
@@ -818,6 +929,7 @@ mod tests {
                         ..HackState::default()
                     },
                 )),
+                ..Default::default()
             };
             WeaponSettingsGui
                 .get_components(&None, EntityId::dead(), &world, &state)
@@ -1221,6 +1333,7 @@ mod tests {
         board.rng_state = 0;
         let playing = WeaponSettingsGuiState {
             board: Some((job, diff, board)),
+            ..Default::default()
         };
         let (lost, effect) = (0..64)
             .map(|seed| {
