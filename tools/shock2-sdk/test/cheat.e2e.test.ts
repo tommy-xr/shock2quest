@@ -42,7 +42,7 @@ test(
 );
 
 test(
-  "cheat: a fatal fall leaves the player alive at full HP",
+  "cheat: a fatal fall leaves the player alive with HP unchanged",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({ mission: "shodan.mis", port: 0 });
@@ -68,5 +68,6 @@ test(
     const fallen = await game.player.position();
     assert.ok(fallen.y < arrival.y - 20, `the player must really fall: ${fallen.y}`);
     assert.equal(await playerHp(game), before, "cheat on: the fall must not lower HP");
+    assert.equal((await game.info()).player.life_state, "alive");
   },
 );
