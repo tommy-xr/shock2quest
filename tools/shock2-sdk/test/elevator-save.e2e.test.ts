@@ -105,6 +105,11 @@ test(
     });
     await game.step({ frames: 5 });
 
+    // Stage on the bottom lift before advancing setup time so enemies at
+    // the mission entrance cannot kill the player while the lift cycles.
+    await game.player.teleport({ x: 43.9006, y: -11.556, z: -168.2003 });
+    await game.step({ frames: 30 });
+
     // Setup only: dispatch the real lift through its authored
     // 477 (bottom) -> 478 (middle) -> 479 (top) path.
     const bottomButton = await object(game, 480, "bottom button mission object 480");
