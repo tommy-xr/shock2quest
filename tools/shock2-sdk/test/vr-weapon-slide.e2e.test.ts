@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { GameServer, type Vec3 } from "../src/index.js";
 import { aimVrHandAt, quatConjugate, quatRotate, sub } from "./helpers/vr-hand.js";
 import { ammoOf, cycleToWeapon, pullTrigger } from "./helpers/weapon.js";
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 
 for (const [weapon, template, locksEmpty] of [["pistol", -17, true], ["AR15", -18, false]] as const) {
   for (const hand of ["left", "right"] as const) {
@@ -14,6 +15,8 @@ for (const [weapon, template, locksEmpty] of [["pistol", -17, true], ["AR15", -1
       await game.step({ frames: 30 });
       const gun = await cycleToWeapon(game, e => e.template_id === template);
       await aimVrHandAt(game, gun.position, .2, 1, 0, { hand, lookAtTarget: false });
+      await game.step({ frames: 5 });
+      if (weapon === "AR15") await unlockWeaponAlternateFire(game);
       await game.input.set(`${hand}_hand.position`, [hand === "left" ? -.3 : .3, 1, -.5]);
       await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
       await game.step({ frames: 20 });

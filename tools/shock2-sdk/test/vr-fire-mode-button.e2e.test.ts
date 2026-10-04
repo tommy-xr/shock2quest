@@ -124,6 +124,7 @@ test(
     });
     await game.step({ frames: 30 });
     await grabWeapon(game, LASER_PISTOL);
+    await unlockWeaponAlternateFire(game);
 
     assert.deepEqual(await fireMode(game), [0, "NORM"]);
     await press(game, "RightHandUpperButton");
