@@ -56,7 +56,7 @@ h2.sec{font-size:34px;margin:6px 0 22px}
 .feeds .main video{display:block;width:100%;aspect-ratio:16/9}
 .feeds .main span{position:absolute;left:12px;top:10px;font:12px "Share Tech Mono",monospace;background:rgba(0,0,0,.7);padding:2px 8px}
 .feeds .main span::before{content:"● ";color:#ff5555}
-.feeds .side{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.feeds .side{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:12px}
 .feeds .side button{padding:0;border:1px solid var(--line);background:none;cursor:pointer;opacity:.6}
 .feeds .side button[aria-pressed=true],.feeds .side button:hover{opacity:1;border-color:var(--cyan)}
 .feeds .side img{display:block;width:100%}
