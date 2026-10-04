@@ -108,6 +108,10 @@ pub const VITALITY_TEMPLATE_ID: i32 = -1159;
 /// for the sustained power's lifetime, including hacking odds.
 pub const CYBER_TEMPLATE_ID: i32 = -1117;
 
+/// `Quickness` - Psychogenic Agility: grants the authored AGI bonus for
+/// movement and other effective-stat consumers until the power expires.
+pub const QUICKNESS_TEMPLATE_ID: i32 = -1138;
+
 /// Identity of a sustained stat bonus, shared by activation and removal.
 pub fn stat_modifier(template_id: i32) -> Option<(&'static str, crate::player_stats::Stat)> {
     use crate::player_stats::Stat;
@@ -116,6 +120,7 @@ pub fn stat_modifier(template_id: i32) -> Option<(&'static str, crate::player_st
         PSI_IMAGE_TEMPLATE_ID => Some(("psi:image", Stat::PsionicAbility)),
         VITALITY_TEMPLATE_ID => Some(("psi:vitality", Stat::Endurance)),
         CYBER_TEMPLATE_ID => Some(("psi:cyber", Stat::CyberAffinity)),
+        QUICKNESS_TEMPLATE_ID => Some(("psi:quickness", Stat::Agility)),
         _ => None,
     }
 }
