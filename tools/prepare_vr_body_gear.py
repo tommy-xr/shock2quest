@@ -14,7 +14,7 @@ import numpy as np
 from PIL import Image, ImageEnhance
 
 
-def prepare_body_gear(source, destination, kind, texture_size):
+def prepare_body_gear(source, destination, kind, texture_size, gear_brightness=0.55, gear_contrast=0.85):
     raw = source.read_bytes()
     magic, version, length = struct.unpack_from("<III", raw)
     if (magic, version, length) != (0x46546C67, 2, len(raw)):
@@ -98,6 +98,12 @@ def prepare_body_gear(source, destination, kind, texture_size):
             # Keep UV islands, scratches and all PBR data in their authored places.
             pixels = ImageEnhance.Contrast(pixels).enhance(0.90)
             pixels = ImageEnhance.Brightness(pixels).enhance(0.60)
+        if index in color_images:
+            # Shared outfit finish after matching the three source exports.
+            # Compress pale baked wear, then darken to the hacker's charcoal.
+            # Only base color changes; preserve UVs and PBR data.
+            pixels = ImageEnhance.Contrast(pixels).enhance(gear_contrast)
+            pixels = ImageEnhance.Brightness(pixels).enhance(gear_brightness)
         if index in normal_images:
             normals = np.array(pixels).astype(np.float32) / 127.5 - 1
             normals /= np.maximum(np.linalg.norm(normals, axis=2, keepdims=True), 1e-6)
@@ -137,6 +143,10 @@ if __name__ == "__main__":
     parser.add_argument("--holster", type=Path)
     parser.add_argument("--backpack", type=Path)
     parser.add_argument("--texture-size", type=int, default=1024)
+    parser.add_argument("--gear-brightness", type=float, default=0.55,
+                        help="shared base-color multiplier after source matching (default: 0.55; legacy: 1)")
+    parser.add_argument("--gear-contrast", type=float, default=0.85,
+                        help="shared base-color contrast after source matching (default: 0.85; legacy: 1)")
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parents[1] / "assets")
     args = parser.parse_args()
     kinds = [kind for kind in ("belt", "holster", "backpack") if getattr(args, kind)]
@@ -144,6 +154,9 @@ if __name__ == "__main__":
         parser.error("provide at least one of --belt, --holster or --backpack")
     if args.texture_size < 1:
         parser.error("--texture-size must be positive")
+    if not (0 < args.gear_brightness <= 1 and 0 < args.gear_contrast <= 1):
+        parser.error("--gear-brightness and --gear-contrast must be in (0, 1]")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for kind in kinds:
-        prepare_body_gear(getattr(args, kind), args.output_dir / f"{kind}.glb", kind, args.texture_size)
+        prepare_body_gear(getattr(args, kind), args.output_dir / f"{kind}.glb", kind, args.texture_size,
+                          args.gear_brightness, args.gear_contrast)
