@@ -227,17 +227,18 @@ test(
     });
     await game.step({ frames: 5 });
 
+    // Stage left of the nearby hybrid so this probes terrain, not an actor.
     // Standing center over the authored y=-13.2 start floor. Crouching plants
     // the feet and produces the campaign-observed center near y=-12.596.
-    await game.player.teleport({ x: 7.75, y: -11.956, z: -128.4 });
+    await game.player.teleport({ x: 6.75, y: -11.956, z: -128.4 });
     await game.step({ frames: 30 });
     await game.input.set("crouch", 1);
     await game.step({ frames: 5 });
     const start = await game.player.position();
 
-    // The recorded route first makes an ordinary crouched jump onto the
-    // 0.4-world-unit upper lip. The second, otherwise identical jump is the one
-    // whose forward probe used to select the disconnected lower floor.
+    // Make two ordinary crouched jumps across the 0.4-world-unit upper lip.
+    // At this unobstructed approach the first jump already selects the
+    // disconnected lower floor on the unfixed controller.
     await game.input.lookAtWorldPoint([
       start.x,
       start.y + PLAYER_EYE_HEIGHT_WORLD,
