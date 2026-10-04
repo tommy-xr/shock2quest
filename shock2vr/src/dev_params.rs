@@ -552,6 +552,9 @@ dev_params! {
     /// cannot detach the view. Turning it back off while detached also
     /// re-attaches the camera, so the switch is always a way out.
     FREE_CAMERA = Camera::bool("free_camera", "Free camera", false),
+    /// Experimental player avatar with controller-driven arms. Only
+    /// submitted in VR while the spectator camera is detached.
+    VR_DEBUG_BODY = Camera::bool("vr_debug_body", "Hacker VR body", false),
     /// Which pose the visibility engine culls from while the free camera is
     /// detached. Off (the default) culls from the *player*, so flying out
     /// shows exactly what the player's viewpoint decided - cells the player

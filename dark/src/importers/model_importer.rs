@@ -89,6 +89,51 @@ fn process_model(
 pub static MODELS_IMPORTER: Lazy<AssetImporter<SystemShockContentModel, Model, ()>> =
     Lazy::new(|| AssetImporter::define(load_model, process_model));
 
+/// Separate cache type: the spectator body must never strip the normal avatar.
+pub struct VrBodyModel(pub Option<Model>);
+
+pub static VR_BODY_IMPORTER: Lazy<AssetImporter<SystemShockContentModel, VrBodyModel, ()>> =
+    Lazy::new(|| AssetImporter::define(load_model, process_vr_body));
+
+fn process_vr_body(mesh: SystemShockContentModel, assets: &mut AssetCache, _: &()) -> VrBodyModel {
+    let SystemShockContentModel::Mesh(mut mesh, skeleton, mut pmnm) = mesh else {
+        return VrBodyModel(None);
+    };
+    // player.cal: both hands + fingertips. Keep the head for spectator shots
+    // and forearms through their wrist pivots; the VR gloves supply the hands.
+    const REMOVED: &[u32] = &[14, 15, 16, 17];
+    mesh.remove_joint_geometry(REMOVED);
+    if let Some(high) = &mut pmnm {
+        let mut indices = Vec::new();
+        for material in &mut high.materials {
+            let start = indices.len();
+            for triangle in high.indices
+                [material.index_start..material.index_start + material.index_count]
+                .chunks_exact(3)
+            {
+                let hidden = triangle.iter().any(|&index| {
+                    let vertex = &high.vertices[index as usize];
+                    let weight: u32 = vertex
+                        .bone_indices
+                        .iter()
+                        .zip(vertex.bone_weights)
+                        .filter(|(joint, _)| REMOVED.contains(&(**joint as u32)))
+                        .map(|(_, weight)| weight as u32)
+                        .sum();
+                    weight >= 128
+                });
+                if !hidden {
+                    indices.extend_from_slice(triangle);
+                }
+            }
+            material.index_start = start;
+            material.index_count = indices.len() - start;
+        }
+        high.indices = indices;
+    }
+    VrBodyModel(Some(Model::from_ai_bin(mesh, skeleton, pmnm, assets)))
+}
+
 /// A complete detachable magazine, centered on its own visible geometry.
 /// The original weapon mesh remains in its separate importer/cache bucket.
 pub struct MagazineModel {

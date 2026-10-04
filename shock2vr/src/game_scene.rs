@@ -67,6 +67,10 @@ pub struct AmbientAudioState {
 /// Abstract game scene that can be rendered and updated
 /// Supports missions, cutscenes, UI screens, debug scenes, etc.
 pub trait GameScene {
+    /// Optional spectator-only body; ordinary first-person rendering never calls this.
+    fn render_debug_body(&mut self, _assets: &mut AssetCache) -> Vec<SceneObject> {
+        Vec::new()
+    }
     /// The placement shared by consecutive frontend screens. Gameplay keeps
     /// the default; only an open pause overlay carries placement out of a mission.
     fn frontend_panel_anchor(&mut self) -> Option<&mut crate::ui::FrontendPanelAnchor> {

@@ -883,6 +883,27 @@ Headlessly, `GET /v1/camera` reports whether the camera is detached and the
 pose it is rendering from, so a test can check what the camera did without
 reading pixels - see `tools/shock2-sdk/test/free-camera.e2e.test.ts`.
 
+**Hacker VR body** (`vr_debug_body`, off by default) adds a `player.bin`
+avatar, including its head, while the free camera is detached in VR. The original
+hands are removed; two-bone arm IK reaches the visible glove cuffs. The abdomen
+and cosmetic backpack follow the same belt centre and smoothed heading as the
+holsters. Existing belt/holster developer
+fit controls still apply. Reattaching the camera hides the body immediately.
+
+Try `cargo dbgr --mission debug_weapons --vr --port 8080`, then:
+
+```bash
+curl -X POST localhost:8080/v1/dev-params -d '{"key":"vr_debug_body","value":1}'
+curl -X POST localhost:8080/v1/camera -d '{"position":[-5.5,3.4,-2.5],"look_at":[0,1.8,0]}'
+curl -X POST localhost:8080/v1/step -d '{"frames":5}'
+```
+
+This is a spectator fit prototype: fixed standing legs, approximate body size,
+no feet IK or walking animation, and no forearm twist tracking. Unreachable
+controllers leave a wrist gap instead of stretching the arms. Tracking loss
+relaxes the affected arm. It has no collision or saved state. Validate seated,
+crouched and standing proportions on a headset before considering first-person use.
+
 #### Throw tuning
 
 **Developer → Weapons → Throwing** contains the live, unlocked throw controls.

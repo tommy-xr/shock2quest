@@ -31,6 +31,27 @@ editor. BIN item placement and size are authored separately in `../vr-holsters.j
 GLB is used only for the wearable artwork.
 Headset fit remains adjustable through the existing developer controls.
 
+## Backpack
+
+`../backpack.glb` is prepared from the user-supplied
+`backpack_triangle_3k.glb`. Rebuild it without changing the other gear:
+
+```sh
+python3 tools/prepare_vr_body_gear.py --backpack /path/to/backpack_triangle_3k.glb
+```
+
+Both embedded maps are 1024×1024 (source: 2048² base color and 4096²
+metallic/roughness). Only base color receives the tonal adjustment: 90% contrast,
+then 60% brightness. This matches the belt/holster's charcoal finish while keeping
+the UV layout and wear marks. The material map is only resized. The packed GLB
+is approximately 2.9 MB, down from 18.1 MB.
+
+The original topology is retained, normalized to 44 cm height (32.4 cm wide,
+24.2 cm deep). Its contact surface is at Z=0, centre height at Y=0, and front
+faces -Z. The spectator hacker's mount turns it outward on the back, above the
+belt. It is currently cosmetic and follows the same `vr_debug_body` gate;
+inventory interaction and capacity are unchanged.
+
 ## Original procedural gear
 
 The original belt, ammo pouch and rigid holster meshes were authored by

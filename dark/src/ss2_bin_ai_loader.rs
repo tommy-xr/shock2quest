@@ -52,6 +52,39 @@ pub struct SystemShock2AIMesh {
 }
 
 impl SystemShock2AIMesh {
+    /// Remove triangles belonging to selected joints without renumbering the rig.
+    pub fn remove_joint_geometry(&mut self, removed: &[u32]) {
+        let mut hidden = vec![false; self.vertices.len()];
+        for joint in &self.joints {
+            let Some(mapping) = self.joint_map.get(joint.mapper_id as usize) else {
+                continue;
+            };
+            if removed.contains(&(mapping.joint as u32)) {
+                let start = joint.start_vertex.max(0) as usize;
+                let end = (start + joint.num_vertices.max(0) as usize).min(hidden.len());
+                if start < end {
+                    hidden[start..end].fill(true);
+                }
+            }
+        }
+        let mut triangles = Vec::new();
+        for material in &mut self.materials {
+            let start = triangles.len();
+            for tri in &self.triangles[material.polygon_start as usize
+                ..(material.polygon_start + material.polygons) as usize]
+            {
+                if [tri.vert_index0, tri.vert_index1, tri.vert_index2]
+                    .iter()
+                    .all(|&i| !hidden[i as usize])
+                {
+                    triangles.push(tri.clone());
+                }
+            }
+            material.polygon_start = start as u16;
+            material.polygons = (triangles.len() - start) as u16;
+        }
+        self.triangles = triangles;
+    }
     /// All vertex positions assigned to each skeleton joint, grouped by joint id.
     ///
     /// Uses each joint's full `start_vertex..start_vertex+num_vertices` range
@@ -682,6 +715,51 @@ fn build_vertex(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removing_head_geometry_rebuilds_each_material_range() {
+        use std::io::Cursor;
+        let mut first = read_material(&mut Cursor::new(vec![0; 128]), 2);
+        first.polygon_start = 0;
+        first.polygons = 2;
+        let mut second = first.clone();
+        second.polygon_start = 2;
+        let triangle = |vertex| AITriangle {
+            vert_index0: vertex,
+            vert_index1: vertex,
+            vert_index2: vertex,
+            material_id: 0,
+            plane_coefficient: 0.0,
+            normal_index: 0,
+            flags: 0,
+        };
+        let mut head = read_joint(&mut Cursor::new(vec![0; 32]));
+        head.num_vertices = 3;
+        let mut mapping = read_joint_map_entry(&mut Cursor::new(vec![0; 32]));
+        mapping.joint = 9;
+        let mut mesh = SystemShock2AIMesh {
+            materials: vec![first, second],
+            vertices: vec![Point3::new(0.0, 0.0, 0.0); 6],
+            triangles: vec![triangle(0), triangle(3), triangle(1), triangle(4)],
+            joints: vec![head],
+            joint_map: vec![mapping],
+            uvs: vec![],
+            normals: vec![],
+            weights: vec![],
+        };
+        mesh.remove_joint_geometry(&[9]);
+        assert_eq!(mesh.triangles.len(), 2);
+        for (i, material) in mesh.materials.iter().enumerate() {
+            assert_eq!(material.polygon_start, i as u16);
+            assert_eq!(material.polygons, 1);
+            let rendered = &mesh.triangles[material.polygon_start as usize
+                ..(material.polygon_start + material.polygons) as usize];
+            assert_eq!(rendered[0].vert_index0, 3 + i as u16);
+        }
+        // Repeating the operation preserves the surviving ranges.
+        mesh.remove_joint_geometry(&[9]);
+        assert_eq!(mesh.triangles.len(), 2);
+    }
 
     #[test]
     fn rigid_vertices_bind_to_a_single_joint() {
