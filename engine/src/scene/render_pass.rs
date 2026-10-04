@@ -99,6 +99,9 @@ uniform float materialPassMaxDistance;
 uniform vec3 materialPassEye;
 uniform bool materialPassCubeEnabled;
 uniform samplerCube materialPassCube;
+bool materialAlphaRejected(float alpha) {
+    return (!materialPassEnabled || materialPassAlphaTest) && alpha < 0.1;
+}
 vec4 sampleMaterialPass(sampler2D tex, vec2 uv, vec3 position, vec3 normal) {
     vec4 pixel;
     if (materialPassEnabled && materialPassCubeEnabled) {

@@ -2,6 +2,9 @@
 pub struct EngineRenderContext {
     pub time: f32,
 
+    /// Renderer-owned self-occlusion mask; callers start with None.
+    pub self_depth: crate::scene::self_depth::Phase,
+
     /// Multiplier for world and model ambient lighting; 1 preserves it.
     pub ambient_light_intensity: f32,
     /// Multiplier for baked world lightmaps, applied before the ambient floor.

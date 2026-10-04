@@ -4,6 +4,7 @@ use crate::util;
 use std::sync::Arc;
 
 pub struct OpenGLEngine {
+    self_depth: std::cell::RefCell<crate::scene::self_depth::Target>,
     pub is_opengl_es: bool,
     pub storage: Arc<dyn crate::file_system::Storage>,
 }
@@ -12,6 +13,7 @@ impl OpenGLEngine {}
 
 fn init(is_opengl_es: bool, storage: Arc<dyn crate::file_system::Storage>) -> OpenGLEngine {
     OpenGLEngine {
+        self_depth: Default::default(),
         is_opengl_es,
         storage,
     }
@@ -149,15 +151,41 @@ impl Engine for OpenGLEngine {
 
                 // Transparent pass with all lighting calculated in shaders
                 gl::DepthMask(gl::FALSE);
-                scene.objects_in_layer(layer).for_each(|s| {
+                // Preserve authored composition order. A mask belongs to one
+                // actor only; rebuilding for another actor never touches scene depth.
+                let mut cached_mask = None;
+                for s in scene.objects_in_layer(layer) {
+                    let mask = s.self_depth_group.map(|group| {
+                        if cached_mask.is_none_or(|(id, _)| id != group) {
+                            cached_mask = Some((
+                                group,
+                                self.self_depth.borrow_mut().render(
+                                    group,
+                                    layer,
+                                    self,
+                                    render_context,
+                                    &view,
+                                    scene,
+                                ),
+                            ));
+                        }
+                        cached_mask.unwrap().1
+                    });
+                    let context = EngineRenderContext {
+                        self_depth: mask.map_or(
+                            crate::scene::self_depth::Phase::None,
+                            crate::scene::self_depth::Phase::Test,
+                        ),
+                        ..*render_context
+                    };
                     let merged = s.lights().map(|o| o.merged_with(scene.lights()));
                     s.draw_transparent(
                         self,
-                        render_context,
+                        &context,
                         &view,
                         merged.as_ref().unwrap_or(scene.lights()),
-                    )
-                });
+                    );
+                }
                 gl::DepthMask(gl::TRUE);
             }
 
