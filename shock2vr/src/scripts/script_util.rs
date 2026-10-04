@@ -74,6 +74,41 @@ pub(crate) fn projectile_contact_effects(
         receiver,
         crate::runtime_props::RuntimePropShotModifiers::of(world, projectile).stim,
     );
+    let damage = if amount > 0.0
+        && world
+            .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
+            .is_ok_and(|shots| shots.contains(projectile))
+    {
+        Effect::combine(vec![damage, super::charmable::player_damage(receiver)])
+    } else {
+        damage
+    };
+    let script_stims = crate::mission::stim_response::contact_script_stims(
+        world,
+        template,
+        receiver,
+        crate::runtime_props::RuntimePropShotModifiers::of(world, projectile).stim,
+    );
+    let damage =
+        if script_stims.is_empty() {
+            damage
+        } else {
+            Effect::combine(
+                std::iter::once(damage)
+                    .chain(script_stims.into_iter().map(|(stim_template, intensity)| {
+                        Effect::Send {
+                            msg: Message {
+                                to: receiver,
+                                payload: MessagePayload::Stimulus {
+                                    stim_template,
+                                    intensity,
+                                },
+                            },
+                        }
+                    }))
+                    .collect(),
+            )
+        };
     let damage = if matches!(hazard, Effect::NoEffect) {
         damage
     } else {

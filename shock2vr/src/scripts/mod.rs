@@ -17,6 +17,7 @@ mod base_room;
 pub mod berserk;
 mod burst_fire;
 mod camera_alert;
+mod charmable;
 mod chemical;
 mod choose_mission;
 mod choose_service;
@@ -253,6 +254,10 @@ pub struct DamageImpact {
 #[derive(Clone, Debug)]
 pub enum MessagePayload {
     BeginPsiSword,
+    Stimulus {
+        stim_template: i32,
+        intensity: f32,
+    },
     StartHordeWave {
         wave: u32,
     },
@@ -1079,7 +1084,7 @@ impl ScriptWorld {
             // TODO: Should these actually be implemented?
             "trapgravity" => Box::new(NoopScript {}), // medsci1 - vent that falls
             "trapmessage" => Box::new(TrapMessage::new()),
-            "charmable" => Box::new(NoopScript::new()),
+            "charmable" => Box::new(charmable::Charmable::default()),
             "transientcorpse" => Box::new(NoopScript::new()),
             "whiteout" => Box::new(WhiteOut::new()),
             "vaporizeinventory" => Box::new(VaporizeInventory::new()),

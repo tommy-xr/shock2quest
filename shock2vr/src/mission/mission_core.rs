@@ -13043,6 +13043,12 @@ impl MissionCore {
                     }
                 }
                 Effect::SetAITeam { entity_id, team } => {
+                    if crate::scripts::ai::ai_util::ai_team(&self.world, entity_id) != team {
+                        self.world
+                            .remove::<(crate::runtime_props::RuntimePropAITargetAwareness,)>(
+                                entity_id,
+                            );
+                    }
                     self.world
                         .add_component(entity_id, dark::properties::PropAITeam(team));
                 }
@@ -18525,6 +18531,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         name: "AIAlertness".to_string(),
                         value: format!("{:?}", alertness.level),
                     });
+                }
+                if let Ok(teams) = self.world.borrow::<View<dark::properties::PropAITeam>>() {
+                    if let Ok(team) = teams.get(id) {
+                        properties.push(DebugPropertyInfo { name: "AITeam".into(), value: format!("{:?}", team.0) });
+                    }
                 }
                 if let Ok(behavior) = v_ai_behavior.get(id) {
                     properties.push(DebugPropertyInfo {

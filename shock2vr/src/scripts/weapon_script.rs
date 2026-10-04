@@ -811,7 +811,7 @@ pub(super) fn flat_melee_hit(
                 },
             },
         };
-        return Effect::Multiple(vec![damage, sound]);
+        return Effect::Multiple(vec![damage, super::charmable::player_damage(target), sound]);
     }
     Effect::NoEffect
 }

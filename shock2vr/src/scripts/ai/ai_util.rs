@@ -616,10 +616,7 @@ pub fn fire_ranged_projectile(
                 point3(offset.x, offset.y, offset.z),
             )
         };
-        let Some((target_entity, target_position)) = world
-            .borrow::<UniqueView<PlayerInfo>>()
-            .ok()
-            .map(|player| (player.entity_id, player.pos))
+        let Some((target_entity, target_position)) = combat_target(world, physics, entity_id)
         else {
             return Effect::NoEffect;
         };
@@ -774,11 +771,7 @@ fn muzzle_offset_for_distance(distance_to_target: f32) -> f32 {
 /// inside the attacker's field of view - the AI swings at where it believes
 /// the target is, but only reality can be hit.
 pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &PhysicsWorld) -> Effect {
-    let Some((player_entity_id, player_pos)) = world
-        .borrow::<UniqueView<PlayerInfo>>()
-        .ok()
-        .map(|player| (player.entity_id, player.pos))
-    else {
+    let Some((target_entity_id, target_pos)) = combat_target(world, physics, entity_id) else {
         return Effect::NoEffect;
     };
 
@@ -788,7 +781,7 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
             .get(entity_id)
             .ok()
             .map(|pos| {
-                (pos.position + creature::sense_offset(world, entity_id) - player_pos).magnitude()
+                (pos.position + creature::sense_offset(world, entity_id) - target_pos).magnitude()
                     < MELEE_ATTACK_RANGE
             })
             .unwrap_or(false)
@@ -797,7 +790,7 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
         return Effect::NoEffect;
     }
 
-    if !is_player_visible_in_fov(entity_id, world, physics, Deg(0.0), MONSTER_FOV_HALF_ANGLE) {
+    if !combat_target_visible(entity_id, world, physics) {
         return Effect::NoEffect;
     }
 
@@ -808,12 +801,12 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
     let damage = crate::mission::stim_response::contact_stim_damage(
         world,
         weapon_template_id,
-        player_entity_id,
+        target_entity_id,
     );
     let hazard = crate::mission::stim_response::contact_hazard_effects(
         world,
         weapon_template_id,
-        player_entity_id,
+        target_entity_id,
         1.0,
     );
     if damage <= 0.0 {
@@ -824,7 +817,7 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
         hazard,
         Effect::Send {
             msg: crate::scripts::Message {
-                to: player_entity_id,
+                to: target_entity_id,
                 payload: crate::scripts::MessagePayload::Damage {
                     amount: damage,
                     impact: None,
@@ -832,6 +825,34 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
             },
         },
     ])
+}
+
+/// Ordinary hostile creatures retain the player target. Allied creatures pick
+/// a living opposing creature; an empty battlefield never falls back to a human.
+pub fn combat_target(
+    world: &World,
+    physics: &PhysicsWorld,
+    observer: EntityId,
+) -> Option<(EntityId, Vector3<f32>)> {
+    if ai_team(world, observer) == AITeam::Good {
+        return nearest_visible_hostile_target(
+            observer,
+            world,
+            physics,
+            Deg(0.0),
+            MONSTER_FOV_HALF_ANGLE,
+        );
+    }
+    let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+    Some((player.entity_id, player.pos))
+}
+
+pub fn combat_target_visible(observer: EntityId, world: &World, physics: &PhysicsWorld) -> bool {
+    if ai_team(world, observer) == AITeam::Good {
+        combat_target(world, physics, observer).is_some()
+    } else {
+        is_player_visible_in_fov(observer, world, physics, Deg(0.0), MONSTER_FOV_HALF_ANGLE)
+    }
 }
 
 /// Where this AI should chase: its last-known target position when it has
@@ -845,6 +866,9 @@ pub fn chase_target(world: &World, entity_id: EntityId) -> Option<Vector3<f32>> 
         if let Ok(awareness) = v_awareness.get(entity_id) {
             return Some(awareness.last_known_pos);
         }
+    }
+    if ai_team(world, entity_id) == AITeam::Good {
+        return None;
     }
     world
         .borrow::<UniqueView<PlayerInfo>>()
@@ -1320,7 +1344,7 @@ pub fn has_line_of_fire(
     physics: &PhysicsWorld,
     target: Vector3<f32>,
 ) -> bool {
-    if is_player_psi_invisible(world) {
+    if ai_team(world, from_entity) != AITeam::Good && is_player_psi_invisible(world) {
         return false;
     }
 
@@ -1331,11 +1355,7 @@ pub fn has_line_of_fire(
     };
     let start_point =
         point3(0.0, 0.0, 0.0) + ent_pos.position + creature::sense_offset(world, from_entity);
-    let Some(target_entity) = world
-        .borrow::<UniqueView<PlayerInfo>>()
-        .ok()
-        .map(|player| player.entity_id)
-    else {
+    let Some((target_entity, _)) = combat_target(world, physics, from_entity) else {
         return false;
     };
     has_line_of_fire_from(
@@ -1447,6 +1467,17 @@ pub(crate) fn nearest_visible_hostile(
     heading: Deg<f32>,
     half_angle: f32,
 ) -> Option<Vector3<f32>> {
+    nearest_visible_hostile_target(observer, world, physics, heading, half_angle)
+        .map(|(_, point)| point)
+}
+
+fn nearest_visible_hostile_target(
+    observer: EntityId,
+    world: &World,
+    physics: &PhysicsWorld,
+    heading: Deg<f32>,
+    half_angle: f32,
+) -> Option<(EntityId, Vector3<f32>)> {
     let (positions, creatures, health) = world
         .borrow::<(View<PropPosition>, View<PropCreature>, View<PropHitPoints>)>()
         .ok()?;
@@ -1464,6 +1495,7 @@ pub(crate) fn nearest_visible_hostile(
                 && Some(*entity) != player
                 && hp.hit_points > 0
                 && ai_team(world, *entity) != team
+                && ai_team(world, *entity) != AITeam::Neutral
         })
         .map(|(entity, (position, _, _))| {
             (
@@ -1478,20 +1510,17 @@ pub(crate) fn nearest_visible_hostile(
             .total_cmp(&(b - pose.position).magnitude2())
     });
     let origin = Point3::from_vec(pose.position + creature::sense_offset(world, observer));
-    candidates
-        .into_iter()
-        .find(|(entity, point)| {
-            within_view_cone(pose, *point, heading, half_angle)
-                && has_clear_sight_between(
-                    observer,
-                    *entity,
-                    origin,
-                    Point3::from_vec(*point),
-                    world,
-                    physics,
-                )
-        })
-        .map(|(_, point)| point)
+    candidates.into_iter().find(|(entity, point)| {
+        within_view_cone(pose, *point, heading, half_angle)
+            && has_clear_sight_between(
+                observer,
+                *entity,
+                origin,
+                Point3::from_vec(*point),
+                world,
+                physics,
+            )
+    })
 }
 
 /// Check if the player is visible from an entity within a field of view
@@ -2440,6 +2469,27 @@ mod hacked_turret_target_tests {
             cell: 0,
             rotation: Quaternion::from_sv(1.0, vec3(0.0, 0.0, 0.0)),
         }
+    }
+
+    #[test]
+    fn allied_creature_without_enemies_never_chases_player() {
+        let mut world = World::new();
+        let ally = world.add_entity((
+            pose(0.0),
+            PropAITeam(AITeam::Good),
+            PropCreature(0),
+            PropHitPoints { hit_points: 12 },
+        ));
+        let player = world.add_entity((pose(1.0),));
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 1.0),
+            rotation: pose(0.0).rotation,
+            entity_id: player,
+            inventory_entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+        });
+        assert_eq!(chase_target(&world, ally), None);
     }
 
     #[test]
