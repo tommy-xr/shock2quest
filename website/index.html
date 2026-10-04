@@ -148,6 +148,7 @@ adb push cutscenes /sdcard/shock2quest/</div></li>
 
 <script type="module">
 import { HERO, MODES, SHOTS, LINKS, DISCLOSURE, socialLinks, wireLinks, fetchVersion } from "./shared/controls.js";
+import { fetchInputs } from "./shared/inputs.js";
 const $ = (s) => document.querySelector(s);
 
 $("#social").innerHTML = $("#social2").innerHTML = socialLinks();
@@ -184,8 +185,10 @@ pick(SHOTS[0]);
 // Controls MFD
 // Loaded lazily so a CDN/WebGL failure only costs the 3D view, not the text.
 let view = null;
+let clip = null; // the shown clip's { video, timeline }, once its recorded inputs load
+const syncView = () => { view?.setMode(MODES[cur]); if (clip) view?.setClip(clip.video, clip.timeline); };
 import("./shared/controller3d.js").then(
-  ({ createControllerView }) => { view = createControllerView($("#ctl3d")); view.setMode(MODES[cur]); },
+  ({ createControllerView }) => { view = createControllerView($("#ctl3d")); syncView(); },
   () => ($("#ctl3d").textContent = "3D controller view unavailable."),
 );
 const tabs = $("#tabs");
@@ -204,7 +207,14 @@ function set(i) {
   $("#blurb").textContent = m.blurb;
   $("#rows").innerHTML = m.rows.map(([k, v]) => `<div class="chip"><b>${k}</b>${v}</div>`).join("");
   $("#clip").innerHTML = m.clip ? `<video src="${HERO}${m.clip}.mp4" poster="${HERO}${m.clip}.png" autoplay muted loop playsinline aria-label="${m.title} footage"></video>` : `FOOTAGE PENDING · ${m.title.toUpperCase()}`;
-  view?.setMode(m);
+  clip = null;
+  syncView();
+  // A clip with <clip>.inputs.json replays its real inputs on the controllers.
+  if (m.clip) fetchInputs(`${HERO}${m.clip}.inputs.json`).then((timeline) => {
+    if (!timeline || MODES[cur] !== m) return;
+    clip = { video: $("#clip video"), timeline };
+    syncView();
+  });
 }
 set(0);
 // Arrow keys move selection and focus together (roving tabindex).
