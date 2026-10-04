@@ -6965,7 +6965,8 @@ impl MissionCore {
                     })
             })
         });
-        self.flat_ui.set_name_strip(name_strip);
+        self.flat_ui
+            .set_name_strip(self.flat_ui.maintenance_preview(&self.world).or(name_strip));
 
         // A deployed mine may be displaced by a collision or moving support.
         // Move its sensor before script damage/overlap checks, so sensing and
@@ -8814,6 +8815,13 @@ impl MissionCore {
     ) -> Vec<Effect> {
         use crate::mission::flat_ui_host::FlatUiDragAction;
         match action {
+            FlatUiDragAction::Maintain { tool, target } => {
+                vec![crate::scripts::maintenance::apply(
+                    &self.world,
+                    tool,
+                    Some(target),
+                )]
+            }
             FlatUiDragAction::ToggleMap => vec![Effect::ToggleMap],
             FlatUiDragAction::Place(entity_id) => vec![crate::scripts::script_util::announce(
                 entity_id,
@@ -15271,6 +15279,10 @@ impl MissionCore {
             if messages.len() > crate::hud::message_line::MAX_LINES {
                 messages.remove(0);
             }
+        }
+        messages.extend(self.interaction.maintenance_previews(&self.world));
+        if messages.len() > crate::hud::message_line::MAX_LINES {
+            messages.drain(..messages.len() - crate::hud::message_line::MAX_LINES);
         }
         messages
     }

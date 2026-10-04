@@ -61,8 +61,6 @@ pub enum MaintenanceOutcome {
     AlreadyGood,
 }
 
-/// The minimum Maintain level `weapon` can be worked on at, or 0 for one that
-/// authors no requirement.
 /// The minimum Maintain level `weapon` can be worked on at. At least one: the
 /// tool restores ten points a level, so a level-zero player working a weapon
 /// that authors no requirement would spend it on nothing at all.
@@ -114,6 +112,23 @@ pub fn maintenance_outcome(world: &World, target: Option<EntityId>) -> Maintenan
     MaintenanceOutcome::Restored {
         weapon: target,
         points,
+    }
+}
+
+/// Shared prediction for the inventory and VR target feedback. Uses exactly
+/// the same eligibility and capped gain as applying the tool.
+pub fn preview(world: &World, target: EntityId) -> String {
+    match maintenance_outcome(world, Some(target)) {
+        MaintenanceOutcome::Restored { points, .. } => {
+            let guns = world.borrow::<View<PropGunState>>().unwrap();
+            let before = guns.get(target).unwrap().condition / 10.0;
+            format!(
+                "Maintain {before:.1} -> {:.1} (+{:.1}); consumes 1 tool",
+                before + points / 10.0,
+                points / 10.0
+            )
+        }
+        outcome => format!("{} Tool kept.", refusal_message(world, outcome)),
     }
 }
 
@@ -191,10 +206,9 @@ pub fn offers_to(world: &World, tool: EntityId, target: EntityId) -> bool {
 ///
 /// This is the whole of the flat inventory's use gesture - the strip's
 /// double-click and the backpack panel's click, which are the same action and
-/// share it. Flat has no way to drag one carried item onto another (#817), so
-/// the wielded weapon is the one target a tool can name; the tool is applied
-/// here rather than offered over the message channel, so a target that runs no
-/// weapon script still gets its refusal instead of silence.
+/// share it. Double-click applies a tool to the wielded weapon; dragging it
+/// onto an inventory weapon names that target explicitly through the same
+/// `apply` function.
 pub fn use_carried_item(world: &World, item: EntityId) -> Effect {
     if crate::virtual_hand::is_wieldable_weapon(world, item) {
         return Effect::GrabEntity {
@@ -247,6 +261,39 @@ mod tests {
 
     fn effects(effect: Effect) -> Vec<Effect> {
         Effect::flatten(vec![effect])
+    }
+
+    #[test]
+    fn maintenance_preview_matches_capped_gain_and_consumption() {
+        let (world, gun, _) = fixture(95.0, 4);
+        assert_eq!(
+            preview(&world, gun),
+            "Maintain 9.5 -> 10.0 (+0.5); consumes 1 tool"
+        );
+        let (world, gun, _) = fixture(40.0, 0);
+        assert_eq!(
+            preview(&world, gun),
+            "Maintaining this weapon requires a skill of 1. Tool kept."
+        );
+    }
+
+    #[test]
+    fn classic_os_upgrades_do_not_change_maintenance_gain() {
+        let (world, gun, _) = fixture(40.0, 2);
+        // Tinker discounts modification; Pharmo-Friendly boosts medical items.
+        // Neither, nor any other classic OS upgrade, boosts maintenance.
+        world
+            .borrow::<shipyard::UniqueViewMut<crate::quest_info::QuestInfo>>()
+            .unwrap()
+            .player_stats_mut()
+            .os_traits = (1..=16).collect();
+        assert_eq!(
+            maintenance_outcome(&world, Some(gun)),
+            MaintenanceOutcome::Restored {
+                weapon: gun,
+                points: 20.0
+            }
+        );
     }
 
     #[test]

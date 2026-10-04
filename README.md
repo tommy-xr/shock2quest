@@ -79,6 +79,12 @@ the loaded rounds to your backpack. In the amp's power selector, use that hand's
 stick up/down for tiers and left/right for purchased powers; confirm with its
 upper button or trigger. Each amp remembers its current and alternate powers.
 
+**Maintenance tools.** In flat inventory, drag a tool onto a ranged weapon.
+In VR, bring the held tool close to a weapon and pull the trigger or release
+it onto the weapon; the weapon can be in your other hand. The preview shows
+condition gained and the one-tool cost. Maintenance skill determines the gain;
+broken weapons need repair first. A refused use consumes nothing.
+
 Empty hands ease toward a partial point at usable controls or a partial grip
 near reachable items, occupied holsters, stocked ammo pouches, and climbing holds.
 These previews only pose the fingers; squeeze or pull the trigger to interact.
