@@ -61,10 +61,11 @@ export const MODES = [
   {
     id: "mfd",
     title: "MFD",
-    blurb: "Jack in: inventory, map, logs and stats float in front of you.",
-    hot: { L: ["menu", "upper"], R: ["trigger", "grip", "upper"] },
-    clip: null,
+    blurb: "Scan with the belt tricorder, or jack in: inventory, map, logs and stats float in front of you.",
+    hot: { L: ["grip", "menu"], R: ["grip"] },
+    clip: "mfd",
     rows: [
+      ["Grip at buckle", "Draw the tricorder — aim to scan"],
       ["Menu tap", "Jack in / out"],
       ["Menu hold", "Pause"],
       ["Point + trigger", "Select"],

@@ -1,0 +1,714 @@
+{
+  "mission": "eng1.mis",
+  "presentation": "Vr",
+  "revision": "c29ab9962415a4f584cd809ee2e801c29eebf679",
+  "revisionParents": [
+    "3430c3bf7b715f64f50d0e87f552c30d5d220a7f",
+    "b216adc0cc425ab7f4bfdf315af4f0426e242709"
+  ],
+  "runtimeSha256": "9334365bdd7864f2dbc76bef01b374fe30a9f339809028a88a06627d84b8ac22",
+  "assetRoot": "/Users/bryphe/ss2-25th",
+  "assetFiles": [
+    "sshock2.kpf",
+    "mods/400.kpf",
+    "mods/patch_ext.kpf",
+    "mods/scp.kpf",
+    "mods/shtup.kpf",
+    "mods/sshock2ee.kpf"
+  ],
+  "settings": {
+    "vr": {
+      "turning": "Smooth",
+      "vignette": "Off"
+    }
+  },
+  "devParams": {
+    "cheat": 1,
+    "fov_override_deg": 62,
+    "level_light_intensity": 1.3
+  },
+  "stagingTeleport": [
+    44.9,
+    -15.36,
+    -41
+  ],
+  "stagedPosition": [
+    44.900024,
+    -15.356057,
+    -41.000027
+  ],
+  "stagedItems": [
+    "Wrench",
+    "Pistol",
+    "Med Patch",
+    "Small Standard Clip"
+  ],
+  "input": {
+    "tricorder": "left squeeze at the buckle, lens held on the mug, release",
+    "menu": "MenuButton held 4 video frames (16 sim frames, under the 0.5 s pause hold), then released; in, and again out",
+    "inventory": {
+      "source": [
+        22.316218999999997,
+        64.255953
+      ],
+      "target": [
+        220.75370299999997,
+        64.255953
+      ]
+    },
+    "framesPerSample": 4,
+    "timeline": "mfd.inputs.json"
+  },
+  "evidence": {
+    "scanned": {
+      "entity": 725,
+      "name": "Mug",
+      "scans": 1
+    },
+    "wrench": {
+      "entity": 2043,
+      "before": [
+        5.779762,
+        16.063988,
+        33.072914,
+        96.38393
+      ],
+      "preview": [
+        204.21725,
+        16.063988,
+        33.072914,
+        96.38393
+      ],
+      "after": [
+        204.21725,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    "noWorldBodyAfterDeposit": true,
+    "hitPoints": 35
+  },
+  "video": {
+    "file": "mfd.mp4",
+    "fps": 15,
+    "frames": 61,
+    "resolution": [
+      960,
+      540
+    ]
+  },
+  "still": "mfd.png",
+  "gif": "mfd.gif",
+  "samples": [
+    {
+      "phase": "reach-buckle",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 0,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "draw",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 0,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "raise",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 0,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "raise",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 0,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "raise",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 0,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "raise",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 0,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "scan",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 0,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "scan",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 0,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "scan",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 0,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "scan",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 0,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "scan",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "scan",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "scan",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "scan",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "readout",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "readout",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "readout",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "readout",
+      "mode": "device",
+      "tricorderHand": 0,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "return",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "look-up",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "look-up",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "look-up",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "menu-in",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "menu-in",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "menu-in",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "menu-in",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "open",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "open",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "open",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "point",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "point",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "point",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "point",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "grip",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": [
+        5.779762,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    {
+      "phase": "grip",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": [
+        5.779762,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": [
+        5.779762,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": [
+        104.998505,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": [
+        138.07143,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": [
+        204.21725,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    {
+      "phase": "drag",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": [
+        204.21725,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    {
+      "phase": "ghost-footprint",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": [
+        204.21725,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    {
+      "phase": "ghost-footprint",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": [
+        204.21725,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    {
+      "phase": "ghost-footprint",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": [
+        204.21725,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    {
+      "phase": "ghost-footprint",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": [
+        204.21725,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    {
+      "phase": "ghost-footprint",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": 2043,
+      "hitPoints": 35,
+      "preview": [
+        204.21725,
+        16.063988,
+        33.072914,
+        96.38393
+      ]
+    },
+    {
+      "phase": "place",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "place",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "place",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "place",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "place",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "lower",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "lower",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "menu-out",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "menu-out",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "menu-out",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "menu-out",
+      "mode": "use",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "closed",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "loop",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "loop",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    },
+    {
+      "phase": "loop",
+      "mode": "shooter",
+      "tricorderHand": null,
+      "scans": 1,
+      "held": null,
+      "hitPoints": 35,
+      "preview": null
+    }
+  ]
+}
