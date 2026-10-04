@@ -29,9 +29,9 @@ Decisions needed before the affected implementation:
 | Installation permanence | Implemented: permanent choices; no refunds or respec | Complete for pistol |
 | Paid cost, challenge, and failure | Implemented: existing skill requirements, nanite costs, Tinker discount, challenge, and failure consequences | Complete for pistol |
 | Energy capacity | Decide explicitly whether double capacity applies to charge stores as well as ammunition magazines | Energy weapon coverage |
-| Meaning of all weapons | Enumerate ranged, melee, stasis, biological weapons, and psi amp; assign useful choices or an explicit exception to each | Coverage milestone |
+| Weapon coverage | Ranged weapons only, including energy and biological capacity; melee and psi amp cannot be modified | Confirmed |
 
-The all-weapons rule remains a requirement to resolve. Starting with the pistol is implementation order, not a decision to exclude other weapons. No universal placeholder upgrade should be introduced without deciding its actual gameplay benefit.
+The coverage requirement is all ranged weapon families; melee weapons and the psi amp are excluded. Starting with the pistol is implementation order, not a decision to exclude other weapons. No universal placeholder upgrade should be introduced without deciding its actual gameplay benefit.
 
 ### Interaction and installation
 
@@ -98,4 +98,4 @@ Implementation starts with the persistent state and pure rules. Settle the remai
 
 The pistol uses one shared 188x300 canvas in flat and VR. Modify opens the chooser; selecting a row previews the automatic bonuses and selected capability. Paid confirmation opens the existing HRM challenge. The chooser reuses the retail Modify bezel and training-screen button texture, with nine-patch borders resolved in shared layout. Installed upgrades are removed from the choices, and Low Maintenance II appears only after I is installed. Selection uses an interior highlight without arrows; the compact list needs no scroll controls. A carried French-Epstein device can be selected with Use device, double-clicked in the inventory strip, or activated with its held-hand trigger to open the chooser directly for the selected pistol. Device confirmation consumes one unit only after target, tier, ownership, and eligibility are revalidated. Closing or backing out consumes nothing.
 
-Low Maintenance I/II, doubled capacity, and alternate fire are active choices. Flashlight, laser, and silencer are labelled as later additions and cannot be installed. Pistol alternate fire starts locked; mode selection and effective firing settings share the purchase check. Upgrade state remains attached to the original weapon across saving and level transitions. Other weapon families remain on their previous behavior until the coverage milestone.
+Low Maintenance I/II, doubled capacity, alternate fire, and flashlight are active choices. Flashlights switch on after installation and have a per-weapon Settings toggle; only equipped weapons emit light. Laser and silencer remain labelled as later additions until their effects are implemented. Pistol alternate fire starts locked; mode selection and effective firing settings share the purchase check. Upgrade state remains attached to the original weapon across saving and level transitions. Other weapon families remain on their previous behavior until the coverage milestone.

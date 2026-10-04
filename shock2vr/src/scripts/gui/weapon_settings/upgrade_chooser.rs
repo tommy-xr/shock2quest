@@ -8,7 +8,7 @@ pub(super) struct UpgradeChooser {
     pub payment: Payment,
 }
 
-fn button(
+pub(super) fn button(
     msg: WeaponSettingsGuiMsg,
     label: &str,
     text: &str,

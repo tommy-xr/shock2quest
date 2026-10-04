@@ -52,7 +52,8 @@ pub fn alternate_unlocked(world: &World, weapon: EntityId) -> bool {
     !supported(world, weapon) || state(world, weapon).has(WeaponUpgrade::AlternateFire)
 }
 
-pub const AVAILABLE: [WeaponUpgrade; 4] = [
+pub const AVAILABLE: [WeaponUpgrade; 5] = [
+    WeaponUpgrade::Flashlight,
     WeaponUpgrade::LowMaintenanceI,
     WeaponUpgrade::LowMaintenanceII,
     WeaponUpgrade::ExtendedCapacity,
@@ -141,6 +142,8 @@ pub fn preview(
         " Double capacity; no free ammo."
     } else if choice == WeaponUpgrade::AlternateFire {
         " Unlock burst fire."
+    } else if choice == WeaponUpgrade::Flashlight {
+        " Weapon light; toggle in Settings."
     } else {
         ""
     };
@@ -169,7 +172,14 @@ pub fn install(
         Ok(next)
     });
     match result {
-        Ok(next) => {
+        Ok(mut next) => {
+            if choice == WeaponUpgrade::Flashlight {
+                next.set_accessory_enabled(
+                    crate::weapon_upgrades::WeaponAccessory::Flashlight,
+                    true,
+                )
+                .unwrap();
+            }
             // Debit synchronously with the state commit. Even if destruction
             // is deferred, a second queued install sees an exhausted device.
             let consumed = if let Payment::Device(device) = payment {

@@ -240,6 +240,7 @@ pub enum WeaponSettingsGuiMsg {
     ConfirmUpgrade,
     CancelUpgrade,
     UpgradePayment(Payment),
+    SetAccessory(crate::weapon_upgrades::WeaponAccessory, bool),
     Repair,
     Board(KeyPadMsg),
 }
@@ -398,6 +399,23 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             components.extend(draw_plug(kind, Some((msg, label))));
         }
 
+        let upgrades = crate::weapon_installation::state(world, weapon);
+        if upgrades.has(WeaponUpgrade::Flashlight) {
+            let accessory = crate::weapon_upgrades::WeaponAccessory::Flashlight;
+            let on = upgrades.accessory_enabled(accessory);
+            components.extend(upgrade_chooser::button(
+                WeaponSettingsGuiMsg::SetAccessory(accessory, !on),
+                "toggle_flashlight",
+                if on {
+                    "Flashlight: ON"
+                } else {
+                    "Flashlight: OFF"
+                },
+                Rect::new(20.0, 24.0, 136.0, 22.0),
+                on,
+                cursor,
+            ));
+        }
         let modification = weapon_modification::level(world, weapon).unwrap_or(0);
         // Retail draws every settings line in the MFD font (MAINAA, cyan).
         let line_h = super::PanelText::line_height(world);
@@ -541,6 +559,16 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             return (WeaponSettingsGuiState::default(), Effect::NoEffect);
         }
         match msg {
+            WeaponSettingsGuiMsg::SetAccessory(accessory, enabled) => {
+                return (
+                    state.clone(),
+                    Effect::SetWeaponAccessory {
+                        entity_id: weapon,
+                        accessory: *accessory,
+                        enabled: *enabled,
+                    },
+                );
+            }
             WeaponSettingsGuiMsg::Modify
                 if crate::weapon_installation::supported(world, weapon) =>
             {

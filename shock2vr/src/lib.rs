@@ -96,6 +96,7 @@ pub mod vr_magazine;
 mod vr_psi_sway;
 mod vr_shotgun_pump;
 mod vr_weapon_action;
+mod weapon_attachments;
 pub mod weapon_installation;
 pub mod weapon_modification;
 mod weapon_muzzle;
