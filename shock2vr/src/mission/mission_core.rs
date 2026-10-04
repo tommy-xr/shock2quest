@@ -14774,6 +14774,7 @@ impl MissionCore {
                 continue;
             };
 
+            // VR shows the use hint on the wrist, with the name.
             ret.extend(draw_item_outline(
                 asset_cache,
                 bounds,
@@ -14782,6 +14783,7 @@ impl MissionCore {
                 view,
                 projection,
                 screen_size,
+                options.presentation_mode == crate::PresentationMode::Flat,
             ));
 
             ret.extend(draw_health_bar(

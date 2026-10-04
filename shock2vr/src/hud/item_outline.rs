@@ -324,11 +324,40 @@ fn emit_rollover_frame(canvas: &mut crate::ui::UiCanvas, origin: Vector2<f32>, n
     }
 }
 
-/// The rollover frame alone, for a world-space mount.
-pub fn rollover_frame_canvas(name: &str) -> crate::ui::UiCanvas {
-    let mut canvas = crate::ui::UiCanvas::new(ROLLOVER_FRAME_SIZE);
+/// The rollover frame alone, for a world-space mount, with the object's use
+/// hint as a bare line below it - the hint has no frame art of its own.
+pub fn rollover_frame_canvas(name: &str, hint: Option<&str>) -> crate::ui::UiCanvas {
+    use crate::ui::{HAlign, Rect, VAlign};
+    let hint_height = if hint.is_some() {
+        LABEL_HEIGHT + 2.0
+    } else {
+        0.0
+    };
+    let mut canvas = crate::ui::UiCanvas::new(ROLLOVER_FRAME_SIZE + vec2(0.0, hint_height));
     emit_rollover_frame(&mut canvas, vec2(0.0, 0.0), Some(name));
+    if let Some(hint) = hint {
+        canvas.text_native_fit(
+            Rect::new(12.0, ROLLOVER_FRAME_SIZE.y + 2.0, 239.0, LABEL_HEIGHT),
+            hint,
+            "mainfont.fon",
+            HAlign::Left,
+            VAlign::Middle,
+        );
+    }
     canvas
+}
+
+/// The authored `P$HUDUse` hint ("Search container"), localized; `None` when
+/// the object has none or it resolves empty.
+pub fn hud_use_hint(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+) -> Option<String> {
+    let hints = world.borrow::<View<PropHUDUse>>().ok()?;
+    let raw = hints.get(entity_id).ok()?;
+    let strings = asset_cache.get(&STRINGS_IMPORTER, "huduse.str");
+    resolve_hud_use(Some(&raw.0), &strings)
 }
 
 /// The flat screen's top-centre frame. The original recentres its 255x17
@@ -442,6 +471,20 @@ mod tests {
             hud_use_position(right_edge, 120.0, 800.0),
             vec2(670.0, 304.0)
         );
+    }
+
+    #[test]
+    fn wrist_rollover_adds_the_use_hint_as_a_line_below_the_frame() {
+        use crate::ui::{Rect, UiElement};
+        let bare = rollover_frame_canvas("A crate", None);
+        assert_eq!(bare.size(), ROLLOVER_FRAME_SIZE);
+        assert_eq!(bare.element_count(), 2);
+
+        let hinted = rollover_frame_canvas("A crate", Some("Search container"));
+        assert_eq!(hinted.size(), vec2(256.0, 28.0));
+        let hint = &hinted.elements()[2];
+        assert_eq!(hint.rect(), Rect::new(12.0, 18.0, 239.0, 10.0));
+        assert!(matches!(hint, UiElement::Text { text, .. } if text == "Search container"));
     }
 
     #[test]
@@ -952,6 +995,7 @@ pub fn draw_item_outline(
     view: Matrix4<f32>,
     projection: Matrix4<f32>,
     screen_size: Vector2<f32>,
+    show_hint: bool,
 ) -> Vec<SceneObject> {
     let options = TextureOptions {
         wrap: false,
@@ -990,22 +1034,21 @@ pub fn draw_item_outline(
         bottom_right_brack_obj,
         top_right_brack_obj,
     ];
-    let hints = world.borrow::<View<PropHUDUse>>().unwrap();
-    if let Ok(raw) = hints.get(entity_id) {
-        let strings = asset_cache.get(&STRINGS_IMPORTER, "huduse.str");
-        if let Some(hint) = resolve_hud_use(Some(&raw.0), &strings) {
-            let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
-            let width = engine::measure_text_width(&**font, &hint, LABEL_HEIGHT);
-            let position = hud_use_position(extents, width, screen_size.x);
-            objects.push(SceneObject::screen_space_text(
-                &hint,
-                font,
-                LABEL_HEIGHT,
-                0.5,
-                position.x,
-                position.y,
-            ));
-        }
+    if let Some(hint) = show_hint
+        .then(|| hud_use_hint(asset_cache, world, entity_id))
+        .flatten()
+    {
+        let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
+        let width = engine::measure_text_width(&**font, &hint, LABEL_HEIGHT);
+        let position = hud_use_position(extents, width, screen_size.x);
+        objects.push(SceneObject::screen_space_text(
+            &hint,
+            font,
+            LABEL_HEIGHT,
+            0.5,
+            position.x,
+            position.y,
+        ));
     }
     objects
 }

@@ -14,7 +14,7 @@ use crate::{
 /// Both wrists show health/psi, back and palm; each cuff opening shows its own weapon, or the
 /// weapon it steadies (`supported`, per hand) - with a two-handed gun the
 /// support wrist is often the only one facing the player. Each wrist also
-/// names what its own hand is aiming at (`names`), in the flat HUD's rollover frame.
+/// names what its own hand is aiming at (`rollovers`, the flat HUD's rollover frame).
 pub fn create_wrist_hud_panels(
     asset_cache: &mut AssetCache,
     world: &World,
@@ -22,7 +22,7 @@ pub fn create_wrist_hud_panels(
     poses: [crate::vr_support::GripPose; 2],
     wrist_frames: [Matrix4<f32>; 2],
     supported: [Option<shipyard::EntityId>; 2],
-    names: [Option<String>; 2],
+    rollovers: [Option<crate::ui::UiCanvas>; 2],
 ) -> Vec<SceneObject> {
     if use_mode {
         return Vec::new();
@@ -108,14 +108,13 @@ pub fn create_wrist_hud_panels(
             .and_then(|amp| crate::psi_amp_readout::wrist(world, amp, hand))
             .map(|(wrist, radius)| wrist * Matrix4::from_scale(radius / BIO_BAND_RADIUS));
         let shows_glove = crate::virtual_hand::shows_hand_visual(world, held);
-        if let (Some(name), Some(root)) = (
-            names[i].as_deref(),
+        if let (Some(canvas), Some(root)) = (
+            rollovers[i].as_ref(),
             if shows_glove { Some(root) } else { amp_root },
         ) {
-            let canvas = super::rollover_frame_canvas(name);
             objects.extend(rollover_name(
                 asset_cache,
-                &canvas,
+                canvas,
                 root,
                 hologram_height,
                 bio_canvas.size(),
