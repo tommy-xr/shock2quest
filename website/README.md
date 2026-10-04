@@ -11,6 +11,9 @@ python3 -m http.server 4180   # http://127.0.0.1:4180/website/
 - `shared/controls.js` — copy, links, control-scheme data, latest-version lookup (GitHub API).
 - `shared/controller3d.js` — Meta Quest Touch Plus pair, rendered with three.js from the
   [WebXR Input Profiles](https://github.com/immersive-web/webxr-input-profiles) models (MIT).
-  A control mode's buttons glow and animate through their press range.
+  A control mode's buttons glow and animate through their press range - or, when its clip
+  has a `<clip>.inputs.json` (recorded with the SDK's `recordClipInputs`), replay the
+  clip's real inputs in sync with the video (`shared/inputs.js`).
+- Tests: `node --test website/test/*.test.js`.
 - Media comes from `screenshots/hero/` (regenerate with `tools/shock2-sdk/scripts/hero-shots.mjs`).
   Control modes with `clip: null` show "footage pending" until a clip is recorded.
