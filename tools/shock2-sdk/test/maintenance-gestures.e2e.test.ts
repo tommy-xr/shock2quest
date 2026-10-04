@@ -44,44 +44,47 @@ test("dragging a maintenance tool onto an inventory gun maintains that gun", opt
   assert.equal((await game.ui.state()).cursor, null, "consumed tool clears the cursor");
 });
 
-for (const held of [false, true]) {
-  for (const gesture of ["trigger", "release"] as const) {
-    test(`VR maintenance ${gesture} near a ${held ? "held" : "world"} gun`, options, async () => {
-      await using game = await GameServer.launch({ mission: "debug_weapons", debugFlags: ["--vr"] });
-      await game.step({ frames: 30 });
-      const gun = await cycleToWeapon(game, e => e.template_id === -17);
-      if (!held) await game.step({ frames: 120 }); // Let the spawned world gun land before aiming.
-      const gunHand = await aimVrHandAt(game, (await game.entities.detail(gun.id)).position as Vec3, 0.3);
-      if (held) {
-        await game.input.set("right_hand.squeeze", 1);
+for (const toolHand of ["left", "right"] as const) {
+  const gunSide = toolHand === "left" ? "right" : "left";
+  for (const held of [false, true]) {
+    for (const gesture of ["trigger", "release"] as const) {
+      test(`VR ${toolHand} maintenance ${gesture} near a ${held ? "held" : "world"} gun`, options, async () => {
+        await using game = await GameServer.launch({ mission: "debug_weapons", debugFlags: ["--vr"] });
+        await game.step({ frames: 30 });
+        const gun = await cycleToWeapon(game, e => e.template_id === -17);
+        if (!held) await game.step({ frames: 120 }); // Let the spawned world gun land before aiming.
+        const gunHand = await aimVrHandAt(game, (await game.entities.detail(gun.id)).position as Vec3, 0.3, 0, 0, { hand: gunSide });
+        if (held) {
+          await game.input.set(`${gunSide}_hand.squeeze`, 1);
+          await game.step({ frames: 8 });
+          assert.ok((await game.player.inventory()).items.some(i => i.entity_id === gun.id && i.location === `${gunSide}_hand`), "opposite hand holds the target gun");
+        }
+        await game.entities.sendMessage(gun.id, { type: "SetGunCondition", condition: 20 });
+        const tool = (await game.entities.byTemplate(TOOL))[0];
+        await aimVrHandAt(game, tool.position as Vec3, 0.3, 0, 0, { hand: toolHand });
+        await game.input.set(`${toolHand}_hand.squeeze`, 1);
         await game.step({ frames: 8 });
-        assert.equal((await game.info()).player.right_hand_entity_id, gun.id);
-      }
-      await game.entities.sendMessage(gun.id, { type: "SetGunCondition", condition: 20 });
-      const tool = (await game.entities.byTemplate(TOOL))[0];
-      await aimVrHandAt(game, tool.position as Vec3, 0.3, 0, 0, { hand: "left" });
-      await game.input.set("left_hand.squeeze", 1);
-      await game.step({ frames: 8 });
-      assert.ok((await game.player.inventory()).items.some(i => i.entity_id === tool.id && i.location === "left_hand"));
-      if (held) {
-        await game.input.set("left_hand.position", [gunHand.local[0] + 0.1, gunHand.local[1], gunHand.local[2]]);
-      } else {
-        await aimVrHandAt(game, (await game.entities.detail(gun.id)).position as Vec3, 0.1, 1, 0, { hand: "left" });
-      }
-      await game.step({ frames: 3 });
-      assert.ok((await game.ui.state()).messages?.some(m => m.includes("Maintain 2.0 -> 8.0") && m.includes("consumes 1 tool")), "nearby tool previews its effect");
-      assert.equal(gunCondition(await game.entities.detail(gun.id)), 20, "preview does not perform maintenance");
-      const near = (await game.input.state()).left_hand.position;
-      await game.input.set("left_hand.position", [near[0] + 2, near[1], near[2]]);
-      await game.step({ frames: 3 });
-      assert.ok(!(await game.ui.state()).messages?.some(m => m.includes("consumes 1 tool")), "preview disappears away from the gun");
-      await game.input.set("left_hand.position", near);
-      await game.step({ frames: 3 });
-      await game.input.set(gesture === "trigger" ? "left_hand.trigger" : "left_hand.squeeze", gesture === "trigger" ? 1 : 0);
-      await game.step({ frames: 8 });
-      assert.equal(gunCondition(await game.entities.detail(gun.id)), 80);
-      assert.equal((await game.entities.byTemplate(TOOL)).length, 0, "successful maintenance consumes the tool");
-      assert.ok(!(await game.player.inventory()).items.some(i => i.entity_id === tool.id), "consumed tool clears the hand");
-    });
+        assert.ok((await game.player.inventory()).items.some(i => i.entity_id === tool.id && i.location === `${toolHand}_hand`));
+        if (held) {
+          await game.input.set(`${toolHand}_hand.position`, [gunHand.local[0] + 0.1, gunHand.local[1], gunHand.local[2]]);
+        } else {
+          await aimVrHandAt(game, (await game.entities.detail(gun.id)).position as Vec3, 0.1, 1, 0, { hand: toolHand });
+        }
+        await game.step({ frames: 3 });
+        assert.ok((await game.ui.state()).messages?.some(m => m.includes("Maintain 2.0 -> 8.0") && m.includes("consumes 1 tool")), "nearby tool previews its effect");
+        assert.equal(gunCondition(await game.entities.detail(gun.id)), 20, "preview does not perform maintenance");
+        const near = (await game.input.state())[`${toolHand}_hand`].position;
+        await game.input.set(`${toolHand}_hand.position`, [near[0] + 2, near[1], near[2]]);
+        await game.step({ frames: 3 });
+        assert.ok(!(await game.ui.state()).messages?.some(m => m.includes("consumes 1 tool")), "preview disappears away from the gun");
+        await game.input.set(`${toolHand}_hand.position`, near);
+        await game.step({ frames: 3 });
+        await game.input.set(gesture === "trigger" ? `${toolHand}_hand.trigger` : `${toolHand}_hand.squeeze`, gesture === "trigger" ? 1 : 0);
+        await game.step({ frames: 8 });
+        assert.equal(gunCondition(await game.entities.detail(gun.id)), 80);
+        assert.equal((await game.entities.byTemplate(TOOL)).length, 0, "successful maintenance consumes the tool");
+        assert.ok(!(await game.player.inventory()).items.some(i => i.entity_id === tool.id), "consumed tool clears the hand");
+      });
+    }
   }
 }
