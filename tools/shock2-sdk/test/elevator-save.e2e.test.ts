@@ -21,6 +21,21 @@ async function object(game: GameServer, missionObjectId: number, label: string) 
 }
 
 async function squeeze(game: GameServer, entity: EntitySummary): Promise<void> {
+  // The platform center is outside retail frob reach of the wall buttons.
+  // Approach through ordinary movement before aiming; visibility alone does
+  // not mean the button is close enough to use.
+  const player = await game.player.position();
+  const dx = entity.position[0] - player.x;
+  const dz = entity.position[2] - player.z;
+  const distance = Math.hypot(dx, dz);
+  if (distance > 2.3) {
+    await game.player.moveTo({
+      x: player.x + dx * (distance - 2.3) / distance,
+      y: player.y,
+      z: player.z + dz * (distance - 2.3) / distance,
+    });
+    await game.step({ frames: 5 });
+  }
   const aim = await game.player.aimAt(entity, {
     hitbox: "surface",
     visibility: "required",
@@ -86,7 +101,7 @@ test(
   async (t) => {
     await using game = await GameServer.launch({
       mission: "eng2.mis",
-      port: Number(process.env.SHOCK2_E2E_ELEVATOR_SAVE_PORT ?? 8141),
+      port: Number(process.env.SHOCK2_E2E_ELEVATOR_SAVE_PORT ?? 0),
     });
     await game.step({ frames: 5 });
 
