@@ -87,3 +87,5 @@ pub use debug_normal_material::{
 
 pub mod clipped_screen_material;
 pub use clipped_screen_material::ClippedScreenMaterial;
+
+pub mod self_depth;

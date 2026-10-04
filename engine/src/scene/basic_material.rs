@@ -17,6 +17,8 @@ use once_cell::sync::OnceCell;
 
 // Unified shader for single-pass lighting with up to 6 spotlights
 const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
+        // Depth and color link this vertex shader into separate programs.
+        invariant gl_Position;
         layout (location = 0) in vec3 inPos;
         layout (location = 1) in vec2 inTex;
         layout (location = 2) in vec3 inNormal;
@@ -135,14 +137,17 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         }
 
         void main() {
+            if (hiddenBySelfDepth()) discard;
             vec4 texColor = sampleMaterialPass(texture1, texCoord, worldPos, worldNormal);
+
             if (additiveUnlit) {
                 // SRC_COLOR/ONE squares RGB. Scale by sqrt(opacity) so the
                 // accumulated light fades linearly with authored alpha.
                 fragColor = vec4(texColor.rgb * sqrt(texColor.a * (1.0 - transparency)), 1.0);
                 return;
             }
-            if ((!materialPassEnabled || materialPassAlphaTest) && texColor.a < 0.1) discard;
+            if (materialAlphaRejected(texColor.a)) discard;
+
 
             vec3 finalColor = texColor.rgb * emissivity;
 
@@ -162,6 +167,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
 "#;
 
 struct UnifiedUniforms {
+    self_depth: super::self_depth::Uniforms,
     incidence: IncidenceUniforms,
     render_pass: super::render_pass::Uniforms,
     shine: ShineUniforms,
@@ -191,6 +197,7 @@ struct UnifiedUniforms {
 }
 
 static UNIFIED_SHADER_PROGRAM: OnceCell<(ShaderProgram, UnifiedUniforms)> = OnceCell::new();
+static SELF_DEPTH_SHADER_PROGRAM: OnceCell<(ShaderProgram, UnifiedUniforms)> = OnceCell::new();
 
 pub struct BasicMaterial<T>
 where
@@ -226,9 +233,12 @@ where
         world_matrix: &Matrix4<f32>,
         lights: &crate::scene::light::LightArray,
     ) {
-        let (shader_program, uniforms) = UNIFIED_SHADER_PROGRAM
-            .get()
-            .expect("unified shader not compiled");
+        let program = if matches!(render_context.self_depth, super::self_depth::Phase::Capture) {
+            &SELF_DEPTH_SHADER_PROGRAM
+        } else {
+            &UNIFIED_SHADER_PROGRAM
+        };
+        let (shader_program, uniforms) = program.get().expect("unified shader not compiled");
         if let Some(texture) = &self.diffuse_override {
             texture.bind0(render_context);
         } else {
@@ -236,6 +246,7 @@ where
         }
         unsafe {
             gl::UseProgram(shader_program.gl_id);
+            uniforms.self_depth.bind(render_context.self_depth);
             uniforms
                 .incidence
                 .bind(self.incidence.as_ref(), render_context, view_matrix);
@@ -390,7 +401,7 @@ where
     }
 
     fn initialize(&mut self, is_opengl_es: bool) {
-        let _ = UNIFIED_SHADER_PROGRAM.get_or_init(|| {
+        let build = |capture| {
             // Build and compile unified shader program with 6-spotlight support
             let vertex_shader = crate::shader::build(
                 UNIFIED_VERTEX_SHADER_SOURCE,
@@ -400,12 +411,17 @@ where
 
             let fragment_shader = crate::shader::build(
                 &format!(
-                    "{}\n{}\n{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}\n{}\n{}",
+                    super::self_depth::GLSL,
                     super::incidence::GLSL,
                     super::environment::GLSL,
                     super::shine::GLSL,
                     super::render_pass::GLSL,
-                    UNIFIED_FRAGMENT_SHADER_SOURCE
+                    if capture {
+                        super::self_depth::FRAGMENT
+                    } else {
+                        UNIFIED_FRAGMENT_SHADER_SOURCE
+                    }
                 ),
                 crate::shader::ShaderType::Fragment,
                 is_opengl_es,
@@ -416,6 +432,7 @@ where
 
                 // Get uniform locations for all shader variables
                 let uniforms = UnifiedUniforms {
+                    self_depth: super::self_depth::Uniforms::new(shader.gl_id),
                     incidence: IncidenceUniforms::new(shader.gl_id),
                     render_pass: super::render_pass::Uniforms::new(shader.gl_id),
                     shine: ShineUniforms::new(shader.gl_id),
@@ -589,8 +606,9 @@ where
                 };
                 (shader, uniforms)
             }
-        });
-
+        };
+        UNIFIED_SHADER_PROGRAM.get_or_init(|| build(false));
+        SELF_DEPTH_SHADER_PROGRAM.get_or_init(|| build(true));
         self.has_initialized = true;
     }
 

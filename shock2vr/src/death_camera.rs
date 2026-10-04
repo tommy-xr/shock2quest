@@ -115,6 +115,7 @@ impl CameraPose {
         screen_size: Vector2<f32>,
     ) -> engine::EngineRenderContext {
         engine::EngineRenderContext {
+            self_depth: engine::scene::self_depth::Phase::None,
             time,
             ambient_light_intensity: crate::dev_params::get(
                 crate::dev_params::AMBIENT_LIGHT_INTENSITY,

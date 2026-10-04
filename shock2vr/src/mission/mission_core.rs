@@ -15676,6 +15676,19 @@ impl MissionCore {
                 .map(|a| a.0.clamp(0.0, 1.0))
                 .filter(|a| *a < 1.0);
 
+            // Only scripted apparitions opt in; glass, holograms and psi-invisible
+            // hands retain ordinary transparency. All parts of one actor share depth.
+            let self_depth_group = render_alpha
+                .filter(|alpha| *alpha > 0.0)
+                .filter(|_| {
+                    crate::scripts::script_util::entity_has_script(
+                        &self.world,
+                        *entity_id,
+                        "Apparition",
+                    )
+                })
+                .map(|_| entity_id.inner());
+
             let debug_tag = Rc::new(engine::scene::SceneObjectDebugTag {
                 entity_id: Some(entity_id.inner()),
                 name: v_sym_name.get(*entity_id).ok().map(|n| n.0.clone()),
@@ -15727,6 +15740,7 @@ impl MissionCore {
                     xformed_obj.set_transform(visual_xform);
                     xformed_obj.set_debug_tag(Some(debug_tag.clone()));
                     xformed_obj.set_lights(entity_lights.clone());
+                    xformed_obj.self_depth_group = self_depth_group;
                     xformed_obj.set_emissivity_scale(emissivity_scale);
                     if options.debug_skeletons && is_animated_model {
                         xformed_obj.set_depth_write(false);

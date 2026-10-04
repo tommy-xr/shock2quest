@@ -141,6 +141,8 @@ pub struct SceneObject {
     pub local_transform: Matrix4<f32>, //hack...
     pub skinning_data: [Matrix4<f32>; crate::scene::SKINNING_PALETTE_SIZE],
     pub depth_write: bool,
+    /// Parts sharing an ID hide one another, without occluding other transparency.
+    pub self_depth_group: Option<u64>,
     render_layer: RenderLayer,
     /// Viewmodel framing changes projection, never the world-space light inputs.
     projection_override: Option<Matrix4<f32>>,
@@ -406,6 +408,7 @@ impl SceneObject {
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); crate::scene::SKINNING_PALETTE_SIZE],
             depth_write: true,
+            self_depth_group: None,
             render_layer: RenderLayer::World,
             projection_override: None,
             transparency_override: None,
@@ -426,6 +429,37 @@ impl SceneObject {
     /// This object's own lights, if it has them.
     pub fn lights(&self) -> Option<&crate::scene::light::LightArray> {
         self.lights.as_deref()
+    }
+
+    /// Depth coverage follows the visible base material, not a replaced legacy
+    /// bitmap. Additive-only stacks have no base surface to self-occlude against.
+    pub(crate) fn self_depth_object(&self) -> Option<Self> {
+        use super::render_pass::BlendFactor;
+        let mut depth = self.clone();
+        if let Some(stack) = self.material_stack.as_ref().filter(|s| s.material_only) {
+            let base = stack
+                .passes
+                .iter()
+                .find(|pass| pass.writes_depth)
+                .or_else(|| {
+                    stack.passes.iter().find(|pass| {
+                        matches!(
+                            pass.blend,
+                            BlendMode::Alpha
+                                | BlendMode::Authored(
+                                    BlendFactor::SrcAlpha,
+                                    BlendFactor::InvSrcAlpha
+                                )
+                                | BlendMode::Authored(BlendFactor::One, BlendFactor::Zero)
+                        )
+                    })
+                })?;
+            depth.material = base.material.clone();
+        }
+        depth.material_stack = None;
+        depth.set_transparency(Some(0.0));
+        depth.set_depth_write(true);
+        Some(depth)
     }
 
     pub fn draw_opaque(
@@ -648,6 +682,7 @@ impl SceneObject {
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); crate::scene::SKINNING_PALETTE_SIZE],
             depth_write: true,
+            self_depth_group: None,
             render_layer: RenderLayer::World,
             projection_override: None,
             transparency_override: None,
@@ -670,6 +705,7 @@ impl SceneObject {
             local_transform: self.local_transform,
             skinning_data: self.skinning_data,
             depth_write: self.depth_write,
+            self_depth_group: self.self_depth_group,
             render_layer: self.render_layer,
             projection_override: self.projection_override,
             transparency_override: self.transparency_override,
@@ -892,6 +928,72 @@ mod tests {
         ))));
         assert!(copy.material_stack.is_none());
         assert!(object.material_stack.is_some());
+    }
+
+    #[test]
+    fn self_depth_uses_replacement_base_coverage_and_excludes_additive_only_stacks() {
+        use super::super::render_pass::BlendFactor;
+        let mut object = SceneObject::new(
+            super::super::color_material::create(vec3(1.0, 1.0, 1.0)),
+            Box::new(super::super::geometry::EmptyMesh),
+        );
+        let base = Rc::new(RefCell::new(super::super::color_material::create(vec3(
+            0.0, 1.0, 0.0,
+        ))));
+        let glow = MaterialPass {
+            material: object.material.clone(),
+            blend: BlendMode::AdditiveAlpha,
+            writes_depth: false,
+            replaces_alpha: false,
+        };
+        object.material_stack = Some(Rc::new(MaterialStack {
+            material_only: true,
+            passes: vec![
+                glow.clone(),
+                MaterialPass {
+                    material: base.clone(),
+                    blend: BlendMode::Authored(BlendFactor::SrcAlpha, BlendFactor::InvSrcAlpha),
+                    writes_depth: false,
+                    replaces_alpha: false,
+                },
+            ],
+        }));
+        object.set_transparency(Some(0.5));
+        object.set_depth_write(false);
+        let depth = object.self_depth_object().unwrap();
+        assert!(Rc::ptr_eq(&depth.material, &base));
+        assert!(depth.material_stack.is_none());
+        assert_eq!(depth.transparency_override, Some(0.0));
+        assert!(depth.depth_write);
+        // The visible color passes and opacity are unaffected by mask construction.
+        assert_eq!(object.material_stack.as_ref().unwrap().passes.len(), 2);
+        assert_eq!(object.transparency_override, Some(0.5));
+        object.material_stack = Some(Rc::new(MaterialStack {
+            material_only: true,
+            passes: vec![glow],
+        }));
+        assert!(object.self_depth_object().is_none());
+        object.material_stack = None;
+        assert!(Rc::ptr_eq(
+            &object.self_depth_object().unwrap().material,
+            &object.material
+        ));
+    }
+
+    #[test]
+    fn self_depth_is_opt_in_and_survives_animated_part_cloning() {
+        let mut part = SceneObject::new(
+            super::super::color_material::create(vec3(1.0, 1.0, 1.0)),
+            Box::new(super::super::geometry::EmptyMesh),
+        );
+        assert_eq!(part.self_depth_group, None);
+        part.self_depth_group = Some(17);
+        let copy = part.duplicate();
+        assert_eq!(copy.self_depth_group, Some(17));
+        // Shared materials do not share actor membership.
+        part.self_depth_group = Some(23);
+        assert_eq!(copy.self_depth_group, Some(17));
+        assert!(Rc::ptr_eq(&part.material, &copy.material));
     }
 
     #[test]

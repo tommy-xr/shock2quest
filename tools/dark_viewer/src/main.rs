@@ -421,6 +421,7 @@ pub fn main() {
         let orig_camera_rot = yaw_quat * pitch_quat;
 
         let render_context = engine::EngineRenderContext {
+            self_depth: engine::scene::self_depth::Phase::None,
             ambient_light_intensity: 1.0,
             level_light_intensity: 1.0,
             time: if cli.screenshot.is_some() {
