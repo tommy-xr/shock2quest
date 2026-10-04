@@ -70,7 +70,7 @@ pub struct AnimationBlendSnapshot {
 pub struct AnimationPlayer {
     animation: immutable::List<(Rc<AnimationClip>, AnimationFlags)>,
     additional_joint_transforms: immutable::HashTrieMap<u32, Matrix4<f32>>,
-    last_animation: Option<Rc<AnimationClip>>,
+    last_animation: Option<(Rc<AnimationClip>, u32)>,
     current_frame: u32,
     remaining_time: f32,
     blend_state: Option<BlendState>,
@@ -121,10 +121,18 @@ impl AnimationPlayer {
     /// queue is empty, [`Self::update`] emits no motion flags, completion or
     /// direction events, and no root velocity.
     pub fn from_completed_animation(animation_clip: Rc<AnimationClip>) -> AnimationPlayer {
+        let frame = animation_clip.num_frames.saturating_sub(1);
+        Self::from_pose(animation_clip, frame)
+    }
+
+    /// Hold an authored pose without advancing its clock or emitting events.
+    /// A later animation can blend from this exact frame.
+    pub fn from_pose(animation_clip: Rc<AnimationClip>, frame: u32) -> AnimationPlayer {
+        let frame = frame.min(animation_clip.num_frames.saturating_sub(1));
         AnimationPlayer {
             animation: immutable::List::new(),
             additional_joint_transforms: immutable::HashTrieMap::new(),
-            last_animation: Some(animation_clip),
+            last_animation: Some((animation_clip, frame)),
             current_frame: 0,
             remaining_time: 0.0,
             blend_state: None,
@@ -163,7 +171,7 @@ impl AnimationPlayer {
 
     /// The pose a new clip should cross-fade from: the playing queue head at
     /// its current frame, or - when the queue already drained - the frozen
-    /// final frame of `last_animation` (what `get_transforms` is showing).
+    /// held frame of `last_animation` (what `get_transforms` is showing).
     fn blend_from(&self) -> Option<(Rc<AnimationClip>, f32, bool)> {
         self.animation
             .first()
@@ -184,13 +192,9 @@ impl AnimationPlayer {
                 )
             })
             .or_else(|| {
-                self.last_animation.as_ref().map(|clip| {
-                    (
-                        clip.clone(),
-                        clip.num_frames.saturating_sub(1) as f32,
-                        false,
-                    )
-                })
+                self.last_animation
+                    .as_ref()
+                    .map(|(clip, frame)| (clip.clone(), *frame as f32, false))
             })
     }
 
@@ -451,7 +455,10 @@ impl AnimationPlayer {
                         // (hitch overshoot doesn't over-rotate, matching the
                         // sub-frame carry below).
                         direction_delta(span as f32, &mut events);
-                        let last_animation = player.animation.first().map(|m| m.0.clone());
+                        let last_animation = player
+                            .animation
+                            .first()
+                            .map(|m| (m.0.clone(), m.0.num_frames.saturating_sub(1)));
                         let animation = player.animation.drop_first().unwrap_or_default();
                         // Carry the sub-frame remainder past the final frame
                         // into the next clip - zeroing it phase-reset the
@@ -530,7 +537,7 @@ impl AnimationPlayer {
             last_clip: self
                 .last_animation
                 .as_ref()
-                .and_then(|clip| clip.name.clone()),
+                .and_then(|(clip, _)| clip.name.clone()),
             current_frame: self.current_frame,
             remaining_time: self.remaining_time,
             blend: self
@@ -550,13 +557,16 @@ impl AnimationPlayer {
     }
 
     pub fn get_transforms(&self, skeleton: &Skeleton) -> [Matrix4<f32>; 40] {
-        // We need to clarify if this animation is the current run, or a carry over from the previous one,
-        // so add a separate boolean flag `is_last_anim` if we fallback to the last_animation.
+        // The queue advances; an authored or completed pose holds its frame.
         let maybe_current_clip = self
             .animation
             .first()
-            .map(|m| (m.0.clone(), matches!(m.1, AnimationFlags::Loop), false))
-            .or_else(|| self.last_animation.clone().map(|m| (m, false, true)));
+            .map(|m| (m.0.clone(), matches!(m.1, AnimationFlags::Loop), None))
+            .or_else(|| {
+                self.last_animation
+                    .clone()
+                    .map(|(clip, frame)| (clip, false, Some(frame)))
+            });
 
         // If there is no animation, we still may need to apply joint transforms (ie, for camera or turret)
         if maybe_current_clip.is_none() {
@@ -565,15 +575,15 @@ impl AnimationPlayer {
             return animated_skeleton.get_transforms();
         }
 
-        let (rc_animation_clip, is_looping, is_last_anim) = maybe_current_clip.unwrap();
+        let (rc_animation_clip, is_looping, held_frame) = maybe_current_clip.unwrap();
         let current_clip = rc_animation_clip.as_ref();
 
         // Sub-frame position: the whole frame plus the accumulated remainder
         // toward the next one, so 60Hz+ playback of 30fps clips interpolates
         // between keyframes instead of holding each for two ticks. A drained
         // queue holds the final keyframe exactly.
-        let current_frame = if is_last_anim {
-            (current_clip.num_frames - 1) as f32
+        let current_frame = if let Some(frame) = held_frame {
+            frame as f32
         } else {
             let time_per_frame = current_clip.time_per_frame.as_secs_f32();
             let fraction = if time_per_frame > f32::EPSILON {
@@ -1129,6 +1139,24 @@ mod tests {
         let (player, _, _, _) = AnimationPlayer::update(&player, Duration::from_millis(300));
         let player = AnimationPlayer::queue_animation(&player, clip_with_root_motion());
         assert!(player.snapshot().blend.is_none());
+    }
+
+    #[test]
+    fn authored_pose_holds_and_blends_from_its_selected_frame() {
+        let clip = clip_with_root_motion();
+        let player = AnimationPlayer::from_pose(clip.clone(), 1);
+        let (held, flags, events, velocity) =
+            AnimationPlayer::update(&player, Duration::from_secs(30));
+        assert!(flags.is_empty());
+        assert!(events.is_empty());
+        assert_eq!(velocity, vec3(0.0, 0.0, 0.0));
+        assert_eq!(held.blend_from().unwrap().1, 1.0);
+        let playing = AnimationPlayer::play_animation(&held, clip.clone());
+        assert_eq!(playing.snapshot().blend.unwrap().from_frame, 1.0);
+        assert_eq!(
+            AnimationPlayer::from_pose(clip, 99).blend_from().unwrap().1,
+            2.0
+        );
     }
 
     #[test]

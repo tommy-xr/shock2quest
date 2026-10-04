@@ -397,7 +397,7 @@ export interface AnimationState {
   remaining_time: number;
   /** Clips queued behind the head, in play order. */
   queue: AnimationQueueEntry[];
-  /** Clip whose final frame poses the skeleton while the queue is empty. */
+  /** Clip holding the skeleton in an authored or completed pose while the queue is empty. */
   last_clip: string | null;
   blend: AnimationBlend | null;
   /** Entity world position / rotation (the pose the joints are composed with). */

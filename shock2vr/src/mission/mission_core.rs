@@ -7300,6 +7300,11 @@ impl MissionCore {
         // afford to stand still (see `Effect::PlayTurnClip`).
         turn: Option<(u64, cgmath::Deg<f32>, f32)>,
     ) {
+        // An empty request means keep the current pose (e.g. a posed actor
+        // after its performance), not an unconstrained motion-db query.
+        if motion_queries.is_empty() {
+            return;
+        }
         let is_death_query = motion_queries
             .iter()
             .flatten()
@@ -11994,6 +11999,35 @@ impl MissionCore {
                     motion_queries,
                     selection_strategy,
                 } => {
+                    // Named creature poses are baked without a player so idle
+                    // initialization cannot stand up mission-placed corpses or
+                    // Watts on his medical bed. An explicit performance releases
+                    // that pose, starting from the same frame the model baked.
+                    // Even a null first action (Frob) now gets its completion.
+                    if !self.id_to_animation_player.contains_key(&entity_id)
+                        && self
+                            .id_to_model
+                            .get(&entity_id)
+                            .is_some_and(Model::is_animated)
+                    {
+                        let poses = self
+                            .world
+                            .borrow::<View<dark::properties::PropCreaturePose>>()
+                            .unwrap();
+                        if let Ok(pose) = poses.get(entity_id) {
+                            if pose
+                                .pose_type
+                                .contains(dark::properties::PoseType::MOTION_NAME)
+                            {
+                                let clip = asset_cache.get(
+                                    &ANIMATION_CLIP_IMPORTER,
+                                    &format!("{}_.mc", pose.motion_or_tag_name),
+                                );
+                                self.id_to_animation_player
+                                    .insert(entity_id, AnimationPlayer::from_pose(clip, 1));
+                            }
+                        }
+                    }
                     self.apply_animation_by_schema(
                         global_context,
                         asset_cache,
