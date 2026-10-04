@@ -15479,6 +15479,10 @@ impl MissionCore {
 
         // Start with built in scene objects
         let mut scene = self.scene_objects.clone();
+        scene.extend(crate::weapon_attachments::render_lasers(
+            &self.world,
+            &self.physics,
+        ));
         {
             let blades = self
                 .world

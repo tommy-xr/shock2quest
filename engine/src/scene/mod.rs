@@ -74,6 +74,7 @@ pub mod basic_material;
 pub use basic_material::BasicMaterial;
 
 pub mod color_material;
+pub mod laser_dot_material;
 pub use color_material::ColorMaterial;
 
 pub mod vignette_material;

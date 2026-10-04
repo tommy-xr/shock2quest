@@ -400,21 +400,33 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         }
 
         let upgrades = crate::weapon_installation::state(world, weapon);
-        if upgrades.has(WeaponUpgrade::Flashlight) {
-            let accessory = crate::weapon_upgrades::WeaponAccessory::Flashlight;
-            let on = upgrades.accessory_enabled(accessory);
-            components.extend(upgrade_chooser::button(
-                WeaponSettingsGuiMsg::SetAccessory(accessory, !on),
+        for (choice, accessory, label, name, y) in [
+            (
+                WeaponUpgrade::Flashlight,
+                crate::weapon_upgrades::WeaponAccessory::Flashlight,
                 "toggle_flashlight",
-                if on {
-                    "Flashlight: ON"
-                } else {
-                    "Flashlight: OFF"
-                },
-                Rect::new(20.0, 24.0, 136.0, 22.0),
-                on,
-                cursor,
-            ));
+                "Flashlight",
+                24.0,
+            ),
+            (
+                WeaponUpgrade::Laser,
+                crate::weapon_upgrades::WeaponAccessory::Laser,
+                "toggle_laser",
+                "Laser",
+                50.0,
+            ),
+        ] {
+            if upgrades.has(choice) {
+                let on = upgrades.accessory_enabled(accessory);
+                components.extend(upgrade_chooser::button(
+                    WeaponSettingsGuiMsg::SetAccessory(accessory, !on),
+                    label,
+                    &format!("{name}: {}", if on { "ON" } else { "OFF" }),
+                    Rect::new(20.0, y, 136.0, 22.0),
+                    on,
+                    cursor,
+                ));
+            }
         }
         let modification = weapon_modification::level(world, weapon).unwrap_or(0);
         // Retail draws every settings line in the MFD font (MAINAA, cyan).

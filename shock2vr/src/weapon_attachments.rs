@@ -65,6 +65,168 @@ pub(crate) fn flashlights(world: &World) -> Vec<SpotLight> {
         .collect()
 }
 
+pub(crate) const LASER_RANGE: f32 = 50.0;
+
+pub(crate) struct LaserTrace {
+    pub origin: Point3<f32>,
+    pub end: Point3<f32>,
+    pub normal: Option<Vector3<f32>>,
+}
+
+/// Two bounded casts let the flat sight converge on the crosshair without
+/// sending a beam through cover between the camera and the visible muzzle.
+fn trace_laser(
+    aim_origin: Point3<f32>,
+    direction: Vector3<f32>,
+    muzzle: Point3<f32>,
+    cast: impl Fn(Point3<f32>, Vector3<f32>, f32) -> Option<(Point3<f32>, Vector3<f32>)>,
+) -> LaserTrace {
+    let target = cast(aim_origin, direction, LASER_RANGE)
+        .map(|(point, _)| point)
+        .unwrap_or(aim_origin + direction * LASER_RANGE);
+    let delta = target - muzzle;
+    let length = delta.magnitude();
+    let hit = (length > 1.0e-5)
+        .then(|| cast(muzzle, delta / length, length.min(LASER_RANGE) + 0.002))
+        .flatten();
+    LaserTrace {
+        origin: muzzle,
+        end: hit.map(|h| h.0).unwrap_or_else(|| {
+            if length > 1.0e-5 {
+                muzzle + delta * (length.min(LASER_RANGE) / length)
+            } else {
+                muzzle
+            }
+        }),
+        normal: hit.map(|h| h.1),
+    }
+}
+
+pub(crate) fn laser_trace(
+    world: &World,
+    physics: &crate::physics::PhysicsWorld,
+    weapon: EntityId,
+) -> Option<LaserTrace> {
+    use crate::{physics::InternalCollisionGroups, runtime_props::RuntimePropViewmodelToWorld};
+    use cgmath::Transform;
+    if !enabled(world, weapon, WeaponAccessory::Laser) {
+        return None;
+    }
+    let (mut origin, direction) = aim(world, weapon)?;
+    let player = world
+        .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
+        .ok()?;
+    let can_hit = |entity| {
+        entity != player.entity_id
+            && !crate::wielded_weapon::held_in_hand(world, entity)
+            && !(crate::creature::has_live_hit_boxes(world, entity)
+                && crate::creature::hit_boxes_cover_body(world, entity))
+    };
+    let mut muzzle = origin;
+    if let Some(mapping) = world
+        .borrow::<View<RuntimePropViewmodelToWorld>>()
+        .ok()
+        .and_then(|v| v.get(weapon).ok().copied())
+    {
+        let transform = world
+            .borrow::<View<RuntimePropTransform>>()
+            .ok()?
+            .get(weapon)
+            .ok()?
+            .0;
+        muzzle = mapping.0.transform_point(
+            transform.transform_point(crate::weapon_muzzle::resolve(world, weapon).point),
+        );
+        muzzle =
+            crate::weapon_muzzle::clamp_projectile_spawn(physics, origin, muzzle, 0.0, &can_hit);
+    } else {
+        // Match projectile creation when a VR barrel penetrates thin cover.
+        let transform = world
+            .borrow::<View<RuntimePropTransform>>()
+            .ok()?
+            .get(weapon)
+            .ok()?
+            .0;
+        let gun_origin = transform.transform_point(Point3::new(0.0, 0.0, 0.0));
+        muzzle = crate::weapon_muzzle::clamp_projectile_spawn(
+            physics, gun_origin, muzzle, 0.0, &can_hit,
+        );
+        origin = muzzle;
+    }
+    Some(trace_laser(
+        origin,
+        direction,
+        muzzle,
+        |start, dir, range| {
+            physics
+                .ray_cast2_with_entity_filter(
+                    start,
+                    dir,
+                    range,
+                    InternalCollisionGroups::WORLD
+                        | InternalCollisionGroups::ENTITIES
+                        | InternalCollisionGroups::HITBOX
+                        | InternalCollisionGroups::SELECTABLE,
+                    Some(player.entity_id),
+                    true,
+                    &can_hit,
+                )
+                .map(|hit| (hit.hit_point, hit.hit_normal))
+        },
+    ))
+}
+
+pub(crate) fn render_lasers(
+    world: &World,
+    physics: &crate::physics::PhysicsWorld,
+) -> Vec<engine::scene::SceneObject> {
+    use cgmath::{Matrix4, vec3};
+    use engine::scene::{SceneObject, SceneObjectDebugTag};
+    let mut objects = Vec::new();
+    for weapon in [Handedness::Left, Handedness::Right]
+        .into_iter()
+        .filter_map(|hand| crate::wielded_weapon::weapon_in_hand(world, hand))
+    {
+        let Some(trace) = laser_trace(world, physics, weapon) else {
+            continue;
+        };
+        if (trace.end - trace.origin).magnitude2() < 1.0e-8 {
+            continue;
+        }
+        let Some(normal) = trace.normal.filter(|n| n.magnitude2() > 1.0e-8) else {
+            continue;
+        };
+        let normal = normal.normalize();
+        let tangent = if normal.y.abs() < 0.9 {
+            vec3(0.0, 1.0, 0.0)
+        } else {
+            vec3(1.0, 0.0, 0.0)
+        };
+        let right = tangent.cross(normal).normalize();
+        // Surface-aligned, fixed world size: never a HUD marker or a billboard
+        // that can poke through a nearby surface when the head moves.
+        let mut dot = SceneObject::new(
+            engine::scene::laser_dot_material::create(vec3(1.0, 0.015, 0.01)),
+            Box::new(engine::scene::quad::create()),
+        );
+        dot.set_transform(Matrix4::from_cols(
+            (right * 0.055).extend(0.0),
+            (normal.cross(right) * 0.055).extend(0.0),
+            normal.extend(0.0),
+            (trace.end + normal * 0.001).to_homogeneous(),
+        ));
+        dot.set_depth_write(false);
+        dot.set_backface_culling(None);
+        dot.set_debug_tag(Some(std::rc::Rc::new(SceneObjectDebugTag {
+            entity_id: Some(weapon.inner()),
+            source: Some("weapon_laser_dot".into()),
+            ..Default::default()
+        })));
+        objects.push(dot);
+    }
+    objects
+}
+
 pub(crate) fn set_enabled(
     world: &mut World,
     weapon: EntityId,
@@ -92,6 +254,148 @@ mod tests {
     use cgmath::{Matrix4, Quaternion, point3, vec3};
     use dark::properties::PropGunState;
     use shipyard::UniqueViewMut;
+
+    #[test]
+    fn laser_stops_at_nearest_solid_ignores_sensors_and_has_no_dot_on_miss() {
+        use crate::physics::{CollisionGroup, InternalCollisionGroups, PhysicsWorld};
+        let mut physics = PhysicsWorld::new();
+        for (id, z, sensor) in [(20, 2.0, false), (22, 1.0, true), (23, 4.0, false)] {
+            physics.add_kinematic(
+                EntityId::from_inner(id).unwrap(),
+                vec3(0.0, 0.0, z),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, 0.0),
+                vec3(4.0, 4.0, 0.02),
+                CollisionGroup::entity(),
+                sensor,
+            );
+        }
+        let mut player =
+            physics.create_player(vec3(10.0, 0.0, 0.0), EntityId::from_inner(21).unwrap());
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let cast = |start, dir, range| {
+            physics
+                .ray_cast2(
+                    start,
+                    dir,
+                    range,
+                    InternalCollisionGroups::ENTITIES,
+                    None,
+                    true,
+                )
+                .map(|hit| (hit.hit_point, hit.hit_normal))
+        };
+        let hit = trace_laser(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            point3(0.3, -0.2, 0.1),
+            cast,
+        );
+        assert!((hit.end.z - 1.99).abs() < 0.001);
+        assert!(hit.end.x.abs() < 0.001, "converges at camera aim point");
+        assert_eq!(hit.normal, Some(vec3(0.0, 0.0, -1.0)));
+        let miss = trace_laser(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, -1.0),
+            point3(0.0, 0.0, 0.0),
+            cast,
+        );
+        assert!(miss.normal.is_none());
+        assert_eq!((miss.end - miss.origin).magnitude(), LASER_RANGE);
+        let edge = trace_laser(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            point3(0.0, 0.0, 1.99),
+            cast,
+        );
+        assert!(edge.end.z.is_finite(), "zero-length target is safe");
+    }
+
+    #[test]
+    fn vr_barrel_cannot_project_through_selectable_cover() {
+        use crate::physics::{CollisionGroup, PhysicsWorld};
+        let mut world = World::new();
+        let player_id = world.add_entity(());
+        let mut upgrades = WeaponUpgrades::default()
+            .with_upgrade(
+                WeaponUpgrade::Laser,
+                &WeaponUpgrade::ALL,
+                UpgradeSource::Device,
+                0,
+            )
+            .unwrap();
+        upgrades
+            .set_accessory_enabled(WeaponAccessory::Laser, true)
+            .unwrap();
+        let weapon = world.add_entity((
+            PropGunState {
+                ammo: 12,
+                condition: 100.0,
+                setting: 0,
+                modification: 0,
+                silence_value: 0.0,
+            },
+            upgrades,
+            RuntimePropTransform(Matrix4::from_scale(1.0)),
+            crate::weapon_muzzle::MuzzleFallback {
+                point: point3(-2.0, 0.0, 0.0),
+                axis: vec3(-1.0, 0.0, 0.0),
+            },
+        ));
+        world.add_unique(PlayerInfo {
+            entity_id: player_id,
+            inventory_entity_id: player_id,
+            left_hand_entity_id: Some(weapon),
+            right_hand_entity_id: None,
+            pos: vec3(10.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        });
+        let mut physics = PhysicsWorld::new();
+        physics.add_kinematic(
+            world.add_entity(()),
+            vec3(-1.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.02, 4.0, 4.0),
+            CollisionGroup::selectable(),
+            false,
+        );
+        let mut player = physics.create_player(vec3(10.0, 0.0, 0.0), player_id);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let trace = laser_trace(&world, &physics, weapon).unwrap();
+        assert!(
+            trace.origin.x > -0.99,
+            "emitter remains on firing side of cover"
+        );
+        assert!(
+            (trace.end.x + 0.99).abs() < 0.001,
+            "dot stops on selectable cover: {:?}",
+            trace.end
+        );
+        assert!(trace.normal.is_some());
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .left_hand_entity_id = None;
+        assert!(
+            laser_trace(&world, &physics, weapon).is_none(),
+            "holstering removes the sight"
+        );
+    }
+
+    #[test]
+    fn cover_between_offset_muzzle_and_crosshair_wins() {
+        let trace = trace_laser(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            point3(0.3, 0.0, 0.0),
+            |start, dir, _| {
+                let distance = if start.x > 0.1 { 0.2 } else { 5.0 };
+                Some((start + dir * distance, -dir))
+            },
+        );
+        assert!((trace.end - trace.origin).magnitude() < 0.201);
+    }
 
     #[test]
     fn lights_follow_equipped_weapons_and_preserve_switches_when_stowed() {
