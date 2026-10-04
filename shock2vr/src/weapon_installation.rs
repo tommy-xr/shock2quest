@@ -1,5 +1,5 @@
 //! Selectable installation policy and its single commit point. Initially the
-//! pistol uses this flow; other families retain their retail path until audited.
+//! pistol and AR15 use this flow; other families retain their retail path until audited.
 use dark::properties::{ObjectState, PropGunState};
 use shipyard::{EntityId, Get, View, World};
 
@@ -9,7 +9,13 @@ use crate::{
 };
 
 pub fn supported(world: &World, weapon: EntityId) -> bool {
-    crate::scripts::script_util::entity_has_script(world, weapon, "PistolModify")
+    silencer_compatible(world, weapon)
+}
+
+pub fn silencer_compatible(world: &World, weapon: EntityId) -> bool {
+    ["PistolModify", "RifleModify"]
+        .into_iter()
+        .any(|script| crate::scripts::script_util::entity_has_script(world, weapon, script))
 }
 
 pub fn state(world: &World, weapon: EntityId) -> WeaponUpgrades {
@@ -52,9 +58,10 @@ pub fn alternate_unlocked(world: &World, weapon: EntityId) -> bool {
     !supported(world, weapon) || state(world, weapon).has(WeaponUpgrade::AlternateFire)
 }
 
-pub const AVAILABLE: [WeaponUpgrade; 6] = [
+pub const AVAILABLE: [WeaponUpgrade; 7] = [
     WeaponUpgrade::Flashlight,
     WeaponUpgrade::Laser,
+    WeaponUpgrade::Silencer,
     WeaponUpgrade::LowMaintenanceI,
     WeaponUpgrade::LowMaintenanceII,
     WeaponUpgrade::ExtendedCapacity,
@@ -142,7 +149,9 @@ pub fn preview(
     let capacity = if choice == WeaponUpgrade::ExtendedCapacity {
         " Double capacity; no free ammo."
     } else if choice == WeaponUpgrade::AlternateFire {
-        " Unlock burst fire."
+        " Unlock alternate fire."
+    } else if choice == WeaponUpgrade::Silencer {
+        " Quieter shots; suppress muzzle flash."
     } else if choice == WeaponUpgrade::Laser {
         " Laser sight; toggle in Settings."
     } else if choice == WeaponUpgrade::Flashlight {
@@ -330,7 +339,7 @@ mod tests {
     #[test]
     fn dropped_broken_untrained_and_unavailable_targets_cannot_install() {
         let (mut world, gun) = fixture();
-        assert!(quote(&world, gun, WeaponUpgrade::Silencer, 0).is_err());
+        assert!(quote(&world, gun, WeaponUpgrade::Silencer, 0).is_ok());
         assert!(quote(&world, gun, WeaponUpgrade::LowMaintenanceII, 0).is_err());
         world
             .borrow::<shipyard::UniqueViewMut<QuestInfo>>()

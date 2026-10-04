@@ -48,7 +48,7 @@ export async function clickUpgradeControl(game: GameServer, label: string): Prom
 
 /** Existing mode/animation fixtures purchase the new prerequisite through the
  * real device chooser, without replacing the weapon or its ammunition. */
-export async function unlockPistolAlternateFire(game: GameServer): Promise<void> {
+export async function unlockWeaponAlternateFire(game: GameServer): Promise<void> {
   const input = await game.input.state();
   const device = await game.player.spawnItem(-1488);
   await game.entities.sendMessage(device.entity_id, { type: "Frob" });
@@ -69,3 +69,6 @@ export async function unlockPistolAlternateFire(game: GameServer): Promise<void>
   }
   await game.step({ frames: 20 });
 }
+
+// Existing pistol-only fixtures keep their descriptive call site during rollout.
+export const unlockPistolAlternateFire = unlockWeaponAlternateFire;

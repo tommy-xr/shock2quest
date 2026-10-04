@@ -12874,6 +12874,22 @@ impl MissionCore {
                         );
                     }
                 }
+                Effect::PlayEnvironmentalSoundWithGain {
+                    query,
+                    position,
+                    audio_handle,
+                    gain,
+                } => {
+                    play_environmental_sound_with_gain(
+                        &global_context.gamesys,
+                        asset_cache,
+                        audio_context,
+                        query,
+                        audio_handle,
+                        position,
+                        gain,
+                    );
+                }
                 Effect::PlayEnvironmentalSound {
                     query,
                     position,
@@ -17821,6 +17837,26 @@ fn play_environmental_sound(
     audio_handle: AudioHandle,
     position: Vector3<f32>,
 ) -> bool {
+    play_environmental_sound_with_gain(
+        gamesys,
+        asset_cache,
+        audio_context,
+        query,
+        audio_handle,
+        position,
+        1.0,
+    )
+}
+
+fn play_environmental_sound_with_gain(
+    gamesys: &Gamesys,
+    asset_cache: &mut AssetCache,
+    audio_context: &mut AudioContext<EntityId, String>,
+    query: dark::EnvSoundQuery,
+    audio_handle: AudioHandle,
+    position: Vector3<f32>,
+    gain_multiplier: f32,
+) -> bool {
     // A query may carry less specific fallbacks (see `EnvSoundQuery::
     // with_fallback`): the schema authors no bullet sound for glass, and
     // playing nothing there is worse than playing the default impact.
@@ -17843,7 +17879,7 @@ fn play_environmental_sound(
         );
         // Log the resolved play so headless tooling (debug runtime
         // /v1/audio/recent) can assert a schema actually played.
-        let gain = resolved.linear_gain();
+        let gain = resolved.linear_gain() * gain_multiplier.clamp(0.0, 1.0);
         crate::audio_log::play_and_record(
             audio_context,
             audio_handle,
