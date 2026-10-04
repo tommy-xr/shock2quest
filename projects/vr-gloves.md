@@ -93,8 +93,8 @@ The left hand mirrors the right-hand model with a negative-X scale (the same
 `flip_x` trick held weapons use). The hand frame's forward is **-Z** (the
 raycast/aim direction — see `VirtualHand::update`), while the glove model's
 fingers point along +Z, so the grip alignment yaws the model 180° to line the
-fingers up with where the hand points. This was validated against the raycast
-hit markers in-game (fingers must point at the hand's own hit cube).
+fingers up with where the hand points: they must point along the hand's
+raycast.
 
 Desktop `--vr` controls: hold **E** (right hand) or **Q** (left hand) to
 possess a hand — the mouse then drives it (move = aim, LMB = trigger,

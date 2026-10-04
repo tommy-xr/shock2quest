@@ -516,8 +516,9 @@ impl VirtualHand {
         (hand, effs)
     }
 
-    /// Render the hand (skin + forearm) for this hand. The hand renderer is owned by the caller (`VrInteraction`)
-    /// so its cached state is shared between both hands.
+    /// Render the hand (skin + forearm) for this hand. The hand renderer is
+    /// owned by the caller (`VrInteraction`) so its cached state is shared
+    /// between both hands.
     pub fn render(
         &self,
         world: &World,
