@@ -1704,13 +1704,13 @@ fn plan_jump_mantle(
         forward_search_end.z
     ];
     let exterior_probe = Ray::new(Point::from(exterior_probe_start), -Vector::y());
-    let forward_search_reaches_exterior_void = !validation_queries
+    let forward_search_reaches_exterior_void = validation_queries
         .cast_ray_and_get_normal(
             &exterior_probe,
             PLAYER_JUMP_MANTLE_MAX_DROP / SCALE_FACTOR + 2.0 * current_floor_tolerance,
             true,
         )
-        .is_some_and(|(_, ground)| ground.normal.y > PLAYER_MIN_WALKABLE_NORMAL);
+        .is_none();
     let mut transition = None;
     let mut lower_transition = None;
     let mut rise_ss2 = PLAYER_JUMP_MANTLE_PROBE_STEP;
@@ -13637,59 +13637,81 @@ mod tests {
     /// that terrain, reproducing Engineering's reverse lip near Aux Storage 5.
     #[test]
     fn jump_mantle_rejects_lower_floor_beneath_supported_upper_route() {
-        let mut world = PhysicsWorld::new();
-        // Starting floor: top y=0, ending at the reverse-step seam x=0.
-        world.add_collider(
-            EntityId::from_inner(1000).unwrap(),
-            ColliderBuilder::cuboid(4.0, 0.1, 4.0)
-                .translation(vector![-4.0, -0.1, 0.0])
-                .build(),
-        );
-        // Forward upper route: a 0.4-world-unit / one-SS2-foot riser. This is
-        // well inside ordinary step height and remains solid across the exact
-        // footprint where the lower landing probe runs.
-        world.add_collider(
-            EntityId::from_inner(1001).unwrap(),
-            ColliderBuilder::cuboid(4.0, 0.1, 4.0)
-                .translation(vector![4.0, 0.3, 0.0])
-                .build(),
-        );
-        // Stable but disconnected floor 12.174 world units below the starting
-        // surface, matching Engineering's ~30.44-SS2-foot erroneous fallback.
-        world.add_collider(
-            EntityId::from_inner(1002).unwrap(),
-            ColliderBuilder::cuboid(4.0, 0.1, 4.0)
-                .translation(vector![4.0, -12.274, 0.0])
-                .build(),
-        );
-        // Populate the broad phase without placing the real player fixture in
-        // the planner's casts.
-        let mut remote_player = world.create_player(
-            vec3(100.0, 100.0, 100.0),
-            EntityId::from_inner(2000).unwrap(),
-        );
-        world.update(Vector3::new(0.0, 0.0, 0.0), &mut remote_player);
+        for occluding_slope in [false, true] {
+            let mut world = PhysicsWorld::new();
+            // Starting floor: top y=0, ending at the reverse-step seam x=0.
+            world.add_collider(
+                EntityId::from_inner(1000).unwrap(),
+                ColliderBuilder::cuboid(4.0, 0.1, 4.0)
+                    .translation(vector![-4.0, -0.1, 0.0])
+                    .build(),
+            );
+            // Forward upper route: a 0.4-world-unit / one-SS2-foot riser. This is
+            // well inside ordinary step height and remains solid across the exact
+            // footprint where the lower landing probe runs.
+            world.add_collider(
+                EntityId::from_inner(1001).unwrap(),
+                ColliderBuilder::cuboid(4.0, 0.1, 4.0)
+                    .translation(vector![4.0, 0.3, 0.0])
+                    .build(),
+            );
+            // Stable but disconnected floor 12.174 world units below the starting
+            // surface, matching Engineering's ~30.44-SS2-foot erroneous fallback.
+            world.add_collider(
+                EntityId::from_inner(1002).unwrap(),
+                ColliderBuilder::cuboid(4.0, 0.1, 4.0)
+                    .translation(vector![4.0, -12.274, 0.0])
+                    .build(),
+            );
+            if occluding_slope {
+                // A steep face can hide the supporting floor from the endpoint
+                // ray. A hit on that face is blocked space, not an exterior void.
+                let x = -0.8 + PLAYER_JUMP_MANTLE_FORWARD / SCALE_FACTOR;
+                world.add_collider(
+                    EntityId::from_inner(1003).unwrap(),
+                    ColliderBuilder::trimesh(
+                        vec![
+                            point![x - 0.1, 0.3, -1.0],
+                            point![x + 0.1, 0.7, -1.0],
+                            point![x - 0.1, 0.3, 1.0],
+                            point![x + 0.1, 0.7, 1.0],
+                        ],
+                        vec![[0, 2, 1], [1, 2, 3]],
+                    )
+                    .unwrap()
+                    .build(),
+                );
+            }
+            // Populate the broad phase without placing the real player fixture in
+            // the planner's casts.
+            let mut remote_player = world.create_player(
+                vec3(100.0, 100.0, 100.0),
+                EntityId::from_inner(2000).unwrap(),
+            );
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut remote_player);
 
-        let validation_queries = query_pipeline(&world, QueryFilter::default());
-        let parented_only = QueryFilter::default()
-            .predicate(&|_handle: ColliderHandle, collider: &Collider| collider.parent().is_some());
-        let scripted_queries = validation_queries.with_filter(parented_only);
-        let start = Isometry::translation(-0.8, player_center_above_floor(true), 0.0);
-        let planned = plan_jump_mantle(
-            &player_character_controller(),
-            &validation_queries,
-            &scripted_queries,
-            &crouched_player_capsule(),
-            &start,
-            vector![0.1, 0.0, 0.0],
-            1.0 / 60.0,
-            true,
-        );
+            let validation_queries = query_pipeline(&world, QueryFilter::default());
+            let parented_only = QueryFilter::default().predicate(
+                &|_handle: ColliderHandle, collider: &Collider| collider.parent().is_some(),
+            );
+            let scripted_queries = validation_queries.with_filter(parented_only);
+            let start = Isometry::translation(-0.8, player_center_above_floor(true), 0.0);
+            let planned = plan_jump_mantle(
+                &player_character_controller(),
+                &validation_queries,
+                &scripted_queries,
+                &crouched_player_capsule(),
+                &start,
+                vector![0.1, 0.0, 0.0],
+                1.0 / 60.0,
+                true,
+            );
 
-        assert!(
-            planned.is_none(),
-            "a supported upper route must block the scripted fallback to the disconnected lower floor"
-        );
+            assert!(
+                planned.is_none(),
+                "a supported upper route must block the scripted fallback to the disconnected lower floor"
+            );
+        }
     }
 
     /// The compressed compatibility body may cross a local terrain lip, but it
