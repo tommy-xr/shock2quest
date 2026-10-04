@@ -292,23 +292,53 @@ fn append_object_state(name: String, suffix: Option<&str>) -> String {
     }
 }
 
-/// Fixed rollover mini-frame from `shkiface.cpp::ShockMiniFrameInit`.
-/// Unlike frontend screens, this overlay has no *R.BIN layout: its 255x17
-/// overlay rect and the 12px / 10px text band are authored in the original
-/// source. The actual `FRAME.PCX` bitmap is 256x16 (not `minifram.pcx`).
-fn mini_frame_canvas(screen_size: Vector2<f32>, name: Option<&str>) -> crate::ui::UiCanvas {
-    use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
-    let mut canvas = UiCanvas::new(screen_size);
-    let x = if screen_size.x == 640.0 {
-        192.0
-    } else {
-        ((screen_size.x - 255.0) / 2.0).floor()
-    };
-    canvas.image(Rect::new(x, 0.0, 256.0, 16.0), "frame.pcx");
+/// Native size of the rollover frame art. The actual `FRAME.PCX` bitmap is
+/// 256x16 (not `minifram.pcx`).
+pub const ROLLOVER_FRAME_SIZE: Vector2<f32> = Vector2::new(256.0, 16.0);
+
+/// The rollover frame and its name, with its top-left at `origin`. Flat places
+/// it top-centre on screen; VR carries the same frame on each wrist.
+///
+/// From `shkiface.cpp::ShockMiniFrameInit`. Unlike frontend screens, this
+/// overlay has no *R.BIN layout: the 12px / 10px text band is authored in the
+/// original source.
+fn emit_rollover_frame(canvas: &mut crate::ui::UiCanvas, origin: Vector2<f32>, name: Option<&str>) {
+    use crate::ui::{HAlign, Rect, VAlign};
+    canvas.image(
+        Rect::new(
+            origin.x,
+            origin.y,
+            ROLLOVER_FRAME_SIZE.x,
+            ROLLOVER_FRAME_SIZE.y,
+        ),
+        "frame.pcx",
+    );
     if let Some(name) = name {
         canvas.text_native_fit(
-            Rect::new(x + 12.0, 0.0, 239.0, 10.0),
+            Rect::new(origin.x + 12.0, origin.y, 239.0, 10.0),
             name,
+            "mainfont.fon",
+            HAlign::Left,
+            VAlign::Middle,
+        );
+    }
+}
+
+/// The rollover frame alone, for a world-space mount, with the object's use
+/// hint as a bare line below it - the hint has no frame art of its own.
+pub fn rollover_frame_canvas(name: &str, hint: Option<&str>) -> crate::ui::UiCanvas {
+    use crate::ui::{HAlign, Rect, VAlign};
+    let hint_height = if hint.is_some() {
+        LABEL_HEIGHT + 2.0
+    } else {
+        0.0
+    };
+    let mut canvas = crate::ui::UiCanvas::new(ROLLOVER_FRAME_SIZE + vec2(0.0, hint_height));
+    emit_rollover_frame(&mut canvas, vec2(0.0, 0.0), Some(name));
+    if let Some(hint) = hint {
+        canvas.text_native_fit(
+            Rect::new(12.0, ROLLOVER_FRAME_SIZE.y + 2.0, 239.0, LABEL_HEIGHT),
+            hint,
             "mainfont.fon",
             HAlign::Left,
             VAlign::Middle,
@@ -317,9 +347,62 @@ fn mini_frame_canvas(screen_size: Vector2<f32>, name: Option<&str>) -> crate::ui
     canvas
 }
 
-/// Draw once per eye, from the active rollover (never the damaged-object list).
-/// The same resolved canvas is used by flat and VR; object bounds have no role
-/// in placing either the frame or its name.
+/// The authored `P$HUDUse` hint ("Search container"), localized; `None` when
+/// the object has none or it resolves empty.
+pub fn hud_use_hint(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+) -> Option<String> {
+    let hints = world.borrow::<View<PropHUDUse>>().ok()?;
+    let raw = hints.get(entity_id).ok()?;
+    let strings = asset_cache.get(&STRINGS_IMPORTER, "huduse.str");
+    resolve_hud_use(Some(&raw.0), &strings)
+}
+
+/// The flat screen's top-centre frame. The original recentres its 255x17
+/// overlay rect for wider screens.
+fn mini_frame_canvas(screen_size: Vector2<f32>, name: Option<&str>) -> crate::ui::UiCanvas {
+    let mut canvas = crate::ui::UiCanvas::new(screen_size);
+    let x = if screen_size.x == 640.0 {
+        192.0
+    } else {
+        ((screen_size.x - 255.0) / 2.0).floor()
+    };
+    emit_rollover_frame(&mut canvas, vec2(x, 0.0), name);
+    canvas
+}
+
+/// The rollover readout for `entity_id`: its name, hit points, and (with
+/// `debug_show_ids`) its template and entity ids.
+pub fn rollover_label(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+    debug_show_ids: bool,
+) -> Option<String> {
+    let item_name = resolve_item_name(asset_cache, world, entity_id)?;
+    let hit_points = world
+        .borrow::<View<PropHitPoints>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|hp| hp.hit_points));
+    let template_id = debug_show_ids.then(|| {
+        world
+            .borrow::<View<PropTemplateId>>()
+            .unwrap()
+            .get(entity_id)
+            .map(|prop| prop.template_id.to_string())
+            .unwrap_or_else(|_| "runtime".to_owned())
+    });
+    let debug_identity = template_id
+        .as_deref()
+        .map(|template_id| (template_id, entity_id.inner()));
+    Some(format_hover_label(&item_name, hit_points, debug_identity))
+}
+
+/// Flat only: draw once per eye, from the active rollover (never the
+/// damaged-object list). Object bounds have no role in placing either the
+/// frame or its name.
 pub fn draw_item_name(
     asset_cache: &mut AssetCache,
     entity_id: Option<EntityId>,
@@ -328,25 +411,8 @@ pub fn draw_item_name(
     screen_size: Vector2<f32>,
     debug_show_ids: bool,
 ) -> Vec<SceneObject> {
-    let name = entity_id.and_then(|entity_id| {
-        let item_name = resolve_item_name(asset_cache, world, entity_id)?;
-        let hit_points = world
-            .borrow::<View<PropHitPoints>>()
-            .ok()
-            .and_then(|v| v.get(entity_id).ok().map(|hp| hp.hit_points));
-        let template_id = debug_show_ids.then(|| {
-            world
-                .borrow::<View<PropTemplateId>>()
-                .unwrap()
-                .get(entity_id)
-                .map(|prop| prop.template_id.to_string())
-                .unwrap_or_else(|_| "runtime".to_owned())
-        });
-        let debug_identity = template_id
-            .as_deref()
-            .map(|template_id| (template_id, entity_id.inner()));
-        Some(format_hover_label(&item_name, hit_points, debug_identity))
-    });
+    let name = entity_id
+        .and_then(|entity_id| rollover_label(asset_cache, world, entity_id, debug_show_ids));
     mini_frame_canvas(screen_size, name.as_deref().or(fallback_name)).render_screen_space(
         asset_cache,
         screen_size,
@@ -405,6 +471,20 @@ mod tests {
             hud_use_position(right_edge, 120.0, 800.0),
             vec2(670.0, 304.0)
         );
+    }
+
+    #[test]
+    fn wrist_rollover_adds_the_use_hint_as_a_line_below_the_frame() {
+        use crate::ui::{Rect, UiElement};
+        let bare = rollover_frame_canvas("A crate", None);
+        assert_eq!(bare.size(), ROLLOVER_FRAME_SIZE);
+        assert_eq!(bare.element_count(), 2);
+
+        let hinted = rollover_frame_canvas("A crate", Some("Search container"));
+        assert_eq!(hinted.size(), vec2(256.0, 28.0));
+        let hint = &hinted.elements()[2];
+        assert_eq!(hint.rect(), Rect::new(12.0, 18.0, 239.0, 10.0));
+        assert!(matches!(hint, UiElement::Text { text, .. } if text == "Search container"));
     }
 
     #[test]
@@ -915,6 +995,7 @@ pub fn draw_item_outline(
     view: Matrix4<f32>,
     projection: Matrix4<f32>,
     screen_size: Vector2<f32>,
+    show_hint: bool,
 ) -> Vec<SceneObject> {
     let options = TextureOptions {
         wrap: false,
@@ -953,22 +1034,21 @@ pub fn draw_item_outline(
         bottom_right_brack_obj,
         top_right_brack_obj,
     ];
-    let hints = world.borrow::<View<PropHUDUse>>().unwrap();
-    if let Ok(raw) = hints.get(entity_id) {
-        let strings = asset_cache.get(&STRINGS_IMPORTER, "huduse.str");
-        if let Some(hint) = resolve_hud_use(Some(&raw.0), &strings) {
-            let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
-            let width = engine::measure_text_width(&**font, &hint, LABEL_HEIGHT);
-            let position = hud_use_position(extents, width, screen_size.x);
-            objects.push(SceneObject::screen_space_text(
-                &hint,
-                font,
-                LABEL_HEIGHT,
-                0.5,
-                position.x,
-                position.y,
-            ));
-        }
+    if let Some(hint) = show_hint
+        .then(|| hud_use_hint(asset_cache, world, entity_id))
+        .flatten()
+    {
+        let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
+        let width = engine::measure_text_width(&**font, &hint, LABEL_HEIGHT);
+        let position = hud_use_position(extents, width, screen_size.x);
+        objects.push(SceneObject::screen_space_text(
+            &hint,
+            font,
+            LABEL_HEIGHT,
+            0.5,
+            position.x,
+            position.y,
+        ));
     }
     objects
 }

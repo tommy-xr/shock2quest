@@ -14750,16 +14750,15 @@ impl MissionCore {
         if !options.debug_show_ids {
             highlighted.retain(|e| is_hud_selectable(&self.world, *e));
         }
-        // One name frame, independent of damage flashes. In VR the existing
-        // name-strip arbitration also excludes hands operating the UI.
-        let rollover = self
-            .name_strip_world_pick(options)
-            .filter(|entity| options.debug_show_ids || is_hud_selectable(&self.world, *entity));
-        // The flat use-mode inventory bar already owns this readout. VR's
-        // inventory lives on a world panel, so it cannot cover the HUD frame.
-        if options.presentation_mode == crate::PresentationMode::Vr
-            || self.flat_ui.strip_entity().is_none()
+        // One name frame, independent of damage flashes. VR names each hand's
+        // pick on its own wrist instead (`create_wrist_hud_panels`), and the
+        // flat use-mode inventory bar already owns this readout.
+        if options.presentation_mode == crate::PresentationMode::Flat
+            && self.flat_ui.strip_entity().is_none()
         {
+            let rollover = self
+                .name_strip_world_pick(options)
+                .filter(|entity| options.debug_show_ids || is_hud_selectable(&self.world, *entity));
             ret.extend(draw_item_name(
                 asset_cache,
                 rollover,
@@ -14775,6 +14774,7 @@ impl MissionCore {
                 continue;
             };
 
+            // VR shows the use hint on the wrist, with the name.
             ret.extend(draw_item_outline(
                 asset_cache,
                 bounds,
@@ -14783,6 +14783,7 @@ impl MissionCore {
                 view,
                 projection,
                 screen_size,
+                options.presentation_mode == crate::PresentationMode::Flat,
             ));
 
             ret.extend(draw_health_bar(

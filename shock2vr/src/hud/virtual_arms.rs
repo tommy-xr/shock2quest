@@ -13,7 +13,8 @@ use crate::{
 /// a held psi amp carries the bio band on its own baked wrist instead.
 /// Both wrists show health/psi, back and palm; each cuff opening shows its own weapon, or the
 /// weapon it steadies (`supported`, per hand) - with a two-handed gun the
-/// support wrist is often the only one facing the player.
+/// support wrist is often the only one facing the player. Each wrist also
+/// names what its own hand is aiming at (`rollovers`, the flat HUD's rollover frame).
 pub fn create_wrist_hud_panels(
     asset_cache: &mut AssetCache,
     world: &World,
@@ -21,6 +22,7 @@ pub fn create_wrist_hud_panels(
     poses: [crate::vr_support::GripPose; 2],
     wrist_frames: [Matrix4<f32>; 2],
     supported: [Option<shipyard::EntityId>; 2],
+    rollovers: [Option<crate::ui::UiCanvas>; 2],
 ) -> Vec<SceneObject> {
     if use_mode {
         return Vec::new();
@@ -39,6 +41,9 @@ pub fn create_wrist_hud_panels(
         let root = Matrix4::from_translation(poses[i].position)
             * Matrix4::from(poses[i].rotation)
             * wrist_frames[i];
+        // Height of the hologram stack above this glove, so an upright name
+        // can sit on top of it.
+        let mut hologram_height: f32 = 0.0;
         if hand == Handedness::Left {
             let alarm_canvas = alarm
                 .map(super::alarm_panel::build_panel_canvas)
@@ -50,6 +55,7 @@ pub fn create_wrist_hud_panels(
                 if canvas.element_count() == 0 {
                     continue;
                 }
+                hologram_height = hologram_height.max(canvas.size().y * HOLOGRAM_SCALE);
                 objects.extend(canvas.render_world_space(
                     asset_cache,
                     wrist_hologram_transform(root, canvas.size(), offset_x),
@@ -95,9 +101,28 @@ pub fn create_wrist_hud_panels(
         let weapon = held.or(steadied_gun);
         let readout = ammo_panel::AmmoReadout::for_weapon(world, weapon, false);
         let bio_canvas = readouts::build_watch_canvas(&bio);
+        // The amp's baked forearm is thicker than the glove's cuff: scale
+        // the wrist's readouts out to it.
+        let amp_root = held
+            .filter(|&amp| crate::wielded_weapon::is_psi_amp(world, amp))
+            .and_then(|amp| crate::psi_amp_readout::wrist(world, amp, hand))
+            .map(|(wrist, radius)| wrist * Matrix4::from_scale(radius / BIO_BAND_RADIUS));
+        let shows_glove = crate::virtual_hand::shows_hand_visual(world, held);
+        if let (Some(canvas), Some(root)) = (
+            rollovers[i].as_ref(),
+            if shows_glove { Some(root) } else { amp_root },
+        ) {
+            objects.extend(rollover_name(
+                asset_cache,
+                canvas,
+                root,
+                hologram_height,
+                bio_canvas.size(),
+            ));
+        }
         // The refusal is available even when a weapon carries its own hand
         // mesh. The cuff's wrist plates require a visible glove.
-        if !crate::virtual_hand::shows_hand_visual(world, held) {
+        if !shows_glove {
             if readout.melee_charge.is_some() {
                 let canvas = ammo_panel::build_wrist_canvas(&readout);
                 objects.extend(canvas.render_world_space(
@@ -112,13 +137,7 @@ pub fn create_wrist_hud_panels(
                     0.001,
                 ));
             }
-            // The amp's baked forearm is thicker than the glove's cuff: scale
-            // the same band out to it.
-            if let Some((wrist, radius)) = held
-                .filter(|&amp| crate::wielded_weapon::is_psi_amp(world, amp))
-                .and_then(|amp| crate::psi_amp_readout::wrist(world, amp, hand))
-            {
-                let root = wrist * Matrix4::from_scale(radius / BIO_BAND_RADIUS);
+            if let Some(root) = amp_root {
                 objects.extend(bio_bands(asset_cache, &bio_canvas, root, 0.0));
             }
             continue;
@@ -188,20 +207,68 @@ fn authored_weapon_readout_transform(
         * Matrix4::from_nonuniform_scale(width, width * size.y / size.x, 1.0)
 }
 
-/// Shared lower-edge hinge for the hazard and alarm canvases. A canvas pixel
-/// occupies 1.25 mm, preserving the approved 16 cm hazard width. Positive X
+/// A hazard/alarm canvas pixel occupies 1.25 mm, preserving the approved 16 cm
+/// hazard width.
+const HOLOGRAM_SCALE: f32 = 0.16 / 128.0;
+
+/// Shared lower-edge hinge for the hazard and alarm canvases. Positive X
 /// tilt lifts the top away from the glove; health/psi remain on the bracelet.
 fn wrist_hologram_transform(
     root: Matrix4<f32>,
     size: cgmath::Vector2<f32>,
     offset_x: f32,
 ) -> Matrix4<f32> {
-    let scale = 0.16 / 128.0;
+    hinged_hologram_transform(root, size, offset_x, 0.0, HOLOGRAM_SCALE)
+}
+
+/// `lift` slides the canvas up its own tilted plane, to stack above another.
+fn hinged_hologram_transform(
+    root: Matrix4<f32>,
+    size: cgmath::Vector2<f32>,
+    offset_x: f32,
+    lift: f32,
+    scale: f32,
+) -> Matrix4<f32> {
     let height = size.y * scale;
     root * Matrix4::from_translation(vec3(offset_x, 0.02375, 0.08))
         * Matrix4::from_angle_x(Deg(45.0))
-        * Matrix4::from_translation(vec3(0.0, height * 0.5, 0.0))
+        * Matrix4::from_translation(vec3(0.0, lift + height * 0.5, 0.0))
         * Matrix4::from_nonuniform_scale(size.x * scale, height, 1.0)
+}
+
+/// Prototype mounts for a wrist's rollover name, switched live by the
+/// `vr_rollover_name_wrapped` dev param: upright on the hologram hinge, above
+/// whatever hazard/alarm stack is up (`stack_height`), or wrapped round the
+/// wrist just past the bio band's finger-side edge.
+fn rollover_name(
+    asset_cache: &mut AssetCache,
+    canvas: &crate::ui::UiCanvas,
+    root: Matrix4<f32>,
+    stack_height: f32,
+    bio_size: cgmath::Vector2<f32>,
+) -> Vec<SceneObject> {
+    let width = crate::dev_params::get(crate::dev_params::VR_ROLLOVER_NAME_WIDTH);
+    let size = canvas.size();
+    if !crate::dev_params::get_bool(crate::dev_params::VR_ROLLOVER_NAME_WRAPPED) {
+        let lift = if stack_height > 0.0 {
+            stack_height + 0.005
+        } else {
+            0.0
+        };
+        let transform = hinged_hologram_transform(root, size, 0.0, lift, width / size.x);
+        return canvas.render_world_space(asset_cache, transform, None, None, 0.001);
+    }
+    let height = width * size.y / size.x;
+    let bio_top = -0.015 + BIO_WIDTH * bio_size.y / bio_size.x * 0.5;
+    let transform = root
+        * Matrix4::from_translation(vec3(0.0, bio_top + 0.002 + height * 0.5, 0.04))
+        * Matrix4::from_nonuniform_scale(width, height, width);
+    canvas.render_world_space_bent(
+        asset_cache,
+        transform,
+        BIO_BAND_RADIUS / width,
+        0.001 / width,
+    )
 }
 
 const BIO_WIDTH: f32 = 0.085;
