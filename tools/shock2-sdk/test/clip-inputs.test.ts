@@ -56,7 +56,7 @@ test("recorder stamps inputs with sim time from start()", async () => {
     duration: 84 / 60,
     parts: {
       "L.grip": [[0, 1]],
-      "R.stick": [[0, [0, 1]], [0.4, [0.5, 0]]],
+      "R.stick": [[0, [0, 1]], [0.4, [-0.5, 0]]],
       "L.lower": [[0.2, 1], [0.4, 0]],
       "L.click": [[0.4, 1], [0.6, 0]],
     },

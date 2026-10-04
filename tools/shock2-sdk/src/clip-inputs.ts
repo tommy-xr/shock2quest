@@ -13,7 +13,7 @@ import type { Game } from "./game.js";
  *   before the first keyframe a part is at rest (0, or `[0, 0]`).
  *
  * Part keys are `<hand>.<part>`, hand `L`/`R`, part one of:
- * `stick` (`[x, y]`, +y forward), `click` (stick click), `trigger`, `grip`,
+ * `stick` (`[x, y]`, +x right, +y forward, as the physical stick reads), `click` (stick click), `trigger`, `grip`,
  * `upper` (Y/B), `lower` (X/A), `menu` (left only); button values are 0..1.
  */
 export interface ClipInputs {
@@ -138,7 +138,9 @@ export class ClipInputRecorder {
     }
     const part = channelPart(channel);
     if (!part) return;
-    this.level(part, Array.isArray(value) ? [Number(value[0]), Number(value[1])] : Number(value));
+    // The Quest runtime negates stick x into the game's channel; undo it so the
+    // replay tilts the stick the way the player's thumb did.
+    this.level(part, Array.isArray(value) ? [-Number(value[0]) || 0, Number(value[1])] : Number(value));
   }
 
   private track(part: string): InputKeyframe[] {
