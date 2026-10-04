@@ -39,6 +39,10 @@ pub struct EntitySaveData {
     /// Current/alternate power templates, owned and remapped with each amp.
     #[serde(default)]
     pub amp_selections: HashMap<u64, crate::psi_amp_selection::AmpSelection>,
+    /// Permanent modification choices and accessory toggles follow each weapon
+    /// through both mission saves and carried-inventory level transitions.
+    #[serde(default)]
+    pub weapon_upgrades: HashMap<u64, crate::weapon_upgrades::WeaponUpgrades>,
     /// Selected projectile-link index for weapons whose ammo type has been
     /// changed. Persisted separately because runtime components are not part of
     /// the Dark property registry.
@@ -92,6 +96,7 @@ impl EntitySaveData {
             searched: Vec::new(),
             implant_slots: HashMap::new(),
             amp_selections: HashMap::new(),
+            weapon_upgrades: HashMap::new(),
             selected_ammo: HashMap::new(),
             holstered: HashMap::new(),
             shoulder_weapons: HashMap::new(),
@@ -215,6 +220,13 @@ impl EntitySaveData {
                 EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
             {
                 world.add_component(*new, *selection);
+            }
+        }
+        for (old, upgrades) in &self.weapon_upgrades {
+            if let Some(new) =
+                EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
+            {
+                world.add_component(*new, upgrades.clone());
             }
         }
         for (old_entity_id, selected_ammo) in &self.selected_ammo {
