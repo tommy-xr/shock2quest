@@ -183,6 +183,10 @@ pub(crate) fn render_lasers(
     use cgmath::{Matrix4, vec3};
     use engine::scene::{SceneObject, SceneObjectDebugTag};
     let mut objects = Vec::new();
+    let seconds = world
+        .borrow::<shipyard::UniqueView<crate::time::Time>>()
+        .map(|time| time.total.as_secs_f32())
+        .unwrap_or(0.0);
     for weapon in [Handedness::Left, Handedness::Right]
         .into_iter()
         .filter_map(|hand| crate::wielded_weapon::weapon_in_hand(world, hand))
@@ -192,6 +196,40 @@ pub(crate) fn render_lasers(
         };
         if (trace.end - trace.origin).magnitude2() < 1.0e-8 {
             continue;
+        }
+        let forward = (trace.end - trace.origin).normalize();
+        let tangent = if forward.y.abs() < 0.9 {
+            vec3(0.0, 1.0, 0.0)
+        } else {
+            vec3(1.0, 0.0, 0.0)
+        };
+        let right = tangent.cross(forward).normalize();
+        for (core, radius) in [(false, 0.018), (true, 0.0025)] {
+            let mut beam = SceneObject::new(
+                engine::scene::laser_material::create_beam(core, seconds),
+                Box::new(engine::scene::cylinder::Cylinder),
+            );
+            beam.set_transform(Matrix4::from_cols(
+                (right * radius).extend(0.0),
+                (forward.cross(right) * radius).extend(0.0),
+                (trace.end - trace.origin).extend(0.0),
+                trace.origin.to_homogeneous(),
+            ));
+            beam.set_depth_write(false);
+            beam.set_backface_culling(Some(engine::scene::FrontFaceWinding::CounterClockwise));
+            beam.set_debug_tag(Some(std::rc::Rc::new(SceneObjectDebugTag {
+                entity_id: Some(weapon.inner()),
+                source: Some(
+                    if core {
+                        "weapon_laser_core"
+                    } else {
+                        "weapon_laser_halo"
+                    }
+                    .into(),
+                ),
+                ..Default::default()
+            })));
+            objects.push(beam);
         }
         let Some(normal) = trace.normal.filter(|n| n.magnitude2() > 1.0e-8) else {
             continue;
@@ -206,7 +244,7 @@ pub(crate) fn render_lasers(
         // Surface-aligned, fixed world size: never a HUD marker or a billboard
         // that can poke through a nearby surface when the head moves.
         let mut dot = SceneObject::new(
-            engine::scene::laser_dot_material::create(vec3(1.0, 0.015, 0.01)),
+            engine::scene::laser_material::create(vec3(1.0, 0.015, 0.01)),
             Box::new(engine::scene::quad::create()),
         );
         dot.set_transform(Matrix4::from_cols(
@@ -373,6 +411,18 @@ mod tests {
             trace.end
         );
         assert!(trace.normal.is_some());
+        let rendered = render_lasers(&world, &physics);
+        assert_eq!(rendered.len(), 3, "one core, one halo, one dot");
+        for beam in &rendered[..2] {
+            use cgmath::Transform;
+            let start = beam.get_transform().transform_point(point3(0.0, 0.0, 0.0));
+            let end = beam.get_transform().transform_point(point3(0.0, 0.0, 1.0));
+            assert!((start - trace.origin).magnitude() < 1.0e-5);
+            assert!(
+                (end - trace.end).magnitude() < 1.0e-5,
+                "beam ends at the hit, without a stale trail"
+            );
+        }
         world
             .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
             .unwrap()
