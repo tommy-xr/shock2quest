@@ -17,6 +17,7 @@ python3 -m http.server 4180   # http://127.0.0.1:4180/website/
 - Tests: `node --test website/test/*.test.js`.
 - Media comes from `screenshots/hero/` (regenerate with `tools/shock2-sdk/scripts/hero-shots.mjs`).
   Control modes with `clip: null` show "footage pending" until a clip is recorded.
+  The MFD clip is re-recorded, with its inputs, by `tools/shock2-sdk/scripts/hero-mfd.mjs`.
 - `shared/equipment.js` / `equipment.css` — equipment tour, backed by runtime captures
   in `screenshots/equipment/`. Regenerate with
   `tools/shock2-sdk/scripts/equipment-shots.mjs`; its `callouts.json` contains normalized
