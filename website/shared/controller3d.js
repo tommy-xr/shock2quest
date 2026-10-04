@@ -1,10 +1,12 @@
 // Meta Quest Touch Plus pair rendered from the WebXR Input Profiles models
 // (MIT, @webxr-input-profiles/assets). A mode's controls glow in `accent` and
-// animate through their authored press/tilt range; drag to turn the pair.
+// animate through their authored press/tilt range - replaying the clip's
+// recorded inputs when it has them; drag to turn the pair.
 // Pages need an import map for "three" and "three/addons/".
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { sampleInputs } from "./inputs.js";
 
 const PROFILE = "https://cdn.jsdelivr.net/npm/@webxr-input-profiles/assets@1.0/dist/profiles/meta-quest-touch-plus/";
 
@@ -21,7 +23,7 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   } catch {
     container.textContent = "3D controller view needs WebGL.";
-    return { setMode() {} };
+    return { setMode() {}, setClip() {} };
   }
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -45,6 +47,7 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
   const glow = new THREE.Color(accent);
   const hands = {}; // hand -> { parts: {part: {meshes, responses}} }
   let mode = null;
+  let clip = null; // { video, timeline } while the mode's clip has recorded inputs
 
   const loader = new GLTFLoader();
   const load = (hand, file, x) =>
@@ -66,7 +69,7 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
           meshes.push(o);
         });
         // Each visual response is a value node moved between authored min/max nodes.
-        const keys = part === "stick" ? [`${name}_xaxis_pressed`, `${name}_yaxis_pressed`] : [`${name}_pressed`];
+        const keys = part === "stick" ? [`${name}_xaxis_pressed`, `${name}_yaxis_pressed`, `${name}_pressed`] : [`${name}_pressed`];
         const responses = keys
           .map((k) => ({ value: root.getObjectByName(`${k}_value`), min: root.getObjectByName(`${k}_min`), max: root.getObjectByName(`${k}_max`) }))
           .filter((r) => r.value && r.min && r.max)
@@ -94,6 +97,27 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
     r.value.quaternion.slerpQuaternions(r.min.quaternion, r.max.quaternion, t);
   };
 
+  // Pose every part as the clip's inputs had it at the video's current time:
+  // pressed parts glow full, the mode's other parts dimly.
+  const replay = ({ video, timeline }) => {
+    const state = sampleInputs(timeline, video.currentTime);
+    for (const [hand, { parts }] of Object.entries(hands)) {
+      const hot = new Set(mode.hot[hand]);
+      for (const [part, { meshes, responses }] of Object.entries(parts)) {
+        const s = state[hand][part];
+        responses.forEach((r, i) => {
+          if (s) pose(r, s.pose[i]);
+          else { r.value.position.copy(r.rest.p); r.value.quaternion.copy(r.rest.q); }
+        });
+        const on = s?.pressed || hot.has(part);
+        meshes.forEach((m) => {
+          m.material = on ? m.userData.hot : m.userData.base;
+          if (on) m.material.emissiveIntensity = s?.pressed ? 1 : 0.3;
+        });
+      }
+    }
+  };
+
   // Drag to turn; otherwise a slow idle sway.
   let yaw = 0, drag = null, lastInput = -1e9;
   renderer.domElement.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, yaw }; renderer.domElement.setPointerCapture(e.pointerId); });
@@ -117,7 +141,8 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
     const idle = performance.now() - lastInput > 2500 && !drag;
     if (idle && !reduce) yaw += (Math.sin(t * 0.4) * 0.25 - yaw) * 0.02;
     pair.rotation.y = yaw;
-    if (mode && !reduce) {
+    if (mode && !reduce && clip) replay(clip);
+    else if (mode && !reduce) {
       for (const [hand, { parts }] of Object.entries(hands)) {
         for (const part of mode.hot[hand]) {
           const p = parts[part];
@@ -143,6 +168,8 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
   });
 
   return {
-    setMode(m) { mode = m; apply(); },
+    setMode(m) { mode = m; clip = null; apply(); },
+    // Drive the pair from `timeline` (see inputs.js) at `video`'s playhead.
+    setClip(video, timeline) { clip = { video, timeline }; },
   };
 }
