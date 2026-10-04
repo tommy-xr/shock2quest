@@ -23,3 +23,4 @@ export * from "./vr-pose.js";
 export * from "./vr-climb.js";
 export * from "./motion.js";
 export { quatMultiply, quatRotate } from "./vec.js";
+export * from "./clip-inputs.js";
