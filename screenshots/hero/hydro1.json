@@ -1,8 +1,7 @@
 {
-  "revision": "ea34f7a74f67e5a94151fd90f1db9aa152f3ad9a",
-  "dirty": false,
-  "runtimeSha256": "5799abc90484136038decf80be77d8cc5468ffc060e50c580eddb09320099b95",
-  "capturedAt": "2026-10-03T23:46:53.644Z",
+  "revision": "07b1b1c2b83398fa251f613794d326b46f7b3652",
+  "dirty": true,
+  "capturedAt": "2026-10-04T19:50:34.500Z",
   "mission": "hydro1.mis",
   "settings": {
     "vr": {

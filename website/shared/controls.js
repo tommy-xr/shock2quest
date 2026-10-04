@@ -94,6 +94,7 @@ export const HERO = "../screenshots/hero/";
 // Camera feeds: [capture, caption].
 export const SHOTS = [
   ["rec1", "Recreation · pistol"],
+  ["hydro1", "Hydroponics · assault rifle"],
   ["ops2", "Operations · psi amp + laser"],
   ["medsci1-melee", "MedSci · pistol + wrench"],
 ];

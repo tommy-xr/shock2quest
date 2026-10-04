@@ -192,6 +192,8 @@ async function captureShot(shot) {
   try {
     // Turning arms after a neutral stick frame on a fresh settings load.
     await game.step({ frames: 1 });
+    // Invulnerable, so a hit's red vignette never lands in the footage.
+    await game.devParams.set("cheat", 1);
     if (shot.stats) await game.player.setStats(shot.stats);
     let subject;
     if (shot.subject) {
