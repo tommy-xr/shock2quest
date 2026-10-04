@@ -245,6 +245,8 @@ their consumers every frame, so the handlers touch the registry directly - no
 curl http://127.0.0.1:8080/v1/dev-params
 curl -X POST http://127.0.0.1:8080/v1/dev-params -d '{"key": "panel_distance", "value": 3.0}'
 curl -X POST http://127.0.0.1:8080/v1/dev-params -d '{"key": "panel_distance", "reset": true}'
+# Player invulnerable (no HP loss, hit tint or death) for clean captures:
+curl -X POST http://127.0.0.1:8080/v1/dev-params -d '{"key": "cheat", "value": 1}'
 ```
 
 The `/v1/control/input` channel vocabulary lives in `shock2vr::input::remote`
