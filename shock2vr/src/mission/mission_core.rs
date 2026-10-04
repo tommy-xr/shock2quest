@@ -7588,6 +7588,7 @@ impl MissionCore {
             });
         }
 
+        let mut nonphysical_motion = Vec::new();
         for (id, player) in self.id_to_animation_player.iter_mut() {
             if let Some(stasis) = self.script_world.stasis(*id, &self.world) {
                 if let Some(pose) = stasis.pose() {
@@ -7624,10 +7625,8 @@ impl MissionCore {
 
             let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
             let maybe_transform = v_transform.get(*id);
-            let curr_velocity = self
-                .physics
-                .get_velocity(*id)
-                .unwrap_or(vec3(0.0, 0.0, 0.0));
+            let physical_velocity = self.physics.get_velocity(*id);
+            let curr_velocity = physical_velocity.unwrap_or(vec3(0.0, 0.0, 0.0));
             if let Ok(transform) = maybe_transform {
                 // AI steering publishes a locomotion scale (heading-error /
                 // arrival coupling); scale the horizontal root velocity so a
@@ -7683,7 +7682,41 @@ impl MissionCore {
                     });
                 if !holds_terminal_death_pose && !launched_with_no_root_motion && !physics_driven_ai
                 {
-                    self.physics.set_velocity(*id, scaled);
+                    if physical_velocity.is_some() {
+                        self.physics.set_velocity(*id, scaled);
+                    } else if has_refs(&self.world, *id)
+                        && self
+                            .world
+                            .borrow::<View<PropCreature>>()
+                            .unwrap()
+                            .contains(*id)
+                    {
+                        // Apparitions have no body: HasRefs controls their visibility,
+                        // not whether their authored root motion can move them. Keep
+                        // them intangible and integrate against the authored pose;
+                        // AI steering updates its rotation even without physics.
+                        let positions = self.world.borrow::<View<PropPosition>>().unwrap();
+                        if let Ok(position) = positions.get(*id) {
+                            let model_scale = self
+                                .world
+                                .borrow::<View<dark::properties::PropScale>>()
+                                .unwrap()
+                                .get(*id)
+                                .map(|scale| scale.0)
+                                .unwrap_or(vec3(1.0, 1.0, 1.0));
+                            let local =
+                                vec3(velocity.z * model_scale.x, 0.0, -velocity.x * model_scale.z);
+                            let delta = position.rotation.rotate_vector(local)
+                                * scale
+                                * time.elapsed.as_secs_f32();
+                            nonphysical_motion.push((
+                                *id,
+                                position.position + delta,
+                                position.rotation,
+                                model_scale,
+                            ));
+                        }
+                    }
                 }
             }
 
@@ -7727,6 +7760,9 @@ impl MissionCore {
                     AnimationEvent::VelocityChanged(_velocity) => (),
                 }
             }
+        }
+        for (id, position, rotation, scale) in nonphysical_motion {
+            self.set_entity_position_rotation(id, position, rotation, scale);
         }
     }
 
