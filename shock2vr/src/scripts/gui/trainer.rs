@@ -18,10 +18,9 @@
 //! module supplies its sequential tier-purchase validation. UNDO is deferred.
 //!
 //! A stat is only sold when it has a live gameplay consumer. Strength expands
-//! the backpack, Endurance raises maximum HP, and Cyber Affinity feeds hacking
-//! odds; Psionics and Agility stay visible but unavailable until their
-//! advertised systems exist. This prevents a stored-only stat bump from
-//! consuming irreplaceable modules.
+//! the backpack, Endurance raises maximum HP, Cyber Affinity feeds hacking,
+//! Psionics scales casts, and Agility scales shared movement. Other retail
+//! Agility effects (fall vulnerability and weapon handling) remain deferred.
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::gamesys::TrainerCostTables;
@@ -59,7 +58,11 @@ pub enum TrainerMode {
 pub fn stat_upgrade_available(stat: Stat) -> bool {
     matches!(
         stat,
-        Stat::Strength | Stat::Endurance | Stat::CyberAffinity | Stat::PsionicAbility
+        Stat::Strength
+            | Stat::Endurance
+            | Stat::CyberAffinity
+            | Stat::PsionicAbility
+            | Stat::Agility
     )
 }
 
@@ -578,8 +581,8 @@ mod tests {
         );
         assert_eq!(
             upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::Agility)),
-            None,
-            "Agility must not be sold until it has a gameplay effect"
+            Some(3),
+            "Agility is purchasable now that shared movement consumes it"
         );
     }
 }

@@ -28,7 +28,10 @@ test("Speedy acquired at a machine increases forward and strafe movement by 15%"
   await acquireOsUpgrade(game, "Speedy");
   assert.ok(Math.abs((await distance(game, [0, 1])) / forward - 1.15) < 0.005);
   assert.ok(Math.abs((await distance(game, [1, 0])) / strafe - 1.15) < 0.005);
+  await game.player.setStats({ agility: 6 });
+  assert.ok(Math.abs((await distance(game, [0, 1])) / forward - 1.15 * 1.7 / 1.2) < 0.005,
+    "Speedy composes with the authored Agility ratio");
   await game.transitionLevel("medsci1.mis");
   assert.ok((await game.info()).player.stats!.os_traits.includes(4));
-  assert.ok(Math.abs((await distance(game, [0, 1])) / forward - 1.15) < 0.005);
+  assert.ok(Math.abs((await distance(game, [0, 1])) / forward - 1.15 * 1.7 / 1.2) < 0.005);
 });

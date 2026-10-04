@@ -585,9 +585,8 @@ dev_params! {
     /// The player loses no hit points from any source, so never shows the hit
     /// tint or dies - keeps deterministic captures from being spoiled by damage.
     CHEAT = Root::bool("cheat", "Cheat: invulnerable", false),
-    /// How fast the free camera flies, in the player's own speed units - the
-    /// default IS [`PLAYER_MOVE_SPEED`], so "walking pace" cannot drift from
-    /// what walking actually is. These are pre-scale SS2 units, not world
+    /// Developer flight uses the established Agility-1 rate [`PLAYER_MOVE_SPEED`].
+    /// Stat upgrades do not change it. These are SS2 units, not world
     /// units per second: the consumer divides by `dark::SCALE_FACTOR` (2.5)
     /// exactly as the player's locomotion does, so the default 25 travels 10
     /// world units a second, not 25. The range spans a crawl to a fast survey of a
