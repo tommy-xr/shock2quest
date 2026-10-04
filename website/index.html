@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>shock2quest</title>
+<link rel="stylesheet" href="./shared/equipment.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"}}</script>
@@ -83,7 +84,7 @@ footer{max-width:1160px;margin:60px auto 0;padding:24px 20px 40px;border-top:1px
 <body>
 <nav class="top">
   <div class="brand">SHOCK2<b>QUEST</b></div>
-  <div class="links"><a href="#feeds">Feeds</a><a href="#controls">Controls</a><a href="#disclosure">Disclosure</a><span id="social"></span></div>
+  <div class="links"><a href="#feeds">Feeds</a><a href="#equipment">Equipment</a><a href="#controls">Controls</a><a href="#disclosure">Disclosure</a><span id="social"></span></div>
 </nav>
 
 <header class="hero" id="install">
@@ -119,6 +120,52 @@ adb push cutscenes /sdcard/shock2quest/</div></li>
     <div class="side" id="feedlist"></div>
   </div>
 </section>
+
+<section id="equipment" aria-labelledby="equipment-heading">
+  <div class="kicker">Equipment</div>
+  <h2 class="sec" id="equipment-heading">Your cyber interface. Within reach.</h2>
+  <p class="equipment-intro">Equipped with the standard TriOptimum cyber interface loadout: MFD, ammo pouch, holsters, biometric readout, and inventory. A place for everything. Reach for what you need.</p>
+  <div class="equipment-console">
+    <div class="equipment-display">
+      <div class="equipment-status mono"><span>TRIOPTIMUM // PERSONAL SYSTEMS</span><span>LOADOUT 01</span></div>
+      <div class="equipment-view">
+        <video id="equipment-video" muted playsinline preload="none" poster="../screenshots/equipment/mfd.png" aria-label="Hacker demonstrating the multi-function display"></video>
+        <svg class="equipment-tracker" viewBox="0 0 1000 750" aria-hidden="true">
+          <path class="equipment-leader" d="M 60 120 H 200 L 500 375" />
+          <circle class="equipment-ring" cx="500" cy="375" r="22" />
+          <circle class="equipment-dot" cx="500" cy="375" r="4" />
+        </svg>
+        <div class="equipment-callout mono" aria-hidden="true"><span>01 / MFD</span><small>MULTI-FUNCTION DISPLAY</small></div>
+        <div class="equipment-caption mono">IN-ENGINE CAPTURE · HACKER BODY PREVIEW</div>
+      </div>
+      <div class="equipment-transport" hidden>
+        <button type="button" id="equipment-play">Pause tour</button>
+        <span class="mono" id="equipment-position">01 / 05</span>
+        <div class="equipment-progress" aria-hidden="true"><span></span></div>
+      </div>
+      <p class="equipment-notice" role="status" hidden></p>
+    </div>
+    <div class="equipment-items" role="group" aria-label="Inspect equipment">
+      <button type="button" data-equipment="mfd" aria-pressed="true" aria-controls="equipment-video">
+        <span class="equipment-number mono">01</span><span><b>MFD</b><small>Draw your multi-function display from the belt. Bring the cyber interface into your hands.</small></span><span class="equipment-chevron" aria-hidden="true">↗</span>
+      </button>
+      <button type="button" data-equipment="ammo" aria-pressed="false" aria-controls="equipment-video">
+        <span class="equipment-number mono">02</span><span><b>Ammo pouch</b><small>Fresh ammunition at your waist. Grab a clip and reload by hand.</small></span><span class="equipment-chevron" aria-hidden="true">↗</span>
+      </button>
+      <button type="button" data-equipment="holsters" aria-pressed="false" aria-controls="equipment-video">
+        <span class="equipment-number mono">03</span><span><b>Holsters</b><small>Keep your weapons at your sides. Draw, switch, and stow with a natural reach.</small></span><span class="equipment-chevron" aria-hidden="true">↗</span>
+      </button>
+      <button type="button" data-equipment="biometrics" aria-pressed="false" aria-controls="equipment-video">
+        <span class="equipment-number mono">04</span><span><b>Biometric readout</b><small>Your condition, at a glance. Wrist-mounted readouts keep vital information close.</small></span><span class="equipment-chevron" aria-hidden="true">↗</span>
+      </button>
+      <button type="button" data-equipment="inventory" aria-pressed="false" aria-controls="equipment-video">
+        <span class="equipment-number mono">05</span><span><b>Inventory</b><small>Carry the essentials. Reach over your shoulder to stow an item in your backpack.</small></span><span class="equipment-chevron" aria-hidden="true">↗</span>
+      </button>
+    </div>
+  </div>
+  <noscript><p>Enable JavaScript to play the equipment tour. The loadout descriptions are available above.</p></noscript>
+</section>
+<script type="module" src="./shared/equipment.js"></script>
 
 <section id="controls">
   <div class="kicker">Controls</div>

@@ -14,3 +14,9 @@ python3 -m http.server 4180   # http://127.0.0.1:4180/website/
   A control mode's buttons glow and animate through their press range.
 - Media comes from `screenshots/hero/` (regenerate with `tools/shock2-sdk/scripts/hero-shots.mjs`).
   Control modes with `clip: null` show "footage pending" until a clip is recorded.
+- `shared/equipment.js` / `equipment.css` — equipment tour, backed by runtime captures
+  in `screenshots/equipment/`. Regenerate with
+  `tools/shock2-sdk/scripts/equipment-shots.mjs`; its `callouts.json` contains normalized
+  camera-projected tracking points. The tour loads on approach, pauses offscreen,
+  and starts paused for reduced-motion preferences. Item selection and stills also
+  work when playback is paused or video is unavailable.
