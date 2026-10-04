@@ -392,7 +392,9 @@ pub fn tick_player_radiation(world: &World, elapsed_secs: f32) -> Option<Effect>
             )
         })
         .unwrap_or(0);
-    if damage <= 0 {
+    // Exposure still accumulates and recovers under `cheat`; only its damage,
+    // and the rad tint and `raddmg` sound that ride alongside it, are dropped.
+    if damage <= 0 || crate::dev_params::get_bool(crate::dev_params::CHEAT) {
         return None;
     }
     let rad_damage = world

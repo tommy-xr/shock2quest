@@ -1962,6 +1962,29 @@ fn apply_comestible_use(
     }
 }
 
+/// Applies `delta` to `entity_id`'s hit points, floored at 0, and returns
+/// `(previous, current)`. `None` when it has no pool, or when `invulnerable`
+/// (the `cheat` dev param) refuses a loss to the player - every damage source
+/// reaches HP through here, so the hit tint, grunt and death never follow.
+fn apply_hit_point_delta(
+    world: &World,
+    entity_id: EntityId,
+    player: EntityId,
+    delta: i32,
+    invulnerable: bool,
+) -> Option<(i32, i32)> {
+    if invulnerable && entity_id == player && delta < 0 {
+        return None;
+    }
+    let mut v_hit_points = world
+        .borrow::<ViewMut<dark::properties::PropHitPoints>>()
+        .unwrap();
+    let hit_points = (&mut v_hit_points).get(entity_id).ok()?;
+    let previous = hit_points.hit_points;
+    hit_points.hit_points = hit_points.hit_points.saturating_add(delta).max(0);
+    Some((previous, hit_points.hit_points))
+}
+
 /// First-person player-melee idle clip (motiondb ActorType 1, `+plyrmelee:0`),
 /// used to pose the flat melee viewmodel in its ready stance.
 const MELEE_IDLE_CLIP: &str = "ph212203";
@@ -10015,19 +10038,16 @@ impl MissionCore {
                     if entity_id == player_entity && !self.player_is_alive() {
                         continue;
                     }
-                    let mut v_hit_points = self
-                        .world
-                        .borrow::<ViewMut<dark::properties::PropHitPoints>>()
-                        .unwrap();
-
-                    if let Ok(hit_points) = (&mut v_hit_points).get(entity_id) {
-                        let previous = hit_points.hit_points;
-                        hit_points.hit_points = hit_points.hit_points.saturating_add(delta).max(0);
+                    if let Some((previous, hp)) = apply_hit_point_delta(
+                        &self.world,
+                        entity_id,
+                        player_entity,
+                        delta,
+                        crate::dev_params::get_bool(crate::dev_params::CHEAT),
+                    ) {
                         // Every HP change flows through here (weapon, stim,
                         // collision damage) - trace it with the resulting
                         // total so a mysterious death is attributable.
-                        let hp = hit_points.hit_points;
-                        drop(v_hit_points);
                         if hp < previous && super::earth_horde::is_horde(&self.level_name) {
                             let hostile = self
                                 .world
@@ -21660,5 +21680,54 @@ mod held_item_physics_tests {
 
         assert!(held_item_collision_group(&world, gun).is_none());
         assert!(held_item_collision_group(&world, wrench).is_none());
+    }
+}
+
+#[cfg(test)]
+mod hit_point_delta_tests {
+    use dark::properties::PropHitPoints;
+
+    use crate::scripts::ai::ai_util::hit_points;
+
+    use super::*;
+
+    fn world_with(hit_points: i32) -> (World, EntityId, EntityId) {
+        let mut world = World::new();
+        let player = world.add_entity(PropHitPoints { hit_points });
+        let creature = world.add_entity(PropHitPoints { hit_points });
+        (world, player, creature)
+    }
+
+    #[test]
+    fn invulnerable_player_loses_no_hit_points() {
+        let (world, player, _) = world_with(40);
+        assert_eq!(
+            apply_hit_point_delta(&world, player, player, -100, true),
+            None
+        );
+        assert_eq!(hit_points(player, &world), Some(40));
+    }
+
+    #[test]
+    fn invulnerable_player_still_heals_and_others_still_take_damage() {
+        let (world, player, creature) = world_with(40);
+        assert_eq!(
+            apply_hit_point_delta(&world, player, player, 5, true),
+            Some((40, 45))
+        );
+        assert_eq!(
+            apply_hit_point_delta(&world, creature, player, -15, true),
+            Some((40, 25))
+        );
+    }
+
+    #[test]
+    fn vulnerable_player_takes_damage_floored_at_zero() {
+        let (world, player, _) = world_with(40);
+        assert_eq!(
+            apply_hit_point_delta(&world, player, player, -100, false),
+            Some((40, 0))
+        );
+        assert_eq!(hit_points(player, &world), Some(0));
     }
 }
