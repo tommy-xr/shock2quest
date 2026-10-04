@@ -1,6 +1,6 @@
 # Weapon modification implementation plan
 
-Build one complete weapon upgrade flow first, then add independent capabilities and broaden weapon coverage. The first playable milestone is a pistol that can be modified through the normal interface, receives the selected benefit and automatic bonuses, and preserves those changes through save/load. This plan is a proposal for implementation; no gameplay changes have been made.
+Build one complete weapon upgrade flow first, then add independent capabilities and broaden weapon coverage. The first playable milestone is a pistol that can be modified through the normal interface, receives the selected benefit and automatic bonuses, and preserves those changes through save/load. The state and shared-stat layers are implemented. The chooser layer now connects the pistol to paid and French-Epstein installation, including the alternate-fire purchase and lock. Other families retain their legacy modification flow during staging; attachment effects and broader weapon coverage follow.
 
 The existing retail implementation is in `shock2vr/src/weapon_modification.rs`; its binary-audit provenance is recorded in [the upgrade audit](os-upgrades-audit.md). This plan separates confirmed rules, remaining decisions, and independently reviewable implementation steps.
 
@@ -25,9 +25,9 @@ Decisions needed before the affected implementation:
 
 | Decision | Suggested default | Needed before |
 |---|---|---|
-| Devices at tiers zero and one | Allow one device to purchase the next tier without Modify skill or nanite cost; normal Modify still stops after any two total upgrades | Device integration |
-| Installation permanence | Permanent choices initially; light/laser toggles do not refund slots | Choice interface |
-| Paid cost, challenge, and failure | Retain existing tier-one/tier-two skill requirements, nanite costs, challenge, and consequences | Choice interface |
+| Devices at tiers zero and one | Implemented: one device purchases the next tier without Modify skill or nanite cost; normal Modify still stops after any two total upgrades | Complete for pistol |
+| Installation permanence | Implemented: permanent choices; no refunds or respec | Complete for pistol |
+| Paid cost, challenge, and failure | Implemented: existing skill requirements, nanite costs, Tinker discount, challenge, and failure consequences | Complete for pistol |
 | Energy capacity | Decide explicitly whether double capacity applies to charge stores as well as ammunition magazines | Energy weapon coverage |
 | Meaning of all weapons | Enumerate ranged, melee, stasis, biological weapons, and psi amp; assign useful choices or an explicit exception to each | Coverage milestone |
 
@@ -93,3 +93,9 @@ Every UI or visible effect change needs flat and VR render verification plus the
 Campaign balance should compare useful builds, not only maximum damage. Confirm that alternate fire does not become a compulsory purchase on every weapon, Low Maintenance does not eliminate the maintenance economy unintentionally, and the device supply supports the intended number of heavily modified weapons. The standard +32% ceiling is about 5.3% above the common retail +25.4% multiplier; grenade and stasis exceptions require separate balance judgment.
 
 Implementation starts with the persistent state and pure rules. Settle the remaining interaction defaults and sketch the choice panel before connecting installation to gameplay. None of the proposed defaults beyond the confirmed rules are treated as already approved.
+
+## Chooser implementation
+
+The pistol uses one shared 188x300 canvas in flat and VR. Modify opens the chooser; selecting a row previews the automatic bonuses and selected capability. Paid confirmation opens the existing HRM challenge. A carried French-Epstein device can be selected in the same chooser, or activated from inventory/while held to open it directly for the wielded pistol. Device confirmation consumes one unit only after target, tier, ownership, and eligibility are revalidated. Closing or backing out consumes nothing.
+
+Low Maintenance I/II, doubled capacity, and alternate fire are active choices. Flashlight, laser, and silencer are labelled as later additions and cannot be installed. Pistol alternate fire starts locked; mode selection and effective firing settings share the purchase check. Upgrade state remains attached to the original weapon across saving and level transitions. Other weapon families remain on their previous behavior until the coverage milestone.

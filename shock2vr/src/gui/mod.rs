@@ -123,6 +123,11 @@ where
         }
     }
 
+    /// Initialize an explicitly targeted panel after its world selection is set.
+    fn on_panel_opened(&self, _world: &World, state: &mut TState) {
+        self.prepare_state_on_frob(state);
+    }
+
     /// An item was offered to this panel's entity (the port's tool channel:
     /// releasing a held item onto a target in VR, or a `ToolConsumable`
     /// touching it). `None` - the default - takes the ordinary deposit path,

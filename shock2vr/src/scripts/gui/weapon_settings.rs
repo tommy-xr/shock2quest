@@ -32,6 +32,7 @@ use crate::gui::{
 use crate::scripts::Effect;
 use crate::scripts::script_util;
 use crate::ui::Rect;
+use crate::weapon_installation::Payment;
 use crate::weapon_modification;
 use crate::weapon_repair;
 use crate::weapon_upgrades::WeaponUpgrade;
@@ -98,14 +99,22 @@ const UNLOAD_LABEL: &str = "unload";
 pub(crate) struct WeaponSettingsTarget {
     entity: Option<EntityId>,
     scanned: bool,
+    upgrade_device: Option<EntityId>,
 }
 
 impl WeaponSettingsTarget {
+    pub(crate) fn set_upgrade_device(world: &World, device: Option<EntityId>) {
+        if let Ok(mut target) = world.borrow::<shipyard::UniqueViewMut<Self>>() {
+            target.upgrade_device = device;
+        }
+    }
+
     pub(crate) fn select(world: &World, weapon: EntityId) {
         world.add_unique(Self::default());
         *world.borrow::<shipyard::UniqueViewMut<Self>>().unwrap() = Self {
             entity: Some(weapon),
             scanned: false,
+            upgrade_device: None,
         };
     }
 
@@ -157,6 +166,7 @@ pub struct WeaponSettingsGui;
 pub struct WeaponSettingsGuiState {
     board: Option<(HrmJob, dark::properties::PropHackDiff, HackState)>,
     chooser: Option<UpgradeChooser>,
+    upgrade_weapon: Option<EntityId>,
 }
 
 /// The plug the settings panel raises for `weapon`, if any, with its button's
@@ -229,6 +239,7 @@ pub enum WeaponSettingsGuiMsg {
     ChooseUpgrade(WeaponUpgrade),
     ConfirmUpgrade,
     CancelUpgrade,
+    UpgradePayment(Payment),
     Repair,
     Board(KeyPadMsg),
 }
@@ -316,9 +327,23 @@ fn row_text_bottom(row: Rect) -> f32 {
 }
 
 impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
+    fn on_panel_opened(&self, world: &World, state: &mut WeaponSettingsGuiState) {
+        self.prepare_state_on_frob(state);
+        let target = world.borrow::<shipyard::UniqueView<WeaponSettingsTarget>>();
+        if let Ok(target) = target {
+            if let (Some(weapon), Some(device)) = (target.entity, target.upgrade_device) {
+                state.upgrade_weapon = Some(weapon);
+                state.chooser = Some(UpgradeChooser {
+                    tier: crate::weapon_installation::state(world, weapon).tier(),
+                    selected: None,
+                    payment: Payment::Device(device),
+                });
+            }
+        }
+    }
     fn get_components(
         &self,
-        _cursor: &Option<GuiCursor>,
+        cursor: &Option<GuiCursor>,
         _entity_id: EntityId,
         world: &World,
         state: &WeaponSettingsGuiState,
@@ -343,8 +368,11 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             };
         };
 
+        if state.upgrade_weapon.is_some_and(|target| target != weapon) {
+            return components;
+        }
         if let Some(chooser) = &state.chooser {
-            return upgrade_chooser::draw(world, weapon, chooser);
+            return upgrade_chooser::draw(world, weapon, chooser, cursor);
         }
         if let Some((job, diff, board)) = &state.board {
             let shown_diff = if matches!(board.phase, HackPhase::Won | HackPhase::Lost) {
@@ -357,7 +385,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 // already carries the next one.
                 HrmJob::Modify(level) => weapon_modification::description(world, weapon, *level),
                 HrmJob::Upgrade(choice, _) => format!(
-                    "Install {}. +8% base damage, -5% base wear.",
+                    "{}\n+8% dmg, -5% wear.",
                     crate::weapon_installation::label(*choice)
                 ),
                 HrmJob::Repair => repair_goal(world),
@@ -392,12 +420,15 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         for setting in 0..2i32 {
             let row = ROWS[setting as usize];
             let header = script_util::gun_setting_header(world, weapon, setting);
-            let Some(line) = row_text(
+            let Some(mut line) = row_text(
                 header.as_deref(),
                 script_util::gun_setting_description(world, weapon, setting).as_deref(),
             ) else {
                 continue;
             };
+            if setting == 1 && !crate::weapon_installation::alternate_unlocked(world, weapon) {
+                line = "Alternate fire locked. Unlock it with Modify.".into();
+            }
             // The highlight and the click target are one rect: both are `row`.
             if setting == current {
                 components.push(
@@ -506,20 +537,32 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         let Some(weapon) = WeaponSettingsTarget::resolve(world) else {
             return (state.clone(), Effect::NoEffect);
         };
+        if state.upgrade_weapon.is_some_and(|target| target != weapon) {
+            return (WeaponSettingsGuiState::default(), Effect::NoEffect);
+        }
         match msg {
             WeaponSettingsGuiMsg::Modify
                 if crate::weapon_installation::supported(world, weapon) =>
             {
                 return (
                     WeaponSettingsGuiState {
+                        upgrade_weapon: Some(weapon),
                         chooser: Some(UpgradeChooser {
                             tier: crate::weapon_installation::state(world, weapon).tier(),
                             selected: None,
+                            payment: Payment::Modify,
                         }),
                         ..Default::default()
                     },
                     Effect::NoEffect,
                 );
+            }
+            WeaponSettingsGuiMsg::UpgradePayment(payment) => {
+                let mut next = state.clone();
+                if let Some(chooser) = &mut next.chooser {
+                    chooser.payment = *payment;
+                }
+                return (next, Effect::NoEffect);
             }
             WeaponSettingsGuiMsg::ChooseUpgrade(choice) => {
                 let mut next = state.clone();
@@ -538,11 +581,32 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 let Some(choice) = chooser.selected else {
                     return (state.clone(), Effect::NoEffect);
                 };
+                if matches!(chooser.payment, Payment::Device(_)) {
+                    return match crate::weapon_installation::validate(
+                        world,
+                        weapon,
+                        choice,
+                        chooser.tier,
+                        chooser.payment,
+                    ) {
+                        Ok(_) => (
+                            WeaponSettingsGuiState::default(),
+                            Effect::InstallWeaponUpgrade {
+                                entity_id: weapon,
+                                choice,
+                                expected_tier: chooser.tier,
+                                payment: chooser.payment,
+                            },
+                        ),
+                        Err(text) => (state.clone(), Effect::ShowMessage { text }),
+                    };
+                }
                 let job = HrmJob::Upgrade(choice, chooser.tier);
                 return match job.quote(world, weapon) {
                     Ok(diff) => (
                         WeaponSettingsGuiState {
                             board: Some((job, diff, HackState::default())),
+                            upgrade_weapon: Some(weapon),
                             ..Default::default()
                         },
                         Effect::NoEffect,
@@ -646,6 +710,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                                 entity_id: weapon,
                                 choice,
                                 expected_tier,
+                                payment: Payment::Modify,
                             },
                         ]);
                     }
@@ -653,7 +718,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 return (
                     WeaponSettingsGuiState {
                         board: Some((*job, diff, board)),
-                        ..Default::default()
+                        ..state.clone()
                     },
                     effect,
                 );
@@ -846,6 +911,44 @@ mod tests {
         assert!(!drawn.iter().any(|c| matches!(c,
             GuiComponent::Button { label: Some(label), .. } if label == "start-hack"
         )));
+    }
+
+    #[test]
+    fn an_upgrade_selection_cannot_move_to_another_weapon() {
+        let (mut world, weapon) = pistol_world(0);
+        world.add_component(
+            weapon,
+            PropScripts {
+                scripts: vec!["PistolModify".into()],
+                inherits: false,
+            },
+        );
+        let (state, _) = WeaponSettingsGui.handle_msg(
+            EntityId::dead(),
+            &world,
+            &WeaponSettingsGuiState::default(),
+            &WeaponSettingsGuiMsg::Modify,
+        );
+        let (state, _) = WeaponSettingsGui.handle_msg(
+            EntityId::dead(),
+            &world,
+            &state,
+            &WeaponSettingsGuiMsg::ChooseUpgrade(WeaponUpgrade::ExtendedCapacity),
+        );
+        let other = world.add_entity(gun_state(0, 0));
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .right_hand_entity_id = Some(other);
+        WeaponSettingsTarget::select(&world, other);
+        let (state, effect) = WeaponSettingsGui.handle_msg(
+            EntityId::dead(),
+            &world,
+            &state,
+            &WeaponSettingsGuiMsg::ConfirmUpgrade,
+        );
+        assert!(state.chooser.is_none());
+        assert!(matches!(effect, Effect::NoEffect));
     }
 
     #[test]

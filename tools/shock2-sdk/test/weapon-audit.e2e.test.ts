@@ -1,3 +1,4 @@
+import { unlockPistolAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -29,6 +30,7 @@ for (const vr of [false, true]) for (const row of cases) {
       await game.step({ frames: 3 });
     }
     if (row.setting) {
+      if (row.weaponTemplate === -17) await unlockPistolAlternateFire(game);
       await game.input.trigger("CycleGunSetting");
       await game.step({ frames: 2 });
     }

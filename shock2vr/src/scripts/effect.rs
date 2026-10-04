@@ -255,6 +255,7 @@ pub enum Effect {
         entity_id: EntityId,
         choice: crate::weapon_upgrades::WeaponUpgrade,
         expected_tier: usize,
+        payment: crate::weapon_installation::Payment,
     },
     ToggleImplant {
         entity_id: EntityId,
@@ -368,6 +369,7 @@ pub enum Effect {
     /// None. An explicit target that was put away never falls back.
     OpenWeaponSettings {
         weapon: Option<EntityId>,
+        upgrade_device: Option<EntityId>,
     },
 
     /// Eject `entity_id`'s magazine back to the backpack, as clips of the ammo
