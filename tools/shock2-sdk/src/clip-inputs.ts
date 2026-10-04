@@ -8,8 +8,9 @@ import type { Game } from "./game.js";
  *
  * - `duration`: seconds of simulation recorded (60 Hz fixed step).
  * - `parts`: per controller part, `[t, value]` keyframes in ascending `t`
- *   (seconds; `t = 0` is the video's first frame). A value holds until the next
- *   keyframe; before the first keyframe a part is at rest (0, or `[0, 0]`).
+ *   (seconds; `t = 0` is the video's first frame, and each `t` is the first
+ *   video frame showing the input). A value holds until the next keyframe;
+ *   before the first keyframe a part is at rest (0, or `[0, 0]`).
  *
  * Part keys are `<hand>.<part>`, hand `L`/`R`, part one of:
  * `stick` (`[x, y]`, +y forward), `click` (stick click), `trigger`, `grip`,
@@ -61,6 +62,8 @@ export function actionPart(action: string): string | null {
  * (`set`, `trigger`, `hold`, `release`), stamped with the simulation time
  * counted from `game.step` results. Create it before the clip's first
  * `game.step`, or call `start()` there; `write()` saves the timeline.
+ * `fps` is the video's frame rate: a screenshot every `60 / fps` sim frames,
+ * the first after the first step.
  */
 export class ClipInputRecorder {
   /** Sim frames stepped since the recorder was created. */
@@ -71,7 +74,10 @@ export class ClipInputRecorder {
   private crouch = 0;
   private readonly restore: () => void;
 
-  constructor(game: Game) {
+  constructor(
+    game: Game,
+    private readonly fps = 15,
+  ) {
     const { input } = game;
     const original = { set: input.set, trigger: input.trigger, hold: input.hold, release: input.release, step: game.step };
     input.set = async (channel, value) => {
@@ -149,8 +155,11 @@ export class ClipInputRecorder {
   }
 
   private pulse(part: string): void {
+    // Already held (by `hold`), with no pulse release pending: stays held.
+    const last = this.track(part).at(-1);
+    const held = last !== undefined && last[0] <= this.now && last[1] === 1;
     this.level(part, 1);
-    this.track(part).push([this.now + PRESS_SECONDS, 0]);
+    if (!held) this.track(part).push([this.now + PRESS_SECONDS, 0]);
   }
 
   /** The timeline since `start()` (or creation). */
@@ -160,7 +169,11 @@ export class ClipInputRecorder {
     for (const [part, track] of this.tracks) {
       const out: InputKeyframe[] = [];
       for (const [t, value] of track) {
-        const at = Math.max(0, Math.round((t - origin) * 1e4) / 1e4);
+        // Input set before sim frame k first shows in the screenshot after
+        // step k + 1, i.e. video frame ceil(k / (60 / fps)).
+        const frame = Math.max(0, Math.ceil((t - origin) * this.fps - 1e-6));
+        // Rounded down, so the page never samples a frame start just before it.
+        const at = Math.floor((frame / this.fps) * 1e4 + 1e-6) / 1e4;
         // A later write at the same instant wins; an unchanged value adds nothing.
         if (out.length && out[out.length - 1][0] === at) out.pop();
         const previous = out.length ? out[out.length - 1][1] : rest(value);
@@ -178,8 +191,8 @@ export class ClipInputRecorder {
 }
 
 /** Start recording `game`'s controller inputs for a clip. */
-export function recordClipInputs(game: Game): ClipInputRecorder {
-  return new ClipInputRecorder(game);
+export function recordClipInputs(game: Game, options?: { fps?: number }): ClipInputRecorder {
+  return new ClipInputRecorder(game, options?.fps);
 }
 
 const rest = (value: PartValue): PartValue => (Array.isArray(value) ? [0, 0] : 0);

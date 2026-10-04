@@ -230,8 +230,9 @@ await inputs.write(`${out}/${clip}.inputs.json`);
 inputs.dispose();
 ```
 
-Time is simulation time from `game.step` results, so it lines up with any
-capture cadence of the 60 Hz sim. Only Touch controls are recorded (sticks,
+Time is simulation time from `game.step` results, snapped to the video frame
+that first shows each input: a screenshot every 4th sim frame (15 fps) by
+default, `recordClipInputs(game, { fps })` otherwise. Only Touch controls are recorded (sticks,
 trigger, squeeze, the raw face buttons, `MenuButton`, `crouch` as a left stick
 click); tracking channels are not. The format and mapping are documented in
 `src/clip-inputs.ts`.

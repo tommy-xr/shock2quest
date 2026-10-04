@@ -86,7 +86,8 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
       for (const [part, { meshes, responses }] of Object.entries(parts)) {
         const on = hot.has(part);
         meshes.forEach((m) => (m.material = on ? m.userData.hot : m.userData.base));
-        if (!on) responses.forEach((r) => { r.value.position.copy(r.rest.p); r.value.quaternion.copy(r.rest.q); });
+        // Hot parts are re-posed by the next frame; a replayed stick click is not.
+        responses.forEach((r) => { r.value.position.copy(r.rest.p); r.value.quaternion.copy(r.rest.q); });
       }
     }
   }
