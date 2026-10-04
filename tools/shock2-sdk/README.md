@@ -213,6 +213,29 @@ Walking is time-bounded, not distance-bounded, and neither API plans a route
 around obstacles. A closed door still requires opening; teleport is not the
 walking fallback.
 
+## Recording a clip's controller inputs
+
+The website's Controls section poses its 3D Touch controllers from the inputs a
+clip was filmed with. While capturing, record them and write
+`<clip>.inputs.json` beside `<clip>.mp4`:
+
+```ts
+import { recordClipInputs } from "@shock2vr/sdk";
+
+const inputs = recordClipInputs(game); // wraps game.input.* and game.step
+// ...setup (held inputs carry over)...
+inputs.start(); // just before the step whose screenshot is the video's first frame
+// ...drive game.input.set / trigger / hold / release and game.step, capturing...
+await inputs.write(`${out}/${clip}.inputs.json`);
+inputs.dispose();
+```
+
+Time is simulation time from `game.step` results, so it lines up with any
+capture cadence of the 60 Hz sim. Only Touch controls are recorded (sticks,
+trigger, squeeze, the raw face buttons, `MenuButton`, `crouch` as a left stick
+click); tracking channels are not. The format and mapping are documented in
+`src/clip-inputs.ts`.
+
 ## Notes
 
 - `GameServer.launch` finds the cargo workspace by walking up from `cwd`;

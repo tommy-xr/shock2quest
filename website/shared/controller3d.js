@@ -97,22 +97,20 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
     r.value.quaternion.slerpQuaternions(r.min.quaternion, r.max.quaternion, t);
   };
 
-  // Pose every part as the clip's inputs had it at the video's current time:
-  // pressed parts glow full, the mode's other parts dimly.
+  // Pose every part as the clip's inputs had it at the video's current time;
+  // a part glows while pressed.
   const replay = ({ video, timeline }) => {
     const state = sampleInputs(timeline, video.currentTime);
     for (const [hand, { parts }] of Object.entries(hands)) {
-      const hot = new Set(mode.hot[hand]);
       for (const [part, { meshes, responses }] of Object.entries(parts)) {
         const s = state[hand][part];
         responses.forEach((r, i) => {
           if (s) pose(r, s.pose[i]);
           else { r.value.position.copy(r.rest.p); r.value.quaternion.copy(r.rest.q); }
         });
-        const on = s?.pressed || hot.has(part);
         meshes.forEach((m) => {
-          m.material = on ? m.userData.hot : m.userData.base;
-          if (on) m.material.emissiveIntensity = s?.pressed ? 1 : 0.3;
+          m.userData.hot.emissiveIntensity = 0.9; // the idle animation pulses it
+          m.material = s?.pressed ? m.userData.hot : m.userData.base;
         });
       }
     }
