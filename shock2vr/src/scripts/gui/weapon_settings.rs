@@ -352,11 +352,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             components.extend(draw_plug(kind, Some((msg, label))));
         }
 
-        let modification = world
-            .borrow::<View<PropGunState>>()
-            .ok()
-            .and_then(|v| v.get(weapon).ok().map(|state| state.modification))
-            .unwrap_or(0);
+        let modification = weapon_modification::level(world, weapon).unwrap_or(0);
         // Retail draws every settings line in the MFD font (MAINAA, cyan).
         let line_h = super::PanelText::line_height(world);
         components.push(super::PanelText::text(

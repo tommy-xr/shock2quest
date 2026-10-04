@@ -46,6 +46,11 @@ fn kind(world: &World, weapon: EntityId) -> Option<Kind> {
         })
 }
 pub fn level(world: &World, weapon: EntityId) -> Option<i32> {
+    if let Ok(upgrades) = world.borrow::<View<crate::weapon_upgrades::WeaponUpgrades>>() {
+        if let Ok(upgrades) = upgrades.get(weapon) {
+            return Some(upgrades.tier() as i32);
+        }
+    }
     world
         .borrow::<View<PropGunState>>()
         .ok()?
@@ -55,6 +60,12 @@ pub fn level(world: &World, weapon: EntityId) -> Option<i32> {
 }
 pub fn supported(world: &World, weapon: EntityId) -> bool {
     kind(world, weapon).is_some()
+}
+
+/// Stasis stimulus controls a non-damaging effect and must not receive the
+/// generic damage bonus. Its family-specific alternative remains a later step.
+pub(crate) fn scales_damage(world: &World, weapon: EntityId) -> bool {
+    kind(world, weapon) != Some(Kind::Stasis)
 }
 
 /// What modifying `weapon` from `level` does: its authored `P$Modify1` /
@@ -101,6 +112,14 @@ fn effect_summary(world: &World, weapon: EntityId, level: i32) -> &'static str {
 }
 
 pub fn quote(world: &World, weapon: EntityId) -> Result<PropHackDiff, String> {
+    // The selectable flow derives stats from an unchanged base. Never let a
+    // legacy paid attempt mutate that base underneath installed choices.
+    if world
+        .borrow::<View<crate::weapon_upgrades::WeaponUpgrades>>()
+        .is_ok_and(|upgrades| upgrades.contains(weapon))
+    {
+        return Err("This weapon uses selectable modifications.".into());
+    }
     if crate::wielded_weapon::resolve_weapon_target(world, Some(weapon)) != Some(weapon)
         && !crate::scripts::gui::WeaponSettingsTarget::permits_device_job(world, weapon)
     {
@@ -250,6 +269,25 @@ pub fn apply(world: &mut World, weapon: EntityId, expected_level: i32) -> bool {
 mod tests {
     use super::*;
     use dark::properties::GunSettingDesc;
+
+    #[test]
+    fn selectable_upgrades_prevent_legacy_modification_of_the_base() {
+        use crate::weapon_upgrades::{UpgradeSource, WeaponUpgrade, WeaponUpgrades};
+        let mut world = World::new();
+        let upgrades = WeaponUpgrades::default()
+            .with_upgrade(
+                WeaponUpgrade::ExtendedCapacity,
+                &WeaponUpgrade::ALL,
+                UpgradeSource::Modify,
+                0,
+            )
+            .unwrap();
+        let weapon = world.add_entity(upgrades);
+        assert_eq!(level(&world, weapon), Some(1));
+        assert!(quote(&world, weapon).unwrap_err().contains("selectable"));
+        assert!(!apply(&mut world, weapon, 1));
+        assert_eq!(level(&world, weapon), Some(1));
+    }
     #[test]
     fn modifications_are_sequential_and_leave_unused_setting_alone() {
         let base = GunSettingDesc {

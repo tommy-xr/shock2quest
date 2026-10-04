@@ -18450,7 +18450,8 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 if let Ok(gun_state) = v_gun_state.get(id) {
                     properties.push(DebugPropertyInfo {
                         name: "Modification".into(),
-                        value: gun_state.modification.to_string(),
+                        value: crate::weapon_modification::level(&self.world, id)
+                            .unwrap_or(gun_state.modification).to_string(),
                     });
                     if let Ok(desc) = self
                         .world
@@ -18461,6 +18462,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         properties.push(DebugPropertyInfo {
                             name: "GunDescription".into(),
                             value: serde_json::to_string(desc).unwrap(),
+                        });
+                    }
+                    if let Some(setting) = crate::scripts::script_util::active_gun_setting(&self.world, id) {
+                        properties.push(DebugPropertyInfo {
+                            name: "EffectiveGunSetting".into(),
+                            value: serde_json::to_string(&setting).unwrap(),
                         });
                     }
                     properties.push(DebugPropertyInfo {

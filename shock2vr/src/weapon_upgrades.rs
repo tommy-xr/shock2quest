@@ -1,5 +1,6 @@
 //! Persistent choices for the new modification flow, separate from retail's
-//! mutable descriptors. This foundation does not yet enroll live weapons.
+//! mutable descriptors. Installation enrolls a weapon by adding this component;
+//! shared stat consumers evaluate it against an unmodified base description.
 //!
 //! The installation caller supplies family eligibility and verifies ownership,
 //! condition, skill and payment. Only the mission effect applier may commit the
@@ -166,7 +167,9 @@ impl WeaponUpgrades {
     pub fn effective_setting(&self, base: &GunSettingDesc, scales_damage: bool) -> GunSettingDesc {
         let mut setting = base.clone();
         if scales_damage {
-            setting.stim_modifier *= self.damage_multiplier();
+            setting.stim_modifier =
+                crate::scripts::script_util::shot_multiplier(base.stim_modifier)
+                    * self.damage_multiplier();
         }
         if self.has(WeaponUpgrade::ExtendedCapacity) && setting.clip > 0 {
             setting.clip = setting.clip.saturating_mul(2);

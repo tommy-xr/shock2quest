@@ -142,6 +142,50 @@ mod tests {
     }
 
     #[test]
+    fn recharge_uses_upgraded_capacity_without_granting_charge_on_evaluation() {
+        use crate::weapon_upgrades::{UpgradeSource, WeaponUpgrade, WeaponUpgrades};
+        let mut world = World::new();
+        let upgrades = WeaponUpgrades::default()
+            .with_upgrade(
+                WeaponUpgrade::ExtendedCapacity,
+                &WeaponUpgrade::ALL,
+                UpgradeSource::Modify,
+                0,
+            )
+            .unwrap();
+        let weapon = world.add_entity((gun_desc(100), gun_state(37), upgrades));
+        let effect = recharge(&world, weapon);
+        assert_eq!(
+            world
+                .borrow::<View<PropGunState>>()
+                .unwrap()
+                .get(weapon)
+                .unwrap()
+                .ammo,
+            37
+        );
+        let Effect::RechargeAmmo { capacity, .. } = effect else {
+            panic!("expected recharge");
+        };
+        assert_eq!(capacity, 200);
+        {
+            let mut states = world.borrow::<ViewMut<PropGunState>>().unwrap();
+            recharge_ammo_to_capacity((&mut states).get(weapon).unwrap(), capacity);
+        }
+        assert!(matches!(recharge(&world, weapon), Effect::NoEffect));
+        assert_eq!(
+            world
+                .borrow::<View<PropBaseGunDesc>>()
+                .unwrap()
+                .get(weapon)
+                .unwrap()
+                .settings[0]
+                .clip,
+            100
+        );
+    }
+
+    #[test]
     fn recharge_does_not_reduce_over_capacity_charge() {
         let mut world = World::new();
         let weapon = world.add_entity((gun_desc(100), gun_state(125)));
