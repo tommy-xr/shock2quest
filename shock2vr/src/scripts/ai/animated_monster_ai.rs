@@ -615,6 +615,20 @@ impl AnimatedMonsterAI {
     /// it is flagged to and a route exists, otherwise stand idle. Falls back to
     /// idle when the mission has no patrol network reachable from here.
     fn idle_behavior(&self, world: &World, entity_id: EntityId) -> Box<RefCell<dyn Behavior>> {
+        // A named creature pose is a staged actor, not a standing guard.
+        // Before a performance it keeps the baked pose; afterward it holds
+        // the performance's terminal pose instead of standing back up.
+        if world
+            .borrow::<View<dark::properties::PropCreaturePose>>()
+            .unwrap()
+            .get(entity_id)
+            .is_ok_and(|pose| {
+                pose.pose_type
+                    .contains(dark::properties::PoseType::MOTION_NAME)
+            })
+        {
+            return Box::new(RefCell::new(NoopBehavior));
+        }
         // A creature excluded from awareness entirely (an apparition - see
         // `build_config`) can never see the player, so it has nothing to
         // look around for and no reason to leave its mark: it holds the
