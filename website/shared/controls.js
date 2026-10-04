@@ -8,7 +8,7 @@ export const MODES = [
     title: "Movement",
     blurb: "Smooth locomotion. Crouch for real, or click the stick.",
     hot: { L: ["stick", "lower"], R: ["stick", "lower"] },
-    clip: null,
+    clip: "movement",
     rows: [
       ["Right stick", "Walk / strafe"],
       ["Left stick ← →", "Turn"],
