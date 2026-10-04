@@ -81,7 +81,7 @@ impl<'a> ObjectLighting<'a> {
 
 /// `lights` with its ambient brightened until its strongest channel reaches
 /// `floor`, keeping the room's tint; a black ambient becomes grey.
-fn with_ambient_floor(mut lights: LightArray, floor: f32) -> LightArray {
+pub(crate) fn with_ambient_floor(mut lights: LightArray, floor: f32) -> LightArray {
     let strongest = lights.ambient.x.max(lights.ambient.y).max(lights.ambient.z);
     if strongest < floor {
         lights.ambient = if strongest > 1e-4 {

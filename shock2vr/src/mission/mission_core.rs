@@ -2955,6 +2955,7 @@ pub struct MissionCore {
     vr_clip_insert_engaged: [bool; 2],
     shoulder_backpack: super::shoulder_backpack::ShoulderBackpack,
     holsters: super::holsters::Holsters,
+    debug_body: super::debug_body::DebugBody,
     implant_sockets: super::implant_sockets::Sockets,
     ammo_pouch: super::ammo_pouch::AmmoPouch,
     personal_card: super::personal_card::PersonalCard,
@@ -3879,6 +3880,7 @@ impl MissionCore {
             body_hand_contacts: [None; 2],
             download_release_disarmed: [false; 2],
             holsters: Default::default(),
+            debug_body: Default::default(),
             implant_sockets: Default::default(),
             ammo_pouch: Default::default(),
             personal_card: Default::default(),
@@ -21496,6 +21498,46 @@ impl crate::game_scene::GameScene for MissionCore {
             game_options,
             command_effects,
         )
+    }
+
+    fn render_debug_body(&mut self, assets: &mut AssetCache) -> Vec<SceneObject> {
+        let Some(body) = self.holsters.body_pose else {
+            return Vec::new();
+        };
+        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+        let rotation = self.holsters.world_rotation(player.rotation);
+        let center = player.pos
+            + player.rotation.rotate_vector(body.front(
+                crate::dev_params::get(crate::dev_params::VR_BELT_DROP),
+                crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) - 0.30,
+            ));
+        let lights = crate::object_lighting::ObjectLighting::for_scene(
+            self.spatial_data.as_deref(),
+            self.animated_lightmaps
+                .as_ref()
+                .map(|c| c.light_intensities()),
+            player.pos,
+            self.environment.clone(),
+        )
+        .map(|lighting| lighting.at_player_position(center))
+        .unwrap_or_else(|| {
+            // Synthetic scenes have no authored light database, but the body
+            // must remain readable just like player-held equipment.
+            std::rc::Rc::new(crate::object_lighting::with_ambient_floor(
+                engine::scene::light::LightArray::new(),
+                crate::dev_params::get(crate::dev_params::HELD_LIGHT_FLOOR),
+            ))
+        });
+        let mut objects = self.debug_body.render(
+            assets,
+            center,
+            rotation,
+            self.interaction.body_wrist_frames(),
+        );
+        for object in &mut objects {
+            object.set_lights(Some(lights.clone()));
+        }
+        objects
     }
 
     fn render(

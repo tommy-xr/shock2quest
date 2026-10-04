@@ -2711,6 +2711,18 @@ impl Game {
             .active_game_scene
             .render(&mut self.asset_cache, &self.options);
 
+        if self.options.presentation_mode == PresentationMode::Vr
+            && self.free_camera.is_detached()
+            && dev_params::get_bool(dev_params::VR_DEBUG_BODY)
+            && !self.pause_menu.is_open()
+            && !self.player_visuals_hidden()
+        {
+            scene.extend(
+                self.active_game_scene
+                    .render_debug_body(&mut self.asset_cache),
+            );
+        }
+
         // While the menu is up it draws its own pointer hands, so the scene's
         // must not draw a second pair inside them (issue #1018). Dropped here,
         // by render-path label, rather than through a per-scene opt-in: every

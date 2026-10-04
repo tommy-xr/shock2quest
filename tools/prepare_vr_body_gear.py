@@ -1,4 +1,4 @@
-"""Prepare the Meshy belt/holster exports for the game's metre-scale mounts.
+"""Prepare Meshy body-gear exports for the game's metre-scale mounts.
 
 Requires Pillow and NumPy. See assets/source/vr-body-gear.md for usage.
 Keeps the source mesh and PBR maps; only placement and texture pixels change.
@@ -11,7 +11,7 @@ from pathlib import Path
 import struct
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 
 def prepare_body_gear(source, destination, kind, texture_size):
@@ -37,9 +37,15 @@ def prepare_body_gear(source, destination, kind, texture_size):
     # Meshy faces +Z; gameplay faces -Z. Match the previous belt's 42 cm
     # width and front at -30 cm, and the holster's 24 cm height / +1.7 cm center.
     scale = (0.42 / (maximum[0] - minimum[0]) if kind == "belt"
-             else 0.24 / (maximum[1] - minimum[1]))
-    translation = np.array([0.0, 0.0, -0.30 + (maximum[2] - minimum[2]) * scale / 2]
-                           if kind == "belt" else [0.0, 0.017, 0.0])
+             else (0.44 if kind == "backpack" else 0.24) / (maximum[1] - minimum[1]))
+    if kind == "belt":
+        translation = [0.0, 0.0, -0.30 + (maximum[2] - minimum[2]) * scale / 2]
+    elif kind == "backpack":
+        # Centre-height attachment on its flat back: the bag extends toward -Z.
+        translation = [0.0, 0.0, -(maximum[2] - minimum[2]) * scale / 2]
+    else:
+        translation = [0.0, 0.017, 0.0]
+    translation = np.array(translation)
     for semantic in ("POSITION", "NORMAL", "TANGENT"):
         if semantic not in primitive["attributes"]:
             continue
@@ -86,6 +92,12 @@ def prepare_body_gear(source, destination, kind, texture_size):
             # Match the belt's base-color luminance (0.116 vs 0.191 before
             # adjustment), preserving the holster's hue and worn detail.
             pixels = pixels.point(lambda value: round(value * 0.61))
+        if kind == "backpack" and index in color_images:
+            # Source mean luminance 0.194; belt/holster both 0.116. Match their
+            # charcoal finish and soften the brighter baked wear highlights.
+            # Keep UV islands, scratches and all PBR data in their authored places.
+            pixels = ImageEnhance.Contrast(pixels).enhance(0.90)
+            pixels = ImageEnhance.Brightness(pixels).enhance(0.60)
         if index in normal_images:
             normals = np.array(pixels).astype(np.float32) / 127.5 - 1
             normals /= np.maximum(np.linalg.norm(normals, axis=2, keepdims=True), 1e-6)
@@ -121,13 +133,17 @@ def prepare_body_gear(source, destination, kind, texture_size):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--belt", type=Path, required=True)
-    parser.add_argument("--holster", type=Path, required=True)
+    parser.add_argument("--belt", type=Path)
+    parser.add_argument("--holster", type=Path)
+    parser.add_argument("--backpack", type=Path)
     parser.add_argument("--texture-size", type=int, default=1024)
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parents[1] / "assets")
     args = parser.parse_args()
+    kinds = [kind for kind in ("belt", "holster", "backpack") if getattr(args, kind)]
+    if not kinds:
+        parser.error("provide at least one of --belt, --holster or --backpack")
     if args.texture_size < 1:
         parser.error("--texture-size must be positive")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    for kind in ("belt", "holster"):
+    for kind in kinds:
         prepare_body_gear(getattr(args, kind), args.output_dir / f"{kind}.glb", kind, args.texture_size)
