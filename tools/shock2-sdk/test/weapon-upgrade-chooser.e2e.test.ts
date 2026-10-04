@@ -45,6 +45,12 @@ for (const vr of [false, true]) {
         await game.entities.sendMessage(device.entity_id, { type: "Frob" });
       }
       await game.step({ frames: 20 });
+      const offered = await elements(game);
+      assert.equal(offered.some(e => e.label === "upgrade_LowMaintenanceII"), tier === 2,
+        "Low Maintenance II appears only after I is installed");
+      for (const installed of choices.slice(0, tier)) {
+        assert.ok(!offered.some(e => e.label === `upgrade_${installed}`), `${installed} is no longer offered`);
+      }
       if (tier === 0) {
         await clickUpgradeControl(game, "upgrade_Laser");
         assert.ok(!(await elements(game)).some(e => e.label === "upgrade_confirm"), "unfinished effects cannot be purchased");
@@ -73,7 +79,9 @@ for (const vr of [false, true]) {
     const spare = await game.player.spawnItem(-1488);
     await game.entities.sendMessage(spare.entity_id, { type: "Frob" });
     await game.step({ frames: 3 });
-    await clickUpgradeControl(game, "upgrade_ExtendedCapacity");
+    const completed = await elements(game);
+    assert.ok(choices.every(choice => !completed.some(e => e.label === `upgrade_${choice}`)), "installed upgrades stay filtered at the cap");
+    await clickUpgradeControl(game, "upgrade_Laser");
     assert.ok(!(await elements(game)).some(e => e.label === "upgrade_confirm"), "a fifth installation is unavailable");
     assert.ok((await game.entities.byTemplate(-1488)).some(e => e.id === spare.entity_id));
     for (let n = 0; n < 3 && (await game.ui.state()).mode === "use"; n++) {

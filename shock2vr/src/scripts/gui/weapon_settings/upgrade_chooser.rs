@@ -14,30 +14,41 @@ fn button(
     text: &str,
     rect: Rect,
     selected: bool,
+    cursor: &Option<GuiCursor>,
 ) -> Vec<GuiComponent<WeaponSettingsGuiMsg>> {
-    vec![
+    let hovered = cursor
+        .as_ref()
+        .is_some_and(|c| rect.contains(vec2(c.position.x, c.position.y)));
+    let mut out = vec![
         gui::button(msg)
             .with_rect(rect)
             .with_label(label)
-            .with_image(if selected {
-                "iface/tbut11.pcx"
-            } else {
-                "iface/tbutmax.pcx"
-            })
-            .with_hover(ButtonHoverBehavior::Texture("iface/tbut11.pcx".into()))
+            .with_image("iface/tbutmax.pcx")
+            .with_nine_slice([90.0, 32.0], [3.0; 4])
             .with_alpha(1.0),
-        super::super::PanelText::text(
-            text,
-            Rect::new(rect.x + 5.0, rect.y + 4.0, rect.w - 19.0, rect.h - 6.0),
-        ),
-    ]
+    ];
+    // TBUT11 has a baked arrow in its stretchable centre. Use the unlabelled
+    // retail bevel and highlight only its interior, leaving every border intact.
+    if selected || hovered {
+        out.push(GuiComponent::Fill {
+            position: vec2(rect.x + 3.0, rect.y + 3.0),
+            size: vec2(rect.w - 6.0, rect.h - 6.0),
+            color: if selected { [0, 112, 88] } else { [0, 76, 60] },
+            alpha: 1.0,
+        });
+    }
+    out.push(super::super::PanelText::text(
+        text,
+        Rect::new(rect.x + 6.0, rect.y + 4.0, rect.w - 12.0, rect.h - 6.0),
+    ));
+    out
 }
 
 pub(super) fn draw(
     world: &World,
     weapon: EntityId,
     chooser: &UpgradeChooser,
-    _cursor: &Option<GuiCursor>,
+    cursor: &Option<GuiCursor>,
 ) -> Vec<GuiComponent<WeaponSettingsGuiMsg>> {
     use super::super::PanelText;
     let upgrades = installation::state(world, weapon);
@@ -79,20 +90,20 @@ pub(super) fn draw(
             Rect::new(18.0, 28.0, 134.0, 11.0),
         ),
     ];
-    for (i, choice) in WeaponUpgrade::ALL.into_iter().enumerate() {
-        let installed = upgrades.has(choice);
-        let prefix = if installed {
-            "+ "
-        } else if chooser.selected == Some(choice) {
-            "> "
-        } else {
-            "  "
-        };
+    for (i, choice) in WeaponUpgrade::ALL
+        .into_iter()
+        .filter(|choice| !upgrades.has(*choice))
+        .filter(|choice| {
+            *choice != WeaponUpgrade::LowMaintenanceII
+                || upgrades.has(WeaponUpgrade::LowMaintenanceI)
+        })
+        .enumerate()
+    {
         out.extend(button(
             WeaponSettingsGuiMsg::ChooseUpgrade(choice),
             &format!("upgrade_{choice:?}"),
             &format!(
-                "{prefix}{}{}",
+                "{}{}",
                 installation::label(choice),
                 if installation::AVAILABLE.contains(&choice) {
                     ""
@@ -102,8 +113,9 @@ pub(super) fn draw(
             ),
             Rect::new(14.0, 44.0 + i as f32 * 19.0, 140.0, 18.0),
             chooser.selected == Some(choice),
+            cursor,
         ));
-        if !installed && !installation::AVAILABLE.contains(&choice) {
+        if !installation::AVAILABLE.contains(&choice) {
             if let Some(GuiComponent::Text { alpha, .. }) = out.last_mut() {
                 *alpha = 0.45;
             }
@@ -114,10 +126,7 @@ pub(super) fn draw(
             "Already installed. Choices are permanent.".to_owned()
         }
         Some(choice) => installation::preview(world, weapon, choice, chooser.tier, chooser.payment),
-        None => {
-            "+ marks installed upgrades. Select an upgrade to preview it. Choices are permanent."
-                .into()
-        }
+        None => "Select an upgrade to preview it. Choices are permanent.".into(),
     };
     out.extend(PanelText::paragraph(
         world,
@@ -140,6 +149,7 @@ pub(super) fn draw(
                 &text,
                 Rect::new(15.0, 242.0, 158.0, 21.0),
                 false,
+                cursor,
             )),
             Err(reason) if reason != info => out.extend(PanelText::paragraph(
                 world,
@@ -155,6 +165,7 @@ pub(super) fn draw(
         "Back",
         Rect::new(15.0, 267.0, 54.0, 21.0),
         false,
+        cursor,
     ));
     let switch = match chooser.payment {
         Payment::Modify => {
@@ -169,6 +180,7 @@ pub(super) fn draw(
             text,
             Rect::new(73.0, 267.0, 100.0, 21.0),
             false,
+            cursor,
         ));
     }
     out
