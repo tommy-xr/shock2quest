@@ -107,7 +107,7 @@ try {
     {id:'biometrics',label:'Wrist biometrics',prepare:async()=>{await stowMfd();await hands([-.3,.42,.34],[-.4,.75,-.28]);},
       // The implant target is on the pinky edge; move to the adjacent curved
       // health/psi band. This offset was checked against a rendered cuff.
-      target:async()=>add((await game.info()).player.hand_feedback.implant_sockets.centers[1],[.05,0,-.05]),offset:[-.35,.5,-.55],lookOffset:[.03,.04,0]},
+      target:async()=>add((await game.info()).player.hand_feedback.implant_sockets.centers[1],[.05,0,-.05]),offset:[-.35,.5,-.55],lookOffset:[.03,.04,0],anchorOffset:[-.03,.024,.042]},
     {id:'inventory',label:'Backpack inventory',prepare:stowMfd,
       target:async()=>add((await game.scene.fromSource('vr_debug_backpack'))[0].position,[.15,0,0]),offset:[1.15,.35,1.3],lookOffset:[-.08,-.03,0]},
   ];
@@ -134,17 +134,17 @@ try {
       const frame=join(folder,`frame-${String(i).padStart(3,'0')}.png`);
       await game.screenshot(frame);
       if(i===0) await copyFile(frame,join(output,`${clip.id}.png`));
-      const actualTarget=await clip.target();
+      const actualTarget=add(await clip.target(),clip.anchorOffset??[0,0,0]);
       const anchor=project(actualTarget,eye,lookAt);
       assert.ok(anchor.x>0&&anchor.x<1&&anchor.y>0&&anchor.y<1,`${clip.id} anchor in frame`);
       keyframes.push({time,...anchor});
     }
     if(!preview) {
-      keyframes.push({time:duration,...project(await clip.target(),cameraAt(duration),lookAt)});
+      keyframes.push({time:duration,...project(add(await clip.target(),clip.anchorOffset??[0,0,0]),cameraAt(duration),lookAt)});
       execFileSync('ffmpeg',['-hide_banner','-loglevel','error','-y','-framerate',String(fps),'-i',join(folder,'frame-%03d.png'),'-c:v','libx264','-crf','22','-preset','slow','-pix_fmt','yuv420p','-movflags','+faststart',join(output,`${clip.id}.mp4`)]);
     }
     metadata.clips.push({id:clip.id,label:clip.label,video:`${clip.id}.mp4`,poster:`${clip.id}.png`,duration,keyframes,
-      camera:{verticalFovDeg:fov,lookAt,target:point,offset:clip.offset,yawAmplitudeRadians:.12,elevationAmplitude:.025}});
+      camera:{verticalFovDeg:fov,lookAt,target:point,offset:clip.offset,anchorOffset:clip.anchorOffset??[0,0,0],yawAmplitudeRadians:.12,elevationAmplitude:.025}});
     console.log(`Captured ${clip.id}${preview?' preview':''}`);
   }
   await writeFile(join(output,'callouts.json'),JSON.stringify(metadata,null,2)+'\n');
