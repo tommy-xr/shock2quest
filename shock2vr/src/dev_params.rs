@@ -577,11 +577,11 @@ dev_params! {
     /// (walk / climb / top-out / airborne), over the world. Turning it off
     /// clears the trail; `GET /v1/player/trail` reads the samples.
     PLAYER_TRAIL = Visualizations::bool("player_trail", "Player trail", false),
+    /// How many seconds of simulated frames the player trail keeps.
+    PLAYER_TRAIL_SECONDS = Camera::float("player_trail_seconds", "Trail seconds", 20.0, 2.0, 120.0, 1.0),
     /// The player loses no hit points from any source, so never shows the hit
     /// tint or dies - keeps deterministic captures from being spoiled by damage.
     CHEAT = Root::bool("cheat", "Cheat: invulnerable", false),
-    /// How many seconds of simulated frames the player trail keeps.
-    PLAYER_TRAIL_SECONDS = Camera::float("player_trail_seconds", "Trail seconds", 20.0, 2.0, 120.0, 1.0),
     /// How fast the free camera flies, in the player's own speed units - the
     /// default IS [`PLAYER_MOVE_SPEED`], so "walking pace" cannot drift from
     /// what walking actually is. These are pre-scale SS2 units, not world

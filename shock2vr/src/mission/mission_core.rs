@@ -21686,7 +21686,8 @@ mod held_item_physics_tests {
 #[cfg(test)]
 mod hit_point_delta_tests {
     use dark::properties::PropHitPoints;
-    use shipyard::View;
+
+    use crate::scripts::ai::ai_util::hit_points;
 
     use super::*;
 
@@ -21697,15 +21698,6 @@ mod hit_point_delta_tests {
         (world, player, creature)
     }
 
-    fn hp(world: &World, id: EntityId) -> i32 {
-        world
-            .borrow::<View<PropHitPoints>>()
-            .unwrap()
-            .get(id)
-            .unwrap()
-            .hit_points
-    }
-
     #[test]
     fn invulnerable_player_loses_no_hit_points() {
         let (world, player, _) = world_with(40);
@@ -21713,7 +21705,7 @@ mod hit_point_delta_tests {
             apply_hit_point_delta(&world, player, player, -100, true),
             None
         );
-        assert_eq!(hp(&world, player), 40);
+        assert_eq!(hit_points(player, &world), Some(40));
     }
 
     #[test]
@@ -21736,6 +21728,6 @@ mod hit_point_delta_tests {
             apply_hit_point_delta(&world, player, player, -100, false),
             Some((40, 0))
         );
-        assert_eq!(hp(&world, player), 0);
+        assert_eq!(hit_points(player, &world), Some(0));
     }
 }
