@@ -1300,6 +1300,7 @@ impl ScriptWorld {
             // hydro1
             "transluceinout" => Box::new(UnimplementedScript::new(&script_name)),
             "freerepair" => Box::new(crate::item_tools::ItemTool),
+            "recycler" => Box::new(crate::item_tools::ItemTool),
             "cancerstick" => Box::new(UnimplementedScript::new(&script_name)),
 
             // hydro2

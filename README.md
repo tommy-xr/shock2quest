@@ -90,6 +90,8 @@ condition gained and the one-tool cost. Maintenance skill determines the gain;
 broken weapons need repair first. A refused use consumes nothing.
 Auto-repair devices use the same drag or close-contact gesture on a broken
 item, consume one device, and bypass the Repair skill and minigame.
+Recyclers use the same gesture to convert an item's entire stack into nanites;
+the preview shows its value. The recycler itself is reusable.
 
 Empty hands ease toward a partial point at usable controls or a partial grip
 near reachable items, occupied holsters, stocked ammo pouches, and climbing holds.
