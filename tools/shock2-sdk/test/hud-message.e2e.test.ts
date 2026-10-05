@@ -238,3 +238,37 @@ test(
     );
   },
 );
+
+test(
+  "vr: grabbing then releasing nanites reports the pickup once, on collection",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "earth.mis", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    const [pile] = await game.entities.byTemplate(257);
+    assert.ok(pile, "Earth nanite pile must be present");
+    const [x, y, z] = pile.position;
+    await game.player.teleport({ x: x + 0.3, y: y + 0.15, z: z + 0.3 });
+    await game.step({ frames: 120 });
+    const aim = await game.player.aimAt(pile.id, { hitbox: "center", visibility: "required" });
+    assert.ok(aim.target_confirmed);
+    const since = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
+
+    await aimVrHandAt(game, aim.world_point, 0.35, 0);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 12 });
+    assert.equal((await game.info()).player.right_hand_entity_id, pile.id);
+    assert.deepEqual((await game.ui.state()).messages, [], "a held pile is not collected yet");
+    await game.input.set("right_hand.position", [0.3, 0.9, -0.55]);
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 12 });
+
+    const messages = (await game.ui.state()).messages;
+    assert.equal(messages.filter(m => m.includes("picked up")).length, 1, JSON.stringify(messages));
+    assert.deepEqual(
+      (await game.audio.recent()).sounds.filter(sound => sound.sequence > since)
+        .map(sound => sound.sample.toLowerCase()).filter(sample => sample === "linebeep" || sample === "pickup"),
+      ["linebeep", "pickup"],
+    );
+  },
+);

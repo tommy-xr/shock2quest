@@ -428,6 +428,27 @@ fn inventory_transfer_sound(world: &World, item: EntityId) -> &'static str {
     }
 }
 
+/// A world-to-hand grab: the MOVE pickup line and cue, else the bare item cue.
+/// Download pickups report on collection (release), not on the grab.
+fn hand_pickup_feedback(
+    world: &World,
+    asset_cache: &mut AssetCache,
+    entity_id: EntityId,
+) -> Vec<Effect> {
+    if crate::scripts::script_util::is_download_pickup(world, entity_id) {
+        return Vec::new();
+    }
+    let feedback = world_pickup_feedback(world, asset_cache, entity_id);
+    if feedback.is_empty() {
+        vec![crate::scripts::script_util::announce(
+            entity_id,
+            "pickup_item",
+        )]
+    } else {
+        feedback
+    }
+}
+
 /// Retail's ordinary MOVE pickup has two cues in this order: posting its
 /// localized status line (which beeps centrally) and the distinct item sound.
 /// A SCRIPT-only log never enters this path.
@@ -12125,10 +12146,7 @@ impl MissionCore {
                         && inventory_transfer_sound(&self.world, entity_id) == "pickup_item";
                     effects.extend(self.grab_entity_into_hand(asset_cache, entity_id, hand));
                     if pickup && self.interaction.is_holding(entity_id) {
-                        effects.push_back(crate::scripts::script_util::announce(
-                            entity_id,
-                            "pickup_item",
-                        ));
+                        effects.extend(hand_pickup_feedback(&self.world, asset_cache, entity_id));
                     }
                 }
                 Effect::SetObjectParameters {
@@ -17123,16 +17141,7 @@ impl MissionCore {
                 }
                 VirtualHandEffect::HoldItem { entity_id } => {
                     if inventory_transfer_sound(&self.world, entity_id) == "pickup_item" {
-                        // A MOVE pickup's feedback already carries the item cue.
-                        let feedback = world_pickup_feedback(&self.world, asset_cache, entity_id);
-                        if feedback.is_empty() {
-                            deferred.push(crate::scripts::script_util::announce(
-                                entity_id,
-                                "pickup_item",
-                            ));
-                        } else {
-                            deferred.extend(feedback);
-                        }
+                        deferred.extend(hand_pickup_feedback(&self.world, asset_cache, entity_id));
                     }
                     self.thrown_items.cancel(entity_id);
                     self.thrown_items.publish(&self.world, &self.physics);
