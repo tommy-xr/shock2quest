@@ -655,6 +655,12 @@ fn run_game_blocking(
     let mut is_paused = true; // Start paused by default
     let mut step_requested = false;
     let mut accumulated_time = 0.0f32;
+    // The last advanced frame's clock, distinct from HTTP-loop wall time.
+    // Idle zero-dt maintenance must not overwrite its elapsed/total pair.
+    let mut snapshot_time = Time {
+        elapsed: Duration::ZERO,
+        total: Duration::ZERO,
+    };
     let mut shutdown_requested = false;
     let mut frame_counter = 0u64;
     // Snapshot of the objects submitted to the renderer on the last drawn
@@ -850,6 +856,7 @@ fn run_game_blocking(
                         other,
                         &mut game,
                         &game_time,
+                        &snapshot_time,
                         frame_counter,
                         &mut action_state,
                         &mut current_input,
@@ -931,6 +938,9 @@ fn run_game_blocking(
                 "game.update",
                 game.update(&game_time, &current_input, &mut action_state)
             );
+            // Use the selected fixed-step, recorded, or free-running clock
+            // verbatim; reporting must never choose or advance gameplay time.
+            snapshot_time = game_time.clone();
             if replay_frame.is_some() {
                 // The recorded frames after a transition were spent on the
                 // loading screen, which this runtime skips: stop rather than
@@ -1232,6 +1242,7 @@ fn process_command(
     command: RuntimeCommand,
     game: &mut Game,
     time: &Time,
+    snapshot_time: &Time,
     frame_counter: u64,
     action_state: &mut InputActionState,
     current_input: &mut InputContext,
@@ -1242,7 +1253,8 @@ fn process_command(
 ) {
     match command {
         RuntimeCommand::GetInfo(reply) => {
-            let snapshot = capture_frame_snapshot(game, time, frame_counter, current_input);
+            let snapshot =
+                capture_frame_snapshot(game, snapshot_time, frame_counter, current_input);
             if let Err(_) = reply.send(snapshot) {
                 tracing::warn!("Failed to send frame snapshot - receiver dropped");
             }
