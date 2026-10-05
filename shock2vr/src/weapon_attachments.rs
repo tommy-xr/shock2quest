@@ -248,8 +248,8 @@ pub(crate) fn render_lasers(
             Box::new(engine::scene::quad::create()),
         );
         dot.set_transform(Matrix4::from_cols(
-            (right * 0.055).extend(0.0),
-            (normal.cross(right) * 0.055).extend(0.0),
+            (right * 0.11).extend(0.0),
+            (normal.cross(right) * 0.11).extend(0.0),
             normal.extend(0.0),
             (trace.end + normal * 0.001).to_homogeneous(),
         ));
