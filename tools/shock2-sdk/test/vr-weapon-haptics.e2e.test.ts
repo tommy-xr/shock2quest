@@ -1,4 +1,4 @@
-import { unlockPistolAlternateFire } from "./helpers/weapon-upgrades.js";
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
@@ -16,7 +16,7 @@ for (const hand of ["left", "right"] as const) {
     await game.input.set(`${hand}_hand.position`, [hand === "left" ? -0.5 : 0.5, 1, -0.6]);
     await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
     await game.step({ frames: 10 });
-    await unlockPistolAlternateFire(game);
+    await unlockWeaponAlternateFire(game);
     await game.input.trigger("CycleGunSetting");
     await game.step({ frames: 2 });
     const rounds = async () => ammoOf(await game.entities.detail(gun.id));

@@ -247,10 +247,6 @@ pub enum Effect {
     ToggleHazardArmor {
         entity_id: EntityId,
     },
-    ModifyWeapon {
-        entity_id: EntityId,
-        expected_level: i32,
-    },
     InstallWeaponUpgrade {
         entity_id: EntityId,
         choice: crate::weapon_upgrades::WeaponUpgrade,

@@ -1,3 +1,4 @@
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer, setHandWorldPose, attachSupportHand } from "../src/index.js";
@@ -33,6 +34,7 @@ for (const [primary, mission, triple, physical] of [
       assert.ok(prop, "the fitted shotgun must enable its manual action");
       return JSON.parse(prop.value);
     };
+    if (triple) await unlockWeaponAlternateFire(game);
     const before = await support();
     assert.ok(before.pump, "support profile must expose the authored slider rail");
     const origin = v(before.controller_position);

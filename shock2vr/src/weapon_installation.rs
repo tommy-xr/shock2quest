@@ -1,5 +1,4 @@
-//! Selectable installation policy and its single commit point. Initially the
-//! pistol and AR15 use this flow; other families retain their retail path until audited.
+//! Selectable installation policy for ranged weapons and its single commit point.
 use dark::properties::{ObjectState, PropGunState};
 use shipyard::{EntityId, Get, View, World};
 
@@ -9,7 +8,7 @@ use crate::{
 };
 
 pub fn supported(world: &World, weapon: EntityId) -> bool {
-    silencer_compatible(world, weapon)
+    crate::weapon_modification::supported(world, weapon)
 }
 
 pub fn silencer_compatible(world: &World, weapon: EntityId) -> bool {
@@ -58,15 +57,17 @@ pub fn alternate_unlocked(world: &World, weapon: EntityId) -> bool {
     !supported(world, weapon) || state(world, weapon).has(WeaponUpgrade::AlternateFire)
 }
 
-pub const AVAILABLE: [WeaponUpgrade; 7] = [
-    WeaponUpgrade::Flashlight,
-    WeaponUpgrade::Laser,
-    WeaponUpgrade::Silencer,
-    WeaponUpgrade::LowMaintenanceI,
-    WeaponUpgrade::LowMaintenanceII,
-    WeaponUpgrade::ExtendedCapacity,
-    WeaponUpgrade::AlternateFire,
-];
+/// Every ranged family has two authored fire settings and a positive capacity.
+/// Silencers are the sole family-specific attachment in this first pass.
+pub fn available(world: &World, weapon: EntityId) -> Vec<WeaponUpgrade> {
+    if !supported(world, weapon) {
+        return Vec::new();
+    }
+    WeaponUpgrade::ALL
+        .into_iter()
+        .filter(|choice| *choice != WeaponUpgrade::Silencer || silencer_compatible(world, weapon))
+        .collect()
+}
 
 pub fn label(choice: WeaponUpgrade) -> &'static str {
     match choice {
@@ -88,7 +89,7 @@ pub fn validate(
     payment: Payment,
 ) -> Result<WeaponUpgrades, String> {
     if !supported(world, weapon) {
-        return Err("Selectable upgrades are not available for this weapon yet.".into());
+        return Err("Only ranged weapons can be modified.".into());
     }
     let gun = world
         .borrow::<View<PropGunState>>()
@@ -107,8 +108,9 @@ pub fn validate(
     {
         return Err("Wield the weapon to modify it.".into());
     }
-    if !AVAILABLE.contains(&choice) {
-        return Err("This upgrade is not available yet.".into());
+    let available = available(world, weapon);
+    if !available.contains(&choice) {
+        return Err("This upgrade is not compatible with this weapon.".into());
     }
     let source = match payment {
         Payment::Modify => UpgradeSource::Modify,
@@ -120,7 +122,7 @@ pub fn validate(
         }
     };
     upgrades
-        .with_upgrade(choice, &AVAILABLE, source, tier)
+        .with_upgrade(choice, &available, source, tier)
         .map_err(|e| e.to_string())
 }
 
@@ -159,6 +161,13 @@ pub fn preview(
     } else {
         ""
     };
+    if !crate::weapon_modification::scales_damage(world, weapon) {
+        return format!(
+            "Stasis duration unchanged. Wear {:.0}% -> {:.0}%.{capacity}",
+            current.wear_multiplier() * 100.0,
+            next.wear_multiplier() * 100.0
+        );
+    }
     format!(
         "Damage {:.0}% -> {:.0}%. Wear {:.0}% -> {:.0}%.{capacity}",
         current.damage_multiplier() * 100.0,
@@ -272,6 +281,148 @@ mod tests {
         quests.player_stats_mut().skills.modify = 6;
         world.add_unique(quests);
         (world, weapon)
+    }
+
+    #[test]
+    fn every_ranged_family_uses_four_derived_tiers_and_family_specific_choices() {
+        for script in [
+            "PistolModify",
+            "ShotgunModify",
+            "RifleModify",
+            "LaserModify",
+            "EMPModify",
+            "FusionModify",
+            "StasisModify",
+            "GrenadeModify",
+            "AnnelidModify",
+            "ViralModify",
+        ] {
+            let (mut world, gun) = fixture();
+            world.add_component(
+                gun,
+                PropScripts {
+                    scripts: vec![script.into()],
+                    inherits: false,
+                },
+            );
+            assert!(supported(&world, gun));
+            assert!(!alternate_unlocked(&world, gun));
+            assert_eq!(
+                available(&world, gun).contains(&WeaponUpgrade::Silencer),
+                ["PistolModify", "RifleModify"].contains(&script)
+            );
+            let device = world.add_entity((
+                PropScripts {
+                    scripts: vec!["FreeModify".into()],
+                    inherits: false,
+                },
+                dark::properties::PropStackCount(4),
+            ));
+            world
+                .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+                .unwrap()
+                .left_hand_entity_id = Some(device);
+            if script == "StasisModify" {
+                let text = preview(
+                    &world,
+                    gun,
+                    WeaponUpgrade::ExtendedCapacity,
+                    0,
+                    Payment::Device(device),
+                );
+                assert!(text.contains("Stasis duration unchanged"));
+                assert!(!text.contains("Damage"));
+            }
+            let base = world
+                .borrow::<View<PropBaseGunDesc>>()
+                .unwrap()
+                .get(gun)
+                .unwrap()
+                .clone();
+            for (tier, choice) in [
+                WeaponUpgrade::ExtendedCapacity,
+                WeaponUpgrade::AlternateFire,
+                WeaponUpgrade::LowMaintenanceI,
+                WeaponUpgrade::LowMaintenanceII,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                install(&mut world, gun, choice, tier, Payment::Device(device));
+                assert_eq!(state(&world, gun).tier(), tier + 1, "{script}");
+            }
+            let evaluated = crate::scripts::script_util::active_gun_setting(&world, gun).unwrap();
+            assert_eq!(
+                evaluated.clip, 24,
+                "energy and biological capacity also double: {script}"
+            );
+            let damage = if script == "StasisModify" {
+                base.settings[0].stim_modifier
+            } else {
+                1.32
+            };
+            assert!(
+                (evaluated.stim_modifier - damage).abs() < 0.0001,
+                "{script}"
+            );
+            assert!((state(&world, gun).wear_multiplier() - 0.4).abs() < 0.0001);
+            assert!(alternate_unlocked(&world, gun));
+            assert_eq!(
+                world
+                    .borrow::<View<PropBaseGunDesc>>()
+                    .unwrap()
+                    .get(gun)
+                    .unwrap()
+                    .settings,
+                base.settings
+            );
+            assert_eq!(
+                world
+                    .borrow::<View<PropGunState>>()
+                    .unwrap()
+                    .get(gun)
+                    .unwrap()
+                    .ammo,
+                7
+            );
+            assert_eq!(
+                world
+                    .borrow::<View<PropGunState>>()
+                    .unwrap()
+                    .get(gun)
+                    .unwrap()
+                    .modification,
+                0,
+                "no retail property mutation"
+            );
+        }
+    }
+
+    #[test]
+    fn melee_and_psi_are_never_modifiable_even_with_gun_state() {
+        for script in ["MeleeWeapon", "PsiAmp", "Weapon", ""] {
+            let (mut world, weapon) = fixture();
+            world.add_component(
+                weapon,
+                PropScripts {
+                    scripts: vec![script.into()],
+                    inherits: false,
+                },
+            );
+            assert!(!supported(&world, weapon));
+            assert!(available(&world, weapon).is_empty());
+            assert!(
+                validate(
+                    &world,
+                    weapon,
+                    WeaponUpgrade::Flashlight,
+                    0,
+                    Payment::Modify
+                )
+                .unwrap_err()
+                .contains("Only ranged")
+            );
+        }
     }
 
     #[test]

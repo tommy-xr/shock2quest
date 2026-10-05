@@ -1,3 +1,4 @@
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
@@ -21,7 +22,8 @@ for (const vr of [false, true]) for (const setting of [0, 1]) {
         await game.input.set("right_hand.rotation",quatFromTo([0,0,-1],[-1,0,0]));
         await game.step({frames:3});
       }
-      if (setting) { await game.input.trigger("CycleGunSetting"); await game.step({ frames: 2 }); }
+      if (setting) { await unlockWeaponAlternateFire(game);
+        await game.input.trigger("CycleGunSetting"); await game.step({ frames: 2 }); }
       await game.input.trigger("EjectClip"); await game.step({ frames: 2 });
       await game.input.trigger("CycleAmmo"); await game.step({ frames: 2 });
       await game.player.spawnItem(-39);
@@ -71,7 +73,8 @@ for (const setting of [0, 1]) {
       await game.player.setStats({skills:{heavy_weapons:6}});
       await game.player.spawnItem("Gren Launcher");
       await game.input.trigger("EquipGrenadeLauncher"); await game.step({frames:5});
-      if (setting) { await game.input.trigger("CycleGunSetting"); await game.step({frames:2}); }
+      if (setting) { await unlockWeaponAlternateFire(game);
+        await game.input.trigger("CycleGunSetting"); await game.step({frames:2}); }
       await game.input.trigger("EjectClip"); await game.step({frames:2});
       await game.input.trigger("CycleAmmo"); await game.step({frames:2});
       await game.player.spawnItem(-39);

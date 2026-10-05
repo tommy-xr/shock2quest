@@ -1,3 +1,4 @@
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
@@ -38,6 +39,7 @@ for (const vr of [false, true])
             await game.input.set("head.look", [0, 0]);
           }
           if (setting) {
+            await unlockWeaponAlternateFire(game);
             await game.input.trigger("CycleGunSetting");
             await game.step({ frames: 2 });
           }
@@ -111,6 +113,7 @@ for (const setting of [0, 1]) {
       await game.step({ frames: 5 });
       await cycleToWeapon(game, (e) => e.template_id === -19);
       if (setting) {
+        await unlockWeaponAlternateFire(game);
         await game.input.trigger("CycleGunSetting");
         await game.step({ frames: 2 });
       }

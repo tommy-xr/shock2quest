@@ -1,4 +1,4 @@
-import { unlockPistolAlternateFire } from "./helpers/weapon-upgrades.js";
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -19,7 +19,7 @@ test("VR dual ammo controls bind to the selected real held entity", { skip: proc
         await game.input.set(`${hand}_hand.position`, [hand === "left" ? -.7 : .7, .8, -.2]);
         await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
         await game.step({ frames: 3 });
-        if (weapon.template_id === -17) await unlockPistolAlternateFire(game);
+        if (weapon.template_id === -17) await unlockWeaponAlternateFire(game);
     }
     await game.input.set("head.rotation", [0, 0, 0, 1]);
     await game.step({ frames: 60 });

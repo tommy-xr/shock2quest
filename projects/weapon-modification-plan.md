@@ -25,10 +25,10 @@ Decisions needed before the affected implementation:
 
 | Decision | Suggested default | Needed before |
 |---|---|---|
-| Devices at tiers zero and one | Implemented: one device purchases the next tier without Modify skill or nanite cost; normal Modify still stops after any two total upgrades | Complete for pistol |
-| Installation permanence | Implemented: permanent choices; no refunds or respec | Complete for pistol |
-| Paid cost, challenge, and failure | Implemented: existing skill requirements, nanite costs, Tinker discount, challenge, and failure consequences | Complete for pistol |
-| Energy capacity | Decide explicitly whether double capacity applies to charge stores as well as ammunition magazines | Energy weapon coverage |
+| Devices at tiers zero and one | Implemented: one device purchases the next tier without Modify skill or nanite cost; normal Modify still stops after any two total upgrades | Complete for ranged weapons |
+| Installation permanence | Implemented: permanent choices; no refunds or respec | Complete for ranged weapons |
+| Paid cost, challenge, and failure | Implemented: existing skill requirements, nanite costs, Tinker discount, challenge, and failure consequences | Complete for ranged weapons |
+| Energy capacity | Double charge stores and biological magazines, without adding loaded ammo/energy | Implemented |
 | Weapon coverage | Ranged weapons only, including energy and biological capacity; melee and psi amp cannot be modified | Confirmed |
 
 The coverage requirement is all ranged weapon families; melee weapons and the psi amp are excluded. Starting with the pistol is implementation order, not a decision to exclude other weapons. No universal placeholder upgrade should be introduced without deciding its actual gameplay benefit.
@@ -96,6 +96,21 @@ Implementation starts with the persistent state and pure rules. Settle the remai
 
 ## Chooser implementation
 
-The pistol uses one shared 188x300 canvas in flat and VR. Modify opens the chooser; selecting a row previews the automatic bonuses and selected capability. Paid confirmation opens the existing HRM challenge. The chooser reuses the retail Modify bezel and training-screen button texture, with nine-patch borders resolved in shared layout. Installed upgrades are removed from the choices, and Low Maintenance II appears only after I is installed. Selection uses an interior highlight without arrows; the compact list needs no scroll controls. A carried French-Epstein device can be selected with Use device, double-clicked in the inventory strip, or activated with its held-hand trigger to open the chooser directly for the selected pistol. Device confirmation consumes one unit only after target, tier, ownership, and eligibility are revalidated. Closing or backing out consumes nothing.
+All ten ranged families use one shared 188x300 canvas in flat and VR. Modify opens the chooser; selecting a row previews the automatic bonuses and selected capability. Paid confirmation opens the existing HRM challenge. The chooser reuses the retail Modify bezel and training-screen button texture, with nine-patch borders resolved in shared layout. Installed upgrades are removed from the choices, and Low Maintenance II appears only after I is installed. Selection uses an interior highlight without arrows; the compact list needs no scroll controls. A carried French-Epstein device can be selected with Use device, double-clicked in the inventory strip, or activated with its held-hand trigger to open the chooser directly for the selected ranged weapon. Device confirmation consumes one unit only after target, tier, ownership, and eligibility are revalidated. Closing or backing out consumes nothing.
 
-Low Maintenance I/II, doubled capacity, alternate fire, and flashlight are active choices. Flashlights switch on after installation and have a per-weapon Settings toggle; only equipped weapons emit light. Laser now has a saved Settings toggle and a surface-aligned dot at the first obstruction; the same clipped segment now draws a thin core and animated cylindrical smoky halo. Silencer is active for pistol/AR15: firing audio gain and AI hearing radius are 25% of normal, and muzzle flashes are suppressed while casings and impact sounds are retained. Pistol alternate fire starts locked; mode selection and effective firing settings share the purchase check. Upgrade state remains attached to the original weapon across saving and level transitions. Other weapon families remain on their previous behavior until the coverage milestone.
+Low Maintenance I/II, doubled capacity, alternate fire, and flashlight are active choices. Flashlights switch on after installation and have a per-weapon Settings toggle; only equipped weapons emit light. Laser now has a saved Settings toggle and a surface-aligned dot at the first obstruction; the same clipped segment now draws a thin core and animated cylindrical smoky halo. Silencer is active for pistol/AR15: firing audio gain and AI hearing radius are 25% of normal, and muzzle flashes are suppressed while casings and impact sounds are retained. All ranged alternate fire starts locked; mode selection and effective firing settings share the purchase check. Upgrade state remains attached to the original weapon across saving and level transitions. The retail property-mutating modification route has been removed. Melee weapons and the psi amp offer no modification choices. Stasis retains its authored non-damaging stimulus rather than receiving a damage multiplier; its preview states this explicitly.
+
+
+## Implemented ranged coverage
+
+| Families | Capacity upgrade | Silencer | Automatic damage |
+|---|---|---|---|
+| Pistol, AR15 | 2× magazine | Yes | +8% per tier |
+| Shotgun, grenade launcher | 2× magazine | No | +8% per tier |
+| Laser pistol, EMP rifle, fusion cannon | 2× energy store | No | +8% per tier |
+| Worm launcher, viral proliferator | 2× biological magazine | No | +8% per tier |
+| Stasis field generator | 2× energy store | No | No damage; authored control duration unchanged |
+
+Every listed family receives the automatic −5% wear per tier and may select flashlight, laser, Low Maintenance I/II, alternate fire or double capacity. Research and working-condition gates still apply. Ordinary Modify stops at two total choices; devices can buy tiers three and four. Wrench, electroshock prod, crystal shard and psi amp cannot be modified.
+
+Flashlight, laser dot, smoky beam and silencer have flat/VR debug-runtime render evidence in their respective stacked PRs. A Quest was not attached during implementation, so device stereo and GPU/frame-cost acceptance remains pending. Flashlights inherit the existing shadowless hand-spotlight renderer.

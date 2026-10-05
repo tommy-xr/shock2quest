@@ -1,4 +1,4 @@
-import { unlockPistolAlternateFire } from "./helpers/weapon-upgrades.js";
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -63,7 +63,7 @@ test(
     });
     await game.step({ frames: 30 });
     const pistol = await grabWeapon(game, PISTOL);
-    await unlockPistolAlternateFire(game);
+    await unlockWeaponAlternateFire(game);
 
     assert.deepEqual(
       await fireMode(game),
@@ -124,6 +124,7 @@ test(
     });
     await game.step({ frames: 30 });
     await grabWeapon(game, LASER_PISTOL);
+    await unlockWeaponAlternateFire(game);
 
     assert.deepEqual(await fireMode(game), [0, "NORM"]);
     await press(game, "RightHandUpperButton");

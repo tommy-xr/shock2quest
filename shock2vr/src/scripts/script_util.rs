@@ -1676,7 +1676,7 @@ mod tests {
         let mut upgrades = WeaponUpgrades::default();
         for choice in [
             WeaponUpgrade::ExtendedCapacity,
-            WeaponUpgrade::LowMaintenanceI,
+            WeaponUpgrade::AlternateFire,
         ] {
             upgrades = upgrades
                 .with_upgrade(

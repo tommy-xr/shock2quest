@@ -49,6 +49,18 @@ export async function clickUpgradeControl(game: GameServer, label: string): Prom
 /** Existing mode/animation fixtures purchase the new prerequisite through the
  * real device chooser, without replacing the weapon or its ammunition. */
 export async function unlockWeaponAlternateFire(game: GameServer): Promise<void> {
+  const player = (await game.info()).player;
+  const gun = player.wielded_entity_id ?? player.right_hand_entity_id;
+  assert.ok(gun != null, "alternate-fire fixture holds a gun");
+  const properties = (await game.entities.detail(gun)).properties;
+  const saved = properties.find(p => p.name === "WeaponUpgrades");
+  if (saved && JSON.parse(saved.value).choices.includes("AlternateFire")) return;
+  // Mode/projectile fixtures model completed research; research gating itself
+  // is tested separately. Biological weapons otherwise begin Unresearched.
+  if (properties.find(p => p.name === "ObjectState")?.value === "Unresearched") {
+    await game.entities.sendMessage(gun, { type: "SetObjectState", state: "Normal" });
+    await game.step({ frames: 2 });
+  }
   const input = await game.input.state();
   const device = await game.player.spawnItem(-1488);
   await game.entities.sendMessage(device.entity_id, { type: "Frob" });
@@ -62,13 +74,11 @@ export async function unlockWeaponAlternateFire(game: GameServer): Promise<void>
   for (const hand of ["left", "right"] as const) {
     const pose = input[`${hand}_hand`];
     await game.input.set(`${hand}_hand.position`, pose.position);
-    // Input snapshots use xyzw; patch rotation uses wxyz.
-    await game.input.set(`${hand}_hand.rotation`, [pose.rotation[3], ...pose.rotation.slice(0, 3)]);
+    // Input snapshots and hand input patches both use xyzw (camera placement
+    // has a different convention). Preserve the fixture's exact aiming pose.
+    await game.input.set(`${hand}_hand.rotation`, pose.rotation);
     await game.input.set(`${hand}_hand.squeeze`, pose.squeeze_value);
     await game.input.set(`${hand}_hand.trigger`, pose.trigger_value);
   }
   await game.step({ frames: 20 });
 }
-
-// Existing pistol-only fixtures keep their descriptive call site during rollout.
-export const unlockPistolAlternateFire = unlockWeaponAlternateFire;

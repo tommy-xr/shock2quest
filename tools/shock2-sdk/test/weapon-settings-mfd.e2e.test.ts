@@ -1,4 +1,4 @@
-import { unlockPistolAlternateFire } from "./helpers/weapon-upgrades.js";
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -67,7 +67,7 @@ test(
     // The pistol is the first weapon DebugCycleWeapon hands out.
     await game.input.trigger("DebugCycleWeapon");
     await game.step({ frames: 5 });
-    await unlockPistolAlternateFire(game);
+    await unlockWeaponAlternateFire(game);
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
 
@@ -156,6 +156,8 @@ test(
     // The laser recharges - it has no magazine to eject - so it shows no
     // UNLOAD, but it still lists both of its fire settings.
     await cycleToWeapon(game, (e) => (e.name ?? "") === "Laser Pistol");
+    await unlockWeaponAlternateFire(game);
+    await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
     await openSettings(game);
     const laserLabels = (await panelElements(game))
