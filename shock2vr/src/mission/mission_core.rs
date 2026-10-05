@@ -10482,15 +10482,6 @@ impl MissionCore {
                         }
                     }
                 }
-                Effect::RechargeItemEnergy { entity_id, level } => {
-                    let mut energy = self
-                        .world
-                        .borrow::<ViewMut<dark::properties::PropEnergy>>()
-                        .unwrap();
-                    if let Ok(energy) = (&mut energy).get(entity_id) {
-                        energy.0 = energy.0.max(level);
-                    }
-                }
                 Effect::AddPlayerHazard { toxin, amount } => {
                     if let Ok(mut status) = self
                         .world
@@ -10662,8 +10653,14 @@ impl MissionCore {
                     amount,
                     recharge,
                 } => {
+                    // ElectroPsi also targets other authored powered items.
+                    // Keep the same charge transition path so equipped implant
+                    // bonuses are refreshed when their power returns.
                     if crate::implants::kind(&self.world, entity_id).is_none()
-                        && !crate::armor::powered(&self.world, entity_id)
+                        && !self
+                            .world
+                            .borrow::<View<dark::properties::PropEnergy>>()
+                            .is_ok_and(|energy| energy.contains(entity_id))
                     {
                         continue;
                     }

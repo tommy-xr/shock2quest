@@ -228,10 +228,6 @@ pub enum Effect {
         request: super::item_tool::ItemUse,
         target: EntityId,
     },
-    RechargeItemEnergy {
-        entity_id: EntityId,
-        level: f32,
-    },
     SetPsiSword {
         amp: EntityId,
         enabled: bool,

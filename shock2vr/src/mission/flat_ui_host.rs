@@ -1191,7 +1191,19 @@ impl FlatUiHost {
         }
         if let (Some(request), Some(pos)) = (self.item_use, canvas_pos) {
             if pressed_edge {
-                if let Some(target) = self.strip_item_at(pos).or_else(|| self.panel_item_at(pos)) {
+                // Socket clicks select the equipped implant while a cast is
+                // pending; they must not fall through to its ordinary Frob
+                // action and unequip it instead.
+                let implant = self.strip_rect().and_then(|rect| {
+                    implant_readout_rects(rect)
+                        .iter()
+                        .position(|rect| rect.contains(pos))
+                        .and_then(|slot| self.implant_items[slot].as_ref().map(|item| item.entity))
+                });
+                if let Some(target) = implant
+                    .or_else(|| self.strip_item_at(pos))
+                    .or_else(|| self.panel_item_at(pos))
+                {
                     self.item_use = None;
                     return (
                         Vec::new(),

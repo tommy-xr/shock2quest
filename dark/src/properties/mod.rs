@@ -274,8 +274,6 @@ pub struct PropFabricate(pub i32);
 pub struct PropFabricateCost(pub i32);
 #[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
 pub struct PropAlchemy(pub f32);
-#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
-pub struct PropRecycle(pub i32);
 /// Number of units removed by a single item operation (e.g. one ammo clip).
 #[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
 pub struct PropStackIncrement(pub i32);
@@ -1933,12 +1931,6 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$Alchemy",
             |r, _| read_single(r),
             PropAlchemy,
-            accumulator::latest,
-        ),
-        define_prop(
-            "P$Recycle",
-            |r, _| read_i32(r),
-            PropRecycle,
             accumulator::latest,
         ),
         define_prop(
