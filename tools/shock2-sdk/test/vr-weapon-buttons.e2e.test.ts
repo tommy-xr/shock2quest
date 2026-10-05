@@ -4,6 +4,7 @@ import { GameServer } from "../src/index.js";
 import { aimVrHandAt, quatConjugate, quatRotate, sub } from "./helpers/vr-hand.js";
 import { stackCount } from "./helpers/nanites.js";
 import { ammoOf } from "./helpers/weapon.js";
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 
@@ -79,6 +80,7 @@ test("gun tap fires on release and simultaneous grip release cancels it", { skip
   await aimVrHandAt(game, pistol.position, 0.2, 1, 0, { hand: "left" });
   await game.step({ frames: 5 });
   assert.equal((await game.info()).player.wielded_entity_id, pistol.id);
+  await unlockWeaponAlternateFire(game);
   const initial = (await game.info()).player.wielded_gun_setting;
   const before = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
   await game.input.hold("LeftHandUpperButton");

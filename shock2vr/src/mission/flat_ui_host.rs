@@ -90,6 +90,10 @@ pub enum FlatUiDragAction {
     Place(EntityId),
     Throw(EntityId),
     Wield(EntityId),
+    Maintain {
+        tool: EntityId,
+        target: EntityId,
+    },
     /// One of the AMMOFULL readout's controls was clicked (fire-mode setting,
     /// reload, ammo cycle, psi selector). Not tied to a cursor item - the
     /// target is the entity in the last drawn readout, never a hand lookup.
@@ -483,6 +487,17 @@ impl FlatUiHost {
         let canvas_pos = self.cursor_canvas?;
         self.strip_item_at(canvas_pos)
             .or_else(|| self.panel_item_at(canvas_pos))
+    }
+
+    /// Predict the same tool/target pairing the next inventory click applies.
+    pub fn maintenance_preview(&self, world: &World) -> Option<String> {
+        let tool = self.cursor_item.as_ref()?.entity;
+        let pos = self.cursor_canvas?;
+        let target = self
+            .strip_item_at(pos)
+            .or_else(|| self.panel_item_at(pos))?;
+        crate::scripts::maintenance::offers_to(world, tool, target)
+            .then(|| crate::scripts::maintenance::preview(world, target))
     }
 
     /// Set the mini-frame's name line (already resolved to a display name).
@@ -1082,7 +1097,12 @@ impl FlatUiHost {
                         .borrow::<View<dark::properties::PropPosition>>()
                         .ok()?;
                     let pos = v_pos.get(panel).ok()?;
-                    Some((pos.position - player.pos).magnitude() > PANEL_AUTO_CLOSE_DISTANCE)
+                    let range = if self.device && !self.psionic_projection {
+                        super::mfd_device::PANEL_RANGE
+                    } else {
+                        PANEL_AUTO_CLOSE_DISTANCE
+                    };
+                    Some((pos.position - player.pos).magnitude() > range)
                 })()
                 .unwrap_or(false);
             if !alive || too_far {
@@ -1224,6 +1244,19 @@ impl FlatUiHost {
             self.hover_close = false;
             if !pressed_edge {
                 return (Vec::new(), Vec::new());
+            }
+            let held = self.cursor_item.as_ref().unwrap().entity;
+            if let Some(target) = self
+                .strip_item_at(canvas_pos)
+                .or_else(|| self.panel_item_at(canvas_pos))
+            {
+                if crate::scripts::maintenance::offers_to(world, held, target) {
+                    self.last_lift = None;
+                    return (
+                        Vec::new(),
+                        vec![FlatUiDragAction::Maintain { tool: held, target }],
+                    );
+                }
             }
             if over_strip {
                 let held = self.cursor_item.as_ref().unwrap().entity;
@@ -2288,6 +2321,41 @@ mod tests {
     }
 
     #[test]
+    fn handheld_panel_survives_scan_range_but_closes_when_leaving() {
+        let mut world = World::new();
+        let panel = world.add_entity(dark::properties::PropPosition {
+            position: cgmath::vec3(6.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            cell: 0,
+        });
+        let player = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            inventory_entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+        });
+        let mut host = FlatUiHost::new();
+        host.device = true;
+        host.open(panel);
+        host.update(&world, None);
+        assert_eq!(host.active_panel(), Some(panel));
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .pos
+            .x = -20.0;
+        host.update(&world, None);
+        assert_eq!(host.active_panel(), None);
+        host.open(panel);
+        world.delete_entity(panel);
+        host.update(&world, None);
+        assert_eq!(host.active_panel(), None);
+    }
+
+    #[test]
     fn close_button_hugs_the_top_right_corner() {
         // Matches the original keypad overlay's CloseOff rect (163, 8, 20x21)
         // for the 188-wide panel.
@@ -2877,6 +2945,45 @@ mod tests {
             &[strip_item(wrench, 0)],
         );
         (world, host, wrench, inventory)
+    }
+
+    #[test]
+    fn maintenance_drag_targets_weapon_without_swapping_or_clearing_tool() {
+        let (mut world, mut host, tool, inventory) = drag_world();
+        world.add_component(
+            tool,
+            (dark::properties::PropScripts {
+                scripts: vec!["Wrench".into()],
+                inherits: true,
+            },),
+        );
+        let gun = world.add_entity((dark::properties::PropGunState {
+            ammo: 1,
+            condition: 40.0,
+            setting: 0,
+            modification: 0,
+            silence_value: 0.0,
+        },));
+        host.on_set_ui(
+            &world,
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            None,
+            &[strip_item(tool, 0), strip_item(gun, 2)],
+        );
+        press_edge(&mut host, &world, (20.0, 30.0));
+        let actions = press_edge(&mut host, &world, (90.0, 30.0));
+        assert_eq!(
+            actions,
+            vec![FlatUiDragAction::Maintain { tool, target: gun }]
+        );
+        assert_eq!(host.held_entity(), Some(tool));
+        assert!(
+            host.maintenance_preview(&world)
+                .unwrap()
+                .contains("Tool kept"),
+            "untrained refusal also preserves cursor ownership"
+        );
     }
 
     #[test]

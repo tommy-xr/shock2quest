@@ -21,6 +21,19 @@ const MEDICAL_KIT = -55; // CombineType "MedicalKit" - sibling of -52 under -51.
 const SMALL_PRISM = -41; // CombineType "Prism", stack 10.
 const LARGE_PRISM = -44; // CombineType "Prism", stack 20 - a DIFFERENT template.
 
+test("small and standard bullet boxes share a reserve stack in either pickup order", {
+  skip: !e2eEnabled, timeout: 180_000,
+}, async () => {
+  for (const templates of [[-31, -1358], [-1358, -31]]) {
+    await using game = await GameServer.launch({ mission: "debug_interactions" });
+    await game.step({ frames: 5 });
+    const first = await game.player.spawnItem(templates[0]);
+    const second = await game.player.spawnItem(templates[1]);
+    assert.equal(first.entity_id, second.entity_id);
+    assert.equal(await stackOf(game, first.entity_id), 18);
+  }
+});
+
 /** The entity's authored `StackCount`, or undefined when it carries none. */
 async function stackOf(game: GameServer, entityId: number): Promise<number | undefined> {
   return stackCount((await game.entities.detail(entityId)).properties);

@@ -10,7 +10,7 @@ import type {
   Vec3,
 } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { LOOT_PANEL_SIZE_PX as PANEL_SIZE_PX, aimVrHandAt } from "./helpers/vr-hand.js";
+import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
 // Production regression for #978. The MedSci1 Wrench is a concrete mission
 // object (990), but its authored melee class is the gamesys Wrench (-928).
@@ -26,7 +26,6 @@ const MONKEY = 543;
 const PIPE_HYBRID = 1293;
 const SHOTGUN_HYBRID = 1392;
 const BREAKABLE_PANE = 237;
-const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
 const WRENCH_WINDUP_DISTANCE = 1.5;
 const WRENCH_SWEEP_END_DISTANCE = -0.75;
 const WRENCH_SWEEP_FRAMES = 45;
@@ -406,48 +405,17 @@ async function grabAuthoredCorpseWrench(
   const uiBodies = (await game.physics.bodies()).bodies.filter((body) =>
     body.collision_groups.includes("ui"),
   );
-  assert.equal(uiBodies.length, 1, "corpse frob should open one VR loot panel");
-  const panel = uiBodies[0];
+  assert.equal(uiBodies.length, 0, "corpse loot must use the MFD");
   const ui = (await game.ui.state()).active_panel;
   assert.ok(ui, "corpse frob should expose its rendered loot panel");
   const wrenchElement = ui.elements.find(
     (element) => element.entity_id === wrenchId,
   );
   assert.ok(wrenchElement, "corpse panel should render Wrench 990");
-  const panelFront = qrotate(panel.rotation, [0, 0, -1]);
-  const eyeHeight = (await game.info()).player.camera_offset[1];
-  await teleportVerified(game, {
-    x: panel.position[0] + panelFront[0] * 1.25,
-    y: panel.position[1] - eyeHeight,
-    z: panel.position[2] + panelFront[2] * 1.25,
-  });
-  await game.step({ frames: 3 });
-  const panelSize: Vec3 = [
-    PANEL_SIZE_PX[0] * GUI_PIXEL_TO_WORLD_SIZE,
-    PANEL_SIZE_PX[1] * GUI_PIXEL_TO_WORLD_SIZE,
-    0,
-  ];
-  const [slotX, slotY, slotWidth, slotHeight] = wrenchElement.rect;
-  const u = (slotX + slotWidth / 2) / PANEL_SIZE_PX[0];
-  const v = (slotY + slotHeight / 2) / PANEL_SIZE_PX[1];
-  const localSlot: Vec3 = [
-    panelSize[0] * (0.5 - u),
-    panelSize[1] * (0.5 - v),
-    0,
-  ];
-  const slotWorld = add(panel.position, qrotate(panel.rotation, localSlot));
-  const panelAim = await aimVrHandAt(game, slotWorld, 0.35);
-  const panelHit = await game.raycast({
-    start: panelAim.start,
-    end: panelAim.target,
-    collision_groups: ["ui"],
-    max_distance: 1,
-  });
-  assert.equal(
-    panelHit.entity_id,
-    panel.entity_id,
-    "hand ray should hit Wrench's slot",
-  );
+  const pose = (await game.ui.state()).panel_pose;
+  assert.ok(pose);
+  const [x, y, w, h] = wrenchElement.rect;
+  await aimVrHandAtCanvas(game, pose, [x + w / 2, y + h / 2]);
   await game.input.set("right_hand.squeeze", 1);
   await game.step({ frames: 10 });
   assert.equal(
@@ -456,6 +424,8 @@ async function grabAuthoredCorpseWrench(
     "squeezing the rendered loot slot should physically grab Wrench 990",
   );
 
+  await game.input.trigger("LeftHandLowerButton");
+  await game.step({ frames: 2 });
   return byMissionId(game, "Wrench", MEDSCI1_WRENCH);
 }
 

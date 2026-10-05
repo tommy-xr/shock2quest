@@ -3,8 +3,76 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { setHandWorldPose } from "../src/vr-pose.js";
 import { add, aimVrHandAt, quatConjugate, quatRotate, sub } from "./helpers/vr-hand.js";
+import { drawPouchAmmo } from "./helpers/ammo-pouch.js";
+import { ammoOf, pullTrigger } from "./helpers/weapon.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
+test("a full gun offers a spare clip whose B-cycle returns rounds to their stack", {
+  skip: !enabled, timeout: 180_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+  await game.step({ frames: 30 });
+  const gun = (await game.entities.list()).entities.find(e => e.template_id === -17)!;
+  await aimVrHandAt(game, gun.position, .2, 1, 0, { hand: "left" });
+  await game.input.set("left_hand.position", [-.3, 1, -.5]);
+  await game.input.set("left_hand.rotation", [0, 0, 0, 1]);
+  const standard = await game.player.spawnItem(-1358);
+  await game.player.spawnItem(-31);
+  await game.player.spawnItem(-31);
+  const he = await game.player.spawnItem(-32);
+  await game.step({ frames: 5 });
+  assert.equal(ammoOf(await game.entities.detail(gun.id)), 12);
+  const { offer, entityId: clip } = await drawPouchAmmo(game, "right");
+  assert.equal(offer.rounds, 12, "a full gun still offers a full spare clip");
+  await game.input.trigger("RightHandUpperButton"); // B on the clip hand.
+  await game.step({ frames: 5 });
+  assert.equal((await game.info()).player.right_hand_entity_id, he.entity_id);
+  assert.equal(ammoOf(await game.entities.detail(gun.id)), 12, "cycling the held clip does not unload the gun");
+  const returned = (await game.entities.detail(standard.entity_id)).properties.find(p => p.name === "StackCount");
+  assert.equal(Number(returned?.value), 30, "cycling returns the spare rounds to the existing reserve stack");
+  assert.ok(!(await game.entities.list()).entities.some(e => e.id === clip), "the returned split clip must merge away");
+});
+
+for (const [hand, spent] of [["left", 5], ["right", 9]] as const) {
+  test(`${hand} pouch top-off consumes the drawn clip without leftovers`, { skip: !enabled, timeout: 180_000 }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    const primary = hand === "left" ? "right" : "left";
+    const gun = (await game.entities.list()).entities.find(e => e.template_id === -17)!;
+    await aimVrHandAt(game, gun.position, .2, 1, 0, { hand: primary });
+    await game.input.set(`${primary}_hand.position`, [primary === "left" ? -.3 : .3, 1, -.5]);
+    await game.input.set(`${primary}_hand.rotation`, [0, 0, 0, 1]);
+    await game.step({ frames: 10 });
+    const capacity = ammoOf(await game.entities.detail(gun.id));
+    for (let i = 0; i < spent; i++) {
+      await pullTrigger(game, primary);
+      await game.step({ frames: 60 });
+    }
+    assert.equal(ammoOf(await game.entities.detail(gun.id)), capacity - spent);
+    const reserve = await game.player.spawnItem(-1358);
+    await game.player.spawnItem(-31);
+    await game.step({ frames: 3 });
+    const rounds = async (id: number) => Number((await game.entities.detail(id)).properties.find(p => p.name === "StackCount")?.value);
+    const stock = await rounds(reserve.entity_id);
+    const { offer, player: held, entityId: clip } = await drawPouchAmmo(game, hand);
+    assert.equal(offer.rounds, spent, "draw the magazine's missing rounds even from pooled small boxes");
+    assert.equal(await rounds(clip), spent);
+    assert.equal(await rounds(reserve.entity_id), stock - spent);
+    const grip = held.hand_grips.find(g => g.entity_id === clip)?.grip;
+    assert.ok(grip);
+    const anchor = (await game.entities.detail(gun.id)).magazine_anchor;
+    assert.ok(anchor);
+    const local = quatRotate(quatConjugate(held.rotation), sub(anchor, held.position));
+    await game.input.set(`${hand}_hand.position`, sub(local, [grip.offset.x, grip.offset.y, grip.offset.z]));
+    await game.step({ frames: 5 });
+    assert.equal(ammoOf(await game.entities.detail(gun.id)), capacity);
+    const final = (await game.info()).player;
+    assert.equal(hand === "left" ? final.wielded_entity_id : final.right_hand_entity_id, null);
+    assert.ok(!(await game.entities.list()).entities.some(e => e.id === clip));
+    assert.equal(await rounds(reserve.entity_id) + capacity, stock + capacity - spent, "reload conserves rounds");
+  });
+}
+
 for (const hand of ["left", "right"] as const) {
   test(`${hand} pouch draws real reserve and returns it without duplication`, { skip: !enabled, timeout: 180_000 }, async () => {
     await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });

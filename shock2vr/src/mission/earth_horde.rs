@@ -526,22 +526,6 @@ pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
         core.spawn_into_backpack(assets, template)
             .expect("horde starter item fits backpack");
     }
-    let mut rng = rand::thread_rng();
-    for name in [
-        "Shotgun",
-        "Laser Pistol",
-        "Maintenance Tool",
-        "5 Nanites",
-        "EXP Cookies",
-    ] {
-        let site = SITES[rng.gen_range(0..8)];
-        core.create_entity_by_template_name(
-            assets,
-            name,
-            Point3::new(site[0], site[1] + 0.5, site[2]),
-            Quaternion::from_angle_y(Deg(0.0)),
-        );
-    }
     // The normal inventory/hand path handles actual weapon selection. Both
     // the pistol and amp are available from the outset, without maxed stats.
 }
@@ -648,10 +632,31 @@ enum Phase {
     Failed,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct Enemy {
     id: u64,
     position: [f32; 3],
+    stalled_seconds: f32,
+    closest_distance: Option<f32>,
+}
+
+impl Enemy {
+    fn needs_recovery(&mut self, distance: f32, obstructed: bool, dt: f32) -> bool {
+        // Visible ranged attackers and enemies closing on the player are active
+        // combatants. Only rescue distant, hidden attackers with no progress.
+        if distance < 12.0
+            || !obstructed
+            || self
+                .closest_distance
+                .is_none_or(|best| distance < best - 1.0)
+        {
+            self.stalled_seconds = 0.0;
+            self.closest_distance = Some(distance);
+        } else {
+            self.stalled_seconds += dt;
+        }
+        self.stalled_seconds >= 45.0
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -897,10 +902,85 @@ impl HordeDirector {
                 position: Point3::from(position),
                 orientation: Quaternion::from_angle_y(Deg(0.0)),
                 root_transform: Matrix4::identity(),
-                options: CreateEntityOptions::default(),
+                options: CreateEntityOptions {
+                    snap_to_floor: true,
+                    ..Default::default()
+                },
             },
         }
     }
+    fn recover_stranded_enemies(
+        &mut self,
+        world: &World,
+        physics: &PhysicsWorld,
+        dt: f32,
+    ) -> Vec<Effect> {
+        let Ok(player) = world.borrow::<UniqueView<PlayerInfo>>() else {
+            return vec![];
+        };
+        let positions = world.borrow::<View<PropPosition>>().unwrap();
+        let templates = world.borrow::<View<PropTemplateId>>().unwrap();
+        let mut effects = vec![];
+        for enemy in &mut self.enemies {
+            let Some(entity) = EntityId::from_inner(enemy.id) else {
+                continue;
+            };
+            let position = cgmath::Vector3::from(enemy.position);
+            let delta = player.pos - position;
+            let distance = delta.magnitude();
+            let obstructed = distance > 0.01
+                && physics
+                    .ray_cast2(
+                        Point3::new(position.x, position.y, position.z),
+                        delta / distance,
+                        distance,
+                        InternalCollisionGroups::WORLD,
+                        Some(entity),
+                        true,
+                    )
+                    .is_some();
+            if !enemy.needs_recovery(distance, obstructed, dt) {
+                continue;
+            }
+            // Reuse surveyed spawn markers on the player's current floor. Pick
+            // the nearest with stand-off, so changing floors cannot strand a wave.
+            let destination = (&templates, &positions)
+                .iter()
+                .filter(|(id, pos)| {
+                    (MARKER_START..MARKER_START + SITES.len() as i32).contains(&id.template_id)
+                        && (pos.position.y < 10.0) == (player.pos.y < 10.0)
+                        && (pos.position - player.pos).magnitude2() >= 64.0
+                })
+                .min_by(|(a_id, a), (b_id, b)| {
+                    (a.position - player.pos)
+                        .magnitude2()
+                        .total_cmp(&(b.position - player.pos).magnitude2())
+                        .then(a_id.template_id.cmp(&b_id.template_id))
+                })
+                .map(|(_, pos)| pos.position);
+            if let Some(destination) = destination {
+                let Ok(pose) = positions.get(entity) else {
+                    continue;
+                };
+                effects.push(Effect::SetPositionRotation {
+                    entity_id: entity,
+                    position: destination,
+                    rotation: pose.rotation,
+                });
+                effects.push(Effect::SetLinearVelocity {
+                    entity_id: entity,
+                    velocity: vec3(0.0, 0.0, 0.0),
+                });
+                effects.push(Effect::ShowMessage {
+                    text: "A stranded attacker has been relocated nearby.".into(),
+                });
+                enemy.stalled_seconds = 0.0;
+                enemy.closest_distance = None;
+            }
+        }
+        effects
+    }
+
     fn spawn(&mut self, world: &World, physics: &PhysicsWorld) -> Option<Effect> {
         let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?.pos;
         let positions = world.borrow::<View<PropPosition>>().ok()?;
@@ -991,6 +1071,28 @@ impl Script for HordeDirector {
                 - 1;
             self.clock = self.rest_seconds();
             self.next_status = 5.0;
+            // Runtime creation waits until the first physics step has indexed
+            // the level: floor rays cannot hit it during population/provision.
+            for name in [
+                "Shotgun",
+                "Laser Pistol",
+                "Maintenance Tool",
+                "5 Nanites",
+                "EXP Cookies",
+            ] {
+                let site = SITES[self.roll(8)];
+                effects.push(Effect::CreateEntityByTemplateName {
+                    source_entity_id: entity,
+                    template_name: name.into(),
+                    position: Point3::new(site[0], site[1] + 0.5, site[2]),
+                    orientation: Quaternion::from_angle_y(Deg(0.0)),
+                    initial_velocity: vec3(0.0, 0.0, 0.0),
+                    options: CreateEntityOptions {
+                        snap_to_floor: true,
+                        ..Default::default()
+                    },
+                });
+            }
             effects.extend(unlock_os_stations(world, self.wave + 1));
             effects.push(Effect::ShowMessage { text: "EARTH: CONTAINMENT | Pistol + psi amp in inventory | Trainers in subway; shops on street; OS bank at the stair landing: start / waves 3/6/9".into() });
         }
@@ -1056,7 +1158,7 @@ impl Script for HordeDirector {
             }
             Phase::Assault => {
                 self.clock += dt;
-                let live: Vec<Enemy> = {
+                let mut live: Vec<Enemy> = {
                     let (types, hp, positions) = world
                         .borrow::<(View<PropEcoType>, View<PropHitPoints>, View<PropPosition>)>()
                         .unwrap();
@@ -1069,6 +1171,7 @@ impl Script for HordeDirector {
                         .map(|(id, (_, _, pos))| Enemy {
                             id: id.inner(),
                             position: pos.position.into(),
+                            ..Default::default()
                         })
                         .collect()
                 };
@@ -1087,7 +1190,14 @@ impl Script for HordeDirector {
                     self.kills += 1;
                     effects.push(self.bonus_loot(world, corpse, position));
                 }
+                for enemy in &mut live {
+                    if let Some(old) = self.enemies.iter().find(|old| old.id == enemy.id) {
+                        enemy.stalled_seconds = old.stalled_seconds;
+                        enemy.closest_distance = old.closest_distance;
+                    }
+                }
                 self.enemies = live;
+                effects.extend(self.recover_stranded_enemies(world, physics, dt));
                 // Creation applies after this update. Count only observed
                 // children, so a failed creation never consumes wave supply.
                 self.next_spawn -= dt;
@@ -1184,6 +1294,40 @@ mod tests {
         )
     }
 
+    #[test]
+    fn recovery_requires_sustained_hidden_stalling() {
+        let mut enemy = Enemy::default();
+        assert!(!enemy.needs_recovery(30.0, true, 1.0));
+        assert!(!enemy.needs_recovery(30.0, true, 44.0));
+        assert!(enemy.needs_recovery(30.0, true, 1.0));
+        assert!(
+            !enemy.needs_recovery(28.0, true, 1.0),
+            "approach resets timer"
+        );
+        assert!(
+            !enemy.needs_recovery(28.0, false, 60.0),
+            "visible shooters stay put"
+        );
+        assert!(
+            !enemy.needs_recovery(8.0, true, 60.0),
+            "nearby enemies stay put"
+        );
+    }
+
+    #[test]
+    fn normal_wave_clear_gives_a_full_minute() {
+        let mut director = HordeDirector {
+            initialized: true,
+            wave: 1,
+            ..Default::default()
+        };
+        director.clear_wave();
+        assert_eq!(director.clock, 60.0);
+        tick(&mut director, &World::new(), 59.0);
+        assert_eq!(director.phase, Phase::Rest);
+        assert_eq!(director.clock, 1.0);
+    }
+
     /// Each wave opens with the centered card, not just a status line.
     #[test]
     fn a_wave_opens_with_its_own_banner() {
@@ -1258,6 +1402,7 @@ mod tests {
             enemies: vec![Enemy {
                 id: enemy.inner(),
                 position: [0.0; 3],
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -1343,6 +1488,7 @@ mod tests {
             enemies: vec![Enemy {
                 id: enemy.inner(),
                 position: [1.0, 2.0, 3.0],
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -1382,6 +1528,7 @@ mod tests {
             enemies.push(Enemy {
                 id: enemy.inner(),
                 position: [index as f32, 2.0, 3.0],
+                ..Default::default()
             });
             if !keep_entities {
                 world.delete_entity(enemy);
@@ -1583,6 +1730,7 @@ mod tests {
             director.enemies.push(Enemy {
                 id: id.inner(),
                 position: position.position.into(),
+                ..Default::default()
             });
         }
         director.spawned = 15;

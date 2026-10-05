@@ -231,6 +231,14 @@ pub fn to_save_data_with_scripts(
         .map(|(id, _)| id.inner())
         .filter(|id| !entities_to_filter.contains(id))
         .partition(|id| held_entities.contains(id));
+    let (held_model_bounds_physics, world_model_bounds_physics): (Vec<_>, Vec<_>) = world
+        .borrow::<View<crate::runtime_props::RuntimePropModelBoundsPhysics>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .map(|(id, _)| id.inner())
+        .filter(|id| !entities_to_filter.contains(id))
+        .partition(|id| held_entities.contains(id));
     let raw_amp_selections = world
         .borrow::<View<crate::psi_amp_selection::AmpSelection>>()
         .unwrap()
@@ -241,6 +249,16 @@ pub fn to_save_data_with_scripts(
         .collect();
     let (held_amp_selections, world_amp_selections) =
         partition_map(raw_amp_selections, |id| held_entities.contains(id));
+    let raw_weapon_upgrades = world
+        .borrow::<View<crate::weapon_upgrades::WeaponUpgrades>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .filter(|(id, _)| !entities_to_filter.contains(&id.inner()))
+        .map(|(id, upgrades)| (id.inner(), upgrades.clone()))
+        .collect();
+    let (held_weapon_upgrades, world_weapon_upgrades) =
+        partition_map(raw_weapon_upgrades, |id| held_entities.contains(id));
     let raw_selected_ammo: HashMap<u64, usize> = v_selected_ammo
         .iter()
         .with_id()
@@ -342,9 +360,11 @@ pub fn to_save_data_with_scripts(
         all_entities: all_world_entities,
         death_poses: world_death_poses,
         amp_selections: world_amp_selections,
+        weapon_upgrades: world_weapon_upgrades,
         selected_ammo: world_selected_ammo,
         hazard_equipment: world_hazard_equipment,
         searched: world_searched,
+        model_bounds_physics: world_model_bounds_physics,
         implant_slots: world_implants,
         holstered: world_holstered,
         shoulder_weapons: world_shoulders,
@@ -366,9 +386,11 @@ pub fn to_save_data_with_scripts(
         properties: held_serialized_properties,
         death_poses: held_death_poses,
         amp_selections: held_amp_selections,
+        weapon_upgrades: held_weapon_upgrades,
         selected_ammo: held_selected_ammo,
         hazard_equipment: held_hazard_equipment,
         searched: held_searched,
+        model_bounds_physics: held_model_bounds_physics,
         implant_slots: held_implants,
         holstered: held_holstered,
         shoulder_weapons: held_shoulders,

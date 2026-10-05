@@ -130,7 +130,10 @@ test(
     );
     assert.ok(cardElement, "corpse 754 must expose its real Card B button");
     await squeezeWorldPanelElement(game, LOOT_PANEL_SIZE_PX, 1, cardElement);
-    // The panel helper completes the release too; state is collected on return.
+    // The panel helper completes the release too; leave the MFD before
+    // drawing the personal card for the world reader.
+    await game.input.trigger("LeftHandLowerButton");
+    await game.step({ frames: 2 });
     await game.input.set("right_hand.position", [0.3, 0.9, -0.5]);
     await game.input.set("right_hand.squeeze", 0);
     await game.step({ frames: 8 });

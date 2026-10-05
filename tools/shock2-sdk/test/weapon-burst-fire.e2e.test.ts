@@ -1,3 +1,4 @@
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -36,6 +37,7 @@ test(
     await game.step({ frames: 5 });
 
     const pistol = await cycleToWeapon(game, (e) => e.name === "Pistol");
+    await unlockWeaponAlternateFire(game);
     const rounds = async () => ammoOf(await game.entities.detail(pistol.id));
     assert.equal(await rounds(), 12, "the debug pistol starts on a full clip");
     assert.equal(
@@ -106,6 +108,7 @@ test(
     await game.step({ frames: 5 });
 
     const rifle = await cycleToWeapon(game, (e) => e.name === "Assault Rifle");
+    await unlockWeaponAlternateFire(game);
     const rounds = async () => ammoOf(await game.entities.detail(rifle.id));
     const loaded = await rounds();
     assert.ok(loaded >= 8, `the debug rifle starts loaded, got ${loaded}`);
@@ -152,6 +155,7 @@ test(
     await game.step({ frames: 5 });
 
     const rifle = await cycleToWeapon(game, (e) => e.name === "Assault Rifle");
+    await unlockWeaponAlternateFire(game);
     const rounds = async () => ammoOf(await game.entities.detail(rifle.id));
 
     await game.input.trigger("CycleGunSetting");

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import { test } from "node:test";
 
 import { e2ePort } from "./helpers/e2e-port.js";
@@ -213,6 +214,7 @@ test(
     await game.step({ frames: 30 });
     await grabWeapon(game, PISTOL);
 
+    await unlockWeaponAlternateFire(game);
     const before = (await game.info()).player.wielded_gun_setting_header;
     await press(game, "RightHandUpperButton");
     assert.notEqual(

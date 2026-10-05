@@ -403,6 +403,15 @@ where
         self.with_kind(ImageKind::Hologram { tiles_x, tiles_y })
     }
 
+    /// Resize a button/image while retaining its authored border thickness.
+    /// Borders are left, top, right, bottom in logical source pixels.
+    pub fn with_nine_slice(self, source_size: [f32; 2], borders: [f32; 4]) -> Self {
+        self.with_kind(ImageKind::NineSlice {
+            source_size,
+            borders,
+        })
+    }
+
     /// How this element's art is keyed and sized. No-op for components that
     /// draw no art.
     fn with_kind(self, kind: ImageKind) -> GuiComponent<TEvent> {

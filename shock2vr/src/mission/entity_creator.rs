@@ -368,6 +368,63 @@ pub fn create_entity_core(
     } else {
         None
     };
+    if additional_options.snap_to_floor {
+        world.add_component(
+            entity_id,
+            crate::runtime_props::RuntimePropModelBoundsPhysics,
+        );
+        if let Some(bounds) = maybe_model
+            .as_ref()
+            .and_then(|(model, _)| model.bounding_box())
+        {
+            let mut position = world
+                .borrow::<View<PropPosition>>()
+                .unwrap()
+                .get(entity_id)
+                .unwrap()
+                .clone();
+            let transform = world
+                .borrow::<View<RuntimePropTransform>>()
+                .unwrap()
+                .get(entity_id)
+                .unwrap()
+                .0;
+            // Survey the local floor, never a lower storey. Fit the loaded art,
+            // including its authored origin, scale and orientation, before physics.
+            if let Some(hit) = physics
+                .ray_cast2(
+                    Point3::new(
+                        position.position.x,
+                        position.position.y + 2.0,
+                        position.position.z,
+                    ),
+                    vec3(0.0, -1.0, 0.0),
+                    6.0,
+                    crate::physics::InternalCollisionGroups::WORLD,
+                    None,
+                    true,
+                )
+                .filter(|hit| crate::physics::is_walkable_normal(hit.hit_normal.y))
+            {
+                let bottom = bounds
+                    .to_corners()
+                    .iter()
+                    .map(|corner| transform.transform_point(*corner).y)
+                    .fold(f32::INFINITY, f32::min);
+                let delta = hit.hit_point.y + 0.01 - bottom;
+                position.position.y += delta;
+                world.add_component(
+                    entity_id,
+                    (
+                        position,
+                        RuntimePropTransform(
+                            Matrix4::from_translation(vec3(0.0, delta, 0.0)) * transform,
+                        ),
+                    ),
+                );
+            }
+        }
+    }
     let maybe_just_model = maybe_model.clone().map(|m| m.0);
 
     // Create bitmap animation, if no model
@@ -398,6 +455,22 @@ pub fn create_entity_core(
     } else {
         None
     };
+
+    // A VR hand holds a ladder only on the rungs and rails its model shows.
+    // Read once here; a model with none keeps the whole box grippable.
+    let is_climbable = world
+        .borrow::<View<PropPhysAttr>>()
+        .unwrap()
+        .get(entity_id)
+        .is_ok_and(|attr| attr.climbable != 0);
+    if rigid_body.is_some()
+        && is_climbable
+        && let Some((_, holds, _)) =
+            crate::ladder_holds::entity_holds(asset_cache, world, entity_id)
+        && !holds.is_empty()
+    {
+        physics.set_ladder_holds(entity_id, holds);
+    }
 
     //let output_scripts = vec![];
     // Create scripts
@@ -1091,6 +1164,10 @@ fn create_physics_representation_with_options(
     launch_projectile: bool,
     flinderize_debris: bool,
 ) -> Option<RigidBodyHandle> {
+    let model_bounds_physics = world
+        .borrow::<View<crate::runtime_props::RuntimePropModelBoundsPhysics>>()
+        .unwrap()
+        .contains(entity_id);
     // A door the authors left permanently open (no travel between its open and
     // closed endpoints, authored open) has nowhere to retract to: a collider
     // for it is a slab welded across the doorway that nothing can ever move,
@@ -1536,9 +1613,17 @@ fn create_physics_representation_with_options(
             let shape = PhysicsShape::Cuboid(abs_dimensions * 1.0);
             rigid_body_handle = physics.add_dynamic(
                 entity_id,
-                pos.position + vec3(0.0, SCALE_FACTOR / 6.0, 0.0) /* bump up so that character is not stuck in geometry */,
+                if model_bounds_physics {
+                    pos.position
+                } else {
+                    pos.position + vec3(0.0, SCALE_FACTOR / 6.0, 0.0)
+                },
                 qrotation,
-                Vector3::zero(),
+                if model_bounds_physics {
+                    model_bounds_center
+                } else {
+                    Vector3::zero()
+                },
                 shape,
                 // TODO: Kinematic experiment
                 //is_sensor,
@@ -1915,6 +2000,8 @@ fn live_creature_shape_for_height(
 #[derive(Clone, Debug)]
 pub struct CreateEntityOptions {
     pub force_visible: bool,
+    /// Rest a generated supply on the surveyed floor using its loaded model bounds.
+    pub snap_to_floor: bool,
     /// Instance-specific appearance, for archetypes whose model is assigned
     /// by a mission rather than the gamesys. Applied before visuals/physics.
     pub model_override: Option<String>,
@@ -1965,6 +2052,7 @@ impl Default for CreateEntityOptions {
     fn default() -> Self {
         CreateEntityOptions {
             force_visible: false,
+            snap_to_floor: false,
             model_override: None,
             name_override: None,
             hit_points_override: None,

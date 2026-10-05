@@ -73,17 +73,28 @@ The **upper face button** (left **Y** / right **B**) acts on what that hand hold
 | Ammo clip | Swap to the next compatible ammo type in your backpack | — |
 | Empty hand or other item | Open/close the newest unread audio log; replay the latest once all are read | — |
 
-**Weapons and powers.** Reload by taking a clip from the cyber interface's
-inventory strip and bringing it to the gun. Inserting another ammo type returns
-the loaded rounds to your backpack. In the amp's power selector, use that hand's
+**Weapons and powers.** Reload by taking a clip from the belt's ammo pouch or
+the cyber interface's inventory strip and bringing it to the gun. With a
+partially loaded gun in the other hand, the pouch draws at most the missing
+rounds; the rest stay in your backpack. A full gun still offers a spare clip;
+tap the clip hand's upper button (**B** on the right, **Y** on the left) to
+cycle through compatible ammo carried in your backpack. Inserting another ammo
+type returns the loaded rounds to your backpack. In the amp's power selector, use that hand's
 stick up/down for tiers and left/right for purchased powers; confirm with its
 upper button or trigger. Each amp remembers its current and alternate powers.
+
+**Maintenance tools.** In flat inventory, drag a tool onto a ranged weapon.
+In VR, bring the held tool close to a weapon and pull the trigger or release
+it onto the weapon; the weapon can be in your other hand. The preview shows
+condition gained and the one-tool cost. Maintenance skill determines the gain;
+broken weapons need repair first. A refused use consumes nothing.
 
 Empty hands ease toward a partial point at usable controls or a partial grip
 near reachable items, occupied holsters, stocked ammo pouches, and climbing holds.
 These previews only pose the fingers; squeeze or pull the trigger to interact.
 
-**Inventory and equipment.** Grip an inventory item, point at its destination,
+**Inventory and equipment.** Crates and corpses open in the held tricorder's MFD,
+or in the cyber interface when the tricorder is stowed. Grip an inventory item, point at its destination,
 and release. The preview is green when it fits or merges, amber for automatic
 placement elsewhere, and red when releasing will drop it into the world.
 Pass an item between hands by squeezing the receiving hand nearby, then releasing

@@ -85,6 +85,10 @@ pub trait PlayerInteraction {
     /// Refresh contacts on moving parts after their deferred joint poses apply.
     fn synchronize_held_articulation(&mut self, _world: &World) {}
 
+    fn maintenance_previews(&self, _world: &World) -> Vec<String> {
+        Vec::new()
+    }
+
     fn hand_feedback_diagnostics(&self) -> serde_json::Value {
         serde_json::Value::Null
     }
@@ -315,6 +319,7 @@ struct SupportAttachment {
     blend: f32,
     correction: Quaternion<f32>,
     anchor: Vector3<f32>,         // Closed-pose contact, fixed until release.
+    pump_separation_offset: f32,  // Controller distance minus rail distance at acquisition.
     primary_offset: Vector3<f32>, // Grab-time collision offset, in world space.
     player_rotation: Quaternion<f32>, // Rebase the offset on locomotion turns, never wrist twists.
 }
@@ -707,7 +712,16 @@ impl VrInteraction {
                 let fraction = crate::vr_support::pump_fraction_from_separation(
                     closed_anchor - primary_anchor,
                     travel,
-                    separation,
+                    separation
+                        - self
+                            .support
+                            .as_ref()
+                            .filter(|s| {
+                                prefer_locked_anchor
+                                    && s.entity == held.entity
+                                    && s.primary == primary
+                            })
+                            .map_or(0.0, |s| s.pump_separation_offset),
                 )?;
                 let moving = prefer_locked_anchor
                     && self.step_dt > 0.0
@@ -813,7 +827,7 @@ impl VrInteraction {
                         crate::vr_support::pump_fraction_from_separation(
                             c.closed_anchor - c.primary_anchor,
                             travel,
-                            separation,
+                            separation - support.pump_separation_offset,
                         )
                         .map(|f| c.closed_anchor + travel * f)
                     })
@@ -831,7 +845,10 @@ impl VrInteraction {
                         c.tracked_axis,
                         poses[other].point(rig[other].palm) - c.control_primary_palm,
                     )
-                    && (separation - (anchor - c.primary_anchor).magnitude()).abs()
+                    && (separation
+                        - support.pump_separation_offset
+                        - (anchor - c.primary_anchor).magnitude())
+                    .abs()
                         <= c.profile.release_distance
             });
             if !valid {
@@ -871,6 +888,12 @@ impl VrInteraction {
                             blend,
                             correction,
                             anchor: c.closed_anchor,
+                            pump_separation_offset: if c.pump.is_some() {
+                                (palm - c.control_primary_palm).magnitude()
+                                    - (c.anchor - c.primary_anchor).magnitude()
+                            } else {
+                                0.0
+                            },
                             // Lock this reference until release, including after a block
                             // clears. Following the body would turn physics recovery into
                             // a steering/release gesture with stationary controllers.
@@ -1492,6 +1515,13 @@ impl PlayerInteraction for VrInteraction {
         self.body_anticipation = targets;
     }
 
+    fn maintenance_previews(&self, world: &World) -> Vec<String> {
+        [&self.left_hand, &self.right_hand]
+            .into_iter()
+            .filter_map(|hand| hand.maintenance_preview(world))
+            .collect()
+    }
+
     fn hand_feedback_diagnostics(&self) -> serde_json::Value {
         serde_json::json!({"left": self.left_hand.feedback_diagnostics(), "right": self.right_hand.feedback_diagnostics(), "anticipation": self.anticipation})
     }
@@ -1643,30 +1673,45 @@ impl PlayerInteraction for VrInteraction {
             ctx.player_rotation,
             ctx.input.right_hand.position,
         );
+        let tracked =
+            [(&ctx.input.left_hand, 0), (&ctx.input.right_hand, 1)].map(|(input, slot)| {
+                self.body_hand_tracking[slot]
+                    && (GripPose {
+                        position: input.position,
+                        rotation: input.rotation,
+                    })
+                    .is_tracked()
+            });
+        let maintenance_hand = [&self.left_hand, &self.right_hand].map(|hand| {
+            hand.get_held_entity().is_some_and(|item| {
+                crate::scripts::maintenance::is_maintenance_tool(ctx.world, item)
+            })
+        });
         let right_held_before = self.right_hand.get_held_entity();
-        let (right_hand, mut right_msgs) =
-            if self.support_blocked[1] && self.right_hand.get_held_entity().is_none() {
-                (
-                    self.right_hand.update_suppressed(
-                        ctx.player_pos,
-                        ctx.player_rotation,
-                        &ctx.input.right_hand,
-                    ),
-                    Vec::new(),
-                )
-            } else {
-                VirtualHand::update(
-                    &self.right_hand,
-                    ctx.physics,
-                    ctx.world,
+        let (right_hand, mut right_msgs) = if maintenance_hand[1] && !tracked[1] {
+            (self.right_hand.suspend_maintenance(), Vec::new())
+        } else if self.support_blocked[1] && self.right_hand.get_held_entity().is_none() {
+            (
+                self.right_hand.update_suppressed(
                     ctx.player_pos,
                     ctx.player_rotation,
                     &ctx.input.right_hand,
-                    left_held_entity,
-                    left_position,
-                    ctx.step_dt,
-                )
-            };
+                ),
+                Vec::new(),
+            )
+        } else {
+            VirtualHand::update(
+                &self.right_hand,
+                ctx.physics,
+                ctx.world,
+                ctx.player_pos,
+                ctx.player_rotation,
+                &ctx.input.right_hand,
+                left_held_entity.filter(|_| !maintenance_hand[1] || tracked[0]),
+                left_position,
+                ctx.step_dt,
+            )
+        };
         self.right_hand = right_hand;
 
         // Right updates first, so a same-frame right-hand grab is visible to
@@ -1674,29 +1719,30 @@ impl PlayerInteraction for VrInteraction {
         // A release is still owned until its effects run (it may be a backpack
         // deposit), so the left hand must not acquire that same entity either.
         let right_held_entity = self.right_hand.get_held_entity().or(right_held_before);
-        let (left_hand, mut left_msgs) =
-            if self.support_blocked[0] && self.left_hand.get_held_entity().is_none() {
-                (
-                    self.left_hand.update_suppressed(
-                        ctx.player_pos,
-                        ctx.player_rotation,
-                        &ctx.input.left_hand,
-                    ),
-                    Vec::new(),
-                )
-            } else {
-                VirtualHand::update(
-                    &self.left_hand,
-                    ctx.physics,
-                    ctx.world,
+        let (left_hand, mut left_msgs) = if maintenance_hand[0] && !tracked[0] {
+            (self.left_hand.suspend_maintenance(), Vec::new())
+        } else if self.support_blocked[0] && self.left_hand.get_held_entity().is_none() {
+            (
+                self.left_hand.update_suppressed(
                     ctx.player_pos,
                     ctx.player_rotation,
                     &ctx.input.left_hand,
-                    right_held_entity,
-                    right_position,
-                    ctx.step_dt,
-                )
-            };
+                ),
+                Vec::new(),
+            )
+        } else {
+            VirtualHand::update(
+                &self.left_hand,
+                ctx.physics,
+                ctx.world,
+                ctx.player_pos,
+                ctx.player_rotation,
+                &ctx.input.left_hand,
+                right_held_entity.filter(|_| !maintenance_hand[0] || tracked[1]),
+                right_position,
+                ctx.step_dt,
+            )
+        };
         self.left_hand = left_hand;
 
         self.update_anticipation(ctx);

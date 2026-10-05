@@ -5891,10 +5891,10 @@ impl MissionCore {
             );
         }
         let merge_returns = std::array::from_fn::<_, 2, _>(|i| {
-            if !matches!(
-                pouch_actions[i],
-                Some(super::ammo_pouch::Action::Return { .. })
-            ) {
+            // Shoulder stows are untargeted deposits too. Reserve a matching
+            // stack before a free cell, just as returning ammo to the pouch
+            // does; otherwise the cell-targeted release bypasses auto-stacking.
+            if !shoulder_releases[i] {
                 return None;
             }
             let inventory = self
@@ -6560,6 +6560,7 @@ impl MissionCore {
                     {
                         effects.push(Effect::OpenWeaponSettings {
                             weapon: Some(entity),
+                            upgrade_device: None,
                         });
                     } else {
                         self.flat_ui.utilities.inspect_entity(entity);
@@ -6965,7 +6966,8 @@ impl MissionCore {
                     })
             })
         });
-        self.flat_ui.set_name_strip(name_strip);
+        self.flat_ui
+            .set_name_strip(self.flat_ui.maintenance_preview(&self.world).or(name_strip));
 
         // A deployed mine may be displaced by a collision or moving support.
         // Move its sensor before script damage/overlap checks, so sensing and
@@ -8814,6 +8816,13 @@ impl MissionCore {
     ) -> Vec<Effect> {
         use crate::mission::flat_ui_host::FlatUiDragAction;
         match action {
+            FlatUiDragAction::Maintain { tool, target } => {
+                vec![crate::scripts::maintenance::apply(
+                    &self.world,
+                    tool,
+                    Some(target),
+                )]
+            }
             FlatUiDragAction::ToggleMap => vec![Effect::ToggleMap],
             FlatUiDragAction::Place(entity_id) => vec![crate::scripts::script_util::announce(
                 entity_id,
@@ -8876,7 +8885,10 @@ impl MissionCore {
                     // (the original's own behavior for this button), where the
                     // mode is *chosen* from a described list. The
                     // `CycleGunSetting` action (F) still toggles directly.
-                    ReadoutButton::GunSetting => vec![Effect::OpenWeaponSettings { weapon }],
+                    ReadoutButton::GunSetting => vec![Effect::OpenWeaponSettings {
+                        weapon,
+                        upgrade_device: None,
+                    }],
                     ReadoutButton::Reload => vec![Effect::ReloadWeapon { weapon }],
                     ReadoutButton::PsiTierPrev => step(PsiSelectionAxis::Tier, false),
                     ReadoutButton::PsiTierNext => step(PsiSelectionAxis::Tier, true),
@@ -9939,11 +9951,32 @@ impl MissionCore {
                         rooms.0.clear();
                     }
                 }
-                Effect::ModifyWeapon {
+                Effect::InstallWeaponUpgrade {
                     entity_id,
-                    expected_level,
+                    choice,
+                    expected_tier,
+                    payment,
                 } => {
-                    crate::weapon_modification::apply(&mut self.world, entity_id, expected_level);
+                    let installed = crate::weapon_installation::install(
+                        &mut self.world,
+                        entity_id,
+                        choice,
+                        expected_tier,
+                        payment,
+                    );
+                    effects.extend(Effect::flatten(vec![installed]));
+                }
+                Effect::SetWeaponAccessory {
+                    entity_id,
+                    accessory,
+                    enabled,
+                } => {
+                    crate::weapon_attachments::set_enabled(
+                        &mut self.world,
+                        entity_id,
+                        accessory,
+                        enabled,
+                    );
                 }
                 Effect::ToggleImplant { entity_id } => {
                     match crate::implants::toggle_slot(&self.world, entity_id) {
@@ -10329,7 +10362,42 @@ impl MissionCore {
                     }
                 }
 
-                Effect::OpenWeaponSettings { weapon } => {
+                Effect::OpenWeaponSettings {
+                    weapon,
+                    upgrade_device,
+                } => {
+                    let weapon = if upgrade_device.is_some() {
+                        weapon
+                            .or(self.flat_ui.ammo_selection().0)
+                            .or_else(|| crate::wielded_weapon::wielded_weapon(&self.world))
+                    } else {
+                        weapon
+                    };
+                    if let Some(device) = upgrade_device {
+                        if !self.player_is_alive()
+                            || !crate::scripts::script_util::player_carried_items(&self.world)
+                                .contains(&device)
+                            || !crate::weapon_installation::is_device(&self.world, device)
+                        {
+                            continue;
+                        }
+                        if !weapon.is_some_and(|gun| {
+                            crate::weapon_installation::supported(&self.world, gun)
+                        }) {
+                            effects.push_back(Effect::ShowMessage {
+                                text: "Select a held pistol to choose a device upgrade.".into(),
+                            });
+                            continue;
+                        }
+                        if !self.use_mode {
+                            effects.push_front(
+                                self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT),
+                            );
+                            if game_options.presentation_mode == crate::PresentationMode::Vr {
+                                self.reset_vr_use_mode_placement();
+                            }
+                        }
+                    }
                     // The MFD presents the *wielded* gun, so it opens only with
                     // one in hand and is remembered so it can be dismissed when
                     // that gun is put away. Unbound: the host is synthetic, so
@@ -10355,10 +10423,6 @@ impl MissionCore {
                             .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
                             .map(|panel| panel.0);
                         if let Ok(panel) = panel {
-                            self.script_world.dispatch(Message {
-                                to: panel,
-                                payload: MessagePayload::PanelOpened,
-                            });
                             self.flat_ui.open_unbound(panel);
                             if self.flat_ui.device {
                                 crate::scripts::gui::WeaponSettingsTarget::select_scanned(
@@ -10371,6 +10435,14 @@ impl MissionCore {
                                     weapon,
                                 );
                             }
+                            crate::scripts::gui::WeaponSettingsTarget::set_upgrade_device(
+                                &self.world,
+                                upgrade_device,
+                            );
+                            self.script_world.dispatch(Message {
+                                to: panel,
+                                payload: MessagePayload::PanelOpened,
+                            });
                             self.weapon_settings_gun = Some(weapon);
                         }
                     }
@@ -10672,6 +10744,38 @@ impl MissionCore {
                                 &mut self.id_to_physics,
                             );
                             self.flat_ui.open(entity)
+                        }
+                        crate::PresentationMode::Vr
+                            if ["ContainerScript", "HackableCrate"].iter().any(|script| {
+                                crate::scripts::script_util::entity_has_script(
+                                    &self.world,
+                                    entity,
+                                    script,
+                                )
+                            }) || (crate::scripts::script_util::entity_has_script(
+                                &self.world,
+                                entity,
+                                "CreatureContainer",
+                            ) && crate::scripts::gui::creature_is_lootable(
+                                &self.world,
+                                entity,
+                            )) =>
+                        {
+                            self.gui.close_panel(
+                                &mut self.world,
+                                &mut self.physics,
+                                &mut self.script_world,
+                                &mut self.id_to_physics,
+                            );
+                            if !self.use_mode {
+                                effects.push_front(
+                                    self.enter_use_mode(
+                                        crate::ui::entry_ramp::LOG_READER_ENTRY_EXIT,
+                                    ),
+                                );
+                                self.reset_vr_use_mode_placement();
+                            }
+                            self.flat_ui.open(entity);
                         }
                         crate::PresentationMode::Vr => {
                             // The other half of "one UI at a time": a world
@@ -12905,6 +13009,22 @@ impl MissionCore {
                         );
                     }
                 }
+                Effect::PlayEnvironmentalSoundWithGain {
+                    query,
+                    position,
+                    audio_handle,
+                    gain,
+                } => {
+                    play_environmental_sound_with_gain(
+                        &global_context.gamesys,
+                        asset_cache,
+                        audio_context,
+                        query,
+                        audio_handle,
+                        position,
+                        gain,
+                    );
+                }
                 Effect::PlayEnvironmentalSound {
                     query,
                     position,
@@ -14412,6 +14532,11 @@ impl MissionCore {
         if !(0..2).contains(&setting) {
             return None;
         }
+        if setting == 1 && !crate::weapon_installation::alternate_unlocked(&self.world, weapon) {
+            return Some(Effect::ShowMessage {
+                text: "Unlock alternate fire with Modify.".into(),
+            });
+        }
         if !script_util::can_cycle_gun_setting(&self.world, weapon) {
             return None;
         }
@@ -14557,6 +14682,13 @@ impl MissionCore {
             let mut player = self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
             player.left_hand_entity_id = left;
             player.right_hand_entity_id = right;
+        }
+        // Keep the outgoing clip intact until the incoming grab succeeds so
+        // rollback can restore it. Once the swap succeeds, pool its rounds
+        // just like an ordinary backpack deposit instead of leaving a split
+        // pouch clip in a second cell.
+        if let Some(target) = find_mergeable_stack_anywhere(&self.world, inventory, held) {
+            self.merge_dropped_stack(target, held);
         }
         let mut effects = effects;
         effects.push(Effect::PlaySound {
@@ -15272,6 +15404,10 @@ impl MissionCore {
                 messages.remove(0);
             }
         }
+        messages.extend(self.interaction.maintenance_previews(&self.world));
+        if messages.len() > crate::hud::message_line::MAX_LINES {
+            messages.drain(..messages.len() - crate::hud::message_line::MAX_LINES);
+        }
         messages
     }
 
@@ -15506,6 +15642,10 @@ impl MissionCore {
 
         // Start with built in scene objects
         let mut scene = self.scene_objects.clone();
+        scene.extend(crate::weapon_attachments::render_lasers(
+            &self.world,
+            &self.physics,
+        ));
         {
             let blades = self
                 .world
@@ -16453,7 +16593,13 @@ impl MissionCore {
     /// Hand spotlights (`hand_spotlights` dev param).
     /// Returns a vector of SpotLight objects positioned at the player's hands
     pub fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
-        self.interaction.hand_spotlights(options)
+        let debug_lights = self.interaction.hand_spotlights(options);
+        // The developer override already supplies one light per hand.
+        if !debug_lights.is_empty() {
+            debug_lights
+        } else {
+            crate::weapon_attachments::flashlights(&self.world)
+        }
     }
 
     /// Whether the runtime should show a 2D cursor instead of captured
@@ -17854,6 +18000,26 @@ fn play_environmental_sound(
     audio_handle: AudioHandle,
     position: Vector3<f32>,
 ) -> bool {
+    play_environmental_sound_with_gain(
+        gamesys,
+        asset_cache,
+        audio_context,
+        query,
+        audio_handle,
+        position,
+        1.0,
+    )
+}
+
+fn play_environmental_sound_with_gain(
+    gamesys: &Gamesys,
+    asset_cache: &mut AssetCache,
+    audio_context: &mut AudioContext<EntityId, String>,
+    query: dark::EnvSoundQuery,
+    audio_handle: AudioHandle,
+    position: Vector3<f32>,
+    gain_multiplier: f32,
+) -> bool {
     // A query may carry less specific fallbacks (see `EnvSoundQuery::
     // with_fallback`): the schema authors no bullet sound for glass, and
     // playing nothing there is worse than playing the default impact.
@@ -17876,7 +18042,7 @@ fn play_environmental_sound(
         );
         // Log the resolved play so headless tooling (debug runtime
         // /v1/audio/recent) can assert a schema actually played.
-        let gain = resolved.linear_gain();
+        let gain = resolved.linear_gain() * gain_multiplier.clamp(0.0, 1.0);
         crate::audio_log::play_and_record(
             audio_context,
             audio_handle,
@@ -18566,9 +18732,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     });
                 }
                 if let Ok(gun_state) = v_gun_state.get(id) {
+                    if let Ok(upgrades) = self.world.borrow::<View<crate::weapon_upgrades::WeaponUpgrades>>() {
+                        if let Ok(upgrades) = upgrades.get(id) {
+                            properties.push(DebugPropertyInfo {
+                                name: "WeaponUpgrades".into(),
+                                value: serde_json::to_string(upgrades).unwrap(),
+                            });
+                        }
+                    }
                     properties.push(DebugPropertyInfo {
                         name: "Modification".into(),
-                        value: gun_state.modification.to_string(),
+                        value: crate::weapon_modification::level(&self.world, id)
+                            .unwrap_or(gun_state.modification).to_string(),
                     });
                     if let Ok(desc) = self
                         .world
@@ -18579,6 +18754,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         properties.push(DebugPropertyInfo {
                             name: "GunDescription".into(),
                             value: serde_json::to_string(desc).unwrap(),
+                        });
+                    }
+                    if let Some(setting) = crate::scripts::script_util::active_gun_setting(&self.world, id) {
+                        properties.push(DebugPropertyInfo {
+                            name: "EffectiveGunSetting".into(),
+                            value: serde_json::to_string(&setting).unwrap(),
                         });
                     }
                     properties.push(DebugPropertyInfo {

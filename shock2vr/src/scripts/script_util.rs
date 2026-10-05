@@ -448,6 +448,9 @@ pub fn has_death_links(world: &World, entity_id: EntityId) -> bool {
 /// `weapon`'s selected fire setting, 0 when it has no gun state. Ammo-type
 /// selection and the firing description both key off this, so they agree.
 pub fn current_gun_setting(world: &World, weapon: EntityId) -> i32 {
+    if !crate::weapon_installation::alternate_unlocked(world, weapon) {
+        return 0;
+    }
     world
         .borrow::<View<PropGunState>>()
         .ok()
@@ -455,13 +458,24 @@ pub fn current_gun_setting(world: &World, weapon: EntityId) -> i32 {
         .unwrap_or(0)
 }
 
-/// The firing description for `weapon`'s currently selected fire setting, or
+/// A missing/invalid authored shot multiplier means the ordinary 1x shot.
+/// Resolve this before applying upgrade bonuses so an authored zero does not
+/// discard the bonus when firing normalizes the final value.
+pub(crate) fn shot_multiplier(raw: f32) -> f32 {
+    if raw.is_finite() && raw > 0.0 {
+        raw
+    } else {
+        1.0
+    }
+}
+
+/// The effective description for `weapon`'s currently selected fire setting, or
 /// `None` when it is not a gun. The setting comes from the weapon's live
 /// `PropGunState` (0 when it has none), and an index the archetype does not
 /// author falls back to setting 0.
 pub fn active_gun_setting(world: &World, weapon: EntityId) -> Option<GunSettingDesc> {
     let setting = current_gun_setting(world, weapon);
-    world
+    let base = world
         .borrow::<View<PropBaseGunDesc>>()
         .ok()
         .and_then(|descs| {
@@ -469,7 +483,18 @@ pub fn active_gun_setting(world: &World, weapon: EntityId) -> Option<GunSettingD
                 .get(weapon)
                 .ok()
                 .map(|desc| desc.setting(setting).clone())
-        })
+        })?;
+    Some(
+        match world.borrow::<View<crate::weapon_upgrades::WeaponUpgrades>>() {
+            Ok(upgrades) if upgrades.contains(weapon) => {
+                upgrades.get(weapon).unwrap().effective_setting(
+                    &base,
+                    crate::weapon_modification::scales_damage(world, weapon),
+                )
+            }
+            _ => base,
+        },
+    )
 }
 
 /// A weapon's selectable `Projectile` links (its ammo types), filtered to the
@@ -519,6 +544,9 @@ fn has_second_fire_mode(second_header: Option<&str>, links: &[(i32, ProjectileOp
 
 /// Whether `weapon` can switch fire modes. See [`has_second_fire_mode`].
 pub fn can_cycle_gun_setting(world: &World, weapon: EntityId) -> bool {
+    if !crate::weapon_installation::alternate_unlocked(world, weapon) {
+        return false;
+    }
     let links = all_projectile_links(world, weapon);
     let second_header = gun_setting_header(world, weapon, 1);
     has_second_fire_mode(second_header.as_deref(), &links)
@@ -1639,6 +1667,64 @@ mod tests {
         let not_a_gun = world.add_entity(gun_state(0));
 
         assert!(active_gun_setting(&world, not_a_gun).is_none());
+    }
+
+    #[test]
+    fn active_upgraded_settings_keep_authored_inputs_and_loaded_ammo() {
+        use crate::weapon_upgrades::{UpgradeSource, WeaponUpgrade, WeaponUpgrades};
+        let mut world = World::new();
+        let mut upgrades = WeaponUpgrades::default();
+        for choice in [
+            WeaponUpgrade::ExtendedCapacity,
+            WeaponUpgrade::AlternateFire,
+        ] {
+            upgrades = upgrades
+                .with_upgrade(
+                    choice,
+                    &WeaponUpgrade::ALL,
+                    UpgradeSource::Device,
+                    upgrades.tier(),
+                )
+                .unwrap();
+        }
+        let weapon = world.add_entity((gun_desc(), gun_state(1), upgrades));
+        for _ in 0..3 {
+            let setting = active_gun_setting(&world, weapon).unwrap();
+            assert_eq!(setting.clip, 40);
+            assert!((setting.stim_modifier - 1.16).abs() < 0.00001);
+        }
+        assert_eq!(
+            world
+                .borrow::<View<PropBaseGunDesc>>()
+                .unwrap()
+                .get(weapon)
+                .unwrap()
+                .settings[1]
+                .clip,
+            20
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropGunState>>()
+                .unwrap()
+                .get(weapon)
+                .unwrap()
+                .ammo,
+            0
+        );
+        // Stasis uses stimulus intensity for its control effect, not damage.
+        world.add_component(
+            weapon,
+            dark::properties::PropScripts {
+                scripts: vec!["StasisModify".into()],
+                inherits: true,
+            },
+        );
+        assert_eq!(
+            active_gun_setting(&world, weapon).unwrap().stim_modifier,
+            1.0
+        );
+        assert_eq!(active_gun_setting(&world, weapon).unwrap().clip, 40);
     }
 
     fn projectile(order: i32, setting: i32) -> ProjectileOptions {

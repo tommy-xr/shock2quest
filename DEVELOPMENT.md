@@ -1134,11 +1134,16 @@ pouch; its old separate mesh and glowing readout are removed.
 ### Belt MFD device
 
 The handheld MFD is enabled by default in VR (`cargo dbgr --mission earth.mis --vr`).
+Scanned machine panels on the handheld tricorder stay connected within 6 metres
+of the player. Ordinary cyber-interface panels retain their walk-away range.
+
 Disable **Developer → Tricorder → MFD device prototype** (`vr_mfd_device`,
 session-only) to restore the personal card. `--experimental mfd_device` still
 forces the device on for explicit test launches. Draw with squeeze and focus on a target
 to scan; use an empty other hand's pointer to click or squeeze loot out of the
-screen. Release to return it. Nanites/modules and LOG / KEY / MFD / RES / ? sit
+screen. Crate and corpse loot opens in this MFD while held, or in the cyber
+interface when stowed, with no separate world container panel. Release to
+return it. Nanites/modules and LOG / KEY / MFD / RES / ? sit
 below the original panel, with the HRM plug alongside when applicable.
 `--experimental mfd_device_preview` presents the same compact canvas in flat
 mode for layout checks. See [the spike notes](projects/vr-mfd-device.md) for

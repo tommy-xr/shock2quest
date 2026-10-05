@@ -1,3 +1,4 @@
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -49,6 +50,7 @@ test(
     assert.equal(await charge(), start - 6, "the next pull after the interval fires");
 
     // OVER: 20 charge a shot, 3 s between shots.
+    await unlockWeaponAlternateFire(game);
     await game.input.trigger("CycleGunSetting");
     await game.step({ frames: 2 });
     assert.equal(
@@ -95,6 +97,7 @@ test(
     assert.equal(loaded, 6, "the debug shotgun starts on a full 6-shell tube");
 
     const switchMode = async (header: "NORM" | "TRIPLE") => {
+      await unlockWeaponAlternateFire(game);
       await game.input.trigger("CycleGunSetting");
       await game.step({ frames: 2 });
       assert.equal((await game.info()).player.wielded_gun_setting_header, header);
@@ -154,6 +157,7 @@ test(
 
     // Both of the fusion's shots are authored with the same launch speed, so
     // the whole difference below is the DEATH setting's 0.4x speed modifier.
+    await unlockWeaponAlternateFire(game);
     await game.input.trigger("CycleGunSetting");
     await game.step({ frames: 2 });
     assert.equal(

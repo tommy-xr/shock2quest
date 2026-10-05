@@ -1,3 +1,4 @@
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer, setHandWorldPose, attachSupportHand } from "../src/index.js";
@@ -8,13 +9,14 @@ import { ammoOf, cycleToWeapon } from "./helpers/weapon.js";
 const v = (p: ResolvedGrip["offset"]): Vec3 => [p.x, p.y, p.z];
 const q = (r: ResolvedGrip["rotation"]): Quat => [...v(r.v), r.s];
 
-for (const [primary, mission, triple, physical] of [
+for (const [primary, mission, triple, physical, gripOffset = 0] of [
   ["left", "debug_weapons", false, false],
+  ["right", "debug_weapons", false, false, 0.04],
   ["right", "debug_weapons", false, true],
   ["left", "debug_weapons", true, false],
   ["left", "medsci1.mis", false, false],
 ] as const) {
-  test(`shotgun pump ${primary} ${mission}${triple ? " triple" : ""}${physical ? " physical" : ""}: hand-driven cycle, delayed casing, re-grip and ownership`, {
+  test(`shotgun pump ${primary} ${mission}${triple ? " triple" : ""}${physical ? " physical" : ""}${gripOffset ? " offset grip" : ""}: hand-driven cycle, delayed casing, re-grip and ownership`, {
     skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000,
   }, async () => {
     await using game = await GameServer.launch({ mission, debugFlags: physical ? ["--vr", "--experimental", "physical_held_items"] : ["--vr"] });
@@ -33,10 +35,11 @@ for (const [primary, mission, triple, physical] of [
       assert.ok(prop, "the fitted shotgun must enable its manual action");
       return JSON.parse(prop.value);
     };
+    if (triple) await unlockWeaponAlternateFire(game);
     const before = await support();
     assert.ok(before.pump, "support profile must expose the authored slider rail");
-    const origin = v(before.controller_position);
     const travel = v(before.pump.world_travel);
+    const origin = add(v(before.controller_position), travel.map(x => -x / Math.hypot(...travel) * gripOffset) as Vec3);
     assert.ok(Math.hypot(...travel) > .07 && Math.hypot(...travel) < .2, "stroke follows the scaled asset");
     const place = async (fraction: number) => {
       const player = (await game.info()).player;
@@ -48,7 +51,14 @@ for (const [primary, mission, triple, physical] of [
       await game.input.set(`${primary}_hand.trigger`, 0);
       await game.step({ frames: 65 });
     };
-    await attachSupportHand(game, primary);
+    if (gripOffset) {
+      await place(0);
+      await game.input.set(`${other}_hand.squeeze`, 1);
+      await game.step({ frames: 10 });
+      assert.ok((await state()).fraction < .01, "an offset grab must not move the pump");
+    } else {
+      await attachSupportHand(game, primary);
+    }
     assert.equal((await support()).attached, true);
     if (triple) {
       await game.input.trigger("CycleGunSetting");

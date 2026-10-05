@@ -64,6 +64,7 @@ pub struct VirtualHand {
 
     handedness: Handedness,
     feedback: HandFeedback,
+    maintenance_target: Option<EntityId>,
     motion: crate::throwing::HandMotion,
 }
 
@@ -179,6 +180,7 @@ impl VirtualHand {
             hand_state: HandState::Empty,
             handedness,
             feedback: HandFeedback::default(),
+            maintenance_target: None,
             motion: Default::default(),
         }
     }
@@ -254,10 +256,23 @@ impl VirtualHand {
         hand.position = hand_world_position(pawn_pos, pawn_rot, input.position);
         hand.rotation = pawn_rot * input.rotation;
         hand.squeeze_value = input.squeeze_value;
+        hand.maintenance_target = None;
         hand.trigger_value = input.trigger_value;
         hand.feedback = HandFeedback::default();
         hand.raytrace_hit = None;
         hand.last_frobbed_entity = None;
+        hand.reset_throw_motion();
+        hand
+    }
+
+    /// Tracking loss must not turn a fallback trigger/grip into tool use.
+    /// Keep ownership and require a new squeeze before accepting a release.
+    pub(crate) fn suspend_maintenance(&self) -> Self {
+        let mut hand = self.clone();
+        hand.maintenance_target = None;
+        hand.feedback = HandFeedback::default();
+        hand.trigger_value = 1.0;
+        hand.restored_grip_pending = true;
         hand.reset_throw_motion();
         hand
     }
@@ -277,6 +292,7 @@ impl VirtualHand {
             hand_state: HandState::Grabbing { entity_id },
             restored_grip_pending: false,
             feedback: HandFeedback::default(),
+            maintenance_target: None,
             ..self.clone()
         }
     }
@@ -336,6 +352,25 @@ impl VirtualHand {
             .get_held_entity()
             .and_then(|held| interaction_ray_cast(physics, world, ray_start, forward, Some(held)));
 
+        // Resolve once for trigger, release, glove light and preview. The
+        // opposite hand has no pick collider; world targets use the visible
+        // ray surface and the same close reach, never a distant ray hit.
+        let maintenance_target = prev.get_held_entity().and_then(|tool| {
+            held_by_other_hand
+                .filter(|target| {
+                    (hand_position - other_hand_position).magnitude() <= TWO_HAND_TOOL_REACH
+                        && crate::scripts::maintenance::offers_to(world, tool, *target)
+                })
+                .or_else(|| {
+                    result.as_ref().and_then(|hit| {
+                        let target = hit.maybe_entity_id?;
+                        ((hit.hit_point - ray_start).magnitude() <= TWO_HAND_TOOL_REACH
+                            && crate::scripts::maintenance::offers_to(world, tool, target))
+                        .then_some(target)
+                    })
+                })
+        });
+
         let (mut hand, mut effs) = match prev.hand_state {
             HandState::Grabbing { entity_id } => {
                 // See what we're hitting
@@ -348,25 +383,13 @@ impl VirtualHand {
                         motion: release,
                     }];
 
-                    // Releasing a tool against the weapon in the other hand is
-                    // the natural two-hand gesture, and it is the one target
-                    // the release ray usually misses: the hands are alongside
-                    // each other, not one pointed at the other. So the tool is
-                    // offered to what the other hand holds once it has been
-                    // brought to it - only for a pairing that item can take,
-                    // since offering on every release near the other hand would
-                    // e.g. post any dropped item into a held container.
-                    let two_hand_target = held_by_other_hand.filter(|other_held| {
-                        (hand_position - other_hand_position).magnitude() <= TWO_HAND_TOOL_REACH
-                            && crate::scripts::maintenance::offers_to(world, entity_id, *other_held)
-                    });
-
-                    // Exactly one recipient: a deliberate two-hand gesture wins
-                    // over whatever the ray happened to be pointing at, so one
-                    // tool can never be spent on two weapons (a released tool
-                    // over a weapons bench sees a second gun most of the time).
-                    let target = two_hand_target
-                        .or_else(|| result.clone().and_then(|hit| hit.maybe_entity_id));
+                    let is_maintenance =
+                        crate::scripts::maintenance::is_maintenance_tool(world, entity_id);
+                    let target = if is_maintenance {
+                        maintenance_target
+                    } else {
+                        result.as_ref().and_then(|hit| hit.maybe_entity_id)
+                    };
                     if let Some(target) = target {
                         msgs.push(VirtualHandEffect::OutMessage {
                             message: Message {
@@ -389,6 +412,7 @@ impl VirtualHand {
                         hand_state: HandState::Empty,
                         handedness,
                         feedback: HandFeedback::default(),
+                        maintenance_target: None,
                         motion: Default::default(),
                     };
                     (updated_hand, msgs)
@@ -407,8 +431,14 @@ impl VirtualHand {
                     if prev.trigger_value < 0.5 && input_hand.trigger_value > 0.5 {
                         msgs.push(VirtualHandEffect::OutMessage {
                             message: Message {
-                                to: entity_id,
-                                payload: held_trigger_press_payload(world, entity_id),
+                                to: maintenance_target.unwrap_or(entity_id),
+                                payload: maintenance_target
+                                    .map(|_| MessagePayload::ProvideForConsumption {
+                                        entity: entity_id,
+                                    })
+                                    .unwrap_or_else(|| {
+                                        held_trigger_press_payload(world, entity_id)
+                                    }),
                             },
                         });
                     }
@@ -444,6 +474,7 @@ impl VirtualHand {
                         hand_state: next_hand_state,
                         handedness,
                         feedback: HandFeedback::default(),
+                        maintenance_target: None,
                         motion: Default::default(),
                     };
                     (updated_hand, msgs)
@@ -461,7 +492,17 @@ impl VirtualHand {
             ),
         };
 
-        let observed = if hand.get_held_entity().is_some() {
+        hand.maintenance_target = hand.get_held_entity().and(maintenance_target);
+        let observed = if let Some(target) = hand.maintenance_target {
+            if matches!(
+                crate::scripts::maintenance::maintenance_outcome(world, Some(target)),
+                crate::scripts::maintenance::MaintenanceOutcome::Restored { .. }
+            ) {
+                HandAffordance::Frobbable
+            } else {
+                HandAffordance::Blocked
+            }
+        } else if hand.get_held_entity().is_some() {
             HandAffordance::None
         } else {
             hand.feedback.observed
@@ -581,6 +622,13 @@ impl VirtualHand {
 
     pub(crate) fn affordance(&self) -> HandAffordance {
         self.feedback.observed
+    }
+
+    pub(crate) fn maintenance_preview(&self, world: &World) -> Option<String> {
+        let tool = self.get_held_entity()?;
+        let target = self.maintenance_target?;
+        crate::scripts::maintenance::offers_to(world, tool, target)
+            .then(|| crate::scripts::maintenance::preview(world, target))
     }
 
     pub(crate) fn feedback_diagnostics(&self) -> serde_json::Value {
@@ -708,6 +756,7 @@ fn handle_empty_hand_state(
         hand_state: next_hand_state,
         handedness,
         feedback,
+        maintenance_target: None,
         motion: Default::default(),
     };
     (updated_hand, msgs)
@@ -949,6 +998,70 @@ mod tests {
             inventory_action: FrobFlag::SCRIPT,
             tool_action: FrobFlag::empty(),
         }
+    }
+
+    #[test]
+    fn maintenance_trigger_uses_one_nearby_target_on_the_press_edge() {
+        let mut world = World::new();
+        let tool = world.add_entity((dark::properties::PropScripts {
+            scripts: vec!["Wrench".into()],
+            inherits: true,
+        },));
+        let gun = world.add_entity((dark::properties::PropGunState {
+            ammo: 1,
+            condition: 40.0,
+            setting: 0,
+            modification: 0,
+            silence_value: 0.0,
+        },));
+        let hand = VirtualHand::new(Handedness::Right).grab_entity(&world, tool);
+        let mut input = Hand::default();
+        input.squeeze_value = 1.0;
+        input.trigger_value = 1.0;
+        let physics = PhysicsWorld::new();
+        let update = |prev: &VirtualHand, other_position| {
+            VirtualHand::update(
+                prev,
+                &physics,
+                &world,
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                &input,
+                Some(gun),
+                other_position,
+                1.0 / 60.0,
+            )
+        };
+        let count = |effects: &[VirtualHandEffect]| {
+            effects.iter().filter(|effect| matches!(effect,
+            VirtualHandEffect::OutMessage { message: Message { to, payload: MessagePayload::ProvideForConsumption { entity } } }
+                if *to == gun && *entity == tool)).count()
+        };
+        let (held, effects) = update(&hand, input.position);
+        assert_eq!(count(&effects), 1);
+        assert_eq!(held.get_held_entity(), Some(tool));
+        assert!(
+            held.maintenance_preview(&world)
+                .unwrap()
+                .contains("Tool kept")
+        );
+        assert_eq!(
+            count(&update(&held, input.position).1),
+            0,
+            "held trigger cannot repeat"
+        );
+        assert_eq!(
+            count(&update(&hand, input.position + vec3(1.0, 0.0, 0.0)).1),
+            0,
+            "distant weapon cannot be maintained"
+        );
+        let suspended = held.suspend_maintenance();
+        assert!(suspended.maintenance_preview(&world).is_none());
+        assert_eq!(
+            count(&update(&suspended, input.position).1),
+            0,
+            "tracking recovery must not synthesize a press"
+        );
     }
 
     fn player_gun() -> PropPlayerGun {

@@ -7,15 +7,12 @@ import type {
   EntityDetailResult,
   EntitySummary,
   PhysicsBodySummary,
-  Vec3,
 } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import {
-  GUI_PIXEL_TO_WORLD_SIZE,
-  LOOT_PANEL_SIZE_PX as PANEL_SIZE_PX,
   add,
   aimVrHandAt,
-  quatRotate,
+  aimVrHandAtCanvas,
   normalize,
   scale,
   sub,
@@ -25,7 +22,7 @@ import {
 // production path that exposed the bug:
 //
 //   Desk 713 --Contains--> Toxin-A 547
-//   trigger desk -> ContainerGui proxy -> squeeze the rendered Toxin slot
+//   trigger desk -> cyber-interface MFD -> squeeze the rendered Toxin slot
 //   held-item trigger -> ResearchGui proxy -> release over that proxy
 //
 // The proxy forwards the offer to its parent Toxin-A. Before the fix the
@@ -147,9 +144,7 @@ test(
     await game.step({ frames: 3 });
     await openPanelThroughVrTrigger(game, desk);
 
-    const [deskPanel] = await uiBodies(game);
-    assert.ok(deskPanel, "production desk frob must open one VR loot panel");
-    assert.equal((await uiBodies(game)).length, 1);
+    assert.equal((await uiBodies(game)).length, 0, "loot must use the MFD");
     const deskGui = (await game.ui.state()).active_panel;
     assert.ok(deskGui, "Desk 713 must own the active container panel");
     assert.equal(deskGui.entity_id, desk.id);
@@ -158,48 +153,10 @@ test(
     );
     assert.ok(toxinSlot, "Desk panel must render the authored Toxin-A slot");
 
-    // Invert ProxyGuiScript's world -> normalized-canvas map for the rendered
-    // Toxin slot using the shared ContainerGui canvas dimensions.
-    const panelSize: Vec3 = [
-      PANEL_SIZE_PX[0] * GUI_PIXEL_TO_WORLD_SIZE,
-      PANEL_SIZE_PX[1] * GUI_PIXEL_TO_WORLD_SIZE,
-      0,
-    ];
-    const slotCenter: Vec3 = [
-      toxinSlot.rect[0] + toxinSlot.rect[2] / 2,
-      toxinSlot.rect[1] + toxinSlot.rect[3] / 2,
-      0,
-    ];
-    const u = slotCenter[0] / PANEL_SIZE_PX[0];
-    const v = slotCenter[1] / PANEL_SIZE_PX[1];
-    const localSlot: Vec3 = [
-      panelSize[0] * (0.5 - u),
-      panelSize[1] * (0.5 - v),
-      0,
-    ];
-    const slotWorld = add(
-      deskPanel.position,
-      quatRotate(deskPanel.rotation, localSlot),
-    );
-    const slotAim = await aimVrHandAt(game, slotWorld, 0.35);
-    const slotHit = await game.raycast({
-      start: slotAim.start,
-      end: slotAim.target,
-      collision_groups: ["ui"],
-      max_distance: 1,
-    });
-    assert.equal(slotHit.entity_id, deskPanel.entity_id);
-    const productionSlotHit = await game.raycast({
-      start: slotAim.start,
-      end: slotAim.target,
-      collision_groups: ["world", "entity", "selectable", "raycast", "ui"],
-      max_distance: 1,
-    });
-    assert.equal(
-      productionSlotHit.entity_id,
-      deskPanel.entity_id,
-      `the unfiltered production ray must reach the slot: ${JSON.stringify(productionSlotHit)}`,
-    );
+    const pose = (await game.ui.state()).panel_pose;
+    assert.ok(pose);
+    const [x, y, w, h] = toxinSlot.rect;
+    await aimVrHandAtCanvas(game, pose, [x + w / 2, y + h / 2]);
     await game.input.set("right_hand.squeeze", 1);
     await game.step({ frames: 8 });
     assert.equal(
@@ -208,6 +165,9 @@ test(
       "squeezing the real Desk slot must hold authored Toxin-A 547",
     );
     assert.equal(contains(await game.entities.detail(desk.id), toxin.id), false);
+
+    await game.input.trigger("LeftHandLowerButton");
+    await game.step({ frames: 2 });
 
     // Carry the real vial clear of its source desk before opening Research.
     // Dropping while still aimed through the desk can legitimately offer it

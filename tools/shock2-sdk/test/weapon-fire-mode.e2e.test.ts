@@ -1,3 +1,4 @@
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -34,6 +35,8 @@ test(
     await game.step({ frames: 5 });
     assert.deepEqual(await fireMode(game), [0, "NORM"], "pistol starts on its first mode");
 
+    await unlockWeaponAlternateFire(game);
+
     const before = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
     await game.input.trigger("CycleGunSetting");
     await game.step({ frames: 2 });
@@ -60,6 +63,7 @@ test(
     await game.step({ frames: 5 });
 
     const shotgun = await cycleToWeapon(game, (e) => e.name.includes("Shotgun"));
+    await unlockWeaponAlternateFire(game);
     assert.deepEqual(await fireMode(game), [0, "NORM"], "shotgun starts on its first mode");
     assert.equal(
       (await game.info()).player.wielded_ammo_type,

@@ -42,6 +42,7 @@ mod frontend_presentation;
 mod frontend_sfx;
 pub mod horde_report;
 pub mod list_scroll;
+mod nine_slice;
 pub mod options_panel;
 mod panel_anchor;
 mod pointer_visual;
@@ -437,6 +438,13 @@ pub enum ImageKind {
     /// region of a shipped bitmap (a single row of the bio monitor, the ammo
     /// gauge's well) without a second, hand-cut copy of the art.
     Crop { u0: f32, v0: f32, u1: f32, v1: f32 },
+    /// Keep borders at their authored canvas-pixel size and stretch the middle.
+    /// Source dimensions and left/top/right/bottom borders use authored pixels;
+    /// shared layout expands this into cropped images before either presenter.
+    NineSlice {
+        source_size: [f32; 2],
+        borders: [f32; 4],
+    },
 }
 
 /// The grid tile every hologram panel is drawn from (`shodan/s45.pcx`): a black
@@ -927,7 +935,7 @@ where
     ) -> Vec<PlacedElement> {
         let mut placed = Vec::with_capacity(self.elements.len());
         for element in &self.elements {
-            placed.push(match element {
+            let element = match element {
                 UiElement::Image {
                     position,
                     size,
@@ -1003,7 +1011,8 @@ where
                         *fit_to_rect,
                     )
                 }
-            });
+            };
+            nine_slice::append(element, &mut placed);
         }
         for (canvas, viewports) in &self.projections {
             let pointer = pointer.and_then(|p| canvas_viewport::target_to_canvas(viewports, p));
@@ -1575,7 +1584,8 @@ pub(crate) fn drawn_rect(
         ImageKind::Ui
         | ImageKind::Hologram { .. }
         | ImageKind::HolographicIcon
-        | ImageKind::Crop { .. } => (position, size),
+        | ImageKind::Crop { .. }
+        | ImageKind::NineSlice { .. } => (position, size),
         ImageKind::ObjectIcon => (position + centered_offset(size, texture_px), texture_px),
         ImageKind::ObjectIconFit => {
             let scale = (size.x / texture_px.x).min(size.y / texture_px.y).min(1.0);
@@ -2089,6 +2099,30 @@ mod tests {
                 1.0,
                 fit_to_rect,
             )
+        }
+
+        #[test]
+        fn nine_patch_pieces_land_identically_in_both_presentations() {
+            let mut pieces = Vec::new();
+            nine_slice::append(
+                PlacedElement {
+                    turns: 0,
+                    rect: Rect::new(10.0, 20.0, 140.0, 18.0),
+                    alpha: 1.0,
+                    content: PlacedContent::Image {
+                        texture: "button.pcx".into(),
+                        kind: ImageKind::NineSlice {
+                            source_size: [90.0, 32.0],
+                            borders: [3.0; 4],
+                        },
+                    },
+                },
+                &mut pieces,
+            );
+            assert_eq!(pieces.len(), 9);
+            for piece in pieces {
+                assert_parity("nine-patch", &piece);
+            }
         }
 
         #[test]

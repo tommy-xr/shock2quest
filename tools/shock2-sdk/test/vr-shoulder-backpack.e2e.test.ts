@@ -18,6 +18,41 @@ const enabled = process.env.SHOCK2_E2E === "1";
 const owner = (hand: "left" | "right") =>
   hand === "left" ? "wielded_entity_id" : "right_hand_entity_id";
 
+for (const hand of ["left", "right"] as const) {
+  test(`${hand} shoulder ammo pickup merges into carried standard bullets`, {
+    skip: !enabled, timeout: 180_000,
+  }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    const reserve = await game.player.spawnItem(-31);
+    const clip = (await game.entities.list()).entities.find(e => e.template_id === -1358)!;
+    assert.ok(clip);
+    const rounds = async (id: number) => Number((await game.entities.detail(id)).properties.find(p => p.name === "StackCount")?.value);
+    const total = await rounds(reserve.entity_id) + await rounds(clip.id);
+    if (hand === "right") {
+      let full = false;
+      for (let i = 0; i < 50; i++) {
+        try { await game.player.spawnItem(-1221); }
+        catch (error) {
+          assert.match(String(error), /could not add item to inventory/);
+          full = true;
+          break;
+        }
+      }
+      assert.ok(full, "matching ammo must also stack into a full backpack");
+    }
+    await aimVrHandAt(game, clip.position, .2, 1, 0, { hand });
+    await game.step({ frames: 5 });
+    assert.equal((await game.info()).player[owner(hand)], clip.id);
+    await reach(game, hand, hand === "left" ? 1 : 0);
+    await game.input.set(`${hand}_hand.squeeze`, 0);
+    await game.step({ frames: 8 });
+    assert.equal((await game.info()).player[owner(hand)], null);
+    assert.equal(await rounds(reserve.entity_id), total, "shoulder pickup must pool all standard bullets even with free backpack cells");
+    assert.ok(!(await game.entities.list()).entities.some(e => e.id === clip.id), "merged donor must be destroyed");
+  });
+}
+
 async function reachInFront(game: GameServer) {
   const player = (await game.info()).player;
   const centers = player.hand_feedback?.shoulder_backpack?.centers;

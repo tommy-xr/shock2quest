@@ -247,9 +247,16 @@ pub enum Effect {
     ToggleHazardArmor {
         entity_id: EntityId,
     },
-    ModifyWeapon {
+    InstallWeaponUpgrade {
         entity_id: EntityId,
-        expected_level: i32,
+        choice: crate::weapon_upgrades::WeaponUpgrade,
+        expected_tier: usize,
+        payment: crate::weapon_installation::Payment,
+    },
+    SetWeaponAccessory {
+        entity_id: EntityId,
+        accessory: crate::weapon_upgrades::WeaponAccessory,
+        enabled: bool,
     },
     ToggleImplant {
         entity_id: EntityId,
@@ -363,6 +370,7 @@ pub enum Effect {
     /// None. An explicit target that was put away never falls back.
     OpenWeaponSettings {
         weapon: Option<EntityId>,
+        upgrade_device: Option<EntityId>,
     },
 
     /// Eject `entity_id`'s magazine back to the backpack, as clips of the ammo
@@ -949,6 +957,14 @@ pub enum Effect {
         audio_handle: AudioHandle,
         query: EnvSoundQuery,
         position: Vector3<f32>,
+    },
+    /// Apply a source-level gain after resolving the authored schema. Used by
+    /// installed silencers without changing reload, empty or impact sounds.
+    PlayEnvironmentalSoundWithGain {
+        audio_handle: AudioHandle,
+        query: EnvSoundQuery,
+        position: Vector3<f32>,
+        gain: f32,
     },
     /// Try the authored schema first, using a fallback only when none resolves.
     PlayEnvironmentalSoundWithFallback {

@@ -96,11 +96,14 @@ pub mod vr_magazine;
 mod vr_psi_sway;
 mod vr_shotgun_pump;
 mod vr_weapon_action;
+mod weapon_attachments;
+pub mod weapon_installation;
 pub mod weapon_modification;
 mod weapon_muzzle;
 pub mod weapon_recoil;
 pub mod weapon_repair;
 mod weapon_requirements;
+pub mod weapon_upgrades;
 pub use hand_glove::{GloveRenderer, HandLight};
 /// Re-exported (the module itself stays private) so the `melee_grip` example
 /// can re-measure the melee `_h` contact offsets off the shipped rigs with the
@@ -875,48 +878,18 @@ impl Game {
     }
 
     /// Model name, world holds and face normal of the ladder entity `id` (see
-    /// [`ladder_holds`]), read from its `.bin` - debug tooling only.
+    /// [`ladder_holds`]), read from its `.bin`.
     pub fn ladder_holds(
-        &self,
+        &mut self,
         id: i32,
     ) -> Result<(String, ladder_holds::LadderHolds, Vector3<f32>), String> {
-        use dark::properties::PropModelName;
-        use runtime_props::RuntimePropTransform;
         let entity = self
             .debug_scene()
             .and_then(|scene| scene.resolve_entity_id(id))
             .ok_or_else(|| format!("no entity {id}"))?;
-        let (model, transform) = self
-            .world()
-            .run(
-                |names: shipyard::View<PropModelName>,
-                 transforms: shipyard::View<RuntimePropTransform>| {
-                    Some((
-                        names.get(entity).ok()?.0.clone(),
-                        transforms.get(entity).ok()?.0,
-                    ))
-                },
-            )
-            .ok_or_else(|| format!("entity {id} has no model"))?;
-        let file = format!("{model}.bin");
-        let reader = self
-            .asset_cache
-            .get_raw_reader(&file)
-            .ok_or_else(|| format!("cannot open {file}"))?;
-        let mut reader = reader.borrow_mut();
-        let header = dark::ss2_bin_header::read(&mut *reader);
-        if !matches!(header.bin_type, dark::ss2_bin_header::BinFileType::Obj) {
-            return Err(format!("{file} is not an object model"));
-        }
-        // Raw vertices, no sub-object palette: every ladder model is one part.
-        let mesh = dark::ss2_bin_obj_loader::read(&mut *reader, &header);
-        let polygons: Vec<Vec<u16>> = mesh
-            .polygons
-            .iter()
-            .map(|p| p.vertex_indices.clone())
-            .collect();
-        let holds = ladder_holds::ladder_holds(&mesh.vertices, &polygons).transformed(&transform);
-        Ok((model, holds, ladder_holds::face_normal(&transform)))
+        let world = self.active_game_scene.world();
+        ladder_holds::entity_holds(&mut self.asset_cache, world, entity)
+            .ok_or_else(|| format!("entity {id} has no object model"))
     }
 
     /// The pawn's position and rotation - the frame tracked hands are in - or

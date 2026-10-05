@@ -122,7 +122,7 @@ where
             // Opened without a frob (the audio-log reader): give the gui the
             // same fresh per-open state a frob-open would have.
             MessagePayload::PanelOpened => {
-                self.gui.prepare_state_on_frob(&mut self.state);
+                self.gui.on_panel_opened(world, &mut self.state);
                 Effect::NoEffect
             }
             MessagePayload::Frob => {

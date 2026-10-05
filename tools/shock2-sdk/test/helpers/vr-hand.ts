@@ -100,13 +100,12 @@ export const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
 
 /**
  * The loot panel's canvas in panel pixels (`ContainerGui::loot_container`):
- * the 188px width of the MFD slot it docks into, and just enough height for
- * its 4x4 hologram grid plus margins.
+ * the shared retail MFD canvas in both flat and VR.
  */
-export const LOOT_PANEL_SIZE_PX: Vec3 = [188, 178, 0];
+export const LOOT_PANEL_SIZE_PX: Vec3 = [188, 296, 0];
 
 /** Center of the loot panel's first 35x34 cell, in panel pixels. */
-export const LOOT_SLOT_CENTER_PX: Vec3 = [24 + 35 / 2, 34 + 34 / 2, 0];
+export const LOOT_SLOT_CENTER_PX: Vec3 = [15 + 35 / 2, 153 + 34 / 2, 0];
 
 /**
  * Press one element of an open world panel with the production VR hand.
@@ -124,6 +123,21 @@ export async function clickWorldPanelElement(
   element: { screen_rect: [number, number, number, number] },
   button: "trigger" | "squeeze" = "trigger",
 ): Promise<void> {
+  const ui = await game.ui.state();
+  if (ui.panel_pose) {
+    // Loot now uses the cyber interface or tricorder. These presenters expose
+    // their resolved canvas pose instead of a transient world-panel collider.
+    const [x, y, w, h] = element.screen_rect;
+    await aimVrHandAtCanvas(game, ui.panel_pose, [
+      (x + w / 2) * ui.panel_pose.canvas[0],
+      (y + h / 2) * ui.panel_pose.canvas[1],
+    ]);
+    await game.input.set(`right_hand.${button}`, 1);
+    await game.step({ frames: 4 });
+    await game.input.set(`right_hand.${button}`, 0);
+    await game.step({ frames: 8 });
+    return;
+  }
   const panels = (await game.physics.bodies()).bodies.filter((body) =>
     body.collision_groups.includes("ui"),
   );

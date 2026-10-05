@@ -12,8 +12,10 @@ async function click(game: GameServer, label: string) {
   await clickElement(game, el);
 }
 /** Press the modify plug and read the quoted cost off the board it opens. */
-async function openModifyBoard(game: GameServer) {
+async function openModifyBoard(game: GameServer, choice = "ExtendedCapacity") {
   await click(game, "modify");
+  await click(game, `upgrade_${choice}`);
+  await click(game, "upgrade_confirm");
   const cost = (await elements(game)).find(e => e.kind === "text" && /^\d+$/.test(e.text ?? ""));
   assert.ok(cost, JSON.stringify(await elements(game)));
   return Number(cost.text);
@@ -46,15 +48,16 @@ test("Tinker halves actual paid Modify attempts; two pistol modifications surviv
   await winBoard(game);
   assert.ok((await elements(game)).some(e => e.texture === "winm.pcx"), "a won modify board shows WINM");
   assert.equal(await property(game, gun, "Modification"), "1");
-  const first = JSON.parse(await property(game, gun, "GunDescription"));
-  assert.equal(first.settings[0].clip, base.settings[0].clip + 12);
-  assert.ok(Math.abs(first.settings[0].stim_modifier - base.settings[0].stim_modifier * 1.1) < 0.0001);
+  const first = JSON.parse(await property(game, gun, "EffectiveGunSetting"));
+  assert.equal(first.clip, base.settings[0].clip * 2);
+  assert.ok(Math.abs(first.stim_modifier - base.settings[0].stim_modifier * 1.08) < 0.0001);
   await reopenSettings(game);
-  await openModifyBoard(game);
+  await openModifyBoard(game, "LowMaintenanceI");
   await winBoard(game);
   assert.equal(await property(game, gun, "Modification"), "2");
   const second = await property(game, gun, "GunDescription");
-  assert.equal(JSON.parse(second).settings[0].reload_time_ms, Math.floor(base.settings[0].reload_time_ms / 3));
+  assert.deepEqual(JSON.parse(second), base, "selectable upgrades never mutate the base description");
+  assert.ok(Math.abs(JSON.parse(await property(game, gun, "EffectiveGunSetting")).stim_modifier - base.settings[0].stim_modifier * 1.16) < 0.0001);
   await reopenSettings(game);
   await click(game, "modify");
   assert.ok(!(await elements(game)).some(e => e.label === "start-hack"), "no third modification board");
