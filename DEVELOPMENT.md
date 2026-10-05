@@ -1134,6 +1134,9 @@ pouch; its old separate mesh and glowing readout are removed.
 ### Belt MFD device
 
 The handheld MFD is enabled by default in VR (`cargo dbgr --mission earth.mis --vr`).
+Scanned machine panels on the handheld tricorder stay connected within 6 metres
+of the player. Ordinary cyber-interface panels retain their walk-away range.
+
 Disable **Developer → Tricorder → MFD device prototype** (`vr_mfd_device`,
 session-only) to restore the personal card. `--experimental mfd_device` still
 forces the device on for explicit test launches. Draw with squeeze and focus on a target

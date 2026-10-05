@@ -50,6 +50,16 @@ for (const hand of ["left", "right"] as const) {
     assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.scans, count);
     assert.equal((await game.info()).player.stats?.nanites, before, "scan cannot purchase");
     await game.input.set(`${hand}_hand.trigger`, 0);
+    // Keep the shop usable after stepping beyond the old four-unit range.
+    const near = (await game.info()).player.position;
+    await game.player.teleport({ x: near[0] - 3, y: near[1], z: near[2] });
+    await game.step({ frames: 10 });
+    const distance = Math.hypot(...sub((await game.info()).player.position, reader.position));
+    assert.ok(distance > 4 && distance < 15, `distance=${distance}`);
+    assert.equal((await game.ui.state()).active_panel?.template_id, 262,
+      "tricorder replicator stays open beyond the ordinary panel range");
+    await game.player.teleport({ x: near[0], y: near[1], z: near[2] });
+    await game.step({ frames: 3 });
     // Bring the instrument to reading height, then use the other hand's ray.
     await game.input.set(`${hand}_hand.position`, [hand === "left" ? -.2 : .2, .3, -.6]);
     await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
