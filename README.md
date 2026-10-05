@@ -99,6 +99,7 @@ empty beaker. Small beakers hold four rounds; large beakers hold eight.
 Broken replicators show static in the MFD and tricorder. Select their Repair
 control to attempt the skill-gated repair minigame; a win restores the catalog,
 and a failed attempt leaves the machine broken and available for another try.
+Use the catalog's page arrows to reach the fifth and sixth items.
 
 Empty hands ease toward a partial point at usable controls or a partial grip
 near reachable items, occupied holsters, stocked ammo pouches, and climbing holds.
