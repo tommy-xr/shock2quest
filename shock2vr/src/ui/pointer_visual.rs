@@ -12,7 +12,7 @@
 use cgmath::{InnerSpace, Matrix4, Quaternion, Vector2, Vector3, vec3};
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{FrontFaceWinding, SceneObject, color_material, cube},
+    scene::{FrontFaceWinding, SceneObject, color_material, cube, cylinder, laser_material, quad},
 };
 
 use crate::{
@@ -25,10 +25,12 @@ use crate::{
 /// How far a beam that misses the panel reaches into space. Long enough to read
 /// as "pointing somewhere", short enough not to spear the whole room.
 pub const POINTER_BEAM_MISS_LENGTH: f32 = 2.0;
-/// Beam cross-section, in metres.
-const POINTER_BEAM_THICKNESS: f32 = 0.006;
-/// Edge length of the hit dot, in metres.
-const POINTER_DOT_SIZE: f32 = 0.03;
+/// Radii of the beam's soft halo and bright core, in metres.
+const BEAM_HALO_RADIUS: f32 = 0.012;
+const BEAM_CORE_RADIUS: f32 = 0.0025;
+/// Edge length of the hit dot's quad, in metres. The glow fades out well
+/// inside it.
+const POINTER_DOT_SIZE: f32 = 0.12;
 /// Clear air between the panel's frontmost canvas layer and the dot.
 const POINTER_DOT_CLEARANCE: f32 = VR_COMPONENT_Z_STEP * 2.0;
 /// Floor on how squarely a ray may meet the panel before the pull-back below
@@ -43,46 +45,27 @@ const CONTROLLER_PROXY_SIZE: Vector3<f32> = Vector3 {
     z: 0.09,
 };
 
-/// How many pieces the beam is cut into to fade along its length. Enough for
-/// the falloff to read as smoke rather than as stripes, few enough that a menu
-/// frame stays cheap on a Quest (each piece is a draw, per hand, per eye).
-pub const BEAM_SEGMENTS: usize = 6;
-/// Transparency (0 = opaque) of the beam where it leaves the hand...
-const BEAM_NEAR_TRANSPARENCY: f32 = 0.35;
-/// ...and at its far end, just short of invisible.
-const BEAM_FAR_TRANSPARENCY: f32 = 0.95;
 /// Clear space left at the hand end, so the beam emerges from the glove's
 /// fingertips instead of starting inside the palm. Roughly a hand's length.
 const BEAM_HAND_CLEARANCE: f32 = 0.25;
 
-const BEAM_COLOR: Vector3<f32> = Vector3 {
-    x: 0.3,
-    y: 0.8,
-    z: 1.0,
-};
-const DOT_COLOR: Vector3<f32> = Vector3 {
-    x: 1.0,
+/// UI green, so a menu pointer never reads as a weapon's red laser sight.
+const BEAM_HALO_COLOR: Vector3<f32> = Vector3 {
+    x: 0.02,
     y: 1.0,
-    z: 1.0,
+    z: 0.15,
 };
+const BEAM_CORE_COLOR: Vector3<f32> = Vector3 {
+    x: 0.25,
+    y: 1.0,
+    z: 0.35,
+};
+const DOT_COLOR: Vector3<f32> = BEAM_CORE_COLOR;
 const CONTROLLER_COLOR: Vector3<f32> = Vector3 {
     x: 0.6,
     y: 0.6,
     z: 0.7,
 };
-
-/// How see-through beam segment `index` of `count` is, hand end first.
-///
-/// Strictly increasing, so the beam is brightest where it leaves the hand and
-/// thins out toward the panel - the hit dot stays the one crisp thing at the
-/// far end.
-pub fn beam_segment_transparency(index: usize, count: usize) -> f32 {
-    debug_assert!(index < count);
-    // Sample each segment at its midpoint, so the first segment is not fully at
-    // the near value nor the last fully at the far one.
-    let t = (index as f32 + 0.5) / count as f32;
-    BEAM_NEAR_TRANSPARENCY + (BEAM_FAR_TRANSPARENCY - BEAM_NEAR_TRANSPARENCY) * t
-}
 
 /// The pose the hand driving `rays[index]` is shown in.
 ///
@@ -183,16 +166,14 @@ fn box_object(
     object
 }
 
-/// The faded beam for one ray, hand end first: [`BEAM_SEGMENTS`] pieces whose
-/// alpha falls off along the length.
-///
-/// Each piece draws in the engine's transparent pass (which masks depth writes
-/// for the whole pass), so the segments blend with each other and with the
-/// panel behind rather than occluding one another with their own boxes. They
-/// also cull backfaces: a double-sided box blends *twice* per pixel, which
-/// turns the authored alpha `a` into `1 - (1 - a)^2` and would make the far end
-/// read as a solid rod instead of fading out.
-fn beam_objects(start: Vector3<f32>, along: Vector3<f32>, length: f32) -> Vec<SceneObject> {
+/// The smoky beam for one ray: the laser sight's halo and core cylinders in UI
+/// green. Both blend without writing depth, so the panel shows through.
+fn beam_objects(
+    start: Vector3<f32>,
+    along: Vector3<f32>,
+    length: f32,
+    seconds: f32,
+) -> Vec<SceneObject> {
     // The hand fills the first stretch of the ray. A beam no longer than that
     // would be entirely inside the glove, so there is nothing to draw - the
     // hand is already touching what it points at.
@@ -200,28 +181,51 @@ fn beam_objects(start: Vector3<f32>, along: Vector3<f32>, length: f32) -> Vec<Sc
         return Vec::new();
     }
     let direction = along / length;
-    let drawn = length - BEAM_HAND_CLEARANCE;
-    let step = drawn / BEAM_SEGMENTS as f32;
-    // `from_arc` is fine at the antiparallel extreme: cgmath falls back to an
-    // arbitrary perpendicular axis, and the beam is square in cross-section, so
-    // the free roll is invisible.
-    let aim = Quaternion::from_arc(vec3(0.0, 0.0, 1.0), direction, None);
+    let origin = start + direction * BEAM_HAND_CLEARANCE;
+    let reach = direction * (length - BEAM_HAND_CLEARANCE);
+    let tangent = if direction.y.abs() < 0.9 {
+        vec3(0.0, 1.0, 0.0)
+    } else {
+        vec3(1.0, 0.0, 0.0)
+    };
+    let right = tangent.cross(direction).normalize();
+    let up = direction.cross(right);
 
-    (0..BEAM_SEGMENTS)
-        .map(|index| {
-            let center = start + direction * (BEAM_HAND_CLEARANCE + step * (index as f32 + 0.5));
-            let mut object = box_object(
-                center,
-                vec3(POINTER_BEAM_THICKNESS, POINTER_BEAM_THICKNESS, step),
-                aim,
-                BEAM_COLOR,
-            );
-            object.set_transparency(Some(beam_segment_transparency(index, BEAM_SEGMENTS)));
-            // The cube's outward faces are clockwise as seen from outside.
-            object.set_backface_culling(Some(FrontFaceWinding::Clockwise));
-            object
-        })
-        .collect()
+    [
+        (false, BEAM_HALO_RADIUS, BEAM_HALO_COLOR),
+        (true, BEAM_CORE_RADIUS, BEAM_CORE_COLOR),
+    ]
+    .into_iter()
+    .map(|(core, radius, color)| {
+        let mut object = SceneObject::new(
+            laser_material::create_beam(core, color, seconds),
+            Box::new(cylinder::Cylinder),
+        );
+        object.set_transform(Matrix4::from_cols(
+            (right * radius).extend(0.0),
+            (up * radius).extend(0.0),
+            reach.extend(0.0),
+            origin.extend(1.0),
+        ));
+        object.set_depth_write(false);
+        object.set_backface_culling(Some(FrontFaceWinding::CounterClockwise));
+        object
+    })
+    .collect()
+}
+
+/// The glowing hit dot: the laser sight's spot, flat against the panel so it
+/// reads as a mark on the canvas.
+fn dot_object(center: Vector3<f32>, panel: &WorldPanel) -> SceneObject {
+    let mut object = SceneObject::new(laser_material::create(DOT_COLOR), Box::new(quad::create()));
+    object.set_transform(
+        Matrix4::from_translation(center)
+            * Matrix4::from(panel.rotation)
+            * Matrix4::from_nonuniform_scale(POINTER_DOT_SIZE, POINTER_DOT_SIZE, 1.0),
+    );
+    object.set_depth_write(false);
+    object.set_backface_culling(None);
+    object
 }
 
 /// The visible half of the frontend pointer, including the glove model it draws
@@ -246,7 +250,8 @@ impl PointerVisuals {
     /// every tracked controller, plus a dot on the one the menu is listening
     /// to.
     ///
-    /// `panel_layers` is the panel canvas's [`canvas_layers`]. Shared by every frontend screen that uses the VR
+    /// `panel_layers` is the panel canvas's [`canvas_layers`]; `seconds`
+    /// animates the beam's smoke. Shared by every frontend screen that uses the VR
     /// pointer, so a screen cannot end up with a pointer that hit-tests but
     /// does not show.
     pub fn render(
@@ -256,6 +261,7 @@ impl PointerVisuals {
         canvas_size: Vector2<f32>,
         panel: &WorldPanel,
         panel_layers: usize,
+        seconds: f32,
     ) -> Vec<SceneObject> {
         let glove = self
             .glove
@@ -269,6 +275,7 @@ impl PointerVisuals {
             panel,
             panel_layers,
             self.glove_fit,
+            seconds,
         );
         // The one pair of hands a frontend screen shows. Labelled so a check
         // can assert *both* halves of issue #1018's fix: the scene's hands are
@@ -291,9 +298,18 @@ pub fn pointer_beams(
     canvas_size: Vector2<f32>,
     panel: &WorldPanel,
     panel_layers: usize,
+    seconds: f32,
 ) -> Vec<SceneObject> {
-    let mut objects =
-        render_pointer_rays(None, false, pass, canvas_size, panel, panel_layers, None);
+    let mut objects = render_pointer_rays(
+        None,
+        false,
+        pass,
+        canvas_size,
+        panel,
+        panel_layers,
+        None,
+        seconds,
+    );
     crate::util::tag_render_source(&mut objects, crate::util::render_source::USE_MODE_POINTER);
     objects
 }
@@ -310,6 +326,7 @@ fn render_pointer_rays(
     panel: &WorldPanel,
     panel_layers: usize,
     glove_fit: Option<crate::glove_fit::GloveFit>,
+    seconds: f32,
 ) -> Vec<SceneObject> {
     let mut objects = Vec::new();
     for (index, ray) in pass.rays.iter().enumerate() {
@@ -323,7 +340,7 @@ fn render_pointer_rays(
         // transform - but still draw the hand and mark the hit, neither of
         // which needs one.
         if length >= 1e-4 {
-            objects.extend(beam_objects(geometry.start, along, length));
+            objects.extend(beam_objects(geometry.start, along, length, seconds));
         }
 
         let hand_start = objects.len();
@@ -365,14 +382,7 @@ fn render_pointer_rays(
         }
 
         if let Some(dot) = geometry.dot {
-            objects.push(box_object(
-                dot,
-                // Flat against the panel, so the dot reads as a mark on the
-                // canvas rather than a cube floating off it.
-                vec3(POINTER_DOT_SIZE, POINTER_DOT_SIZE, VR_COMPONENT_Z_STEP),
-                panel.rotation,
-                DOT_COLOR,
-            ));
+            objects.push(dot_object(dot, panel));
         }
     }
     objects
@@ -398,6 +408,16 @@ mod tests {
             ..InputContext::default()
         };
         vr_frontend_pointer_pass(&input, CANVAS, &test_panel())
+    }
+
+    /// The fallback-proxy pointer for `pass`, at simulation time zero.
+    fn rays(
+        draw_hand: bool,
+        pass: &FrontendPointerPass,
+        panel: &WorldPanel,
+        fit: Option<crate::glove_fit::GloveFit>,
+    ) -> Vec<SceneObject> {
+        render_pointer_rays(None, draw_hand, pass, CANVAS, panel, LAYERS, fit, 0.0)
     }
 
     fn geometry(pass: &FrontendPointerPass, index: usize) -> PointerRayGeometry {
@@ -445,7 +465,7 @@ mod tests {
                 vec3(0.0, 0.0, 0.0),
                 vec3(1.0, 1.0, 1.0),
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                BEAM_COLOR,
+                CONTROLLER_COLOR,
             );
             object.set_transform(
                 panel.transform()
@@ -504,9 +524,7 @@ mod tests {
         };
         let pass = pass(untracked.clone(), untracked);
         assert!(pass.rays.is_empty());
-        assert!(
-            render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS, None).is_empty()
-        );
+        assert!(rays(true, &pass, &test_panel(), None).is_empty());
     }
 
     #[test]
@@ -526,12 +544,9 @@ mod tests {
             .filter(|(index, _)| geometry(&pass, *index).dot.is_some())
             .count();
         assert_eq!(dots, 1);
-        // Each hand: a proxy plus its beam segments; the right hand also the
+        // Each hand: a proxy plus its halo and core; the right hand also the
         // one dot.
-        assert_eq!(
-            render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS, None).len(),
-            2 * (BEAM_SEGMENTS + 1) + 1
-        );
+        assert_eq!(rays(true, &pass, &test_panel(), None).len(), 2 * 3 + 1);
     }
 
     #[test]
@@ -547,8 +562,8 @@ mod tests {
             size: 1.2,
             visible: true,
         };
-        let base = render_pointer_rays(None, true, &pass, CANVAS, &panel, LAYERS, None);
-        let adjusted = render_pointer_rays(None, true, &pass, CANVAS, &panel, LAYERS, Some(fit));
+        let base = rays(true, &pass, &panel, None);
+        let adjusted = rays(true, &pass, &panel, Some(fit));
         assert_eq!(base.len(), adjusted.len());
         // All beam segments and the hit dot keep their exact transforms;
         // exactly the two glove proxies change.
@@ -559,19 +574,16 @@ mod tests {
                 .count(),
             2
         );
-        let hidden = render_pointer_rays(
-            None,
+        let hidden = rays(
             true,
             &pass,
-            CANVAS,
             &panel,
-            LAYERS,
             Some(crate::glove_fit::GloveFit {
                 visible: false,
                 ..fit
             }),
         );
-        let beams = render_pointer_rays(None, false, &pass, CANVAS, &panel, LAYERS, None);
+        let beams = rays(false, &pass, &panel, None);
         assert_eq!(hidden.len(), beams.len());
         for (actual, expected) in hidden.iter().zip(beams) {
             assert_eq!(actual.get_transform(), expected.get_transform());
@@ -579,50 +591,28 @@ mod tests {
     }
 
     #[test]
-    fn the_beam_fades_along_its_length() {
-        // "Smoky": brightest at the hand, thinning toward the panel, so the
-        // crisp dot at the end is the thing the eye lands on. A beam of one
-        // flat alpha (or one that brightened toward the panel) would read as a
-        // solid rod and compete with the dot.
-        let alphas: Vec<f32> = (0..BEAM_SEGMENTS)
-            .map(|index| beam_segment_transparency(index, BEAM_SEGMENTS))
-            .collect();
-        assert!(
-            alphas.windows(2).all(|pair| pair[1] > pair[0]),
-            "beam transparency must increase away from the hand: {alphas:?}"
-        );
-        assert!(
-            alphas.iter().all(|a| (0.0..=1.0).contains(a)),
-            "transparency must stay in range: {alphas:?}"
-        );
-        // Translucent at the hand too, not just at the tip.
-        assert!(alphas[0] > 0.0);
-    }
-
-    #[test]
-    fn every_beam_segment_is_translucent_and_single_sided() {
-        // A double-sided box blends twice per pixel, turning alpha `a` into
-        // `1 - (1 - a)^2` - the far end would read as a solid rod rather than
-        // fading out, so the authored ramp only means what it says with the
-        // inner faces culled.
+    fn the_beam_is_a_halo_and_core_from_the_fingertips_to_the_dot() {
         let pass = pass(
             hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
             hand_aimed_away(0.0),
         );
-        let objects = render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS, None);
-        let translucent: Vec<_> = objects
-            .iter()
-            .filter(|object| object.effective_transparency().is_some_and(|t| t > 0.0))
-            .collect();
-        assert_eq!(translucent.len(), 2 * BEAM_SEGMENTS);
-        assert!(
-            translucent
-                .iter()
-                .all(|object| object.backface_culling().is_some())
-        );
-        // The dot stays opaque - it is the focus point.
-        let dot = objects.last().expect("a dot must be drawn");
-        assert_eq!(dot.effective_transparency(), None);
+        let geometry = geometry(&pass, 0);
+        let objects = rays(false, &pass, &test_panel(), None);
+        // Right hand: halo, core, dot. Left hand (off panel): halo, core.
+        assert_eq!(objects.len(), 5);
+        let direction = (geometry.end - geometry.start).normalize();
+        for beam in &objects[..2] {
+            let transform = beam.get_transform();
+            // The unit cylinder runs from z = 0 to z = 1.
+            let start = transform.w.truncate();
+            let end = start + transform.z.truncate();
+            let expected_start = geometry.start + direction * BEAM_HAND_CLEARANCE;
+            assert!((start - expected_start).magnitude() < 1e-4);
+            assert!((end - geometry.end).magnitude() < 1e-4);
+            // Blends over the panel instead of punching a hole in its depth.
+            assert!(!beam.depth_write);
+            assert!(beam.backface_culling().is_some());
+        }
     }
 
     #[test]
@@ -647,13 +637,8 @@ mod tests {
                 ..Hand::default()
             },
         );
-        let objects = render_pointer_rays(None, true, &pass, CANVAS, &panel, LAYERS, None);
-        assert!(
-            objects
-                .iter()
-                .all(|object| object.effective_transparency().is_none()),
-            "no translucent beam segment may be drawn inside the hand"
-        );
+        // Just the proxy and the dot - no beam buried in the hand.
+        assert_eq!(rays(true, &pass, &panel, None).len(), 2);
         assert!(pass.rays[0].canvas_hit.is_some());
         assert!(
             geometry(&pass, 0).dot.is_some(),

@@ -204,9 +204,12 @@ pub(crate) fn render_lasers(
             vec3(1.0, 0.0, 0.0)
         };
         let right = tangent.cross(forward).normalize();
-        for (core, radius) in [(false, 0.018), (true, 0.0025)] {
+        for (core, radius, color) in [
+            (false, 0.018, vec3(1.0, 0.01, 0.005)),
+            (true, 0.0025, vec3(1.0, 0.08, 0.025)),
+        ] {
             let mut beam = SceneObject::new(
-                engine::scene::laser_material::create_beam(core, seconds),
+                engine::scene::laser_material::create_beam(core, color, seconds),
                 Box::new(engine::scene::cylinder::Cylinder),
             );
             beam.set_transform(Matrix4::from_cols(

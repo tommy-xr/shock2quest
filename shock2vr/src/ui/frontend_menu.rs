@@ -179,6 +179,8 @@ pub struct FrontendMenu<A> {
     pointer_canvas: Option<Vector2<f32>>,
     vr_pointer: FrontendPointerPass,
     vr_pointer_visuals: PointerVisuals,
+    /// Time this menu has been updated for; animates the pointer beam's smoke.
+    seconds: f32,
     panel_anchor: FrontendPanelAnchor,
     last_pressed: bool,
     last_screen_size: Vector2<f32>,
@@ -194,6 +196,7 @@ impl<A: Copy + PartialEq> FrontendMenu<A> {
             pointer_canvas: None,
             vr_pointer: FrontendPointerPass::default(),
             vr_pointer_visuals: PointerVisuals::new(),
+            seconds: 0.0,
             panel_anchor: FrontendPanelAnchor::new(),
             // Enter every frontend surface already pressed. A held gameplay or
             // previous-screen input must be released before it can click here.
@@ -235,6 +238,7 @@ impl<A: Copy + PartialEq> FrontendMenu<A> {
         click_hit: impl FnOnce(Vector2<f32>) -> Option<A>,
         hover_hit: impl FnOnce(Vector2<f32>) -> Option<A>,
     ) -> Option<A> {
+        self.seconds += elapsed.as_secs_f32();
         let panel = self.panel_anchor.update(
             input_context.head.position,
             input_context.head.rotation,
@@ -349,6 +353,7 @@ impl<A: Copy + PartialEq> FrontendMenu<A> {
                     self.canvas_size,
                     &panel,
                     panel_layers,
+                    self.seconds,
                 ));
             },
         )

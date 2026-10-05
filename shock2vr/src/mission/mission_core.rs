@@ -15526,11 +15526,17 @@ impl MissionCore {
         let panel_layers = crate::ui::canvas_layers(&canvas, &panel);
         objects.extend(canvas);
         if let Some(pass) = self.vr_use_mode_pointer.as_ref() {
+            let seconds = self
+                .world
+                .borrow::<UniqueView<Time>>()
+                .map(|time| time.total.as_secs_f32())
+                .unwrap_or_default();
             objects.extend(crate::ui::pointer_beams(
                 pass,
                 crate::mission::flat_ui_host::CANVAS_SIZE,
                 &panel,
                 panel_layers,
+                seconds,
             ));
         }
         objects
@@ -16429,6 +16435,11 @@ impl MissionCore {
                     self.personal_card.hand,
                 )
             };
+            let seconds = self
+                .world
+                .borrow::<UniqueView<Time>>()
+                .map(|time| time.total.as_secs_f32())
+                .unwrap_or_default();
             if let Some(model) = self
                 .flat_ui
                 .utilities
@@ -16436,11 +16447,6 @@ impl MissionCore {
                 .filter(|_| self.flat_ui.active_panel().is_none())
                 .and_then(|entity| self.id_to_model.get(&entity))
             {
-                let seconds = self
-                    .world
-                    .borrow::<UniqueView<Time>>()
-                    .map(|time| time.total.as_secs_f32())
-                    .unwrap_or_default();
                 objects.extend(super::mfd_device::hologram(model, panel, seconds));
             }
             let layout = super::mfd_device::layout(self.flat_ui.device_screen_source());
@@ -16454,6 +16460,7 @@ impl MissionCore {
                     layout.size,
                     &panel,
                     panel_layers,
+                    seconds,
                 ));
             }
             for object in &mut objects {

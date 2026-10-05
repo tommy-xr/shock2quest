@@ -203,15 +203,12 @@ pub fn create(color: Vector3<f32>) -> Box<dyn Material> {
     })
 }
 
-/// The same shader shades the two cached cylinder instances for each sight.
-pub fn create_beam(core: bool, seconds: f32) -> Box<dyn Material> {
+/// The same shader shades the two cached cylinder instances (halo and core) of
+/// each beam - a weapon's laser sight or a VR UI pointer.
+pub fn create_beam(core: bool, color: Vector3<f32>, seconds: f32) -> Box<dyn Material> {
     Box::new(LaserMaterial {
         has_initialized: false,
-        color: if core {
-            Vector3::new(1.0, 0.08, 0.025)
-        } else {
-            Vector3::new(1.0, 0.01, 0.005)
-        },
+        color,
         transparency: 0.0,
         beam: [if core { 2.0 } else { 1.0 }, seconds],
     })
