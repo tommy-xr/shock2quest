@@ -2647,8 +2647,9 @@ impl CollisionGroup {
 
     /// Keep this collider visible to generic interaction/projectile rays while
     /// removing it from every physical contact pair. Used for render-model
-    /// frob bounds that accompany a separate authored physics collider.
-    fn interaction_only(self) -> CollisionGroup {
+    /// frob bounds, with either a separate authored physics collider or no
+    /// authored physical model at all.
+    pub(crate) fn interaction_only(self) -> CollisionGroup {
         Self::solid(InteractionGroups {
             memberships: self.collision.memberships,
             filter: InternalCollisionGroups::RAYCAST.bits.into(),
@@ -2659,14 +2660,9 @@ impl CollisionGroup {
     /// The same membership as this group, with living characters dropped from
     /// its filter so neither the player nor creature capsules collide with it.
     ///
-    /// Dark only instantiates a physics model for an object that carries a
-    /// `PhysType` (`phprop.cpp`'s PhysType listener is what creates the
-    /// instance `PhysDims`). An object with no `PhysType` anywhere in its
-    /// inheritance chain - a wall console, a card slot, a button, the
-    /// Resurrection Station's own casing - is therefore never solid in
-    /// retail; its physical presence is the brushwork behind it. This engine
-    /// still needs a collider there so the object stays frobbable and
-    /// raycastable, so keep the collider and only take characters out of it.
+    /// Used by authored corpses and unsimulated debris that stay solid to
+    /// loose props. Typeless fixtures instead use `interaction_only`: their
+    /// selection bounds are not an authored physical model at all.
     pub fn non_solid_to_characters(self) -> CollisionGroup {
         let filter = self.collision.filter.bits() & !InternalCollisionGroups::CHARACTERS.bits;
         Self::solid(InteractionGroups {
