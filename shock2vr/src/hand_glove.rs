@@ -16,6 +16,7 @@ use dark::{
 use engine::{
     assets::asset_cache::AssetCache,
     scene::{Material, SceneObject, SkinnedMaterial},
+    texture_format::{PixelFormat, RawTextureData},
 };
 
 use crate::{
@@ -37,18 +38,37 @@ pub enum HandLight {
     Green,
     Amber,
     Red,
+    /// A climbable hold is within reach: the whole glove glows half cyan.
+    ClimbReach,
+    /// The hand is holding a climbable hold: the whole glove glows cyan.
+    ClimbHeld,
 }
 
 impl HandLight {
-    pub const ALL: [Self; 4] = [Self::Off, Self::Green, Self::Amber, Self::Red];
+    pub const ALL: [Self; 6] = [
+        Self::Off,
+        Self::Green,
+        Self::Amber,
+        Self::Red,
+        Self::ClimbReach,
+        Self::ClimbHeld,
+    ];
 
     pub fn tint(self) -> Vector3<f32> {
+        const CLIMB_CYAN: Vector3<f32> = Vector3::new(0.0, 0.7, 0.85);
         match self {
             Self::Off => Vector3::new(0.0, 0.0, 0.0),
             Self::Green => Vector3::new(0.05, 0.85, 0.25),
             Self::Amber => Vector3::new(0.90, 0.55, 0.05),
             Self::Red => Vector3::new(0.90, 0.10, 0.10),
+            Self::ClimbReach => CLIMB_CYAN * 0.5,
+            Self::ClimbHeld => CLIMB_CYAN,
         }
+    }
+
+    /// Climb lights cover the whole glove; the rest only the status-light mask.
+    fn whole_glove(self) -> bool {
+        matches!(self, Self::ClimbReach | Self::ClimbHeld)
     }
 }
 
@@ -121,14 +141,27 @@ impl GloveRenderer {
         // Immutable material sets per colour: drawing the second hand cannot
         // recolour scene objects already submitted for the first hand.
         let authored = model.to_scene_objects();
+        // A white mask makes the light tint the whole glove, not just the status lights.
+        let whole_glove: Rc<dyn engine::texture::TextureTrait> =
+            Rc::new(engine::texture::init_from_memory(RawTextureData {
+                bytes: vec![255; 4],
+                width: 1,
+                height: 1,
+                format: PixelFormat::RGBA,
+            }));
         let make_materials = |base_emissivity| {
             HandLight::ALL
                 .into_iter()
                 .map(|light| {
+                    let mask = if light.whole_glove() {
+                        Some(&whole_glove)
+                    } else {
+                        emissive.as_ref()
+                    };
                     authored
                         .iter()
                         .map(|object| match &texture {
-                            Some(texture) => Rc::new(RefCell::new(match &emissive {
+                            Some(texture) => Rc::new(RefCell::new(match mask {
                                 Some(mask) => SkinnedMaterial::create_with_light(
                                     texture.clone(),
                                     base_emissivity,

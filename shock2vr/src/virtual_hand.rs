@@ -572,6 +572,7 @@ impl VirtualHand {
         grip: Option<(&crate::vr_grip::ResolvedGrip, f32)>,
         visual_pose: Option<crate::vr_support::GripPose>,
         anticipation: Option<&crate::hand_anticipation::HandAnticipation>,
+        light_override: Option<crate::hand_glove::HandLight>,
         lighting: Option<&crate::object_lighting::ObjectLighting<'_>>,
     ) -> Vec<SceneObject> {
         let hand_pose = visual_pose.unwrap_or(crate::vr_support::GripPose {
@@ -597,7 +598,7 @@ impl VirtualHand {
                     self.get_held_entity().is_some(),
                     anticipation,
                     grip.map(|(grip, blend)| (grip.finger_amounts_at(self.trigger_value), blend)),
-                    self.feedback.light(),
+                    light_override.unwrap_or(self.feedback.light()),
                     hand_lights,
                 )
             })

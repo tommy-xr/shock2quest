@@ -313,6 +313,8 @@ pub struct VrInteraction {
     anticipation: [crate::hand_anticipation::HandAnticipation; 2],
     body_anticipation: [Option<EntityId>; 2],
     climb_anticipation: [bool; 2],
+    /// Last anticipation pass's climb reach, kept for the glove glow.
+    climb_reach: [bool; 2],
     ui_point: [bool; 2],
 }
 
@@ -430,6 +432,7 @@ impl VrInteraction {
             anticipation: Default::default(),
             body_anticipation: [None; 2],
             climb_anticipation: [false; 2],
+            climb_reach: [false; 2],
             ui_point: [false; 2],
         }
     }
@@ -533,6 +536,7 @@ impl VrInteraction {
         use shipyard::{Get, View};
         // The climb prepass can be skipped during a mantle; never retain its target.
         let climb = std::mem::take(&mut self.climb_anticipation);
+        self.climb_reach = climb;
         for (i, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
             let tracked = ctx.input.pose_tracking.is_none_or(|p| p.head && p.hands[i])
                 && (GripPose {
@@ -1829,6 +1833,14 @@ impl PlayerInteraction for VrInteraction {
                 Some((1 - support.primary, grip))
             })
         });
+        // Climb feedback is the glove itself: cyan while holding, half while in reach.
+        // Holding comes from the resolved holds, so a blocked pull still shows a catch.
+        let mut climb_lights = self
+            .climb_reach
+            .map(|reach| reach.then_some(crate::hand_glove::HandLight::ClimbReach));
+        for (handedness, _) in self.hand_climb.grips() {
+            climb_lights[handedness as usize] = Some(crate::hand_glove::HandLight::ClimbHeld);
+        }
         for (index, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
             let card_grip = self.body_tool_hands[index]
                 .then(|| self.personal_card_grip(index))
@@ -1858,6 +1870,7 @@ impl PlayerInteraction for VrInteraction {
                 }),
                 self.visual_hands[index],
                 Some(&self.anticipation[index]),
+                climb_lights[index],
                 lighting,
             ));
         }
@@ -1886,25 +1899,6 @@ impl PlayerInteraction for VrInteraction {
                     objs.push(marker);
                 }
             }
-        }
-        // Feedback comes from the resolved holds, never a second proximity
-        // query: a blocked pull still shows a catch; release/break removes it.
-        // Float just above the fist so the glove cannot hide the marker.
-        for (handedness, _) in self.hand_climb.grips() {
-            let hand = match handedness {
-                Handedness::Left => &self.left_hand,
-                Handedness::Right => &self.right_hand,
-            };
-            let mut marker = SceneObject::new(
-                engine::scene::color_material::create(cgmath::vec3(0.0, 1.0, 1.0)),
-                Box::new(engine::scene::cube::create()),
-            );
-            marker.set_transform(
-                cgmath::Matrix4::from_translation(
-                    hand.get_position() + cgmath::vec3(0.0, 0.18, 0.0),
-                ) * cgmath::Matrix4::from_scale(0.03),
-            );
-            objs.push(marker);
         }
         // Labelled as the player's hands: that is what `Game` drops while the
         // pause menu is up (issue #1018), and what `/v1/scene` reports. The
