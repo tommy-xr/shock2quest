@@ -111,6 +111,11 @@ pub enum VirtualHandEffect {
     HoldItem {
         entity_id: EntityId,
     },
+    /// Store a world pickup and report only a successful transfer. Unlike a
+    /// held pickup, storage can merge and destroy the incoming entity.
+    StoreWorldPickup {
+        entity_id: EntityId,
+    },
     /// Move an item into the player's backpack - a flat world pickup of
     /// ordinary loot, the weapon a wield swap displaced, or a VR hand opened
     /// over the cyber interface's inventory strip. VR's ordinary release is

@@ -191,7 +191,7 @@ impl FlatPlayerController {
         } else if is_wieldable_weapon(world, entity_id) {
             self.wield(entity_id)
         } else {
-            vec![VirtualHandEffect::StoreItem { entity_id }]
+            vec![VirtualHandEffect::StoreWorldPickup { entity_id }]
         }
     }
 
@@ -804,7 +804,7 @@ mod tests {
         assert!(
             matches!(
                 effects.as_slice(),
-                [VirtualHandEffect::StoreItem { entity_id }] if *entity_id == ammo
+                [VirtualHandEffect::StoreWorldPickup { entity_id }] if *entity_id == ammo
             ),
             "ordinary loot should be sent to the backpack"
         );

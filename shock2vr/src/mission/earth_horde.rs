@@ -867,6 +867,7 @@ impl HordeDirector {
             },
             Effect::AwardXP {
                 amount: 8 + self.wave.min(20) as i32 * 2,
+                verbose: false,
             },
             Effect::ShowMessage {
                 text: format!(
@@ -1500,7 +1501,10 @@ mod tests {
         assert_eq!(director.kills, 1);
         fn rewards(effect: Effect) -> usize {
             match effect {
-                Effect::AwardXP { .. } => 1,
+                Effect::AwardXP { verbose, .. } => {
+                    assert!(!verbose, "the wave summary owns reward feedback");
+                    1
+                }
                 Effect::Multiple(effects) => effects.into_iter().map(rewards).sum(),
                 _ => 0,
             }

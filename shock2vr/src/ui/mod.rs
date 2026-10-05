@@ -81,6 +81,9 @@ pub const MFD_FONT: &str = "@shock-mfd";
 pub const MFD_LABEL_FONT: &str = "@shock-mfd-label";
 /// The engine's large overlay face (BLUEAA), for a title card.
 pub const TITLE_FONT: &str = "@shock-title";
+/// Monochrome MAINFONT in ShockUtilInitColor's foreground colour. Unlike the
+/// paletted MFD faces, this packed bitmap needs an explicit tint.
+pub const MESSAGE_FONT: &str = "@shock-message";
 
 /// The tints below are FALLBACKS. An antialiased `.FON` carries its own colour
 /// per texel, as indices into `res/iface/fontpal.pcx`, and the font importer
@@ -99,6 +102,13 @@ const MFD_TINT: [u8; 3] = [0, 255, 190];
 pub(crate) fn resolve_font(asset_cache: &mut AssetCache, font: &str) -> Rc<Box<dyn engine::Font>> {
     if font == BUILTIN_FONT {
         return engine::shared_builtin_font();
+    }
+    if font == MESSAGE_FONT {
+        return asset_cache.get_ext(
+            &dark::importers::TINTED_FONT_IMPORTER,
+            "mainfont.fon",
+            &[0, 255, 190],
+        );
     }
     if font == TITLE_FONT {
         return asset_cache.get_ext(
@@ -1506,9 +1516,8 @@ fn present_world(
             let texture = asset_cache
                 .get_ext(&TEXTURE_IMPORTER, texture, &texture_options(*kind))
                 .clone();
-            let material = engine::scene::basic_material::create_with_fixed_ambient(
+            let material = engine::scene::basic_material::create_unlit(
                 texture as Rc<dyn TextureTrait>,
-                1.0,
                 1.0 - alpha,
             );
             match kind.uv_rect() {
@@ -1537,7 +1546,7 @@ fn present_world(
                 Box::new(engine::scene::quad::create()),
             );
             // `color_material` authors itself opaque; a blended plate is a
-            // per-object override, as the image path's fixed ambient is.
+            // per-object override, as on the unlit image path.
             object.set_transparency(Some((1.0 - alpha).clamp(0.0, 1.0)));
             object
         }

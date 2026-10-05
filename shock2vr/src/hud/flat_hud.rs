@@ -80,6 +80,7 @@ pub(crate) fn build_flat_hud_canvas(
     banner: Option<&super::ActiveBanner>,
     reticle: super::reticle::ReticleState,
     fov_y_degrees: f32,
+    message_font: &dyn engine::Font,
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(VIRTUAL_W, VIRTUAL_H));
 
@@ -140,7 +141,12 @@ pub(crate) fn build_flat_hud_canvas(
 
     // Status messages, placed by the shared `message_line` layout the VR head
     // panel draws with.
-    message_line::emit(&mut canvas, message_line::flat_origin(), messages);
+    message_line::emit(
+        &mut canvas,
+        message_line::flat_origin(use_mode),
+        messages,
+        message_font,
+    );
 
     // The interstitial banner, placed by the shared `banner` layout the VR
     // head panel draws with. Last, so its plate covers the view centre.
@@ -164,6 +170,7 @@ pub(crate) fn create_flat_hud(
     reticle: super::reticle::ReticleState,
     fov_y_degrees: f32,
 ) -> Vec<SceneObject> {
+    let message_font = crate::ui::resolve_font(asset_cache, message_line::FONT);
     let mut canvas = build_flat_hud_canvas(
         use_mode,
         &BioReadout::from_world(world),
@@ -175,6 +182,7 @@ pub(crate) fn create_flat_hud(
         banner,
         reticle,
         fov_y_degrees,
+        message_font.as_ref().as_ref(),
     );
     if !use_mode {
         super::hazards::emit(
@@ -217,6 +225,7 @@ mod tests {
             banner,
             crate::hud::reticle::ReticleState::default(),
             crate::DEFAULT_FOV_DEG,
+            &message_line::tests::StubFont,
         )
     }
 
@@ -394,7 +403,24 @@ mod tests {
 
         assert_eq!(with_message.element_count(), base.element_count() + 1);
         let line = with_message.elements().last().unwrap().rect();
-        assert_eq!(vec2(line.x, line.y), message_line::flat_origin());
+        assert_eq!(vec2(line.x, line.y), message_line::flat_origin(false));
+    }
+
+    #[test]
+    fn inventory_moves_messages_below_the_top_strip() {
+        let empty = readout(None, None, None, false);
+        for (use_mode, expected_y) in [(false, 18.0), (true, 130.0)] {
+            let canvas = build_flat_hud_canvas(
+                use_mode,
+                &BIO,
+                None,
+                &empty,
+                &["Log added to PDA.".into()],
+                None,
+            );
+            let rect = canvas.elements().last().unwrap().rect();
+            assert_eq!(vec2(rect.x, rect.y), vec2(192.0, expected_y));
+        }
     }
 
     /// A banner adds its plate plus one text element per line, centered on the

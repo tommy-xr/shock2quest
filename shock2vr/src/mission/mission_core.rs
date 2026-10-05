@@ -428,6 +428,69 @@ fn inventory_transfer_sound(world: &World, item: EntityId) -> &'static str {
     }
 }
 
+/// A world-to-hand grab: the MOVE pickup line and cue, else the bare item cue.
+/// Download pickups report on collection (release), not on the grab.
+fn hand_pickup_feedback(
+    world: &World,
+    asset_cache: &mut AssetCache,
+    entity_id: EntityId,
+) -> Vec<Effect> {
+    if crate::scripts::script_util::is_download_pickup(world, entity_id) {
+        return Vec::new();
+    }
+    let feedback = world_pickup_feedback(world, asset_cache, entity_id);
+    if feedback.is_empty() {
+        vec![crate::scripts::script_util::announce(
+            entity_id,
+            "pickup_item",
+        )]
+    } else {
+        feedback
+    }
+}
+
+/// Retail's ordinary MOVE pickup has two cues in this order: posting its
+/// localized status line (which beeps centrally) and the distinct item sound.
+/// A SCRIPT-only log never enters this path.
+fn world_pickup_feedback(
+    world: &World,
+    asset_cache: &mut AssetCache,
+    entity_id: EntityId,
+) -> Vec<Effect> {
+    let moves_on_world_frob = world
+        .borrow::<View<dark::properties::PropFrobInfo>>()
+        .ok()
+        .and_then(|frob| frob.get(entity_id).ok().map(|info| info.world_action))
+        .is_some_and(|action| action.contains(dark::properties::FrobFlag::MOVE));
+    if !moves_on_world_frob {
+        return Vec::new();
+    }
+    pickup_feedback(world, asset_cache, entity_id)
+}
+
+/// Shared by MOVE pickups and explicit stat-item collection scripts.
+fn pickup_feedback(
+    world: &World,
+    asset_cache: &mut AssetCache,
+    entity_id: EntityId,
+) -> Vec<Effect> {
+    let name = crate::hud::resolve_item_short_name(asset_cache, world, entity_id)
+        .unwrap_or_else(|| "Item".to_owned());
+    let format =
+        crate::scripts::gui::PanelText::string(world, "misc", "PickupString", "%s picked up.");
+    vec![
+        Effect::ShowMessage {
+            text: format.replace("%s", &name),
+        },
+        Effect::PlaySound {
+            handle: AudioHandle::new(),
+            name: "pickup_item".to_owned(),
+            source: None,
+            spatial: false,
+        },
+    ]
+}
+
 /// Whether the player's backpack can actually take `dropped_entity_id` right
 /// now.
 ///
@@ -10894,6 +10957,25 @@ impl MissionCore {
                         let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                         quests.collect_log(deck, log);
                     }
+                    let name =
+                        crate::hud::localized_log_pickup_title(asset_cache, &self.world, entity_id)
+                            .or_else(|| {
+                                crate::hud::resolve_item_short_name(
+                                    asset_cache,
+                                    &self.world,
+                                    entity_id,
+                                )
+                            })
+                            .unwrap_or_else(|| "Audio log".to_owned());
+                    let format = crate::scripts::gui::PanelText::string(
+                        &self.world,
+                        "misc",
+                        "LogPickup",
+                        "Log %s added to PDA.",
+                    );
+                    effects.push_back(Effect::ShowMessage {
+                        text: format.replace("%s", &name),
+                    });
                     // Retail copies the entry into the PDA and destroys the
                     // pickup. Retire it from rendered, physical and container
                     // presence; the player-owned reader carries presentation.
@@ -11608,7 +11690,7 @@ impl MissionCore {
                     }
                 }
 
-                Effect::AwardXP { amount } => {
+                Effect::AwardXP { amount, verbose } => {
                     // Cyber modules are the game's upgrade currency (retail's
                     // "XP"). Persisted on the character sheet inside QuestInfo,
                     // so the balance survives level transitions + save/load.
@@ -11616,7 +11698,24 @@ impl MissionCore {
                     let balance = quests.player_stats_mut().award_cyber_modules(amount);
                     if amount > 0 {
                         info!("Awarded {} cyber modules (balance now {})", amount, balance);
+                        if verbose {
+                            effects.push_back(Effect::ShowMessage {
+                                text: crate::scripts::gui::PanelText::format(
+                                    &crate::scripts::gui::PanelText::string(
+                                        &self.world,
+                                        "misc",
+                                        "AddExp",
+                                        "%d cyber modules received.",
+                                    ),
+                                    &[amount],
+                                ),
+                            });
+                        }
                     }
+                }
+
+                Effect::ReportPickup { entity_id } => {
+                    effects.extend(pickup_feedback(&self.world, asset_cache, entity_id));
                 }
 
                 Effect::AwardNanites { amount } => {
@@ -11983,14 +12082,24 @@ impl MissionCore {
                         .borrow::<View<PlayerInventoryEntity>>()
                         .is_ok_and(|inventories| inventories.get(parent_entity_id).is_ok());
                     let sound = inventory_transfer_sound(&self.world, dropped_entity_id);
+                    let feedback = if player_inventory && sound == "pickup_item" {
+                        world_pickup_feedback(&self.world, asset_cache, dropped_entity_id)
+                    } else {
+                        Vec::new()
+                    };
                     let stored = self
                         .drop_entity_into_container(parent_entity_id, dropped_entity_id)
                         .is_some();
                     if stored && player_inventory {
-                        effects.push_front(crate::scripts::script_util::announce(
-                            parent_entity_id,
-                            sound,
-                        ));
+                        // A MOVE pickup's feedback already carries the item cue.
+                        if feedback.is_empty() {
+                            effects.push_front(crate::scripts::script_util::announce(
+                                parent_entity_id,
+                                sound,
+                            ));
+                        } else {
+                            effects.extend(feedback);
+                        }
                     } else if !stored && player_inventory {
                         effects.push_front(backpack_full_feedback(dropped_entity_id));
                     }
@@ -12037,10 +12146,7 @@ impl MissionCore {
                         && inventory_transfer_sound(&self.world, entity_id) == "pickup_item";
                     effects.extend(self.grab_entity_into_hand(asset_cache, entity_id, hand));
                     if pickup && self.interaction.is_holding(entity_id) {
-                        effects.push_back(crate::scripts::script_util::announce(
-                            entity_id,
-                            "pickup_item",
-                        ));
+                        effects.extend(hand_pickup_feedback(&self.world, asset_cache, entity_id));
                     }
                 }
                 Effect::SetObjectParameters {
@@ -13368,6 +13474,20 @@ impl MissionCore {
                         .borrow::<UniqueViewMut<crate::hud::HudMessages>>()
                         .unwrap()
                         .push(text, now);
+                    // Every posted line has its own cue, including multiple
+                    // lines in one frame. Do not replace a previous linebeep
+                    // through `listener_sounds`: retail does not coalesce them.
+                    play_schema_sound(
+                        &self.world,
+                        global_context,
+                        asset_cache,
+                        audio_context,
+                        AudioHandle::new(),
+                        "linebeep",
+                        None,
+                        false,
+                        false,
+                    );
                 }
 
                 Effect::ShowBanner { text, duration } => {
@@ -15474,23 +15594,34 @@ impl MissionCore {
         )
     }
 
-    /// The status-message block in VR. The original's placement is a line near
-    /// the top of a 640x480 screen, which has no world position - so the one
-    /// thing this presentation decides for itself is to lift the block above
-    /// the gaze, so it does not sit over what the player is aiming at;
-    /// everything on it is placed by the shared `message_line` layout.
+    /// Shooter messages use the head panel. In use mode the inventory owns
+    /// the canvas: share its world-locked anchor so turning the head cannot
+    /// move the message over the inventory strip.
     fn render_vr_messages(
         &self,
         asset_cache: &mut AssetCache,
         messages: &[String],
     ) -> Vec<SceneObject> {
-        let size = crate::hud::message_line::PANEL_SIZE;
-        self.render_vr_head_canvas(
-            asset_cache,
-            &crate::hud::message_line::build_message_canvas(messages),
-            size,
-            |scale| vec3(0.0, size.y * scale * 0.5 + 0.2, 0.0),
-        )
+        let font = crate::ui::resolve_font(asset_cache, crate::hud::message_line::FONT);
+        let size = crate::mission::flat_ui_host::CANVAS_SIZE;
+        let mut canvas = crate::ui::UiCanvas::new(size);
+        crate::hud::message_line::emit(
+            &mut canvas,
+            crate::hud::message_line::flat_origin(self.use_mode),
+            messages,
+            font.as_ref().as_ref(),
+        );
+        if self.use_mode {
+            canvas.render_world_space(
+                asset_cache,
+                self.vr_use_mode_anchor.panel().transform(),
+                None,
+                None,
+                crate::ui::VR_COMPONENT_Z_STEP,
+            )
+        } else {
+            self.render_vr_head_canvas(asset_cache, &canvas, size, |_| vec3(0.0, 0.0, 0.0))
+        }
     }
 
     /// Whether the shared `show_position` readout is visible during gameplay.
@@ -16936,6 +17067,7 @@ impl MissionCore {
     ) -> Vec<Effect> {
         let mut deferred = Vec::new();
         for msg in msgs {
+            let world_pickup = matches!(msg, VirtualHandEffect::StoreWorldPickup { .. });
             match msg {
                 VirtualHandEffect::MoveSlide {
                     entity_id,
@@ -17009,10 +17141,7 @@ impl MissionCore {
                 }
                 VirtualHandEffect::HoldItem { entity_id } => {
                     if inventory_transfer_sound(&self.world, entity_id) == "pickup_item" {
-                        deferred.push(crate::scripts::script_util::announce(
-                            entity_id,
-                            "pickup_item",
-                        ));
+                        deferred.extend(hand_pickup_feedback(&self.world, asset_cache, entity_id));
                     }
                     self.thrown_items.cancel(entity_id);
                     self.thrown_items.publish(&self.world, &self.physics);
@@ -17113,8 +17242,16 @@ impl MissionCore {
                         });
                     }
                 }
-                VirtualHandEffect::StoreItem { entity_id } => {
+                VirtualHandEffect::StoreItem { entity_id }
+                | VirtualHandEffect::StoreWorldPickup { entity_id } => {
+                    // A merge destroys entity_id. Resolve authored name/count
+                    // before storage, but never report a refused pickup.
                     let sound = inventory_transfer_sound(&self.world, entity_id);
+                    let feedback = if world_pickup {
+                        world_pickup_feedback(&self.world, asset_cache, entity_id)
+                    } else {
+                        Vec::new()
+                    };
                     let inventory_entity = self
                         .world
                         .borrow::<UniqueView<PlayerInfo>>()
@@ -17125,10 +17262,15 @@ impl MissionCore {
                             .is_some()
                     });
                     if stored {
-                        deferred.push(crate::scripts::script_util::announce(
-                            inventory_entity.unwrap(),
-                            sound,
-                        ));
+                        // A MOVE pickup's feedback already carries the item cue.
+                        if feedback.is_empty() {
+                            deferred.push(crate::scripts::script_util::announce(
+                                inventory_entity.unwrap(),
+                                sound,
+                            ));
+                        } else {
+                            deferred.extend(feedback);
+                        }
                     } else {
                         deferred.push(backpack_full_feedback(entity_id));
                         self.restore_refused_store_to_world(entity_id);
@@ -17667,15 +17809,26 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
     let canonical = world
         .borrow::<View<crate::runtime_props::RuntimePropCanonicalTemplateId>>()
         .unwrap();
-    let mut effects = (&canonical)
-        .iter()
-        .with_id()
-        .filter(|(_, canonical)| canonical.0 == template_id)
-        .map(|(entity_id, _)| Effect::SetObjectState {
-            entity_id,
-            state: dark::properties::ObjectState::Normal,
-        })
-        .collect::<Vec<_>>();
+    let mut effects = vec![Effect::ShowMessage {
+        text: crate::scripts::gui::PanelText::string(
+            world,
+            "misc",
+            "ResearchDone",
+            "Research completed! Click the reports button to see the results.",
+        )
+        .replace("\\n", "\n"),
+    }];
+    effects.extend(
+        (&canonical)
+            .iter()
+            .with_id()
+            .filter(|(_, canonical)| canonical.0 == template_id)
+            .map(|(entity_id, _)| Effect::SetObjectState {
+                entity_id,
+                state: dark::properties::ObjectState::Normal,
+            })
+            .collect::<Vec<_>>(),
+    );
     effects.push(crate::scripts::script_util::announce(entity_id, "bb06"));
     if let Some(quest_bit) = crate::scripts::script_util::set_quest_bit_effect(world, entity_id) {
         effects.push(quest_bit);

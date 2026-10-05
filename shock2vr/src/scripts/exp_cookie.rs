@@ -66,6 +66,7 @@ impl Script for ExpCookie {
                     effects: vec![
                         Effect::AwardXP {
                             amount: award_amount,
+                            verbose: true,
                         },
                         Effect::DestroyEntity { entity_id },
                     ],
@@ -102,7 +103,7 @@ mod tests {
         assert!(
             effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::AwardXP { amount } if *amount == 10)),
+                .any(|effect| matches!(effect, Effect::AwardXP { amount, verbose: true } if *amount == 10)),
             "the first Frob should award the pile's modules"
         );
         assert!(

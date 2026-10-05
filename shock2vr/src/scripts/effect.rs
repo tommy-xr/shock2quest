@@ -276,6 +276,14 @@ pub enum Effect {
 
     AwardXP {
         amount: i32,
+        /// Retail AddExp's verbose flag. Rewards with their own summary stay quiet.
+        verbose: bool,
+    },
+
+    /// Report a collected item while its name and stack count still exist.
+    /// Explicit collection scripts emit this before destroying the pickup.
+    ReportPickup {
+        entity_id: EntityId,
     },
 
     /// Award nanites (the game's money) directly to the player's persistent

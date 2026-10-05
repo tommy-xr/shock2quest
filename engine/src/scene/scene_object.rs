@@ -390,8 +390,7 @@ impl SceneObject {
     /// normalize into, so it produces an empty mesh.
     pub fn world_space_text(str: &str, font: Rc<Box<dyn Font>>, transparency: f32) -> SceneObject {
         let mesh = mesh::create(Self::unit_text_vertices(str, &**font));
-        let material =
-            basic_material::create_with_fixed_ambient(font.get_texture(), 1.0, transparency);
+        let material = basic_material::create_unlit(font.get_texture(), transparency);
         Self::new(material, Box::new(mesh))
     }
 
