@@ -939,7 +939,9 @@ pub struct FrameSnapshot {
     pub inputs: InputSnapshot,
 }
 
-/// Time information
+/// Clock supplied to the last advanced runtime frame, held unchanged while
+/// idle. Fixed steps report simulation time; replays retain recorded timestamps.
+/// Milliseconds are truncated, matching Duration::as_millis().
 #[derive(Debug, Serialize, Clone)]
 pub struct TimeInfo {
     pub elapsed_ms: f32,

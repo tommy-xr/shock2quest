@@ -33,8 +33,11 @@ test("a recorded session replays from its start save", { skip: !enabled, timeout
     const start = (await game.info()).player.position;
     const { frames, scene } = await game.replay(path);
     assert.equal(scene, "medsci1.mis");
-    await game.step({ frames });
-    const end = (await game.info()).player.position;
+    const replayed = await game.step({ frames });
+    const snapshot = await game.info();
+    assert.ok(Math.abs(snapshot.time.total_ms - replayed.new_total_time * 1000) < 1.1,
+      "snapshot must report the replayed simulation clock");
+    const end = snapshot.player.position;
     const moved = Math.hypot(end[0] - start[0], end[2] - start[2]);
     const error = Math.hypot(end[0] - recordedEnd[0], end[2] - recordedEnd[2]);
     assert.ok(moved > 1, `the replay walks (moved ${moved})`);

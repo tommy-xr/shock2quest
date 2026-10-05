@@ -932,7 +932,8 @@ export interface SoftwareVersions {
 
 export interface FrameSnapshot {
   frame_index: number;
-  time: { total: number; delta: number };
+  /** Clock supplied to the last advanced runtime frame, held while idle. */
+  time: { total_ms: number; elapsed_ms: number };
   mission: string;
   /** True while the retail finale is playing its terminal ending cutscene;
    * false again once the chain reaches the main menu. */

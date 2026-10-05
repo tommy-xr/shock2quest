@@ -74,6 +74,11 @@ e.g. a ragdoll falling — erratic.) `/v1/physics/joints` reports each impulse
 joint's anchor separation + applied impulse (bone-labeled) for ragdoll
 constraint diagnostics.
 
+`/v1/info.time` reports the last advanced frame's clock as `total_ms` and
+`elapsed_ms` (whole milliseconds), including recorded timestamps during replay.
+Both values remain unchanged between steps, rather than tracking HTTP request
+wall time. Before the first advanced frame, both are zero.
+
 ### Phase 5: Game Commands 🟡 PARTIAL
 
 Dedicated typed endpoints rather than one stringly-typed command dispatcher -
