@@ -1082,7 +1082,12 @@ impl FlatUiHost {
                         .borrow::<View<dark::properties::PropPosition>>()
                         .ok()?;
                     let pos = v_pos.get(panel).ok()?;
-                    Some((pos.position - player.pos).magnitude() > PANEL_AUTO_CLOSE_DISTANCE)
+                    let range = if self.device && !self.psionic_projection {
+                        super::mfd_device::PANEL_RANGE
+                    } else {
+                        PANEL_AUTO_CLOSE_DISTANCE
+                    };
+                    Some((pos.position - player.pos).magnitude() > range)
                 })()
                 .unwrap_or(false);
             if !alive || too_far {
@@ -2285,6 +2290,41 @@ mod tests {
         host.open(panel);
         host.update(&world, None);
         assert!(host.active_panel().is_none());
+    }
+
+    #[test]
+    fn handheld_panel_survives_scan_range_but_closes_when_leaving() {
+        let mut world = World::new();
+        let panel = world.add_entity(dark::properties::PropPosition {
+            position: cgmath::vec3(6.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            cell: 0,
+        });
+        let player = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            inventory_entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+        });
+        let mut host = FlatUiHost::new();
+        host.device = true;
+        host.open(panel);
+        host.update(&world, None);
+        assert_eq!(host.active_panel(), Some(panel));
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .pos
+            .x = -20.0;
+        host.update(&world, None);
+        assert_eq!(host.active_panel(), None);
+        host.open(panel);
+        world.delete_entity(panel);
+        host.update(&world, None);
+        assert_eq!(host.active_panel(), None);
     }
 
     #[test]
