@@ -48,6 +48,22 @@ type BeamColors = [Vector3<f32>; 2];
 const MENU_BEAM: BeamColors = [vec3(0.05, 0.55, 1.0), vec3(0.4, 0.85, 1.0)];
 /// In-play UI devices (cyber interface, tricorder): green.
 const DEVICE_BEAM: BeamColors = [vec3(0.02, 1.0, 0.15), vec3(0.25, 1.0, 0.35)];
+
+/// How one caller's pointer looks: beam colours and hit-dot size (0 = none).
+#[derive(Clone, Copy)]
+struct PointerStyle {
+    colors: BeamColors,
+    dot_size: f32,
+}
+
+impl PointerStyle {
+    fn with_dev_dot(colors: BeamColors) -> Self {
+        Self {
+            colors,
+            dot_size: crate::dev_params::get(crate::dev_params::VR_POINTER_DOT_SIZE),
+        }
+    }
+}
 const CONTROLLER_COLOR: Vector3<f32> = Vector3 {
     x: 0.6,
     y: 0.6,
@@ -219,7 +235,7 @@ impl PointerVisuals {
             panel,
             panel_layers,
             self.glove_fit,
-            MENU_BEAM,
+            PointerStyle::with_dev_dot(MENU_BEAM),
             seconds,
         );
         // The one pair of hands a frontend screen shows. Labelled so a check
@@ -253,7 +269,7 @@ pub fn pointer_beams(
         panel,
         panel_layers,
         None,
-        DEVICE_BEAM,
+        PointerStyle::with_dev_dot(DEVICE_BEAM),
         seconds,
     );
     crate::util::tag_render_source(&mut objects, crate::util::render_source::USE_MODE_POINTER);
@@ -272,10 +288,9 @@ fn render_pointer_rays(
     panel: &WorldPanel,
     panel_layers: usize,
     glove_fit: Option<crate::glove_fit::GloveFit>,
-    colors: BeamColors,
+    style: PointerStyle,
     seconds: f32,
 ) -> Vec<SceneObject> {
-    let dot_size = crate::dev_params::get(crate::dev_params::VR_POINTER_DOT_SIZE);
     let mut objects = Vec::new();
     for (index, ray) in pass.rays.iter().enumerate() {
         // Only the ray the menu is reading: a beam from an ignored hand would
@@ -290,7 +305,7 @@ fn render_pointer_rays(
                 ray.origin,
                 along,
                 along.magnitude(),
-                colors,
+                style.colors,
                 seconds,
             ));
         }
@@ -333,8 +348,8 @@ fn render_pointer_rays(
             }
         }
 
-        if let Some(end) = end.filter(|_| dot_size > 0.0) {
-            objects.push(dot_object(end, panel, colors[1], dot_size));
+        if let Some(end) = end.filter(|_| style.dot_size > 0.0) {
+            objects.push(dot_object(end, panel, style.colors[1], style.dot_size));
         }
     }
     objects
@@ -352,6 +367,10 @@ mod tests {
     /// A stand-in for what a frontend canvas emits; the exact count only shifts
     /// the beam tip's clearance.
     const LAYERS: usize = 18;
+    const STYLE: PointerStyle = PointerStyle {
+        colors: MENU_BEAM,
+        dot_size: 0.05,
+    };
 
     fn pass(right: Hand, left: Hand) -> FrontendPointerPass {
         let input = InputContext {
@@ -370,7 +389,7 @@ mod tests {
         fit: Option<crate::glove_fit::GloveFit>,
     ) -> Vec<SceneObject> {
         render_pointer_rays(
-            None, draw_hand, pass, CANVAS, panel, LAYERS, fit, MENU_BEAM, 0.0,
+            None, draw_hand, pass, CANVAS, panel, LAYERS, fit, STYLE, 0.0,
         )
     }
 
@@ -475,6 +494,30 @@ mod tests {
         assert_eq!(pass.rays.len(), 2);
         // Two proxies, plus one halo, core and dot.
         assert_eq!(rays(true, &pass, &test_panel(), None).len(), 2 + 3);
+    }
+
+    #[test]
+    fn a_zero_dot_size_hides_the_dot_but_keeps_the_beam() {
+        let pass = pass(
+            hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
+            hand_aimed_away(0.0),
+        );
+        let objects = render_pointer_rays(
+            None,
+            false,
+            &pass,
+            CANVAS,
+            &test_panel(),
+            LAYERS,
+            None,
+            PointerStyle {
+                dot_size: 0.0,
+                ..STYLE
+            },
+            0.0,
+        );
+        // Halo and core only.
+        assert_eq!(objects.len(), 2);
     }
 
     #[test]

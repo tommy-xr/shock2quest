@@ -1460,7 +1460,9 @@ impl FlatUiHost {
     /// presentations render exactly this canvas - flat on screen
     /// ([`Self::render`]), VR on the cyber-interface world panel
     /// ([`Self::render_world_space`]) - so their layout cannot drift apart
-    /// (AGENTS.md §3).
+    /// (AGENTS.md §3). The one exception: VR may omit the bare arrow cursor
+    /// (`VR_UI_CURSOR`, see [`Self::build_canvas_with`]), since its pointer dot
+    /// already marks the spot.
     fn build_canvas(&self) -> Option<UiCanvas> {
         self.build_canvas_with(true)
     }
