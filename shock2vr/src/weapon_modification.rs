@@ -61,6 +61,11 @@ pub fn supported(world: &World, weapon: EntityId) -> bool {
     kind(world, weapon).is_some()
 }
 
+/// Biological weapons grow both fire modes; neither costs an upgrade slot.
+pub(crate) fn innate_alternate_fire(world: &World, weapon: EntityId) -> bool {
+    matches!(kind(world, weapon), Some(Kind::Annelid | Kind::Viral))
+}
+
 /// Stasis stimulus controls a non-damaging effect and must not receive the
 /// generic damage bonus. Its capacity, wear and alternate mode still upgrade.
 pub(crate) fn scales_damage(world: &World, weapon: EntityId) -> bool {
