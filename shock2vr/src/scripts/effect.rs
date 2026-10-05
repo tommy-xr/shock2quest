@@ -896,6 +896,12 @@ pub enum Effect {
         template_id: i32,
     },
 
+    /// Revalidate and apply one explicit inventory-tool use before the next.
+    ApplyItemTool {
+        tool: EntityId,
+        target: Option<EntityId>,
+    },
+
     ContinueHorde,
     StartHordeWave {
         wave: u32,

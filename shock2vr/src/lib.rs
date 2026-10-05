@@ -60,6 +60,7 @@ pub mod paths;
 pub mod pause_menu;
 mod physics;
 pub use physics::player_collision_shape;
+pub mod item_tools;
 pub mod player_stats;
 mod psi;
 mod psi_defenses;

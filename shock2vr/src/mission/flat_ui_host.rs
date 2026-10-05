@@ -496,8 +496,8 @@ impl FlatUiHost {
         let target = self
             .strip_item_at(pos)
             .or_else(|| self.panel_item_at(pos))?;
-        crate::scripts::maintenance::offers_to(world, tool, target)
-            .then(|| crate::scripts::maintenance::preview(world, target))
+        crate::item_tools::offers_to(world, tool, target)
+            .then(|| crate::item_tools::preview(world, tool, target))
     }
 
     /// Set the mini-frame's name line (already resolved to a display name).
@@ -1250,7 +1250,7 @@ impl FlatUiHost {
                 .strip_item_at(canvas_pos)
                 .or_else(|| self.panel_item_at(canvas_pos))
             {
-                if crate::scripts::maintenance::offers_to(world, held, target) {
+                if crate::item_tools::offers_to(world, held, target) {
                     self.last_lift = None;
                     return (
                         Vec::new(),
