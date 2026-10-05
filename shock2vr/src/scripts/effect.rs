@@ -1179,6 +1179,10 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    /// Set CollisionType=0 and PhysAIColl=false, as Dark's TrapCollideOff does.
+    DisableObjectCollisions {
+        entity_id: EntityId,
+    },
     SetGravity {
         entity_id: EntityId,
         gravity_percent: f32,

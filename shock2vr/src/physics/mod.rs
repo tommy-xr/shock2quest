@@ -2657,6 +2657,32 @@ impl CollisionGroup {
         })
     }
 
+    /// Dark's explicit CollisionType=0 excludes object contacts, but does not
+    /// remove terrain collision or interaction rays. PhysAIColl is independent:
+    /// false excludes AI capsules even when CollisionType still enables contact.
+    /// NO_RESULT is an impact-response flag, not CollisionType=0.
+    fn with_object_collision_properties(
+        self,
+        collision_type: Option<dark::properties::CollisionType>,
+        ai_collides: bool,
+    ) -> Self {
+        let mut allowed = u32::MAX;
+        if collision_type.is_some_and(|flags| flags.is_empty()) {
+            allowed = InternalCollisionGroups::WORLD.bits | InternalCollisionGroups::RAYCAST.bits;
+        }
+        if !ai_collides {
+            allowed &= !InternalCollisionGroups::ACTOR.bits;
+        }
+        let restrict = |groups: InteractionGroups| InteractionGroups {
+            filter: (groups.filter.bits() & allowed).into(),
+            ..groups
+        };
+        Self {
+            collision: restrict(self.collision),
+            solver: restrict(self.solver),
+        }
+    }
+
     /// The same membership as this group, with living characters dropped from
     /// its filter so neither the player nor creature capsules collide with it.
     ///
@@ -3896,6 +3922,36 @@ impl PhysicsWorld {
         let collider_handles = body.colliders().to_vec();
         for collider_handle in collider_handles {
             if let Some(collider) = self.collider_set.get_mut(collider_handle) {
+                collider.set_collision_groups(group.collision);
+                collider.set_solver_groups(group.solver);
+                collider.set_active_hooks(active_hooks_for(group));
+            }
+        }
+    }
+
+    /// Apply authored contact exclusions without widening an existing filter
+    /// (selection proxies and held-body solver restrictions must stay intact).
+    pub fn apply_object_collision_properties(
+        &mut self,
+        entity_id: EntityId,
+        collision_type: Option<dark::properties::CollisionType>,
+        ai_collides: bool,
+    ) {
+        let Some(body) = self
+            .entity_id_to_body
+            .get(&entity_id)
+            .and_then(|handle| self.rigid_body_set.get(*handle))
+        else {
+            return;
+        };
+        let handles = body.colliders().to_vec();
+        for handle in handles {
+            if let Some(collider) = self.collider_set.get_mut(handle) {
+                let group = CollisionGroup {
+                    collision: collider.collision_groups(),
+                    solver: collider.solver_groups(),
+                }
+                .with_object_collision_properties(collision_type, ai_collides);
                 collider.set_collision_groups(group.collision);
                 collider.set_solver_groups(group.solver);
                 collider.set_active_hooks(active_hooks_for(group));
@@ -9665,6 +9721,61 @@ mod tests {
             "corpse must remain selectable for looting"
         );
         assert!(!collider.is_sensor(), "world support uses a solid collider");
+    }
+
+    #[test]
+    fn object_collision_properties_preserve_terrain_rays_and_independent_ai_flag() {
+        use dark::properties::CollisionType;
+        let object = CollisionGroup::entity();
+        let player = InteractionGroups::new(
+            InternalCollisionGroups::PLAYER.bits.into(),
+            InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            Default::default(),
+        );
+        let ray = InteractionGroups::new(
+            InternalCollisionGroups::ALL.bits.into(),
+            InternalCollisionGroups::ALL.bits.into(),
+            Default::default(),
+        );
+        let disabled = object.with_object_collision_properties(Some(CollisionType::empty()), false);
+        for groups in [disabled.collision, disabled.solver] {
+            assert!(!groups.test(player));
+            assert!(!groups.test(CollisionGroup::actor().collision));
+            assert!(
+                !groups.test(object.collision),
+                "loose physical objects must pass"
+            );
+            assert!(!groups.test(CollisionGroup::player_projectile().collision));
+            assert!(groups.test(CollisionGroup::world_for_test().collision));
+            assert!(
+                groups.test(ray),
+                "frob and weapon rays must still see the object"
+            );
+        }
+        let ai_off = object.with_object_collision_properties(Some(CollisionType::BOUNCE), false);
+        assert!(!ai_off.collision.test(CollisionGroup::actor().collision));
+        assert!(ai_off.collision.test(player));
+        assert!(ai_off.collision.test(object.collision));
+        for flags in [
+            None,
+            Some(CollisionType::BOUNCE),
+            Some(CollisionType::NO_RESULT),
+        ] {
+            let ordinary = object.with_object_collision_properties(flags, true);
+            assert!(
+                ordinary.collision.test(player),
+                "absent/NO_RESULT is not zero"
+            );
+            assert!(ordinary.collision.test(CollisionGroup::actor().collision));
+        }
+        let selection = object
+            .interaction_only()
+            .with_object_collision_properties(None, true);
+        assert!(
+            !selection.collision.test(object.collision),
+            "do not widen selection proxies"
+        );
+        assert!(selection.collision.test(ray));
     }
 
     #[test]

@@ -13457,6 +13457,29 @@ impl MissionCore {
                             .add_component(entity_id, dark::properties::PropEcoState(state));
                     }
                 }
+                Effect::DisableObjectCollisions { entity_id } => {
+                    if self
+                        .world
+                        .borrow::<shipyard::EntitiesView>()
+                        .unwrap()
+                        .is_alive(entity_id)
+                    {
+                        self.world.add_component(
+                            entity_id,
+                            (
+                                dark::properties::PropCollisionType {
+                                    collision_type: dark::properties::CollisionType::empty(),
+                                },
+                                dark::properties::PropPhysAICollide(false),
+                            ),
+                        );
+                        crate::mission::entity_creator::apply_object_collision_properties(
+                            &self.world,
+                            &mut self.physics,
+                            entity_id,
+                        );
+                    }
+                }
                 Effect::SetLocked { entity_id, locked } => {
                     crate::scripts::script_util::set_entity_locked(
                         &mut self.world,

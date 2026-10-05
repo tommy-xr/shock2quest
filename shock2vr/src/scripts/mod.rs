@@ -84,6 +84,7 @@ mod std_door;
 pub(crate) use std_door::player_door_frob_blocked;
 mod tool_consumable;
 mod transluce;
+mod trap_collide_off;
 mod trap_delay;
 mod trap_destroyer;
 mod trap_email;
@@ -206,6 +207,7 @@ use self::{
     std_door::StdDoor,
     tool_consumable::ToolConsumable,
     transluce::TransluceInOutHolo,
+    trap_collide_off::TrapCollideOff,
     trap_delay::TrapDelay,
     trap_destroyer::TrapDestroyer,
     trap_email::TrapEmail,
@@ -1325,7 +1327,7 @@ impl ScriptWorld {
             // command1: some crazy scripts here
             "rerouteelevatorbutton" => Box::new(RerouteElevatorButton::new()),
             "trapambientoff" => Box::new(NoopScript::new()),
-            "trapcollideoff" => Box::new(NoopScript::new()),
+            "trapcollideoff" => Box::new(TrapCollideOff),
             "tweqbutton" => Box::new(NoopScript::new()),
             "tweqtrap" => Box::new(NoopScript::new()),
             "putbombinreplicator" => Box::new(PutBombInReplicator::new()),

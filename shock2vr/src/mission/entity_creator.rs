@@ -1156,7 +1156,49 @@ pub fn create_physics_representation(
     create_physics_representation_with_options(world, physics, maybe_model, entity_id, false, false)
 }
 
+/// Apply the registered Dark properties both at creation/load and on the
+/// script transition. Missing properties retain the ordinary collision defaults.
+pub(crate) fn apply_object_collision_properties(
+    world: &World,
+    physics: &mut PhysicsWorld,
+    entity_id: EntityId,
+) {
+    let collision_type = world
+        .borrow::<View<PropCollisionType>>()
+        .unwrap()
+        .get(entity_id)
+        .ok()
+        .map(|prop| prop.collision_type);
+    let ai_collides = world
+        .borrow::<View<dark::properties::PropPhysAICollide>>()
+        .unwrap()
+        .get(entity_id)
+        .map(|prop| prop.0)
+        .unwrap_or(true);
+    physics.apply_object_collision_properties(entity_id, collision_type, ai_collides);
+}
+
 fn create_physics_representation_with_options(
+    world: &mut World,
+    physics: &mut PhysicsWorld,
+    maybe_model: &Option<&Model>,
+    entity_id: EntityId,
+    launch_projectile: bool,
+    flinderize_debris: bool,
+) -> Option<RigidBodyHandle> {
+    let body = create_physics_representation_unfiltered(
+        world,
+        physics,
+        maybe_model,
+        entity_id,
+        launch_projectile,
+        flinderize_debris,
+    );
+    apply_object_collision_properties(world, physics, entity_id);
+    body
+}
+
+fn create_physics_representation_unfiltered(
     world: &mut World,
     physics: &mut PhysicsWorld,
     maybe_model: &Option<&Model>,
