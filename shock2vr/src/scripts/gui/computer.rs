@@ -11,10 +11,13 @@ use dark::{
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
 
 use crate::{
-    gui::{Gui, GuiComponent, GuiConfig, GuiCursor},
+    gui::{self, Gui, GuiComponent, GuiConfig, GuiCursor, PanelSidecar},
     scripts::{Effect, Message, MessagePayload, script_util::*},
+    ui::Rect,
 };
 
+use super::PanelText;
+use super::hrm_plug::{self, PlugKind, draw_plug, plug_sidecar};
 use super::keypad::{
     HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_panel, hack_diff,
     handle_hack_msg, object_state,
@@ -125,11 +128,13 @@ impl ComputerGui {
 
 #[derive(Clone, Debug, Default)]
 pub struct ComputerState {
+    show_hack: bool,
     hack: HackState,
 }
 
 #[derive(Clone)]
 pub enum ComputerMsg {
+    OpenHack,
     Hack(KeyPadMsg),
 }
 
@@ -229,6 +234,37 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
         world: &World,
         state: &ComputerState,
     ) -> Vec<GuiComponent<ComputerMsg>> {
+        if self.is_security() && !state.show_hack {
+            // Retail shkscomp.cpp: ALARMFD, AlarmState[0/1] at (18, 187),
+            // and the shared HRM plug. Layout is resolved once for flat/VR.
+            let mut components =
+                vec![gui::image("alarmfd.pcx").with_rect(Rect::new(0.0, 0.0, 188.0, 296.0))];
+            let (key, fallback) =
+                if crate::security_alarm::security_devices_can_detect_player(world) {
+                    (
+                        "AlarmState1",
+                        "Security system active....\n\nNo threats detected.",
+                    )
+                } else {
+                    (
+                        "AlarmState0",
+                        "Security system disabled....\n\nCameras deactivated.",
+                    )
+                };
+            let status = PanelText::string(world, "misc", key, fallback).replace("\\n", "\n");
+            components.extend(PanelText::paragraph(
+                world,
+                &status,
+                Rect::new(18.0, 187.0, 150.0, 100.0),
+            ));
+            if can_hack(world, entity_id) {
+                components.extend(draw_plug(
+                    PlugKind::Hack,
+                    Some((ComputerMsg::OpenHack, "hack-security")),
+                ));
+            }
+            return components;
+        }
         let Some(diff) = hack_diff(world, entity_id) else {
             return Vec::new();
         };
@@ -249,6 +285,29 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
         }
     }
 
+    fn get_config_for(
+        &self,
+        _entity_id: EntityId,
+        _world: &World,
+        _state: &ComputerState,
+    ) -> GuiConfig {
+        let mut config = self.get_config();
+        if self.is_security() {
+            config.screen_size_in_pixels.x = hrm_plug::CANVAS_W;
+        }
+        config
+    }
+
+    fn sidecar(
+        &self,
+        entity_id: EntityId,
+        world: &World,
+        state: &ComputerState,
+    ) -> Option<PanelSidecar> {
+        self.is_security()
+            .then(|| plug_sidecar(!state.show_hack && can_hack(world, entity_id)))
+    }
+
     fn handle_msg(
         &self,
         entity_id: EntityId,
@@ -256,10 +315,22 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
         state: &ComputerState,
         msg: &ComputerMsg,
     ) -> (ComputerState, Effect) {
+        if let ComputerMsg::OpenHack = msg {
+            let mut next = state.clone();
+            if self.is_security() && can_hack(world, entity_id) {
+                next.show_hack = true;
+            }
+            return (next, Effect::NoEffect);
+        }
+        let ComputerMsg::Hack(msg) = msg else {
+            unreachable!()
+        };
+        if self.is_security() && !state.show_hack {
+            return (state.clone(), Effect::NoEffect);
+        }
         let Some(diff) = hack_diff(world, entity_id) else {
             return (state.clone(), Effect::NoEffect);
         };
-        let ComputerMsg::Hack(msg) = msg;
         let (hack, effect) = handle_hack_msg(
             entity_id,
             world,
@@ -280,7 +351,23 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
                 },
             },
         );
-        (ComputerState { hack }, effect)
+        (
+            ComputerState {
+                hack,
+                ..state.clone()
+            },
+            effect,
+        )
+    }
+
+    fn on_frob(&self, entity_id: EntityId, world: &World) -> Effect {
+        // Using a normal security console resets the alarm for free. Only a
+        // successful paid hack grants the authored timed device suppression.
+        if self.is_security() && object_state(world, entity_id) == ObjectState::Normal {
+            Effect::ClearSecurityAlarm { from: entity_id }
+        } else {
+            Effect::NoEffect
+        }
     }
 
     fn opens_on_frob(&self, entity_id: EntityId, world: &World) -> bool {
@@ -293,6 +380,11 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
     fn prepare_state_on_frob(&self, state: &mut ComputerState) {
         if state.hack.phase != HackPhase::Playing {
             *state = ComputerState::default();
+        }
+        // Reopening a station always shows its status first. An unfinished
+        // paid board resumes when Hack is selected again.
+        if self.is_security() {
+            state.show_hack = false;
         }
     }
 }
@@ -407,6 +499,7 @@ mod tests {
                 rng_state: 42,
                 ..HackState::default()
             },
+            ..ComputerState::default()
         };
         gui.prepare_state_on_frob(&mut state);
         assert_eq!(state.hack.phase, HackPhase::Playing);
@@ -435,6 +528,102 @@ mod tests {
             dark::properties::PropAITeam(dark::properties::AITeam::Good),
         );
         assert!(!gui.opens_on_frob(turret, &world));
+    }
+
+    #[test]
+    fn security_opens_its_station_panel_before_the_paid_board() {
+        let mut world = World::new();
+        let computer = world.add_entity(PropHackDiff {
+            success_chance: 20,
+            critical_chance: 10,
+            cost: 3.0,
+        });
+        let gui = ComputerGui::security();
+        let components = gui.get_components(&None, computer, &world, &ComputerState::default());
+        assert!(components.iter().any(|component| matches!(component,
+            GuiComponent::Image { texture, .. } if texture == "alarmfd.pcx")));
+        assert!(components.iter().any(|component| matches!(component,
+            GuiComponent::Button { label, .. } if label.as_deref() == Some("hack-security"))));
+        assert!(!components.iter().any(|component| matches!(component,
+            GuiComponent::Button { label, .. } if label.as_deref() == Some("start-hack"))));
+
+        let (mut state, effect) = gui.handle_msg(
+            computer,
+            &world,
+            &ComputerState::default(),
+            &ComputerMsg::OpenHack,
+        );
+        assert!(matches!(effect, Effect::NoEffect), "selecting Hack is free");
+        let components = gui.get_components(&None, computer, &world, &state);
+        assert!(components.iter().any(|component| matches!(component,
+            GuiComponent::Button { label, .. } if label.as_deref() == Some("start-hack"))));
+        assert!(
+            gui.sidecar(computer, &world, &state)
+                .unwrap()
+                .rect
+                .is_none()
+        );
+
+        state.hack.phase = HackPhase::Playing;
+        state.hack.rng_state = 42;
+        gui.prepare_state_on_frob(&mut state);
+        assert!(!state.show_hack, "reopening returns to station status");
+        let (resumed, _) = gui.handle_msg(computer, &world, &state, &ComputerMsg::OpenHack);
+        assert_eq!(resumed.hack.phase, HackPhase::Playing);
+        assert_eq!(
+            resumed.hack.rng_state, 42,
+            "an unfinished paid board is retained"
+        );
+    }
+
+    #[test]
+    fn security_station_status_tracks_the_timed_hack() {
+        let mut world = World::new();
+        let computer = world.add_entity(());
+        let gui = ComputerGui::security();
+        let mut quests = crate::quest_info::QuestInfo::new();
+        quests.activate_security_hack(30.0);
+        world.add_unique(quests);
+        let components = gui.get_components(&None, computer, &world, &ComputerState::default());
+        assert!(components.iter().any(|component| matches!(component,
+            GuiComponent::Text { text, .. } if text.contains("Cameras deactivated"))));
+        world
+            .borrow::<shipyard::UniqueViewMut<crate::quest_info::QuestInfo>>()
+            .unwrap()
+            .advance_security_hack(30.0);
+        let components = gui.get_components(&None, computer, &world, &ComputerState::default());
+        assert!(components.iter().any(|component| matches!(component,
+            GuiComponent::Text { text, .. } if text.contains("No threats detected"))));
+    }
+
+    #[test]
+    fn frobbing_a_normal_security_computer_only_clears_the_alarm() {
+        let mut world = World::new();
+        let computer = world.add_entity(PropObjState(ObjectState::Normal));
+        assert!(matches!(
+            ComputerGui::security().on_frob(computer, &world),
+            Effect::ClearSecurityAlarm { from } if from == computer
+        ));
+    }
+
+    #[test]
+    fn frobbing_other_computers_or_unusable_security_does_not_clear_alarms() {
+        let mut world = World::new();
+        let normal = world.add_entity(PropObjState(ObjectState::Normal));
+        for gui in [ComputerGui::default(), ComputerGui::turret()] {
+            assert!(matches!(gui.on_frob(normal, &world), Effect::NoEffect));
+        }
+        for state in [
+            ObjectState::Broken,
+            ObjectState::Destroyed,
+            ObjectState::Hacked,
+        ] {
+            let computer = world.add_entity(PropObjState(state));
+            assert!(matches!(
+                ComputerGui::security().on_frob(computer, &world),
+                Effect::NoEffect
+            ));
+        }
     }
 
     #[test]

@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { selectPsiPower } from "./helpers/psi.js";
 import { pullTrigger } from "./helpers/weapon.js";
+import { clickUiElement } from "./helpers/ui.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
 
 for (const vr of [false, true]) {
@@ -51,8 +52,12 @@ test("Cyber changes real hack odds, refreshes without stacking and survives save
   async function boardText() {
     await game.entities.sendMessage(computer.id, { type: "Frob" });
     await game.step({ frames: 2 });
-    const panel = (await game.ui.state()).active_panel;
+    let panel = (await game.ui.state()).active_panel;
     assert.equal(panel?.entity_id, computer.id);
+    const hack = panel.elements.find(e => e.label === "hack-security");
+    assert.ok(hack);
+    await clickUiElement(game, hack);
+    panel = (await game.ui.state()).active_panel!;
     const text = panel.elements.map(e => e.text ?? "").join("\n");
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 2 });

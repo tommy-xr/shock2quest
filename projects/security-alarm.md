@@ -29,12 +29,21 @@ ecology clears on its next update. This also covers saves made just after an
 ecology reset. Older saves without this optional field load without alarm bookkeeping;
 their existing ecology/script state is preserved.
 
-Security computers reuse the existing `ComputerGui` HRM board, skill checks,
-node interactions and nanite payment. Opening the board does not clear the
-alarm; a successful hack emits `ClearSecurityAlarm`. The console remains usable
-for later alarms. This covers alarm stand-down, not a new timed player-invisibility
-or security-shutdown power. Non-camera alarm sources and separate klaxon/audio
-objects remain outside this PR.
+Security computers first show the retail station panel (`ALARMFD.PCX`) and its
+localized `AlarmState1` / `AlarmState0` status paragraph at (18, 187), width150.
+The existing HRM Hack plug opens the paid hacking board; selecting Hack is free,
+and START still performs its existing skill checks and nanite payment. Shared
+canvas layout and the same plug renderer serve flat and VR presentations. The
+station reports security disabled only while the timed hack is active.
+
+This follows retail `shkscomp.cpp`'s station artwork, text rect and HRM plug:
+https://github.com/dima424658/darkengine/blob/4aa92d74e727a503954eb01914f69b3997324fc3/src/shock/shkscomp.cpp . Opening a normal security computer clears
+the current alarm for free in both presentations. It does not disable detection:
+cameras can identify the player and raise a fresh alarm immediately afterward.
+A successful paid hack also clears the alarm and suppresses cameras and hostile
+turrets for authored `HackTime` milliseconds scaled by effective Cyber. The
+remaining suppression interval survives saves and deck transitions; a new alarm
+cancels it. The console remains usable for later alarms.
 
 ## Presentation
 
