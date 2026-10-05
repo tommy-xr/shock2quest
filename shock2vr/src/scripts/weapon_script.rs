@@ -90,17 +90,7 @@ fn shot_cooldown_seconds(setting: &GunSettingDesc) -> f32 {
     setting.shot_interval_ms as f32 / 1000.0
 }
 
-/// One per-shot multiplier of a fire setting, sanitized. The shipped data
-/// leaves the modifiers of a setting the gun never authored at 0, which taken
-/// literally would make its shots damageless and motionless - so only a
-/// positive multiplier counts as one.
-fn shot_multiplier(raw: f32) -> f32 {
-    if raw.is_finite() && raw > 0.0 {
-        raw
-    } else {
-        1.0
-    }
-}
+use super::script_util::shot_multiplier;
 
 /// The damage and speed multipliers this fire setting puts on the projectile it
 /// launches (the EMP rifle's overcharge hits 3x; the fusion cannon's DEATH lob
@@ -161,7 +151,12 @@ fn degrade_per_shot(world: &World, entity_id: EntityId) -> Option<f32> {
         .borrow::<View<dark::properties::PropGunReliability>>()
         .ok()
         .and_then(|v| v.get(entity_id).ok().map(|r| r.degrade_rate))?;
-    (rate > 0.0).then_some(rate)
+    let multiplier = world
+        .borrow::<View<crate::weapon_upgrades::WeaponUpgrades>>()
+        .ok()
+        .and_then(|upgrades| upgrades.get(entity_id).ok().map(|u| u.wear_multiplier()))
+        .unwrap_or(1.0);
+    (rate > 0.0).then_some(rate * multiplier)
 }
 
 /// Whether the Anti-entropic Field is running: while it is, a gun neither
@@ -1861,6 +1856,50 @@ mod tests {
             degrade_rate: 1.0,
             thresh_break: 10.0,
         }
+    }
+
+    #[test]
+    fn upgraded_weapon_wear_and_shots_use_live_effective_stats() {
+        use crate::weapon_upgrades::{UpgradeSource, WeaponUpgrade, WeaponUpgrades};
+        let mut world = World::new();
+        let mut upgrades = WeaponUpgrades::default();
+        for choice in [
+            WeaponUpgrade::ExtendedCapacity,
+            WeaponUpgrade::AlternateFire,
+            WeaponUpgrade::LowMaintenanceI,
+            WeaponUpgrade::LowMaintenanceII,
+        ] {
+            upgrades = upgrades
+                .with_upgrade(
+                    choice,
+                    &WeaponUpgrade::ALL,
+                    UpgradeSource::Device,
+                    upgrades.tier(),
+                )
+                .unwrap();
+        }
+        let gun = world.add_entity((
+            pistol_reliability(),
+            dark::properties::PropBaseGunDesc {
+                settings: std::array::from_fn(|_| GunSettingDesc {
+                    stim_modifier: 0.0,
+                    ..Default::default()
+                }),
+            },
+            upgrades,
+        ));
+        assert!((degrade_per_shot(&world, gun).unwrap() - 0.4).abs() < 0.00001);
+        let setting = active_gun_setting(&world, gun).unwrap();
+        assert!((shot_modifiers(&world, gun, &setting).stim - 1.32).abs() < 0.00001);
+        assert_eq!(
+            world
+                .borrow::<View<PropGunReliability>>()
+                .unwrap()
+                .get(gun)
+                .unwrap()
+                .degrade_rate,
+            1.0
+        );
     }
 
     /// The break chance across the condition range, for a player with no skill
