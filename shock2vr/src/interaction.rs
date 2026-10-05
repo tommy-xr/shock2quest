@@ -1840,7 +1840,7 @@ impl PlayerInteraction for VrInteraction {
                 Some((1 - support.primary, grip))
             })
         });
-        // Climb feedback is the glove itself: cyan while holding, half while in reach.
+        // Glove lights are cyan while holding, half intensity while in reach.
         // Holding comes from the resolved holds, so a blocked pull still shows a catch.
         let mut climb_lights = self
             .climb_reach
