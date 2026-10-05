@@ -35,6 +35,9 @@ pub struct EntitySaveData {
     /// Objects whose panel the player has opened; remapped like hazard gear.
     #[serde(default)]
     pub searched: Vec<u64>,
+    /// Generated supplies retain their model-centered pickup collider.
+    #[serde(default)]
+    pub model_bounds_physics: Vec<u64>,
     pub implant_slots: HashMap<u64, crate::runtime_props::RuntimePropImplantSlot>,
     /// Current/alternate power templates, owned and remapped with each amp.
     #[serde(default)]
@@ -90,6 +93,7 @@ impl EntitySaveData {
             death_poses: HashMap::new(),
             hazard_equipment: Vec::new(),
             searched: Vec::new(),
+            model_bounds_physics: Vec::new(),
             implant_slots: HashMap::new(),
             amp_selections: HashMap::new(),
             selected_ammo: HashMap::new(),
@@ -171,6 +175,13 @@ impl EntitySaveData {
                 if let Some(new) = old_entity_id_to_new_entity_id.get(&old) {
                     world.add_component(*new, crate::runtime_props::RuntimePropHazardEquipment);
                 }
+            }
+        }
+        for id in &self.model_bounds_physics {
+            if let Some(new) =
+                EntityId::from_inner(*id).and_then(|old| old_entity_id_to_new_entity_id.get(&old))
+            {
+                world.add_component(*new, crate::runtime_props::RuntimePropModelBoundsPhysics);
             }
         }
         for id in &self.searched {
