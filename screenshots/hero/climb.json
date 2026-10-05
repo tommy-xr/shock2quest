@@ -1,0 +1,1655 @@
+{
+  "mission": "medsci1.mis",
+  "presentation": "Vr",
+  "revision": "8aae1c02c6d96fb43949471cfdb114f9704edb8f",
+  "revisionParents": [
+    "3430c3bf7b715f64f50d0e87f552c30d5d220a7f",
+    "b216adc0cc425ab7f4bfdf315af4f0426e242709"
+  ],
+  "runtimeSha256": "a672225f6b0fc0341134262b0bc28605ab4ab5987a0b26cb3640efde0b53d484",
+  "assetRoot": "/Users/bryphe/ss2-25th",
+  "devParams": {
+    "cheat": 1,
+    "ambient_light_intensity": 1.6,
+    "level_light_intensity": 2,
+    "held_light_floor": 1
+  },
+  "stance": {
+    "eyeGapToLadder": 0.5,
+    "mantleEyeGap": 0,
+    "mantleRiseRungs": 0.25,
+    "note": "tracked head held this far off the ladder face while climbing, then while planting on the deck"
+  },
+  "handRotation": {
+    "rungPitchDeg": 45,
+    "deckPitchDeg": -10,
+    "deckToeInDeg": 10,
+    "palm": "rolled down (overhand)",
+    "deck": "fingers forward, wrist raised"
+  },
+  "rungGripOffset": {
+    "up": 0.06,
+    "towardClimber": 0.03
+  },
+  "stagingTeleport": {
+    "x": -17.54,
+    "y": -4.5,
+    "z": 14.65
+  },
+  "ladderSegments": [
+    {
+      "model": "rickladd",
+      "rung": [
+        [
+          -17.941078,
+          -5.9999995,
+          14.453153
+        ],
+        [
+          -17.141357,
+          -5.9999995,
+          14.453153
+        ]
+      ]
+    },
+    {
+      "model": "rickladd",
+      "rung": [
+        [
+          -17.942055,
+          -5.2027607,
+          14.451532
+        ],
+        [
+          -17.142334,
+          -5.2027607,
+          14.451532
+        ]
+      ]
+    },
+    {
+      "model": "rickladd",
+      "rung": [
+        [
+          -17.941153,
+          -4.4019537,
+          14.45239
+        ],
+        [
+          -17.141432,
+          -4.4019537,
+          14.45239
+        ]
+      ]
+    },
+    {
+      "model": "rickladd",
+      "rung": [
+        [
+          -17.940926,
+          -3.6011462,
+          14.452866
+        ],
+        [
+          -17.141205,
+          -3.6011462,
+          14.452866
+        ]
+      ]
+    },
+    {
+      "model": "rickladd",
+      "rung": [
+        [
+          -17.941153,
+          -2.7940946,
+          14.451438
+        ],
+        [
+          -17.141432,
+          -2.7940946,
+          14.451438
+        ]
+      ]
+    },
+    {
+      "model": "rickladd",
+      "rung": [
+        [
+          -17.943863,
+          -1.993882,
+          14.453724
+        ],
+        [
+          -17.144142,
+          -1.993882,
+          14.453724
+        ]
+      ]
+    }
+  ],
+  "climb": {
+    "strokes": [
+      {
+        "rung": 3,
+        "bodyY": -3.6722026
+      },
+      {
+        "rung": 4,
+        "bodyY": -2.876835
+      },
+      {
+        "rung": 5,
+        "bodyY": -2.0756116
+      }
+    ]
+  },
+  "mantle": {
+    "holds": {
+      "left": [
+        -17.74393275,
+        -1.4938535,
+        14.153153
+      ],
+      "right": [
+        -17.34407225,
+        -1.4938535,
+        14.153153
+      ]
+    },
+    "pressFrames": 13,
+    "landed": [
+      -17.279732,
+      -0.35600007,
+      13.758377
+    ],
+    "gripsAfter": 0
+  },
+  "video": {
+    "file": "climb.mp4",
+    "fps": 15,
+    "frames": 82
+  },
+  "inputs": "climb.inputs.json",
+  "gif": "climb.gif",
+  "samples": [
+    {
+      "frame": 1,
+      "phase": "climb",
+      "position": [
+        -17.539875,
+        -4.4469337,
+        14.650742
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 5,
+      "phase": "climb",
+      "position": [
+        -17.53955,
+        -4.346781,
+        14.651113
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 9,
+      "phase": "climb",
+      "position": [
+        -17.539078,
+        -4.246628,
+        14.6513405
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 13,
+      "phase": "climb",
+      "position": [
+        -17.538574,
+        -4.1464777,
+        14.651487
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 17,
+      "phase": "climb",
+      "position": [
+        -17.536768,
+        -4.04997,
+        14.654373
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 21,
+      "phase": "climb",
+      "position": [
+        -17.480125,
+        -3.9602726,
+        14.713124
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 25,
+      "phase": "climb",
+      "position": [
+        -17.472414,
+        -3.846014,
+        14.8139925
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 29,
+      "phase": "climb",
+      "position": [
+        -17.467299,
+        -3.7502515,
+        14.852065
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 33,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -3.6530204,
+        14.904955
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 37,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -3.6530204,
+        14.904955
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 41,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -3.6530204,
+        14.904955
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 45,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -3.6530204,
+        14.904955
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 49,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -3.6530204,
+        14.904955
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 53,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -3.6530204,
+        14.904955
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 57,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -3.6530204,
+        14.904955
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 61,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -3.6530204,
+        14.904955
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 65,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -3.6530204,
+        14.904955
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 69,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -3.6530204,
+        14.904955
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 73,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -3.6530204,
+        14.904955
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 77,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -3.6530204,
+        14.904955
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 81,
+      "phase": "climb",
+      "position": [
+        -17.46887,
+        -3.602944,
+        14.905155
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 85,
+      "phase": "climb",
+      "position": [
+        -17.466202,
+        -3.5030107,
+        14.916491
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 89,
+      "phase": "climb",
+      "position": [
+        -17.46336,
+        -3.402647,
+        14.919859
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 93,
+      "phase": "climb",
+      "position": [
+        -17.460966,
+        -3.302483,
+        14.920096
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 97,
+      "phase": "climb",
+      "position": [
+        -17.458902,
+        -3.2023306,
+        14.920281
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 101,
+      "phase": "climb",
+      "position": [
+        -17.458576,
+        -3.1019201,
+        14.920108
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 105,
+      "phase": "climb",
+      "position": [
+        -17.467499,
+        -3.0018327,
+        14.919859
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 109,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.9018748,
+        14.920225
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 113,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.8517969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 117,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.8517969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 121,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.8517969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 125,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.8517969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 129,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.8517969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 133,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.8517969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 137,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.8517969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 141,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.8517969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 145,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.8517969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 149,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.8517969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 153,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.8517969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 157,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.8517969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 161,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.751644,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 165,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.651491,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 169,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.551338,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 173,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.4511852,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 177,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.3510323,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 181,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.2508793,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 185,
+      "phase": "climb",
+      "position": [
+        -17.468973,
+        -2.1507263,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 189,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -2.0505733,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 193,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -2.025535,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 197,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -2.0004969,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 201,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.9754586,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 205,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.9504204,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 209,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.9253821,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 213,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.9003439,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 217,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8753057,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ladder"
+        },
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 221,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8502674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 225,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8502674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 229,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8502674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 233,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8502674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 237,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8502674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 241,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8502674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "right",
+          "kind": "ladder"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 245,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8502674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ledge"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 249,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8502674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ledge"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 253,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8502674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ledge"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 257,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8502674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ledge"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 261,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8502674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ledge"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 265,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8502674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ledge"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 269,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.8202674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ledge"
+        },
+        {
+          "hand": "right",
+          "kind": "ledge"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 273,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.7602674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ledge"
+        },
+        {
+          "hand": "right",
+          "kind": "ledge"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 277,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.7002674,
+        14.920099
+      ],
+      "grips": [
+        {
+          "hand": "left",
+          "kind": "ledge"
+        },
+        {
+          "hand": "right",
+          "kind": "ledge"
+        }
+      ],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 281,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.4852672,
+        14.920099
+      ],
+      "grips": [],
+      "vaulting": true,
+      "health": 35
+    },
+    {
+      "frame": 285,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -1.2186003,
+        14.920099
+      ],
+      "grips": [],
+      "vaulting": true,
+      "health": 35
+    },
+    {
+      "frame": 289,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -0.95193344,
+        14.920099
+      ],
+      "grips": [],
+      "vaulting": true,
+      "health": 35
+    },
+    {
+      "frame": 293,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -0.6852668,
+        14.920099
+      ],
+      "grips": [],
+      "vaulting": true,
+      "health": 35
+    },
+    {
+      "frame": 297,
+      "phase": "mantle",
+      "position": [
+        -17.468973,
+        -0.41860014,
+        14.920099
+      ],
+      "grips": [],
+      "vaulting": true,
+      "health": 35
+    },
+    {
+      "frame": 301,
+      "phase": "mantle",
+      "position": [
+        -17.436827,
+        -0.35600007,
+        14.7227
+      ],
+      "grips": [],
+      "vaulting": true,
+      "health": 35
+    },
+    {
+      "frame": 305,
+      "phase": "mantle",
+      "position": [
+        -17.393965,
+        -0.35600007,
+        14.459501
+      ],
+      "grips": [],
+      "vaulting": true,
+      "health": 35
+    },
+    {
+      "frame": 309,
+      "phase": "mantle",
+      "position": [
+        -17.351103,
+        -0.35600007,
+        14.196302
+      ],
+      "grips": [],
+      "vaulting": true,
+      "health": 35
+    },
+    {
+      "frame": 313,
+      "phase": "mantle",
+      "position": [
+        -17.308237,
+        -0.35600007,
+        13.933104
+      ],
+      "grips": [],
+      "vaulting": true,
+      "health": 35
+    },
+    {
+      "frame": 317,
+      "phase": "mantle",
+      "position": [
+        -17.279778,
+        -0.35600007,
+        13.758354
+      ],
+      "grips": [],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 321,
+      "phase": "landed",
+      "position": [
+        -17.27975,
+        -0.35600007,
+        13.75836
+      ],
+      "grips": [],
+      "vaulting": false,
+      "health": 35
+    },
+    {
+      "frame": 325,
+      "phase": "landed",
+      "position": [
+        -17.279747,
+        -0.35541603,
+        13.758357
+      ],
+      "grips": [],
+      "vaulting": false,
+      "health": 35
+    }
+  ]
+}
