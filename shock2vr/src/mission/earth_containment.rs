@@ -4,6 +4,7 @@ use std::{collections::HashMap, sync::LazyLock};
 
 use cgmath::{Deg, InnerSpace, Quaternion, Rotation3, vec3};
 use dark::properties::*;
+use rand::{Rng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
@@ -14,6 +15,9 @@ const STATIONS: i32 = 60_200;
 const PATCHES: i32 = 61_000;
 const PATCH_STRIDE: i32 = 1_000;
 const EGG_SITES: i32 = 60_250;
+const WORM_SITES: i32 = 60_280;
+const WORM_PILE: i32 = -105;
+const WORM_SITE_COUNT: usize = 2;
 // Below the wave tags (60_001 onward), including in endless play.
 const ECOLOGY: i32 = 59_000;
 const MAX_DENSITY: f32 = 6.0;
@@ -159,6 +163,18 @@ pub(super) fn populate(
                 0.0,
             ));
         }
+        for site in 0..WORM_SITE_COUNT {
+            let mut position = EGG_POINTS[zone][site * 2];
+            position[0] += 1.5;
+            position[1] -= 0.73; // surveyed floor used by the growth seeds
+            result.markers.push(add(
+                WORM_SITES + (zone * WORM_SITE_COUNT + site) as i32,
+                -327,
+                "Containment worm site",
+                position,
+                0.0,
+            ));
+        }
     }
     result
 }
@@ -237,6 +253,8 @@ struct Zone {
     protection: f32,
     density: f32,
     next_egg: f32,
+    next_worm: f32,
+    loot_seed: u64,
     next_site: usize,
     // A saved mix, independent of occupied sites: five grubs, two swarmers,
     // and one black egg per eight successful births. Never reroll on load.
@@ -244,6 +262,16 @@ struct Zone {
     shown: i32,
 }
 impl Zone {
+    fn black_egg_weapon(&mut self) -> Option<&'static str> {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(self.loot_seed);
+        self.loot_seed = rng.next_u64();
+        match rng.gen_range(0..20) {
+            0 => Some("Worm Launcher"),
+            1 => Some("Viral Prolif"),
+            _ => None,
+        }
+    }
+
     fn stage(&self, growth_allowed: bool) -> u8 {
         if self.protection > 30.0 {
             0
@@ -270,6 +298,9 @@ impl Zone {
             let seconds = crate::dev_params::get(crate::dev_params::HORDE_GROWTH_SECONDS);
             self.density = (self.density + dt * scale * MAX_DENSITY / seconds).min(MAX_DENSITY);
         }
+        if active && growth_allowed && self.protection <= 0.0 && self.density >= 2.0 {
+            self.next_worm -= dt * scale;
+        }
         if active && growth_allowed && self.protection <= 0.0 && self.density >= DENSE {
             self.next_egg -= dt * scale;
         }
@@ -292,6 +323,8 @@ impl Default for Containment {
                 protection: 180.0 + zone.min(1) as f32 * 30.0,
                 density: 0.0,
                 next_egg: 0.0,
+                next_worm: 0.0,
+                loot_seed: 0x574f_524d_0000 + zone as u64,
                 next_site: 0,
                 next_kind: 0,
                 shown: -1,
@@ -407,9 +440,25 @@ impl Containment {
                 eggs[(tag.0 - ECOLOGY) as usize].push(id);
             }
         }
+        let mut piles: [Vec<EntityId>; 3] = Default::default();
+        for (id, (tag, template)) in (&tags, &ids).iter().with_id() {
+            if is_containment_type(tag.0) && template.template_id == WORM_PILE {
+                piles[(tag.0 - ECOLOGY) as usize].push(id);
+            }
+        }
         // Stable site/hatching order across saves and ECS iteration order.
         for pods in &mut eggs {
-            pods.sort_by_key(|id| id.inner());
+            // Runtime IDs change on load. Position keeps the saved random
+            // stream assigned to the same authored sites after a reload.
+            pods.sort_by(|a, b| match (positions.get(*a), positions.get(*b)) {
+                (Ok(a), Ok(b)) => a
+                    .position
+                    .x
+                    .total_cmp(&b.position.x)
+                    .then(a.position.y.total_cmp(&b.position.y))
+                    .then(a.position.z.total_cmp(&b.position.z)),
+                _ => std::cmp::Ordering::Equal,
+            });
         }
         for (index, zone) in self.zones.iter_mut().enumerate() {
             if let Some(station) = entities.get(&(STATIONS + index as i32)) {
@@ -439,6 +488,39 @@ impl Containment {
                 }
                 zone.shown = shown;
             }
+            if active
+                && growth_allowed
+                && zone.protection <= 0.0
+                && zone.density >= 2.0
+                && zone.next_worm <= 0.0
+                && piles[index].len() < WORM_SITE_COUNT
+            {
+                for site in 0..WORM_SITE_COUNT {
+                    let Some(marker) =
+                        entities.get(&(WORM_SITES + (index * WORM_SITE_COUNT + site) as i32))
+                    else {
+                        continue;
+                    };
+                    let Ok(at) = positions.get(*marker) else {
+                        continue;
+                    };
+                    if piles[index].iter().any(|pile| {
+                        positions
+                            .get(*pile)
+                            .is_ok_and(|p| (p.position - at.position).magnitude2() < 1.0)
+                    }) {
+                        continue;
+                    }
+                    effects.push(Effect::SpawnEcologyEntity {
+                        template_name: "WormGoo".into(),
+                        spawn_point: *marker,
+                        ecology_type: Some(ECOLOGY + index as i32),
+                        goto_player: false,
+                    });
+                    zone.next_worm = 30.0;
+                    break;
+                }
+            }
             for pod in &eggs[index] {
                 if hp.get(*pod).is_ok_and(|hp| hp.hit_points <= 0) {
                     continue;
@@ -457,6 +539,7 @@ impl Containment {
                             .is_ok_and(|pos| (pos.position - player).magnitude2() < 4.0 * 4.0)
                     })
                 {
+                    let mut spawned_hatchling = true;
                     if models
                         .get(*pod)
                         .is_ok_and(|m| m.0.eq_ignore_ascii_case("fpod"))
@@ -464,11 +547,13 @@ impl Containment {
                         // Golden Egg has no retail hatch script or open model.
                         // Only containment-tagged eggs get this payload; burst
                         // via the authored gas/debris links after using its pose.
+                        let weapon = zone.black_egg_weapon();
+                        spawned_hatchling = weapon.is_none();
                         effects.push(Effect::SpawnEcologyEntity {
-                            template_name: "Baby Arachnid".into(),
+                            template_name: weapon.unwrap_or("Baby Arachnid").into(),
                             spawn_point: *pod,
-                            ecology_type: Some(ECOLOGY + index as i32),
-                            goto_player: true,
+                            ecology_type: spawned_hatchling.then_some(ECOLOGY + index as i32),
+                            goto_player: spawned_hatchling,
                         });
                         effects.push(Effect::SlayEntity { entity_id: *pod });
                     } else {
@@ -479,7 +564,7 @@ impl Containment {
                             },
                         });
                     }
-                    hatchlings += 1; // reserve births emitted by this batch
+                    hatchlings += usize::from(spawned_hatchling); // reserve actual AI births
                     swarmers += usize::from(swarmer);
                 }
             }
@@ -607,6 +692,192 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, Effect::SpawnEcologyEntity { .. }))
             .count()
+    }
+
+    fn seed_for_weapon(wanted: Option<&str>) -> u64 {
+        (1..10_000)
+            .find(|seed| {
+                let mut state = Containment::default();
+                state.zones[0].loot_seed = *seed;
+                state.zones[0].black_egg_weapon() == wanted
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn black_egg_loot_stream_is_rare_and_resumes_after_save() {
+        let mut state = Containment::default();
+        let mut counts = [0; 2];
+        for _ in 0..10_000 {
+            match state.zones[0].black_egg_weapon() {
+                Some("Worm Launcher") => counts[0] += 1,
+                Some("Viral Prolif") => counts[1] += 1,
+                None => {}
+                _ => panic!("unexpected black-egg weapon"),
+            }
+        }
+        assert!((800..1200).contains(&counts.iter().sum::<i32>()));
+        assert!(counts.iter().all(|count| (300..700).contains(count)));
+        state.zones[0].next_worm = 19.5;
+        let mut restored: Containment =
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        assert_eq!(restored.zones[0].next_worm, 19.5);
+        for _ in 0..200 {
+            assert_eq!(
+                state.zones[0].black_egg_weapon(),
+                restored.zones[0].black_egg_weapon()
+            );
+        }
+    }
+
+    #[test]
+    fn rare_black_eggs_create_collectible_weapons_without_an_enemy_tag() {
+        for weapon in ["Worm Launcher", "Viral Prolif"] {
+            let (mut world, _) = fixture();
+            world
+                .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+                .unwrap()
+                .pos = vec3(0.0, 1.6, 0.0);
+            let pod = world.add_entity((
+                PropEcoType(ECOLOGY),
+                PropModelName("fpod".into()),
+                PropHitPoints { hit_points: 10 },
+                PropPosition {
+                    position: vec3(0.0, 1.6, 0.0),
+                    cell: 0,
+                    rotation: Quaternion::from_angle_y(Deg(0.0)),
+                },
+            ));
+            let mut state = Containment::default();
+            state.zones[0].loot_seed = seed_for_weapon(Some(weapon));
+            let effects = state.update(&world, 0.5, false, false, 5);
+            assert!(
+                effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::SpawnEcologyEntity {
+                template_name, spawn_point, ecology_type: None, goto_player: false
+            } if template_name == weapon && *spawn_point == pod))
+            );
+            assert!(
+                effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::SlayEntity { entity_id } if *entity_id == pod))
+            );
+            world.add_component(pod, PropHitPoints { hit_points: 0 });
+            assert_eq!(egg_spawns(&state.update(&world, 0.5, false, false, 5)), 0);
+        }
+    }
+
+    #[test]
+    fn black_egg_rewards_follow_positions_after_runtime_ids_change() {
+        let seed = (1..10_000)
+            .find(|seed| {
+                let mut state = Containment::default();
+                state.zones[0].loot_seed = *seed;
+                state.zones[0].black_egg_weapon() != state.zones[0].black_egg_weapon()
+            })
+            .unwrap();
+        let run = |xs: [f32; 2]| {
+            let (mut world, _) = fixture();
+            world
+                .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+                .unwrap()
+                .pos = vec3(0.0, 1.6, 0.0);
+            for x in xs {
+                world.add_entity((
+                    PropEcoType(ECOLOGY),
+                    PropModelName("fpod".into()),
+                    PropHitPoints { hit_points: 10 },
+                    PropPosition {
+                        position: vec3(x, 1.6, 0.0),
+                        cell: 0,
+                        rotation: Quaternion::from_angle_y(Deg(0.0)),
+                    },
+                ));
+            }
+            let mut state = Containment::default();
+            state.zones[0].loot_seed = seed;
+            let effects = state.update(&world, 0.5, false, false, 5);
+            let positions = world.borrow::<View<PropPosition>>().unwrap();
+            effects
+                .into_iter()
+                .filter_map(|e| match e {
+                    Effect::SpawnEcologyEntity {
+                        template_name,
+                        spawn_point,
+                        ..
+                    } => Some((
+                        positions.get(spawn_point).unwrap().position.x as i32,
+                        template_name,
+                    )),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run([-1.0, 1.0]), run([1.0, -1.0]));
+    }
+
+    #[test]
+    fn worm_piles_replenish_on_cooldown_with_a_zone_cap_and_pause_in_rest() {
+        let (mut world, _) = fixture();
+        for site in 0..WORM_SITE_COUNT {
+            world.add_entity((
+                PropTemplateId {
+                    template_id: WORM_SITES + site as i32,
+                },
+                PropPosition {
+                    position: vec3(site as f32 * 4.0, 0.0, 2.0),
+                    cell: 0,
+                    rotation: Quaternion::from_angle_y(Deg(0.0)),
+                },
+            ));
+        }
+        let births = |effects: Vec<Effect>| {
+            effects
+                .into_iter()
+                .filter_map(|e| match e {
+                    Effect::SpawnEcologyEntity {
+                        template_name,
+                        spawn_point,
+                        ..
+                    } if template_name == "WormGoo" => Some(spawn_point),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let apply = |world: &mut World, marker| {
+            let at = world
+                .borrow::<View<PropPosition>>()
+                .unwrap()
+                .get(marker)
+                .unwrap()
+                .clone();
+            world.add_entity((
+                PropTemplateId {
+                    template_id: WORM_PILE,
+                },
+                PropEcoType(ECOLOGY),
+                at,
+            ))
+        };
+        let mut state = Containment::default();
+        state.zones[0].protection = 0.0;
+        state.zones[0].density = 3.0;
+        let first = births(state.update(&world, 0.5, true, false, 5));
+        assert_eq!(first.len(), 1);
+        let first_pile = apply(&mut world, first[0]);
+        assert!(births(state.update(&world, 1.0, true, false, 5)).is_empty());
+        let remaining = state.zones[0].next_worm;
+        assert!(births(state.update(&world, 100.0, false, false, 5)).is_empty());
+        assert_eq!(state.zones[0].next_worm, remaining);
+        let second = births(state.update(&world, 30.0, true, false, 5));
+        assert_eq!(second.len(), 1);
+        apply(&mut world, second[0]);
+        assert!(births(state.update(&world, 30.0, true, false, 5)).is_empty());
+        world.delete_entity(first_pile);
+        assert_eq!(births(state.update(&world, 0.5, true, false, 5)).len(), 1);
+        state.zones[0].protection = 180.0;
+        assert!(births(state.update(&world, 60.0, true, false, 5)).is_empty());
     }
 
     #[test]
@@ -973,6 +1244,7 @@ mod tests {
             }
         }
         let mut state = Containment::default();
+        state.zones[0].loot_seed = seed_for_weapon(None);
         let effects = state.update(&world, 1.0, false, false, 5);
         let births: Vec<_> = effects
             .iter()

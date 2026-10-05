@@ -99,14 +99,24 @@ Each zone follows a saved eight-egg cycle: five Grub Floor Pods, two Swarmer
 Floor Pods, and one black egg (the Rick1 `Golden Egg` / `fpod` asset). The black
 slot remains a grub until wave 5 and density 5; the diagnostic alias bypasses
 only the wave gate. Occupied sites do not advance the mix, and save/load resumes
-it. Black eggs burst on approach into one Baby Arachnid. Destroying an unopened
-black egg prevents the hatch. This behavior is limited to containment-tagged
-eggs; campaign Golden Eggs retain their original behavior. Swarms keep their
-normal twenty-second lifetime. All three payloads inherit the zone's ecology
-tag, stay outside wave completion accounting, and share its hatchling budget.
+it. Black eggs burst on approach: 90% yield a Baby Arachnid, 5% a Worm Launcher,
+and 5% a Viral Proliferator. Destroying an unopened egg prevents its payload.
+The random stream persists in saves; spatial ordering keeps rewards attached
+to the same sites when runtime entity IDs change on load. This behavior is
+limited to containment-tagged eggs; campaign Golden Eggs retain their original
+behavior. Swarms keep their normal twenty-second lifetime. Creature payloads
+inherit the zone's ecology tag and share its hatchling budget; weapon pickups
+do not count as enemies. Neither contributes to wave completion accounting.
+
+Unprotected growth at density 2 also produces worm piles at two surveyed floor
+sites per zone, capped at two uncollected piles per zone. Production has a
+30-combat-second cooldown and pauses during rest or protection; existing piles
+remain collectible. An empty small/large beaker collects four/eight rounds.
+Beakers are sold at the far east supplies shop. The diagnostic alias scales
+the cooldown tenfold along with growth. Cooldowns persist in saves.
 
 Wall-mounted growth reuses the Hydro meshes with wall-facing transforms;
-wall eggs and goo payloads remain follow-ups.
+wall eggs remain a follow-up.
 
 ## Pacing prototype controls
 
