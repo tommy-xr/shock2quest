@@ -287,7 +287,10 @@ mod tests {
                 to_links: vec![ToLink {
                     to_template_id: 0,
                     to_entity_id: Some(WrappedEntityId(end_node)),
-                    link: Link::TPath(TPathData { speed }),
+                    link: Link::TPath(TPathData {
+                        speed,
+                        ..Default::default()
+                    }),
                 }],
             },
         ));
@@ -313,7 +316,10 @@ mod tests {
                 to_links: vec![ToLink {
                     to_template_id: 0,
                     to_entity_id: Some(WrappedEntityId(fourth)),
-                    link: Link::TPath(TPathData { speed: 4.0 }),
+                    link: Link::TPath(TPathData {
+                        speed: 4.0,
+                        ..Default::default()
+                    }),
                 }],
             },
         ));
@@ -323,7 +329,10 @@ mod tests {
                 to_links: vec![ToLink {
                     to_template_id: 0,
                     to_entity_id: Some(WrappedEntityId(third)),
-                    link: Link::TPath(TPathData { speed: 3.0 }),
+                    link: Link::TPath(TPathData {
+                        speed: 3.0,
+                        ..Default::default()
+                    }),
                 }],
             },
         ));
@@ -333,7 +342,10 @@ mod tests {
                 to_links: vec![ToLink {
                     to_template_id: 0,
                     to_entity_id: Some(WrappedEntityId(second)),
-                    link: Link::TPath(TPathData { speed: 2.0 }),
+                    link: Link::TPath(TPathData {
+                        speed: 2.0,
+                        ..Default::default()
+                    }),
                 }],
             },
         ));
