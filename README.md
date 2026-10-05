@@ -99,7 +99,8 @@ and release. The preview is green when it fits or merges, amber for automatic
 placement elsewhere, and red when releasing will drop it into the world.
 Pass an item between hands by squeezing the receiving hand nearby, then releasing
 the carrying hand. Stow a compact gun, melee weapon, or amp at either thigh by
-releasing it there; squeeze again to retrieve it.
+releasing it there; squeeze again to retrieve it. Holsters also work while the
+cyber interface is open, including items drawn directly from its inventory.
 
 **Access and pickups.** Grip nanites, cyber modules, software upgrades, or found
 access cards, then release anywhere to download them. Draw your personal access
