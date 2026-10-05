@@ -5504,6 +5504,16 @@ impl MissionCore {
                 }),
             );
         }
+        // The hand a VR panel is listening to eases into a point.
+        let mut ui_point = [false; 2];
+        if let Some(ray) = self
+            .vr_use_mode_pointer
+            .as_ref()
+            .and_then(|p| p.active_ray())
+        {
+            ui_point[hand_slot(ray.handedness)] = true;
+        }
+        self.interaction.set_ui_point(ui_point);
         if self.vr_trigger_swallow && !self.use_mode {
             let held = |hand: &crate::input_context::Hand| {
                 hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD
@@ -15370,8 +15380,8 @@ impl MissionCore {
     /// - see `render`'s `is_settled_closed()` gate). The canvas itself is
     /// empty once the strip has been cleared on exit, so only the dim
     /// actually lingers.
-    /// The pointer (aim beams) is drawn last, from the same pass the canvas
-    /// was hit-tested with, so a beam can only ever end on the pixel the
+    /// The pointer (aim beams + hit dot) is drawn last, from the same pass the
+    /// canvas was hit-tested with, so the dot can only ever mark the pixel the
     /// interface actually reacted to. Deliberately hand-less: unlike a frontend
     /// screen this is a mode of play, so the player's own hands are still being
     /// rendered by the interaction controller, and a second static glove would

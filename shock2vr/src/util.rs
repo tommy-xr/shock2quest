@@ -345,15 +345,15 @@ pub mod render_source {
     /// the forearm HUD panels. Emitted by both the mission interaction
     /// controller and the `debug_hud` scene.
     pub const PLAYER_HANDS: &str = "player_hands";
-    /// A frontend panel's pointer: a hand per tracked controller and its aim
-    /// beam. This is the *only* pair of hands a frontend screen or
+    /// A frontend panel's pointer: a hand per tracked controller, its aim beam
+    /// and the hit dot. This is the *only* pair of hands a frontend screen or
     /// the pause menu shows.
     pub const FRONTEND_POINTER: &str = "frontend_pointer";
     /// The pause menu's comfort dim, behind its panel.
     pub const PAUSE_DIM: &str = "pause_dim";
     /// The VR cyber interface's comfort dim, behind the use-mode panel.
     pub const USE_MODE_DIM: &str = "use_mode_dim";
-    /// The VR cyber interface's aim beams. Unlike
+    /// The VR cyber interface's aim beams and hit dot. Unlike
     /// [`FRONTEND_POINTER`] this draws no hands: the interface is a mode of
     /// play, so the player's real [`PLAYER_HANDS`] are still on screen and a
     /// second static glove would stack on top of them.

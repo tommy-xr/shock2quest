@@ -696,7 +696,7 @@ impl PauseMenu {
                 // The controllers and their aim rays, drawn from the same pass that
                 // resolved the highlight, so the beams can never promise a hover the
                 // menu will not give. The canvas objects already in hand are the layer
-                // stack the beam's tip has to stop clear of - the dim is not one of them,
+                // stack the hit dot has to float clear of - the dim is not one of them,
                 // it hangs behind the panel rather than on it.
                 objects.extend(canvas_objects);
                 // Everything above was built in the tracked play space (where the head,

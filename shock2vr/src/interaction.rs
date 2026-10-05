@@ -240,6 +240,9 @@ pub trait PlayerInteraction {
     /// Available body-slot contents, resolved by the same pass that owns retrieval.
     fn set_body_anticipation(&mut self, _targets: [Option<EntityId>; 2]) {}
 
+    /// Hands a VR UI panel is listening to this frame; they ease into a point.
+    fn set_ui_point(&mut self, _hands: [bool; 2]) {}
+
     fn set_body_tool_device(&mut self, _device: bool) {}
 
     fn personal_card_grip(&self, _hand: usize) -> Option<crate::vr_grip::ResolvedGrip> {
@@ -310,6 +313,7 @@ pub struct VrInteraction {
     anticipation: [crate::hand_anticipation::HandAnticipation; 2],
     body_anticipation: [Option<EntityId>; 2],
     climb_anticipation: [bool; 2],
+    ui_point: [bool; 2],
 }
 
 struct SupportAttachment {
@@ -426,6 +430,7 @@ impl VrInteraction {
             anticipation: Default::default(),
             body_anticipation: [None; 2],
             climb_anticipation: [false; 2],
+            ui_point: [false; 2],
         }
     }
 }
@@ -546,7 +551,9 @@ impl VrInteraction {
             let object = self.body_anticipation[i].or_else(|| hand.nearby_grab_target());
             // Climbing resolves before ordinary pickup rays, so a nearby rung
             // wins even when that hand points through it at a loose item.
-            let target = if climb[i] {
+            let target = if self.ui_point[i] {
+                Target::UiPoint
+            } else if climb[i] {
                 Target::Grab([1.0; 5])
             } else if let Some(entity) = object {
                 // Weapons change from their world mesh to the authored hand mesh
@@ -1511,6 +1518,10 @@ impl PlayerInteraction for VrInteraction {
         self.synchronize_slide(world);
     }
 
+    fn set_ui_point(&mut self, hands: [bool; 2]) {
+        self.ui_point = hands;
+    }
+
     fn set_body_anticipation(&mut self, targets: [Option<EntityId>; 2]) {
         self.body_anticipation = targets;
     }
@@ -2316,6 +2327,36 @@ mod tests {
             interaction.hand_feedback_diagnostics()["anticipation"][1]["curls"],
             serde_json::json!([0.0, 0.0, 0.0, 0.0, 0.0])
         );
+    }
+
+    #[test]
+    fn the_hand_a_ui_panel_reads_eases_into_a_full_point() {
+        let world = World::new();
+        let physics = PhysicsWorld::new();
+        let mut input = InputContext::default();
+        input.left_hand.rotation = identity();
+        input.right_hand.rotation = identity();
+        let mut interaction = VrInteraction::new();
+        for hand in [&mut interaction.left_hand, &mut interaction.right_hand] {
+            *hand = hand.update_suppressed(vec3(0.0, 0.0, 0.0), identity(), &input.right_hand);
+        }
+        interaction.set_ui_point([false, true]);
+        for _ in 0..60 {
+            interaction.update_anticipation(&context(&world, &physics, &input));
+        }
+        let point = |interaction: &VrInteraction, hand: usize| {
+            interaction.hand_feedback_diagnostics()["anticipation"][hand]["point"]
+                .as_f64()
+                .unwrap()
+        };
+        assert!(point(&interaction, 1) > 0.99);
+        assert!(point(&interaction, 0) < 0.01);
+        // Leaving the panel eases back out.
+        interaction.set_ui_point([false; 2]);
+        for _ in 0..60 {
+            interaction.update_anticipation(&context(&world, &physics, &input));
+        }
+        assert!(point(&interaction, 1) < 0.01);
     }
 
     fn step_physics(physics: &mut PhysicsWorld) {

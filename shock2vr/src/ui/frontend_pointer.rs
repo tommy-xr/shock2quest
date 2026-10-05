@@ -125,8 +125,9 @@ fn frontend_ray(
 /// them the menu is listening to, and whether a trigger is down.
 ///
 /// This is the single unit of frontend pointing. The hover highlight, the click
-/// and the drawn beams ([`crate::ui::PointerVisuals`]) all read the same pass,
-/// so a beam cannot end anywhere but the pixel the menu hit-tested.
+/// and the drawn hit dot ([`crate::ui::PointerVisuals`]) all read the same
+/// pass, so the dot cannot appear anywhere but the pixel the menu hit-tested,
+/// and a controller the menu is ignoring cannot draw a dot that says otherwise.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FrontendPointerPass {
     /// Every tracked controller's ray, right hand first. An untracked

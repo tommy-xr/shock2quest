@@ -13,6 +13,8 @@ pub(crate) enum Target {
     #[default]
     None,
     Point,
+    /// Operating a VR UI panel: a full point, not the partial preview.
+    UiPoint,
     Grab([f32; 5]),
 }
 
@@ -21,6 +23,7 @@ impl HandAnticipation {
         let (curls, point) = match target {
             Target::None => ([0.0; 5], 0.0),
             Target::Point => ([0.0; 5], 0.65),
+            Target::UiPoint => ([0.0; 5], 1.0),
             Target::Grab(curls) => (curls.map(|v| v.clamp(0.0, 1.0) * 0.55), 0.0),
         };
         // Exponential easing has the same response at 60, 90 and 120 Hz.

@@ -38,8 +38,8 @@ impl FrontendCanvasPresenter {
         self.render_world_space_with(asset_cache, canvas, panel, pointer, |_, _| {})
     }
 
-    /// The menu shell extends the common panel stack with pointer rays.
-    /// Keeping that decoration inside this guarded call prevents a
+    /// The menu shell extends the common panel stack with pointer rays and a
+    /// hit dot. Keeping that decoration inside this guarded call prevents a
     /// stale VR pointer from leaking into the flat presentation.
     pub(crate) fn render_world_space_with<TEvent: Clone>(
         self,
