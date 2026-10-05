@@ -2,36 +2,18 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { Vec3 } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import {
-  LOOT_PANEL_SIZE_PX as PANEL_SIZE_PX,
-  LOOT_SLOT_CENTER_PX,
-  add,
-  aimVrHandAt,
-  quatRotate,
-} from "./helpers/vr-hand.js";
+import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
-// Default-VR regression for #940. The mission data and gameplay path are the
-// real ones:
-//
-//   medsci1 corpse 219 --Contains--> Psi Amp 1407
-//   production hand trigger -> ContainerScript/GuiScript::OpenPanel
-//   production hand ray + squeeze -> ProxyGuiScript::GUIHover -> GrabEntity
-//
-// No direct Frob or Give is used. Before the original fix the
-// trigger reaches the corpse but no UI collider is created, so the first
-// post-frob UI-body assertion is the negative key. The retired-flag case also
-// rejects unsolicited panel colliders before frob (the old flag creates 97).
+// Production frob -> cyber-interface MFD -> physical loot grab. No third
+// container surface or proxy collider should be created, even with the old flag.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const CORPSE_PSI_AMP = 219;
-const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
-
 
 for (const experimental of [[], ["gui"]]) {
   test(
-    `${experimental.length ? "retired gui flag" : "default VR"} opens only the active container panel and grabs loot through the hand ray`,
+    `${experimental.length ? "retired gui flag" : "default VR"} opens loot in the cyber interface and grabs loot through the hand ray`,
     { skip: !e2eEnabled, timeout: 600_000 },
     async () => {
       await using game = await GameServer.launch({
@@ -86,38 +68,15 @@ for (const experimental of [[], ["gui"]]) {
       const uiBodiesAfter = (await game.physics.bodies()).bodies.filter((body) =>
         body.collision_groups.includes("ui"),
       );
-      assert.equal(
-        uiBodiesAfter.length,
-        1,
-        "a production VR frob must create one interactable world-panel collider",
-      );
-      const panel = uiBodiesAfter[0];
-      assert.equal(panel.body_type, "kinematic");
-
-      // ProxyGuiScript maps a panel hit back with:
-      //   u = 1 - (local.x + width/2) / width
-      //   v = 1 - (local.y + height/2) / height
-      // Invert that mapping for the center of the first 35x34 loot slot. The
-      // corpse has exactly one item, so the real ContainerGui places the amp
-      // there through its normal Inventory packing path.
-      const panelSize: Vec3 = [
-        PANEL_SIZE_PX[0] * GUI_PIXEL_TO_WORLD_SIZE,
-        PANEL_SIZE_PX[1] * GUI_PIXEL_TO_WORLD_SIZE,
-        0,
-      ];
-      const u = LOOT_SLOT_CENTER_PX[0] / PANEL_SIZE_PX[0];
-      const v = LOOT_SLOT_CENTER_PX[1] / PANEL_SIZE_PX[1];
-      const localSlot: Vec3 = [panelSize[0] * (0.5 - u), panelSize[1] * (0.5 - v), 0];
-      const slotWorld = add(panel.position, quatRotate(panel.rotation, localSlot));
-
-      const panelAim = await aimVrHandAt(game, slotWorld, 0.35);
-      const panelHit = await game.raycast({
-        start: panelAim.start,
-        end: panelAim.target,
-        collision_groups: ["ui"],
-        max_distance: 1,
-      });
-      assert.equal(panelHit.entity_id, panel.entity_id, "the production hand ray must hit the panel");
+      assert.equal(uiBodiesAfter.length, 0, "loot must not create a world-panel collider");
+      const ui = await game.ui.state();
+      assert.equal(ui.mode, "use");
+      assert.equal(ui.active_panel?.entity_id, corpse.id);
+      assert.ok(ui.panel_pose, "the cyber interface must own the loot canvas");
+      const slot = ui.active_panel.elements.find(e => e.kind === "button" && e.entity_id === ampId);
+      assert.ok(slot);
+      const [x, y, w, h] = slot.rect;
+      await aimVrHandAtCanvas(game, ui.panel_pose, [x + w / 2, y + h / 2]);
 
       await game.input.set("right_hand.squeeze", 1);
       await game.step({ frames: 10 });

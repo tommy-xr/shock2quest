@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { EntitySummary, UiElement, Vec3 } from "../src/types.js";
+import type { EntitySummary, UiElement } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import { clickUiElement } from "./helpers/ui.js";
-import { LOOT_PANEL_SIZE_PX, add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
+import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
 // End-to-end regression for #668, reproducing the campaign's exact production
 // path before covering the sibling item and flat presentation:
@@ -27,9 +27,6 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const MEDSCI2_DESK_WITH_PATCH = 471;
 const MEDSCI2_PATCH = 1054;
-const PANEL_PIXEL_TO_WORLD = 1 / 250;
-const BACKPACK_PANEL_SIZE_PX: Vec3 = [635, 120, 0];
-const VR_BACKPACK_SCALE = 0.55;
 
 function hp(info: Awaited<ReturnType<GameServer["info"]>>): number {
   assert.notEqual(
@@ -52,35 +49,6 @@ async function exactMissionEntity(
     `expected exactly one ${label} (${missionObjectId}), got ${JSON.stringify(matches)}`,
   );
   return matches[0];
-}
-
-function canvasPointWorld(
-  panel: { position: Vec3; rotation: [number, number, number, number] },
-  panelPixels: Vec3,
-  pointPixels: Vec3,
-  worldScale: number,
-): Vec3 {
-  const panelSize: Vec3 = [
-    panelPixels[0] * PANEL_PIXEL_TO_WORLD * worldScale,
-    panelPixels[1] * PANEL_PIXEL_TO_WORLD * worldScale,
-    0,
-  ];
-  const u = pointPixels[0] / panelPixels[0];
-  const v = pointPixels[1] / panelPixels[1];
-  const local: Vec3 = [panelSize[0] * (0.5 - u), panelSize[1] * (0.5 - v), 0];
-  return add(panel.position, quatRotate(panel.rotation, local));
-}
-
-async function onlyUiPanel(game: GameServer, context: string) {
-  const panels = (await game.physics.bodies()).bodies.filter((body) =>
-    body.collision_groups.includes("ui"),
-  );
-  assert.equal(
-    panels.length,
-    1,
-    `${context} must expose exactly one world panel`,
-  );
-  return panels[0];
 }
 
 async function stripItem(
@@ -215,18 +183,6 @@ test(
     await game.input.set("right_hand.trigger", 0);
     await game.step({ frames: 5 });
 
-    const lootPanel = await onlyUiPanel(game, "Desk 471 frob");
-    // Desk 471 is yawed in the mission. Stand on the panel's authored front
-    // normal instead of remaining on top of the desk, so the controller ray
-    // crosses its face (rather than grazing the thin collider edge).
-    const panelFront = quatRotate(lootPanel.rotation, [0, 0, -1]);
-    const eyeHeight = (await game.info()).player.camera_offset[1];
-    await teleportVerified(game, {
-      x: lootPanel.position[0] + panelFront[0] * 1.25,
-      y: lootPanel.position[1] - eyeHeight,
-      z: lootPanel.position[2] + panelFront[2] * 1.25,
-    });
-    await game.step({ frames: 3 });
     const lootUi = (await game.ui.state()).active_panel;
     assert.ok(lootUi, "Desk 471's VR panel must be introspectable");
     const lootElement = lootUi.elements.find(
@@ -237,24 +193,9 @@ test(
       `the real panel must render exact Med Patch ${patchId}: ${JSON.stringify(lootUi)}`,
     );
     const [lootX, lootY, lootW, lootH] = lootElement.rect;
-    const lootSlot = canvasPointWorld(
-      lootPanel,
-      LOOT_PANEL_SIZE_PX,
-      [lootX + lootW / 2, lootY + lootH / 2, 0],
-      1,
-    );
-    const lootAim = await aimVrHandAt(game, lootSlot, 0.35);
-    const lootHit = await game.raycast({
-      start: lootAim.start,
-      end: lootAim.target,
-      collision_groups: ["ui"],
-      max_distance: 1,
-    });
-    assert.equal(
-      lootHit.entity_id,
-      lootPanel.entity_id,
-      "the hand ray must hit the patch slot",
-    );
+    const lootPose = (await game.ui.state()).panel_pose;
+    assert.ok(lootPose);
+    await aimVrHandAtCanvas(game, lootPose, [lootX + lootW / 2, lootY + lootH / 2]);
     await game.input.set("right_hand.squeeze", 1);
     await game.step({ frames: 10 });
     assert.equal(
@@ -273,13 +214,9 @@ test(
       "physical loot must sever Desk 471's exact Contains link",
     );
 
-    // Close the Desk panel without releasing the physical patch: walk away,
-    // and the bound panel's distance auto-close puts it away (the original's
-    // per-overlay `distance`). The old backpack round-trip here - drop,
-    // world-trigger pickup into the backpack, Quest-X retrieval - is gone
-    // with the world-quad backpack; panel-side retrieval returns with the
-    // cyber interface's pointer slice, and the stored-pickup behavior itself
-    // is covered by the flat presentation test below.
+    // Close the cyber interface while keeping the physical patch held.
+    await game.input.trigger("LeftHandLowerButton");
+    await game.step({ frames: 2 });
     await teleportVerified(game, {
       x: initial.player.position[0],
       y: initial.player.position[1],

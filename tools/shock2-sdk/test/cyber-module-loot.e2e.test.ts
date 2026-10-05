@@ -4,13 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import { clickUiElement } from "./helpers/ui.js";
-import {
-  GUI_PIXEL_TO_WORLD_SIZE,
-  LOOT_PANEL_SIZE_PX,
-  add,
-  aimVrHandAt,
-  quatRotate,
-} from "./helpers/vr-hand.js";
+import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 
@@ -74,29 +68,10 @@ for (const mode of ["flat", "vr-trigger", "vr-grip"] as const) {
     );
 
     if (vr) {
-      const proxies = (await game.physics.bodies()).bodies.filter(
-        (body) => body.collision_groups.includes("ui"),
-      );
-      assert.equal(proxies.length, 1);
-      const [proxy] = proxies;
-      const u = (slot.rect[0] + slot.rect[2] / 2) / LOOT_PANEL_SIZE_PX[0];
-      const v = (slot.rect[1] + slot.rect[3] / 2) / LOOT_PANEL_SIZE_PX[1];
-      const target = add(proxy.position, quatRotate(proxy.rotation, [
-        LOOT_PANEL_SIZE_PX[0] * GUI_PIXEL_TO_WORLD_SIZE * (0.5 - u),
-        LOOT_PANEL_SIZE_PX[1] * GUI_PIXEL_TO_WORLD_SIZE * (0.5 - v),
-        0,
-      ]));
-      const hand = await aimVrHandAt(game, target, 0.35);
-      const hit = await game.raycast({
-        start: hand.start,
-        end: hand.target,
-        collision_groups: ["world", "entity", "selectable", "raycast", "ui"],
-      });
-      assert.equal(
-        hit.entity_id,
-        proxy.entity_id,
-        "the native controller ray must reach the module slot",
-      );
+      const ui = await game.ui.state();
+      assert.ok(ui.panel_pose);
+      const [x, y, w, h] = slot.rect;
+      await aimVrHandAtCanvas(game, ui.panel_pose, [x + w / 2, y + h / 2]);
       const input = mode === "vr-trigger"
         ? "right_hand.trigger"
         : "right_hand.squeeze";
