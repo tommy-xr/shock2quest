@@ -150,6 +150,7 @@ impl SupplyDrops {
             root_transform: Matrix4::identity(),
             options: CreateEntityOptions {
                 ecology_type: Some(tag),
+                snap_to_floor: true,
                 ..Default::default()
             },
         }

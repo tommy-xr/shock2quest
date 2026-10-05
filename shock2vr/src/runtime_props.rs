@@ -147,6 +147,11 @@ pub struct RuntimePropObjectArticulation(
     pub std::sync::Arc<dark::object_articulation::ObjectArticulation>,
 );
 
+/// Generated supplies use their model's actual center for fallback pickup
+/// physics. Persist this choice across body recreation and save/load.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropModelBoundsPhysics;
+
 // RuntimePropDoNotSerialize - runtime prop to signal that this prop should not be serialized
 #[derive(Component)]
 pub struct RuntimePropDoNotSerialize;

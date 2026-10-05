@@ -526,22 +526,6 @@ pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
         core.spawn_into_backpack(assets, template)
             .expect("horde starter item fits backpack");
     }
-    let mut rng = rand::thread_rng();
-    for name in [
-        "Shotgun",
-        "Laser Pistol",
-        "Maintenance Tool",
-        "5 Nanites",
-        "EXP Cookies",
-    ] {
-        let site = SITES[rng.gen_range(0..8)];
-        core.create_entity_by_template_name(
-            assets,
-            name,
-            Point3::new(site[0], site[1] + 0.5, site[2]),
-            Quaternion::from_angle_y(Deg(0.0)),
-        );
-    }
     // The normal inventory/hand path handles actual weapon selection. Both
     // the pistol and amp are available from the outset, without maxed stats.
 }
@@ -918,7 +902,10 @@ impl HordeDirector {
                 position: Point3::from(position),
                 orientation: Quaternion::from_angle_y(Deg(0.0)),
                 root_transform: Matrix4::identity(),
-                options: CreateEntityOptions::default(),
+                options: CreateEntityOptions {
+                    snap_to_floor: true,
+                    ..Default::default()
+                },
             },
         }
     }
@@ -1084,6 +1071,28 @@ impl Script for HordeDirector {
                 - 1;
             self.clock = self.rest_seconds();
             self.next_status = 5.0;
+            // Runtime creation waits until the first physics step has indexed
+            // the level: floor rays cannot hit it during population/provision.
+            for name in [
+                "Shotgun",
+                "Laser Pistol",
+                "Maintenance Tool",
+                "5 Nanites",
+                "EXP Cookies",
+            ] {
+                let site = SITES[self.roll(8)];
+                effects.push(Effect::CreateEntityByTemplateName {
+                    source_entity_id: entity,
+                    template_name: name.into(),
+                    position: Point3::new(site[0], site[1] + 0.5, site[2]),
+                    orientation: Quaternion::from_angle_y(Deg(0.0)),
+                    initial_velocity: vec3(0.0, 0.0, 0.0),
+                    options: CreateEntityOptions {
+                        snap_to_floor: true,
+                        ..Default::default()
+                    },
+                });
+            }
             effects.extend(unlock_os_stations(world, self.wave + 1));
             effects.push(Effect::ShowMessage { text: "EARTH: CONTAINMENT | Pistol + psi amp in inventory | Trainers in subway; shops on street; OS bank at the stair landing: start / waves 3/6/9".into() });
         }
