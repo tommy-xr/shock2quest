@@ -15370,8 +15370,8 @@ impl MissionCore {
     /// - see `render`'s `is_settled_closed()` gate). The canvas itself is
     /// empty once the strip has been cleared on exit, so only the dim
     /// actually lingers.
-    /// The pointer (aim beams + hit dot) is drawn last, from the same pass the
-    /// canvas was hit-tested with, so the dot can only ever mark the pixel the
+    /// The pointer (aim beams) is drawn last, from the same pass the canvas
+    /// was hit-tested with, so a beam can only ever end on the pixel the
     /// interface actually reacted to. Deliberately hand-less: unlike a frontend
     /// screen this is a mode of play, so the player's own hands are still being
     /// rendered by the interaction controller, and a second static glove would
