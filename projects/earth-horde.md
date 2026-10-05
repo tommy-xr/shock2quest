@@ -75,6 +75,9 @@ Eggs can be destroyed normally.
 
 New runs begin with Toxin-A research completed. Buy ready-to-use Anti-Annelid
 Toxin (Toxin-A) for 10 nanites at the supply replicator.
+Other research retains its skill requirements, skill-based speed, and authored
+timers, but Survive skips chemical requirements. This run rule persists with
+research progress in saves; campaign research still requires chemicals.
 In flatscreen, frob a circulator while carrying a vial; in VR, release a held
 vial against the cabinet. Each vial protects
 that device’s level for another 180 combat seconds, immediately stops new eggs, and

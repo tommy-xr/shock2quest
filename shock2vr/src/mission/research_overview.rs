@@ -106,7 +106,11 @@ impl ResearchCatalog {
             } else if status.complete {
                 "Research complete. Select REPORTS to read the findings.".into()
             } else if status.active {
-                project.description.clone()
+                if quests.research().ignore_chemicals {
+                    crate::research::CHEMICAL_FREE_STATUS.to_owned()
+                } else {
+                    project.description.clone()
+                }
             } else {
                 "Research suspended. Use the specimen to resume.".into()
             };
