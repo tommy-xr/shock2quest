@@ -1,5 +1,7 @@
 use cgmath::{Vector2, Vector3, vec2, vec3};
-use dark::properties::{ObjectState, PropReplicatorContents, PropReplicatorHackedContents};
+use dark::properties::{
+    ObjectState, PropRepairDiff, PropReplicatorContents, PropReplicatorHackedContents,
+};
 use engine::audio::AudioHandle;
 
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -19,8 +21,8 @@ use crate::scripts::{Effect, script_util::*};
 use super::{
     hrm_plug::{self, PlugKind, draw_plug, plug_sidecar},
     keypad::{
-        HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_panel, hack_diff,
-        handle_hack_msg, object_state,
+        HackOutcomeEffects, HackPhase, HackState, HrmContext, KeyPadMsg, draw_hack_board,
+        draw_hack_panel, draw_hrm_text, hack_diff, handle_hack_msg, handle_hrm_msg, object_state,
     },
     traits::TRAIT_REPLICATOR_EXPERT,
 };
@@ -32,6 +34,7 @@ enum ReplicatorPanel {
     #[default]
     Inventory,
     Hacking,
+    Repairing,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -46,6 +49,8 @@ pub struct ReplicatorState {
 pub enum ReplicatorMsg {
     SelectItem(usize),
     OpenHack,
+    OpenRepair,
+    Repair(KeyPadMsg),
     Hack(KeyPadMsg),
 }
 
@@ -137,8 +142,7 @@ pub(super) fn can_hack(world: &World, entity_id: EntityId) -> bool {
     ) && hackable(world, entity_id)
 }
 
-/// Whether the catalog shows a plug: HACK while hackable, the inert repair
-/// plug once broken.
+/// Whether the catalog shows a hack or repair plug.
 fn shows_plug(world: &World, entity_id: EntityId) -> bool {
     can_hack(world, entity_id) || object_state(world, entity_id) == ObjectState::Broken
 }
@@ -146,7 +150,9 @@ fn shows_plug(world: &World, entity_id: EntityId) -> bool {
 /// Whether the canvas keeps room for a plug. Unlike `can_hack` this survives
 /// a hack's win or critical failure, so the VR quad never resizes while open.
 fn has_plug_room(world: &World, entity_id: EntityId) -> bool {
-    hackable(world, entity_id) || object_state(world, entity_id) == ObjectState::Broken
+    hackable(world, entity_id)
+        || crate::weapon_repair::supported(world, entity_id)
+        || object_state(world, entity_id) == ObjectState::Broken
 }
 
 pub(super) fn replicator_hack_success(entity_id: EntityId, _world: &World) -> Effect {
@@ -163,6 +169,12 @@ pub(super) fn replicator_hack_critical_failure(entity_id: EntityId, _world: &Wor
     Effect::SetObjectState {
         entity_id,
         state: ObjectState::Broken,
+    }
+}
+
+fn replicator_repair_failure(_entity_id: EntityId, _world: &World) -> Effect {
+    Effect::ShowMessage {
+        text: "Repair failed. The replicator remains broken.".into(),
     }
 }
 
@@ -188,7 +200,27 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         world: &World,
         state: &ReplicatorState,
     ) -> Vec<GuiComponent<ReplicatorMsg>> {
-        if state.panel == ReplicatorPanel::Hacking {
+        if state.panel == ReplicatorPanel::Repairing
+            && crate::weapon_repair::is_broken(world, entity_id)
+        {
+            if let Ok(view) = world.borrow::<View<PropRepairDiff>>() {
+                if let Ok(diff) = view.get(entity_id) {
+                    let context = HrmContext::Repair;
+                    let mut components =
+                        draw_hack_board(&state.hack, diff.0, context, ReplicatorMsg::Repair);
+                    components.extend(draw_hrm_text(
+                        world,
+                        "Repair this replicator to restore its inventory.",
+                        diff.0,
+                        context,
+                    ));
+                    return components;
+                }
+            }
+        }
+        if state.panel == ReplicatorPanel::Hacking
+            && !crate::weapon_repair::is_broken(world, entity_id)
+        {
             if let Some(diff) = hack_diff(world, entity_id) {
                 return draw_hack_panel(
                     world,
@@ -287,10 +319,9 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                 Some((ReplicatorMsg::OpenHack, "hack-replicator")),
             ));
         } else if current_state == ObjectState::Broken {
-            // Original raises the repair plug for a broken replicator. Repair
-            // is not implemented yet, so expose the authored status art but
-            // deliberately no clickable repair/hack/purchase path.
-            components.extend(draw_plug(PlugKind::Repair, None));
+            let action = crate::weapon_repair::supported(world, entity_id)
+                .then_some((ReplicatorMsg::OpenRepair, "repair-replicator"));
+            components.extend(draw_plug(PlugKind::Repair, action));
             return components;
         }
 
@@ -336,12 +367,19 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         state: &ReplicatorState,
     ) -> Option<PanelSidecar> {
         has_plug_room(world, entity_id).then(|| {
-            plug_sidecar(state.panel == ReplicatorPanel::Inventory && shows_plug(world, entity_id))
+            plug_sidecar(
+                (state.panel == ReplicatorPanel::Inventory
+                    || (state.panel == ReplicatorPanel::Hacking
+                        && crate::weapon_repair::is_broken(world, entity_id))
+                    || (state.panel == ReplicatorPanel::Repairing
+                        && !crate::weapon_repair::is_broken(world, entity_id)))
+                    && shows_plug(world, entity_id),
+            )
         })
     }
 
     fn prepare_state_on_frob(&self, state: &mut ReplicatorState) {
-        if state.panel != ReplicatorPanel::Hacking || state.hack.phase != HackPhase::Playing {
+        if state.panel == ReplicatorPanel::Inventory || state.hack.phase != HackPhase::Playing {
             *state = ReplicatorState::default();
         }
     }
@@ -398,6 +436,53 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                 } else {
                     (state.clone(), Effect::NoEffect)
                 }
+            }
+            ReplicatorMsg::OpenRepair => {
+                match crate::weapon_repair::quote_object(world, entity_id) {
+                    Ok(_) => (
+                        ReplicatorState {
+                            panel: ReplicatorPanel::Repairing,
+                            ..ReplicatorState::default()
+                        },
+                        Effect::NoEffect,
+                    ),
+                    Err(text) => (state.clone(), Effect::ShowMessage { text }),
+                }
+            }
+            ReplicatorMsg::Repair(msg) => {
+                if state.panel != ReplicatorPanel::Repairing {
+                    return (state.clone(), Effect::NoEffect);
+                }
+                let diff = match crate::weapon_repair::quote_object(world, entity_id) {
+                    Ok(diff) => diff,
+                    Err(text) => return (ReplicatorState::default(), Effect::ShowMessage { text }),
+                };
+                let (hack, effect) = handle_hrm_msg(
+                    entity_id,
+                    world,
+                    &state.hack,
+                    msg,
+                    diff,
+                    HrmContext::Repair,
+                    HackOutcomeEffects {
+                        success: crate::weapon_repair::success,
+                        // A failed machine repair leaves it broken and retryable.
+                        critical_failure: replicator_repair_failure,
+                    },
+                );
+                let panel = if hack.phase == HackPhase::Won {
+                    ReplicatorPanel::Inventory
+                } else {
+                    ReplicatorPanel::Repairing
+                };
+                (
+                    ReplicatorState {
+                        hack,
+                        panel,
+                        ..state.clone()
+                    },
+                    effect,
+                )
             }
             ReplicatorMsg::Hack(hack_msg) => {
                 let Some(diff) = hack_diff(world, entity_id) else {
@@ -657,6 +742,114 @@ mod tests {
             Some(None),
             "no plug to click once hacked"
         );
+    }
+
+    #[test]
+    fn broken_machine_repairs_with_skill_payment_and_restores_catalog() {
+        use dark::properties::{PropRepairDiff, PropRequiredTechDesc, TechSkillValues};
+        let mut world = World::new();
+        let machine = world.add_entity((
+            PropObjState(ObjectState::Broken),
+            PropRepairDiff(PropHackDiff {
+                success_chance: 100,
+                critical_chance: 0,
+                cost: 3.0,
+            }),
+            PropRequiredTechDesc(TechSkillValues([0, 2, 0, 0, 0])),
+            PropReplicatorContents {
+                costs: [10, 0, 0, 0, 0, 0],
+                object_names: [
+                    "gun".into(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ],
+            },
+        ));
+        world.add_unique(QuestInfo::new());
+        let initial = ReplicatorState::default();
+        let components = ReplicatorGui.get_components(&None, machine, &world, &initial);
+        assert!(
+            components.iter().any(
+                |c| matches!(c, GuiComponent::Image { texture, .. } if texture == "breplic.pcx")
+            )
+        );
+        assert!(components.iter().any(|c| matches!(
+            c,
+            GuiComponent::Button {
+                on_click: Some(ReplicatorMsg::OpenRepair),
+                ..
+            }
+        )));
+        assert!(replicator_quote(&world, machine, 0).is_none());
+        let (blocked, effect) =
+            ReplicatorGui.handle_msg(machine, &world, &initial, &ReplicatorMsg::OpenRepair);
+        assert_eq!(blocked.panel, ReplicatorPanel::Inventory);
+        assert!(
+            matches!(effect, Effect::ShowMessage { text } if text == "Repair skill 2 required.")
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<QuestInfo>>()
+            .unwrap()
+            .player_stats_mut()
+            .skills
+            .repair = 2;
+        let (mut state, _) =
+            ReplicatorGui.handle_msg(machine, &world, &initial, &ReplicatorMsg::OpenRepair);
+        assert_eq!(state.panel, ReplicatorPanel::Repairing);
+        let (unpaid, _) = ReplicatorGui.handle_msg(
+            machine,
+            &world,
+            &state,
+            &ReplicatorMsg::Repair(KeyPadMsg::StartHack),
+        );
+        assert_eq!(unpaid.hack.phase, HackPhase::InsufficientNanites);
+        world
+            .borrow::<shipyard::UniqueViewMut<QuestInfo>>()
+            .unwrap()
+            .player_stats_mut()
+            .nanites = 10;
+        let (paid, payment) = ReplicatorGui.handle_msg(
+            machine,
+            &world,
+            &state,
+            &ReplicatorMsg::Repair(KeyPadMsg::StartHack),
+        );
+        assert_eq!(paid.hack.phase, HackPhase::Playing);
+        assert!(
+            Effect::flatten(vec![payment])
+                .iter()
+                .any(|e| matches!(e, Effect::SpendNanites { amount: 3 }))
+        );
+        // Finish a paid board with two connected nodes; the win restores the
+        // machine's persistent property, which also gates purchases.
+        state.hack.phase = HackPhase::Playing;
+        state.hack.nodes = [HackNode::Free; 20];
+        state.hack.nodes[0] = HackNode::Lit;
+        state.hack.nodes[1] = HackNode::Lit;
+        state.hack.rng_state = 1;
+        let (after, effect) = ReplicatorGui.handle_msg(
+            machine,
+            &world,
+            &state,
+            &ReplicatorMsg::Repair(KeyPadMsg::PlayNode { x: 2, y: 0 }),
+        );
+        assert_eq!(after.panel, ReplicatorPanel::Inventory);
+        for e in Effect::flatten(vec![effect]) {
+            if let Effect::SetObjectState { entity_id, state } = e {
+                world.add_component(entity_id, PropObjState(state));
+            }
+        }
+        assert_eq!(
+            replicator_quote(&world, machine, 0),
+            Some(("gun".into(), 10))
+        );
+        assert!(matches!(
+            replicator_repair_failure(machine, &world),
+            Effect::ShowMessage { .. }
+        ));
     }
 
     #[test]

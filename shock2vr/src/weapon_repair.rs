@@ -28,18 +28,23 @@ pub fn quote(world: &World, weapon: EntityId) -> Result<PropHackDiff, String> {
     {
         return Err("Wield the weapon to repair it.".into());
     }
-    if !is_broken(world, weapon) {
-        return Err("The weapon is not broken.".into());
+    quote_object(world, weapon)
+}
+
+/// Repair terms shared by held weapons and world machines.
+pub fn quote_object(world: &World, item: EntityId) -> Result<PropHackDiff, String> {
+    if !is_broken(world, item) {
+        return Err("The item is not broken.".into());
     }
     let mut diff = world
         .borrow::<View<PropRepairDiff>>()
         .ok()
-        .and_then(|v| v.get(weapon).ok().map(|p| p.0))
-        .ok_or("This weapon cannot be repaired.")?;
+        .and_then(|v| v.get(item).ok().map(|p| p.0))
+        .ok_or("This item cannot be repaired.")?;
     let required = world
         .borrow::<View<PropRequiredTechDesc>>()
         .ok()
-        .and_then(|v| v.get(weapon).ok().map(|p| p.0.repair()))
+        .and_then(|v| v.get(item).ok().map(|p| p.0.repair()))
         .unwrap_or(1);
     let quests = world
         .borrow::<UniqueView<QuestInfo>>()
@@ -168,7 +173,7 @@ mod tests {
         assert_eq!(quote(&world, gun).unwrap().cost, 3.0);
 
         world.add_component(gun, PropObjState(ObjectState::Normal));
-        assert_eq!(quote(&world, gun).unwrap_err(), "The weapon is not broken.");
+        assert_eq!(quote(&world, gun).unwrap_err(), "The item is not broken.");
     }
 
     #[test]
