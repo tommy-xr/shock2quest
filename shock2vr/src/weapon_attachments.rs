@@ -197,39 +197,20 @@ pub(crate) fn render_lasers(
         if (trace.end - trace.origin).magnitude2() < 1.0e-8 {
             continue;
         }
-        let forward = (trace.end - trace.origin).normalize();
-        let tangent = if forward.y.abs() < 0.9 {
-            vec3(0.0, 1.0, 0.0)
-        } else {
-            vec3(1.0, 0.0, 0.0)
-        };
-        let right = tangent.cross(forward).normalize();
-        for (core, radius, color) in [
-            (false, 0.018, vec3(1.0, 0.01, 0.005)),
-            (true, 0.0025, vec3(1.0, 0.08, 0.025)),
-        ] {
-            let mut beam = SceneObject::new(
-                engine::scene::laser_material::create_beam(core, color, seconds),
-                Box::new(engine::scene::cylinder::Cylinder),
-            );
-            beam.set_transform(Matrix4::from_cols(
-                (right * radius).extend(0.0),
-                (forward.cross(right) * radius).extend(0.0),
-                (trace.end - trace.origin).extend(0.0),
-                trace.origin.to_homogeneous(),
-            ));
-            beam.set_depth_write(false);
-            beam.set_backface_culling(Some(engine::scene::FrontFaceWinding::CounterClockwise));
+        let beams = engine::scene::laser_material::beam(
+            trace.origin.to_vec(),
+            trace.end - trace.origin,
+            (0.018, vec3(1.0, 0.01, 0.005)),
+            (0.0025, vec3(1.0, 0.08, 0.025)),
+            seconds,
+        );
+        for (mut beam, source) in beams
+            .into_iter()
+            .zip(["weapon_laser_halo", "weapon_laser_core"])
+        {
             beam.set_debug_tag(Some(std::rc::Rc::new(SceneObjectDebugTag {
                 entity_id: Some(weapon.inner()),
-                source: Some(
-                    if core {
-                        "weapon_laser_core"
-                    } else {
-                        "weapon_laser_halo"
-                    }
-                    .into(),
-                ),
+                source: Some(source.into()),
                 ..Default::default()
             })));
             objects.push(beam);

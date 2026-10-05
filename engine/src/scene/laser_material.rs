@@ -1,7 +1,7 @@
 //! Unlit laser spot and cylindrical core/halo. No scene-wide fog or trails.
 extern crate gl;
 use crate::engine::EngineRenderContext;
-use crate::scene::Material;
+use crate::scene::{FrontFaceWinding, Material, SceneObject, cylinder};
 use crate::shader_program::ShaderProgram;
 
 use c_string::*;
@@ -67,7 +67,8 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
             float core = 1.0 - smoothstep(0.12, 0.3, radius);
             float alpha = max(core, halo * 0.7) * (1.0 - transparency);
             if (alpha < 0.005) discard;
-            fragColor = vec4(mix(vertexColor, vec3(1.0, 0.7, 0.6), core * 0.5), alpha);
+            // Hot centre: the spot's own colour washed toward white.
+            fragColor = vec4(mix(vertexColor, mix(vertexColor, vec3(1.0), 0.6), core * 0.5), alpha);
         }
 "#;
 
@@ -203,13 +204,46 @@ pub fn create(color: Vector3<f32>) -> Box<dyn Material> {
     })
 }
 
-/// The same shader shades the two cached cylinder instances (halo and core) of
-/// each beam - a weapon's laser sight or a VR UI pointer.
-pub fn create_beam(core: bool, color: Vector3<f32>, seconds: f32) -> Box<dyn Material> {
+fn create_beam(core: bool, color: Vector3<f32>, seconds: f32) -> Box<dyn Material> {
     Box::new(LaserMaterial {
         has_initialized: false,
         color,
         transparency: 0.0,
         beam: [if core { 2.0 } else { 1.0 }, seconds],
+    })
+}
+
+/// A smoky beam from `origin` along `reach`: a soft halo and a bright core,
+/// each `(radius, color)`, returned halo first. Shared by weapon laser sights
+/// and the VR UI pointer. Neither writes depth, so what is behind shows through.
+pub fn beam(
+    origin: Vector3<f32>,
+    reach: Vector3<f32>,
+    halo: (f32, Vector3<f32>),
+    core: (f32, Vector3<f32>),
+    seconds: f32,
+) -> [SceneObject; 2] {
+    let forward = reach.normalize();
+    let tangent = if forward.y.abs() < 0.9 {
+        Vector3::new(0.0, 1.0, 0.0)
+    } else {
+        Vector3::new(1.0, 0.0, 0.0)
+    };
+    let right = tangent.cross(forward).normalize();
+    let up = forward.cross(right);
+    [(false, halo), (true, core)].map(|(is_core, (radius, color))| {
+        let mut object = SceneObject::new(
+            create_beam(is_core, color, seconds),
+            Box::new(cylinder::Cylinder),
+        );
+        object.set_transform(Matrix4::from_cols(
+            (right * radius).extend(0.0),
+            (up * radius).extend(0.0),
+            reach.extend(0.0),
+            origin.extend(1.0),
+        ));
+        object.set_depth_write(false);
+        object.set_backface_culling(Some(FrontFaceWinding::CounterClockwise));
+        object
     })
 }

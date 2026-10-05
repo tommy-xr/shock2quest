@@ -12,7 +12,7 @@
 use cgmath::{InnerSpace, Matrix4, Quaternion, Vector2, Vector3, vec3};
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{FrontFaceWinding, SceneObject, color_material, cube, cylinder, laser_material, quad},
+    scene::{SceneObject, color_material, cube, laser_material, quad},
 };
 
 use crate::{
@@ -166,8 +166,7 @@ fn box_object(
     object
 }
 
-/// The smoky beam for one ray: the laser sight's halo and core cylinders in UI
-/// green. Both blend without writing depth, so the panel shows through.
+/// The smoky beam for one ray: the laser sight's halo and core in UI green.
 fn beam_objects(
     start: Vector3<f32>,
     along: Vector3<f32>,
@@ -181,41 +180,20 @@ fn beam_objects(
         return Vec::new();
     }
     let direction = along / length;
-    let origin = start + direction * BEAM_HAND_CLEARANCE;
-    let reach = direction * (length - BEAM_HAND_CLEARANCE);
-    let tangent = if direction.y.abs() < 0.9 {
-        vec3(0.0, 1.0, 0.0)
-    } else {
-        vec3(1.0, 0.0, 0.0)
-    };
-    let right = tangent.cross(direction).normalize();
-    let up = direction.cross(right);
-
-    [
-        (false, BEAM_HALO_RADIUS, BEAM_HALO_COLOR),
-        (true, BEAM_CORE_RADIUS, BEAM_CORE_COLOR),
-    ]
-    .into_iter()
-    .map(|(core, radius, color)| {
-        let mut object = SceneObject::new(
-            laser_material::create_beam(core, color, seconds),
-            Box::new(cylinder::Cylinder),
-        );
-        object.set_transform(Matrix4::from_cols(
-            (right * radius).extend(0.0),
-            (up * radius).extend(0.0),
-            reach.extend(0.0),
-            origin.extend(1.0),
-        ));
-        object.set_depth_write(false);
-        object.set_backface_culling(Some(FrontFaceWinding::CounterClockwise));
-        object
-    })
-    .collect()
+    laser_material::beam(
+        start + direction * BEAM_HAND_CLEARANCE,
+        direction * (length - BEAM_HAND_CLEARANCE),
+        (BEAM_HALO_RADIUS, BEAM_HALO_COLOR),
+        (BEAM_CORE_RADIUS, BEAM_CORE_COLOR),
+        seconds,
+    )
+    .into()
 }
 
 /// The glowing hit dot: the laser sight's spot, flat against the panel so it
-/// reads as a mark on the canvas.
+/// reads as a mark on the canvas. It writes no depth, so it shows over the
+/// canvas only because callers emit the pointer after it (the transparent pass
+/// draws in emit order).
 fn dot_object(center: Vector3<f32>, panel: &WorldPanel) -> SceneObject {
     let mut object = SceneObject::new(laser_material::create(DOT_COLOR), Box::new(quad::create()));
     object.set_transform(
@@ -565,7 +543,7 @@ mod tests {
         let base = rays(true, &pass, &panel, None);
         let adjusted = rays(true, &pass, &panel, Some(fit));
         assert_eq!(base.len(), adjusted.len());
-        // All beam segments and the hit dot keep their exact transforms;
+        // Both beam cylinders and the hit dot keep their exact transforms;
         // exactly the two glove proxies change.
         assert_eq!(
             base.iter()
