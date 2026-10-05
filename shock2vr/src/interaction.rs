@@ -315,6 +315,7 @@ struct SupportAttachment {
     blend: f32,
     correction: Quaternion<f32>,
     anchor: Vector3<f32>,         // Closed-pose contact, fixed until release.
+    pump_separation_offset: f32,  // Controller distance minus rail distance at acquisition.
     primary_offset: Vector3<f32>, // Grab-time collision offset, in world space.
     player_rotation: Quaternion<f32>, // Rebase the offset on locomotion turns, never wrist twists.
 }
@@ -707,7 +708,16 @@ impl VrInteraction {
                 let fraction = crate::vr_support::pump_fraction_from_separation(
                     closed_anchor - primary_anchor,
                     travel,
-                    separation,
+                    separation
+                        - self
+                            .support
+                            .as_ref()
+                            .filter(|s| {
+                                prefer_locked_anchor
+                                    && s.entity == held.entity
+                                    && s.primary == primary
+                            })
+                            .map_or(0.0, |s| s.pump_separation_offset),
                 )?;
                 let moving = prefer_locked_anchor
                     && self.step_dt > 0.0
@@ -813,7 +823,7 @@ impl VrInteraction {
                         crate::vr_support::pump_fraction_from_separation(
                             c.closed_anchor - c.primary_anchor,
                             travel,
-                            separation,
+                            separation - support.pump_separation_offset,
                         )
                         .map(|f| c.closed_anchor + travel * f)
                     })
@@ -831,7 +841,10 @@ impl VrInteraction {
                         c.tracked_axis,
                         poses[other].point(rig[other].palm) - c.control_primary_palm,
                     )
-                    && (separation - (anchor - c.primary_anchor).magnitude()).abs()
+                    && (separation
+                        - support.pump_separation_offset
+                        - (anchor - c.primary_anchor).magnitude())
+                    .abs()
                         <= c.profile.release_distance
             });
             if !valid {
@@ -871,6 +884,12 @@ impl VrInteraction {
                             blend,
                             correction,
                             anchor: c.closed_anchor,
+                            pump_separation_offset: if c.pump.is_some() {
+                                (palm - c.control_primary_palm).magnitude()
+                                    - (c.anchor - c.primary_anchor).magnitude()
+                            } else {
+                                0.0
+                            },
                             // Lock this reference until release, including after a block
                             // clears. Following the body would turn physics recovery into
                             // a steering/release gesture with stationary controllers.
