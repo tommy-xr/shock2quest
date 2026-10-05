@@ -257,6 +257,11 @@ pub enum Effect {
         expected_tier: usize,
         payment: crate::weapon_installation::Payment,
     },
+    SetWeaponAccessory {
+        entity_id: EntityId,
+        accessory: crate::weapon_upgrades::WeaponAccessory,
+        enabled: bool,
+    },
     ToggleImplant {
         entity_id: EntityId,
     },

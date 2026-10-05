@@ -9964,6 +9964,18 @@ impl MissionCore {
                     );
                     effects.extend(Effect::flatten(vec![installed]));
                 }
+                Effect::SetWeaponAccessory {
+                    entity_id,
+                    accessory,
+                    enabled,
+                } => {
+                    crate::weapon_attachments::set_enabled(
+                        &mut self.world,
+                        entity_id,
+                        accessory,
+                        enabled,
+                    );
+                }
                 Effect::ToggleImplant { entity_id } => {
                     match crate::implants::toggle_slot(&self.world, entity_id) {
                         Ok(Some(slot)) => {
@@ -16552,7 +16564,13 @@ impl MissionCore {
     /// Hand spotlights (`hand_spotlights` dev param).
     /// Returns a vector of SpotLight objects positioned at the player's hands
     pub fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
-        self.interaction.hand_spotlights(options)
+        let debug_lights = self.interaction.hand_spotlights(options);
+        // The developer override already supplies one light per hand.
+        if !debug_lights.is_empty() {
+            debug_lights
+        } else {
+            crate::weapon_attachments::flashlights(&self.world)
+        }
     }
 
     /// Whether the runtime should show a 2D cursor instead of captured
@@ -18665,6 +18683,14 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     });
                 }
                 if let Ok(gun_state) = v_gun_state.get(id) {
+                    if let Ok(upgrades) = self.world.borrow::<View<crate::weapon_upgrades::WeaponUpgrades>>() {
+                        if let Ok(upgrades) = upgrades.get(id) {
+                            properties.push(DebugPropertyInfo {
+                                name: "WeaponUpgrades".into(),
+                                value: serde_json::to_string(upgrades).unwrap(),
+                            });
+                        }
+                    }
                     properties.push(DebugPropertyInfo {
                         name: "Modification".into(),
                         value: crate::weapon_modification::level(&self.world, id)
