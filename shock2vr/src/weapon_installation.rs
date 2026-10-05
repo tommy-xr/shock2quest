@@ -52,8 +52,9 @@ pub fn alternate_unlocked(world: &World, weapon: EntityId) -> bool {
     !supported(world, weapon) || state(world, weapon).has(WeaponUpgrade::AlternateFire)
 }
 
-pub const AVAILABLE: [WeaponUpgrade; 5] = [
+pub const AVAILABLE: [WeaponUpgrade; 6] = [
     WeaponUpgrade::Flashlight,
+    WeaponUpgrade::Laser,
     WeaponUpgrade::LowMaintenanceI,
     WeaponUpgrade::LowMaintenanceII,
     WeaponUpgrade::ExtendedCapacity,
@@ -142,6 +143,8 @@ pub fn preview(
         " Double capacity; no free ammo."
     } else if choice == WeaponUpgrade::AlternateFire {
         " Unlock burst fire."
+    } else if choice == WeaponUpgrade::Laser {
+        " Laser sight; toggle in Settings."
     } else if choice == WeaponUpgrade::Flashlight {
         " Weapon light; toggle in Settings."
     } else {
@@ -173,12 +176,15 @@ pub fn install(
     });
     match result {
         Ok(mut next) => {
-            if choice == WeaponUpgrade::Flashlight {
-                next.set_accessory_enabled(
-                    crate::weapon_upgrades::WeaponAccessory::Flashlight,
-                    true,
-                )
-                .unwrap();
+            let accessory = match choice {
+                WeaponUpgrade::Flashlight => {
+                    Some(crate::weapon_upgrades::WeaponAccessory::Flashlight)
+                }
+                WeaponUpgrade::Laser => Some(crate::weapon_upgrades::WeaponAccessory::Laser),
+                _ => None,
+            };
+            if let Some(accessory) = accessory {
+                next.set_accessory_enabled(accessory, true).unwrap();
             }
             // Debit synchronously with the state commit. Even if destruction
             // is deferred, a second queued install sees an exhausted device.
@@ -324,7 +330,7 @@ mod tests {
     #[test]
     fn dropped_broken_untrained_and_unavailable_targets_cannot_install() {
         let (mut world, gun) = fixture();
-        assert!(quote(&world, gun, WeaponUpgrade::Laser, 0).is_err());
+        assert!(quote(&world, gun, WeaponUpgrade::Silencer, 0).is_err());
         assert!(quote(&world, gun, WeaponUpgrade::LowMaintenanceII, 0).is_err());
         world
             .borrow::<shipyard::UniqueViewMut<QuestInfo>>()

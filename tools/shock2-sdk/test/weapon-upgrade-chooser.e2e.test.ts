@@ -52,7 +52,7 @@ for (const vr of [false, true]) {
         assert.ok(!offered.some(e => e.label === `upgrade_${installed}`), `${installed} is no longer offered`);
       }
       if (tier === 0) {
-        await clickUpgradeControl(game, "upgrade_Laser");
+        await clickUpgradeControl(game, "upgrade_Silencer");
         assert.ok(!(await elements(game)).some(e => e.label === "upgrade_confirm"), "unfinished effects cannot be purchased");
         await clickUpgradeControl(game, "upgrade_cancel");
         assert.equal(await property(game, gun, "Modification"), "0");
