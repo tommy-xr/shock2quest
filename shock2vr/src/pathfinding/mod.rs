@@ -1936,7 +1936,7 @@ fn inset_edge(a: Vector3<f32>, b: Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) 
 }
 
 /// Closest point to `target` on the segment from `a` to `b`
-fn closest_point_on_segment(
+pub(crate) fn closest_point_on_segment(
     a: Vector3<f32>,
     b: Vector3<f32>,
     target: Vector3<f32>,

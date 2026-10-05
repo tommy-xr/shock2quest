@@ -1,14 +1,24 @@
 //! A ladder's hand holds, read off its render mesh: the rungs (horizontal
 //! bars, or a pole ladder's side pegs) and the rails (vertical members, or the
 //! pole). Its physics body is a single box, so the mesh is the only place the
-//! rungs exist. Used by debug tooling to put a VR hand on a real rung.
+//! rungs exist. A VR hand holds a ladder only on these (see
+//! [`crate::physics::PhysicsWorld::set_ladder_holds`]); debug tooling reads
+//! them too, to put a test hand on a real rung.
 
 use cgmath::{InnerSpace, Matrix4, Transform, Vector3, point3, vec3};
+use dark::properties::PropModelName;
+use engine::assets::{
+    asset_cache::AssetCache, asset_importer::AssetImporter, asset_paths::ReadableAndSeekable,
+};
+use once_cell::sync::Lazy;
+use shipyard::{EntityId, Get, View, World};
+
+use crate::runtime_props::RuntimePropTransform;
 
 /// A straight member of a ladder, as its two end points.
 pub type Segment = [Vector3<f32>; 2];
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct LadderHolds {
     /// Rungs bottom to top, each from its low-x end to its high-x end.
     pub rungs: Vec<Segment>,
@@ -20,6 +30,11 @@ pub struct LadderHolds {
 /// overlap or come this close fold into one member: a rung's cylinder faces,
 /// a rail's segments.
 const MERGE_DISTANCE: f32 = 0.1;
+
+/// A member thicker than this across (about 19 cm) is no bar a hand can
+/// close around - an organic strand, a panel - so its mesh is not a bar
+/// ladder and offers no holds.
+const MAX_BAR_THICKNESS: f32 = 0.25;
 
 type Bounds = (Vector3<f32>, Vector3<f32>);
 
@@ -55,7 +70,8 @@ fn merge(mut faces: Vec<Bounds>, key: fn(Vector3<f32>) -> f32) -> Vec<Bounds> {
 /// quarter of the ladder's width) and flat in y; a rail face is long in y and
 /// narrow in x (a slab's side faces count, so a slab offers its edges). Faces
 /// that are neither (caps, feet) are ignored, and so is a "rung" with no
-/// thickness (a slab's top face).
+/// thickness (a slab's top face). A mesh with a member too thick to grip
+/// offers none.
 pub fn ladder_holds(vertices: &[Vector3<f32>], polygons: &[Vec<u16>]) -> LadderHolds {
     let bounds = |indices: &[u16]| {
         indices
@@ -79,10 +95,20 @@ pub fn ladder_holds(vertices: &[Vector3<f32>], polygons: &[Vec<u16>]) -> LadderH
     let rungs = merge(rung_faces, |v| v.y);
     let rails = merge(rail_faces, |v| v.x);
 
+    let rungs: Vec<Bounds> = rungs
+        .into_iter()
+        .filter(|(a, b)| b.y - a.y > 0.01)
+        .collect();
+    let too_thick = |(a, b): &Bounds, across: fn(Vector3<f32>) -> f32| {
+        across(b - a).max(b.z - a.z) > MAX_BAR_THICKNESS
+    };
+    if rungs.iter().any(|r| too_thick(r, |v| v.y)) || rails.iter().any(|r| too_thick(r, |v| v.x)) {
+        return LadderHolds::default();
+    }
+
     // A rung is its bar's centre line; a rail its member's centre line.
     let mut rungs: Vec<Segment> = rungs
         .into_iter()
-        .filter(|(a, b)| b.y - a.y > 0.01)
         .map(|(a, b)| {
             let (y, z) = ((a.y + b.y) / 2.0, (a.z + b.z) / 2.0);
             [vec3(a.x, y, z), vec3(b.x, y, z)]
@@ -101,6 +127,23 @@ pub fn ladder_holds(vertices: &[Vector3<f32>], polygons: &[Vec<u16>]) -> LadderH
 }
 
 impl LadderHolds {
+    pub fn is_empty(&self) -> bool {
+        self.rungs.is_empty() && self.rails.is_empty()
+    }
+
+    /// The point on the nearest rung or rail to `hand`, if one is within
+    /// `reach` of it.
+    pub fn nearest_hold(&self, hand: Vector3<f32>, reach: f32) -> Option<Vector3<f32>> {
+        self.rungs
+            .iter()
+            .chain(&self.rails)
+            .map(|&[a, b]| crate::pathfinding::closest_point_on_segment(a, b, hand))
+            .map(|p| (p, (p - hand).magnitude()))
+            .filter(|&(_, distance)| distance <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(p, _)| p)
+    }
+
     /// These holds placed in the world by the ladder entity's transform.
     pub fn transformed(&self, transform: &Matrix4<f32>) -> LadderHolds {
         let place = |segments: &[Segment]| {
@@ -125,6 +168,51 @@ impl LadderHolds {
 /// axis. Either side may be the climbing side.
 pub fn face_normal(transform: &Matrix4<f32>) -> Vector3<f32> {
     transform.transform_vector(Vector3::unit_z()).normalize()
+}
+
+/// A `.bin` model's holds in model space, cached per model by the asset
+/// cache. Empty for a model that is not an object model.
+static LADDER_HOLDS_IMPORTER: Lazy<AssetImporter<LadderHolds, LadderHolds, ()>> = Lazy::new(|| {
+    AssetImporter::define(
+        |_name, reader: &mut Box<dyn ReadableAndSeekable>, _assets, _config| {
+            let header = dark::ss2_bin_header::read(reader);
+            if !matches!(header.bin_type, dark::ss2_bin_header::BinFileType::Obj) {
+                return LadderHolds::default();
+            }
+            // Raw vertices, no sub-object palette: every ladder model is one part.
+            let mesh = dark::ss2_bin_obj_loader::read(reader, &header);
+            let polygons: Vec<Vec<u16>> = mesh
+                .polygons
+                .iter()
+                .map(|p| p.vertex_indices.clone())
+                .collect();
+            ladder_holds(&mesh.vertices, &polygons)
+        },
+        |holds, _assets, _config| holds,
+    )
+});
+
+/// `entity`'s model name, its holds placed in the world, and its face normal;
+/// `None` when it has no model, no transform, or its `.bin` cannot be opened.
+pub fn entity_holds(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity: EntityId,
+) -> Option<(String, LadderHolds, Vector3<f32>)> {
+    let (model, transform) = world.run(
+        |names: View<PropModelName>, transforms: View<RuntimePropTransform>| {
+            Some((
+                names.get(entity).ok()?.0.clone(),
+                transforms.get(entity).ok()?.0,
+            ))
+        },
+    )?;
+    let holds = asset_cache.get_opt(&LADDER_HOLDS_IMPORTER, &format!("{model}.bin"))?;
+    Some((
+        model,
+        holds.transformed(&transform),
+        face_normal(&transform),
+    ))
 }
 
 #[cfg(test)]
@@ -236,6 +324,21 @@ mod tests {
         assert!(holds.rungs.is_empty());
         let edges: Vec<f32> = holds.rails.iter().map(|r| r[0].x).collect();
         assert_eq!(edges, vec![-0.45, 0.45]);
+    }
+
+    #[test]
+    fn a_mesh_with_members_too_thick_to_grip_offers_no_holds() {
+        // Many's nerve climbable: strands about 0.65 across.
+        let mut vertices = vec![];
+        let mut polygons = vec![];
+        for x in [-1.6, -0.33, 0.96] {
+            polygons.extend(bar(
+                &mut vertices,
+                vec3(x, -1.6, -0.03),
+                vec3(x + 0.64, 1.6, 0.2),
+            ));
+        }
+        assert!(ladder_holds(&vertices, &polygons).is_empty());
     }
 
     #[test]

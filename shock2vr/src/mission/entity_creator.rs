@@ -456,6 +456,22 @@ pub fn create_entity_core(
         None
     };
 
+    // A VR hand holds a ladder only on the rungs and rails its model shows.
+    // Read once here; a model with none keeps the whole box grippable.
+    let is_climbable = world
+        .borrow::<View<PropPhysAttr>>()
+        .unwrap()
+        .get(entity_id)
+        .is_ok_and(|attr| attr.climbable != 0);
+    if rigid_body.is_some()
+        && is_climbable
+        && let Some((_, holds, _)) =
+            crate::ladder_holds::entity_holds(asset_cache, world, entity_id)
+        && !holds.is_empty()
+    {
+        physics.set_ladder_holds(entity_id, holds);
+    }
+
     //let output_scripts = vec![];
     // Create scripts
     let v_scripts = world
