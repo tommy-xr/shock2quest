@@ -633,6 +633,10 @@ pub struct PropHasRefs(pub bool);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropImmobile(pub bool);
 
+/// Dark's `PhysAIColl`: whether AI physical models collide with this object.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropPhysAICollide(pub bool);
+
 /// Authored opt-out from Kinetic Redirection.
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPsiNotPullable(pub bool);
@@ -2481,6 +2485,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$NotPullab", // Dark chunk names truncate to 11 characters.
             |reader, _len| read_bool(reader),
             PropPsiNotPullable,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$PhysAICol", // PhysAIColl, truncated to Dark's 11-byte chunk name.
+            |reader, _len| read_bool(reader),
+            PropPhysAICollide,
             accumulator::latest,
         ),
         define_prop(
