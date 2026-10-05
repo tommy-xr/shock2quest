@@ -409,6 +409,11 @@ dev_params! {
     VR_AMMO_POUCH_ZONES = Interaction::bool("vr_ammo_pouch_zones", "Ammo pouch zone", false),
     VR_PLAYER_COLLIDER = Body::bool("vr_player_collider", "Player collision capsule", false),
     VR_HOLSTER_ZONES = Interaction::bool("vr_holster_zones", "Holster zones", false),
+    /// Glowing dot where a VR UI pointer beam meets its panel; 0 hides it.
+    VR_POINTER_DOT_SIZE = Hands::float("vr_pointer_dot_size", "UI pointer dot size (m)", 0.05, 0.0, 0.15, 0.005),
+    /// The 2D arrow cursor on the VR cyber interface and tricorder screen,
+    /// which the pointer dot replaces.
+    VR_UI_CURSOR = Hands::bool("vr_ui_cursor", "UI arrow cursor", false),
     /// Actual front of the curved belt, including the asset's authored offset.
     /// The pouch and personal card follow both belt settings with their grab targets.
     VR_BELT_DISTANCE = Body::float("vr_belt_distance", "Belt forward (m)", 0.0, -0.5, 0.5, 0.01),

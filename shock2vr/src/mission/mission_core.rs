@@ -5567,6 +5567,16 @@ impl MissionCore {
                 }),
             );
         }
+        // The hand a VR panel is listening to eases into a point.
+        let mut ui_point = [false; 2];
+        if let Some(ray) = self
+            .vr_use_mode_pointer
+            .as_ref()
+            .and_then(|p| p.active_ray())
+        {
+            ui_point[hand_slot(ray.handedness)] = true;
+        }
+        self.interaction.set_ui_point(ui_point);
         if self.vr_trigger_swallow && !self.use_mode {
             let held = |hand: &crate::input_context::Hand| {
                 hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD
@@ -15653,14 +15663,21 @@ impl MissionCore {
             self.use_mode_ramp.eased(),
             crate::util::render_source::USE_MODE_DIM,
         )];
-        objects.extend(self.flat_ui.render_world_space(asset_cache, &panel));
+        let canvas = self.flat_ui.render_world_space(asset_cache, &panel);
+        let panel_layers = crate::ui::canvas_layers(&canvas, &panel);
+        objects.extend(canvas);
         if let Some(pass) = self.vr_use_mode_pointer.as_ref() {
-            let panel_layers = objects.len();
+            let seconds = self
+                .world
+                .borrow::<UniqueView<Time>>()
+                .map(|time| time.total.as_secs_f32())
+                .unwrap_or_default();
             objects.extend(crate::ui::pointer_beams(
                 pass,
                 crate::mission::flat_ui_host::CANVAS_SIZE,
                 &panel,
                 panel_layers,
+                seconds,
             ));
         }
         objects
@@ -16559,6 +16576,11 @@ impl MissionCore {
                     self.personal_card.hand,
                 )
             };
+            let seconds = self
+                .world
+                .borrow::<UniqueView<Time>>()
+                .map(|time| time.total.as_secs_f32())
+                .unwrap_or_default();
             if let Some(model) = self
                 .flat_ui
                 .utilities
@@ -16566,22 +16588,20 @@ impl MissionCore {
                 .filter(|_| self.flat_ui.active_panel().is_none())
                 .and_then(|entity| self.id_to_model.get(&entity))
             {
-                let seconds = self
-                    .world
-                    .borrow::<UniqueView<Time>>()
-                    .map(|time| time.total.as_secs_f32())
-                    .unwrap_or_default();
                 objects.extend(super::mfd_device::hologram(model, panel, seconds));
             }
             let layout = super::mfd_device::layout(self.flat_ui.device_screen_source());
             let panel = layout.surface_panel(panel);
-            objects.extend(self.flat_ui.render_world_space(asset_cache, &panel));
+            let canvas = self.flat_ui.render_world_space(asset_cache, &panel);
+            let panel_layers = crate::ui::canvas_layers(&canvas, &panel);
+            objects.extend(canvas);
             if let Some(pass) = &self.vr_use_mode_pointer {
                 objects.extend(crate::ui::pointer_beams(
                     pass,
                     layout.size,
                     &panel,
-                    objects.len(),
+                    panel_layers,
+                    seconds,
                 ));
             }
             for object in &mut objects {

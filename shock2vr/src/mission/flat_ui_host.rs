@@ -1460,8 +1460,17 @@ impl FlatUiHost {
     /// presentations render exactly this canvas - flat on screen
     /// ([`Self::render`]), VR on the cyber-interface world panel
     /// ([`Self::render_world_space`]) - so their layout cannot drift apart
-    /// (AGENTS.md §3).
+    /// (AGENTS.md §3). The one exception: VR may omit the bare arrow cursor
+    /// (`VR_UI_CURSOR`, see [`Self::build_canvas_with`]), since its pointer dot
+    /// already marks the spot.
     fn build_canvas(&self) -> Option<UiCanvas> {
+        self.build_canvas_with(true)
+    }
+
+    /// [`Self::build_canvas`], optionally without the bare arrow cursor. VR
+    /// marks the pointer with its own beam dot, so the arrow is a dev-param
+    /// choice there; a lifted item or the inspect cursor always draws.
+    fn build_canvas_with(&self, arrow: bool) -> Option<UiCanvas> {
         let strip_rect = self.strip_rect();
         let panel_rect = self.panel_rect();
         if strip_rect.is_none() && panel_rect.is_none() && self.readouts.is_none() && !self.device {
@@ -1629,10 +1638,11 @@ impl FlatUiHost {
                 // any rect bigger than the art would only center the icon
                 // inside it - i.e. slide it off the pointer.
                 Some(icon) => canvas.object_icon(Rect::new(cursor.x, cursor.y, 0.0, 0.0), icon),
-                None => canvas.image(
+                None if arrow => canvas.image(
                     Rect::new(cursor.x, cursor.y, CURSOR_SIZE.x, CURSOR_SIZE.y),
                     "cursor.pcx",
                 ),
+                None => &mut canvas,
             };
         }
         Some(if self.psionic_projection {
@@ -1672,7 +1682,8 @@ impl FlatUiHost {
         asset_cache: &mut AssetCache,
         panel: &crate::ui::WorldPanel,
     ) -> Vec<SceneObject> {
-        match self.build_canvas() {
+        let arrow = crate::dev_params::get_bool(crate::dev_params::VR_UI_CURSOR);
+        match self.build_canvas_with(arrow) {
             Some(canvas) => canvas.render_world_space(
                 asset_cache,
                 panel.transform(),
@@ -3235,6 +3246,31 @@ mod tests {
         assert_eq!(
             host.pointed_equipment_name().as_deref(),
             Some("Right holster: Empty")
+        );
+    }
+
+    #[test]
+    fn vr_canvas_can_drop_only_the_bare_arrow_cursor() {
+        let (world, mut host, item, _) = drag_world();
+        host.cursor_canvas = Some(Vector2::new(100.0, 100.0));
+        let arrows = |canvas: UiCanvas| {
+            canvas
+                .elements()
+                .iter()
+                .filter(|element| {
+                    matches!(element,
+                    UiElement::Image { texture, .. } if texture == "cursor.pcx")
+                })
+                .count()
+        };
+        assert_eq!(arrows(host.build_canvas().unwrap()), 1);
+        assert_eq!(arrows(host.build_canvas_with(false).unwrap()), 0);
+        // A lifted item still rides the pointer without the arrow.
+        host.cursor_item = Some(make_cursor_item(&world, item));
+        let with_item = host.build_canvas().unwrap().element_count();
+        assert_eq!(
+            host.build_canvas_with(false).unwrap().element_count(),
+            with_item
         );
     }
 

@@ -1,18 +1,17 @@
 //! The visible half of the VR frontend pointer: a gloved hand at each tracked
-//! controller, a beam along its aim, and a dot where the menu is being pointed.
+//! controller, plus a beam and a dot from the one the menu is listening to.
 //!
 //! Without this a VR menu gives no feedback until an entry happens to light up,
 //! so aiming is guesswork (issue #1001). Everything here is derived from the
-//! [`FrontendPointerPass`] the menu itself hit-tested - the *canvas* hit point,
-//! mapped back through [`canvas_to_panel_world`], and the pass's own choice of
-//! which controller is driving the menu - so the dot marks the pixel the menu
-//! hit-tested, on the controller the menu is listening to, and the two cannot
-//! drift apart.
+//! [`FrontendPointerPass`] the menu itself hit-tested - the beam ends at the
+//! *canvas* hit point, mapped back through [`canvas_to_panel_world`] - so it
+//! ends on the pixel the menu hit-tested and the two cannot drift apart. A
+//! controller aimed off the panel, or one the menu is ignoring, draws no beam.
 
 use cgmath::{InnerSpace, Matrix4, Quaternion, Vector2, Vector3, vec3};
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{FrontFaceWinding, SceneObject, color_material, cube},
+    scene::{SceneObject, color_material, cube, laser_material, quad},
 };
 
 use crate::{
@@ -22,18 +21,14 @@ use crate::{
     },
 };
 
-/// How far a beam that misses the panel reaches into space. Long enough to read
-/// as "pointing somewhere", short enough not to spear the whole room.
-pub const POINTER_BEAM_MISS_LENGTH: f32 = 2.0;
-/// Beam cross-section, in metres.
-const POINTER_BEAM_THICKNESS: f32 = 0.006;
-/// Edge length of the hit dot, in metres.
-const POINTER_DOT_SIZE: f32 = 0.03;
-/// Clear air between the panel's frontmost canvas layer and the dot.
-const POINTER_DOT_CLEARANCE: f32 = VR_COMPONENT_Z_STEP * 2.0;
+/// Radii of the beam's soft halo and bright core, in metres.
+const BEAM_HALO_RADIUS: f32 = 0.012;
+const BEAM_CORE_RADIUS: f32 = 0.0025;
+/// Clear air between the panel's frontmost canvas layer and the beam's tip.
+const BEAM_TIP_CLEARANCE: f32 = VR_COMPONENT_Z_STEP * 2.0;
 /// Floor on how squarely a ray may meet the panel before the pull-back below
-/// stops scaling. Without it a ray grazing the panel edge would put its dot
-/// arbitrarily far back down the beam.
+/// stops scaling. Without it a ray grazing the panel edge would end its beam
+/// arbitrarily far back from the panel.
 const MIN_APPROACH: f32 = 0.25;
 /// Size of the fallback controller proxy: a stubby box at the hand, aimed down
 /// the ray. Only drawn when the glove model is unavailable.
@@ -43,51 +38,42 @@ const CONTROLLER_PROXY_SIZE: Vector3<f32> = Vector3 {
     z: 0.09,
 };
 
-/// How many pieces the beam is cut into to fade along its length. Enough for
-/// the falloff to read as smoke rather than as stripes, few enough that a menu
-/// frame stays cheap on a Quest (each piece is a draw, per hand, per eye).
-pub const BEAM_SEGMENTS: usize = 6;
-/// Transparency (0 = opaque) of the beam where it leaves the hand...
-const BEAM_NEAR_TRANSPARENCY: f32 = 0.35;
-/// ...and at its far end, just short of invisible.
-const BEAM_FAR_TRANSPARENCY: f32 = 0.95;
 /// Clear space left at the hand end, so the beam emerges from the glove's
 /// fingertips instead of starting inside the palm. Roughly a hand's length.
 const BEAM_HAND_CLEARANCE: f32 = 0.25;
 
-const BEAM_COLOR: Vector3<f32> = Vector3 {
-    x: 0.3,
-    y: 0.8,
-    z: 1.0,
-};
-const DOT_COLOR: Vector3<f32> = Vector3 {
-    x: 1.0,
-    y: 1.0,
-    z: 1.0,
-};
+/// A beam's `[halo, core]` colours.
+type BeamColors = [Vector3<f32>; 2];
+/// Frontend and pause menus: blue.
+const MENU_BEAM: BeamColors = [vec3(0.05, 0.55, 1.0), vec3(0.4, 0.85, 1.0)];
+/// In-play UI devices (cyber interface, tricorder): green.
+const DEVICE_BEAM: BeamColors = [vec3(0.02, 1.0, 0.15), vec3(0.25, 1.0, 0.35)];
+
+/// How one caller's pointer looks: beam colours and hit-dot size (0 = none).
+#[derive(Clone, Copy)]
+struct PointerStyle {
+    colors: BeamColors,
+    dot_size: f32,
+}
+
+impl PointerStyle {
+    fn with_dev_dot(colors: BeamColors) -> Self {
+        Self {
+            colors,
+            dot_size: crate::dev_params::get(crate::dev_params::VR_POINTER_DOT_SIZE),
+        }
+    }
+}
 const CONTROLLER_COLOR: Vector3<f32> = Vector3 {
     x: 0.6,
     y: 0.6,
     z: 0.7,
 };
 
-/// How see-through beam segment `index` of `count` is, hand end first.
-///
-/// Strictly increasing, so the beam is brightest where it leaves the hand and
-/// thins out toward the panel - the hit dot stays the one crisp thing at the
-/// far end.
-pub fn beam_segment_transparency(index: usize, count: usize) -> f32 {
-    debug_assert!(index < count);
-    // Sample each segment at its midpoint, so the first segment is not fully at
-    // the near value nor the last fully at the far one.
-    let t = (index as f32 + 0.5) / count as f32;
-    BEAM_NEAR_TRANSPARENCY + (BEAM_FAR_TRANSPARENCY - BEAM_NEAR_TRANSPARENCY) * t
-}
-
 /// The pose the hand driving `rays[index]` is shown in.
 ///
-/// Read off the same pass that decides the hover highlight, the click and the
-/// hit dot, so the hand points exactly when the menu is listening to it - a
+/// Read off the same pass that decides the hover highlight and the click, so
+/// the hand points exactly when the menu is listening to it - a
 /// hand posed as pointing can never promise a hover the menu will not give.
 pub fn pointer_hand_pose(pass: &FrontendPointerPass, index: usize) -> StaticHandPose {
     if pass.is_active(index) {
@@ -97,63 +83,47 @@ pub fn pointer_hand_pose(pass: &FrontendPointerPass, index: usize) -> StaticHand
     }
 }
 
-/// How far in front of the panel face the dot floats, given a canvas that
-/// stacked `panel_layers` components on it.
-///
-/// [`crate::ui::UiCanvas::render_world_space`] steps component *i* forward by
-/// `VR_COMPONENT_Z_STEP * i`, so the count of objects it emitted bounds the
-/// stack - taking it from the caller keeps this honest as screens gain widgets,
-/// where a guessed layer count would silently sink the dot behind a label.
-fn dot_lift(panel_layers: usize) -> f32 {
-    VR_COMPONENT_Z_STEP * panel_layers as f32 + POINTER_DOT_CLEARANCE
+/// How far in front of the panel face the beam's tip stops, given a canvas
+/// that stacked `panel_layers` layers on it (see [`canvas_layers`]).
+fn tip_lift(panel_layers: usize) -> f32 {
+    VR_COMPONENT_Z_STEP * panel_layers as f32 + BEAM_TIP_CLEARANCE
 }
 
-/// Where one controller's pointer draws, in world space.
+/// How many `VR_COMPONENT_Z_STEP` layers a world-space canvas stacks on
+/// `panel`, read off its frontmost object. The canvas steps only overlapping
+/// art forward, so its object count overstates the stack many times over -
+/// enough to end the beam centimetres off a near panel like the tricorder's.
+pub fn canvas_layers(canvas: &[SceneObject], panel: &WorldPanel) -> usize {
+    let front = canvas
+        .iter()
+        .map(|object| (object.get_transform().w.truncate() - panel.center).dot(panel.normal()))
+        .fold(0.0, f32::max);
+    (front / VR_COMPONENT_Z_STEP).round() as usize + 1
+}
+
+/// Where one ray's beam ends, in world space: just clear of the panel point
+/// the menu hit-tested, or `None` when the ray misses the panel.
 ///
 /// Pure geometry, so the placement rule is testable without a renderer.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PointerRayGeometry {
-    /// The controller end of the beam.
-    pub start: Vector3<f32>,
-    /// The far end: just clear of the panel hit when there is one, otherwise
-    /// [`POINTER_BEAM_MISS_LENGTH`] out along the aim.
-    pub end: Vector3<f32>,
-    /// The hit dot, drawn only for the controller the menu is listening to.
-    pub dot: Option<Vector3<f32>>,
-}
-
-/// The beam and dot placement for one ray. `marks_hit` is whether this is the
-/// ray the menu is actually pointing with.
-pub fn pointer_ray_geometry(
+pub fn pointer_beam_end(
     ray: &FrontendRay,
     canvas_size: Vector2<f32>,
     panel: &WorldPanel,
     panel_layers: usize,
-    marks_hit: bool,
-) -> PointerRayGeometry {
+) -> Option<Vector3<f32>> {
     // The hit comes back from the canvas point the menu hit-tested, not from a
     // second intersection of the same ray.
-    let Some(point) = ray.canvas_hit else {
-        return PointerRayGeometry {
-            start: ray.origin,
-            end: ray.origin + ray.direction * POINTER_BEAM_MISS_LENGTH,
-            dot: None,
-        };
-    };
-    let hit = canvas_to_panel_world(canvas_size, panel, point);
+    let hit = canvas_to_panel_world(canvas_size, panel, ray.canvas_hit?);
 
-    // Stop short *along the beam* rather than pushing the marker out along the
-    // panel normal: back down the ray it still reads as the point being aimed
-    // at from any viewpoint, and the beam can end exactly there - so there is
-    // no gap between beam and dot, and no beam tip buried in the canvas layers.
+    // Stop short *along the beam* rather than along the panel normal, so the
+    // tip stays on the aimed-at point from any viewpoint without burying itself
+    // in the canvas layers.
     let approach = -ray.direction.dot(panel.normal());
-    let marker = hit - ray.direction * (dot_lift(panel_layers) / approach.max(MIN_APPROACH));
-
-    PointerRayGeometry {
-        start: ray.origin,
-        end: marker,
-        dot: marks_hit.then_some(marker),
-    }
+    let lift = tip_lift(panel_layers);
+    let pull = lift / approach.max(MIN_APPROACH);
+    // A ray grazing past MIN_APPROACH stops short of clearing the stack; top
+    // the rest up along the normal so the tip never sinks under a label.
+    Some(hit - ray.direction * pull + panel.normal() * (lift - pull * approach).max(0.0))
 }
 
 /// A unit cube scaled to `scale` and placed at `center`, oriented by `rotation`.
@@ -172,16 +142,14 @@ fn box_object(
     object
 }
 
-/// The faded beam for one ray, hand end first: [`BEAM_SEGMENTS`] pieces whose
-/// alpha falls off along the length.
-///
-/// Each piece draws in the engine's transparent pass (which masks depth writes
-/// for the whole pass), so the segments blend with each other and with the
-/// panel behind rather than occluding one another with their own boxes. They
-/// also cull backfaces: a double-sided box blends *twice* per pixel, which
-/// turns the authored alpha `a` into `1 - (1 - a)^2` and would make the far end
-/// read as a solid rod instead of fading out.
-fn beam_objects(start: Vector3<f32>, along: Vector3<f32>, length: f32) -> Vec<SceneObject> {
+/// The smoky beam for one ray: the laser sight's halo and core.
+fn beam_objects(
+    start: Vector3<f32>,
+    along: Vector3<f32>,
+    length: f32,
+    [halo, core]: BeamColors,
+    seconds: f32,
+) -> Vec<SceneObject> {
     // The hand fills the first stretch of the ray. A beam no longer than that
     // would be entirely inside the glove, so there is nothing to draw - the
     // hand is already touching what it points at.
@@ -189,28 +157,35 @@ fn beam_objects(start: Vector3<f32>, along: Vector3<f32>, length: f32) -> Vec<Sc
         return Vec::new();
     }
     let direction = along / length;
-    let drawn = length - BEAM_HAND_CLEARANCE;
-    let step = drawn / BEAM_SEGMENTS as f32;
-    // `from_arc` is fine at the antiparallel extreme: cgmath falls back to an
-    // arbitrary perpendicular axis, and the beam is square in cross-section, so
-    // the free roll is invisible.
-    let aim = Quaternion::from_arc(vec3(0.0, 0.0, 1.0), direction, None);
+    laser_material::beam(
+        start + direction * BEAM_HAND_CLEARANCE,
+        direction * (length - BEAM_HAND_CLEARANCE),
+        (BEAM_HALO_RADIUS, halo),
+        (BEAM_CORE_RADIUS, core),
+        seconds,
+    )
+    .into()
+}
 
-    (0..BEAM_SEGMENTS)
-        .map(|index| {
-            let center = start + direction * (BEAM_HAND_CLEARANCE + step * (index as f32 + 0.5));
-            let mut object = box_object(
-                center,
-                vec3(POINTER_BEAM_THICKNESS, POINTER_BEAM_THICKNESS, step),
-                aim,
-                BEAM_COLOR,
-            );
-            object.set_transparency(Some(beam_segment_transparency(index, BEAM_SEGMENTS)));
-            // The cube's outward faces are clockwise as seen from outside.
-            object.set_backface_culling(Some(FrontFaceWinding::Clockwise));
-            object
-        })
-        .collect()
+/// The glowing hit dot: the laser sight's spot in the beam's core colour, flat
+/// against the panel and `size` across. It writes no depth, so it shows over
+/// the canvas only because callers emit the pointer after it (the transparent
+/// pass draws in emit order).
+fn dot_object(
+    center: Vector3<f32>,
+    panel: &WorldPanel,
+    color: Vector3<f32>,
+    size: f32,
+) -> SceneObject {
+    let mut object = SceneObject::new(laser_material::create(color), Box::new(quad::create()));
+    object.set_transform(
+        Matrix4::from_translation(center)
+            * Matrix4::from(panel.rotation)
+            * Matrix4::from_nonuniform_scale(size, size, 1.0),
+    );
+    object.set_depth_write(false);
+    object.set_backface_culling(None);
+    object
 }
 
 /// The visible half of the frontend pointer, including the glove model it draws
@@ -231,12 +206,12 @@ impl PointerVisuals {
         Self::default()
     }
 
-    /// The scene objects for a frame of frontend pointing: a hand and beam for
-    /// every tracked controller, plus a dot on the one the menu is listening
-    /// to.
+    /// The scene objects for a frame of frontend pointing: a hand for every
+    /// tracked controller, plus a beam and dot from the one the menu is
+    /// listening to.
     ///
-    /// `panel_layers` is how many objects the panel's canvas already emitted
-    /// (see [`dot_lift`]). Shared by every frontend screen that uses the VR
+    /// `panel_layers` is the panel canvas's [`canvas_layers`]; `seconds`
+    /// animates the beam's smoke. Shared by every frontend screen that uses the VR
     /// pointer, so a screen cannot end up with a pointer that hit-tests but
     /// does not show.
     pub fn render(
@@ -246,6 +221,7 @@ impl PointerVisuals {
         canvas_size: Vector2<f32>,
         panel: &WorldPanel,
         panel_layers: usize,
+        seconds: f32,
     ) -> Vec<SceneObject> {
         let glove = self
             .glove
@@ -259,6 +235,8 @@ impl PointerVisuals {
             panel,
             panel_layers,
             self.glove_fit,
+            PointerStyle::with_dev_dot(MENU_BEAM),
+            seconds,
         );
         // The one pair of hands a frontend screen shows. Labelled so a check
         // can assert *both* halves of issue #1018's fix: the scene's hands are
@@ -268,7 +246,7 @@ impl PointerVisuals {
     }
 }
 
-/// The aim beams and hit dot alone, with no hands at the controllers.
+/// The aim beam and hit dot alone, with no hands at the controllers.
 ///
 /// For a panel shown *during play* - the VR cyber interface - where the
 /// player's own hands are already rendered by the interaction controller.
@@ -281,9 +259,19 @@ pub fn pointer_beams(
     canvas_size: Vector2<f32>,
     panel: &WorldPanel,
     panel_layers: usize,
+    seconds: f32,
 ) -> Vec<SceneObject> {
-    let mut objects =
-        render_pointer_rays(None, false, pass, canvas_size, panel, panel_layers, None);
+    let mut objects = render_pointer_rays(
+        None,
+        false,
+        pass,
+        canvas_size,
+        panel,
+        panel_layers,
+        None,
+        PointerStyle::with_dev_dot(DEVICE_BEAM),
+        seconds,
+    );
     crate::util::tag_render_source(&mut objects, crate::util::render_source::USE_MODE_POINTER);
     objects
 }
@@ -300,46 +288,52 @@ fn render_pointer_rays(
     panel: &WorldPanel,
     panel_layers: usize,
     glove_fit: Option<crate::glove_fit::GloveFit>,
+    style: PointerStyle,
+    seconds: f32,
 ) -> Vec<SceneObject> {
     let mut objects = Vec::new();
     for (index, ray) in pass.rays.iter().enumerate() {
-        let geometry =
-            pointer_ray_geometry(ray, canvas_size, panel, panel_layers, pass.is_active(index));
-
-        let along = geometry.end - geometry.start;
-        let length = along.magnitude();
-        // A degenerate beam (the hand pushed right up to its own hit point) has
-        // no orientation to speak of, so skip the beam rather than build a NaN
-        // transform - but still draw the hand and mark the hit, neither of
-        // which needs one.
-        if length >= 1e-4 {
-            objects.extend(beam_objects(geometry.start, along, length));
+        // Only the ray the menu is reading: a beam from an ignored hand would
+        // end on a button that will not hover or click.
+        let end = pass
+            .is_active(index)
+            .then(|| pointer_beam_end(ray, canvas_size, panel, panel_layers))
+            .flatten();
+        if let Some(end) = end {
+            let along = end - ray.origin;
+            objects.extend(beam_objects(
+                ray.origin,
+                along,
+                along.magnitude(),
+                style.colors,
+                seconds,
+            ));
         }
 
         let hand_start = objects.len();
         match glove.as_deref_mut().filter(|_| draw_hand) {
             Some(glove) => objects.extend(glove.render_static_hand(
-                geometry.start,
+                ray.origin,
                 ray.rotation,
                 ray.handedness,
                 pointer_hand_pose(pass, index),
             )),
             // No glove model: keep a proxy so the player can still see where
             // the controller is, rather than a beam growing out of nothing.
-            None if draw_hand && length >= 1e-4 => objects.push(box_object(
-                geometry.start,
+            None if draw_hand => objects.push(box_object(
+                ray.origin,
                 CONTROLLER_PROXY_SIZE,
-                Quaternion::from_arc(vec3(0.0, 0.0, 1.0), along / length, None),
+                Quaternion::from_arc(vec3(0.0, 0.0, 1.0), ray.direction, None),
                 CONTROLLER_COLOR,
             )),
             None => {}
         }
 
         if let Some(fit) = glove_fit {
-            // Calibrate only the mesh. Hover, clicks, beam and dot retain the
+            // Calibrate only the mesh. Hover, clicks and the beam retain the
             // single tracked aim pass, so tuning cannot move the menu target.
             let pose = crate::vr_support::GripPose {
-                position: geometry.start,
+                position: ray.origin,
                 rotation: ray.rotation,
             };
             let original = Matrix4::from_translation(pose.position) * Matrix4::from(pose.rotation);
@@ -354,15 +348,8 @@ fn render_pointer_rays(
             }
         }
 
-        if let Some(dot) = geometry.dot {
-            objects.push(box_object(
-                dot,
-                // Flat against the panel, so the dot reads as a mark on the
-                // canvas rather than a cube floating off it.
-                vec3(POINTER_DOT_SIZE, POINTER_DOT_SIZE, VR_COMPONENT_Z_STEP),
-                panel.rotation,
-                DOT_COLOR,
-            ));
+        if let Some(end) = end.filter(|_| style.dot_size > 0.0) {
+            objects.push(dot_object(end, panel, style.colors[1], style.dot_size));
         }
     }
     objects
@@ -374,12 +361,16 @@ mod tests {
     use crate::input_context::{Hand, InputContext};
     use crate::ui::test_support::{hand_aimed_at, hand_aimed_away, test_panel};
     use crate::ui::{canvas_to_panel_world, vr_frontend_pointer_pass};
-    use cgmath::{Zero, vec2};
+    use cgmath::{Rotation, Zero, vec2};
 
     const CANVAS: Vector2<f32> = Vector2 { x: 640.0, y: 480.0 };
     /// A stand-in for what a frontend canvas emits; the exact count only shifts
-    /// the dot's clearance.
+    /// the beam tip's clearance.
     const LAYERS: usize = 18;
+    const STYLE: PointerStyle = PointerStyle {
+        colors: MENU_BEAM,
+        dot_size: 0.05,
+    };
 
     fn pass(right: Hand, left: Hand) -> FrontendPointerPass {
         let input = InputContext {
@@ -390,14 +381,20 @@ mod tests {
         vr_frontend_pointer_pass(&input, CANVAS, &test_panel())
     }
 
-    fn geometry(pass: &FrontendPointerPass, index: usize) -> PointerRayGeometry {
-        pointer_ray_geometry(
-            &pass.rays[index],
-            CANVAS,
-            &test_panel(),
-            LAYERS,
-            pass.is_active(index),
+    /// The fallback-proxy pointer for `pass`, at simulation time zero.
+    fn rays(
+        draw_hand: bool,
+        pass: &FrontendPointerPass,
+        panel: &WorldPanel,
+        fit: Option<crate::glove_fit::GloveFit>,
+    ) -> Vec<SceneObject> {
+        render_pointer_rays(
+            None, draw_hand, pass, CANVAS, panel, LAYERS, fit, STYLE, 0.0,
         )
+    }
+
+    fn end(pass: &FrontendPointerPass, index: usize) -> Option<Vector3<f32>> {
+        pointer_beam_end(&pass.rays[index], CANVAS, &test_panel(), LAYERS)
     }
 
     #[test]
@@ -405,24 +402,60 @@ mod tests {
         let target = vec2(500.0, 120.0);
         let pass = pass(hand_aimed_at(CANVAS, target, 0.0), hand_aimed_away(0.0));
         let panel = test_panel();
-        let geometry = geometry(&pass, 0);
-
         let hit = canvas_to_panel_world(CANVAS, &panel, target);
-        let dot = geometry.dot.expect("the active ray must show a hit dot");
-        assert_eq!(
-            geometry.end, dot,
-            "the beam must end at the dot, leaving no gap between them"
-        );
-        // The dot stays *on the ray* - it marks the aimed-at point from any
+        let tip = end(&pass, 0).expect("a ray on the panel must draw a beam");
+        // The tip stays *on the ray* - it marks the aimed-at point from any
         // viewpoint, rather than being shoved sideways off the beam.
-        let off_ray = (dot - hit) - ray_component(dot - hit, pass.rays[0].direction);
-        assert!(off_ray.magnitude() < 1e-4, "the dot must sit on the ray");
+        let off_ray = (tip - hit) - ray_component(tip - hit, pass.rays[0].direction);
+        assert!(off_ray.magnitude() < 1e-4, "the tip must sit on the ray");
         // ...and it clears the panel's whole canvas layer stack, rather than
-        // z-fighting the very label it is pointing at.
+        // burying itself in the very label it is pointing at.
         assert!(
-            (dot - hit).dot(panel.normal()) >= dot_lift(LAYERS) - 1e-4,
-            "the dot must clear the panel's canvas layers"
+            (tip - hit).dot(panel.normal()) >= tip_lift(LAYERS) - 1e-4,
+            "the tip must clear the panel's canvas layers"
         );
+    }
+
+    #[test]
+    fn canvas_layers_counts_the_stack_not_the_objects() {
+        // Ten labels side by side on the face, one badge two layers up: the
+        // tip clears three layers, not ten objects.
+        let panel = test_panel();
+        let at_layer = |layer: f32| {
+            let mut object = box_object(
+                vec3(0.0, 0.0, 0.0),
+                vec3(1.0, 1.0, 1.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                CONTROLLER_COLOR,
+            );
+            object.set_transform(
+                panel.transform()
+                    * Matrix4::from_translation(vec3(0.0, 0.0, VR_COMPONENT_Z_STEP * layer)),
+            );
+            object
+        };
+        let mut canvas: Vec<_> = (0..9).map(|_| at_layer(0.0)).collect();
+        canvas.push(at_layer(2.0));
+        assert_eq!(canvas_layers(&canvas, &panel), 3);
+        assert_eq!(canvas_layers(&[], &panel), 1);
+    }
+
+    #[test]
+    fn a_grazing_ray_still_lifts_its_tip_clear_of_the_canvas() {
+        let panel = test_panel();
+        let hit = canvas_to_panel_world(CANVAS, &panel, vec2(500.0, 120.0));
+        // Approach 0.1, well under MIN_APPROACH.
+        let direction =
+            (panel.normal() * -0.1 + panel.rotation.rotate_vector(vec3(1.0, 0.0, 0.0))).normalize();
+        let mut ray = pass(
+            hand_aimed_at(CANVAS, vec2(500.0, 120.0), 0.0),
+            hand_aimed_away(0.0),
+        )
+        .rays[0];
+        ray.origin = hit - direction;
+        ray.direction = direction;
+        let tip = pointer_beam_end(&ray, CANVAS, &panel, LAYERS).unwrap();
+        assert!((tip - hit).dot(panel.normal()) >= tip_lift(LAYERS) - 1e-4);
     }
 
     fn ray_component(v: Vector3<f32>, direction: Vector3<f32>) -> Vector3<f32> {
@@ -430,13 +463,10 @@ mod tests {
     }
 
     #[test]
-    fn a_beam_that_misses_the_panel_floats_free() {
+    fn a_ray_that_misses_the_panel_draws_no_beam() {
         let pass = pass(hand_aimed_away(0.0), hand_aimed_away(0.0));
-        let geometry = geometry(&pass, 0);
-        assert_eq!(geometry.dot, None, "an off-panel ray must show no hit dot");
-        assert!(
-            ((geometry.end - geometry.start).magnitude() - POINTER_BEAM_MISS_LENGTH).abs() < 1e-3
-        );
+        assert_eq!(pass.rays.len(), 2);
+        assert!(rays(false, &pass, &test_panel(), None).is_empty());
     }
 
     #[test]
@@ -450,34 +480,57 @@ mod tests {
         };
         let pass = pass(untracked.clone(), untracked);
         assert!(pass.rays.is_empty());
-        assert!(
-            render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS, None).is_empty()
-        );
+        assert!(rays(true, &pass, &test_panel(), None).is_empty());
     }
 
     #[test]
-    fn only_the_controller_the_menu_is_listening_to_shows_a_dot() {
-        // Both hands on the panel: the menu highlights one entry, so exactly
-        // one dot may appear - two would leave the player unable to tell which
-        // one the menu is actually reading.
+    fn only_the_controller_the_menu_is_listening_to_draws_a_beam_and_dot() {
+        // Both hands on the panel, but the menu reads one: a second beam would
+        // end on a button that will not hover or click.
         let pass = pass(
             hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
             hand_aimed_at(CANVAS, vec2(100.0, 100.0), 0.0),
         );
         assert_eq!(pass.rays.len(), 2);
-        let dots = pass
-            .rays
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| geometry(&pass, *index).dot.is_some())
-            .count();
-        assert_eq!(dots, 1);
-        // Each hand: a proxy plus its beam segments; the right hand also the
-        // one dot.
-        assert_eq!(
-            render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS, None).len(),
-            2 * (BEAM_SEGMENTS + 1) + 1
+        // Two proxies, plus one halo, core and dot.
+        assert_eq!(rays(true, &pass, &test_panel(), None).len(), 2 + 3);
+    }
+
+    #[test]
+    fn a_zero_dot_size_hides_the_dot_but_keeps_the_beam() {
+        let pass = pass(
+            hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
+            hand_aimed_away(0.0),
         );
+        let objects = render_pointer_rays(
+            None,
+            false,
+            &pass,
+            CANVAS,
+            &test_panel(),
+            LAYERS,
+            None,
+            PointerStyle {
+                dot_size: 0.0,
+                ..STYLE
+            },
+            0.0,
+        );
+        // Halo and core only.
+        assert_eq!(objects.len(), 2);
+    }
+
+    #[test]
+    fn an_idle_hand_on_the_panel_draws_nothing_while_the_other_holds_its_trigger() {
+        // The menu ignores the idle hand here (`vr_frontend_pointer_pass`'s
+        // held-hand gate), so its beam would promise a click it will not take.
+        let pass = pass(
+            hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
+            hand_aimed_away(1.0),
+        );
+        assert_eq!(pass.point(), None);
+        assert!(pass.rays[0].canvas_hit.is_some());
+        assert!(rays(false, &pass, &test_panel(), None).is_empty());
     }
 
     #[test]
@@ -493,10 +546,10 @@ mod tests {
             size: 1.2,
             visible: true,
         };
-        let base = render_pointer_rays(None, true, &pass, CANVAS, &panel, LAYERS, None);
-        let adjusted = render_pointer_rays(None, true, &pass, CANVAS, &panel, LAYERS, Some(fit));
+        let base = rays(true, &pass, &panel, None);
+        let adjusted = rays(true, &pass, &panel, Some(fit));
         assert_eq!(base.len(), adjusted.len());
-        // All beam segments and the hit dot keep their exact transforms;
+        // Both beam cylinders and the dot keep their exact transforms;
         // exactly the two glove proxies change.
         assert_eq!(
             base.iter()
@@ -505,19 +558,16 @@ mod tests {
                 .count(),
             2
         );
-        let hidden = render_pointer_rays(
-            None,
+        let hidden = rays(
             true,
             &pass,
-            CANVAS,
             &panel,
-            LAYERS,
             Some(crate::glove_fit::GloveFit {
                 visible: false,
                 ..fit
             }),
         );
-        let beams = render_pointer_rays(None, false, &pass, CANVAS, &panel, LAYERS, None);
+        let beams = rays(false, &pass, &panel, None);
         assert_eq!(hidden.len(), beams.len());
         for (actual, expected) in hidden.iter().zip(beams) {
             assert_eq!(actual.get_transform(), expected.get_transform());
@@ -525,57 +575,35 @@ mod tests {
     }
 
     #[test]
-    fn the_beam_fades_along_its_length() {
-        // "Smoky": brightest at the hand, thinning toward the panel, so the
-        // crisp dot at the end is the thing the eye lands on. A beam of one
-        // flat alpha (or one that brightened toward the panel) would read as a
-        // solid rod and compete with the dot.
-        let alphas: Vec<f32> = (0..BEAM_SEGMENTS)
-            .map(|index| beam_segment_transparency(index, BEAM_SEGMENTS))
-            .collect();
-        assert!(
-            alphas.windows(2).all(|pair| pair[1] > pair[0]),
-            "beam transparency must increase away from the hand: {alphas:?}"
-        );
-        assert!(
-            alphas.iter().all(|a| (0.0..=1.0).contains(a)),
-            "transparency must stay in range: {alphas:?}"
-        );
-        // Translucent at the hand too, not just at the tip.
-        assert!(alphas[0] > 0.0);
-    }
-
-    #[test]
-    fn every_beam_segment_is_translucent_and_single_sided() {
-        // A double-sided box blends twice per pixel, turning alpha `a` into
-        // `1 - (1 - a)^2` - the far end would read as a solid rod rather than
-        // fading out, so the authored ramp only means what it says with the
-        // inner faces culled.
+    fn the_beam_is_a_halo_and_core_from_the_fingertips_to_the_panel() {
         let pass = pass(
             hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
             hand_aimed_away(0.0),
         );
-        let objects = render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS, None);
-        let translucent: Vec<_> = objects
-            .iter()
-            .filter(|object| object.effective_transparency().is_some_and(|t| t > 0.0))
-            .collect();
-        assert_eq!(translucent.len(), 2 * BEAM_SEGMENTS);
-        assert!(
-            translucent
-                .iter()
-                .all(|object| object.backface_culling().is_some())
-        );
-        // The dot stays opaque - it is the focus point.
-        let dot = objects.last().expect("a dot must be drawn");
-        assert_eq!(dot.effective_transparency(), None);
+        let origin = pass.rays[0].origin;
+        let tip = end(&pass, 0).unwrap();
+        let objects = rays(false, &pass, &test_panel(), None);
+        // Right hand: halo, core, dot. Left hand (off panel): nothing.
+        assert_eq!(objects.len(), 3);
+        let direction = (tip - origin).normalize();
+        for beam in &objects[..2] {
+            let transform = beam.get_transform();
+            // The unit cylinder runs from z = 0 to z = 1.
+            let start = transform.w.truncate();
+            let end = start + transform.z.truncate();
+            let expected_start = origin + direction * BEAM_HAND_CLEARANCE;
+            assert!((start - expected_start).magnitude() < 1e-4);
+            assert!((end - tip).magnitude() < 1e-4);
+            // Blends over the panel instead of punching a hole in its depth.
+            assert!(!beam.depth_write);
+            assert!(beam.backface_culling().is_some());
+        }
     }
 
     #[test]
-    fn a_hand_right_up_against_the_panel_draws_no_beam_but_still_marks_its_hit() {
+    fn a_hand_right_up_against_the_panel_draws_no_beam() {
         // The whole beam would be inside the glove, so drawing it just buries a
-        // bright box in the hand. The hit still has to be marked - that is what
-        // the player is reading.
+        // bright cylinder in the hand.
         let panel = test_panel();
         let target = vec2(320.0, 240.0);
         let hit = canvas_to_panel_world(CANVAS, &panel, target);
@@ -593,23 +621,14 @@ mod tests {
                 ..Hand::default()
             },
         );
-        let objects = render_pointer_rays(None, true, &pass, CANVAS, &panel, LAYERS, None);
-        assert!(
-            objects
-                .iter()
-                .all(|object| object.effective_transparency().is_none()),
-            "no translucent beam segment may be drawn inside the hand"
-        );
         assert!(pass.rays[0].canvas_hit.is_some());
-        assert!(
-            geometry(&pass, 0).dot.is_some(),
-            "the hit must still be marked"
-        );
+        // Just the proxy and the dot - no beam buried in the hand.
+        assert_eq!(rays(true, &pass, &panel, None).len(), 2);
     }
 
     #[test]
     fn only_the_hand_the_menu_is_listening_to_points() {
-        // Pose is arbitrated by the same pass as the dot: the left hand is on
+        // Pose is arbitrated by the same pass as the hover: the left hand is on
         // the panel too, but the menu is not reading it, so posing it as
         // pointing would promise a hover it will not get.
         let pass = pass(
@@ -627,25 +646,6 @@ mod tests {
         assert!(
             (0..pass.rays.len())
                 .all(|index| pointer_hand_pose(&pass, index) == StaticHandPose::Relaxed)
-        );
-    }
-
-    #[test]
-    fn an_idle_hand_on_the_panel_shows_no_dot_while_the_other_holds_its_trigger() {
-        // The menu ignores the idle hand here (`vr_frontend_pointer_pass`'s
-        // held-hand gate), so drawing its dot would promise a hover the menu
-        // will not give and a click it will not take.
-        let pass = pass(
-            hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
-            hand_aimed_away(1.0),
-        );
-        assert_eq!(pass.point(), None);
-        assert!(pass.pressed);
-        assert!(
-            pass.rays
-                .iter()
-                .enumerate()
-                .all(|(index, _)| geometry(&pass, index).dot.is_none())
         );
     }
 }
