@@ -1,4 +1,4 @@
-//! Unlit radial laser spot, blended on a surface-aligned shared quad.
+//! Unlit laser spot and cylindrical core/halo. No scene-wide fog or trails.
 extern crate gl;
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
@@ -11,9 +11,15 @@ use once_cell::sync::OnceCell;
 use std::any::Any;
 
 const VERTEX_SHADER_SOURCE: &str = r#"
+        #ifdef GL_ES
+        precision highp float;
+        #endif
         layout (location = 0) in vec3 inPos;
         layout (location = 1) in vec2 inUv;
+        layout (location = 2) in vec3 inNormal;
         out vec2 uv;
+        out vec3 viewPos;
+        out vec3 viewNormal;
 
         uniform mat4 world;
         uniform mat4 view;
@@ -24,20 +30,38 @@ const VERTEX_SHADER_SOURCE: &str = r#"
 
         void main() {
             uv = inUv;
+            viewPos = (view * world * vec4(inPos, 1.0)).xyz;
+            viewNormal = mat3(view * world) * inNormal;
             vertexColor = color;
             gl_Position = projection * view * world * vec4(inPos, 1.0);
         }
 "#;
 
 const FRAGMENT_SHADER_SOURCE: &str = r#"
+        #ifdef GL_ES
+        precision highp float;
+        #endif
         out vec4 fragColor;
 
         in vec3 vertexColor;
         in vec2 uv;
+        in vec3 viewPos;
+        in vec3 viewNormal;
+        // x: dot=0, halo=1, core=2. y: simulation time, not wall clock.
+        uniform vec2 beam;
 
         uniform float transparency;
 
         void main() {
+            if (beam.x > 0.5) {
+                float facing = abs(dot(normalize(viewNormal), normalize(-viewPos)));
+                float ends = smoothstep(0.0, 0.015, uv.y) * (1.0 - smoothstep(0.8, 1.0, uv.y));
+                float smoke = 0.65 + 0.35 * sin(uv.y * 87.0 - beam.y * 1.4 + sin(uv.x * 18.84955592 + beam.y))
+                                          * sin(uv.y * 31.0 + uv.x * 12.56637061 - beam.y * 0.6);
+                float alpha = beam.x > 1.5 ? 0.8 * pow(facing, 0.7) : 0.24 * pow(facing, 1.8) * smoke;
+                fragColor = vec4(vertexColor, alpha * ends * (1.0 - transparency));
+                return;
+            }
             float radius = length(uv * 2.0 - 1.0);
             float halo = pow(max(1.0 - radius, 0.0), 2.0);
             float core = 1.0 - smoothstep(0.12, 0.3, radius);
@@ -53,18 +77,20 @@ struct Uniforms {
     projection_loc: i32,
     color_loc: i32,
     transparency_loc: i32,
+    beam_loc: i32,
 }
 
 static SHADER_PROGRAM: OnceCell<(ShaderProgram, Uniforms)> = OnceCell::new();
 
-pub struct LaserDotMaterial {
+pub struct LaserMaterial {
     has_initialized: bool,
     pub color: Vector3<f32>,
     /// Additional opacity override, applied on top of the radial alpha.
     transparency: f32,
+    beam: [f32; 2],
 }
 
-impl Material for LaserDotMaterial {
+impl Material for LaserMaterial {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -93,6 +119,7 @@ impl Material for LaserDotMaterial {
             unsafe {
                 let shader = crate::shader_program::link(&vertex_shader, &fragment_shader);
                 let uniforms = Uniforms {
+                    beam_loc: gl::GetUniformLocation(shader.gl_id, c_str!("beam").as_ptr()),
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
                     view_loc: gl::GetUniformLocation(shader.gl_id, c_str!("view").as_ptr()),
                     projection_loc: gl::GetUniformLocation(
@@ -144,7 +171,7 @@ impl Material for LaserDotMaterial {
     }
 }
 
-impl LaserDotMaterial {
+impl LaserMaterial {
     fn draw(
         &self,
         render_context: &EngineRenderContext,
@@ -162,14 +189,30 @@ impl LaserDotMaterial {
             gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
             gl::Uniform3fv(uniforms.color_loc, 1, self.color.as_ptr());
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
+            gl::Uniform2f(uniforms.beam_loc, self.beam[0], self.beam[1]);
         }
     }
 }
 
 pub fn create(color: Vector3<f32>) -> Box<dyn Material> {
-    Box::new(LaserDotMaterial {
+    Box::new(LaserMaterial {
         has_initialized: false,
         color,
         transparency: 0.0,
+        beam: [0.0, 0.0],
+    })
+}
+
+/// The same shader shades the two cached cylinder instances for each sight.
+pub fn create_beam(core: bool, seconds: f32) -> Box<dyn Material> {
+    Box::new(LaserMaterial {
+        has_initialized: false,
+        color: if core {
+            Vector3::new(1.0, 0.08, 0.025)
+        } else {
+            Vector3::new(1.0, 0.01, 0.005)
+        },
+        transparency: 0.0,
+        beam: [if core { 2.0 } else { 1.0 }, seconds],
     })
 }

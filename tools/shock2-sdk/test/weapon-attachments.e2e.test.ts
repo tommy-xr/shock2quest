@@ -24,6 +24,11 @@ for (const vr of [false, true]) for (const attachment of ["Flashlight", "Laser"]
       assert.ok(!(await game.entities.byTemplate(-1488)).some(e => e.id === device.entity_id));
       await clickUpgradeControl(game, toggle);
       assert.equal((await state())[key], false);
+      if (attachment === "Laser") {
+        for (const source of ["weapon_laser_dot", "weapon_laser_core", "weapon_laser_halo"]) {
+          assert.equal((await game.scene.fromSource(source)).length, 0, `${source} disappears on switch off`);
+        }
+      }
       const save = `weapon_${attachment}_${vr ? "vr" : "flat"}_${Date.now()}`;
       await game.save(save);
       await game.load(save);
@@ -40,5 +45,16 @@ for (const vr of [false, true]) for (const attachment of ["Flashlight", "Laser"]
       await clickUpgradeControl(game, "gun_setting");
       await clickUpgradeControl(game, toggle);
       assert.equal((await state())[key], true);
+      if (attachment === "Laser") {
+        const core = await game.scene.fromSource("weapon_laser_core");
+        const halo = await game.scene.fromSource("weapon_laser_halo");
+        assert.equal(core.length, 1);
+        assert.equal(halo.length, 1);
+        assert.deepEqual(core[0].position, halo[0].position);
+        assert.equal(core[0].scale[2], halo[0].scale[2]);
+        assert.ok(core[0].scale[2] <= 50.01);
+        assert.equal(halo[0].depth_write, false);
+        assert.equal(halo[0].render_layer, "world");
+      }
     });
 }
