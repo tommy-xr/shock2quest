@@ -1273,7 +1273,7 @@ impl ScriptWorld {
             "minigamecart" => Box::new(NoopScript::new()),
             "forcewallstructure" => Box::new(force_wall::ForceWallStructure::default()),
             "forcedoor" => Box::new(UnimplementedScript::new(&script_name)),
-            "wormpilescript" => Box::new(UnimplementedScript::new(&script_name)),
+            "wormpilescript" => Box::new(crate::item_tools::WormPile),
             "traptoxincleanse" => Box::new(hazard_objects::HazardObject::Cleanse(true)),
             "trapradcleanse" => Box::new(hazard_objects::HazardObject::Cleanse(false)),
             "armorscript" => Box::new(hazard_objects::HazardObject::Armor),
@@ -1284,7 +1284,7 @@ impl ScriptWorld {
             // eng1
             "healinggland" => Box::new(UnimplementedScript::new(&script_name)),
             "researchableusescript" => Box::new(UnimplementedScript::new(&script_name)),
-            "beakerscript" => Box::new(UnimplementedScript::new(&script_name)),
+            "beakerscript" => Box::new(crate::item_tools::ItemTool),
             "trapmetapropbylist" => Box::new(NoopScript::new()),
 
             // eng2

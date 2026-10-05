@@ -734,6 +734,8 @@ pub enum Link {
     LandingPoint,
     Projectile(ProjectileOptions),
     Replicator,
+    /// Empty beaker -> filled worm-ammo archetype.
+    Mutate,
     /// Authored candidate location for a `TrapSpawn` generator.
     SpawnPoint,
     /// Runtime ownership edge from a spawn marker to its live child.
@@ -1558,6 +1560,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_link("L$AIRangedW", |_| Link::AIRangedWeapon),
         define_link("L$LandingPo", |_| Link::LandingPoint),
         define_link("L$Replicato", |_| Link::Replicator),
+        define_link("L$Mutate", |_| Link::Mutate),
         define_link("L$SpawnPoin", |_| Link::SpawnPoint),
         define_link("L$Spawned", |_| Link::Spawned),
         define_link("L$HackingLi", |_| Link::Hacking),
