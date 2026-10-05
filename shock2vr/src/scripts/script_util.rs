@@ -448,6 +448,9 @@ pub fn has_death_links(world: &World, entity_id: EntityId) -> bool {
 /// `weapon`'s selected fire setting, 0 when it has no gun state. Ammo-type
 /// selection and the firing description both key off this, so they agree.
 pub fn current_gun_setting(world: &World, weapon: EntityId) -> i32 {
+    if !crate::weapon_installation::alternate_unlocked(world, weapon) {
+        return 0;
+    }
     world
         .borrow::<View<PropGunState>>()
         .ok()
@@ -541,6 +544,9 @@ fn has_second_fire_mode(second_header: Option<&str>, links: &[(i32, ProjectileOp
 
 /// Whether `weapon` can switch fire modes. See [`has_second_fire_mode`].
 pub fn can_cycle_gun_setting(world: &World, weapon: EntityId) -> bool {
+    if !crate::weapon_installation::alternate_unlocked(world, weapon) {
+        return false;
+    }
     let links = all_projectile_links(world, weapon);
     let second_header = gun_setting_header(world, weapon, 1);
     has_second_fire_mode(second_header.as_deref(), &links)

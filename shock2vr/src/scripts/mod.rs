@@ -34,6 +34,7 @@ mod egg_goo_cloud;
 mod energy_station;
 mod energy_weapon;
 mod exp_cookie;
+mod free_modify;
 mod frob_qb;
 mod goo_projectile;
 pub mod gui;
@@ -1286,7 +1287,7 @@ impl ScriptWorld {
 
             // eng2
             "overlord" => Box::new(UnimplementedScript::new(&script_name)),
-            "freemodify" => Box::new(UnimplementedScript::new(&script_name)),
+            "freemodify" => Box::new(free_modify::FreeModify),
             "manybrain" => Box::new(UnimplementedScript::new(&script_name)),
             "trapsuicide" => Box::new(UnimplementedScript::new(&script_name)),
             // many ride?

@@ -120,6 +120,11 @@ pub fn quote(world: &World, weapon: EntityId) -> Result<PropHackDiff, String> {
     {
         return Err("This weapon uses selectable modifications.".into());
     }
+    paid_quote(world, weapon)
+}
+
+/// Shared skill, target and HRM pricing rules for both installation flows.
+pub(crate) fn paid_quote(world: &World, weapon: EntityId) -> Result<PropHackDiff, String> {
     if crate::wielded_weapon::resolve_weapon_target(world, Some(weapon)) != Some(weapon)
         && !crate::scripts::gui::WeaponSettingsTarget::permits_device_job(world, weapon)
     {

@@ -27,3 +27,45 @@ export async function saveUpgradedWeapon(game: GameServer, name: string): Promis
   writeFileSync(path, JSON.stringify(save));
   return path;
 }
+
+/** Click either presentation's actual chooser, preserving a held VR weapon. */
+export async function clickUpgradeControl(game: GameServer, label: string): Promise<void> {
+  const ui = await game.ui.state();
+  const element = [...(ui.active_panel?.elements ?? []), ...ui.readout].find(e => e.label === label);
+  assert.ok(element, `upgrade control ${label}`);
+  if (ui.panel_pose) {
+    const { aimVrHandAtCanvas } = await import("./vr-hand.js");
+    const { canvasCenter } = await import("./ui.js");
+    for (const trigger of [0, 1, 0]) {
+      await aimVrHandAtCanvas(game, ui.panel_pose, canvasCenter(element), { trigger, squeeze: 1 });
+      await game.step({ frames: 3 });
+    }
+  } else {
+    const { clickElement } = await import("./os-upgrade.js");
+    await clickElement(game, element);
+  }
+}
+
+/** Existing mode/animation fixtures purchase the new prerequisite through the
+ * real device chooser, without replacing the weapon or its ammunition. */
+export async function unlockPistolAlternateFire(game: GameServer): Promise<void> {
+  const input = await game.input.state();
+  const device = await game.player.spawnItem(-1488);
+  await game.entities.sendMessage(device.entity_id, { type: "Frob" });
+  await game.step({ frames: 20 });
+  await clickUpgradeControl(game, "upgrade_AlternateFire");
+  await clickUpgradeControl(game, "upgrade_confirm");
+  for (let n = 0; n < 3 && (await game.ui.state()).mode === "use"; n++) {
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 3 });
+  }
+  for (const hand of ["left", "right"] as const) {
+    const pose = input[`${hand}_hand`];
+    await game.input.set(`${hand}_hand.position`, pose.position);
+    // Input snapshots use xyzw; patch rotation uses wxyz.
+    await game.input.set(`${hand}_hand.rotation`, [pose.rotation[3], ...pose.rotation.slice(0, 3)]);
+    await game.input.set(`${hand}_hand.squeeze`, pose.squeeze_value);
+    await game.input.set(`${hand}_hand.trigger`, pose.trigger_value);
+  }
+  await game.step({ frames: 20 });
+}

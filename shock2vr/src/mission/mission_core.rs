@@ -6560,6 +6560,7 @@ impl MissionCore {
                     {
                         effects.push(Effect::OpenWeaponSettings {
                             weapon: Some(entity),
+                            upgrade_device: None,
                         });
                     } else {
                         self.flat_ui.utilities.inspect_entity(entity);
@@ -8876,7 +8877,10 @@ impl MissionCore {
                     // (the original's own behavior for this button), where the
                     // mode is *chosen* from a described list. The
                     // `CycleGunSetting` action (F) still toggles directly.
-                    ReadoutButton::GunSetting => vec![Effect::OpenWeaponSettings { weapon }],
+                    ReadoutButton::GunSetting => vec![Effect::OpenWeaponSettings {
+                        weapon,
+                        upgrade_device: None,
+                    }],
                     ReadoutButton::Reload => vec![Effect::ReloadWeapon { weapon }],
                     ReadoutButton::PsiTierPrev => step(PsiSelectionAxis::Tier, false),
                     ReadoutButton::PsiTierNext => step(PsiSelectionAxis::Tier, true),
@@ -9945,6 +9949,21 @@ impl MissionCore {
                 } => {
                     crate::weapon_modification::apply(&mut self.world, entity_id, expected_level);
                 }
+                Effect::InstallWeaponUpgrade {
+                    entity_id,
+                    choice,
+                    expected_tier,
+                    payment,
+                } => {
+                    let installed = crate::weapon_installation::install(
+                        &mut self.world,
+                        entity_id,
+                        choice,
+                        expected_tier,
+                        payment,
+                    );
+                    effects.extend(Effect::flatten(vec![installed]));
+                }
                 Effect::ToggleImplant { entity_id } => {
                     match crate::implants::toggle_slot(&self.world, entity_id) {
                         Ok(Some(slot)) => {
@@ -10329,7 +10348,42 @@ impl MissionCore {
                     }
                 }
 
-                Effect::OpenWeaponSettings { weapon } => {
+                Effect::OpenWeaponSettings {
+                    weapon,
+                    upgrade_device,
+                } => {
+                    let weapon = if upgrade_device.is_some() {
+                        weapon
+                            .or(self.flat_ui.ammo_selection().0)
+                            .or_else(|| crate::wielded_weapon::wielded_weapon(&self.world))
+                    } else {
+                        weapon
+                    };
+                    if let Some(device) = upgrade_device {
+                        if !self.player_is_alive()
+                            || !crate::scripts::script_util::player_carried_items(&self.world)
+                                .contains(&device)
+                            || !crate::weapon_installation::is_device(&self.world, device)
+                        {
+                            continue;
+                        }
+                        if !weapon.is_some_and(|gun| {
+                            crate::weapon_installation::supported(&self.world, gun)
+                        }) {
+                            effects.push_back(Effect::ShowMessage {
+                                text: "Select a held pistol to choose a device upgrade.".into(),
+                            });
+                            continue;
+                        }
+                        if !self.use_mode {
+                            effects.push_front(
+                                self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT),
+                            );
+                            if game_options.presentation_mode == crate::PresentationMode::Vr {
+                                self.reset_vr_use_mode_placement();
+                            }
+                        }
+                    }
                     // The MFD presents the *wielded* gun, so it opens only with
                     // one in hand and is remembered so it can be dismissed when
                     // that gun is put away. Unbound: the host is synthetic, so
@@ -10355,10 +10409,6 @@ impl MissionCore {
                             .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
                             .map(|panel| panel.0);
                         if let Ok(panel) = panel {
-                            self.script_world.dispatch(Message {
-                                to: panel,
-                                payload: MessagePayload::PanelOpened,
-                            });
                             self.flat_ui.open_unbound(panel);
                             if self.flat_ui.device {
                                 crate::scripts::gui::WeaponSettingsTarget::select_scanned(
@@ -10371,6 +10421,14 @@ impl MissionCore {
                                     weapon,
                                 );
                             }
+                            crate::scripts::gui::WeaponSettingsTarget::set_upgrade_device(
+                                &self.world,
+                                upgrade_device,
+                            );
+                            self.script_world.dispatch(Message {
+                                to: panel,
+                                payload: MessagePayload::PanelOpened,
+                            });
                             self.weapon_settings_gun = Some(weapon);
                         }
                     }
@@ -14443,6 +14501,11 @@ impl MissionCore {
         // An SS2 gun has two modes; the effect's raw index must name one.
         if !(0..2).contains(&setting) {
             return None;
+        }
+        if setting == 1 && !crate::weapon_installation::alternate_unlocked(&self.world, weapon) {
+            return Some(Effect::ShowMessage {
+                text: "Unlock alternate fire with Modify.".into(),
+            });
         }
         if !script_util::can_cycle_gun_setting(&self.world, weapon) {
             return None;
