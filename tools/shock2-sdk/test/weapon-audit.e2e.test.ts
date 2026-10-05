@@ -1,4 +1,4 @@
-import { unlockPistolAlternateFire } from "./helpers/weapon-upgrades.js";
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -30,10 +30,11 @@ for (const vr of [false, true]) for (const row of cases) {
       await game.step({ frames: 3 });
     }
     if (row.setting) {
-      if (row.weaponTemplate === -17) await unlockPistolAlternateFire(game);
+      if (row.weaponTemplate === -17 || row.weaponTemplate === -18) await unlockWeaponAlternateFire(game);
       await game.input.trigger("CycleGunSetting");
       await game.step({ frames: 2 });
     }
+    assert.equal((await game.info()).player.wielded_gun_setting, row.setting, "audit must exercise the requested mode");
     if (row.ammoIndex) {
       await game.input.trigger("EjectClip");
       await game.step({ frames: 2 });

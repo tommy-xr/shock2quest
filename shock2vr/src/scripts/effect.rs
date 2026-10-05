@@ -962,6 +962,14 @@ pub enum Effect {
         query: EnvSoundQuery,
         position: Vector3<f32>,
     },
+    /// Apply a source-level gain after resolving the authored schema. Used by
+    /// installed silencers without changing reload, empty or impact sounds.
+    PlayEnvironmentalSoundWithGain {
+        audio_handle: AudioHandle,
+        query: EnvSoundQuery,
+        position: Vector3<f32>,
+        gain: f32,
+    },
     /// Try the authored schema first, using a fallback only when none resolves.
     PlayEnvironmentalSoundWithFallback {
         audio_handle: AudioHandle,

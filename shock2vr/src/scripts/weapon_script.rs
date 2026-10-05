@@ -504,6 +504,9 @@ impl Script for WeaponScript {
 /// burst just stops).
 fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -> ShotOutcome {
     let muzzle_flashes = weapon_flash_links(world, entity_id);
+    let silenced = crate::weapon_installation::silencer_compatible(world, entity_id)
+        && crate::weapon_installation::state(world, entity_id)
+            .has(crate::weapon_upgrades::WeaponUpgrade::Silencer);
 
     // Pick the selected ammo type: guns carry several Projectile
     // links (standard / HE / AP, ...); RuntimePropSelectedAmmo indexes
@@ -614,6 +617,20 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
         AudioHandle::new(),
     );
 
+    let sound_effect = match sound_effect {
+        Effect::PlayEnvironmentalSound {
+            audio_handle,
+            query,
+            position,
+        } if silenced => Effect::PlayEnvironmentalSoundWithGain {
+            audio_handle,
+            query,
+            position,
+            gain: 0.25,
+        },
+        effect => effect,
+    };
+
     let projectile_effect = Effect::Multiple(
         maybe_projectile
             .into_iter()
@@ -632,6 +649,9 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
     let muzzle_flash_effect = Effect::Multiple(
         muzzle_flashes
             .into_iter()
+            // Physical casing ejection survives suppression, including delayed
+            // arm-animation ejections; only the attached flash is removed.
+            .filter(|(_, options)| !silenced || options.flags & 1 != 0)
             .filter(|(_, options)| {
                 options.flags & 1 == 0
                     || (!crate::vr_shotgun_pump::enabled(world, entity_id)
@@ -699,7 +719,7 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
             effects.push(Effect::RaiseNoise {
                 source: entity_id,
                 origin,
-                radius: GUNSHOT_NOISE_RADIUS,
+                radius: GUNSHOT_NOISE_RADIUS * if silenced { 0.25 } else { 1.0 },
             });
         }
     }
@@ -1971,6 +1991,106 @@ mod tests {
         }
         world.add_unique(GlobalTemplateClassTags(Default::default()));
         (world, gun)
+    }
+
+    #[test]
+    fn silencer_reduces_shot_noise_and_audio_without_removing_rounds_or_casings() {
+        use crate::weapon_upgrades::{UpgradeSource, WeaponUpgrade, WeaponUpgrades};
+        use dark::properties::{Links, PropClassTag, PropScripts, ToLink};
+        for script in ["PistolModify", "RifleModify"] {
+            let (mut world, gun) = gun_world(None);
+            world.add_component(
+                gun,
+                (
+                    PropScripts {
+                        scripts: vec![script.into()],
+                        inherits: false,
+                    },
+                    PropClassTag::from_string("weapontype pistol"),
+                    Links {
+                        to_links: vec![
+                            ToLink {
+                                to_entity_id: None,
+                                to_template_id: -1,
+                                link: Link::Projectile(ProjectileOptions {
+                                    order: 0,
+                                    setting: -1,
+                                }),
+                            },
+                            ToLink {
+                                to_entity_id: None,
+                                to_template_id: -2,
+                                link: Link::GunFlash(GunFlashOptions { vhot: 0, flags: 0 }),
+                            },
+                            ToLink {
+                                to_entity_id: None,
+                                to_template_id: -3,
+                                link: Link::GunFlash(GunFlashOptions { vhot: 1, flags: 1 }),
+                            },
+                        ],
+                    },
+                ),
+            );
+            for silenced in [false, true] {
+                if silenced {
+                    world.add_component(
+                        gun,
+                        WeaponUpgrades::default()
+                            .with_upgrade(
+                                WeaponUpgrade::Silencer,
+                                &WeaponUpgrade::ALL,
+                                UpgradeSource::Device,
+                                0,
+                            )
+                            .unwrap(),
+                    );
+                }
+                let ShotOutcome::Fired(effect) =
+                    fire_one_shot(&world, gun, &GunSettingDesc::default())
+                else {
+                    panic!("loaded gun fires");
+                };
+                let effects = Effect::flatten(vec![effect]);
+                let mut templates: Vec<_> = effects
+                    .iter()
+                    .filter_map(|e| {
+                        if let Effect::CreateEntity { template_id, .. } = e {
+                            Some(*template_id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                templates.sort();
+                assert_eq!(
+                    templates,
+                    if silenced {
+                        vec![-3, -1]
+                    } else {
+                        vec![-3, -2, -1]
+                    }
+                );
+                assert!(effects.iter().any(|e| matches!(e, Effect::RaiseNoise { radius, .. } if (*radius - GUNSHOT_NOISE_RADIUS * if silenced {0.25} else {1.0}).abs() < 0.0001)));
+                assert_eq!(effects.iter().any(|e| matches!(e, Effect::PlayEnvironmentalSoundWithGain { gain, .. } if *gain == 0.25)), silenced);
+                assert_eq!(
+                    effects
+                        .iter()
+                        .any(|e| matches!(e, Effect::PlayEnvironmentalSound { .. })),
+                    !silenced
+                );
+                let casing = Effect::flatten(vec![eject_casings(&world, gun)]);
+                assert!(
+                    casing.iter().any(|e| matches!(
+                        e,
+                        Effect::CreateEntity {
+                            template_id: -3,
+                            ..
+                        }
+                    )),
+                    "delayed ejection survives too"
+                );
+            }
+        }
     }
 
     /// A gun that gives out says which gun it was, in the shipped wording.
