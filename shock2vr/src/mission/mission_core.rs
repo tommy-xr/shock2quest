@@ -15386,9 +15386,10 @@ impl MissionCore {
             self.use_mode_ramp.eased(),
             crate::util::render_source::USE_MODE_DIM,
         )];
-        objects.extend(self.flat_ui.render_world_space(asset_cache, &panel));
+        let canvas = self.flat_ui.render_world_space(asset_cache, &panel);
+        let panel_layers = crate::ui::canvas_layers(&canvas, &panel);
+        objects.extend(canvas);
         if let Some(pass) = self.vr_use_mode_pointer.as_ref() {
-            let panel_layers = objects.len();
             objects.extend(crate::ui::pointer_beams(
                 pass,
                 crate::mission::flat_ui_host::CANVAS_SIZE,
@@ -16304,13 +16305,15 @@ impl MissionCore {
             }
             let layout = super::mfd_device::layout(self.flat_ui.device_screen_source());
             let panel = layout.surface_panel(panel);
-            objects.extend(self.flat_ui.render_world_space(asset_cache, &panel));
+            let canvas = self.flat_ui.render_world_space(asset_cache, &panel);
+            let panel_layers = crate::ui::canvas_layers(&canvas, &panel);
+            objects.extend(canvas);
             if let Some(pass) = &self.vr_use_mode_pointer {
                 objects.extend(crate::ui::pointer_beams(
                     pass,
                     layout.size,
                     &panel,
-                    objects.len(),
+                    panel_layers,
                 ));
             }
             for object in &mut objects {

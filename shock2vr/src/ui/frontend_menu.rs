@@ -342,7 +342,7 @@ impl<A: Copy + PartialEq> FrontendMenu<A> {
             &panel,
             self.pointer_canvas,
             |asset_cache, objects| {
-                let panel_layers = objects.len();
+                let panel_layers = crate::ui::canvas_layers(objects, &panel);
                 objects.extend(self.vr_pointer_visuals.render(
                     asset_cache,
                     &self.vr_pointer,

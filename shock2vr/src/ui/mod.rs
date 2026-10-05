@@ -62,7 +62,7 @@ pub use frontend_pointer::{
 pub use frontend_presentation::FrontendCanvasPresenter;
 pub use frontend_sfx::FrontendSfx;
 pub use panel_anchor::{FrontendPanelAnchor, PanelPlacement};
-pub use pointer_visual::{PointerVisuals, pointer_beams};
+pub use pointer_visual::{PointerVisuals, canvas_layers, pointer_beams};
 pub use ui_anim::UiAnims;
 
 /// Font name that resolves to the engine's compiled-in font rather than a

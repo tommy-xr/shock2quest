@@ -98,14 +98,21 @@ pub fn pointer_hand_pose(pass: &FrontendPointerPass, index: usize) -> StaticHand
 }
 
 /// How far in front of the panel face the dot floats, given a canvas that
-/// stacked `panel_layers` components on it.
-///
-/// [`crate::ui::UiCanvas::render_world_space`] steps component *i* forward by
-/// `VR_COMPONENT_Z_STEP * i`, so the count of objects it emitted bounds the
-/// stack - taking it from the caller keeps this honest as screens gain widgets,
-/// where a guessed layer count would silently sink the dot behind a label.
+/// stacked `panel_layers` layers on it (see [`canvas_layers`]).
 fn dot_lift(panel_layers: usize) -> f32 {
     VR_COMPONENT_Z_STEP * panel_layers as f32 + POINTER_DOT_CLEARANCE
+}
+
+/// How many `VR_COMPONENT_Z_STEP` layers a world-space canvas stacks on
+/// `panel`, read off its frontmost object. The canvas steps only overlapping
+/// art forward, so its object count overstates the stack many times over -
+/// enough to float the dot centimetres off a near panel like the tricorder's.
+pub fn canvas_layers(canvas: &[SceneObject], panel: &WorldPanel) -> usize {
+    let front = canvas
+        .iter()
+        .map(|object| (object.get_transform().w.truncate() - panel.center).dot(panel.normal()))
+        .fold(0.0, f32::max);
+    (front / VR_COMPONENT_Z_STEP).round() as usize + 1
 }
 
 /// Where one controller's pointer draws, in world space.
@@ -147,7 +154,11 @@ pub fn pointer_ray_geometry(
     // at from any viewpoint, and the beam can end exactly there - so there is
     // no gap between beam and dot, and no beam tip buried in the canvas layers.
     let approach = -ray.direction.dot(panel.normal());
-    let marker = hit - ray.direction * (dot_lift(panel_layers) / approach.max(MIN_APPROACH));
+    let lift = dot_lift(panel_layers);
+    let pull = lift / approach.max(MIN_APPROACH);
+    // A ray grazing past MIN_APPROACH stops short of clearing the stack; top
+    // the rest up along the normal so the dot never sinks under a label.
+    let marker = hit - ray.direction * pull + panel.normal() * (lift - pull * approach).max(0.0);
 
     PointerRayGeometry {
         start: ray.origin,
@@ -235,8 +246,7 @@ impl PointerVisuals {
     /// every tracked controller, plus a dot on the one the menu is listening
     /// to.
     ///
-    /// `panel_layers` is how many objects the panel's canvas already emitted
-    /// (see [`dot_lift`]). Shared by every frontend screen that uses the VR
+    /// `panel_layers` is the panel canvas's [`canvas_layers`]. Shared by every frontend screen that uses the VR
     /// pointer, so a screen cannot end up with a pointer that hit-tests but
     /// does not show.
     pub fn render(
@@ -374,7 +384,7 @@ mod tests {
     use crate::input_context::{Hand, InputContext};
     use crate::ui::test_support::{hand_aimed_at, hand_aimed_away, test_panel};
     use crate::ui::{canvas_to_panel_world, vr_frontend_pointer_pass};
-    use cgmath::{Zero, vec2};
+    use cgmath::{Rotation, Zero, vec2};
 
     const CANVAS: Vector2<f32> = Vector2 { x: 640.0, y: 480.0 };
     /// A stand-in for what a frontend canvas emits; the exact count only shifts
@@ -423,6 +433,50 @@ mod tests {
             (dot - hit).dot(panel.normal()) >= dot_lift(LAYERS) - 1e-4,
             "the dot must clear the panel's canvas layers"
         );
+    }
+
+    #[test]
+    fn canvas_layers_counts_the_stack_not_the_objects() {
+        // Ten labels side by side on the face, one badge two layers up: the
+        // dot clears three layers, not ten objects.
+        let panel = test_panel();
+        let at_layer = |layer: f32| {
+            let mut object = box_object(
+                vec3(0.0, 0.0, 0.0),
+                vec3(1.0, 1.0, 1.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                BEAM_COLOR,
+            );
+            object.set_transform(
+                panel.transform()
+                    * Matrix4::from_translation(vec3(0.0, 0.0, VR_COMPONENT_Z_STEP * layer)),
+            );
+            object
+        };
+        let mut canvas: Vec<_> = (0..9).map(|_| at_layer(0.0)).collect();
+        canvas.push(at_layer(2.0));
+        assert_eq!(canvas_layers(&canvas, &panel), 3);
+        assert_eq!(canvas_layers(&[], &panel), 1);
+    }
+
+    #[test]
+    fn a_grazing_ray_still_lifts_its_dot_clear_of_the_canvas() {
+        let panel = test_panel();
+        let hit = canvas_to_panel_world(CANVAS, &panel, vec2(500.0, 120.0));
+        // Approach 0.1, well under MIN_APPROACH.
+        let direction =
+            (panel.normal() * -0.1 + panel.rotation.rotate_vector(vec3(1.0, 0.0, 0.0))).normalize();
+        let mut ray = pass(
+            hand_aimed_at(CANVAS, vec2(500.0, 120.0), 0.0),
+            hand_aimed_away(0.0),
+        )
+        .rays[0];
+        ray.origin = hit - direction;
+        ray.direction = direction;
+        let dot = pointer_ray_geometry(&ray, CANVAS, &panel, LAYERS, true)
+            .dot
+            .unwrap();
+        assert!((dot - hit).dot(panel.normal()) >= dot_lift(LAYERS) - 1e-4);
     }
 
     fn ray_component(v: Vector3<f32>, direction: Vector3<f32>) -> Vector3<f32> {
