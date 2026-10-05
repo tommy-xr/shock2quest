@@ -59,6 +59,13 @@ test("flat item powers and Recycler use authored values through inventory gestur
   psi = await castAt(game, "ElectroPsi", recycler);
   assert.equal((await game.info()).player.psi_points, psi, "non-rechargeable target refuses");
 
+  const armor = (await game.player.spawnItem(-82)).entity_id; // powered Reflec Armor
+  assert.equal(await property(game, armor, "Energy"), 100);
+  psi = await castAt(game, "ElectroPsi", armor);
+  assert.equal(await property(game, armor, "Energy"), 160,
+    "authored powered equipment without an implant descriptor also recharges");
+  assert.equal((await game.info()).player.psi_points, psi - 3);
+
   const laser = (await game.player.spawnItem(-22)).entity_id;
   await shooter(game);
   await game.input.trigger("EquipLaserPistol"); await game.step({ frames: 3 });
@@ -174,9 +181,7 @@ for (const toolHand of ["right", "left"] as const) {
     await game.step({ frames: 5 });
     const before = (await game.info()).player.stats!.nanites;
     assert.equal(await property(game, patch.id, "StackCount"), 1);
-    await game.input.set(`${toolHand}_hand.trigger`, 1); await game.step({ frames: 2 });
-    await game.input.set(`${toolHand}_hand.trigger`, 0); await game.step({ frames: 2 });
-    assert.equal((await game.info()).player.stats!.nanites, before, "Recycler trigger explains; it does not consume");
+    // Close-contact trigger use is also supported; exercise the feed gesture here.
     await game.input.set(`${targetHand}_hand.squeeze`, 0); await game.step({ frames: 5 });
     assert.equal((await game.info()).player.stats!.nanites, before + 2, "deliberate feed earns authored nanites");
     assert.ok(!(await game.player.inventory()).items.some(i => i.entity_id === patch.id));

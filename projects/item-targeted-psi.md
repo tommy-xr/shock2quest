@@ -35,8 +35,8 @@ These are observations of the installed version, not portable binary addresses.
 
 VR: the amp targets the item in the opposite hand using its ordinary trigger
 charge/release timing. The Recycler instead accepts a deliberate release of
-an item brought close to the hand holding it. Pulling its trigger only explains
-that gesture; incidental contact never consumes an item.
+an item brought close to the hand holding it. The existing close-contact
+trigger gesture also remains available; incidental contact never consumes an item.
 
 Flat: drag an item onto the Recycler, or activate the amp/use the Recycler
 from inventory and choose a target on

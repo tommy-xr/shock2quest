@@ -212,9 +212,10 @@ pub fn resolve(world: &World, request: ItemUse, target: EntityId, roll: i32) -> 
                     return message("This item is already fully charged.");
                 }
                 vec![
-                    Effect::RechargeItemEnergy {
+                    Effect::AdjustEquipmentEnergy {
                         entity_id: target,
-                        level: energy.0 + increment,
+                        amount: energy.0 + increment,
+                        recharge: true,
                     },
                     message("Item recharged."),
                 ]
@@ -477,13 +478,13 @@ mod tests {
         assert!(
             effects(&world, request, target, 1)
                 .iter()
-                .any(|e| matches!(e, Effect::RechargeItemEnergy {level, ..} if *level == 85.0))
+                .any(|e| matches!(e, Effect::AdjustEquipmentEnergy {amount, recharge: true, ..} if *amount == 85.0))
         );
         world.add_component(target, PropEnergy(100.0));
         assert!(
             effects(&world, request, target, 1)
                 .iter()
-                .any(|e| matches!(e, Effect::RechargeItemEnergy {level, ..} if *level == 120.0))
+                .any(|e| matches!(e, Effect::AdjustEquipmentEnergy {amount, recharge: true, ..} if *amount == 120.0))
         );
         world.add_component(target, PropEnergy(120.0));
         assert!(no_payment(&effects(&world, request, target, 1)));
