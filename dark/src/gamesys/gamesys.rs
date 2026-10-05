@@ -2,7 +2,7 @@ use std::io;
 
 use crate::{
     EnvMap, EnvSoundQuery, ResolvedSoundSchema, SoundSchema, SpeechDB, TagDatabase,
-    gamesys::params::{GameParams, HrmParams, SkillParams, TrainerCostTables},
+    gamesys::params::{GameParams, HrmParams, MeleeStrengthParams, SkillParams, TrainerCostTables},
     properties::{LinkDefinition, LinkDefinitionWithData, PropertyDefinition},
     ss2_chunk_file_reader::{self},
     ss2_entity_info::{self, SystemShock2EntityInfo},
@@ -25,6 +25,7 @@ pub struct Gamesys {
     hazard_params: Option<crate::gamesys::HazardParams>,
     /// General gameplay tuning, including the authored Agility speed table.
     game_params: Option<GameParams>,
+    melee_strength_params: Option<MeleeStrengthParams>,
 }
 
 impl Gamesys {
@@ -90,6 +91,10 @@ impl Gamesys {
         self.game_params.as_ref()
     }
 
+    pub fn melee_strength_params(&self) -> Option<&MeleeStrengthParams> {
+        self.melee_strength_params.as_ref()
+    }
+
     pub fn skill_params(&self) -> Option<&SkillParams> {
         self.skill_params.as_ref()
     }
@@ -122,6 +127,7 @@ pub fn read<T: io::Read + io::Seek>(
     let player_pool_params = crate::gamesys::PlayerPoolParams::read(&table_of_contents, reader);
     let hazard_params = crate::gamesys::HazardParams::read(&table_of_contents, reader);
     let game_params = GameParams::read(&table_of_contents, reader);
+    let melee_strength_params = MeleeStrengthParams::read(&table_of_contents, reader);
 
     // Uncomment to output debug info for voices:
     // debug_print_voices(&sound_schema, &speech_db);
@@ -139,5 +145,6 @@ pub fn read<T: io::Read + io::Seek>(
         hazard_params,
         player_pool_params,
         game_params,
+        melee_strength_params,
     }
 }

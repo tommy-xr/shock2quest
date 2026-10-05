@@ -793,13 +793,13 @@ pub(super) fn flat_melee_hit(
             surface_material.and_then(|material| physics.surface_material_name(material)),
         );
         let amount = if crate::psi_sword::active(world, weapon_id) {
-            crate::mission::stim_response::contact_stim_damage_with_bonus(
+            crate::scripts::melee_weapon::authored_template_contact_damage(
                 world,
                 crate::psi_sword::WEAPON,
                 target,
-                crate::scripts::melee_weapon::player_melee_damage_scale(world),
                 bonus,
             )
+            .unwrap_or(0.0)
         } else {
             crate::scripts::melee_weapon::authored_contact_damage(world, weapon_id, target, bonus)
                 .unwrap_or(0.0)

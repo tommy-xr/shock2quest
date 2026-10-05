@@ -82,6 +82,9 @@ async function wrenchHit(game: GameServer): Promise<number> {
   await game.step({ frames: 30 });
   const aim = await game.player.aimAt(hybrid.entity_id, { hitbox: "torso", visibility: "required" });
   assert.equal(aim.entity_id, hybrid.entity_id);
+  // Keep the target alive so HP clamping on death cannot hide a damage bonus.
+  await game.entities.sendMessage(hybrid.entity_id, { type: "Damage", amount: -100 });
+  await game.step({ frames: 1 });
   const before = hitPoints(await game.entities.detail(hybrid.entity_id));
   await pullTrigger(game);
   await game.step({ frames: 60 });
@@ -111,4 +114,22 @@ test("Might increases the damage of a real wrench hit", {
   const baseline = await hit(false);
   const buffed = await hit(true);
   assert.ok(baseline > 0 && buffed > baseline, `Might should improve a real hit: ${baseline} -> ${buffed}`);
+});
+
+// MELEESTR in the 25AE gamesys adds [0,1,2,3,4,6,10,15] HP by effective STR.
+test("trained Strength uses the authored melee bonuses", {
+  skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000,
+}, async () => {
+  async function hit(strength: number): Promise<number> {
+    await using game = await GameServer.launch({ mission: "debug_melee" });
+    await game.step({ frames: 20 });
+    await game.player.setStats({ strength });
+    await game.player.spawnItem(-928);
+    await game.input.trigger("EquipWrench");
+    await game.step({ frames: 5 });
+    return await wrenchHit(game);
+  }
+  const low = await hit(1);
+  const high = await hit(6);
+  assert.equal(high - low, 6, `MELEESTR adds six HP at trained Strength 6: ${low} -> ${high}`);
 });

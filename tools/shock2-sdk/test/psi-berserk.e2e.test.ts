@@ -53,6 +53,9 @@ async function swingOnce(game: GameServer, target: EntityDetailResult): Promise<
   });
   assert.equal(aim.entity_id, target.entity_id, "the crosshair should be on the creature");
 
+  // Avoid clipping the measured damage to this low-HP creature's health.
+  await game.entities.sendMessage(target.entity_id, { type: "Damage", amount: -100 });
+  await game.step({ frames: 1 });
   const before = propOf(await game.entities.detail(target.entity_id), "HitPoints");
   await pullTrigger(game);
   await game.step({ frames: SWING_FRAMES });
@@ -99,6 +102,7 @@ test(
     {
       await using game = await GameServer.launch({ mission: "debug_melee" });
       await game.step({ frames: 20 });
+      await game.player.setStats({ strength: 6 });
       await game.player.spawnItem(WRENCH);
       await wieldWrench(game);
       baseline = await swingOnce(game, await nearestCreature(game));
@@ -109,6 +113,7 @@ test(
     {
       await using game = await GameServer.launch({ mission: "debug_melee" });
       await game.step({ frames: 20 });
+      await game.player.setStats({ strength: 6 });
       await game.player.spawnItem(WRENCH);
       await castBerserk(game);
       await wieldWrench(game);
@@ -119,15 +124,16 @@ test(
         "Berserk should still be running when the blow lands",
       );
       // Hit points are integers, so the authored Wrench blow and its +13%
-      // modifier are compared after rounding. It should also grow strictly.
+      // modifier are compared after rounding. The six-HP MELEESTR bonus
+      // follows source scaling, so Berserk does not multiply it.
       assert.ok(
         buffed > baseline,
         `a berserk swing should hurt more than ${baseline}; got ${buffed}`,
       );
       assert.equal(
         buffed,
-        Math.round(baseline * 1.13),
-        `the blow should scale by the authored +13% (baseline ${baseline})`,
+        Math.round((baseline - 6) * 1.13 + 6),
+        `Berserk scales the stimulus before the STR6 additive bonus (baseline ${baseline})`,
       );
     }
   },
