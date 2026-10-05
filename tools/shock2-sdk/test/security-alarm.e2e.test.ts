@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import { clickUiElement } from "./helpers/ui.js";
+import { winHack } from "./helpers/hack.js";
 import { carriedNaniteTotal } from "./helpers/nanites.js";
 import type { EntityDetailResult, EntitySummary } from "../src/index.js";
 
@@ -118,36 +119,21 @@ test(
 
     const scanPosition = (await game.info()).player.position;
     await game.player.teleport({ x: console_.position[0], y: console_.position[1], z: console_.position[2] - 2 });
-    // Opening the console must not bypass its paid hacking interaction.
+    // Opening resets the alarm for free; timed suppression still requires a paid hack.
     await game.entities.sendMessage(console_.id, { type: "Frob" });
     await game.step({ frames: 10 });
-    assert.ok(await alarm(game), "merely opening security must not clear an alarm");
+    assert.equal(await alarm(game), null, "opening security must clear the alarm");
+    assert.ok(await played(game, "xxalrtov"), "opening should announce the stand-down");
+    assert.ok(!(await played(game, "xxhaksec")), "opening must not announce a successful hack");
+    assert.ok(!(await klaxonLooping(game)), "opening should stop the klaxon");
     const unpaid = (await game.ui.state()).active_panel;
-    assert.ok(unpaid, "security computer should open the existing HRM panel");
-    const start = unpaid.elements.find((e) => e.label === "start-hack");
-    assert.ok(start);
+    assert.ok(unpaid, "security computer should open its station panel");
+    const hack = unpaid.elements.find((element) => element.label === "hack-security");
+    assert.ok(hack, "security station must offer Hack before the paid HRM");
+    await clickUiElement(game, hack);
     const nanitesBefore = await carriedNaniteTotal(game);
-    await clickUiElement(game, start);
+    await winHack(game);
     assert.ok(await carriedNaniteTotal(game) < nanitesBefore, "HRM must charge nanites");
-    // Exercise real node clicks. High provisioned skill removes mines; misses
-    // can block a node, so explore remaining rows rather than inject success.
-    for (let attempt = 0; attempt < 5 && await alarm(game); attempt++) {
-      if (attempt > 0) {
-        const panel = (await game.ui.state()).active_panel;
-        const reset = panel?.elements.find((e) => e.label === "reset-hack");
-        assert.ok(reset, "failed HRM should offer reset");
-        await clickUiElement(game, reset);
-        const startAgain = (await game.ui.state()).active_panel?.elements.find((e) => e.label === "start-hack");
-        if (startAgain) await clickUiElement(game, startAgain);
-      }
-      for (let y = 0; y < 4 && await alarm(game); y++) {
-        for (let x = 0; x < 5 && await alarm(game); x++) {
-          const panel = (await game.ui.state()).active_panel;
-          const node = panel?.elements.find((e) => e.label === `node-${x}-${y}`);
-          if (node) await clickUiElement(game, node);
-        }
-      }
-    }
     await game.step({ frames: 2 });
     assert.equal(await alarm(game), null, "a successful hack should stand security down");
     assert.equal(

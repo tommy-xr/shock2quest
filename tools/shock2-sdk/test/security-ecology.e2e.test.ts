@@ -52,6 +52,7 @@ test(
       mission: "medsci1.mis",
     });
     await game.step({ frames: 10 });
+    const safeStart = (await game.info()).player.position;
 
     const camera = await exactlyOne(game, CAMERA, "security camera");
     const ecology = await exactlyOne(game, ECOLOGY, "security ecology");
@@ -160,7 +161,9 @@ test(
     // deadline: at 110s since the alert was observed at most 112s have
     // elapsed since the alarm (still inside the 120s window), and at 125s at
     // least 125s have (past it, with margin for the expiry-frame Reset).
-    await game.player.teleport({ x: 300, y: 0, z: 300 });
+    // Return to the authored start outside this camera cone. Teleporting
+    // outside the map falls into the void and reloads the mission mid-check.
+    await game.player.teleport({ x: safeStart[0], y: safeStart[1], z: safeStart[2] });
     await step(110 * 60 - framesSinceAlert);
     assert.equal(
       property(await game.entities.detail(ecology.id), "EcologyState"),

@@ -19,8 +19,12 @@ test("Security Expert acquisition preserves retail security-board mines, cost an
     await standNear(game, computer.id);
     await game.entities.sendMessage(computer.id, { type: "Frob" });
     await game.step({ frames: 5 });
-    const panel = (await game.ui.state()).active_panel;
+    let panel = (await game.ui.state()).active_panel;
     assert.equal(panel?.entity_id, computer.id);
+    const hack = panel.elements.find(e => e.label === "hack-security");
+    assert.ok(hack);
+    await clickElement(game, hack);
+    panel = (await game.ui.state()).active_panel!;
     const start = panel.elements.find(e => e.label === "start-hack" || e.label === "reset-hack");
     assert.ok(start);
     const balance = await carriedNaniteTotal(game);
