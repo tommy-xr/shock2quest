@@ -110,7 +110,7 @@ pub fn validate(
         return Err("The weapon must be functional and researched.".into());
     }
     if crate::wielded_weapon::resolve_weapon_target(world, Some(weapon)) != Some(weapon)
-        && !crate::scripts::gui::WeaponSettingsTarget::permits_device_job(world, weapon)
+        && !crate::scripts::gui::WeaponSettingsTarget::permits_panel_job(world, weapon)
     {
         return Err("Wield the weapon to modify it.".into());
     }

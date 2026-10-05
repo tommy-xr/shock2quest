@@ -20,6 +20,7 @@ impl Script for FreeModify {
         Effect::OpenWeaponSettings {
             weapon: None,
             upgrade_device: Some(entity_id),
+            from_inventory: false,
         }
     }
 }

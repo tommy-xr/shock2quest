@@ -24,7 +24,7 @@ pub fn supported(world: &World, weapon: EntityId) -> bool {
 /// be attempted.
 pub fn quote(world: &World, weapon: EntityId) -> Result<PropHackDiff, String> {
     if crate::wielded_weapon::resolve_weapon_target(world, Some(weapon)) != Some(weapon)
-        && !crate::scripts::gui::WeaponSettingsTarget::permits_device_job(world, weapon)
+        && !crate::scripts::gui::WeaponSettingsTarget::permits_panel_job(world, weapon)
     {
         return Err("Wield the weapon to repair it.".into());
     }

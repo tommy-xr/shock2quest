@@ -379,6 +379,13 @@ pub enum Effect {
     OpenWeaponSettings {
         weapon: Option<EntityId>,
         upgrade_device: Option<EntityId>,
+        /// Inventory USE keeps the gun carried instead of equipping it.
+        from_inventory: bool,
+    },
+
+    /// Show the selected held/scanned gun in the existing description reader.
+    OpenWeaponDescription {
+        weapon: EntityId,
     },
 
     /// Eject `entity_id`'s magazine back to the backpack, as clips of the ammo
