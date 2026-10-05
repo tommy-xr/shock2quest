@@ -339,13 +339,31 @@ pub(crate) fn reserve_clip_for_pouch(world: &World, weapon: EntityId) -> Option<
             .min_by_key(|t| if **t == class { 0 } else { 1 })?
     };
     let stock = clip_rounds(world, reserve);
-    let rounds = clips
+    let mut rounds = clips
         .clip_sizes
         .get(&template)
         .copied()
         .unwrap_or(stock)
         .max(1)
         .min(stock);
+    // Size a magazine for the gun, not the original ammo box: a pooled reserve
+    // may still have a six-round box's archetype while holding many magazines.
+    // Top-offs draw only missing rounds; a full gun still offers a spare clip.
+    if let Some(setting) = crate::scripts::script_util::active_gun_setting(world, weapon) {
+        let ammo = world
+            .borrow::<View<PropGunState>>()
+            .ok()
+            .and_then(|states| states.get(weapon).ok().map(|state| state.ammo))
+            .unwrap_or(0);
+        if setting.clip > 0 {
+            let needed = if ammo > 0 && ammo < setting.clip {
+                setting.clip - ammo
+            } else {
+                setting.clip
+            };
+            rounds = stock.min(needed);
+        }
+    }
     (rounds > 0).then_some(PouchClip {
         reserve,
         template,
@@ -661,7 +679,41 @@ mod tests {
     const LARGE_PRISM: i32 = -44;
 
     #[test]
-    fn pouch_offer_respects_selected_ammo_real_stock_and_authored_clip_size() {
+    fn pouch_uses_magazine_capacity_and_stock_regardless_of_box_size() {
+        for (ammo, template, stock, expected) in [
+            (7, STD_CLIP, 2, 2),
+            (1, SMALL_STD_CLIP, 20, 11),
+            (11, SMALL_STD_CLIP, 20, 1),
+            (0, SMALL_STD_CLIP, 20, 12),
+            (12, SMALL_STD_CLIP, 20, 12),
+            (12, STD_CLIP, 20, 12),
+        ] {
+            let mut f = Fixture::new(ammo, 0);
+            f.reserve(template, stock);
+            let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
+            assert_eq!(offer.rounds, expected);
+        }
+    }
+
+    #[test]
+    fn pouch_partial_reload_draws_only_missing_rounds() {
+        let mut f = Fixture::new(7, 0);
+        let reserve = f.reserve(STD_CLIP, 27);
+        let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
+        assert_eq!((offer.rounds, offer.stock), (5, 27));
+        assert_eq!(f.rounds(reserve), 27, "preview must not spend reserve");
+        let held = f.held_clip(offer.template, offer.rounds);
+        let result = load_from_held_clip(&f.world, f.weapon, held, 12);
+        assert_eq!(f.ammo(), 12);
+        assert_eq!(
+            result.depleted_items,
+            vec![held],
+            "top-off leaves no ammo in hand"
+        );
+    }
+
+    #[test]
+    fn pouch_offer_respects_selected_ammo_real_stock_and_magazine_capacity() {
         let mut f = Fixture::new(0, 0);
         assert_eq!(reserve_clip_for_pouch(&f.world, f.weapon), None);
         let standard = f.reserve(STD_CLIP, 27);
@@ -682,13 +734,13 @@ mod tests {
     }
 
     #[test]
-    fn pouch_offer_uses_small_clip_canonical_size_after_a_mission_remap() {
+    fn pouch_offer_preserves_small_clip_canonical_template_after_a_mission_remap() {
         let mut f = Fixture::new(0, 0);
         let clip = f.reserve_with_canonical_template(EARTH_SMALL_STD_CLIP, SMALL_STD_CLIP, 17);
         let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
         assert_eq!(
             (offer.reserve, offer.template, offer.rounds),
-            (clip, SMALL_STD_CLIP, 6)
+            (clip, SMALL_STD_CLIP, 12)
         );
     }
 
@@ -759,6 +811,12 @@ mod tests {
             let player = world.add_entity(());
             let inventory = world.add_entity((Links::empty(),));
             let weapon = world.add_entity((
+                dark::properties::PropBaseGunDesc {
+                    settings: std::array::from_fn(|_| dark::properties::GunSettingDesc {
+                        clip: 12,
+                        ..Default::default()
+                    }),
+                },
                 PropTemplateId {
                     template_id: PISTOL,
                 },

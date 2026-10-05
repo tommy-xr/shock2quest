@@ -73,9 +73,13 @@ The **upper face button** (left **Y** / right **B**) acts on what that hand hold
 | Ammo clip | Swap to the next compatible ammo type in your backpack | — |
 | Empty hand or other item | Open/close the newest unread audio log; replay the latest once all are read | — |
 
-**Weapons and powers.** Reload by taking a clip from the cyber interface's
-inventory strip and bringing it to the gun. Inserting another ammo type returns
-the loaded rounds to your backpack. In the amp's power selector, use that hand's
+**Weapons and powers.** Reload by taking a clip from the belt's ammo pouch or
+the cyber interface's inventory strip and bringing it to the gun. With a
+partially loaded gun in the other hand, the pouch draws at most the missing
+rounds; the rest stay in your backpack. A full gun still offers a spare clip;
+tap the clip hand's upper button (**B** on the right, **Y** on the left) to
+cycle through compatible ammo carried in your backpack. Inserting another ammo
+type returns the loaded rounds to your backpack. In the amp's power selector, use that hand's
 stick up/down for tiers and left/right for purchased powers; confirm with its
 upper button or trigger. Each amp remembers its current and alternate powers.
 

@@ -5891,10 +5891,10 @@ impl MissionCore {
             );
         }
         let merge_returns = std::array::from_fn::<_, 2, _>(|i| {
-            if !matches!(
-                pouch_actions[i],
-                Some(super::ammo_pouch::Action::Return { .. })
-            ) {
+            // Shoulder stows are untargeted deposits too. Reserve a matching
+            // stack before a free cell, just as returning ammo to the pouch
+            // does; otherwise the cell-targeted release bypasses auto-stacking.
+            if !shoulder_releases[i] {
                 return None;
             }
             let inventory = self
@@ -14589,6 +14589,13 @@ impl MissionCore {
             let mut player = self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
             player.left_hand_entity_id = left;
             player.right_hand_entity_id = right;
+        }
+        // Keep the outgoing clip intact until the incoming grab succeeds so
+        // rollback can restore it. Once the swap succeeds, pool its rounds
+        // just like an ordinary backpack deposit instead of leaving a split
+        // pouch clip in a second cell.
+        if let Some(target) = find_mergeable_stack_anywhere(&self.world, inventory, held) {
+            self.merge_dropped_stack(target, held);
         }
         let mut effects = effects;
         effects.push(Effect::PlaySound {
