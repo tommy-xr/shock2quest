@@ -189,9 +189,7 @@ impl FlatPlayerController {
         if uses_scripted_world_frob(world, entity_id) {
             vec![out_message(entity_id, MessagePayload::Frob)]
         } else if is_wieldable_weapon(world, entity_id) {
-            let mut effects = self.wield(entity_id);
-            effects.push(VirtualHandEffect::ReportWorldPickup { entity_id });
-            effects
+            self.wield(entity_id)
         } else {
             vec![VirtualHandEffect::StoreWorldPickup { entity_id }]
         }
@@ -824,7 +822,7 @@ mod tests {
         assert!(
             matches!(
                 effects.as_slice(),
-                [VirtualHandEffect::HoldItem { entity_id }, VirtualHandEffect::ReportWorldPickup { entity_id: reported }] if *entity_id == weapon && *reported == weapon
+                [VirtualHandEffect::HoldItem { entity_id }] if *entity_id == weapon
             ),
             "weapon pickup should preserve flat auto-wield"
         );

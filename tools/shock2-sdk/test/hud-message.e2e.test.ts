@@ -190,12 +190,15 @@ test(
   async () => {
     await using game = await GameServer.launch({ mission: "earth.mis" });
     await game.step({ frames: 5 });
-    const [first] = await game.entities.byTemplate(248);
+    const [first] = await game.entities.byTemplate(249);
     const [second] = await game.entities.byTemplate(247);
     assert.ok(first && second);
     const firstCount = stackCount((await game.entities.detail(first.id)).properties)!;
     const secondCount = stackCount((await game.entities.detail(second.id)).properties)!;
+    const [x, y, z] = (await game.info()).player.position;
     await earthWorldUse(game, first);
+    // Wait out the first message on solid floor; the booth staging spot is not.
+    await game.player.teleport({ x, y, z });
     await game.step({ frames: 301 });
     const since = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
     await earthWorldUse(game, second);

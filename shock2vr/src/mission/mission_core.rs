@@ -17123,10 +17123,16 @@ impl MissionCore {
                 }
                 VirtualHandEffect::HoldItem { entity_id } => {
                     if inventory_transfer_sound(&self.world, entity_id) == "pickup_item" {
-                        deferred.push(crate::scripts::script_util::announce(
-                            entity_id,
-                            "pickup_item",
-                        ));
+                        // A MOVE pickup's feedback already carries the item cue.
+                        let feedback = world_pickup_feedback(&self.world, asset_cache, entity_id);
+                        if feedback.is_empty() {
+                            deferred.push(crate::scripts::script_util::announce(
+                                entity_id,
+                                "pickup_item",
+                            ));
+                        } else {
+                            deferred.extend(feedback);
+                        }
                     }
                     self.thrown_items.cancel(entity_id);
                     self.thrown_items.publish(&self.world, &self.physics);
@@ -17146,14 +17152,6 @@ impl MissionCore {
                         payload: MessagePayload::Hold,
                         to: entity_id,
                     });
-                }
-                VirtualHandEffect::ReportWorldPickup { entity_id } => {
-                    let acquired = self.interaction.is_holding(entity_id)
-                        || crate::scripts::script_util::player_carried_items(&self.world)
-                            .contains(&entity_id);
-                    if acquired {
-                        deferred.extend(world_pickup_feedback(&self.world, asset_cache, entity_id));
-                    }
                 }
                 VirtualHandEffect::HolsterItem { entity_id, slot } => {
                     self.detach_from_containers(entity_id);

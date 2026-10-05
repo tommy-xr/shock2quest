@@ -111,12 +111,6 @@ pub enum VirtualHandEffect {
     HoldItem {
         entity_id: EntityId,
     },
-    /// A successful world-to-hand take. Emitted after HoldItem so
-    /// the mission can show the pickup line and sounds only once possession
-    /// actually changed; equipping or re-storing a carried item never emits it.
-    ReportWorldPickup {
-        entity_id: EntityId,
-    },
     /// Store a world pickup and report only a successful transfer. Unlike a
     /// held pickup, storage can merge and destroy the incoming entity.
     StoreWorldPickup {
@@ -735,7 +729,6 @@ fn handle_empty_hand_state(
             let needs_scripted_frob = target.scripted;
             if Some(entity_id) != held_by_other_hand && target.grabbable {
                 msgs.push(VirtualHandEffect::HoldItem { entity_id });
-                msgs.push(VirtualHandEffect::ReportWorldPickup { entity_id });
 
                 next_hand_state = HandState::Grabbing { entity_id };
             } else if Some(entity_id) != held_by_other_hand
