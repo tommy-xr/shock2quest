@@ -1654,7 +1654,12 @@ fn create_physics_representation_with_options(
             // a posed creature, so it *does* inherit a `PhysType`, but its box
             // is now the whole body and a solid one would fence off the floor
             // around it. Retail lets the player walk over a body.
-            if v_phys_type.get(entity_id).is_err() || v_creature_pose.get(entity_id).is_ok() {
+            if v_phys_type.get(entity_id).is_err() {
+                // No physical model means no contacts with loose items either.
+                // A solid RepBase selection box ejects purchased items from
+                // its hollow hopper into the surrounding brushwork (#1919).
+                frob_group = frob_group.interaction_only();
+            } else if v_creature_pose.get(entity_id).is_ok() {
                 frob_group = frob_group.non_solid_to_characters();
             }
             rigid_body_handle = physics.add_kinematic(
@@ -2787,6 +2792,71 @@ mod tests {
             );
             assert_eq!(bodies[0].blocks_player, should_block);
             assert_eq!(bodies[0].blocks_actor, should_block);
+        }
+    }
+
+    /// RepBase has no PhysType: its broad selection box must not shove a
+    /// purchased item out of the authored hopper and into adjacent brushwork.
+    #[test]
+    fn typeless_frob_bounds_pass_loose_items_but_authored_fixtures_stop_them() {
+        for authored in [false, true] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let fixture = add_wall_fixture(
+                &mut world,
+                authored.then_some(PhysicsModelType::ORIENTED_BOUNDING_BOX),
+            );
+            if authored {
+                world.add_component(
+                    fixture,
+                    PropPhysDimensions {
+                        radius0: 0.0,
+                        radius1: 0.0,
+                        offset0: Vector3::zero(),
+                        offset1: Vector3::zero(),
+                        size: vec3(1.0, 4.0, 0.2),
+                        point_vs_terrain: 0,
+                        point_vs_not_special: 0,
+                    },
+                );
+            }
+            create_physics_representation(
+                &mut world,
+                &mut physics,
+                &Some(&ladder_model()),
+                fixture,
+            )
+            .unwrap();
+            let item = world.add_entity(());
+            let handle = physics.add_dynamic(
+                item,
+                vec3(0.0, 0.0, -1.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                Vector3::zero(),
+                PhysicsShape::Sphere(0.1),
+                CollisionGroup::entity(),
+                false,
+                Default::default(),
+            );
+            physics.set_gravity(item, 0.0);
+            physics.set_velocity(item, vec3(0.0, 0.0, 2.0));
+            let mut player = physics.create_player(vec3(20.0, 20.0, 20.0), world.add_entity(()));
+            for _ in 0..60 {
+                physics.update(Vector3::zero(), &mut player);
+            }
+            let z = physics.get_position(handle).unwrap().z;
+            assert_eq!(z > 0.5, !authored, "authored={authored}, item z={z}");
+            let hit = physics
+                .ray_cast2(
+                    Point3::new(0.5, 0.0, -2.0),
+                    vec3(0.0, 0.0, 1.0),
+                    4.0,
+                    crate::physics::InternalCollisionGroups::ENTITY,
+                    None,
+                    true,
+                )
+                .expect("the fixture must remain frobbable through its selection bounds");
+            assert_eq!(hit.maybe_entity_id, Some(fixture));
         }
     }
 
