@@ -77,10 +77,11 @@ export const MODES = [
     id: "belt",
     title: "Toolbelt",
     blurb: "Your kit lives on your body, where your hands expect it.",
-    hot: { L: ["grip"], R: ["grip"] },
-    clip: null,
+    hot: { L: ["grip"], R: ["trigger", "grip"] },
+    clip: "toolbelt",
     rows: [
-      ["Grip at buckle", "Draw access card — swipe readers"],
+      ["Grip at buckle", "Tricorder — hack, repair, modify"],
+      ["Free hand on its screen", "Trigger to tap, grip to take loot"],
       ["Grip at pouch", "Pull a clip"],
       ["Reach over shoulder, release", "Stow in backpack"],
       ["Grip near other hand", "Pass an item across"],
@@ -95,6 +96,7 @@ export const HERO = "../screenshots/hero/";
 // Camera feeds: [capture, caption].
 export const SHOTS = [
   ["rec1", "Recreation · pistol"],
+  ["toolbelt", "Recreation · tricorder hack"],
   ["hydro1", "Hydroponics · assault rifle"],
   ["ops2", "Operations · psi amp + laser"],
   ["medsci1-melee", "MedSci · pistol + wrench"],
