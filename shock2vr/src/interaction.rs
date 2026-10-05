@@ -313,6 +313,8 @@ pub struct VrInteraction {
     anticipation: [crate::hand_anticipation::HandAnticipation; 2],
     body_anticipation: [Option<EntityId>; 2],
     climb_anticipation: [bool; 2],
+    /// Last anticipation pass's climb reach, kept for the glove glow.
+    climb_reach: [bool; 2],
     ui_point: [bool; 2],
 }
 
@@ -430,6 +432,7 @@ impl VrInteraction {
             anticipation: Default::default(),
             body_anticipation: [None; 2],
             climb_anticipation: [false; 2],
+            climb_reach: [false; 2],
             ui_point: [false; 2],
         }
     }
@@ -531,8 +534,15 @@ impl VrInteraction {
     fn update_anticipation(&mut self, ctx: &InteractionContext) {
         use crate::{hand_anticipation::Target, hand_feedback::HandAffordance};
         use shipyard::{Get, View};
-        // The climb prepass can be skipped during a mantle; never retain its target.
-        let climb = std::mem::take(&mut self.climb_anticipation);
+        // Paused updates skip the climb prepass; keep the last resolved reach
+        // for rendering. A simulated frame consumes the fresh target (or clears
+        // it when a mantle skips the prepass).
+        let climb = if ctx.step_dt > 0.0 {
+            std::mem::take(&mut self.climb_anticipation)
+        } else {
+            self.climb_reach
+        };
+        self.climb_reach = climb;
         for (i, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
             let tracked = ctx.input.pose_tracking.is_none_or(|p| p.head && p.hands[i])
                 && (GripPose {
@@ -546,6 +556,7 @@ impl VrInteraction {
                 || self.body_tool_hands[i]
             {
                 self.anticipation[i] = Default::default();
+                self.climb_reach[i] = false;
                 continue;
             }
             let object = self.body_anticipation[i].or_else(|| hand.nearby_grab_target());
@@ -1829,6 +1840,14 @@ impl PlayerInteraction for VrInteraction {
                 Some((1 - support.primary, grip))
             })
         });
+        // Glove lights are cyan while holding, half intensity while in reach.
+        // Holding comes from the resolved holds, so a blocked pull still shows a catch.
+        let mut climb_lights = self
+            .climb_reach
+            .map(|reach| reach.then_some(crate::hand_glove::HandLight::ClimbReach));
+        for (handedness, _) in self.hand_climb.grips() {
+            climb_lights[handedness as usize] = Some(crate::hand_glove::HandLight::ClimbHeld);
+        }
         for (index, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
             let card_grip = self.body_tool_hands[index]
                 .then(|| self.personal_card_grip(index))
@@ -1858,6 +1877,7 @@ impl PlayerInteraction for VrInteraction {
                 }),
                 self.visual_hands[index],
                 Some(&self.anticipation[index]),
+                climb_lights[index],
                 lighting,
             ));
         }
@@ -1886,25 +1906,6 @@ impl PlayerInteraction for VrInteraction {
                     objs.push(marker);
                 }
             }
-        }
-        // Feedback comes from the resolved holds, never a second proximity
-        // query: a blocked pull still shows a catch; release/break removes it.
-        // Float just above the fist so the glove cannot hide the marker.
-        for (handedness, _) in self.hand_climb.grips() {
-            let hand = match handedness {
-                Handedness::Left => &self.left_hand,
-                Handedness::Right => &self.right_hand,
-            };
-            let mut marker = SceneObject::new(
-                engine::scene::color_material::create(cgmath::vec3(0.0, 1.0, 1.0)),
-                Box::new(engine::scene::cube::create()),
-            );
-            marker.set_transform(
-                cgmath::Matrix4::from_translation(
-                    hand.get_position() + cgmath::vec3(0.0, 0.18, 0.0),
-                ) * cgmath::Matrix4::from_scale(0.03),
-            );
-            objs.push(marker);
         }
         // Labelled as the player's hands: that is what `Game` drops while the
         // pause menu is up (issue #1018), and what `/v1/scene` reports. The
@@ -2327,6 +2328,45 @@ mod tests {
             interaction.hand_feedback_diagnostics()["anticipation"][1]["curls"],
             serde_json::json!([0.0, 0.0, 0.0, 0.0, 0.0])
         );
+    }
+
+    #[test]
+    fn climb_reach_survives_paused_updates_but_clears_when_resuming_or_untracked() {
+        let world = World::new();
+        let physics = PhysicsWorld::new();
+        let mut input = InputContext::default();
+        input.right_hand.rotation = identity();
+        let mut interaction = VrInteraction::new();
+        interaction.right_hand = interaction.right_hand.update_suppressed(
+            vec3(0.0, 0.0, 0.0),
+            identity(),
+            &input.right_hand,
+        );
+        interaction.climb_anticipation = [false, true];
+        interaction.update_anticipation(&context(&world, &physics, &input));
+        assert_eq!(interaction.climb_reach, [false, true]);
+
+        // The paused runtime pumps interaction without a new climb prepass.
+        let mut paused = context(&world, &physics, &input);
+        paused.step_dt = 0.0;
+        for _ in 0..3 {
+            interaction.update_anticipation(&paused);
+            assert_eq!(interaction.climb_reach, [false, true]);
+        }
+
+        // A resumed frame with no target (including a mantle) clears the glow.
+        interaction.update_anticipation(&context(&world, &physics, &input));
+        assert_eq!(interaction.climb_reach, [false; 2]);
+        interaction.climb_anticipation = [false, true];
+        interaction.update_anticipation(&context(&world, &physics, &input));
+        input.pose_tracking = Some(crate::input_context::PoseTracking {
+            head: true,
+            hands: [true, false],
+        });
+        let mut paused = context(&world, &physics, &input);
+        paused.step_dt = 0.0;
+        interaction.update_anticipation(&paused);
+        assert_eq!(interaction.climb_reach, [false; 2]);
     }
 
     #[test]

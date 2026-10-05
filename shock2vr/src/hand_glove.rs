@@ -37,17 +37,31 @@ pub enum HandLight {
     Green,
     Amber,
     Red,
+    /// A climbable hold is within reach: the emissive lights glow half cyan.
+    ClimbReach,
+    /// The hand is holding a climbable hold: the emissive lights glow cyan.
+    ClimbHeld,
 }
 
 impl HandLight {
-    pub const ALL: [Self; 4] = [Self::Off, Self::Green, Self::Amber, Self::Red];
+    pub const ALL: [Self; 6] = [
+        Self::Off,
+        Self::Green,
+        Self::Amber,
+        Self::Red,
+        Self::ClimbReach,
+        Self::ClimbHeld,
+    ];
 
     pub fn tint(self) -> Vector3<f32> {
+        const CLIMB_CYAN: Vector3<f32> = Vector3::new(0.0, 0.7, 0.85);
         match self {
             Self::Off => Vector3::new(0.0, 0.0, 0.0),
             Self::Green => Vector3::new(0.05, 0.85, 0.25),
             Self::Amber => Vector3::new(0.90, 0.55, 0.05),
             Self::Red => Vector3::new(0.90, 0.10, 0.10),
+            Self::ClimbReach => CLIMB_CYAN * 0.5,
+            Self::ClimbHeld => CLIMB_CYAN,
         }
     }
 }
