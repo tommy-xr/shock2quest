@@ -2,15 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { PhysicsBodySummary, UiPanel, Vec3 } from "../src/types.js";
+import type { PhysicsBodySummary, UiPanel } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import {
-  LOOT_PANEL_SIZE_PX as PANEL_SIZE_PX,
-  LOOT_SLOT_CENTER_PX as LOG_SLOT_CENTER_PX,
-  add,
-  aimVrHandAt,
-  quatRotate,
-} from "./helpers/vr-hand.js";
+import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
 // Exact MedSci campaign regression for #921. This uses the authentic production
 // VR chain rather than a debug Frob shortcut:
@@ -31,7 +25,6 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const AMANPOUR_CORPSE = 1680;
 const AMANPOUR_LOG = 1608;
-const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
 
 
 const uiBodies = async (game: GameServer): Promise<PhysicsBodySummary[]> =>
@@ -80,32 +73,13 @@ async function collectAmanpourThroughVrCorpse(game: GameServer): Promise<void> {
   await game.input.set("right_hand.trigger", 0);
   await game.step({ frames: 5 });
 
-  const [corpsePanel] = await uiBodies(game);
-  assert.ok(corpsePanel, "production corpse frob must open its VR loot panel");
-  assert.equal((await uiBodies(game)).length, 1, "only the corpse panel should be open");
-
-  // Invert ProxyGuiScript's world -> normalized-canvas mapping for Contains(0),
-  // the first authored 35x34 slot in the 188x296 corpse canvas.
-  const panelSize: Vec3 = [
-    PANEL_SIZE_PX[0] * GUI_PIXEL_TO_WORLD_SIZE,
-    PANEL_SIZE_PX[1] * GUI_PIXEL_TO_WORLD_SIZE,
-    0,
-  ];
-  const u = LOG_SLOT_CENTER_PX[0] / PANEL_SIZE_PX[0];
-  const v = LOG_SLOT_CENTER_PX[1] / PANEL_SIZE_PX[1];
-  const localSlot: Vec3 = [panelSize[0] * (0.5 - u), panelSize[1] * (0.5 - v), 0];
-  const slotWorld = add(
-    corpsePanel.position,
-    quatRotate(corpsePanel.rotation, localSlot),
-  );
-  const panelAim = await aimVrHandAt(game, slotWorld, 0.35);
-  const hit = await game.raycast({
-    start: panelAim.start,
-    end: panelAim.target,
-    collision_groups: ["ui"],
-    max_distance: 1,
-  });
-  assert.equal(hit.entity_id, corpsePanel.entity_id, "hand ray must hit Log1608's slot");
+  const loot = await game.ui.state();
+  assert.ok(loot.panel_pose);
+  assert.equal((await uiBodies(game)).length, 0, "loot uses the cyber interface");
+  const slot = loot.active_panel?.elements.find(e => e.entity_id === logId && e.kind === "button");
+  assert.ok(slot);
+  const [x, y, w, h] = slot.rect;
+  await aimVrHandAtCanvas(game, loot.panel_pose, [x + w / 2, y + h / 2]);
 
   await game.input.set("right_hand.trigger", 1);
   await game.step({ frames: 2 });
@@ -114,6 +88,8 @@ async function collectAmanpourThroughVrCorpse(game: GameServer): Promise<void> {
   assert.deepEqual((await game.info()).player.collected_logs, [
     { deck: 2, log: 20, read: false },
   ]);
+  await game.input.trigger("LeftHandLowerButton");
+  await game.step({ frames: 10 });
 }
 
 async function assertAmanpourReader(game: GameServer): Promise<UiPanel> {

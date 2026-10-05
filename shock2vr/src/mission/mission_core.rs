@@ -10673,6 +10673,38 @@ impl MissionCore {
                             );
                             self.flat_ui.open(entity)
                         }
+                        crate::PresentationMode::Vr
+                            if ["ContainerScript", "HackableCrate"].iter().any(|script| {
+                                crate::scripts::script_util::entity_has_script(
+                                    &self.world,
+                                    entity,
+                                    script,
+                                )
+                            }) || (crate::scripts::script_util::entity_has_script(
+                                &self.world,
+                                entity,
+                                "CreatureContainer",
+                            ) && crate::scripts::gui::creature_is_lootable(
+                                &self.world,
+                                entity,
+                            )) =>
+                        {
+                            self.gui.close_panel(
+                                &mut self.world,
+                                &mut self.physics,
+                                &mut self.script_world,
+                                &mut self.id_to_physics,
+                            );
+                            if !self.use_mode {
+                                effects.push_front(
+                                    self.enter_use_mode(
+                                        crate::ui::entry_ramp::LOG_READER_ENTRY_EXIT,
+                                    ),
+                                );
+                                self.reset_vr_use_mode_placement();
+                            }
+                            self.flat_ui.open(entity);
+                        }
                         crate::PresentationMode::Vr => {
                             // The other half of "one UI at a time": a world
                             // panel replaces an open log reader, exactly as the

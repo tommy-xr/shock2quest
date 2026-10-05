@@ -16,28 +16,7 @@ use crate::gui;
 
 use crate::scripts::{Effect, MessagePayload};
 
-/// What a panel draws behind its item cells.
-enum PanelBackdrop {
-    /// The original panel bitmap, filling the whole panel.
-    Art(&'static str),
-    /// A bare holographic grid over the item cells and nothing else - no
-    /// backdrop, no chrome (see [`ImageKind::Hologram`]).
-    HologramGrid,
-}
-
-impl PanelBackdrop {
-    /// The bitmap this backdrop draws from.
-    fn texture(&self) -> &str {
-        match self {
-            Self::Art(texture) => texture,
-            Self::HologramGrid => crate::ui::HOLOGRAM_TILE_TEXTURE,
-        }
-    }
-}
-
-/// Which panel this is. The backpack strip looks the same everywhere; a loot
-/// panel is the one thing here that is drawn differently per presentation
-/// (see [`PanelSpec::loot`]).
+/// Backpack and loot share the same MFD canvas in flat and VR.
 enum PanelKind {
     Backpack,
     Loot,
@@ -49,54 +28,25 @@ enum PanelKind {
 /// and the panel's own canvas size - reads this one struct, so nothing
 /// downstream can make a second, disagreeing decision about the panel's shape.
 struct PanelSpec {
-    backdrop: PanelBackdrop,
+    backdrop: &'static str,
     size: Vector2<f32>,
     grid_origin: Vector2<f32>,
     slots: (usize, usize),
 }
 
 impl PanelSpec {
-    /// **The loot panel's one presentation divergence**, deliberately confined
-    /// to this function (AGENTS.md section 3: if a presentation must differ,
-    /// confine it to one named conversion at the boundary and test it).
-    ///
-    /// Flat keeps the original `contain.pcx` MFD: on a 2D HUD the panel is a
-    /// screen widget in a slot the retail art already fills, and its chrome
-    /// (logo, SEARCH tab, backdrop) is what the player expects to see there.
-    /// VR draws the bare hologram grid, because in VR the same canvas hangs in
-    /// the room as a physical object - an opaque bitmap slab beside the corpse
-    /// reads as a billboard, while the grid lets the world show through.
-    ///
-    /// Only the *drawing* differs. Cell pitch, slot count, take-on-click and
-    /// every behavior below are shared, and both presentations lay their items
-    /// out from this struct's `grid_origin`.
-    /// Both arms feed ONE struct literal, so a field added to `PanelSpec`
-    /// cannot be filled in for one presentation and forgotten for the other.
-    fn loot(is_vr: bool) -> PanelSpec {
-        let (backdrop, grid_origin, height) = if is_vr {
-            (
-                PanelBackdrop::HologramGrid,
-                HOLOGRAM_GRID_ORIGIN,
-                HOLOGRAM_GRID_ORIGIN.y + SLOT_PITCH.y * LOOT_SLOTS.1 as f32 + LOOT_GRID_MARGIN,
-            )
-        } else {
-            (
-                PanelBackdrop::Art("contain.pcx"),
-                LOOT_ART_GRID_ORIGIN,
-                LOOT_ART_HEIGHT,
-            )
-        };
+    fn loot() -> PanelSpec {
         PanelSpec {
-            backdrop,
-            size: Vector2::new(LOOT_PANEL_WIDTH, height),
-            grid_origin,
+            backdrop: "contain.pcx",
+            size: Vector2::new(LOOT_PANEL_WIDTH, LOOT_ART_HEIGHT),
+            grid_origin: LOOT_ART_GRID_ORIGIN,
             slots: LOOT_SLOTS,
         }
     }
 
     fn backpack() -> PanelSpec {
         PanelSpec {
-            backdrop: PanelBackdrop::Art("invback.pcx"),
+            backdrop: "invback.pcx",
             size: Vector2::new(635.0, 120.0),
             grid_origin: BACKPACK_GRID_ORIGIN,
             slots: (15, 3),
@@ -151,14 +101,6 @@ pub(crate) fn creature_is_lootable(world: &World, entity_id: EntityId) -> bool {
 /// 35px apart horizontally and 34px apart vertically.
 const SLOT_PITCH: Vector2<f32> = Vector2::new(35.0, 34.0);
 
-/// Top-left of the VR hologram grid. That panel is nothing but the grid, so
-/// this is a plain margin: horizontally centered in the 188px width the flat
-/// MFD slot reserves, with [`LOOT_GRID_TOP_MARGIN`] above it.
-const HOLOGRAM_GRID_ORIGIN: Vector2<f32> = Vector2::new(
-    (LOOT_PANEL_WIDTH - SLOT_PITCH.x * LOOT_SLOTS.0 as f32) / 2.0,
-    LOOT_GRID_TOP_MARGIN,
-);
-
 /// Top-left of the flat panel's 4x4 item grid, in `contain.pcx` pixels. Its
 /// cell separators run at x = 13 + 35n and y = 150 + 34n; both are 2px wide,
 /// so this is flush with the first cell's interior horizontally and one row
@@ -174,15 +116,6 @@ const LOOT_PANEL_WIDTH: f32 = 188.0;
 
 /// Cells in the loot grid.
 const LOOT_SLOTS: (usize, usize) = (4, 4);
-
-/// Breathing room below the VR hologram grid, so its outer separators are not
-/// flush with the panel edge.
-const LOOT_GRID_MARGIN: f32 = 8.0;
-
-/// Clearance above the VR hologram grid: the panel's host draws a close button
-/// hugging the top-right corner (21px tall at y=8), and a grid tucked under it
-/// would hand that corner cell's clicks to the close button.
-const LOOT_GRID_TOP_MARGIN: f32 = 34.0;
 
 /// Top-left of the backpack strip's 15x3 item grid, in `invback.pcx` pixels:
 /// separators at x = 2 + 35n and y = 15 + 34n, so this sits 2px inside the
@@ -273,32 +206,21 @@ impl ContainerGui {
         }
     }
 
-    /// This panel's style and geometry for the running presentation.
-    /// Read off the world so the panel's style follows the running
-    /// presentation rather than whatever mode the script was constructed under.
-    fn spec(&self, world: &World) -> PanelSpec {
-        // The handheld screen owns the same retail canvas as the flat MFD.
-        // World-space loot panels retain their transparent grid.
-        self.spec_for(
-            crate::mission::presentation_is_vr(world)
-                && !crate::mission::mfd_device::screen_active(world),
-        )
+    fn spec(&self, _world: &World) -> PanelSpec {
+        self.spec_for()
     }
 
-    fn spec_for(&self, is_vr: bool) -> PanelSpec {
+    fn spec_for(&self) -> PanelSpec {
         match self.kind {
             PanelKind::Backpack => PanelSpec::backpack(),
-            PanelKind::Loot => PanelSpec::loot(is_vr),
+            PanelKind::Loot => PanelSpec::loot(),
         }
     }
 
     fn config_for_spec(&self, spec: &PanelSpec) -> GuiConfig {
         GuiConfig {
-            // The player backpack canvas is presented by its host (today
-            // the use-mode strip / cyber-interface panel) at viewing height;
-            // applying the object-panel lift again would put it above the
-            // player's comfortable field of view. Loot panels remain lifted
-            // beside their physical host.
+            // MFD hosts position the canvas themselves; keep the legacy
+            // object offset only for callers that request a world transform.
             world_offset: Vector3::new(0.0, if self.take_on_click { 1.0 } else { 0.0 }, 0.0),
             screen_size_in_pixels: spec.size,
         }
@@ -350,25 +272,11 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             return Vec::new();
         }
         let spec = self.spec(world);
-        let mut components: Vec<GuiComponent<ContainerGuiMsg>> = vec![match &spec.backdrop {
-            PanelBackdrop::Art(_) => gui::image(spec.backdrop.texture())
+        let mut components = vec![
+            gui::image(spec.backdrop)
                 .with_position(vec2(0.0, 0.0))
                 .with_size(spec.size),
-            // One hologram cell per item cell, drawn over the item grid only:
-            // the panel has no backdrop of its own, so the world shows through
-            // between the lines.
-            PanelBackdrop::HologramGrid => gui::image(spec.backdrop.texture())
-                .with_hologram(spec.slots.0 as u8, spec.slots.1 as u8)
-                // Fully opaque: the grid's own translucency is in its alpha,
-                // and `gui::image`'s 0.5 default would otherwise halve the
-                // lines in VR while the flat host draws them at full strength.
-                .with_alpha(1.0)
-                .with_position(spec.grid_origin)
-                .with_size(vec2(
-                    SLOT_PITCH.x * spec.slots.0 as f32,
-                    SLOT_PITCH.y * spec.slots.1 as f32,
-                )),
-        }];
+        ];
 
         // Resolve the usable grid once in panel pixels. Both flat and VR
         // presentations consume this same component list, so blocked-cell and
@@ -480,14 +388,9 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
         components
     }
 
-    /// The trait's world-less fallback, which can only answer **flat** - it
-    /// has no world to read the presentation from. Every runtime path resolves
-    /// through [`Gui::get_config_for`] instead (`gui::gui_script` calls only
-    /// that), so nothing in VR gets flat geometry this way; a new world-less
-    /// caller would, which is why anything needing a loot panel's real size
-    /// must take a `&World`.
+    /// Every presentation uses the same retail canvas geometry.
     fn get_config(&self) -> GuiConfig {
-        self.config_for_spec(&self.spec_for(false))
+        self.config_for_spec(&self.spec_for())
     }
 
     fn get_config_for(
@@ -1074,11 +977,11 @@ mod tests {
                 (&world, container, item),
                 vec2(15.0, 153.0),
             ),
-            // VR's hologram panel is nothing but the grid, centered.
+            // VR uses the same MFD grid.
             (
                 ContainerGui::loot_container(),
                 (&vr_world, vr_container, vr_item),
-                vec2(24.0, 34.0),
+                vec2(15.0, 153.0),
             ),
             (
                 ContainerGui::inv_container(),
@@ -1106,11 +1009,9 @@ mod tests {
         }
     }
 
-    /// The deliberate presentation divergence (AGENTS.md section 3): flat draws
-    /// the retail `contain.pcx` MFD, VR draws the bare hologram grid. Negative
-    /// half first - neither may draw the other's backdrop.
+    /// Both VR hosts present the same retail canvas as flatscreen.
     #[test]
-    fn a_loot_panel_keeps_the_retail_art_in_flat_and_the_hologram_in_vr() {
+    fn a_loot_panel_uses_the_same_retail_art_in_flat_and_vr() {
         let (flat_world, flat_container, ..) = loot_world();
         let (mut vr_world, vr_container, ..) = loot_world();
         present_in_vr(&mut vr_world);
@@ -1133,14 +1034,10 @@ mod tests {
         };
 
         assert_eq!(backdrop(&flat_world, flat_container), "contain.pcx");
-        assert_eq!(
-            backdrop(&vr_world, vr_container),
-            crate::ui::HOLOGRAM_TILE_TEXTURE
-        );
+        assert_eq!(backdrop(&vr_world, vr_container), "contain.pcx");
     }
 
-    /// The panel's canvas follows its style: flat is the full authored art,
-    /// VR is only as tall as the grid.
+    /// Both presentations preserve the complete authored MFD canvas.
     #[test]
     fn a_loot_panels_canvas_matches_the_style_it_draws() {
         let (flat_world, container, ..) = loot_world();
@@ -1152,11 +1049,7 @@ mod tests {
         let vr = gui.get_config_for(vr_container, &vr_world, &ContainerGuiState {});
 
         assert_eq!(flat.screen_size_in_pixels, vec2(188.0, 296.0));
-        assert_eq!(vr.screen_size_in_pixels.x, 188.0);
-        assert!(
-            vr.screen_size_in_pixels.y < flat.screen_size_in_pixels.y,
-            "the hologram panel is only as tall as its grid"
-        );
+        assert_eq!(vr.screen_size_in_pixels, flat.screen_size_in_pixels);
         assert_eq!(
             flat.world_offset, vr.world_offset,
             "only the drawing differs - placement is shared"
@@ -1170,7 +1063,7 @@ mod tests {
         world.add_unique(crate::mission::mfd_device::ScreenActive(true));
         let gui = ContainerGui::loot_container();
         let spec = gui.spec(&world);
-        assert_eq!(spec.backdrop.texture(), "contain.pcx");
+        assert_eq!(spec.backdrop, "contain.pcx");
         assert_eq!(spec.grid_origin, LOOT_ART_GRID_ORIGIN);
         assert_eq!(
             gui.get_config_for(container, &world, &ContainerGuiState {})
@@ -1181,10 +1074,7 @@ mod tests {
             .borrow::<shipyard::UniqueViewMut<crate::mission::mfd_device::ScreenActive>>()
             .unwrap()
             .0 = false;
-        assert_eq!(
-            gui.spec(&world).backdrop.texture(),
-            crate::ui::HOLOGRAM_TILE_TEXTURE
-        );
+        assert_eq!(gui.spec(&world).backdrop, "contain.pcx");
     }
 
     #[test]
@@ -1253,7 +1143,7 @@ mod tests {
             ContainerGui::loot_container(),
             ContainerGui::inv_container(),
         ] {
-            let backdrop = gui.spec(&world).backdrop.texture().to_owned();
+            let backdrop = gui.spec(&world).backdrop.to_owned();
             let components = gui.get_components(&cursor, container, &world, &ContainerGuiState {});
             let kinds: Vec<ImageKind> = components
                 .iter()

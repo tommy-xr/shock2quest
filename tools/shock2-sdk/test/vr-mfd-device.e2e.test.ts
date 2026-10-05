@@ -266,7 +266,7 @@ test("MFD screen ignores a gun hand while its trigger and face button still work
 });
 
 
-test("drawing the device replaces a world quad and hand frobs stay on its screen", {
+test("loot uses the cyber interface or held device without a world quad", {
   skip: !enabled, timeout: 180_000,
 }, async () => {
   await using game = await GameServer.launch({ mission: "earth.mis", port: 0,
@@ -288,7 +288,10 @@ test("drawing the device replaces a world quad and hand frobs stay on its screen
     await game.step({ frames: 8 });
   }
   await frob();
-  assert.ok(await uiBodies() > 0, "ordinary hand frob opens a world quad");
+  assert.equal(await uiBodies(), 0, "ordinary loot frob has no world quad");
+  assert.equal((await game.ui.state()).mode, "use");
+  await game.input.trigger("LeftHandLowerButton");
+  await game.step({ frames: 10 });
   await drawPersonalCard(game, "left");
   await game.input.set("left_hand.position", [-.4, .1, -.4]);
   await game.step({ frames: 3 });

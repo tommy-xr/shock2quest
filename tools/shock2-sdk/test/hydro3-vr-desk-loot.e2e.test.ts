@@ -2,30 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { Vec3 } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { LOOT_PANEL_SIZE_PX as PANEL_SIZE_PX, add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
+import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
-// Production-VR regression for #1100. Hydro3 mission Desk #2 (2116) has an
-// authored desk_sd OBB and Contains the deck-3/log-16 Audio Log (200) in its
-// third row. Before the fix the panel plane rendered inside the desk mesh:
-// that row's y=1.671..1.807 span is below the desk top at y=1.809, so the
-// desk's own geometry buried the panel and it z-fought/occluded rather than
-// showing (clickable via #1115's host-bypass hit-testing, but not visible).
-//
-// #1115 already fixed hit-testing (a panel bypasses its own host collider),
-// so this no longer asserts on a raw nearest-hit raycast against world
-// geometry - that guards physics, not what the player sees. Instead it
-// asserts the player-observable outcomes: the buried row is still clickable
-// end-to-end (aim + trigger collects it), and the panel's rendered quads
-// report the render-over-everything overlay layer rather than the ordinary
-// world layer that would let the desk occlude them (see `GuiManager` in
-// `shock2vr/src/gui/gui_manager.rs`).
+// A wide desk must not occlude its loot. The cyber-interface MFD owns the
+// complete container canvas and its input, including lower rows.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const HYDRO3_DESK_2 = 2116;
 const HYDRO3_AUDIO_LOG = 200;
-const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
 
 test(
   "Hydro3 Desk #2 draws log 200 over its collider and lets the production VR hand collect it",
@@ -81,46 +66,14 @@ test(
     );
     assert.ok(logButton, "the third loot row must render Audio Log 200");
 
-    // Visual claim: the open panel's quads must be on the depth-bypass
-    // overlay layer (`scene_ui`), the same "draw over the world" layer the
-    // per-eye HUD/viewmodel use - not the ordinary `world` layer a wide host
-    // like Desk #2 can depth-test in front of and bury. Every panel element
-    // (background, row art, text, cursor) becomes at least one opaque quad,
-    // so opening the panel must add at least that many scene_ui objects, and
-    // none of them may be the see-through-the-world default (depth_write
-    // false would mean the panel could show the desk drawn through it).
-    const sceneUiAfterOpen = (await game.scene.objects()).objects.filter(
-      (object) => object.render_layer === "scene_ui",
-    );
-    assert.ok(
-      sceneUiAfterOpen.length >= panelState.elements.length,
-      `opening Desk #2's panel must add at least ${panelState.elements.length} scene_ui objects, got ${sceneUiAfterOpen.length}`,
-    );
-    assert.ok(
-      sceneUiAfterOpen.every((object) => object.depth_write),
-      "every panel quad must write depth so it still self-occludes correctly, just not against the world",
-    );
+    const ui = await game.ui.state();
+    assert.ok(ui.panel_pose);
+    assert.equal(ui.mode, "use");
+    const panelBodies = (await game.physics.bodies()).bodies.filter(body => body.collision_groups.includes("ui"));
+    assert.equal(panelBodies.length, 0, "loot must not create a third world panel");
+    const [x, y, w, h] = logButton.rect;
+    await aimVrHandAtCanvas(game, ui.panel_pose, [x + w / 2, y + h / 2]);
 
-    const panelBodies = (await game.physics.bodies()).bodies.filter((body) =>
-      body.collision_groups.includes("ui"),
-    );
-    assert.equal(panelBodies.length, 1, "exactly one world panel should be open");
-    const panel = panelBodies[0];
-    const [x, y, width, height] = logButton.rect;
-    const u = (x + width / 2) / PANEL_SIZE_PX[0];
-    const v = (y + height / 2) / PANEL_SIZE_PX[1];
-    const panelSize: Vec3 = [
-      PANEL_SIZE_PX[0] * GUI_PIXEL_TO_WORLD_SIZE,
-      PANEL_SIZE_PX[1] * GUI_PIXEL_TO_WORLD_SIZE,
-      0,
-    ];
-    const localLog: Vec3 = [panelSize[0] * (0.5 - u), panelSize[1] * (0.5 - v), 0];
-    const logWorld = add(panel.position, quatRotate(panel.rotation, localLog));
-    await aimVrHandAt(game, logWorld, 0.35);
-
-    // The buried row is still clickable end-to-end through the production
-    // hand path (#1115's host-bypass hit-testing) - the point of this
-    // regression is that it is now also visible, asserted above.
     await game.input.set("right_hand.trigger", 1);
     await game.step({ frames: 2 });
     await game.input.set("right_hand.trigger", 0);

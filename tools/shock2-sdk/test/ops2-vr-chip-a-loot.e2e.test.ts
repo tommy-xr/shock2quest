@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { PhysicsBodySummary, Vec3 } from "../src/types.js";
+import type { PhysicsBodySummary } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
+import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
@@ -12,10 +12,6 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const RED_ASSASSIN = 254;
 const CHIP_A = 554;
 const EXPERIENCE_TRAP = 1089;
-const PANEL_SIZE_PX: Vec3 = [188, 296, 0];
-const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
-const FIRST_LOOT_SLOT_CENTER_PX: Vec3 = [15 + 35 / 2, 153 + 34 / 2, 0];
-
 const uiBodies = async (game: GameServer): Promise<PhysicsBodySummary[]> =>
   (await game.physics.bodies()).bodies.filter((body) =>
     body.collision_groups.includes("ui"),
@@ -77,22 +73,13 @@ test(
     await triggerClick(game);
 
     const panels = await uiBodies(game);
-    assert.equal(panels.length, 1, "trigger-frobbing the corpse must open one VR loot panel");
-    const panel = panels[0];
-
-    // Invert ProxyGuiScript's panel mapping for the center of the first loot
-    // slot. Chip A is the corpse's sole contained item, so ContainerGui packs
-    // its real button into this authored cell.
-    const panelSize: Vec3 = [
-      PANEL_SIZE_PX[0] * GUI_PIXEL_TO_WORLD_SIZE,
-      PANEL_SIZE_PX[1] * GUI_PIXEL_TO_WORLD_SIZE,
-      0,
-    ];
-    const u = FIRST_LOOT_SLOT_CENTER_PX[0] / PANEL_SIZE_PX[0];
-    const v = FIRST_LOOT_SLOT_CENTER_PX[1] / PANEL_SIZE_PX[1];
-    const localSlot: Vec3 = [panelSize[0] * (0.5 - u), panelSize[1] * (0.5 - v), 0];
-    const slotWorld = add(panel.position, quatRotate(panel.rotation, localSlot));
-    await aimVrHandAt(game, slotWorld, 0.35);
+    assert.equal(panels.length, 0, "corpse loot must use the cyber-interface MFD");
+    const ui = await game.ui.state();
+    const slot = ui.active_panel?.elements.find(e => e.entity_id === chip.id && e.kind === "button");
+    assert.ok(slot);
+    assert.ok(ui.panel_pose);
+    const [x, y, w, h] = slot.rect;
+    await aimVrHandAtCanvas(game, ui.panel_pose, [x + w / 2, y + h / 2]);
     await triggerClick(game);
 
     const inventory = await game.player.inventory();
@@ -122,7 +109,7 @@ test(
 
     // Repeating the same production trigger edge over the now-empty slot must
     // neither duplicate the item nor re-award the destroyed one-shot trap.
-    await aimVrHandAt(game, slotWorld, 0.35);
+    await aimVrHandAtCanvas(game, ui.panel_pose, [x + w / 2, y + h / 2]);
     await triggerClick(game);
     assert.equal((await game.info()).player.stats?.cyber_modules, 10);
     assert.equal(
