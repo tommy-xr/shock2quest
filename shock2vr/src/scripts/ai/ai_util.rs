@@ -506,7 +506,10 @@ pub fn fire_ranged_weapon(
                 position: point3(0.0, 0.0, 0.0),
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
                 root_transform: projectile_transform,
-                options: CreateEntityOptions::default(),
+                options: CreateEntityOptions {
+                    launch_projectile: true,
+                    ..CreateEntityOptions::default()
+                },
             });
 
             fire_effects.push(play_positional_sound(
@@ -652,7 +655,10 @@ pub fn fire_ranged_projectile(
                 position: point3(0.0, 0.0, 0.0),
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
                 root_transform: projectile_transform,
-                options: CreateEntityOptions::default(),
+                options: CreateEntityOptions {
+                    launch_projectile: true,
+                    ..CreateEntityOptions::default()
+                },
             },
             projectile_launch_sound(world, projectile_id, muzzle_position.to_vec()),
         ])
