@@ -300,5 +300,17 @@ test(
       ),
       `loaded corpse changed behavior, pose, or position: ${JSON.stringify(loadedStates)}`,
     );
+
+    // A restored corpse no longer has the live creature-capsule component.
+    // Saving it again must retain the capsule already stored in its death pose.
+    assert.ok((await game.save(saveName)).success);
+    assert.ok((await game.load(saveName)).success);
+    const resaved = (await game.entities.list({ filter: "OG-Pipe", limit: 50 })).entities
+      .find(entity => entity.template_id === monster.template_id &&
+        distance3(entity.position, savedCorpse.position) < 0.02);
+    assert.ok(resaved, "the corpse survives a second save/load");
+    const resavedBodies = await game.physics.bodies({ entityId: resaved.id });
+    assert.equal(resavedBodies.bodies.length, 1);
+    assert.equal(resavedBodies.bodies[0].mass, savedBody.mass, "re-saving preserves the fitted capsule");
   },
 );

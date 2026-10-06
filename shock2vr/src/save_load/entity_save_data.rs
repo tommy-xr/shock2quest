@@ -507,8 +507,13 @@ mod tests {
     }
 
     #[test]
-    fn death_pose_round_trip_preserves_the_live_floor_depth() {
-        let pose = RuntimePropDeathPose::new("resolved_death".to_owned(), Some(-1.6));
+    fn death_pose_round_trip_preserves_live_floor_depth_and_capsule() {
+        let mut pose = RuntimePropDeathPose::new("resolved_death".to_owned(), Some(-1.6));
+        pose.capsule = Some(crate::runtime_props::RuntimePropCreatureCapsule {
+            center_y: -0.25,
+            height: 2.2,
+            radius: 0.3,
+        });
 
         let encoded = serde_json::to_string(&pose).unwrap();
         let decoded: RuntimePropDeathPose = serde_json::from_str(&encoded).unwrap();

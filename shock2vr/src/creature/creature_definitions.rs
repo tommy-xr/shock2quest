@@ -454,6 +454,7 @@ mod tests {
             crate::runtime_props::RuntimePropCreatureCapsule {
                 center_y: -0.5,
                 height: 2.6,
+                radius: 0.3,
             },
         );
         world.add_component(
@@ -461,6 +462,7 @@ mod tests {
             crate::runtime_props::RuntimePropCreatureCapsule {
                 center_y: 1.0,
                 height: 2.6,
+                radius: 0.3,
             },
         );
         assert_eq!(sense_offset(&world, human).y, 0.0);
