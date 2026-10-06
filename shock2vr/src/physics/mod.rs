@@ -10316,19 +10316,59 @@ mod tests {
             world.rigid_body_set[handle].set_linvel(vector![3.0, 0.0, 0.0], true);
             let mut player =
                 world.create_player(vec3(30.0, 5.0, 0.0), EntityId::from_inner(7004).unwrap());
-            // PhysicsWorld uses 120 Hz substeps; allow two seconds for the
-            // shot to reach and settle against the wall three units away.
-            step(&mut world, &mut player, 240);
-            let x = world.rigid_body_set[handle].translation().x;
+            // Observe the first physical contact, where the script would slay
+            // the shot. Letting this script-free physics fixture keep running
+            // instead bounces off the wall's authored restitution.
+            let mut first_contact = None;
+            for frame in 0..240 {
+                let (_, events) = world.update(vec3(0.0, 0.0, 0.0), &mut player);
+                for event in events {
+                    if let CollisionEvent::CollisionStarted {
+                        entity1_id,
+                        entity2_id,
+                        ..
+                    } = event
+                    {
+                        let other = if entity1_id == shot {
+                            Some(entity2_id)
+                        } else if entity2_id == shot {
+                            Some(entity1_id)
+                        } else {
+                            None
+                        };
+                        if let Some(other) = other {
+                            first_contact =
+                                Some((other, frame, world.rigid_body_set[handle].translation().x));
+                            break;
+                        }
+                    }
+                }
+                if first_contact.is_some() {
+                    break;
+                }
+            }
+            let (other, frame, x) =
+                first_contact.expect("shot must reach a solid terminal surface");
             if excluded {
+                assert_eq!(
+                    other, wall,
+                    "exempt shield must produce no contact, first at frame {frame}, x={x}"
+                );
                 assert!(
                     x > 2.5 && x < 3.0,
-                    "must pass shield and stop at ordinary wall: {x}"
+                    "first ordinary wall contact must occur at its face: {x}"
                 );
                 world.remove(shot);
                 assert!(world.ignored_collision_pairs.is_empty());
             } else {
-                assert!(x < 1.0, "ordinary projectile must still hit shield: {x}");
+                assert_eq!(
+                    other, shield,
+                    "ordinary projectile must contact shield first"
+                );
+                assert!(
+                    x > 0.5 && x < 1.0,
+                    "first shield contact must occur at its face: {x}"
+                );
             }
         }
     }
