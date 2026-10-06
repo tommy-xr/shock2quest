@@ -46,9 +46,8 @@ function drawsAt(objects: SceneObjectSummary[], panel: Vec3): SceneObjectSummary
 }
 
 /**
- * Locate the right forearm's ammo panel: the biggest cluster of `player_hands`
- * draws worn near the right hand (the hand/arm meshes and the left BIOFULL
- * panel sit elsewhere). Only valid while the readout has something to say -
+ * Locate the right forearm's six-element ammo panel, excluding the larger
+ * watch bands and the glove mesh. Only valid while the readout has something to say -
  * the point of calling it is to pin the panel's origin, which stays put as
  * long as the hand pose does.
  */
@@ -58,7 +57,7 @@ async function locateForearmPanel(game: GameServer, rightHand: Vec3): Promise<Ve
   );
   const best = near
     .map((object) => object.position)
-    .sort((a, b) => drawsAt(near, b).length - drawsAt(near, a).length)[0];
+    .find(position => drawsAt(near, position).length === 6);
   assert.ok(best, "the right forearm should be wearing a panel");
   return best;
 }
@@ -107,13 +106,13 @@ test(
     );
 
     // 2. The forearm panel composites the live readout on the backdrop: round
-    //    count + ammo icon + type label. Before the fix the readout resolved to
+    //    count, ammo icon, condition badge, type and mode. Before the fix it resolved to
     //    nothing and only the backdrop drew.
     const panel = await locateForearmPanel(game, rightHand);
     assert.equal(
       await forearmAmmoDraws(game, panel),
-      4,
-      "backdrop + round count + ammo icon + type label",
+      6,
+      "plate + round count + ammo icon + condition + type + mode",
     );
 
     // 3. The readout is live: what it reports tracks the clip as rounds are
@@ -134,7 +133,7 @@ test(
     );
     assert.equal(
       await forearmAmmoDraws(game, panel),
-      4,
+      6,
       "the readout stays on the forearm while firing",
     );
 
@@ -169,14 +168,14 @@ test(
       "CycleAmmo advances the right hand's weapon to its next type (was a no-op)",
     );
 
-    // 6. Dropping it puts the forearm back to the bare backdrop.
+    // 6. Empty hands no longer carry an ammo panel.
     await game.input.set("right_hand.squeeze", 0.0);
     await game.step({ frames: 10 });
     assert.equal((await game.info()).player.right_hand_entity_id, null, "pistol dropped");
     assert.equal(
       await forearmAmmoDraws(game, panel),
-      1,
-      "an empty hand leaves the bare AMMOFULL backdrop",
+      0,
+      "an empty hand hides the ammo panel",
     );
   },
 );
