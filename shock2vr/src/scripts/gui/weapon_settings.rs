@@ -11,11 +11,8 @@
 //! The canvas is presentation-agnostic - placement is decided once here, in
 //! panel pixels (AGENTS.md section 3), and `FlatUiHost` presents that one
 //! component list in flat's MFD slot and in VR's cyber-interface panel slot
-//! alike. What VR does not have yet is a *way in*: the forearm readout draws no
-//! buttons, because the VR pointer only ever reaches the cyber-interface panel
-//! and never the forearm quad. When that readout gains its buttons, its SETTING
-//! button emits the same `Effect::OpenWeaponSettings` and this panel works with
-//! no further wiring.
+//! alike. An empty hand's trigger click on a gun in the VR cyber inventory
+//! opens this panel for that carried gun without equipping it.
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::PropGunState;
@@ -83,6 +80,9 @@ const MOD_LEVEL_Y: f32 = ROWS[0].y - 50.0;
 /// the hit test takes the last match, so the overlap resolves to UNLOAD - the
 /// control actually drawn there.
 const UNLOAD_RECT: Rect = Rect::new(23.0, 278.0, 142.0, 22.0);
+/// Accessory/description controls above the retail modify/repair plug.
+const SIDECAR_RECT: Rect = Rect::new(179.0, 8.0, 73.0, 282.0);
+const INFO_RECT: Rect = Rect::new(186.0, 64.0, 66.0, 22.0);
 
 const BACKDROP: &str = "iface/settings.pcx";
 
@@ -99,6 +99,7 @@ const UNLOAD_LABEL: &str = "unload";
 pub(crate) struct WeaponSettingsTarget {
     entity: Option<EntityId>,
     scanned: bool,
+    inventory: bool,
     upgrade_device: Option<EntityId>,
 }
 
@@ -114,6 +115,7 @@ impl WeaponSettingsTarget {
         *world.borrow::<shipyard::UniqueViewMut<Self>>().unwrap() = Self {
             entity: Some(weapon),
             scanned: false,
+            inventory: false,
             upgrade_device: None,
         };
     }
@@ -126,18 +128,44 @@ impl WeaponSettingsTarget {
             .scanned = true;
     }
 
-    /// Only the active device's explicitly scanned, still-nearby gun may
-    /// bypass wielding. Skill, condition, cost and HRM outcome checks still run.
-    pub(crate) fn permits_device_job(world: &World, weapon: EntityId) -> bool {
+    pub(crate) fn select_inventory(world: &World, weapon: EntityId) {
+        Self::select(world, weapon);
+        world
+            .borrow::<shipyard::UniqueViewMut<Self>>()
+            .unwrap()
+            .inventory = true;
+    }
+
+    pub(crate) fn is_carried_gun(world: &World, weapon: EntityId) -> bool {
+        world
+            .borrow::<View<PropGunState>>()
+            .is_ok_and(|guns| guns.get(weapon).is_ok())
+            && !crate::wielded_weapon::is_psi_amp(world, weapon)
+            && script_util::player_carried_items(world).contains(&weapon)
+    }
+
+    pub(crate) fn is_inventory_target(world: &World, weapon: EntityId) -> bool {
         world
             .borrow::<shipyard::UniqueView<Self>>()
-            .is_ok_and(|selection| selection.scanned)
+            .is_ok_and(|selection| selection.inventory)
+            && Self::resolve(world) == Some(weapon)
+    }
+
+    /// Only the selected carried inventory gun or active device's nearby
+    /// scanned gun may bypass wielding. All skill, condition and cost checks remain.
+    pub(crate) fn permits_panel_job(world: &World, weapon: EntityId) -> bool {
+        world
+            .borrow::<shipyard::UniqueView<Self>>()
+            .is_ok_and(|selection| selection.scanned || selection.inventory)
             && Self::resolve(world) == Some(weapon)
     }
 
     fn resolve(world: &World) -> Option<EntityId> {
         let selection = *world.borrow::<shipyard::UniqueView<Self>>().ok()?;
         let target = selection.entity?;
+        if selection.inventory {
+            return Self::is_carried_gun(world, target).then_some(target);
+        }
         if selection.scanned {
             if !crate::mission::mfd_device::screen_active(world) {
                 return None;
@@ -190,13 +218,6 @@ fn plug_for(
     }
 }
 
-/// Whether `weapon` can ever raise a plug. Unlike `plug_for` this does not
-/// flip with the gun's condition, so the canvas width stays fixed while the
-/// panel is open (a repair win on an unmodifiable gun removes its plug).
-fn has_plug_room(world: &World, weapon: EntityId) -> bool {
-    weapon_repair::supported(world, weapon) || weapon_modification::supported(world, weapon)
-}
-
 /// What the open HRM board is doing to the gun.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum HrmJob {
@@ -238,6 +259,7 @@ pub enum WeaponSettingsGuiMsg {
     CancelUpgrade,
     UpgradePayment(Payment),
     SetAccessory(crate::weapon_upgrades::WeaponAccessory, bool),
+    Description,
     Repair,
     Board(KeyPadMsg),
 }
@@ -406,15 +428,15 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 WeaponUpgrade::Flashlight,
                 crate::weapon_upgrades::WeaponAccessory::Flashlight,
                 "toggle_flashlight",
-                "Flashlight",
-                24.0,
+                "Light",
+                8.0,
             ),
             (
                 WeaponUpgrade::Laser,
                 crate::weapon_upgrades::WeaponAccessory::Laser,
                 "toggle_laser",
                 "Laser",
-                50.0,
+                36.0,
             ),
         ] {
             if upgrades.has(choice) {
@@ -422,8 +444,8 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 components.extend(upgrade_chooser::button(
                     WeaponSettingsGuiMsg::SetAccessory(accessory, !on),
                     label,
-                    &format!("{name}: {}", if on { "ON" } else { "OFF" }),
-                    Rect::new(20.0, y, 136.0, 22.0),
+                    &format!("{name} {}", if on { "ON" } else { "OFF" }),
+                    Rect::new(186.0, y, 66.0, 22.0),
                     on,
                     cursor,
                 ));
@@ -493,6 +515,14 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             ));
         }
 
+        components.extend(upgrade_chooser::button(
+            WeaponSettingsGuiMsg::Description,
+            "description",
+            "Info",
+            INFO_RECT,
+            false,
+            cursor,
+        ));
         if shows_unload(world, weapon) {
             components.push(
                 gui::button(WeaponSettingsGuiMsg::Unload)
@@ -520,8 +550,8 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         }
     }
 
-    /// A gun with a plug widens the canvas for it for as long as the panel is
-    /// open - board included - so the VR quad never resizes mid-session.
+    /// Keep the side controls' width through boards and repair outcomes, so
+    /// the VR quad never resizes mid-session.
     fn get_config_for(
         &self,
         _entity_id: EntityId,
@@ -530,9 +560,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
     ) -> GuiConfig {
         let mut config = self.get_config();
         // A lost repair board was dealt beside a repair plug, so it has room.
-        if lost_repair(state)
-            || WeaponSettingsTarget::resolve(world).is_some_and(|w| has_plug_room(world, w))
-        {
+        if lost_repair(state) || WeaponSettingsTarget::resolve(world).is_some() {
             config.screen_size_in_pixels.x = hrm_plug::CANVAS_W;
         }
         config
@@ -549,13 +577,11 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         if lost_repair(state) {
             return Some(plug_sidecar(false));
         }
-        let weapon = WeaponSettingsTarget::resolve(world)?;
-        if !has_plug_room(world, weapon) {
-            return None;
-        }
-        Some(plug_sidecar(
-            state.board.is_none() && state.chooser.is_none() && plug_for(world, weapon).is_some(),
-        ))
+        WeaponSettingsTarget::resolve(world)?;
+        Some(PanelSidecar {
+            body_width: PANEL_W,
+            rect: (state.board.is_none() && state.chooser.is_none()).then_some(SIDECAR_RECT),
+        })
     }
 
     fn handle_msg(
@@ -733,6 +759,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 setting: *setting,
             },
             WeaponSettingsGuiMsg::Unload => Effect::UnloadWeapon { entity_id: weapon },
+            WeaponSettingsGuiMsg::Description => Effect::OpenWeaponDescription { weapon },
             _ => Effect::NoEffect,
         };
         (state.clone(), effect)
@@ -859,18 +886,18 @@ mod tests {
             .right_hand_entity_id = None;
         world.add_unique(crate::mission::mfd_device::ScreenActive(true));
         assert!(
-            !WeaponSettingsTarget::permits_device_job(&world, gun),
+            !WeaponSettingsTarget::permits_panel_job(&world, gun),
             "an ordinary selection cannot authorize a world gun"
         );
         WeaponSettingsTarget::select_scanned(&world, gun);
-        assert!(WeaponSettingsTarget::permits_device_job(&world, gun));
+        assert!(WeaponSettingsTarget::permits_panel_job(&world, gun));
         let other = world.add_entity(());
-        assert!(!WeaponSettingsTarget::permits_device_job(&world, other));
+        assert!(!WeaponSettingsTarget::permits_panel_job(&world, other));
         world
             .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
             .unwrap()
             .pos = vec3(0.0, 0.0, 10.0);
-        assert!(!WeaponSettingsTarget::permits_device_job(&world, gun));
+        assert!(!WeaponSettingsTarget::permits_panel_job(&world, gun));
         world
             .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
             .unwrap()
@@ -879,7 +906,7 @@ mod tests {
             .borrow::<shipyard::UniqueViewMut<crate::mission::mfd_device::ScreenActive>>()
             .unwrap()
             .0 = false;
-        assert!(!WeaponSettingsTarget::permits_device_job(&world, gun));
+        assert!(!WeaponSettingsTarget::permits_panel_job(&world, gun));
     }
 
     /// A Broken gun raises the repair plug in the modify plug's place, and
@@ -1141,7 +1168,11 @@ mod tests {
         world.add_component(weapon, PropObjState(ObjectState::Normal));
         assert_eq!(width(&world), hrm_plug::CANVAS_W);
         let sidecar = WeaponSettingsGui.sidecar(EntityId::dead(), &world, &state);
-        assert_eq!(sidecar.map(|s| s.rect), Some(None), "no plug to click");
+        assert_eq!(
+            sidecar.map(|s| s.rect),
+            Some(Some(SIDECAR_RECT)),
+            "description remains available"
+        );
     }
 
     #[test]
@@ -1182,6 +1213,44 @@ mod tests {
             .left_hand_entity_id = None;
         assert!(matches!(click(), Effect::NoEffect));
         assert!(labels(&components(&world)).is_empty());
+    }
+
+    #[test]
+    fn inventory_selection_stays_bound_without_equipping_and_expires_when_removed() {
+        let (mut world, weapon) = pistol_world(0);
+        let other = world.add_entity((gun_state(0, 0),));
+        let inventory = {
+            let mut player = world
+                .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+                .unwrap();
+            player.right_hand_entity_id = Some(other);
+            player.inventory_entity_id
+        };
+        world.add_component(
+            inventory,
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(dark::properties::WrappedEntityId(weapon)),
+                    link: Link::Contains(0),
+                }],
+            },
+        );
+        assert!(!WeaponSettingsTarget::permits_panel_job(&world, weapon));
+        WeaponSettingsTarget::select_inventory(&world, weapon);
+        assert_eq!(WeaponSettingsTarget::resolve(&world), Some(weapon));
+        assert!(WeaponSettingsTarget::permits_panel_job(&world, weapon));
+        assert!(!WeaponSettingsTarget::permits_panel_job(&world, other));
+        assert_eq!(
+            world
+                .borrow::<shipyard::UniqueView<PlayerInfo>>()
+                .unwrap()
+                .right_hand_entity_id,
+            Some(other)
+        );
+        world.add_component(inventory, Links::empty());
+        assert_eq!(WeaponSettingsTarget::resolve(&world), None);
+        assert!(!WeaponSettingsTarget::permits_panel_job(&world, weapon));
     }
 
     fn components(world: &World) -> Vec<GuiComponent<WeaponSettingsGuiMsg>> {
@@ -1421,6 +1490,32 @@ mod tests {
             effect,
             Effect::UnloadWeapon { entity_id } if entity_id == weapon
         ));
+    }
+
+    #[test]
+    fn description_opens_for_the_selected_gun_and_its_side_button_is_hittable() {
+        let (world, weapon) = pistol_world(0);
+        let state = WeaponSettingsGuiState::default();
+        let (_, effect) = WeaponSettingsGui.handle_msg(
+            EntityId::dead(),
+            &world,
+            &state,
+            &WeaponSettingsGuiMsg::Description,
+        );
+        assert!(
+            matches!(effect, Effect::OpenWeaponDescription { weapon: target } if target == weapon)
+        );
+        let sidecar = WeaponSettingsGui
+            .sidecar(EntityId::dead(), &world, &state)
+            .unwrap()
+            .rect
+            .unwrap();
+        assert!(sidecar.contains(vec2(INFO_RECT.x + 1.0, INFO_RECT.y + 1.0)));
+        assert!(sidecar.contains(vec2(
+            INFO_RECT.x + INFO_RECT.w - 1.0,
+            INFO_RECT.y + INFO_RECT.h - 1.0
+        )));
+        assert!(labels(&components(&world)).contains(&"description".to_owned()));
     }
 
     #[test]

@@ -6665,6 +6665,7 @@ impl MissionCore {
                         effects.push(Effect::OpenWeaponSettings {
                             weapon: Some(entity),
                             upgrade_device: None,
+                            from_inventory: false,
                         });
                     } else {
                         self.flat_ui.utilities.inspect_entity(entity);
@@ -6886,7 +6887,12 @@ impl MissionCore {
                 crate::wielded_weapon::held_in_hand(&self.world, opened_for).then_some(opened_for),
                 self.entity_exists(opened_for),
             );
-            let dismiss = put_away && !self.flat_ui.device;
+            let dismiss = put_away
+                && !self.flat_ui.device
+                && !crate::scripts::gui::WeaponSettingsTarget::is_inventory_target(
+                    &self.world,
+                    opened_for,
+                );
             if !super::synthetic_panels::retain_docked(&mut self.flat_ui, panel, dismiss) {
                 self.weapon_settings_gun = None;
             }
@@ -7035,11 +7041,12 @@ impl MissionCore {
         self.refresh_readouts();
         if !self.flat_ui.device
             && self.weapon_settings_gun.is_some_and(|gun| {
-                crate::scripts::gui::should_close_settings_panel(
-                    gun,
-                    self.flat_ui.ammo_selection().0,
-                    self.entity_exists(gun),
-                )
+                !crate::scripts::gui::WeaponSettingsTarget::is_inventory_target(&self.world, gun)
+                    && crate::scripts::gui::should_close_settings_panel(
+                        gun,
+                        self.flat_ui.ammo_selection().0,
+                        self.entity_exists(gun),
+                    )
             })
         {
             let panel = self
@@ -8920,6 +8927,27 @@ impl MissionCore {
     ) -> Vec<Effect> {
         use crate::mission::flat_ui_host::FlatUiDragAction;
         match action {
+            FlatUiDragAction::UseInventory(entity_id) => {
+                if !self.player_is_alive()
+                    || !crate::scripts::script_util::player_carried_items(&self.world)
+                        .contains(&entity_id)
+                {
+                    return Vec::new();
+                }
+                if crate::scripts::gui::WeaponSettingsTarget::is_carried_gun(&self.world, entity_id)
+                {
+                    vec![Effect::OpenWeaponSettings {
+                        weapon: Some(entity_id),
+                        upgrade_device: None,
+                        from_inventory: true,
+                    }]
+                } else {
+                    vec![crate::scripts::maintenance::use_carried_item(
+                        &self.world,
+                        entity_id,
+                    )]
+                }
+            }
             FlatUiDragAction::Maintain { tool, target } => {
                 vec![Effect::ApplyItemTool {
                     tool,
@@ -8991,6 +9019,7 @@ impl MissionCore {
                     ReadoutButton::GunSetting => vec![Effect::OpenWeaponSettings {
                         weapon,
                         upgrade_device: None,
+                        from_inventory: false,
                     }],
                     ReadoutButton::Reload => vec![Effect::ReloadWeapon { weapon }],
                     ReadoutButton::PsiTierPrev => step(PsiSelectionAxis::Tier, false),
@@ -10468,6 +10497,7 @@ impl MissionCore {
                 Effect::OpenWeaponSettings {
                     weapon,
                     upgrade_device,
+                    from_inventory,
                 } => {
                     let weapon = if upgrade_device.is_some() {
                         weapon
@@ -10501,10 +10531,9 @@ impl MissionCore {
                             }
                         }
                     }
-                    // The MFD presents the *wielded* gun, so it opens only with
-                    // one in hand and is remembered so it can be dismissed when
-                    // that gun is put away. Unbound: the host is synthetic, so
-                    // there is no world object to walk away from.
+                    // Readouts select held guns; inventory USE selects a carried
+                    // gun without equipping it. Remember which selection opened
+                    // this synthetic panel so losing that item dismisses it.
                     //
                     // The panel slot has to actually be presented, or this would
                     // dock a panel nothing draws and nothing can dismiss. Flat
@@ -10515,7 +10544,16 @@ impl MissionCore {
                         == crate::PresentationMode::Flat
                         || self.use_mode
                         || self.flat_ui.device;
-                    let target = if self.flat_ui.device {
+                    let target = if from_inventory {
+                        weapon.filter(|gun| {
+                            self.player_is_alive()
+                                && self.use_mode
+                                && crate::scripts::gui::WeaponSettingsTarget::is_carried_gun(
+                                    &self.world,
+                                    *gun,
+                                )
+                        })
+                    } else if self.flat_ui.device {
                         weapon
                     } else {
                         crate::wielded_weapon::resolve_weapon_target(&self.world, weapon)
@@ -10527,7 +10565,12 @@ impl MissionCore {
                             .map(|panel| panel.0);
                         if let Ok(panel) = panel {
                             self.flat_ui.open_unbound(panel);
-                            if self.flat_ui.device {
+                            if from_inventory {
+                                crate::scripts::gui::WeaponSettingsTarget::select_inventory(
+                                    &self.world,
+                                    weapon,
+                                );
+                            } else if self.flat_ui.device {
                                 crate::scripts::gui::WeaponSettingsTarget::select_scanned(
                                     &self.world,
                                     weapon,
@@ -10548,6 +10591,24 @@ impl MissionCore {
                             });
                             self.weapon_settings_gun = Some(weapon);
                         }
+                    }
+                }
+
+                Effect::OpenWeaponDescription { weapon } => {
+                    if self.player_is_alive()
+                        && (game_options.presentation_mode == crate::PresentationMode::Flat
+                            || self.use_mode
+                            || self.flat_ui.device)
+                        && (crate::wielded_weapon::resolve_weapon_target(&self.world, Some(weapon))
+                            .is_some()
+                            || crate::scripts::gui::WeaponSettingsTarget::permits_panel_job(
+                                &self.world,
+                                weapon,
+                            ))
+                    {
+                        self.flat_ui.close();
+                        self.weapon_settings_gun = None;
+                        self.flat_ui.utilities.inspect_entity(weapon);
                     }
                 }
 

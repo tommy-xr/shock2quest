@@ -90,6 +90,8 @@ pub enum FlatUiDragAction {
     Place(EntityId),
     Throw(EntityId),
     Wield(EntityId),
+    /// VR trigger uses the item in place; squeeze remains the grab gesture.
+    UseInventory(EntityId),
     Maintain {
         tool: EntityId,
         target: EntityId,
@@ -1348,6 +1350,28 @@ impl FlatUiHost {
         // GUIHover. ---
         if over_strip {
             self.hover_close = false;
+            // VR has a separate squeeze for pickup. A free hand's trigger
+            // therefore uses the item instead of starting the mouse drag.
+            if pointer.bare_view == BareViewPress::Ignore {
+                if pressed_edge {
+                    let action = crate::wielded_weapon::held_by_hand(world, pointer.hand)
+                        .is_none()
+                        .then(|| self.strip_item_at(canvas_pos))
+                        .flatten()
+                        .map(FlatUiDragAction::UseInventory);
+                    return (Vec::new(), action.into_iter().collect());
+                }
+                return (
+                    vec![gui_hover(
+                        self.strip.as_ref().unwrap().entity,
+                        strip_rect.unwrap(),
+                        canvas_pos,
+                        false,
+                        pointer,
+                    )],
+                    Vec::new(),
+                );
+            }
             if pressed_edge {
                 if let Some(item) = self.strip_item_at(canvas_pos) {
                     // An always-collected item is never carried on the cursor:
@@ -3966,33 +3990,39 @@ mod tests {
         vr_canvas_pointer(&pass, &input)
     }
 
-    /// The bridge's core claim: a controller aimed at an inventory slot lands
-    /// on that slot's canvas pixels, and a trigger pull there lifts the item
-    /// onto the cursor - the same drag the flat mouse drives.
     #[test]
-    fn a_controller_aimed_at_a_slot_lifts_its_item() {
-        let (world, mut host, wrench, _inv) = drag_world();
-        // Slot 0's center on the shared canvas (as the flat drag tests use).
-        let slot = (23.5, 34.0);
+    fn an_empty_controller_uses_a_slot_once_without_lifting_it() {
+        for hand in [Handedness::Left, Handedness::Right] {
+            let (world, mut host, item, _) = drag_world();
+            let slot = Some((23.5, 34.0));
+            host.update_canvas(&world, Some(vr_pointer(hand, slot, 0.0, 0.0)));
+            let (_, actions) = host.update_canvas(&world, Some(vr_pointer(hand, slot, 1.0, 0.0)));
+            assert_eq!(actions, vec![FlatUiDragAction::UseInventory(item)]);
+            assert!(host.cursor_debug().is_none());
+            let (_, repeated) = host.update_canvas(&world, Some(vr_pointer(hand, slot, 1.0, 0.0)));
+            assert!(repeated.is_empty(), "held trigger cannot repeat USE");
+        }
+    }
 
-        let idle = vr_pointer(Handedness::Right, Some(slot), 0.0, 0.0);
-        let landed = idle.canvas_pos.expect("the ray should land on the panel");
-        assert!(
-            (landed.x - slot.0).abs() < 1.0 && (landed.y - slot.1).abs() < 1.0,
-            "the ray must land on the slot it was aimed at, got {:?}",
-            landed
-        );
-        host.update_canvas(&world, Some(idle));
-        assert!(host.cursor_debug().is_none(), "hovering must not lift");
-
-        host.update_canvas(
-            &world,
-            Some(vr_pointer(Handedness::Right, Some(slot), 1.0, 0.0)),
-        );
-        let cursor = host
-            .cursor_debug()
-            .expect("the trigger should lift the item");
-        assert_eq!(cursor.entity_id, wrench.inner() as i32);
+    #[test]
+    fn an_occupied_hand_cannot_trigger_inventory_use() {
+        let (mut world, mut host, item, inventory) = drag_world();
+        let player = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: Some(item),
+            right_hand_entity_id: Some(item),
+            inventory_entity_id: inventory,
+        });
+        for hand in [Handedness::Left, Handedness::Right] {
+            let slot = Some((23.5, 34.0));
+            host.update_canvas(&world, Some(vr_pointer(hand, slot, 0.0, 0.0)));
+            let (_, actions) = host.update_canvas(&world, Some(vr_pointer(hand, slot, 1.0, 0.0)));
+            assert!(actions.is_empty());
+            assert!(host.cursor_debug().is_none());
+        }
     }
 
     /// The interface canvas carries the use-mode readouts, so the VR panel
@@ -4057,54 +4087,30 @@ mod tests {
         );
     }
 
-    /// Rule 6 of the vr-ui-design skill: a trigger already held as the
-    /// interface opens must not read as a click on whatever the ray first
-    /// crosses. Without `guard_held_press` the very first frame lifts an item.
     #[test]
-    fn a_trigger_held_when_the_interface_opens_does_not_lift() {
-        let (world, mut host, _wrench, _inv) = drag_world();
-        let slot = (23.5, 34.0);
+    fn an_existing_trigger_pull_cannot_use_an_inventory_item() {
+        let (world, mut host, item, _) = drag_world();
+        let slot = Some((23.5, 34.0));
         host.guard_held_press();
-
-        host.update_canvas(
-            &world,
-            Some(vr_pointer(Handedness::Right, Some(slot), 1.0, 0.0)),
-        );
+        let (_, actions) =
+            host.update_canvas(&world, Some(vr_pointer(Handedness::Right, slot, 1.0, 0.0)));
         assert!(
-            host.cursor_debug().is_none(),
-            "a carried-over press must not lift an item"
+            actions.is_empty(),
+            "opening under a held trigger must not USE"
         );
-
-        // Releasing and pulling again is a real click.
-        host.update_canvas(
-            &world,
-            Some(vr_pointer(Handedness::Right, Some(slot), 0.0, 0.0)),
-        );
-        host.update_canvas(
-            &world,
-            Some(vr_pointer(Handedness::Right, Some(slot), 1.0, 0.0)),
-        );
-        assert!(
-            host.cursor_debug().is_some(),
-            "a fresh pull after release must lift"
-        );
-    }
-
-    /// A press that starts off-panel and sweeps onto a slot while still held
-    /// is not a fresh edge: the pass reports the trigger even with nothing on
-    /// the panel, so the host has already swallowed it.
-    #[test]
-    fn a_press_swept_on_from_off_panel_does_not_lift() {
-        let (world, mut host, _wrench, _inv) = drag_world();
+        host.update_canvas(&world, Some(vr_pointer(Handedness::Right, slot, 0.0, 0.0)));
+        let (_, actions) =
+            host.update_canvas(&world, Some(vr_pointer(Handedness::Right, slot, 1.0, 0.0)));
+        assert_eq!(actions, vec![FlatUiDragAction::UseInventory(item)]);
+        host.update_canvas(&world, Some(vr_pointer(Handedness::Right, None, 0.0, 0.0)));
         host.update_canvas(&world, Some(vr_pointer(Handedness::Right, None, 1.0, 0.0)));
-        host.update_canvas(
-            &world,
-            Some(vr_pointer(Handedness::Right, Some((23.5, 34.0)), 1.0, 0.0)),
-        );
+        let (_, actions) =
+            host.update_canvas(&world, Some(vr_pointer(Handedness::Right, slot, 1.0, 0.0)));
         assert!(
-            host.cursor_debug().is_none(),
-            "a press carried in from off-panel must not lift an item"
+            actions.is_empty(),
+            "sweeping a held trigger onto the panel must not USE"
         );
+        assert!(host.cursor_debug().is_none());
     }
 
     /// An untracked controller (the zero quaternion) reports no point at all,

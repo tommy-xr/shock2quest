@@ -1115,6 +1115,11 @@ The cyber interface's left and right paperdoll arm wells show the corresponding
 holstered items. They are read-only storage indicators; the weapon selectors
 below still operate on the items actually held in each hand.
 
+In the VR cyber interface, an empty hand’s trigger click uses an inventory item.
+Using a gun opens its settings, repair/modify controls, and Info without equipping
+it. Squeeze still grabs the item; flatscreen double-click still equips weapons.
+The handheld tricorder does not stop a gun in the other hand from firing.
+
 Author an item's placement with `cargo dx ui --holster atek_w` (or
 `cargo run -p dark_explorer -- ui --holster atek_w`). VR Setup → **Holster**
 previews the item inside the new shell; adjust position in centimetres,

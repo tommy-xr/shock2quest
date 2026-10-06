@@ -256,7 +256,7 @@ pub(crate) fn set_enabled(
     enabled: bool,
 ) {
     if !crate::wielded_weapon::held_in_hand(world, weapon)
-        && !crate::scripts::gui::WeaponSettingsTarget::permits_device_job(world, weapon)
+        && !crate::scripts::gui::WeaponSettingsTarget::permits_panel_job(world, weapon)
     {
         return;
     }
