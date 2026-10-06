@@ -20,14 +20,22 @@ for (const vr of [false, true]) for (const template of ranged) {
       await game.step({ frames: 5 });
       const raw = await property(game, gun, "GunDescription");
       const base = JSON.parse(raw).settings;
+      const innateAlternate = template === -27 || template === -29;
+      const choices = ["ExtendedCapacity", innateAlternate ? "LowMaintenanceI" : "AlternateFire"];
       const ammo = ammoOf(await game.entities.detail(gun));
       await game.input.trigger("CycleGunSetting"); await game.step({ frames: 2 });
-      assert.equal((await game.info()).player.wielded_gun_setting, 0, "alternate mode starts locked");
-      for (const choice of ["ExtendedCapacity", "AlternateFire"]) {
+      assert.equal((await game.info()).player.wielded_gun_setting, innateAlternate ? 1 : 0,
+        "biological alternate modes are innate; manufactured modes start locked");
+      if (innateAlternate) {
+        await game.input.trigger("CycleGunSetting"); await game.step({ frames: 2 });
+      }
+      for (const choice of choices) {
         const device = await game.player.spawnItem(-1488);
         await game.entities.sendMessage(device.entity_id, { type: "Frob" }); await game.step({ frames: 20 });
         const elements = (await game.ui.state()).active_panel!.elements;
         assert.equal(elements.some(e => e.label === "upgrade_Silencer"), template === -17 || template === -18);
+        if (innateAlternate) assert.ok(!elements.some(e => e.label === "upgrade_AlternateFire"),
+          "an innate mode cannot consume an upgrade slot");
         await clickUpgradeControl(game, `upgrade_${choice}`);
         if (template === -25) {
           assert.ok((await game.ui.state()).active_panel!.elements.some(e => e.text?.includes("Stasis duration unchanged")));
@@ -57,7 +65,7 @@ for (const vr of [false, true]) for (const template of ranged) {
       await game.save(save); await game.load(save); await game.step({ frames: 3 });
       const player = (await game.info()).player;
       gun = (vr ? player.right_hand_entity_id : player.wielded_entity_id)!;
-      assert.deepEqual(JSON.parse(await property(game, gun, "WeaponUpgrades")).choices, ["ExtendedCapacity", "AlternateFire"]);
+      assert.deepEqual(JSON.parse(await property(game, gun, "WeaponUpgrades")).choices, choices);
       assert.equal(JSON.parse(await property(game, gun, "EffectiveGunSetting")).clip, base[1].clip * 2);
     });
 }
