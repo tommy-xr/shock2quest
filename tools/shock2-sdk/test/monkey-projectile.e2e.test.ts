@@ -10,7 +10,11 @@ test("Survive pyrotechnic monkey launches its inactive projectile template", {
   await game.devParams.set("horde_start_wave", 6);
   await game.devParams.set("cheat", 1);
   await game.player.teleport({ x: 0, y: 21.044, z: 24 });
-  await game.step({ frames: 3600 });
+  // Enter the target wave explicitly: this scenario verifies projectiles,
+  // and must not depend on the configurable preparation time before wave 6.
+  await game.step({ frames: 1 });
+  await game.input.trigger("DebugStartHordeWave");
+  await game.step({ frames: 1 });
   const cleared = new Set<number>();
   let monkey: EntitySummary | undefined;
   // Wave 6 guarantees a red monkey. Clear earlier spawns at their distant

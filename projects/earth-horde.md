@@ -4,7 +4,7 @@ Run `cargo dbgr --mission earth_horde` (or launch that mission in the desktop ru
 
 The player starts at the top of the stairs, facing the subway gravshaft.
 
-Ten escalating waves have about 26 minutes of minimum scheduled combat and rest. Clearing enemies can take longer. After the final wave, use the ready button beside the shops to begin optional endless play. The same button skips a rest. The training trigger graph is disabled. The original training doors remain sealed; OS rewards are available from the landing bank.
+Ten escalating waves have 38.5 minutes of minimum scheduled combat and rest. Clearing enemies can take longer. Rest starts at 90 seconds and adds 10 seconds per completed wave, capped at 180 seconds; the initial preparation delay is 90 seconds. The diagnostic `earth_horde_test` alias keeps its eight-second rests. After the final wave, use the ready button beside the shops to begin optional endless play. The same button skips a rest. The training trigger graph is disabled. The original training doors remain sealed; OS rewards are available from the landing bank.
 
 The starter backpack contains a wrench, pistol, psi amp, ammunition and medical/psi supplies. Three shops are spread across the street; four trainers are spread around the subway. Buy psi tiers and individual powers separately; only powers supported by the current runtime are sold. Replicated items dispense in front of the machines. Random equipment and currency supplement normal enemy loot and wave rewards.
 

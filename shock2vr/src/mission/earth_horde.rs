@@ -789,7 +789,11 @@ impl HordeDirector {
         if self.quick { 3 } else { FINAL_WAVE }
     }
     fn rest_seconds(&self) -> f32 {
-        if self.quick { 8.0 } else { 60.0 }
+        if self.quick {
+            8.0
+        } else {
+            (90.0 + 10.0 * self.wave as f32).min(180.0)
+        }
     }
     fn quota(&self) -> u32 {
         if self.quick {
@@ -1391,17 +1395,26 @@ mod tests {
     }
 
     #[test]
-    fn normal_wave_clear_gives_a_full_minute() {
-        let mut director = HordeDirector {
-            initialized: true,
-            wave: 1,
-            ..Default::default()
-        };
-        director.clear_wave();
-        assert_eq!(director.clock, 60.0);
-        tick(&mut director, &World::new(), 59.0);
-        assert_eq!(director.phase, Phase::Rest);
-        assert_eq!(director.clock, 1.0);
+    fn normal_wave_clear_scales_rest_and_caps_at_three_minutes() {
+        for (wave, seconds) in [
+            (1, 100.0),
+            (2, 110.0),
+            (8, 170.0),
+            (9, 180.0),
+            (11, 180.0),
+            (100, 180.0),
+        ] {
+            let mut director = HordeDirector {
+                initialized: true,
+                wave,
+                ..Default::default()
+            };
+            director.clear_wave();
+            assert_eq!(director.clock, seconds);
+            tick(&mut director, &World::new(), seconds - 1.0);
+            assert_eq!(director.phase, Phase::Rest);
+            assert_eq!(director.clock, 1.0);
+        }
     }
 
     /// Each wave opens with the centered card, not just a status line.
@@ -1896,14 +1909,15 @@ mod tests {
     }
 
     #[test]
-    fn full_run_has_twenty_six_minutes_of_minimum_scheduled_time() {
+    fn full_run_sums_each_scaled_rest_and_assault() {
         let mut director = HordeDirector::default();
-        let mut seconds = FINAL_WAVE as f32 * director.rest_seconds();
+        let mut seconds = 0.0;
         for wave in 1..=FINAL_WAVE {
+            seconds += director.rest_seconds();
             director.wave = wave;
             seconds += director.assault_seconds();
         }
-        assert_eq!(seconds, 26.0 * 60.0);
+        assert_eq!(seconds, 38.5 * 60.0);
         assert_eq!(asset_mission("EARTH_HORDE"), "earth.mis");
         assert_eq!(asset_mission("medsci1.mis"), "medsci1.mis");
     }
