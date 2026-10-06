@@ -13,6 +13,14 @@ test(
       mission: "debug_turret",
     });
 
+    const [turret] = await game.entities.byTemplate(-168);
+    assert.ok(turret, "the debug scene's laser turret");
+    const [x, y, z] = (await game.entities.detail(turret.id)).position;
+    // Turrets face model -X. This scene mounts it at 180 degrees, so stand
+    // on its +X side inside the authored detection cone, above the floor.
+    await game.player.teleport({ x: x + 4, y: y + 1, z });
+    await game.step({ frames: 30 });
+
     const hpBefore = (await game.info()).player.hit_points;
     assert.ok(hpBefore !== null, "debug player should expose hit points");
 
