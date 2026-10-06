@@ -30,7 +30,10 @@ for (const vr of [false, true]) for (const row of cases) {
       await game.step({ frames: 3 });
     }
     if (row.setting) {
-      await unlockWeaponAlternateFire(game);
+      // Biological weapons have innate alternate modes.
+      if (row.weaponTemplate !== -27 && row.weaponTemplate !== -29) {
+        await unlockWeaponAlternateFire(game);
+      }
       await game.input.trigger("CycleGunSetting");
       await game.step({ frames: 2 });
     }
