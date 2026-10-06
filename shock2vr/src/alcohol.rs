@@ -34,6 +34,16 @@ impl AlcoholVital {
         self.level = (self.level + 1.0).min(MAX_LEVEL);
     }
 
+    /// Developer shortcut: show full strength immediately, even while paused.
+    pub(crate) fn maximize(&mut self) {
+        self.level = MAX_LEVEL;
+        self.intensity = 1.0;
+    }
+
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+
     pub(crate) fn update(&mut self, dt: f32) {
         if !dt.is_finite() || dt <= 0.0 {
             return;
@@ -133,6 +143,21 @@ impl AlcoholVital {
 mod tests {
     use super::*;
     use engine::scene::RenderLayer;
+
+    #[test]
+    fn cheats_set_full_strength_and_clear_without_waiting_for_an_update() {
+        let mut vital = AlcoholVital::default();
+        vital.update(1.0);
+        let phase = vital.phase;
+        vital.maximize();
+        assert_eq!(vital.level(), MAX_LEVEL);
+        assert_eq!(vital.intensity(), 1.0);
+        assert_eq!(vital.phase, phase);
+        vital.update(1.0);
+        assert!(vital.level() < MAX_LEVEL, "the cheat does not pin recovery");
+        vital.clear();
+        assert_eq!(vital, AlcoholVital::default());
+    }
 
     #[test]
     fn world_wave_spares_gear_and_ui_and_clears_when_sober() {

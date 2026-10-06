@@ -226,6 +226,9 @@ pub enum Effect {
         enabled: bool,
     },
     NoEffect,
+    /// Developer shortcuts for immediate full intoxication or sobriety.
+    MaxPlayerAlcohol,
+    ClearPlayerAlcohol,
     /// Cheat: add stored contamination directly, regardless of protection.
     AddPlayerHazard {
         toxin: bool,

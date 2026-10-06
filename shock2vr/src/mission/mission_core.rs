@@ -10194,6 +10194,18 @@ impl MissionCore {
         while let Some(effect) = effects.pop_front() {
             let toxin_patch = matches!(&effect, Effect::UseToxinPatch { .. });
             match effect {
+                Effect::MaxPlayerAlcohol => {
+                    self.world
+                        .borrow::<UniqueViewMut<crate::alcohol::AlcoholVital>>()
+                        .unwrap()
+                        .maximize();
+                }
+                Effect::ClearPlayerAlcohol => {
+                    self.world
+                        .borrow::<UniqueViewMut<crate::alcohol::AlcoholVital>>()
+                        .unwrap()
+                        .clear();
+                }
                 Effect::AddPlayerHazard { toxin, amount } => {
                     if let Ok(mut status) = self
                         .world

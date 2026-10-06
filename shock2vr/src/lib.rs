@@ -2000,6 +2000,8 @@ impl Game {
                         Effect::SetAllAIAlertness { level, pin }
                     }
                     CheatAction::MaxStats => Effect::MaxPlayerStats,
+                    CheatAction::MaxAlcohol => Effect::MaxPlayerAlcohol,
+                    CheatAction::ClearAlcohol => Effect::ClearPlayerAlcohol,
                     CheatAction::StartHordeWave => Effect::StartHordeWave {
                         wave: dev_params::get(dev_params::HORDE_START_WAVE) as u32,
                     },
