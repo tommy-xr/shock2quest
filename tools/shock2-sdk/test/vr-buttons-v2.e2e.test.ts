@@ -16,7 +16,7 @@ import { cycleToWeapon } from "./helpers/weapon.js";
 //   | anything   | jump        | -           |
 //   | empty/melee/other | jump | last unread log |
 //   | gun        | jump        | toggle fire mode |
-//   | psi amp    | jump        | open the psi selector |
+//   | psi amp    | jump        | swap powers / hold for selector |
 //
 // ...plus the left Menu button, which is now BOTH the way in and out of the
 // cyber interface (short press) and the way to the pause menu (held 0.5 s).
@@ -235,7 +235,7 @@ test(
 );
 
 test(
-  "the psi amp's upper button opens the power selection MFD",
+  "holding the psi amp's upper button opens its power carousel",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -244,17 +244,21 @@ test(
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
-    await grabWeapon(game, PSI_AMP);
+    const amp = await grabWeapon(game, PSI_AMP);
 
     assert.equal((await game.ui.state()).active_panel, null);
-    // The selector moved UP from the lower button, which is jump now.
-    await press(game, "RightHandUpperButton");
-    await game.step({ frames: 5 });
-    assert.equal(
-      (await game.ui.state()).active_panel?.name,
-      "Psi Powers",
-      "the amp hand's upper button must dock the psi selection MFD",
-    );
+    const carousel = async () => (await game.entities.detail(amp)).properties
+      .find(property => property.name === "PsiCarousel");
+    assert.equal(await carousel(), undefined);
+    // The upper button now distinguishes a short power swap from a held
+    // selector gesture. The selector belongs to this amp, not the shared MFD.
+    await game.input.hold("RightHandUpperButton");
+    await game.step({ frames: 20 });
+    assert.equal(await carousel(), undefined, "a short hold does not open the selector");
+    await game.step({ frames: 20 });
+    await game.input.release("RightHandUpperButton");
+    await game.step({ frames: 2 });
+    assert.ok(await carousel(), "the amp hand's upper hold opens its power carousel");
   },
 );
 
