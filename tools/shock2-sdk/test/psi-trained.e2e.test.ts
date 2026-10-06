@@ -48,6 +48,9 @@ test(
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
     });
+    // Selection belongs to the equipped amp; an empty hand reports none.
+    await game.player.spawnItem(-247);
+    await game.input.trigger("EquipPsiAmp");
 
     await game.step({ frames: 10 });
     let player = (await game.info()).player;
