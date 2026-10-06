@@ -6,6 +6,7 @@
     "lib": ["ES2023"],
     "types": ["node"],
     "strict": true,
+    "noEmitOnError": true,
     "declaration": true,
     "sourceMap": true,
     "outDir": "dist",
