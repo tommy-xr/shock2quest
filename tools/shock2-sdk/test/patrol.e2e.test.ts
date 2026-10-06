@@ -96,6 +96,9 @@ test(
     // SINGLE PatrolBehavior instance run uninterrupted, so the observed motion
     // really comes from arriving at a point and advancing to the next (not from
     // the behavior being rebuilt each tick).
+    // Outside the level there is no floor. Keep the isolated observer alive
+    // so fatal-fall damage cannot unload the mission during a long patrol.
+    await game.devParams.set("cheat", 1);
     await game.player.teleport({ x: 300, y: 0, z: 300 });
     await game.step({ frames: 5 });
     await game.entities.sendMessage(patroller, {
@@ -111,6 +114,7 @@ test(
     let stayedPatrolling = true;
     for (let tick = 0; tick < 10; tick++) {
       await game.step({ frames: 120 });
+      assert.ok((await game.info()).player.hit_points! > 0, "the observer remains alive");
       const detail = await game.entities.detail(patroller);
       traveled += distXZ(detail.position, prev);
       prev = detail.position;
@@ -245,6 +249,9 @@ test(
     // Move the player off the deck before anything can be seen, so the run is
     // unambiguously about an AI nobody ever alerted. No alertness is forced
     // here, and none is expected: the assertions below check it stays Lowest.
+    // Outside the level there is no floor. Keep the isolated observer alive
+    // so fatal-fall damage cannot unload the mission during a long patrol.
+    await game.devParams.set("cheat", 1);
     await game.player.teleport({ x: 300, y: 0, z: 300 });
     await game.step({ frames: 60 });
 
@@ -299,6 +306,7 @@ test(
     let traveled = 0;
     for (let tick = 0; tick < 40 && !reached.every(Boolean); tick++) {
       await game.step({ frames: 120 });
+      assert.ok((await game.info()).player.hit_points! > 0, "the observer remains alive");
       detail = await game.entities.detail(patroller.id);
       traveled += distXZ(detail.position, prev);
       prev = detail.position;
@@ -347,6 +355,9 @@ test(
     });
 
     // Keep the player far away: this is about an AI nobody ever alerted.
+    // Outside the level there is no floor. Keep the isolated observer alive
+    // so fatal-fall damage cannot unload the mission during a long patrol.
+    await game.devParams.set("cheat", 1);
     await game.player.teleport({ x: 300, y: 0, z: 300 });
     await game.step({ frames: 60 });
 
@@ -375,6 +386,7 @@ test(
     const targets: number[] = [];
     for (let tick = 0; tick < 40; tick++) {
       await game.step({ frames: 120 });
+      assert.ok((await game.info()).player.hit_points! > 0, "the observer remains alive");
       detail = await game.entities.detail(patroller.id);
       traveled += distXZ(detail.position, prev);
       prev = detail.position;

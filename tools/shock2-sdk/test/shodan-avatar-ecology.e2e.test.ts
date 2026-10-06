@@ -50,17 +50,23 @@ async function waitForAvatar(
   // beyond the authored east arena wall, where terrain occludes all four
   // stable SpawnPoint objects. This removes only the retry lottery: the retail
   // timer, SwitchLink, TrapSpawn selection, and entity creation remain real.
+  // The occluded observation point is outside walkable terrain. Keep the
+  // observer alive through ecology pulses, then restore normal combat rules.
+  const cheat = (await game.devParams.list()).params.find(param => param.key === "cheat")!.value;
+  await game.devParams.set("cheat", 1);
   await game.player.teleport({ x: 60, y: -91.8, z: 72 });
   let found: EntitySummary | undefined;
   try {
     for (let poll = 0; poll < 3; poll += 1) {
       await game.step({ frames: ECOLOGY_PERIOD_FRAMES });
+      assert.ok((await game.info()).player.hit_points! > 0, "the ecology observer remains alive");
       [found] = await livingAvatars(game, excludedId);
       if (found) break;
     }
   } finally {
     await game.player.teleport(originalPosition);
     await game.step({ frames: 2 });
+    await game.devParams.set("cheat", cheat);
   }
   assert.ok(found, "the SHODAN ecology should spawn behind authored terrain");
   return found;
