@@ -42,6 +42,7 @@ mod hazard_objects;
 pub mod healing_item;
 mod homing;
 pub(crate) mod impact_sound;
+pub(crate) mod shodan_shot;
 
 pub mod immolate;
 mod implant;
@@ -1021,6 +1022,7 @@ impl ScriptWorld {
             "grubegg" => Box::new(BaseEgg::new(EggPayload::Grub)),
             "swarmeregg" => Box::new(BaseEgg::new(EggPayload::Swarmer)),
             "gooprojectile" => Box::new(GooProjectile::new()),
+            "shodanshot" => Box::new(shodan_shot::ShodanShot::new()),
             "swarm" => Box::new(swarm::Swarm::new()),
             "containerscript" => gui_script(Box::new(ContainerGui::loot_container())),
 
