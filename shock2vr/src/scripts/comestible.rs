@@ -15,11 +15,22 @@ use super::{Effect, MessagePayload, Script, script_util::player_carried_items};
 /// inventory `SCRIPT` path.
 pub struct Comestible {
     hit_points: i32,
+    liquor: bool,
 }
 
 impl Comestible {
     pub fn new(hit_points: i32) -> Self {
-        Self { hit_points }
+        Self {
+            hit_points,
+            liquor: false,
+        }
+    }
+    /// Retail Liquor shares inventory-use dispatch, with a distinct atomic effect.
+    pub fn liquor() -> Self {
+        Self {
+            hit_points: 1,
+            liquor: true,
+        }
     }
 }
 
@@ -36,9 +47,13 @@ impl Script for Comestible {
             return Effect::NoEffect;
         }
 
-        Effect::UseComestible {
-            entity_id,
-            hit_points: self.hit_points,
+        if self.liquor {
+            Effect::UseLiquor { entity_id }
+        } else {
+            Effect::UseComestible {
+                entity_id,
+                hit_points: self.hit_points,
+            }
         }
     }
 }
@@ -81,6 +96,29 @@ mod tests {
             inventory_entity_id: inventory,
         });
         (world, food)
+    }
+
+    #[test]
+    fn liquor_only_dispatches_inventory_use() {
+        for carried in [false, true] {
+            let (world, bottle) = world_with_food(carried);
+            let mut script = crate::scripts::ScriptWorld::create_script("liquor".into());
+            let physics = PhysicsWorld::new();
+            let effect = script.handle_message(bottle, &world, &physics, &MessagePayload::Frob);
+            assert_eq!(
+                matches!(effect, Effect::UseLiquor { entity_id } if entity_id == bottle),
+                carried
+            );
+            assert!(matches!(
+                script.handle_message(
+                    bottle,
+                    &world,
+                    &physics,
+                    &MessagePayload::TurnOn { from: bottle }
+                ),
+                Effect::NoEffect
+            ));
+        }
     }
 
     #[test]

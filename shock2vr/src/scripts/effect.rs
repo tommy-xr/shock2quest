@@ -591,6 +591,12 @@ pub enum Effect {
         hit_points: i32,
     },
 
+    /// Retail Liquor: heal one HP, subtract four PSI (floored at zero), play
+    /// Activate and consume one carried bottle, even at full HP or zero PSI.
+    UseLiquor {
+        entity_id: EntityId,
+    },
+
     /// Consume one Med Patch / Medical Kit and queue its retail timed healing
     /// course. Invalid and full-health uses leave the source item untouched.
     UseHealingItem {

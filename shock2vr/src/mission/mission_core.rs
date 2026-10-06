@@ -2025,6 +2025,16 @@ fn apply_comestible_use(
     }
 }
 
+/// Liquor uses the same source validation and lifetime as food. Apply the PSI
+/// penalty only after a successful use, including full-health/empty-PSI uses.
+fn apply_liquor_use(world: &World, entity_id: EntityId) -> ComestibleUseOutcome {
+    let outcome = apply_comestible_use(world, entity_id, 1);
+    if outcome != ComestibleUseOutcome::NotUsed {
+        update_player_psi_points(world, |points| points.saturating_sub(4));
+    }
+    outcome
+}
+
 /// Applies `delta` to `entity_id`'s hit points, floored at 0, and returns
 /// `(previous, current)`. `None` when it has no pool, or when `invulnerable`
 /// (the `cheat` dev param) refuses a loss to the player - every damage source
@@ -11492,15 +11502,19 @@ impl MissionCore {
                     }
                 }
 
-                Effect::UseComestible {
-                    entity_id,
-                    hit_points,
-                } => {
+                effect @ (Effect::UseComestible { entity_id, .. }
+                | Effect::UseLiquor { entity_id }) => {
                     // Resolve the heal and source lifetime against the same
                     // live world snapshot. A duplicate effect for an already
                     // destroyed object safely no-ops; full health still
                     // consumes, matching the retail script.
-                    let outcome = apply_comestible_use(&self.world, entity_id, hit_points);
+                    let outcome = match effect {
+                        Effect::UseLiquor { .. } => apply_liquor_use(&self.world, entity_id),
+                        Effect::UseComestible { hit_points, .. } => {
+                            apply_comestible_use(&self.world, entity_id, hit_points)
+                        }
+                        _ => unreachable!(),
+                    };
                     if outcome == ComestibleUseOutcome::NotUsed {
                         continue;
                     }
@@ -21582,6 +21596,59 @@ mod comestible_use_tests {
             .get(player)
             .unwrap()
             .hit_points
+    }
+
+    #[test]
+    fn liquor_heals_one_drains_four_psi_and_clamps_both_pools() {
+        for (hp, psi, expected_hp, expected_psi) in
+            [(20, 10, 21, 6), (30, 2, 30, 0), (30, 0, 30, 0)]
+        {
+            let (mut world, player, bottle) = world_with_player(hp, true);
+            world.add_component(
+                player,
+                dark::properties::PropPsiState {
+                    psi_points: psi,
+                    max_psi_points: 50,
+                    unknown: 0,
+                },
+            );
+            assert_eq!(
+                apply_liquor_use(&world, bottle),
+                ComestibleUseOutcome::Consumed
+            );
+            assert_eq!(player_hit_points(&world, player), expected_hp);
+            assert_eq!(crate::scripts::player_psi_points(&world), expected_psi);
+            world.delete_entity(bottle);
+            assert_eq!(
+                apply_liquor_use(&world, bottle),
+                ComestibleUseOutcome::NotUsed
+            );
+            assert_eq!(crate::scripts::player_psi_points(&world), expected_psi);
+        }
+    }
+
+    #[test]
+    fn world_liquor_and_empty_stacks_do_not_change_vitals() {
+        for carried in [false, true] {
+            let (mut world, player, bottle) = world_with_player(20, carried);
+            world.add_component(
+                player,
+                dark::properties::PropPsiState {
+                    psi_points: 10,
+                    max_psi_points: 50,
+                    unknown: 0,
+                },
+            );
+            if carried {
+                world.add_component(bottle, dark::properties::PropStackCount(0));
+            }
+            assert_eq!(
+                apply_liquor_use(&world, bottle),
+                ComestibleUseOutcome::NotUsed
+            );
+            assert_eq!(player_hit_points(&world, player), 20);
+            assert_eq!(crate::scripts::player_psi_points(&world), 10);
+        }
     }
 
     #[test]
