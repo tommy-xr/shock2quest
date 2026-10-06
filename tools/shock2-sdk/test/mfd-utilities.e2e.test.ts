@@ -254,15 +254,23 @@ for (const vr of [false,true]) {
     await click(close);
     assert.equal((await game.ui.state()).active_panel,null,"map close control works");
     assert.deepEqual(await game.player.inventory(),inventory);
-    const item=(await game.ui.state()).strip!.elements.find(e=>e.kind==="button"&&e.entity_id===inventory.items[0]!.entity_id);assert.ok(item);
-    await click(item);
-    const carried=(await game.ui.state()).cursor;assert.ok(carried,"inventory click carries the hypo on the UI cursor");
     const emptyFrame=(await game.ui.state()).readout_elements.find(e=>e.texture?.toUpperCase()==="AMMOFULL.PCX");assert.ok(emptyFrame);
-    await click(emptyFrame);
-    assert.deepEqual((await game.ui.state()).cursor,carried,"blank ammo strip chrome must not throw the cursor item");
-    await click(item);
-    assert.equal((await game.ui.state()).cursor,null);
-    assert.deepEqual(await game.player.inventory(),inventory,"returning cursor item preserves inventory");
+    if (vr) {
+      // VR trigger clicks USE inventory items; grabs put them in a physical
+      // hand. There is no flat cursor to carry through this chrome check.
+      await click(emptyFrame);
+      assert.equal((await game.ui.state()).cursor,null);
+      assert.deepEqual(await game.player.inventory(),inventory,"blank ammo chrome preserves VR inventory");
+    } else {
+      const item=(await game.ui.state()).strip!.elements.find(e=>e.kind==="button"&&e.entity_id===inventory.items[0]!.entity_id);assert.ok(item);
+      await click(item);
+      const carried=(await game.ui.state()).cursor;assert.ok(carried,"inventory click carries the hypo on the UI cursor");
+      await click(emptyFrame);
+      assert.deepEqual((await game.ui.state()).cursor,carried,"blank ammo strip chrome must not throw the cursor item");
+      await click(item);
+      assert.equal((await game.ui.state()).cursor,null);
+      assert.deepEqual(await game.player.inventory(),inventory,"returning cursor item preserves inventory");
+    }
   });
 }
 
