@@ -2914,6 +2914,7 @@ pub struct MissionCore {
     /// Station security alarm bookkeeping, persisted with this mission.
     pub security_alarm: crate::security_alarm::SecurityAlarm,
     klaxon: crate::security_alarm::Klaxon,
+    room_gravity: super::room_gravity::RoomGravity,
     listener_sounds: crate::listener_sounds::ListenerSounds,
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
     /// the next animation deterministically (debug hitbox inspection).
@@ -3950,6 +3951,7 @@ impl MissionCore {
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
             security_alarm,
             klaxon: Default::default(),
+            room_gravity: Default::default(),
             listener_sounds: Default::default(),
             debug_pose_index: 0,
             debug_weapon_index: 0,
@@ -13401,6 +13403,18 @@ impl MissionCore {
                 Effect::DestroyEntity { entity_id } => {
                     info!("!!!Destroying entity: {:?}", entity_id);
                     self.destroy_entity(entity_id);
+                }
+                Effect::SetRoomGravity {
+                    entity_id,
+                    sensor_id,
+                    gravity_percent,
+                } => {
+                    if let Some(gravity) =
+                        self.room_gravity
+                            .update(entity_id, sensor_id, gravity_percent)
+                    {
+                        self.physics.set_gravity(entity_id, gravity);
+                    }
                 }
                 Effect::ResetGravity { entity_id } => {
                     self.physics.set_gravity(entity_id, 1.0);

@@ -27,6 +27,7 @@ pub(crate) mod projectile_spray;
 mod psi_hack_panel;
 pub(crate) mod reload;
 mod research_overview;
+mod room_gravity;
 mod shoulder_backpack;
 pub mod spatial_query;
 mod spawn_location;
