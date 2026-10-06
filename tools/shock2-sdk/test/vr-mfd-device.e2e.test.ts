@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { aimMfdAt, aimVrHandAt, aimVrHandAtCanvas, drawPersonalCard, equipRightHand, add, sub, scale, quatRotate } from "./helpers/vr-hand.js";
@@ -225,7 +226,9 @@ test("scanned world weapons offer state-specific repair and modify boards", {
   await scan();
   await game.player.setStats({ skills: { modify: 6, repair: 6 }, cyber_affinity: 6 });
   await click("modify");
-  assert.ok(await art("modify.pcx"), "the scanned world gun opens its Modify board");
+  assert.ok(await art("iface/modify.pcx"), "the scanned world gun opens its Modify chooser");
+  assert.ok((await game.ui.state()).active_panel?.elements.some(e => e.label === "upgrade_AlternateFire"),
+    "the chooser offers a real weapon upgrade");
   await game.entities.sendMessage(gun.id, { type: "SetObjectState", state: "Broken" });
   await game.entities.sendMessage(gun.id, { type: "SetGunCondition", condition: 30 });
   await game.step({ frames: 2 });
@@ -248,6 +251,7 @@ test("MFD screen ignores a gun hand while its trigger and face button still work
   await game.player.teleport({ x: gun.position[0], y: .9, z: 0 });
   await game.step({ frames: 120 });
   await equipRightHand(game, true, gun.id, "EquipPistol");
+  await unlockWeaponAlternateFire(game);
   await drawPersonalCard(game, "left");
   await game.input.set("left_hand.position", [-.25, .4, -.7]);
   await game.input.set("left_hand.rotation", [0, 0, 0, 1]);
