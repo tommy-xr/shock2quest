@@ -11,7 +11,10 @@ use util::*;
 
 use bitflags::bitflags;
 use cgmath::{InnerSpace, Point3, Quaternion, Vector3, point3, vec3};
-use dark::{SCALE_FACTOR, mission::SystemShock2Level};
+use dark::{
+    SCALE_FACTOR,
+    mission::{BspTree, SystemShock2Level},
+};
 use engine::scene::SceneObject;
 use rapier3d::{
     control::{
@@ -987,6 +990,7 @@ struct ClimbPass<'a> {
     validation_queries: QueryPipeline<'a>,
     probe_queries: QueryPipeline<'a>,
     scripted_queries: QueryPipeline<'a>,
+    level_bounds: Option<&'a LevelBounds>,
 }
 
 #[derive(Clone, Copy)]
@@ -1403,6 +1407,7 @@ fn plan_climb_top_out(
     direction: Vector<Real>,
     minimum_clear_forward: Real,
     dt: Real,
+    level_bounds: Option<&LevelBounds>,
 ) -> Option<PlayerMovement> {
     let direction_h = vector![direction.x, 0.0, direction.z];
     let direction_norm = direction_h.norm();
@@ -1540,7 +1545,9 @@ fn plan_climb_top_out(
         // against every collider, then let ordinary gravity find the lower
         // deck.
         .unwrap_or(final_sphere - Vector::y() * head_offset);
-    if shape_intersects(validation_queries, final_standing, &standing) {
+    if level_bounds.is_some_and(|bounds| !bounds.contains_shape(final_standing, &standing))
+        || shape_intersects(validation_queries, final_standing, &standing)
+    {
         return None;
     }
     let initial_obstruction_limit =
@@ -1625,6 +1632,7 @@ fn plan_swim_mantle(
     desired: Vector<Real>,
     facing: Vector<Real>,
     dt: Real,
+    level_bounds: Option<&LevelBounds>,
 ) -> Option<PlayerMovement> {
     let direction = climb_top_out_direction(desired, facing)?;
     let desired_h = vector![desired.x, 0.0, desired.z];
@@ -1646,6 +1654,7 @@ fn plan_swim_mantle(
         direction,
         CLIMB_TOP_OUT_PROBE_FORWARD,
         dt,
+        level_bounds,
     )
 }
 
@@ -1675,6 +1684,7 @@ fn plan_jump_mantle(
     desired: Vector<Real>,
     dt: Real,
     is_crouched: bool,
+    level_bounds: Option<&LevelBounds>,
 ) -> Option<PlayerMovement> {
     let desired_h = vector![desired.x, 0.0, desired.z];
     let desired_distance = desired_h.norm();
@@ -1866,7 +1876,12 @@ fn plan_jump_mantle(
                 // drop, as SHODAN's initial final-descent barrier does; do not
                 // skip that normal crossing in favor of a deeper landing.
                 let same_height_standing = (walk_blocked && validation_probe_clear)
-                    .then(|| pos.translation.vector + direction * forward);
+                    .then(|| pos.translation.vector + direction * forward)
+                    .filter(|target| {
+                        !level_bounds.is_some_and(|bounds| {
+                            bounds.is_beneath_floor(validation_queries, *target)
+                        })
+                    });
                 if let Some(final_standing) = elevated_standing.or(same_height_standing) {
                     if !shape_intersects(validation_queries, final_standing, &final_shape) {
                         transition = Some((raised, raised_forward, final_standing));
@@ -2143,6 +2158,7 @@ fn step_player_movement(
         validation_queries,
         probe_queries: climb_queries,
         scripted_queries,
+        level_bounds,
     }) = climb
     {
         if climb.y > 0.0 {
@@ -2156,6 +2172,7 @@ fn step_player_movement(
                     direction,
                     minimum_clear_forward,
                     dt,
+                    level_bounds,
                 )
             }) {
                 return top_out;
@@ -3058,6 +3075,66 @@ impl LevelSurfaceMaterials {
     }
 }
 
+/// The authored BSP distinguishes playable cells from the solid outside of a
+/// level. A triangle overlap test alone cannot distinguish the two sides of a
+/// thin terrain surface (Dark's PhysObjValidPos also calls CellFromLoc first).
+/// Validate expanded swim/ladder top-out targets. Ordinary jump-through may
+/// intentionally finish in exposed exterior space; its unsupported same-height
+/// fallback only rejects the solid underside of an authored floor.
+struct LevelBounds {
+    bsp: BspTree,
+    cell_count: usize,
+}
+
+impl LevelBounds {
+    fn contains(&self, position: Vector<Real>) -> bool {
+        self.bsp
+            .cell_from_position(nvec_to_cgmath(position))
+            .is_some_and(|cell| (cell as usize) < self.cell_count)
+    }
+
+    /// A same-height jump-through may finish in exposed exterior space before
+    /// falling normally, but cannot restore the body beneath an authored floor.
+    /// Ray normals face the ray, so classify the hit's two sides through the
+    /// BSP instead: a floor opens into a cell above and solid space below. A
+    /// ceiling has the opposite orientation and does not veto the crossing.
+    fn is_beneath_floor(&self, queries: &QueryPipeline, position: Vector<Real>) -> bool {
+        if self.contains(position) {
+            return false;
+        }
+        let world_queries = queries.with_filter(queries.filter.groups(InteractionGroups::new(
+            InternalCollisionGroups::PLAYER.bits.into(),
+            InternalCollisionGroups::WORLD.bits.into(),
+            Default::default(),
+        )));
+        let ray = Ray::new(Point::from(position), Vector::y());
+        let Some((_, distance)) = world_queries.cast_ray(&ray, Real::MAX, true) else {
+            return false;
+        };
+        let hit = position + Vector::y() * distance;
+        let side_offset = Vector::y() * (PROBE_SKIN / SCALE_FACTOR);
+        self.contains(hit + side_offset) && !self.contains(hit - side_offset)
+    }
+
+    /// Supplemental cell probes at the center and axis extremes. The existing
+    /// full-shape overlap and route sweeps still provide geometric clearance;
+    /// these probes distinguish a clear pose from the solid side of terrain.
+    fn contains_shape(&self, position: Vector<Real>, shape: &dyn Shape) -> bool {
+        let aabb = shape.compute_local_aabb();
+        self.contains(position)
+            && [
+                vector![aabb.mins.x, 0.0, 0.0],
+                vector![aabb.maxs.x, 0.0, 0.0],
+                vector![0.0, aabb.mins.y, 0.0],
+                vector![0.0, aabb.maxs.y, 0.0],
+                vector![0.0, 0.0, aabb.mins.z],
+                vector![0.0, 0.0, aabb.maxs.z],
+            ]
+            .into_iter()
+            .all(|offset| self.contains(position + offset))
+    }
+}
+
 /// A level's collision geometry: the world trimesh plus the material of each
 /// of its triangles, built together so the two can never fall out of step.
 ///
@@ -3068,6 +3145,7 @@ pub struct LevelGeometry {
     per_triangle_material: Vec<u16>,
     material_names: Vec<String>,
     water_surfaces: Vec<Triangle>,
+    bounds: Option<LevelBounds>,
 }
 
 impl LevelGeometry {
@@ -3080,6 +3158,7 @@ impl LevelGeometry {
             per_triangle_material: Vec::new(),
             material_names: Vec::new(),
             water_surfaces: Vec::new(),
+            bounds: None,
         }
     }
 }
@@ -3112,6 +3191,10 @@ pub fn build_level_geometry(level: &SystemShock2Level) -> Option<LevelGeometry> 
                 )
             })
             .collect(),
+        bounds: Some(LevelBounds {
+            bsp: level.bsp_tree.clone(),
+            cell_count: level.cells.len(),
+        }),
     })
 }
 
@@ -3601,6 +3684,7 @@ pub struct PhysicsWorld {
     /// Shared with the collision-event handler so contacts and ray hits name
     /// the same surface. Debug scenes build their own trimeshes and have none.
     level_surface_materials: Option<std::sync::Arc<LevelSurfaceMaterials>>,
+    level_bounds: Option<LevelBounds>,
 
     // Authored water boundaries are query-only: never solid collision geometry.
     water_surfaces: Vec<Triangle>,
@@ -3760,7 +3844,9 @@ impl PhysicsWorld {
             per_triangle_material,
             material_names,
             water_surfaces,
+            bounds,
         } = geometry;
+        self.level_bounds = bounds;
 
         self.water_surfaces.extend(water_surfaces);
 
@@ -6374,6 +6460,7 @@ impl PhysicsWorld {
             no_bodies: RigidBodySet::new(),
             level_surface_materials: None,
             water_surfaces: Vec::new(),
+            level_bounds: None,
             rigid_bodies_with_forces: Vec::new(),
             // TODO:
             // physics_hooks: Box::new(physics_hooks),
@@ -7506,6 +7593,7 @@ impl PhysicsWorld {
                             desired_movement,
                             self.integration_parameters.dt,
                             player_handle.is_crouched,
+                            self.level_bounds.as_ref(),
                         )
                     })
                     .flatten()
@@ -7521,6 +7609,7 @@ impl PhysicsWorld {
                                     desired_movement,
                                     facing,
                                     self.integration_parameters.dt,
+                                    self.level_bounds.as_ref(),
                                 )
                             })
                             .flatten()
@@ -7558,6 +7647,7 @@ impl PhysicsWorld {
                             validation_queries: queries,
                             probe_queries: queries.with_filter(climb_pass_filter),
                             scripted_queries: queries.with_filter(scripted_top_out_filter),
+                            level_bounds: self.level_bounds.as_ref(),
                         }),
                     )
                 }
@@ -10244,6 +10334,7 @@ mod tests {
         };
 
         let mut world = PhysicsWorld::new();
+        world.level_bounds = Some(bank_world_bounds(-5.2, 0.0, 1.2));
         world.add_collider(
             EntityId::from_inner(1300).unwrap(),
             quad(-100.0, 100.0, 0.0).build(),
@@ -11357,6 +11448,7 @@ mod tests {
             Vector::x(),
             minimum_clear_forward,
             1.0 / 60.0,
+            world.level_bounds.as_ref(),
         )
     }
 
@@ -12443,6 +12535,217 @@ mod tests {
         );
     }
 
+    fn bank_world_bounds(start: f32, gradient: f32, intercept: f32) -> LevelBounds {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2u32.to_le_bytes()); // two extra BSP planes
+        let length = (gradient * gradient + 1.0).sqrt();
+        // Plane::read converts the Dark axes and normalizes the normal.
+        for plane in [
+            [1.0, 0.0, 0.0, start * SCALE_FACTOR],
+            [gradient, 0.0, 1.0, -intercept / length * SCALE_FACTOR],
+        ] {
+            for value in plane {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        for node in [
+            [0u32, u32::MAX, 0, 2, 1],
+            [0, u32::MAX, 1, 2, 0x00ff_ffff],
+            [1 << 24, 0, 0, 0, 0],
+        ] {
+            for value in node {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        LevelBounds {
+            bsp: BspTree::read(&mut std::io::Cursor::new(bytes), &Vec::new()),
+            cell_count: 1,
+        }
+    }
+
+    /// A sloped shore is a surface, not a solid volume in Rapier. A capsule
+    /// wholly below it does not overlap the triangles, but is outside the
+    /// authored world and cannot be a valid sparse-body mantle destination.
+    #[test]
+    fn swim_top_out_rejects_a_pose_beneath_a_sloped_world_bank() {
+        let mut world = PhysicsWorld::new();
+        // Thin steep bank over a deeper floor. The lower floor satisfies the
+        // old support ray even though the expanded destination is under land.
+        let slope = |x: f32| 3.0 * x + 1.0;
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::trimesh(
+                vec![
+                    point![0.5, slope(0.5), -10.0],
+                    point![5.0, slope(5.0), -10.0],
+                    point![5.0, slope(5.0), 10.0],
+                    point![0.5, slope(0.5), 10.0],
+                ],
+                vec![[0, 2, 1], [0, 3, 2]],
+            )
+            .unwrap()
+            .build(),
+        );
+        slab(&mut world, 2, [-10.0, -3.1, -10.0], [10.0, -3.0, 10.0]);
+        // A low pool lip blocks the ordinary stroke, enabling the real swim
+        // planner; the raised sparse-body route can clear it.
+        slab(&mut world, 3, [0.5, -3.0, -10.0], [0.7, 1.0, 10.0]);
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(4).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let parented = |_handle: ColliderHandle, collider: &Collider| collider.parent().is_some();
+        let scripted = queries.with_filter(QueryFilter::default().predicate(&parented));
+        let plan = |bounds| {
+            plan_swim_mantle(
+                &player_character_controller(),
+                &queries,
+                &scripted,
+                &standing_player_capsule(),
+                &Isometry::identity(),
+                vector![0.1, 0.0, 0.0],
+                Vector::x(),
+                1.0 / 60.0,
+                bounds,
+            )
+        };
+        let invalid = plan(None).and_then(|movement| movement.top_out).expect(
+            "without authored bounds the swim planner must reproduce the below-bank landing",
+        );
+        let target = *invalid.waypoints.last().unwrap();
+        let bounds = bank_world_bounds(0.5, 3.0, 1.0);
+        assert!(!bounds.contains(target));
+        assert!(!shape_intersects(
+            &queries,
+            target,
+            &standing_player_capsule()
+        ));
+        assert!(
+            plan(Some(&bounds)).is_none(),
+            "a swimmer must not expand beneath the solid bank: {target:?}"
+        );
+    }
+
+    #[test]
+    fn jump_same_height_target_cannot_finish_beneath_a_world_bank() {
+        let mut world = PhysicsWorld::new();
+        let slope = |x: f32| 1.1 * x - 0.7;
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::trimesh(
+                vec![
+                    point![0.5, slope(0.5), -10.0],
+                    point![5.0, slope(5.0), -10.0],
+                    point![5.0, slope(5.0), 10.0],
+                    point![0.5, slope(0.5), 10.0],
+                ],
+                vec![[0, 2, 1], [0, 3, 2]],
+            )
+            .unwrap()
+            .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let parented = |_handle: ColliderHandle, collider: &Collider| collider.parent().is_some();
+        let scripted = queries.with_filter(QueryFilter::default().predicate(&parented));
+        let plan = |bounds| {
+            plan_jump_mantle(
+                &player_character_controller(),
+                &queries,
+                &scripted,
+                &standing_player_capsule(),
+                &Isometry::identity(),
+                vector![0.1, 0.0, 0.0],
+                1.0 / 60.0,
+                false,
+                bounds,
+            )
+        };
+        let old = plan(None)
+            .and_then(|m| m.top_out)
+            .expect("legacy same-height target reproduces the bank escape");
+        let target = *old.waypoints.last().unwrap();
+        let bounds = bank_world_bounds(0.5, 1.1, -0.7);
+        assert!(!shape_intersects(
+            &queries,
+            target,
+            &standing_player_capsule()
+        ));
+        assert!(bounds.is_beneath_floor(&queries, target));
+        assert!(
+            !bounds.is_beneath_floor(&queries, vector![2.0, 4.0, 0.0]),
+            "an exposed position above the bank remains valid"
+        );
+        assert!(
+            plan(Some(&bounds)).is_none(),
+            "same-height jump must not expand beneath bank: {target:?}"
+        );
+    }
+
+    #[test]
+    fn exterior_jump_target_distinguishes_ceiling_from_floor() {
+        // An exterior target under a ceiling is not the solid underside of a
+        // floor. The authored air cell is between Y0.5 and Y1; the ray sees its
+        // ceiling at Y1. Ray-facing normals alone cannot make this distinction.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        for plane in [
+            [0.0_f32, 0.0, 1.0, -0.5 * SCALE_FACTOR],
+            [0.0, 0.0, -1.0, SCALE_FACTOR],
+        ] {
+            for value in plane {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        for node in [
+            [0u32, u32::MAX, 0, 1, 0x00ff_ffff],
+            [0, u32::MAX, 1, 2, 0x00ff_ffff],
+            [1 << 24, 0, 0, 0, 0],
+        ] {
+            for value in node {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        let bounds = LevelBounds {
+            bsp: BspTree::read(&mut std::io::Cursor::new(bytes), &Vec::new()),
+            cell_count: 1,
+        };
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::trimesh(
+                vec![
+                    point![-10.0, 1.0, -10.0],
+                    point![10.0, 1.0, -10.0],
+                    point![10.0, 1.0, 10.0],
+                    point![-10.0, 1.0, 10.0],
+                ],
+                vec![[0, 2, 1], [0, 3, 2]],
+            )
+            .unwrap()
+            .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let queries = query_pipeline(&world, QueryFilter::default());
+        assert!(!bounds.contains(Vector::zeros()));
+        assert!(bounds.contains(vector![0.0, 0.9, 0.0]));
+        assert!(!bounds.contains(vector![0.0, 1.1, 0.0]));
+        assert!(
+            !bounds.is_beneath_floor(&queries, Vector::zeros()),
+            "a downward-facing ceiling is not the solid underside of a floor"
+        );
+        assert!(
+            !bounds.is_beneath_floor(&queries, vector![0.0, 2.0, 0.0]),
+            "exposed exterior space above terrain remains a valid jump-through target"
+        );
+    }
+
     /// A thin terrain slab: `min`..`max` corners.
     fn slab(world: &mut PhysicsWorld, id: u64, min: [f32; 3], max: [f32; 3]) {
         let half = vector![
@@ -12492,6 +12795,7 @@ mod tests {
         // A ceiling at 2.0 is within the rise, but the landing ahead (-0.6)
         // needs less: the top-out crosses below the ceiling.
         let mut world = PhysicsWorld::new();
+        world.level_bounds = Some(bank_world_bounds(0.6, 0.0, -0.6));
         slab(&mut world, 1, [-2.0, 2.0, -2.0], [4.0, 2.02, 2.0]);
         slab(&mut world, 2, [0.6, -2.0, -2.0], [4.0, -0.6, 2.0]);
         let mut player =
@@ -14418,6 +14722,7 @@ mod tests {
                 vector![0.1, 0.0, 0.0],
                 1.0 / 60.0,
                 true,
+                world.level_bounds.as_ref(),
             );
 
             assert!(
@@ -15877,6 +16182,7 @@ mod tests {
         world.add_level_geometry(
             EntityId::from_inner(1).unwrap(),
             LevelGeometry {
+                bounds: None,
                 collider,
                 per_triangle_material: vec![0, 1],
                 material_names: vec!["metal".to_owned(), "fabric".to_owned()],
