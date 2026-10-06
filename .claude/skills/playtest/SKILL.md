@@ -28,6 +28,14 @@ the finding in the final `data.json`.
 
 ## Choose the launch configuration
 
+Build `debug_runtime` from the selected checkout before a session and record
+that checkout's commit and the launched binary's SHA-256 in `data.json`.
+`target/debug/debug_runtime` can be left over from another branch even when
+the source checkout is current; a stale binary can produce saves that the
+current build cannot load and invalidate a progression replay. If another
+agent is compiling into the same Cargo target directory, copy the finished
+binary to a session-owned path before launching it.
+
 **Always use the 25th Anniversary assets.** Set
 `DARK_ASSET_PATH="$HOME/ss2-25th"` on every debug-runtime launch and verify that
 the directory contains a data-root sentinel such as `sshock2.kpf` before
