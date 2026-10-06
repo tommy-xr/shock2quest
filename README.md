@@ -92,6 +92,9 @@ Auto-repair devices use the same drag or close-contact gesture on a broken
 item, consume one device, and bypass the Repair skill and minigame.
 Recyclers use the same gesture to convert an item's entire stack into nanites;
 the preview shows its value. The recycler itself is reusable.
+To collect worm ammunition, touch an empty beaker to a worm pile in VR and
+pull the trigger or release it. In flat mode, use the pile while carrying an
+empty beaker. Small beakers hold four rounds; large beakers hold eight.
 
 Broken replicators show static in the MFD and tricorder. Select their Repair
 control to attempt the skill-gated repair minigame; a win restores the catalog,

@@ -10,9 +10,14 @@ pub fn is_tool(world: &World, tool: EntityId) -> bool {
     maintenance::is_maintenance_tool(world, tool)
         || script_util::entity_has_script(world, tool, "FreeRepair")
         || script_util::entity_has_script(world, tool, "Recycler")
+        || script_util::entity_has_script(world, tool, "BeakerScript")
 }
 
 pub fn offers_to(world: &World, tool: EntityId, target: EntityId) -> bool {
+    if script_util::entity_has_script(world, tool, "BeakerScript") {
+        return script_util::entity_has_script(world, target, "WormPileScript");
+    }
+
     if maintenance::is_maintenance_tool(world, tool) {
         return maintenance::offers_to(world, tool, target);
     }
@@ -46,6 +51,10 @@ fn repair_refusal(world: &World, target: Option<EntityId>) -> Option<&'static st
 }
 
 pub fn can_apply(world: &World, tool: EntityId, target: EntityId) -> bool {
+    if script_util::entity_has_script(world, tool, "BeakerScript") {
+        return offers_to(world, tool, target) && filled_beaker_template(world, tool).is_some();
+    }
+
     if script_util::entity_has_script(world, tool, "Recycler") {
         return tool != target && recycle_value(world, target).is_ok();
     }
@@ -59,6 +68,10 @@ pub fn can_apply(world: &World, tool: EntityId, target: EntityId) -> bool {
 }
 
 pub fn preview(world: &World, tool: EntityId, target: EntityId) -> String {
+    if script_util::entity_has_script(world, tool, "BeakerScript") {
+        return "Collect worms in the beaker for ammunition".into();
+    }
+
     if script_util::entity_has_script(world, tool, "Recycler") {
         return match recycle_value(world, target) {
             Ok(value) => format!("Recycle entire item stack for {value} nanites"),
@@ -106,6 +119,26 @@ pub fn apply(world: &World, tool: EntityId, target: Option<EntityId>) -> Effect 
             },
         };
     }
+
+    if script_util::entity_has_script(world, tool, "BeakerScript") {
+        if let Some(pile) = target.filter(|id| offers_to(world, tool, *id)) {
+            if let Some(template_id) = filled_beaker_template(world, tool) {
+                return Effect::combine(vec![
+                    Effect::DestroyEntity { entity_id: pile },
+                    Effect::ReplaceEntity {
+                        entity_id: tool,
+                        template_id,
+                    },
+                    Effect::ShowMessage {
+                        text: "Collected worm ammunition.".into(),
+                    },
+                ]);
+            }
+        }
+        return Effect::ShowMessage {
+            text: "Use an empty beaker on a worm pile.".into(),
+        };
+    }
     if !script_util::entity_has_script(world, tool, "FreeRepair") {
         return Effect::NoEffect;
     }
@@ -124,6 +157,43 @@ pub fn apply(world: &World, tool: EntityId, target: Option<EntityId>) -> Effect 
         crate::weapon_repair::success(target, world),
         maintenance::consume_tool(world, tool),
     ])
+}
+
+fn filled_beaker_template(world: &World, beaker: EntityId) -> Option<i32> {
+    script_util::get_all_links_with_template(world, beaker, |link| {
+        matches!(link, dark::properties::Link::Mutate).then_some(())
+    })
+    .first()
+    .map(|(template, _)| *template)
+}
+
+/// A world frob can fill a carried beaker in flatscreen; VR can also place
+/// a specific beaker against the pile using the shared close-tool gesture.
+pub struct WormPile;
+impl Script for WormPile {
+    fn handle_message(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        _physics: &crate::physics::PhysicsWorld,
+        msg: &MessagePayload,
+    ) -> Effect {
+        if !matches!(msg, MessagePayload::Frob) {
+            return Effect::NoEffect;
+        }
+        match script_util::player_carried_items(world)
+            .into_iter()
+            .find(|item| script_util::entity_has_script(world, *item, "BeakerScript"))
+        {
+            Some(tool) => Effect::ApplyItemTool {
+                tool,
+                target: Some(entity_id),
+            },
+            None => Effect::ShowMessage {
+                text: "An empty beaker is needed to collect these worms.".into(),
+            },
+        }
+    }
 }
 
 fn recycle_value(world: &World, target: EntityId) -> Result<i32, &'static str> {
@@ -173,6 +243,45 @@ impl Script for ItemTool {
 mod tests {
     use super::*;
     use dark::properties::{PropObjState, PropScripts};
+
+    #[test]
+    fn beakers_use_authored_mutation_consume_the_pile_and_refuse_repeat_collection() {
+        use dark::properties::{Link, Links, ToLink};
+        for filled in [-48, -1264] {
+            let mut world = World::new();
+            let beaker = world.add_entity((
+                PropScripts {
+                    scripts: vec!["BeakerScript".into()],
+                    inherits: false,
+                },
+                Links {
+                    to_links: vec![ToLink {
+                        to_template_id: filled,
+                        to_entity_id: None,
+                        link: Link::Mutate,
+                    }],
+                },
+            ));
+            let pile = world.add_entity((PropScripts {
+                scripts: vec!["WormPileScript".into()],
+                inherits: false,
+            },));
+            assert!(can_apply(&world, beaker, pile));
+            let effects = Effect::flatten(vec![apply(&world, beaker, Some(pile))]);
+            assert!(effects.iter().any(|e| matches!(e, Effect::ReplaceEntity { entity_id, template_id } if *entity_id == beaker && *template_id == filled)));
+            assert!(
+                effects.iter().any(
+                    |e| matches!(e, Effect::DestroyEntity { entity_id } if *entity_id == pile)
+                )
+            );
+            world.delete_entity(pile);
+            assert!(!can_apply(&world, beaker, pile));
+            assert!(matches!(
+                apply(&world, beaker, Some(pile)),
+                Effect::ShowMessage { .. }
+            ));
+        }
+    }
 
     #[test]
     fn recycler_uses_authored_stack_value_keeps_device_and_refuses_unpriced_items() {
