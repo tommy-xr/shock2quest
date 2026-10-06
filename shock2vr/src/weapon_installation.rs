@@ -54,7 +54,9 @@ fn device_available(world: &World, device: EntityId) -> bool {
 
 /// The purchase route and the lock ship together for this weapon family.
 pub fn alternate_unlocked(world: &World, weapon: EntityId) -> bool {
-    !supported(world, weapon) || state(world, weapon).has(WeaponUpgrade::AlternateFire)
+    !supported(world, weapon)
+        || crate::weapon_modification::innate_alternate_fire(world, weapon)
+        || state(world, weapon).has(WeaponUpgrade::AlternateFire)
 }
 
 /// Every ranged family has two authored fire settings and a positive capacity.
@@ -66,6 +68,10 @@ pub fn available(world: &World, weapon: EntityId) -> Vec<WeaponUpgrade> {
     WeaponUpgrade::ALL
         .into_iter()
         .filter(|choice| *choice != WeaponUpgrade::Silencer || silencer_compatible(world, weapon))
+        .filter(|choice| {
+            *choice != WeaponUpgrade::AlternateFire
+                || !crate::weapon_modification::innate_alternate_fire(world, weapon)
+        })
         .collect()
 }
 
@@ -306,7 +312,13 @@ mod tests {
                 },
             );
             assert!(supported(&world, gun));
-            assert!(!alternate_unlocked(&world, gun));
+            let innate = ["AnnelidModify", "ViralModify"].contains(&script);
+            assert_eq!(alternate_unlocked(&world, gun), innate);
+            assert_eq!(
+                available(&world, gun).contains(&WeaponUpgrade::AlternateFire),
+                !innate
+            );
+            assert_eq!(state(&world, gun).tier(), 0);
             assert_eq!(
                 available(&world, gun).contains(&WeaponUpgrade::Silencer),
                 ["PistolModify", "RifleModify"].contains(&script)
@@ -341,7 +353,11 @@ mod tests {
                 .clone();
             for (tier, choice) in [
                 WeaponUpgrade::ExtendedCapacity,
-                WeaponUpgrade::AlternateFire,
+                if innate {
+                    WeaponUpgrade::Flashlight
+                } else {
+                    WeaponUpgrade::AlternateFire
+                },
                 WeaponUpgrade::LowMaintenanceI,
                 WeaponUpgrade::LowMaintenanceII,
             ]
