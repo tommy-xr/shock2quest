@@ -329,7 +329,8 @@ const PLAYER_SLOPE_MIN_HORIZONTAL_NORMAL_SQUARED: f32 = 0.0076;
 const PLAYER_SLOPE_MIN_FLOOR_NORMAL: f32 = 0.25;
 
 /// Legacy PR threshold, retained for gameplay review: a continuous unsupported
-/// drop of 50 SS2 feet (20 world units) is treated as fatal before landing,
+/// drop equivalent to 50 SS2 feet (20 world units) at normal gravity is fatal,
+/// weighting each segment by its actual gravity rather than raw distance,
 /// unless the current descent has a clear capsule path into authored water.
 ///
 /// The tracker resets on sustained terrain contact, direct relocation,
@@ -3314,6 +3315,12 @@ pub enum PhysicsShape {
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FatalFallTracker {
     reference_y: Real,
+    // Optional only for the genuine pre-fix checkpoint used by the campaign.
+    // Current saves always retain both the last sample and weighted distance.
+    #[serde(default)]
+    previous_y: Option<Real>,
+    #[serde(default)]
+    gravity_weighted_descent: Real,
     supported_frames: u8,
     reported: bool,
 }
@@ -3322,6 +3329,8 @@ impl FatalFallTracker {
     fn new(y: Real) -> Self {
         Self {
             reference_y: y,
+            previous_y: Some(y),
+            gravity_weighted_descent: 0.0,
             supported_frames: 0,
             reported: false,
         }
@@ -3331,6 +3340,17 @@ impl FatalFallTracker {
         *self = Self::new(y);
     }
 
+    /// Equivalent normal-gravity descent for the next sample. This weights
+    /// the existing void guard, not retail impact damage. Rising travel
+    /// unwinds the descent; a new apex cannot carry debt from an older fall.
+    fn descent_at(&self, target_y: Real, gravity_scale: Real) -> Real {
+        if target_y >= self.reference_y {
+            return 0.0;
+        }
+        let delta = self.previous_y.unwrap_or(self.reference_y) - target_y;
+        (self.gravity_weighted_descent + delta * gravity_scale.max(0.0)).max(0.0)
+    }
+
     /// Returns true once when one unsupported descent becomes fatal.
     fn update(
         &mut self,
@@ -3338,6 +3358,7 @@ impl FatalFallTracker {
         touches_traversable_surface: bool,
         has_explicit_support: bool,
         has_water_landing: bool,
+        gravity_scale: Real,
     ) -> bool {
         if has_explicit_support {
             self.relocate(target_y);
@@ -3347,8 +3368,7 @@ impl FatalFallTracker {
         if touches_traversable_surface {
             self.supported_frames = self.supported_frames.saturating_add(1);
             if self.supported_frames >= PLAYER_FATAL_FALL_SUPPORT_FRAMES {
-                self.reference_y = target_y;
-                self.reported = false;
+                self.relocate(target_y);
                 return false;
             }
         } else {
@@ -3357,11 +3377,13 @@ impl FatalFallTracker {
 
         // A jump or an upward impulse starts measuring from its apex, not the
         // last floor. This keeps the rule about actual downward travel.
+        self.gravity_weighted_descent = self.descent_at(target_y, gravity_scale);
+        self.previous_y = Some(target_y);
         self.reference_y = self.reference_y.max(target_y);
         // Water below defers the decision, but is not support: preserve the
-        // original fall distance and reported state, including across saves.
+        // weighted fall distance and reported state, including across saves.
         // Steering out of the pool's column must immediately restore the guard.
-        let fatal = self.reference_y - target_y >= PLAYER_FATAL_FALL_DISTANCE
+        let fatal = self.gravity_weighted_descent >= PLAYER_FATAL_FALL_DISTANCE
             && !self.reported
             && !has_water_landing;
         if fatal {
@@ -7690,7 +7712,8 @@ impl PhysicsWorld {
         // input or a moving obstacle can change the available route mid-fall.
         let has_water_landing = !has_explicit_support
             && !player_handle.fatal_fall.reported
-            && player_handle.fatal_fall.reference_y - target.y >= PLAYER_FATAL_FALL_DISTANCE
+            && player_handle.fatal_fall.descent_at(target.y, gravity_scale)
+                >= PLAYER_FATAL_FALL_DISTANCE
             && clear_water_landing(
                 &self.water_surfaces,
                 &self.player_movement_queries(dispatcher, movement_filter),
@@ -7705,6 +7728,7 @@ impl PhysicsWorld {
             player_movement.touches_traversable_surface,
             has_explicit_support,
             has_water_landing,
+            gravity_scale,
         ) {
             collision_events.push(CollisionEvent::FatalFall {
                 entity_id: player_id,
@@ -10400,6 +10424,90 @@ mod tests {
     }
 
     #[test]
+    fn gravity_weighted_fall_survives_authored_shaft_and_round_trips() {
+        let mut tracker = FatalFallTracker::new(-28.0);
+        // Stock SHODAN: first eight units at 5%, then a long 1% shaft.
+        for y in 29..=36 {
+            assert!(!tracker.update(-(y as f32), false, false, false, 0.05));
+        }
+        for y in 37..=180 {
+            assert!(!tracker.update(-(y as f32), false, false, false, 0.01));
+        }
+        let saved = serde_json::to_string(&tracker).unwrap();
+        let mut restored: FatalFallTracker = serde_json::from_str(&saved).unwrap();
+        for y in 181..=344 {
+            assert!(!tracker.update(-(y as f32), false, false, false, 0.01));
+            assert!(!restored.update(-(y as f32), false, false, false, 0.01));
+        }
+        assert!((tracker.gravity_weighted_descent - 3.48).abs() < 0.001);
+        assert_eq!(tracker.previous_y, restored.previous_y);
+        assert_eq!(
+            tracker.gravity_weighted_descent,
+            restored.gravity_weighted_descent
+        );
+        // Reduced gravity still has a finite budget; it is not immunity.
+        assert!(tracker.update(-2000.0, false, false, false, 0.01));
+        assert!(!tracker.update(-2001.0, false, false, false, 0.01));
+    }
+
+    #[test]
+    fn gravity_weighted_fall_preserves_low_to_normal_segments() {
+        let mut tracker = FatalFallTracker::new(100.0);
+        assert!(!tracker.update(0.0, false, false, false, 0.01));
+        assert!(!tracker.update(-18.0, false, false, false, 1.0));
+        assert!(tracker.update(-19.0, false, false, false, 1.0));
+        assert!(!tracker.update(-20.0, false, false, false, 1.0));
+    }
+
+    #[test]
+    fn gravity_weighted_fall_resets_for_support_and_new_apex() {
+        let mut tracker = FatalFallTracker::new(0.0);
+        assert!(!tracker.update(-19.0, false, false, false, 1.0));
+        // An ascent unwinds debt; exceeding the old apex clears it even
+        // when the upward segment uses a different gravity scale.
+        assert!(!tracker.update(1.0, false, false, false, 0.01));
+        assert_eq!(tracker.gravity_weighted_descent, 0.0);
+        assert!(!tracker.update(-18.0, false, false, false, 1.0));
+        assert!(!tracker.update(-18.0, false, true, false, 1.0));
+        assert!(!tracker.update(-37.0, false, false, false, 1.0));
+        assert!(tracker.update(-38.0, false, false, false, 1.0));
+        // Three stable contacts re-arm a fresh normal-gravity fall.
+        for _ in 0..3 {
+            assert!(!tracker.update(-38.0, true, false, false, 1.0));
+        }
+        assert!(!tracker.update(-57.0, false, false, false, 1.0));
+        assert!(tracker.update(-58.0, false, false, false, 1.0));
+    }
+
+    #[test]
+    fn gravity_weighted_fall_uses_live_player_gravity() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 0.0, 0.0), EntityId::from_inner(1001).unwrap());
+        world.rigid_body_set[player.character_handle].set_gravity_scale(0.05, true);
+        for _ in 0..300 {
+            let events = world.update(vec3(0.0, -0.5, 0.0), &mut player).1;
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, CollisionEvent::FatalFall { .. }))
+            );
+        }
+        assert!(world.get_player_translation(&player).y < -100.0);
+        world.rigid_body_set[player.character_handle].set_gravity_scale(1.0, true);
+        let mut fatalities = 0;
+        for _ in 0..150 {
+            fatalities += world
+                .update(vec3(0.0, 0.0, 0.0), &mut player)
+                .1
+                .iter()
+                .filter(|event| matches!(event, CollisionEvent::FatalFall { .. }))
+                .count();
+        }
+        assert_eq!(fatalities, 1);
+    }
+
+    #[test]
     fn unsupported_fall_beyond_survivable_distance_emits_one_fatal_event() {
         let mut world = PhysicsWorld::new();
         let player_id = EntityId::from_inner(1001).unwrap();
@@ -10455,7 +10563,7 @@ mod tests {
         for step in 1..=150 {
             let y = -(step as f32) * 0.2;
             let brushes_surface = step % 25 == 0;
-            events += tracker.update(y, brushes_surface, false, false) as usize;
+            events += tracker.update(y, brushes_surface, false, false, 1.0) as usize;
         }
 
         assert_eq!(events, 1, "one interrupted descent is still one fatal fall");
@@ -10474,7 +10582,7 @@ mod tests {
             let y = -(step as f32) * 0.2;
             let touches_surface =
                 movement_touches_traversable_surface(true, true, true, vector![0.0, -0.2, 0.0]);
-            events += tracker.update(y, touches_surface, false, false) as usize;
+            events += tracker.update(y, touches_surface, false, false, 1.0) as usize;
         }
 
         assert_eq!(
@@ -10494,7 +10602,7 @@ mod tests {
             let touches_surface =
                 movement_touches_traversable_surface(false, true, true, vector![0.1, -0.2, 0.0]);
             assert!(
-                !tracker.update(y, touches_surface, false, false),
+                !tracker.update(y, touches_surface, false, false, 1.0),
                 "sustained terrain contact must remain safe at y={y}"
             );
         }
@@ -10502,7 +10610,7 @@ mod tests {
         // Once the player leaves it, a new full-distance fall is fatal.
         let mut fatal = false;
         for step in 1..=110 {
-            fatal |= tracker.update(-step as f32 * 0.2, false, false, false);
+            fatal |= tracker.update(-step as f32 * 0.2, false, false, false, 1.0);
         }
         assert!(fatal, "leaving the slope must arm a new fatal fall");
     }
