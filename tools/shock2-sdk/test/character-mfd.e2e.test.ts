@@ -69,7 +69,7 @@ for (const vr of [false, true]) {
     const card = await game.player.spawnItem(-1495); // Hydro Card B archetype
     await game.entities.sendMessage(card.entity_id, { type: "Frob" });
     await game.step({ frames: 3 });
-    assert.match(await renderedText(), /Hydroponics B/);
+    assert.match(await renderedText(), /HYDROPONICS B/);
     assert.doesNotMatch(await renderedText(), /No access cards/);
     await clickUtility("utility_close");
     assert.ok(!(await game.ui.state()).utilities.some((e) => e.label === "utility_close"));
