@@ -29,9 +29,12 @@ interface Runtime {
 
 function spawnRuntime(args: string[]): Runtime {
   assert.ok(repoRoot, "could not find cargo workspace root");
+  // These raw launches need the same immutable executable as GameServer.
+  const binary = process.env.SHOCK2_RUNTIME_BINARY;
+  const runtimeArgs = ["--mission", "debug_minimal", ...args];
   const child = spawn(
-    "cargo",
-    ["run", "-p", "debug_runtime", "--", "--mission", "debug_minimal", ...args],
+    binary || "cargo",
+    binary ? runtimeArgs : ["run", "-p", "debug_runtime", "--", ...runtimeArgs],
     {
       cwd: repoRoot,
       env: { ...process.env, RUST_LOG: "debug_runtime=info" },
