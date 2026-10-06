@@ -13,11 +13,14 @@ test("VR nanites credit on release exactly once, with sound and releasing-hand h
   const [pile] = await game.entities.byTemplate(257);
   assert.ok(pile);
   const [x, y, z] = pile.position;
-  await game.player.teleport({ x: x + .3, y: y + .15, z: z + .3 });
+  // Keep the reaching palm clear of shoulder-backpack gesture arbitration.
+  await game.player.teleport({ x: x + .8, y: y + 1, z: z + .8 });
   await game.step({ frames: 120 });
   const aim = await game.player.aimAt(pile.id, { hitbox: "center", visibility: "required" });
   assert.ok(aim.target_confirmed);
   await aimVrHandAt(game, aim.world_point, .35, 0);
+  assert.equal((await game.info()).player.hand_feedback?.shoulder_backpack?.near[1], false,
+    "world pickup must start outside the backpack gesture region");
   await game.input.set("right_hand.squeeze", 1);
   await game.step({ frames: 12 });
   let player = (await game.info()).player;
