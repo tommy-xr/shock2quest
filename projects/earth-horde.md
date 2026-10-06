@@ -14,6 +14,15 @@ Containment adds renewable circulators, floor/wall growth, and proximity-hatchin
 
 Validation includes director unit tests for timing, final-wave/endless gating, rewards, corpse cleanup and serialization; psi purchase quote tests; and debug-runtime purchase/save checks. The short alias is a diagnostic aid, not evidence that a full-length run has been completed.
 
+## Wave status screens
+
+Dedicated world screens on both the subway and street floors show the same
+readout in flatscreen and VR. During rest, they show the next wave and its
+countdown, with a progress bar that fills as the rest elapses. During combat,
+they show the current wave, enemies active (alive), and enemies remaining
+(including those not yet spawned); the bar fills as the wave's enemies are
+defeated. Brief HUD banners also announce wave starts and cleared-wave rests.
+
 ## Cumulative wave roster
 
 Each wave begins with a pipe hybrid and a shotgun hybrid, then introduces the new types and guarantees one of every returning type. Remaining slots are weighted random reinforcements. At most 15 enemies are alive at once; both the timer and all kills must finish before rest.
