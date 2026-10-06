@@ -4,7 +4,7 @@ Run `cargo dbgr --mission earth_horde` (or launch that mission in the desktop ru
 
 The player starts at the top of the stairs, facing the subway gravshaft.
 
-Ten escalating waves have about 26 minutes of minimum scheduled combat and rest. Clearing enemies can take longer. After the final wave, use the ready button beside the shops to begin optional endless play. The same button skips a rest. The training trigger graph is disabled. The original training doors remain sealed; OS rewards are available from the landing bank.
+Ten escalating waves have about 26 minutes of minimum scheduled combat and rest. Clearing enemies can take longer. After the final wave, use the ready button beside the shops to begin optional endless play. The same button skips a rest. The training trigger graph is disabled. The original training doors remain sealed; OS rewards are available at the four former phone locations, two on the street and two in the subway.
 
 The starter backpack contains a wrench, pistol, psi amp, ammunition and medical/psi supplies. Three shops are spread across the street; four trainers are spread around the subway. Buy psi tiers and individual powers separately; only powers supported by the current runtime are sold. Replicated items dispense in front of the machines. Random equipment and currency supplement normal enemy loot and wave rewards.
 
@@ -147,10 +147,10 @@ player health/psi pools and authored shop/training costs and loot; the director'
 wave roster, quotas, living-enemy cap, and assault schedule are fixed independently.
 A debug run accepts `--difficulty easy|normal|hard|impossible` at launch.
 
-## OS bank and service placement
+## Trait stations and service placement
 
-Four single-use OS stations mount on the continuous west wall of the upstairs
-landing, grouped clear of the doorway and light fixture. The
+Four single-use OS stations replace all four phones: two on the street and two
+in the subway, facing the original phone approaches. The
 first is available immediately; the others activate at the beginning of waves
 3, 6, and 9. Offline stations are dimmed, show their wave requirement in the
 object name, and refuse purchases until activated. Each grants one supported
