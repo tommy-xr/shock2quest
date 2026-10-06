@@ -365,7 +365,12 @@ async function releaseTrigger(
   await game.input.set("right_hand.trigger", 0);
   await game.step({ frames: 2 });
   if (targetPoint) {
-    await poseWrench(game, targetPoint, WRENCH_WINDUP_DISTANCE, 30);
+    // Trigger release does not disarm free-swing melee. Park the wrench above
+    // the player while the victim settles; leaving it pointed down the lane
+    // lets an approaching hybrid legitimately impale itself on the held head.
+    await game.input.set("right_hand.position", [0.5, 2.8, 0.5]);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.step({ frames: 30 });
   }
 }
 
@@ -450,10 +455,10 @@ function assertContactDamage(
     no_damage: 0,
   }[part.classification];
   assert.ok(multiplier > 0, `${label}: the swing must hit a damaging body part`);
-  const expectedHp = Math.max(0, hitPoints(before) - Math.round(9 * multiplier));
+  const expectedHp = Math.max(0, hitPoints(before) - Math.round((6 + 9) * 0.5 * multiplier));
   assert.equal(
     hitPoints(after), expectedHp,
-    `${label}: authored 9-HP Wrench contact on ${part.classification} (joint ${bone})`,
+    `${label}: authored 15-HP Wrench contact at one-hand scale 0.5 on ${part.classification} (joint ${bone})`,
   );
   return expectedHp;
 }
@@ -483,8 +488,9 @@ async function killShotgunWithBoundedPulls(
   const target = await byMissionId(game, "OG-Shotgun", SHOTGUN_HYBRID);
   assert.equal(hitPoints(await game.entities.detail(target.id)), 24);
 
-  // Even extremity hits deal round(9 * 0.5) = 5 HP: five pulls must kill.
-  for (let hit = 0; hit < 5; hit++) {
+  // Both inherited sources emit; the unsupported hand halves damage.
+  // Extremity hits deal round((6 + 9) * 0.5 * 0.5) = 4 HP: six pulls kill.
+  for (let hit = 0; hit < 6; hit++) {
     const before = await game.entities.detail(target.id);
     const beforeBody = await bodyFor(game, target.id);
     const { sequence, targetId, targetPoint } = await firstWrenchContact(game, target, -1);
@@ -558,7 +564,7 @@ async function killShotgunWithBoundedPulls(
       return;
     }
   }
-  assert.fail("five minimum-damage native Wrench pulls must kill the original OG-Shotgun");
+  assert.fail("six minimum-damage native Wrench pulls must kill the original OG-Shotgun");
 }
 
 test(
@@ -735,7 +741,7 @@ test(
     assert.ok(monster, "expected a newly spawned OG-Pipe");
     assert.equal(hitPoints(await game.entities.detail(monster.id)), 12);
 
-    // Leave 1 HP, below even the minimum damaging extremity contact (5 HP).
+    // Leave 1 HP, below even the minimum damaging extremity contact (4 HP).
     // The setup damage is deliberately directionless and non-lethal.
     await game.entities.sendMessage(monster.id, { type: "Damage", amount: 11 });
     await game.step({ frames: 2 });
