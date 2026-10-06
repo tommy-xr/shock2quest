@@ -4815,6 +4815,29 @@ impl MissionCore {
             }
         }
 
+        // Native moving terrain is independent of object scripts. Set targets
+        // before stepping physics so contacts, render poses and saved positions
+        // all observe the same completed motion (including passenger support).
+        for (entity, pose) in super::moving_terrain::update(&self.world, time, |entity| {
+            self.id_to_physics.contains_key(&entity)
+        }) {
+            if let Some(handle) = self.id_to_physics.get(&entity) {
+                self.physics.set_translation(*handle, pose.position);
+                // Initial activation adopts the path node's facing. Ordinary
+                // translation must not overwrite a pending rotation tweq.
+                let previous_rotation = self
+                    .world
+                    .borrow::<View<PropPosition>>()
+                    .unwrap()
+                    .get(entity)
+                    .map(|position| position.rotation)
+                    .ok();
+                if previous_rotation != Some(pose.rotation) {
+                    self.physics.set_rotation(*handle, pose.rotation);
+                }
+            }
+        }
+
         // Skip physics while time is frozen (the debug runtime's paused state
         // calls update with zero dt): the Rapier pipeline advances by a fixed
         // internal dt per call regardless of elapsed time, so stepping it here

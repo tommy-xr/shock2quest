@@ -868,15 +868,26 @@ impl AIProjectileOptions {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TPathData {
     pub speed: f32,
+    /// Delay before traversing this edge, in milliseconds (an integer on disk).
+    pub pause_ms: i32,
+    /// Stop at the waypoint for this physics step instead of consuming overshoot.
+    pub path_limit: bool,
+    /// Elapsed pause, or -1 while travelling. Native moving terrain saves this.
+    pub current_pause_ms: i32,
 }
 
 impl TPathData {
     pub fn read(reader: &mut Box<dyn ReadAndSeek>, _len: u32) -> TPathData {
         let speed = read_single(reader) / SCALE_FACTOR;
-        let _time = read_single(reader);
-        let _limit = read_bool(reader);
-        let _paused = read_u32(reader);
-        TPathData { speed }
+        let pause_ms = read_i32(reader);
+        let path_limit = read_bool(reader);
+        let current_pause_ms = read_i32(reader);
+        TPathData {
+            speed,
+            pause_ms,
+            path_limit,
+            current_pause_ms,
+        }
     }
 }
 
@@ -3427,6 +3438,25 @@ mod tests {
         let property = PropUseMsg(read_variable_length_string(&mut cursor, 15));
 
         assert_eq!(property.0, "OutOfOrder");
+    }
+
+    #[test]
+    fn terrain_path_reads_integer_pause_limit_and_signed_pause_state() {
+        let mut bytes = 12.0f32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&1500i32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(-1i32).to_le_bytes());
+        let mut reader: Box<dyn ReadAndSeek> = Box::new(Cursor::new(bytes));
+        let data = TPathData::read(&mut reader, 16);
+        assert_eq!(
+            data,
+            TPathData {
+                speed: 4.8,
+                pause_ms: 1500,
+                path_limit: true,
+                current_pause_ms: -1
+            }
+        );
     }
 
     #[test]

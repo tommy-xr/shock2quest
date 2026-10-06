@@ -17,6 +17,7 @@ mod holsters;
 mod implant_sockets;
 mod mfd_utilities;
 pub mod mission_core;
+mod moving_terrain;
 pub mod pathfinding_debug;
 pub mod pathfinding_test;
 pub mod player_footsteps;
