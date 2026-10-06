@@ -146,8 +146,13 @@ pub fn create_entity_with_position(
         world.add_component(entity_id, dark::properties::PropEcoType(ecology_type));
     }
 
-    if additional_options.force_visible {
+    // A projectile template may be parked outside the world (Red Monkey Shot
+    // authors HasRefs=false). Launching must activate its physics as well as
+    // its attached effects, without overriding authored NoRender behavior.
+    if additional_options.force_visible || additional_options.launch_projectile {
         world.add_component(entity_id, PropHasRefs(true));
+    }
+    if additional_options.force_visible {
         world.add_component(entity_id, PropRenderType(RenderType::Normal));
     };
 
