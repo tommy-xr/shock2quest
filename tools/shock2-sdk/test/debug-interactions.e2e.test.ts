@@ -43,10 +43,12 @@ test(
         await game.step({ frames: 3 });
         const heldSlot = hand === "left" ? "wielded_entity_id" : "right_hand_entity_id";
         if ([-2998, -2594].includes(template)) {
-          assert.equal((await game.info()).player[heldSlot], null, "credentials are collected, not held");
-          assert.ok(!(await game.entities.list()).entities.some(e => e.id === item.id), "collecting consumes the card pickup");
+          assert.equal((await game.info()).player[heldSlot], item.id,
+            "credentials are held until the player releases them to download");
           await game.input.set(`${hand}_hand.squeeze`, 0);
           await game.step({ frames: 3 });
+          assert.equal((await game.info()).player[heldSlot], null, "release collects the credential");
+          assert.ok(!(await game.entities.list()).entities.some(e => e.id === item.id), "collecting consumes the card pickup");
           continue;
         }
         assert.equal(
@@ -84,8 +86,12 @@ test(
           const offset = before.grip.offset;
           const input = { position: [0, 3, 0] as [number, number, number],
             rotation: [0, Math.sin(0.3), 0, Math.cos(0.3)] as [number, number, number, number] };
-          const expected = add(snapshot.player.position, quatRotate(snapshot.player.rotation,
-            add(input.position, quatRotate(input.rotation, [offset.x, offset.y, offset.z]))));
+          // Grip offsets are relative to the calibrated hand, not raw tracking.
+          // The runtime reports that world point after applying glove-forward fit.
+          const handWorld = (await game.input.state())[`${hand}_hand`].world_position;
+          assert.ok(handWorld, "VR input exposes the calibrated hand world position");
+          const expected = add(handWorld, quatRotate(snapshot.player.rotation,
+            quatRotate(input.rotation, [offset.x, offset.y, offset.z])));
           const actual = (await game.entities.list()).entities.find(e => e.id === item.id)!.position;
           assert.ok(actual.every((v,i) => Math.abs(v-expected[i]) < 0.001), "item origin follows the fitted hand-local offset");
         }
@@ -96,7 +102,12 @@ test(
           `${hand} releases ${item.name}`,
         );
         assert.ok(!(await game.info()).player.hand_grips.some(g => g.hand === hand), "release clears the fitted grip");
-        for (const draw of (await game.scene.objects({entityId:item.id})).objects) {
+        // The stowed tricorder readout can be tagged with the selected item;
+        // compare the released world model, not those UI quads' dimensions.
+        const released = (await game.scene.objects({entityId:item.id})).objects
+          .filter(draw => draw.source === "entity");
+        assert.ok(released.length > 0, `${item.name}: released world model renders`);
+        for (const draw of released) {
           for (let axis = 0; axis < 3; axis++) assert.ok(Math.abs(draw.scale[axis] - worldDraws[0].scale[axis]) < 1e-5,
             `${item.name}: release restores the original world size`);
         }
