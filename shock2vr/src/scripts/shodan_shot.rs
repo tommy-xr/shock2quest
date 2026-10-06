@@ -163,4 +163,79 @@ mod tests {
             Effect::NoEffect
         ));
     }
+
+    #[test]
+    fn shodan_shot_authored_bounce_delivers_one_stim16_and_one_slay() {
+        use crate::{
+            mission::stim_response::GlobalContactStims,
+            scripts::internal_collision_type::InternalCollisionType,
+        };
+        use dark::properties::{
+            CollisionType, PropCollisionType, ReceptronEffect, ReceptronOptions,
+        };
+        use dark::properties::{Link, Links, ToLink};
+
+        let (mut world, shot, _, victim) = fixture(0);
+        world.add_unique(GlobalContactStims(HashMap::from([(
+            -3496,
+            vec![(-4351, 16.0)],
+        )])));
+        world.add_component(
+            shot,
+            PropCollisionType {
+                collision_type: CollisionType::BOUNCE,
+            },
+        );
+        world.add_component(
+            victim,
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: -4351,
+                    to_entity_id: None,
+                    link: Link::Receptron(ReceptronOptions {
+                        order: 1,
+                        effect: ReceptronEffect::Damage {
+                            multiplier: 1.0,
+                            use_intensity: true,
+                        },
+                    }),
+                }],
+            },
+        );
+        let physics = PhysicsWorld::new();
+        let mut shot_script = ShodanShot::new();
+        let mut collision_script = InternalCollisionType::new();
+        collision_script.initialize(shot, &world);
+        let contact = MessagePayload::Collided {
+            with: victim,
+            contact: None,
+        };
+        let mut effects = Vec::new();
+        // Multiple collider contacts can arrive before the terminal effect is
+        // applied. Both authored and internal scripts see each notification.
+        for _ in 0..2 {
+            effects.push(shot_script.handle_message(shot, &world, &physics, &contact));
+            effects.push(collision_script.handle_message(shot, &world, &physics, &contact));
+        }
+        let flattened = Effect::flatten(effects);
+        assert_eq!(
+            flattened
+                .iter()
+                .filter(|effect| matches!(effect,
+            Effect::SlayEntity { entity_id } if *entity_id == shot))
+                .count(),
+            1
+        );
+        let damage = flattened
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::Send { msg } if msg.to == victim => match msg.payload {
+                    MessagePayload::Damage { amount, .. } => Some(amount),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(damage, vec![16.0]);
+    }
 }
