@@ -1,7 +1,7 @@
 //! A game-scale alcohol vital, not a physiological BAC estimate.
 //!
 //! One bottle adds one unit; one unit clears every 45 seconds of gameplay.
-//! More than two units starts a peripheral wave overlay, reaching full strength
+//! More than two units starts a world vertex wave and haze, reaching full strength
 //! at four. Smooth strength changes avoid a flash when drinking or sobering up.
 use cgmath::{Matrix4, SquareMatrix, vec3};
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,8 @@ const RECOVERY_PER_SECOND: f32 = 1.0 / 45.0;
 const THRESHOLD: f32 = 2.0;
 const FULL_EFFECT_LEVEL: f32 = 4.0;
 const MAX_OPACITY: f32 = 0.16;
+// Maximum horizontal shear: about six degrees at full strength.
+const MAX_SHEAR: f32 = 0.10;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, Unique)]
 pub struct AlcoholVital {
@@ -62,6 +64,40 @@ impl AlcoholVital {
         self
     }
 
+    /// Apply the same world-space field in flat and VR. Player gear and UI keep
+    /// their authored positions; neither the camera nor physics is displaced.
+    pub(crate) fn apply_world_wave(&self, scene: &mut [engine::scene::SceneObject], origin_y: f32) {
+        use crate::util::render_source;
+        use engine::scene::{RenderLayer, world_wave::WorldWave};
+
+        let wave = WorldWave {
+            offset_per_height: self.intensity
+                * MAX_SHEAR
+                * vec3(
+                    self.phase.sin(),
+                    0.35 * (2.0 * self.phase).sin(),
+                    self.phase.cos(),
+                ),
+            origin_y,
+        };
+        for object in scene {
+            let source = object.debug_tag().and_then(|tag| tag.source.as_deref());
+            let stable = object.render_layer() != RenderLayer::World
+                || matches!(
+                    source,
+                    Some(
+                        render_source::PLAYER_HANDS
+                            | render_source::GAMEPLAY_HUD
+                            | render_source::DEBUG_OVERLAY
+                            | render_source::DAMAGE_NUMBERS
+                            | render_source::FRONTEND_POINTER
+                            | render_source::USE_MODE_POINTER
+                    )
+                );
+            object.world_wave = if stable { WorldWave::default() } else { wave };
+        }
+    }
+
     pub(crate) fn render(
         &self,
         view: Matrix4<f32>,
@@ -97,6 +133,54 @@ impl AlcoholVital {
 mod tests {
     use super::*;
     use engine::scene::RenderLayer;
+
+    #[test]
+    fn world_wave_spares_gear_and_ui_and_clears_when_sober() {
+        use crate::util::render_source;
+        use engine::scene::{SceneObject, color_material, quad, world_wave::WorldWave};
+        let create = || {
+            SceneObject::new(
+                color_material::create(vec3(1.0, 1.0, 1.0)),
+                Box::new(quad::create()),
+            )
+        };
+        let mut scene = vec![create()];
+        for source in [
+            render_source::PLAYER_HANDS,
+            render_source::GAMEPLAY_HUD,
+            render_source::DEBUG_OVERLAY,
+            render_source::DAMAGE_NUMBERS,
+            render_source::FRONTEND_POINTER,
+            render_source::USE_MODE_POINTER,
+        ] {
+            let mut objects = vec![create()];
+            crate::util::tag_render_source(&mut objects, source);
+            scene.extend(objects);
+        }
+        for layer in [
+            RenderLayer::SceneUi,
+            RenderLayer::SceneOverlay,
+            RenderLayer::SystemOverlay,
+        ] {
+            let mut object = create();
+            object.set_render_layer(layer);
+            scene.push(object);
+        }
+        let mut vital = AlcoholVital::default();
+        for _ in 0..4 {
+            vital.drink();
+        }
+        vital.update(1.0);
+        vital.apply_world_wave(&mut scene, 3.0);
+        assert!(scene[0].world_wave.offset_per_height.x > 0.0);
+        assert_eq!(scene[0].world_wave.origin_y, 3.0);
+        assert_eq!(scene[0].duplicate().world_wave, scene[0].world_wave);
+        for object in &scene[1..] {
+            assert_eq!(object.world_wave, WorldWave::default());
+        }
+        AlcoholVital::default().apply_world_wave(&mut scene, 3.0);
+        assert_eq!(scene[0].world_wave.offset_per_height, vec3(0.0, 0.0, 0.0));
+    }
 
     #[test]
     fn repeated_drinks_cross_threshold_and_fade_smoothly() {

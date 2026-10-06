@@ -2849,6 +2849,15 @@ impl Game {
         }
         scene.extend(pause_objects);
 
+        if !self.player_visuals_hidden() {
+            if let Ok(alcohol) = self
+                .world()
+                .borrow::<shipyard::UniqueView<alcohol::AlcoholVital>>()
+            {
+                alcohol.apply_world_wave(&mut scene, pos.y);
+            }
+        }
+
         // let font = File::open(resource_path("res/fonts/mainfont.FON")).unwrap();
         // let mut font_reader = BufReader::new(font);
         // let font: Rc<Box<dyn engine::Font>> =

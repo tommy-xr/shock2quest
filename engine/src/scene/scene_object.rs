@@ -141,6 +141,8 @@ pub struct SceneObject {
     pub local_transform: Matrix4<f32>, //hack...
     pub skinning_data: [Matrix4<f32>; crate::scene::SKINNING_PALETTE_SIZE],
     pub depth_write: bool,
+    /// Visual displacement for this object, including its self-depth passes.
+    pub world_wave: super::world_wave::WorldWave,
     /// Parts sharing an ID hide one another, without occluding other transparency.
     pub self_depth_group: Option<u64>,
     render_layer: RenderLayer,
@@ -407,6 +409,7 @@ impl SceneObject {
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); crate::scene::SKINNING_PALETTE_SIZE],
             depth_write: true,
+            world_wave: Default::default(),
             self_depth_group: None,
             render_layer: RenderLayer::World,
             projection_override: None,
@@ -475,6 +478,7 @@ impl SceneObject {
         }
 
         let render_context = EngineRenderContext {
+            world_wave: self.world_wave,
             projection_matrix: self
                 .projection_override
                 .unwrap_or(render_context.projection_matrix),
@@ -538,6 +542,7 @@ impl SceneObject {
         lights: &crate::scene::light::LightArray,
     ) {
         let render_context = EngineRenderContext {
+            world_wave: self.world_wave,
             projection_matrix: self
                 .projection_override
                 .unwrap_or(render_context.projection_matrix),
@@ -681,6 +686,7 @@ impl SceneObject {
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); crate::scene::SKINNING_PALETTE_SIZE],
             depth_write: true,
+            world_wave: Default::default(),
             self_depth_group: None,
             render_layer: RenderLayer::World,
             projection_override: None,
@@ -704,6 +710,7 @@ impl SceneObject {
             local_transform: self.local_transform,
             skinning_data: self.skinning_data,
             depth_write: self.depth_write,
+            world_wave: self.world_wave,
             self_depth_group: self.self_depth_group,
             render_layer: self.render_layer,
             projection_override: self.projection_override,
@@ -959,7 +966,12 @@ mod tests {
         }));
         object.set_transparency(Some(0.5));
         object.set_depth_write(false);
+        object.world_wave = super::super::world_wave::WorldWave {
+            offset_per_height: vec3(0.1, 0.03, 0.0),
+            origin_y: 1.0,
+        };
         let depth = object.self_depth_object().unwrap();
+        assert_eq!(depth.world_wave, object.world_wave);
         assert!(Rc::ptr_eq(&depth.material, &base));
         assert!(depth.material_stack.is_none());
         assert_eq!(depth.transparency_override, Some(0.0));

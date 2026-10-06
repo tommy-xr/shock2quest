@@ -116,6 +116,7 @@ impl CameraPose {
     ) -> engine::EngineRenderContext {
         engine::EngineRenderContext {
             self_depth: engine::scene::self_depth::Phase::None,
+            world_wave: Default::default(),
             time,
             ambient_light_intensity: crate::dev_params::get(
                 crate::dev_params::AMBIENT_LIGHT_INTENSITY,
