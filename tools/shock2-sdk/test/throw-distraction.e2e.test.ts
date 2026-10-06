@@ -11,6 +11,8 @@ test("a thrown mug distracts a hybrid toward its audible scenery impact", {
   await using game = await GameServer.launch({
     mission: "debug_interactions", debugFlags: ["--vr"],
   });
+  // Hiding below the floor must not kill the observer and unload the scene.
+  await game.devParams.set("cheat", 1);
   await game.step({ frames: 60 });
   const mug = (await game.entities.list({ filter: "Mug" })).entities.find(
     entity => entity.template_id === -1221,
@@ -76,6 +78,7 @@ test("a thrown mug distracts a hybrid toward its audible scenery impact", {
   assert.ok(collisions.some(sound => Math.hypot(...target.map((value, axis) => value - sound.position[axis])) < 0.1),
     `investigation target is an actual cup impact: ${known}`);
   await game.step({ frames: 180 });
+  assert.ok((await game.info()).player.hit_points! > 0, "the hidden observer remains alive");
   const moved = await game.entities.detail(hybrid.id);
   assert.equal(moved.properties.find(p => p.name === "HitPoints")?.value, initialHp);
   assert.ok(!["MeleeAttack", "RangedAttack"].includes(
