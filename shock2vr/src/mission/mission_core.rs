@@ -15760,6 +15760,13 @@ impl MissionCore {
             messages,
             font.as_ref().as_ref(),
         );
+        if !self.use_mode {
+            crate::hud::hazards::emit(
+                &mut canvas,
+                crate::hud::hazards::SCREEN_ORIGIN,
+                &crate::hud::hazards::HazardReadout::from_world(&self.world),
+            );
+        }
         if self.use_mode {
             canvas.render_world_space(
                 asset_cache,
@@ -16788,7 +16795,10 @@ impl MissionCore {
         // is the VR half of the same shared canvas.
         if options.presentation_mode == crate::PresentationMode::Vr {
             let messages = self.hud_messages();
-            if !messages.is_empty() {
+            if !messages.is_empty()
+                || (!self.use_mode
+                    && crate::hud::hazards::HazardReadout::from_world(&self.world).active())
+            {
                 let mut objects = self.render_vr_messages(asset_cache, &messages);
                 crate::util::tag_render_source(
                     &mut objects,
