@@ -34,6 +34,15 @@ for (const hand of ["left", "right"] as const) {
     await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
     await game.input.set(`${hand}_hand.squeeze`, 0);
     await game.step({ frames: 3 });
+    // Body gestures use the calibrated palm, not the raw controller origin.
+    const reached = (await game.info()).player;
+    const index = hand === "left" ? 0 : 1;
+    const palm = reached.hand_feedback!.glove_contacts!.centers[index]!;
+    const pouch = reached.hand_feedback!.ammo_pouch!.center!;
+    const raw = (await game.input.state())[`${hand}_hand`].position;
+    const correction = quatRotate(quatConjugate(reached.rotation), sub(pouch, palm));
+    await game.input.set(`${hand}_hand.position`, raw.map((v, i) => v + correction[i]));
+    await game.step({ frames: 3 });
     await game.input.set(`${hand}_hand.squeeze`, 1);
     await game.step({ frames: 5 });
     assert.equal((await game.info()).player[owner], standard.entity_id);
