@@ -229,6 +229,10 @@ impl PropClassTag {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropConsumeType(pub String);
 
+/// Authored nanites returned per unit by a recycler (`P$Recycle`).
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropRecycle(pub i32);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropDestLevel(pub String);
 
@@ -1756,6 +1760,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ConsumeTy",
             read_variable_length_string,
             PropConsumeType,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Recycle",
+            |reader, _len| read_i32(reader),
+            PropRecycle,
             accumulator::latest,
         ),
         define_prop(

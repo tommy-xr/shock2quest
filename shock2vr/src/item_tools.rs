@@ -1,7 +1,7 @@
 //! Shared inventory-tool decisions for cursor drags and close VR gestures.
 //! Application is queued through one effect so each use is revalidated after
 //! earlier uses have finished (a second device cannot repair the same gun).
-use dark::properties::{ObjectState, PropGunState, PropRepairDiff, PropStackCount};
+use dark::properties::{ObjectState, PropGunState, PropRecycle, PropRepairDiff, PropStackCount};
 use shipyard::{EntitiesView, EntityId, Get, View, World};
 
 use crate::scripts::{Effect, MessagePayload, Script, maintenance, script_util};
@@ -9,11 +9,18 @@ use crate::scripts::{Effect, MessagePayload, Script, maintenance, script_util};
 pub fn is_tool(world: &World, tool: EntityId) -> bool {
     maintenance::is_maintenance_tool(world, tool)
         || script_util::entity_has_script(world, tool, "FreeRepair")
+        || script_util::entity_has_script(world, tool, "Recycler")
 }
 
 pub fn offers_to(world: &World, tool: EntityId, target: EntityId) -> bool {
     if maintenance::is_maintenance_tool(world, tool) {
         return maintenance::offers_to(world, tool, target);
+    }
+    if script_util::entity_has_script(world, tool, "Recycler") {
+        return tool != target
+            && world
+                .borrow::<View<PropRecycle>>()
+                .is_ok_and(|v| v.get(target).is_ok());
     }
     script_util::entity_has_script(world, tool, "FreeRepair")
         && tool != target
@@ -39,6 +46,9 @@ fn repair_refusal(world: &World, target: Option<EntityId>) -> Option<&'static st
 }
 
 pub fn can_apply(world: &World, tool: EntityId, target: EntityId) -> bool {
+    if script_util::entity_has_script(world, tool, "Recycler") {
+        return tool != target && recycle_value(world, target).is_ok();
+    }
     if maintenance::is_maintenance_tool(world, tool) {
         return matches!(
             maintenance::maintenance_outcome(world, Some(target)),
@@ -49,6 +59,12 @@ pub fn can_apply(world: &World, tool: EntityId, target: EntityId) -> bool {
 }
 
 pub fn preview(world: &World, tool: EntityId, target: EntityId) -> String {
+    if script_util::entity_has_script(world, tool, "Recycler") {
+        return match recycle_value(world, target) {
+            Ok(value) => format!("Recycle entire item stack for {value} nanites"),
+            Err(reason) => reason.into(),
+        };
+    }
     if maintenance::is_maintenance_tool(world, tool) {
         return maintenance::preview(world, target);
     }
@@ -70,6 +86,26 @@ pub fn apply(world: &World, tool: EntityId, target: Option<EntityId>) -> Effect 
     if maintenance::is_maintenance_tool(world, tool) {
         return maintenance::apply(world, tool, target);
     }
+    if script_util::entity_has_script(world, tool, "Recycler") {
+        let value = target
+            .filter(|id| *id != tool)
+            .ok_or("Apply the recycler to an item to convert it to nanites.")
+            .and_then(|id| recycle_value(world, id));
+        return match value {
+            Ok(amount) => Effect::combine(vec![
+                Effect::DestroyEntity {
+                    entity_id: target.unwrap(),
+                },
+                Effect::AwardNanites { amount },
+                Effect::ShowMessage {
+                    text: format!("Recycled for {amount} nanites."),
+                },
+            ]),
+            Err(reason) => Effect::ShowMessage {
+                text: reason.into(),
+            },
+        };
+    }
     if !script_util::entity_has_script(world, tool, "FreeRepair") {
         return Effect::NoEffect;
     }
@@ -90,6 +126,23 @@ pub fn apply(world: &World, tool: EntityId, target: Option<EntityId>) -> Effect 
     ])
 }
 
+fn recycle_value(world: &World, target: EntityId) -> Result<i32, &'static str> {
+    let value = world
+        .borrow::<View<PropRecycle>>()
+        .ok()
+        .and_then(|v| v.get(target).ok().map(|p| p.0))
+        .unwrap_or(0);
+    let count = world
+        .borrow::<View<PropStackCount>>()
+        .ok()
+        .and_then(|v| v.get(target).ok().map(|p| p.0))
+        .unwrap_or(1);
+    if value <= 0 || count <= 0 {
+        return Err("This item cannot be recycled.");
+    }
+    Ok(value.saturating_mul(count))
+}
+
 /// Inventory activation uses the held gun; explicit drags/VR contact name their
 /// own target and do not silently choose a different hand.
 pub struct ItemTool;
@@ -104,7 +157,11 @@ impl Script for ItemTool {
         if matches!(msg, MessagePayload::Frob) {
             Effect::ApplyItemTool {
                 tool: entity_id,
-                target: crate::wielded_weapon::wielded_weapon(world),
+                // Recyclers require an explicit target: activating the tool
+                // alone must never destroy the currently wielded weapon.
+                target: script_util::entity_has_script(world, entity_id, "FreeRepair")
+                    .then(|| crate::wielded_weapon::wielded_weapon(world))
+                    .flatten(),
             }
         } else {
             Effect::NoEffect
@@ -116,6 +173,46 @@ impl Script for ItemTool {
 mod tests {
     use super::*;
     use dark::properties::{PropObjState, PropScripts};
+
+    #[test]
+    fn recycler_uses_authored_stack_value_keeps_device_and_refuses_unpriced_items() {
+        let mut world = World::new();
+        let tool = world.add_entity((PropScripts {
+            scripts: vec!["Recycler".into()],
+            inherits: false,
+        },));
+        let item = world.add_entity((PropRecycle(3), PropStackCount(6)));
+        let effects = Effect::flatten(vec![apply(&world, tool, Some(item))]);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::AwardNanites { amount: 18 }))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::DestroyEntity { entity_id } if *entity_id == item))
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::DestroyEntity { entity_id } if *entity_id == tool))
+        );
+        assert!(matches!(
+            apply(&world, tool, Some(tool)),
+            Effect::ShowMessage { .. }
+        ));
+        let unpriced = world.add_entity(());
+        assert!(matches!(
+            apply(&world, tool, Some(unpriced)),
+            Effect::ShowMessage { .. }
+        ));
+        world.delete_entity(item);
+        assert!(matches!(
+            apply(&world, tool, Some(item)),
+            Effect::ShowMessage { .. }
+        ));
+    }
 
     #[test]
     fn auto_repair_bypasses_skill_consumes_one_and_refuses_healthy_items() {
