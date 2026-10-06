@@ -9,8 +9,8 @@ use std::time::Duration;
 
 /// Incremental video decoder used by cutscene scenes.
 ///
-/// Frames are decoded only as playback reaches them. A retail ending can be
-/// several minutes of 1080p video, so retaining every RGB frame would consume
+/// Only the current image and one pending presentation frame are retained.
+/// A retail ending can be several minutes of 1080p video; retaining every frame would consume
 /// tens of gigabytes and terminate the runtime before the first frame appeared.
 pub struct VideoPlayer {
     current_time: Duration,
@@ -18,12 +18,21 @@ pub struct VideoPlayer {
     frames_per_second: f64,
     current_frame_index: usize,
     current_frame: RawTextureData,
+    pending_frame: Option<TimedFrame>,
+    time_base: f64,
+    timestamp_origin: Option<i64>,
+    last_decoded_time: Option<Duration>,
     input: ffmpeg::format::context::Input,
     video_stream_index: usize,
     decoder: ffmpeg::decoder::Video,
     scaler: ffmpeg::software::scaling::Context,
     sent_eof: bool,
     frames_exhausted: bool,
+}
+
+struct TimedFrame {
+    time: Duration,
+    image: RawTextureData,
 }
 
 impl VideoPlayer {
@@ -54,13 +63,15 @@ impl VideoPlayer {
         // container reports one. FFmpeg's container duration is in
         // microseconds (AV_TIME_BASE).
         let container_duration_seconds = input_context.duration() as f64 / 1_000_000.0;
-        let duration_seconds =
-            if stream_duration_seconds.is_finite() && stream_duration_seconds > 0.0 {
-                stream_duration_seconds
-            } else {
-                container_duration_seconds.max(0.0)
-            };
-        let duration = Duration::from_secs_f64(duration_seconds.max(0.0));
+        // Keep the final image while a longer audio stream plays out too.
+        let duration_seconds = [stream_duration_seconds, container_duration_seconds]
+            .into_iter()
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+            .fold(0.0, f64::max);
+        let duration = Duration::from_secs_f64(duration_seconds);
+        let time_base = f64::from(input_stream.time_base());
+        let start = input_stream.start_time();
+        let timestamp_origin = (start != i64::MIN).then_some(start);
         let reported_frame_rate = f64::from(input_stream.avg_frame_rate());
         let frames_per_second = if reported_frame_rate.is_finite() && reported_frame_rate > 0.0 {
             reported_frame_rate
@@ -82,6 +93,10 @@ impl VideoPlayer {
                 height: 0,
                 format: PixelFormat::RGB,
             },
+            pending_frame: None,
+            time_base,
+            timestamp_origin,
+            last_decoded_time: None,
             input: input_context,
             video_stream_index,
             decoder,
@@ -89,32 +104,50 @@ impl VideoPlayer {
             sent_eof: false,
             frames_exhausted: false,
         };
-        if !player.decode_next_frame()? {
-            return Err(ffmpeg::Error::InvalidData);
-        }
+        let first = player
+            .decode_next_frame()?
+            .ok_or(ffmpeg::Error::InvalidData)?;
+        player.current_frame = first.image;
         Ok(player)
     }
 
     /// Decode one more video frame, consuming packets from the demuxer only as
     /// needed. Audio packets are skipped because the audio player owns its own
     /// input context.
-    fn decode_next_frame(&mut self) -> Result<bool, ffmpeg::Error> {
+    fn decode_next_frame(&mut self) -> Result<Option<TimedFrame>, ffmpeg::Error> {
         loop {
             let mut decoded = Video::empty();
             if self.decoder.receive_frame(&mut decoded).is_ok() {
                 let mut rgb_frame = Video::empty();
                 self.scaler.run(&decoded, &mut rgb_frame)?;
-                self.current_frame = RawTextureData {
+                // Decoders return presentation-ordered frames. Best-effort
+                // timestamps include valid held-image gaps (e.g. Theora's
+                // duplicate frames), which frame ordinal / FPS cannot model.
+                let fallback = self.last_decoded_time.map_or(Duration::ZERO, |last| {
+                    last + Duration::from_secs_f64(1.0 / self.frames_per_second)
+                });
+                let time = decoded
+                    .timestamp()
+                    .or_else(|| decoded.pts())
+                    .and_then(|pts| {
+                        let origin = *self.timestamp_origin.get_or_insert(pts);
+                        let seconds = (pts as f64 - origin as f64) * self.time_base;
+                        (seconds.is_finite() && seconds >= 0.0)
+                            .then(|| Duration::from_secs_f64(seconds))
+                    })
+                    .unwrap_or(fallback);
+                self.last_decoded_time = Some(time);
+                let image = RawTextureData {
                     bytes: rgb_frame.data(0).to_vec(),
                     width: rgb_frame.width(),
                     height: rgb_frame.height(),
                     format: PixelFormat::RGB,
                 };
-                return Ok(true);
+                return Ok(Some(TimedFrame { time, image }));
             }
 
             if self.sent_eof {
-                return Ok(false);
+                return Ok(None);
             }
 
             let next_packet = self.input.packets().find_map(|(stream, packet)| {
@@ -138,25 +171,27 @@ impl VideoPlayer {
         if !self.duration.is_zero() {
             self.current_time = self.current_time.min(self.duration);
         }
-        let target_frame_index =
-            (self.current_time.as_secs_f64() * self.frames_per_second).floor() as usize;
-
-        while self.current_frame_index < target_frame_index {
-            match self.decode_next_frame() {
-                Ok(true) => self.current_frame_index += 1,
-                Ok(false) => {
-                    self.frames_exhausted = true;
-                    break;
-                }
-                // Deliberately not latched: a bad packet mid-video would
-                // otherwise mark the whole stream finished and truncate the
-                // cutscene. Breaking lets the next advance retry, and a stream
-                // that reported a duration still completes on its timeline.
-                Err(error) => {
-                    eprintln!("cutscene video decode failed: {error}");
-                    break;
+        loop {
+            if self.pending_frame.is_none() && !self.frames_exhausted {
+                match self.decode_next_frame() {
+                    Ok(Some(frame)) => self.pending_frame = Some(frame),
+                    Ok(None) => self.frames_exhausted = true,
+                    // A corrupt packet is not a successful EOF. Retry on the
+                    // next advance; known duration still bounds playback.
+                    Err(error) => {
+                        eprintln!("cutscene video decode failed: {error}");
+                        break;
+                    }
                 }
             }
+            let Some(frame) = self.pending_frame.as_ref() else {
+                break;
+            };
+            if frame.time > self.current_time {
+                break;
+            }
+            self.current_frame = self.pending_frame.take().unwrap().image;
+            self.current_frame_index += 1;
         }
     }
 
@@ -164,17 +199,24 @@ impl VideoPlayer {
         self.current_frame.clone()
     }
 
-    /// Playback length of the video stream. Zero when neither the stream nor
-    /// the container reported one.
+    /// Playback length including the container's audio tail. Zero when
+    /// neither the stream nor the container reported one.
     pub fn duration(&self) -> Duration {
         self.duration
     }
 
-    /// True once playback has reached the end: either the timeline caught up
-    /// with the reported duration, or the decoder drained (which is the only
-    /// signal available for a stream that reports no duration).
+    /// Known timelines finish at their duration, not at the last decoded
+    /// image. Duration-less streams hold their last frame for one fallback
+    /// frame interval after EOF instead of finishing as soon as it is shown.
     pub fn is_finished(&self) -> bool {
-        self.frames_exhausted || (!self.duration.is_zero() && self.current_time >= self.duration)
+        if !self.duration.is_zero() {
+            self.current_time >= self.duration
+        } else {
+            self.frames_exhausted
+                && self.current_time
+                    >= self.last_decoded_time.unwrap_or_default()
+                        + Duration::from_secs_f64(1.0 / self.frames_per_second)
+        }
     }
 }
 
@@ -186,6 +228,10 @@ mod tests {
 
     fn retained_frame_bytes(player: &VideoPlayer) -> usize {
         player.current_frame.bytes.len()
+            + player
+                .pending_frame
+                .as_ref()
+                .map_or(0, |frame| frame.image.bytes.len())
     }
 
     #[test]
@@ -200,7 +246,7 @@ mod tests {
             let one_rgb_frame = 64 * 64 * 3;
 
             assert!(
-                retained_frame_bytes(&player) <= one_rgb_frame,
+                retained_frame_bytes(&player) <= 2 * one_rgb_frame,
                 "opening {fixture_name} retained {} decoded bytes",
                 retained_frame_bytes(&player)
             );
@@ -217,7 +263,7 @@ mod tests {
                 "{fixture_name} should decode a later frame after advancing"
             );
             assert!(
-                retained_frame_bytes(&player) <= one_rgb_frame,
+                retained_frame_bytes(&player) <= 2 * one_rgb_frame,
                 "advancing {fixture_name} retained prior decoded frames"
             );
 
@@ -229,7 +275,7 @@ mod tests {
                 "{fixture_name} should stop decoding cleanly at EOF"
             );
             assert!(
-                retained_frame_bytes(&player) <= one_rgb_frame,
+                retained_frame_bytes(&player) <= 2 * one_rgb_frame,
                 "reaching EOF in {fixture_name} retained prior decoded frames"
             );
         }
@@ -265,6 +311,48 @@ mod tests {
                 "{fixture_name} should be finished after its duration elapses"
             );
         }
+    }
+
+    #[test]
+    fn timestamp_gaps_hold_frames_and_preserve_audio_tail() {
+        crate::init().unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/timestamp-gaps.mkv");
+        let mut player = VideoPlayer::from_filename(fixture.to_str().unwrap()).unwrap();
+        let first = player.get_current_frame().bytes;
+        player.advance_by_time(Duration::from_millis(400));
+        assert!(
+            player.get_current_frame().bytes == first,
+            "the first image must hold until the next PTS at 0.5s"
+        );
+        assert!(!player.is_finished());
+        player.advance_by_time(Duration::from_millis(100));
+        let second = player.get_current_frame().bytes;
+        assert!(
+            second != first,
+            "the 0.5s frame must replace the first image"
+        );
+        player.advance_by_time(Duration::from_millis(900));
+        assert!(
+            player.get_current_frame().bytes == second,
+            "the second image must hold through its one-second timestamp gap"
+        );
+        player.advance_by_time(Duration::from_millis(100));
+        let third = player.get_current_frame().bytes;
+        assert!(
+            third != second,
+            "the 1.5s frame must replace the second image"
+        );
+        player.advance_by_time(Duration::from_millis(1400));
+        assert!(
+            player.get_current_frame().bytes == third,
+            "the final image must remain through the audio tail"
+        );
+        assert!(
+            !player.is_finished(),
+            "video EOF must not cut the 3s audio tail"
+        );
+        player.advance_by_time(Duration::from_millis(100));
+        assert!(player.is_finished());
     }
 
     /// A container that reports no duration has only EOF to signal completion,

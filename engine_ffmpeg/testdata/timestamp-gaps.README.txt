@@ -1,0 +1,10 @@
+Generated fixture (no retail content), 64x64 FFV1 with PCM audio:
+
+ffmpeg -f lavfi -i 'testsrc2=size=64x64:rate=10:duration=2' \
+  -f lavfi -i 'sine=frequency=440:sample_rate=8000:duration=3' \
+  -vf 'select=eq(n\,0)+eq(n\,5)+eq(n\,15)' \
+  -fps_mode vfr -c:v ffv1 -c:a pcm_s16le timestamp-gaps.mkv
+
+ffprobe: video packet PTS 0.0, 0.5, 1.5 seconds; packet durations0.1s;
+nominal/average FPS10; container duration3.0s (audio continues past video).
+The first two frames must remain visible through the timestamp gaps.
