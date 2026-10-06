@@ -8,6 +8,7 @@
 //! Both implementations speak the same `VirtualHandEffect` language, which
 //! `mission_core` already processes in one place.
 
+mod climb_visual;
 mod slide;
 
 use std::{cell::RefCell, collections::HashMap};
@@ -290,6 +291,8 @@ pub struct VrInteraction {
     glove_renderer: RefCell<Option<Option<GloveRenderer>>>,
     /// Which hands hold a climbing hold, and which one moves the body.
     hand_climb: crate::vr_climb::HandClimb,
+    climb_members: [Option<(crate::physics::ClimbGrip, crate::ladder_holds::LadderMember)>; 2],
+    climb_visuals: [climb_visual::ClimbVisual; 2],
     grip_kinematics: Option<[crate::vr_grip::GripKinematics; 2]>,
     grip_geometry: HashMap<String, Option<GripGeometry>>,
     magazine_grips: HashMap<String, Option<crate::vr_grip::ResolvedGrip>>,
@@ -409,6 +412,8 @@ impl VrInteraction {
             glove_renderer: RefCell::new(None),
             body_hand_tracking: [false; 2],
             hand_climb: crate::vr_climb::HandClimb::default(),
+            climb_members: [None; 2],
+            climb_visuals: Default::default(),
             grip_kinematics: None,
             grip_geometry: HashMap::new(),
             magazine_grips: HashMap::new(),
@@ -1482,6 +1487,27 @@ impl PlayerInteraction for VrInteraction {
         let poses = self.hand_poses();
         self.support_preview = self.support_candidate(world, poses, true);
         self.visual_hands = [None, None];
+        for i in 0..2 {
+            if !self.body_hand_tracking[i]
+                || !poses[i].is_tracked()
+                || self.body_tool_hands[i]
+                || [&self.left_hand, &self.right_hand][i]
+                    .get_held_entity()
+                    .is_some()
+            {
+                self.climb_visuals[i] = Default::default();
+                continue;
+            }
+            let target = self.climb_members[i].and_then(|(grip, member)| {
+                climb_visual::attached_pose(
+                    &self.grip_kinematics.as_ref()?[i],
+                    [Handedness::Left, Handedness::Right][i],
+                    grip,
+                    member,
+                )
+            });
+            self.visual_hands[i] = self.climb_visuals[i].update(poses[i], target, self.step_dt);
+        }
         // Physical melee follows its synchronized body even with one hand.
         // Supported guns follow their solved pose so both gloves stay seated.
         for (index, held) in self.fitted_grips.iter().enumerate() {
@@ -1621,7 +1647,7 @@ impl PlayerInteraction for VrInteraction {
                     )
                     .is_some()
         });
-        self.hand_climb.update(
+        let frame = self.hand_climb.update(
             ctx.pawn_pos,
             ctx.pawn_rotation,
             ctx.step_dt,
@@ -1647,7 +1673,21 @@ impl PlayerInteraction for VrInteraction {
                     .borrow::<EntitiesView>()
                     .map_or(true, |entities| entities.is_alive(entity_id))
             },
-        )
+        );
+        self.climb_members = [None; 2];
+        for (hand, anchor) in self.hand_climb.grips() {
+            self.climb_members[hand as usize] =
+                ctx.physics.ladder_member(&anchor.grip).map(|member| {
+                    let mut grip = anchor.grip;
+                    // A cap contact has a vertical normal. Choose its ladder
+                    // face from the acquisition point, never the drifting hand.
+                    if member.face_normal.dot(grip.normal).abs() <= 0.1 {
+                        grip.normal = anchor.hand_world_at_grab - grip.point;
+                    }
+                    (grip, member)
+                });
+        }
+        frame
     }
 
     fn hand_climb(&self) -> Option<&crate::vr_climb::HandClimb> {
@@ -1660,6 +1700,7 @@ impl PlayerInteraction for VrInteraction {
 
     fn release_climb_grips(&mut self) {
         self.hand_climb.release_all();
+        self.climb_members = [None; 2];
     }
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
@@ -1863,23 +1904,28 @@ impl PlayerInteraction for VrInteraction {
                             .map(|(_, g)| g)
                     })
             });
-            objs.extend(hand.render(
-                world,
-                glove_renderer.as_deref_mut(),
-                grip.map(|grip| {
-                    (
-                        grip,
-                        self.support
-                            .as_ref()
-                            .filter(|s| 1 - s.primary == index && hand.get_held_entity().is_none())
-                            .map_or(1.0, |s| s.blend),
-                    )
-                }),
-                self.visual_hands[index],
-                Some(&self.anticipation[index]),
-                climb_lights[index],
-                lighting,
-            ));
+            objs.extend(
+                hand.render(
+                    world,
+                    glove_renderer.as_deref_mut(),
+                    grip.map(|grip| {
+                        (
+                            grip.finger_amounts_at(hand.get_trigger_value()),
+                            self.support
+                                .as_ref()
+                                .filter(|s| {
+                                    1 - s.primary == index && hand.get_held_entity().is_none()
+                                })
+                                .map_or(1.0, |s| s.blend),
+                        )
+                    })
+                    .or_else(|| self.climb_visuals[index].fingers()),
+                    self.visual_hands[index],
+                    Some(&self.anticipation[index]),
+                    climb_lights[index],
+                    lighting,
+                ),
+            );
         }
         if self.grip_overlay {
             use cgmath::{Matrix4, Rotation, vec3};

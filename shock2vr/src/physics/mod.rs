@@ -6748,6 +6748,17 @@ impl PhysicsWorld {
         self.ladder_holds.insert(entity_id, holds);
     }
 
+    /// Presentation metadata for a real modelled ladder hold. Ledges and
+    /// climbable slabs without modelled members keep their tracked glove pose.
+    pub fn ladder_member(&self, grip: &ClimbGrip) -> Option<crate::ladder_holds::LadderMember> {
+        if grip.kind != ClimbGripKind::Ladder {
+            return None;
+        }
+        self.ladder_holds
+            .get(&grip.entity_id?)?
+            .member_at(grip.point)
+    }
+
     /// What, if anything, a hand at `point` can hold onto.
     ///
     /// Probes a ball of `radius` and returns the nearest qualifying contact.

@@ -568,7 +568,7 @@ impl VirtualHand {
         &self,
         world: &World,
         glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
-        grip: Option<(&crate::vr_grip::ResolvedGrip, f32)>,
+        grip: Option<(crate::hand_pose::FingerAmounts, f32)>,
         visual_pose: Option<crate::vr_support::GripPose>,
         anticipation: Option<&crate::hand_anticipation::HandAnticipation>,
         light_override: Option<crate::hand_glove::HandLight>,
@@ -596,7 +596,7 @@ impl VirtualHand {
                     self.squeeze_value,
                     self.get_held_entity().is_some(),
                     anticipation,
-                    grip.map(|(grip, blend)| (grip.finger_amounts_at(self.trigger_value), blend)),
+                    grip,
                     light_override.unwrap_or(self.feedback.light()),
                     hand_lights,
                 )
