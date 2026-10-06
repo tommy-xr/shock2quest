@@ -16,7 +16,7 @@ use std::{
 };
 
 use dark::properties::{Link, Links};
-use shipyard::{EntitiesView, EntityId, IntoIter, IntoWithId, UniqueView, View, World};
+use shipyard::{EntitiesView, EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
 use crate::{
     creature::RuntimePropHitBox,
@@ -193,12 +193,21 @@ pub fn to_save_data_with_scripts(
     }
 
     let v_death_poses = world.borrow::<View<RuntimePropDeathPose>>().unwrap();
+    let v_capsules = world
+        .borrow::<View<crate::runtime_props::RuntimePropCreatureCapsule>>()
+        .unwrap();
     let mut world_death_poses = HashMap::new();
     let mut held_death_poses = HashMap::new();
     for (entity_id, death_pose) in v_death_poses.iter().with_id() {
         if entities_to_filter.contains(&entity_id.inner()) {
             continue;
         }
+        let mut death_pose = death_pose.clone();
+        death_pose.capsule = v_capsules
+            .get(entity_id)
+            .ok()
+            .copied()
+            .or(death_pose.capsule);
         if held_entities.contains(&entity_id.inner()) {
             held_death_poses.insert(entity_id.inner(), death_pose.clone());
         } else {

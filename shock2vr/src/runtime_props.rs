@@ -61,10 +61,11 @@ pub struct RuntimePropFlightVelocity(pub Vector3<f32>);
 
 /// Live creature capsule measured from the model at spawn. Rebuilt with the
 /// physics body after loading, so AI sensing uses the same vertical geometry.
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RuntimePropCreatureCapsule {
     pub center_y: f32,
     pub height: f32,
+    pub radius: f32,
 }
 
 /// Runtime changes to an object's authored metaproperty relations.
@@ -100,6 +101,8 @@ pub struct RuntimePropJointTransforms(pub [Matrix4<f32>; 40]);
 pub struct RuntimePropDeathPose {
     pub clip_name: String,
     pub floor_depth: Option<f32>,
+    /// Preserve the live model-fitted body when restoring the terminal pose.
+    pub capsule: Option<RuntimePropCreatureCapsule>,
 }
 
 impl RuntimePropDeathPose {
@@ -107,6 +110,7 @@ impl RuntimePropDeathPose {
         Self {
             clip_name,
             floor_depth,
+            capsule: None,
         }
     }
 }
@@ -124,6 +128,7 @@ impl<'de> Deserialize<'de> for RuntimePropDeathPose {
                 clip_name: String,
                 #[serde(default)]
                 floor_depth: Option<f32>,
+                capsule: Option<RuntimePropCreatureCapsule>,
             },
         }
 
@@ -132,7 +137,12 @@ impl<'de> Deserialize<'de> for RuntimePropDeathPose {
             StoredDeathPose::Current {
                 clip_name,
                 floor_depth,
-            } => Self::new(clip_name, floor_depth),
+                capsule,
+            } => Self {
+                clip_name,
+                floor_depth,
+                capsule,
+            },
         })
     }
 }
