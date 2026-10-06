@@ -80,6 +80,7 @@ mod researchable;
 mod room_trigger;
 pub mod script_util;
 mod setup_initial_debrief;
+mod shodan_shield;
 mod std_door;
 pub(crate) use std_door::player_door_frob_blocked;
 mod tool_consumable;
@@ -1076,11 +1077,11 @@ impl ScriptWorld {
             "toggleshodantexture" => Box::new(NoopScript::new()),
             "changedelay" => Box::new(NoopScript::new()), //?
             "shodanhead" => Box::new(NoopScript::new()),  //?
-            "shodanshield" => Box::new(NoopScript::new()), //?
+            "shodanshield" => Box::new(shodan_shield::ShodanShield::new()),
             "seatplayer" => Box::new(TrapTeleportPlayer::new()), // This is used in final battle -does this do anything else besides teleport?
             "dieshodandie" => Box::new(DieShodanDie::new()),
             "teleportpath" => Box::new(NoopScript::new()), // end cutscene!
-            "translucebydamage" => Box::new(NoopScript::new()), // end cutscene!
+            "translucebydamage" => Box::new(shodan_shield::TransluceByDamage::default()),
 
             "earthtext" => Box::new(EarthText::new()),
 

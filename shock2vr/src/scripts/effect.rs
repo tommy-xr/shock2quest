@@ -1102,6 +1102,20 @@ pub enum Effect {
         render_type: dark::properties::RenderType,
     },
 
+    /// Regenerate a living object's HP against its current pool, after any
+    /// queued damage, without treating an authored cap correction as damage.
+    RegenerateHitPoints {
+        entity_id: EntityId,
+        amount: i32,
+        cap: i32,
+    },
+
+    /// Resolve alpha from the applied HP pool, rather than a script's stale
+    /// pre-effect view of damage or regeneration.
+    SetRenderAlphaFromHitPoints {
+        entity_id: EntityId,
+    },
+
     /// Set an entity's render alpha (Renderer\Transparency (alpha): 1.0 =
     /// opaque, 0.0 = invisible). Drives holo/ghost fades (Transluce scripts,
     /// CS9 cutscene exhibits).
