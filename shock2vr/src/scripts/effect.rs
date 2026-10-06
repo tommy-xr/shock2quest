@@ -1206,6 +1206,14 @@ pub enum Effect {
         progress: f32,
     },
 
+    /// Add/remove one room sensor's gravity contribution; overlapping sensors
+    /// remain independent even when they link to the same authored archetype.
+    SetRoomGravity {
+        entity_id: EntityId,
+        sensor_id: EntityId,
+        gravity_percent: Option<f32>,
+    },
+
     ResetGravity {
         entity_id: EntityId,
     },
