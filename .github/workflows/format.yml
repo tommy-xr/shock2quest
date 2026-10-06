@@ -5,10 +5,14 @@ on:
     branches: [ "main" ]
     paths-ignore:
       - '**/*.md'
+      - 'tools/shock2-sdk/**'
+      - '.github/workflows/sdk-tests.yml'
   pull_request:
     branches: [ "main" ]
     paths-ignore:
       - '**/*.md'
+      - 'tools/shock2-sdk/**'
+      - '.github/workflows/sdk-tests.yml'
 
 env:
   CARGO_TERM_COLOR: always
