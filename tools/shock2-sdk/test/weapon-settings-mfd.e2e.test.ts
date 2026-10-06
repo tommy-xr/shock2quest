@@ -58,6 +58,33 @@ async function openSettings(game: GameServer): Promise<void> {
 }
 
 test(
+  "weapon Info renders its description on the opening frame without firing",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_weapons" });
+    await game.step({ frames: 5 });
+    const pistol = await cycleToWeapon(game, (e) => (e.name ?? "") === "Pistol");
+    const ammo = ammoOf(await game.entities.detail(pistol.id));
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    await openSettings(game);
+    const info = (await panelElements(game)).find((e) => e.label === "description");
+    assert.ok(info, "settings offers Info beside the panel");
+    // A late effect used to select an unrefreshed reader, crashing its first
+    // render on an empty title. This click steps through that exact frame.
+    await clickUiElement(game, info);
+    const ui = await game.ui.state();
+    const elements = ui.strip?.elements ?? [];
+    assert.equal(ui.active_panel, null, "description replaces settings");
+    assert.match(elements.find((e) => e.label === "query_title")?.text ?? "", /pistol/i);
+    const lines = elements.filter((e) => e.label === "utility_text");
+    assert.ok(lines.length > 0, "authored description is visible");
+    assert.ok(lines.every((e) => e.entity_id === pistol.id));
+    assert.equal(ammoOf(await game.entities.detail(pistol.id)), ammo);
+  },
+);
+
+test(
   "SETTING opens a two-row settings panel and a row click switches the fire mode",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
