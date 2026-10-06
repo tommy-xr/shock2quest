@@ -362,6 +362,12 @@ pub fn load_mission_from_save_data(
         &active_mission.mission_core.world,
         save_data.global_data.player_vitals,
     );
+    if let Some(gravity) = save_data.global_data.player_gravity_scale {
+        active_mission
+            .mission_core
+            .physics
+            .restore_player_gravity(&active_mission.mission_core.player_handle, gravity);
+    }
     if let Some(state) = save_data.global_data.player_fall_state {
         active_mission
             .mission_core

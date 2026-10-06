@@ -189,6 +189,11 @@ pub trait GameScene {
         false
     }
 
+    /// Live gravity must be restored before the first movement after load.
+    fn player_gravity_scale(&self) -> Option<f32> {
+        None
+    }
+
     fn player_fall_state(&self) -> Option<crate::physics::FatalFallTracker> {
         None
     }

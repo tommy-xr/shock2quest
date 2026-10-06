@@ -4654,6 +4654,17 @@ impl PhysicsWorld {
         None
     }
 
+    pub fn get_player_gravity(&self, player_handle: &PlayerHandle) -> f32 {
+        self.rigid_body_set[player_handle.character_handle].gravity_scale()
+    }
+
+    /// Restore before movement queues its first kinematic target. Room sensor
+    /// effects arrive after that movement and cannot repair an already queued
+    /// translation computed with the newly created body's default gravity.
+    pub fn restore_player_gravity(&mut self, player_handle: &PlayerHandle, gravity: f32) {
+        self.rigid_body_set[player_handle.character_handle].set_gravity_scale(gravity, true);
+    }
+
     /// The character body's current translation, without stepping the
     /// simulation. Used while time is frozen (debug-runtime pause) so
     /// teleports - which write the physics body directly - are still
