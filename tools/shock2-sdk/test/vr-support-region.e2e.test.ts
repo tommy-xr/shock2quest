@@ -20,7 +20,9 @@ for (const [model,template] of [["fsn_h",-26],["al_h",-27],["wrench_h",-928]] as
         : await cycleToWeapon(game,e=>e.template_id === template);
       await aimVrHandAt(game,weapon.position,.2,1,0,{hand:primary});
       const other = primary === "left" ? "right" : "left";
-      await game.input.set(`${primary}_hand.position`,[0,1,-.5]);
+      assert.equal((await game.info()).player[primary === "left" ? "wielded_entity_id" : "right_hand_entity_id"], weapon.id);
+      // Keep the free hand outside body-slot gesture regions while supporting.
+      await game.input.set(`${primary}_hand.position`,[0,1,-1]);
       await game.input.set(`${primary}_hand.rotation`,[0,0,0,1]);
       await game.input.set(`${other}_hand.squeeze`,0);
       await game.step({frames:30});
@@ -70,6 +72,9 @@ for (const [model,template] of [["fsn_h",-26],["al_h",-27],["wrench_h",-928]] as
       await game.devParams.set("vr_support_grips",0);
       await game.step({frames:1});
       assert.equal((await game.scene.fromSource("vr_support_grip")).length,0,"overlay can be hidden while still holding");
+      // Release both hands: leaving support squeezed deliberately hands off
+      // melee weapons instead of dropping them.
+      await game.input.set(`${other}_hand.squeeze`,0);
       await game.input.set(`${primary}_hand.squeeze`,0);
       await game.step({frames:5});
       const player = (await game.info()).player;
