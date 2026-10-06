@@ -7804,6 +7804,13 @@ impl MissionCore {
                     adj_velocity.y,
                     adj_velocity.z * scale,
                 );
+                if let Some(flight) = self.world.run(
+                    |mut flight: ViewMut<crate::runtime_props::RuntimePropFlightVelocity>| {
+                        flight.remove(*id).map(|v| v.0)
+                    },
+                ) {
+                    scaled = flight;
+                }
                 scaled += self.physics.take_player_push_velocity(*id);
                 // A restored terminal death player has no queued motion, but
                 // even writing zero velocity wakes its deliberately sleeping
@@ -13925,6 +13932,12 @@ impl MissionCore {
                                 self.world.add_component(
                                     entity_id,
                                     crate::runtime_props::RuntimePropLocomotionScale(scale),
+                                );
+                            }
+                            AIPropertyUpdate::FlightVelocity { velocity } => {
+                                self.world.add_component(
+                                    entity_id,
+                                    crate::runtime_props::RuntimePropFlightVelocity(velocity),
                                 );
                             }
                             AIPropertyUpdate::TargetAwareness {
@@ -20410,6 +20423,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             }
             DebugEntityMessage::Frob => MessagePayload::Frob,
             DebugEntityMessage::Signal { name } => MessagePayload::Signal { name },
+            DebugEntityMessage::HeardNoise { origin } => MessagePayload::HeardNoise {
+                origin: vec3(origin[0], origin[1], origin[2]),
+            },
             DebugEntityMessage::SetAlertness { level } => {
                 MessagePayload::SetAlertness { level, pin: false }
             }

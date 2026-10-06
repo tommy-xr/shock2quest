@@ -199,6 +199,10 @@ pub enum AIPropertyUpdate {
     LocomotionScale {
         scale: f32,
     },
+    /// Skeletal flight motor velocity, consumed by animation integration.
+    FlightVelocity {
+        velocity: Vector3<f32>,
+    },
     /// What the AI knows about its target (last-known position + current
     /// line of sight) - drives non-omniscient chase steering
     TargetAwareness {

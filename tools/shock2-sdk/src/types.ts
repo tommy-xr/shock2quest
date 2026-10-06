@@ -210,6 +210,7 @@ export type DebugEntityMessage =
     }
   | { type: "Frob" }
   | { type: "Signal"; name: string }
+  | { type: "HeardNoise"; origin: Vec3 }
   | { type: "SetAlertness"; level: "Lowest" | "Low" | "Moderate" | "High" }
   // Switch-link activate/deactivate - what a tripwire/button sends to its targets.
   | { type: "TurnOn" }

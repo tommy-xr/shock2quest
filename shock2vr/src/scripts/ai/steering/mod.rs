@@ -13,7 +13,7 @@ pub use collision_avoidance_steering_strategy::*;
 pub use path_follow_steering_strategy::*;
 pub use whisker_avoidance::*;
 
-use cgmath::{Deg, EuclideanSpace, Point3};
+use cgmath::{Deg, EuclideanSpace, Point3, Vector3};
 use shipyard::{EntityId, World};
 
 use crate::{physics::PhysicsWorld, time::Time};
@@ -25,12 +25,15 @@ use super::{
 
 pub struct SteeringOutput {
     pub desired_heading: Deg<f32>,
+    /// Remaining world-space travel; flyers use its height as well as its heading.
+    pub travel: Option<Vector3<f32>>,
 }
 
 impl Default for SteeringOutput {
     fn default() -> Self {
         SteeringOutput {
             desired_heading: Deg(0.0),
+            travel: None,
         }
     }
 }
@@ -40,6 +43,7 @@ impl Steering {
     pub fn from_current(heading: Deg<f32>) -> SteeringOutput {
         SteeringOutput {
             desired_heading: heading,
+            travel: None,
         }
     }
 
@@ -47,6 +51,7 @@ impl Steering {
         let yaw = ai_util::yaw_between_vectors(position.to_vec(), target.to_vec());
         SteeringOutput {
             desired_heading: yaw,
+            travel: Some(target - position),
         }
     }
 }

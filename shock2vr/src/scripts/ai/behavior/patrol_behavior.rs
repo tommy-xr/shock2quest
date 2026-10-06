@@ -1,7 +1,7 @@
 use cgmath::{Deg, EuclideanSpace, Vector3};
 use dark::SCALE_FACTOR;
 use dark::motion::MotionQueryItem;
-use shipyard::{EntityId, World};
+use shipyard::{EntityId, Get, View, World};
 
 use crate::{
     physics::PhysicsWorld,
@@ -60,6 +60,7 @@ pub struct PatrolBehavior {
     /// patrolling and hands back to idle. Also set once every point on the
     /// route has been given up on with no arrival in between.
     finished: bool,
+    flying: bool,
     /// Stall watchdog: where the AI was when the timer was last re-anchored,
     /// and how long it has been stuck within PATROL_STALL_PROGRESS of it.
     stall_anchor: Option<Vector3<f32>>,
@@ -100,6 +101,7 @@ impl PatrolBehavior {
             steering_strategy: Self::steering_to(goal),
             make_steering: Self::steering_to,
             finished: false,
+            flying: false,
             stall_anchor: None,
             stall_seconds: 0.0,
             given_up_points: Vec::new(),
@@ -239,7 +241,11 @@ impl PatrolBehavior {
         let moved = self
             .stall_anchor
             .map(|anchor| {
-                (position.x - anchor.x).hypot(position.z - anchor.z) >= PATROL_STALL_PROGRESS
+                if self.flying {
+                    cgmath::InnerSpace::magnitude(position - anchor) >= PATROL_STALL_PROGRESS
+                } else {
+                    (position.x - anchor.x).hypot(position.z - anchor.z) >= PATROL_STALL_PROGRESS
+                }
             })
             .unwrap_or(true);
         if moved {
@@ -273,6 +279,7 @@ impl Behavior for PatrolBehavior {
                 target: Some(self.target_point),
             });
         }
+        self.flying = crate::creature::is_flying_creature(world, entity_id);
         let now = time.total.as_secs_f32();
         if let Some(until) = self.paused_until {
             if now < until {
@@ -294,7 +301,21 @@ impl Behavior for PatrolBehavior {
         if !self.finished {
             let (position, _) = ai_util::get_position_and_forward(world, entity_id);
             let position = position.to_vec();
-            if self.arrived(position) {
+            let arrived = if self.flying {
+                // Dark's locomotion arrival allows the floor-relative hover
+                // offset above authored markers (GetGroundOffset + accuracyZ).
+                let hover = world
+                    .borrow::<View<dark::properties::PropAIMoveZOffset>>()
+                    .unwrap()
+                    .get(entity_id)
+                    .map(|p| p.0)
+                    .unwrap_or(0.0);
+                (position.x - self.goal.x).hypot(position.z - self.goal.z) < PATROL_ARRIVE_DISTANCE
+                    && (position.y - self.goal.y).abs() < hover + PATROL_ARRIVE_HEIGHT
+            } else {
+                self.arrived(position)
+            };
+            if arrived {
                 self.given_up_points.clear();
                 self.pauses = 0;
                 patrol_effects.push(self.advance(world, entity_id, true));

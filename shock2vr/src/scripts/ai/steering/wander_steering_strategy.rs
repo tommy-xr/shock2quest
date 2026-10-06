@@ -42,6 +42,7 @@ impl WanderSteeringStrategy {
         Some((
             SteeringOutput {
                 desired_heading: self.maybe_current_heading.unwrap(),
+                travel: None,
             },
             Effect::NoEffect,
         ))

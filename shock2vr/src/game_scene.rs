@@ -1321,6 +1321,10 @@ pub enum DebugEntityMessage {
     Signal {
         name: String,
     },
+    /// Inject a heard sound at a world position, using the production investigation path.
+    HeardNoise {
+        origin: [f32; 3],
+    },
     /// Force an AI's alertness level (clamped by its alert cap).
     SetAlertness {
         level: dark::properties::AIAlertLevel,
