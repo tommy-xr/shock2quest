@@ -16,7 +16,8 @@ use engine::{
         FrontFaceWinding, SceneObject, VertexPositionTextureNormal,
         VertexPositionTextureSkinnedNormal,
     },
-    texture::{AnimatedTexture, TextureTrait},
+    texture::{self, AnimatedTexture, TextureOptions, TextureTrait},
+    texture_format::{PixelFormat, RawTextureData},
 };
 use tracing::warn;
 
@@ -143,18 +144,26 @@ pub fn to_scene_objects(
                 tex_path = "soft12 .pcx".to_owned();
             }
 
-            let Some(resolved_tex_path) =
-                resolve_object_material_texture_name(asset_cache, &tex_path)
-            else {
-                // Dropping the slot here makes part (or all) of a prop silently
-                // vanish from the world, so it is worth surfacing.
-                warn!("no texture for material \"{tex_path}\"; dropping mesh slot {slot}");
-                return None;
-            };
-
-            let Some(texture) = asset_cache.get_opt(&TEXTURE_IMPORTER, &resolved_tex_path) else {
-                warn!("could not load resolved texture \"{resolved_tex_path}\"; dropping mesh slot {slot}");
-                return None;
+            // MD_MAT_COLOR stores BGR color rather than a texture filename.
+            // A constant texel uses the same lit/skinned material and alpha
+            // paths as textured models (also used for solid GLB materials).
+            let texture = if material.material_type == 1 {
+                Rc::new(texture::init_from_memory2(
+                    solid_color_texture_data(material.color),
+                    &TextureOptions::default(),
+                ))
+            } else {
+                let Some(resolved_tex_path) =
+                    resolve_object_material_texture_name(asset_cache, &tex_path)
+                else {
+                    warn!("no texture for material \"{tex_path}\"; dropping mesh slot {slot}");
+                    return None;
+                };
+                let Some(texture) = asset_cache.get_opt(&TEXTURE_IMPORTER, &resolved_tex_path) else {
+                    warn!("could not load resolved texture \"{resolved_tex_path}\"; dropping mesh slot {slot}");
+                    return None;
+                };
+                texture
             };
 
             let geometry: Rc<Box<dyn engine::scene::Geometry>> = if is_skinned {
@@ -173,7 +182,9 @@ pub fn to_scene_objects(
             {
                 None
             } else {
-                let mut animation_frames = load_multiple_textures_for_model(asset_cache, &tex_path);
+                let mut animation_frames = if material.material_type == 0 {
+                    load_multiple_textures_for_model(asset_cache, &tex_path)
+                } else { Vec::new() };
                 let texture = if !animation_frames.is_empty() {
                     animation_frames.insert(0, texture.clone());
                     Rc::new(AnimatedTexture::new(
@@ -193,7 +204,7 @@ pub fn to_scene_objects(
                 transparency = 0.8
             }
 
-            let additive = !is_skinned && !debug_normals_enabled
+            let additive = material.material_type == 0 && !is_skinned && !debug_normals_enabled
                 && crate::util::object_material_is_additive_flash(asset_cache, &tex_path);
             let mat: Box<dyn engine::scene::Material> = if debug_normals_enabled {
                 if is_skinned {
@@ -222,8 +233,8 @@ pub fn to_scene_objects(
                 )
             };
 
-            let material = RefCell::new(mat);
-            let mut so = create_dark_object_scene_object(material, geometry.clone());
+            let render_material = RefCell::new(mat);
+            let mut so = create_dark_object_scene_object(render_material, geometry.clone());
 
             so.blend_mode = if additive {
                 engine::scene::scene_object::BlendMode::AdditiveColor
@@ -234,7 +245,7 @@ pub fn to_scene_objects(
             so.set_skinning_data(skeleton.get_transforms());
 
             let mut objects = vec![so];
-            if !debug_normals_enabled {
+            if !debug_normals_enabled && material.material_type == 0 {
                 crate::util::append_incidence_overlays(
                     &mut objects, asset_cache, &format!("obj/txt16/{tex_path}"), texture, is_skinned,
                 );
@@ -250,6 +261,18 @@ pub fn to_scene_objects(
     (mesh_objects, skeleton)
 }
 
+/// Solid colors have opaque texels; authored material/entity transparency is
+/// applied by the normal material pipeline, just as it is for textured props.
+fn solid_color_texture_data(color: Vector4<f32>) -> RawTextureData {
+    let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+    RawTextureData {
+        bytes: vec![channel(color.x), channel(color.y), channel(color.z), 255],
+        width: 1,
+        height: 1,
+        format: PixelFormat::RGBA,
+    }
+}
+
 fn create_dark_object_scene_object(
     material: RefCell<Box<dyn engine::scene::Material>>,
     geometry: Rc<Box<dyn engine::scene::Geometry>>,
@@ -263,13 +286,11 @@ fn create_dark_object_scene_object(
 #[derive(Debug, Clone)]
 pub struct SystemShock2MeshMaterial {
     pub name: String,
-    #[allow(dead_code)]
-    material_type: u8, // TODO: Add real type
+    material_type: u8, // 0 = MD_MAT_TMAP, 1 = MD_MAT_COLOR
     pub slot_num: u8,
     #[allow(dead_code)]
     ipal_index: u32, // unused
 
-    #[allow(dead_code)]
     color: Vector4<f32>,
     #[allow(dead_code)]
     handle: u32,
@@ -288,17 +309,15 @@ fn read_material<T: Read>(reader: &mut T) -> SystemShock2MeshMaterial {
     let (color, ipal_index, handle, uv_scale) = if material_type == 1
     /* MD_MAT_COLOR */
     {
-        let r = ss2_common::read_u8(reader);
-        let g = ss2_common::read_u8(reader);
+        // LGMD stores BGR plus an unused byte, not RGBA. Opde's
+        // ObjectMeshLoader::getFillerForPolygon uses colour[2], [1], [0];
+        // opacity is the separate extended material transparency.
         let b = ss2_common::read_u8(reader);
-        let a = ss2_common::read_u8(reader);
+        let g = ss2_common::read_u8(reader);
+        let r = ss2_common::read_u8(reader);
+        let _unused = ss2_common::read_u8(reader);
 
-        let color = vec4(
-            r as f32 / 255.0,
-            g as f32 / 255.0,
-            b as f32 / 255.0,
-            a as f32 / 255.0,
-        );
+        let color = vec4(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0);
         let ipal_index = ss2_common::read_u32(reader);
         (color, ipal_index, 0, 1.0)
     } else if material_type == 0
@@ -759,25 +778,38 @@ pub fn to_vertices(
                 .unwrap()
         };
 
-        if len >= 3 && uv_len >= len {
+        let solid_color = poly.polygon_type & 0x07 == 1
+            && poly.polygon_type & 0x60 == 0x40
+            && mesh
+                .materials
+                .iter()
+                .any(|material| material.slot_num as u16 == slot && material.material_type == 1);
+        let uv_for_corner = |corner: usize| {
+            if solid_color {
+                Vector2::new(0.0, 0.0)
+            } else {
+                uvs[uv_indices[corner] as usize]
+            }
+        };
+        if len >= 3 && (solid_color || uv_len >= len) {
             for idx in 1..(len - 1) {
                 let bone_idx = get_bone_index_for_point(mesh, indices[idx]);
 
                 verts.push(build_vertex(
                     vertices[indices[idx] as usize],
-                    uvs[uv_indices[idx] as usize],
+                    uv_for_corner(idx),
                     normal_for_corner(idx),
                     bone_idx,
                 ));
                 verts.push(build_vertex(
                     vertices[indices[idx + 1] as usize],
-                    uvs[uv_indices[idx + 1_usize] as usize],
+                    uv_for_corner(idx + 1),
                     normal_for_corner(idx + 1),
                     bone_idx,
                 ));
                 verts.push(build_vertex(
                     vertices[indices[0] as usize],
-                    uvs[uv_indices[0] as usize],
+                    uv_for_corner(0),
                     normal_for_corner(0),
                     bone_idx,
                 ));
@@ -842,6 +874,7 @@ fn build_skeleton_for_obj_mesh(
 
 #[derive(Debug, Clone)]
 pub struct SystemShock2ObjectPolygon {
+    pub polygon_type: u8,
     pub vertex_indices: Vec<u16>,
     pub normal_indices: Vec<u16>,
     pub uv_indices: Vec<u16>,
@@ -883,6 +916,7 @@ fn read_polygon<T: Read>(
     }
 
     SystemShock2ObjectPolygon {
+        polygon_type: poly_type,
         vertex_indices,
         normal_indices,
         uv_indices: uvs,
@@ -1268,6 +1302,55 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
+    fn solid_material_decodes_bgr_and_ignores_the_fourth_color_byte() {
+        let mut bytes = vec![0u8; 26];
+        bytes[..6].copy_from_slice(b"purple");
+        bytes[16] = 1; // MD_MAT_COLOR
+        bytes[17] = 1;
+        bytes[18..22].copy_from_slice(&[176, 59, 112, 0]);
+        let material = read_material(&mut Cursor::new(bytes));
+        assert_eq!(
+            material.color,
+            vec4(112.0 / 255.0, 59.0 / 255.0, 176.0 / 255.0, 1.0)
+        );
+        let texel = solid_color_texture_data(material.color);
+        assert_eq!(texel.bytes, vec![112, 59, 176, 255]);
+        assert_eq!((texel.width, texel.height), (1, 1));
+    }
+
+    #[test]
+    fn solid_quad_without_uvs_produces_triangles_but_textured_quad_does_not() {
+        let mut material = material_in_slot("purple", 1);
+        material.material_type = 1;
+        let polygon = SystemShock2ObjectPolygon {
+            polygon_type: 0x59,
+            vertex_indices: vec![0, 1, 2, 3],
+            normal_indices: vec![0, 0, 0, 0],
+            uv_indices: vec![],
+            slot_index: 1,
+        };
+        let mut mesh = mesh_with(vec![material], vec![polygon]);
+        mesh.uvs.clear();
+        mesh.vertices = vec![
+            vec3(-1.0, -1.0, 0.0),
+            vec3(1.0, -1.0, 0.0),
+            vec3(1.0, 1.0, 0.0),
+            vec3(-1.0, 1.0, 0.0),
+        ];
+        let vertices = to_vertices(&mesh);
+        assert_eq!(vertices[&1].len(), 6);
+        assert!(vertices[&1].iter().all(|v| v.uv == Vector2::new(0.0, 0.0)));
+        mesh.polygons[0].polygon_type = 0x5a; // Wire is not a filled quad.
+        assert!(to_vertices(&mesh)[&1].is_empty());
+        mesh.polygons[0].polygon_type = 0x1b;
+        mesh.materials[0].material_type = 0;
+        assert!(
+            to_vertices(&mesh)[&1].is_empty(),
+            "missing UVs must not silently turn a textured polygon solid"
+        );
+    }
+
+    #[test]
     fn subobject_parser_preserves_parameter_and_attachment_ownership() {
         // A 93-byte LGMD record, with a deliberately unrelated file index,
         // parameter ID and attachment ID. The old loader called parm a parent.
@@ -1334,6 +1417,7 @@ mod tests {
 
     fn polygon_in_slot(slot_index: u16) -> SystemShock2ObjectPolygon {
         SystemShock2ObjectPolygon {
+            polygon_type: 0x1b,
             vertex_indices: vec![0, 1, 2],
             normal_indices: vec![0, 1, 2],
             uv_indices: vec![0, 1, 2],
@@ -1385,6 +1469,7 @@ mod tests {
     #[test]
     fn retained_sub_objects_preserve_the_rig_and_material_selection() {
         let polygon = |vertices| SystemShock2ObjectPolygon {
+            polygon_type: 0x1b,
             vertex_indices: vertices,
             normal_indices: vec![0; 3],
             uv_indices: vec![0; 3],
