@@ -15953,18 +15953,21 @@ impl MissionCore {
             .borrow::<UniqueViewMut<crate::hud::HudMessages>>()
             .map(|mut messages| messages.active(now))
             .unwrap_or_default();
-        // The flat status line and glove share the same weapon-bound notice,
-        // including expiry and immediate removal after training/equipping.
-        if let Some(requirement) =
-            crate::wielded_weapon::held_by_hand(&self.world, crate::vr_config::Handedness::Left)
-                .filter(|weapon| crate::runtime_props::is_flat_aimed(&self.world, *weapon))
+        // Both hands use the shared HUD message line; deduplicate matching
+        // requirements when dual wielding, while retaining weapon-bound expiry.
+        for hand in [
+            crate::vr_config::Handedness::Left,
+            crate::vr_config::Handedness::Right,
+        ] {
+            if let Some(requirement) = crate::wielded_weapon::held_by_hand(&self.world, hand)
                 .and_then(|weapon| {
                     crate::weapon_requirements::active_weapon_skill_notice(&self.world, weapon)
                 })
-        {
-            messages.push(requirement.message());
-            if messages.len() > crate::hud::message_line::MAX_LINES {
-                messages.remove(0);
+            {
+                let text = requirement.message();
+                if !messages.contains(&text) {
+                    messages.push(text);
+                }
             }
         }
         messages.extend(self.interaction.maintenance_previews(&self.world));

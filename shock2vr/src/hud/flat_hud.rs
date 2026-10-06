@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn inventory_moves_messages_below_the_top_strip() {
         let empty = readout(None, None, None, false);
-        for (use_mode, expected_y) in [(false, 18.0), (true, 130.0)] {
+        for (use_mode, expected_x, expected_y) in [(false, 192.0, 18.0), (true, 258.0, 130.0)] {
             let canvas = build_flat_hud_canvas(
                 use_mode,
                 &BIO,
@@ -419,7 +419,7 @@ mod tests {
                 None,
             );
             let rect = canvas.elements().last().unwrap().rect();
-            assert_eq!(vec2(rect.x, rect.y), vec2(192.0, expected_y));
+            assert_eq!(vec2(rect.x, rect.y), vec2(expected_x, expected_y));
         }
     }
 

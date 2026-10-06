@@ -388,6 +388,15 @@ impl Script for WeaponScript {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
+            MessagePayload::Hold => {
+                crate::weapon_requirements::unmet_weapon_skill(world, entity_id).map_or(
+                    Effect::NoEffect,
+                    |requirement| Effect::ShowWeaponSkillRequirement {
+                        entity_id,
+                        requirement,
+                    },
+                )
+            }
             MessagePayload::TriggerPull => {
                 if let Some(requirement) =
                     crate::weapon_requirements::unmet_weapon_skill(world, entity_id)

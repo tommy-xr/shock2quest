@@ -96,6 +96,7 @@ pub(crate) fn flat_origin(use_mode: bool) -> Vector2<f32> {
 /// The same message block, tightly sized for a world-space panel. Increasing
 /// its wrapped height must not move the first line; the panel mount maps its
 /// top-left back to flat_origin rather than centering it above the gaze.
+#[cfg(test)]
 pub(crate) fn build_message_canvas(messages: &[String], font: &dyn engine::Font) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(LINE_WIDTH, 1.0));
     let height = emit(&mut canvas, vec2(0.0, 0.0), messages, font);

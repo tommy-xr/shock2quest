@@ -119,11 +119,15 @@ for (const hand of ["left", "right"] as const) {
       p => p.name === "WeaponSkillNotice",
     )?.value;
     const before = await ammo();
+    assert.ok((await game.ui.state()).messages.includes("Requires Standard Weapons 6 - You have 4"),
+      "equipping an unusable gun explains the requirement in the shared HUD");
     assert.ok(before > 0);
     await game.input.set(`${hand}_hand.trigger`, 1);
     await game.step({ frames: 1 });
     assert.equal(await ammo(), before);
     assert.equal(await notice(), "Requires Standard Weapons 6 - You have 4");
+    assert.ok((await game.ui.state()).messages.includes("Requires Standard Weapons 6 - You have 4"),
+      "VR refusal appears in the head HUD for either hand");
     await game.step({ frames: 190 });
     assert.equal(await notice(), undefined, "a held trigger must let the notice expire");
     assert.equal(await ammo(), before, "a held trigger must not bypass the skill gate");

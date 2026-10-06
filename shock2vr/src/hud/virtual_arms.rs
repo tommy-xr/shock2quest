@@ -52,33 +52,6 @@ pub fn create_wrist_hud_panels(
                 ));
             }
         }
-        if let Some(notice) = crate::wielded_weapon::held_by_hand(world, hand).and_then(|weapon| {
-            crate::weapon_requirements::active_weapon_skill_notice(world, weapon)
-        }) {
-            let font = crate::ui::resolve_font(asset_cache, crate::hud::message_line::FONT);
-            let canvas = crate::hud::message_line::build_message_canvas(
-                &[notice.message()],
-                font.as_ref().as_ref(),
-            );
-            // Same pixel layout as the flat status line. Only the panel's
-            // world placement differs: above this glove.
-            let width = 0.32;
-            // Leave the full hazard panel unobscured when a left-hand weapon
-            // also needs to explain a skill refusal.
-            let notice_y = if hand == Handedness::Left && alarm.is_some() {
-                0.17
-            } else {
-                0.06
-            };
-            let transform = root
-                * Matrix4::from_translation(vec3(0.0, notice_y, 0.10))
-                * Matrix4::from_nonuniform_scale(
-                    width,
-                    width * canvas.size().y / canvas.size().x,
-                    1.0,
-                );
-            objects.extend(canvas.render_world_space(asset_cache, transform, None, None, 0.001));
-        }
         // Some weapons carry an authored hand instead of our glove. Give a
         // melee charge a hologram mount; there is no physical cuff to host it.
         // Only a steadied gun lends its readout: a melee weapon's charge
@@ -92,8 +65,7 @@ pub fn create_wrist_hud_panels(
         let weapon = held.or(steadied_gun);
         let readout = ammo_panel::AmmoReadout::for_weapon(world, weapon, false);
         let bio_canvas = readouts::build_watch_canvas(&bio);
-        // The refusal is available even when a weapon carries its own hand
-        // mesh. The cuff's wrist plates require a visible glove.
+        // The cuff's wrist plates require a visible glove.
         if !crate::virtual_hand::shows_hand_visual(world, held) {
             if readout.melee_charge.is_some() {
                 let canvas = ammo_panel::build_wrist_canvas(&readout);
