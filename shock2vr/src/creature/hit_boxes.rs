@@ -238,6 +238,9 @@ impl HitBoxManager {
     ) {
         let (joint_updates, marked_parents) = {
             let v_position = world.borrow::<View<PropPosition>>().unwrap();
+            let v_has_refs = world
+                .borrow::<View<dark::properties::PropHasRefs>>()
+                .unwrap();
             let v_runtime_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
             let v_runtime_joints = world.borrow::<View<RuntimePropJointTransforms>>().unwrap();
             let mut v_runtime_hitbox = world.borrow::<ViewMut<RuntimePropHitBox>>().unwrap();
@@ -257,6 +260,9 @@ impl HitBoxManager {
                     .iter()
                     .with_id()
             {
+                if v_has_refs.get(parent_entity_id).is_ok_and(|refs| !refs.0) {
+                    continue;
+                }
                 let maybe_creature_type = get_entity_creature(world, parent_entity_id);
                 let object_grub = is_grub(world, parent_entity_id);
                 if maybe_creature_type.is_none() && !object_grub {

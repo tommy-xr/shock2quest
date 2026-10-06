@@ -2590,6 +2590,63 @@ fn template_lineage_excluding(
     out
 }
 
+fn resurrect_hit_points(world: &mut World, entity: EntityId) -> bool {
+    let hp = world
+        .borrow::<View<PropHitPoints>>()
+        .ok()
+        .and_then(|v| v.get(entity).ok().map(|p| p.hit_points));
+    let max = world
+        .borrow::<View<dark::properties::PropMaxHitPoints>>()
+        .ok()
+        .and_then(|v| v.get(entity).ok().map(|p| p.hit_points as i32))
+        .or(hp);
+    let (Some(hp), Some(max)) = (hp, max) else {
+        return false;
+    };
+    // cSimpleDamageModel::ResurrectObject: no resurrection at nonpositive
+    // maximum, otherwise raise HP to maximum only when below it.
+    if max <= 0 {
+        return false;
+    }
+    world.add_component(
+        entity,
+        PropHitPoints {
+            hit_points: hp.max(max),
+        },
+    );
+    true
+}
+
+#[cfg(test)]
+mod resurrection_health_tests {
+    use super::*;
+    #[test]
+    fn resurrection_matches_original_maximum_health_contract() {
+        let mut world = World::new();
+        for (hp, max, expected, succeeds) in [
+            (-20, 120, 120, true),
+            (70, 120, 120, true),
+            (140, 120, 140, true),
+            (-10, 0, -10, false),
+        ] {
+            let entity = world.add_entity((
+                PropHitPoints { hit_points: hp },
+                dark::properties::PropMaxHitPoints { hit_points: max },
+            ));
+            assert_eq!(resurrect_hit_points(&mut world, entity), succeeds);
+            assert_eq!(
+                world
+                    .borrow::<View<PropHitPoints>>()
+                    .unwrap()
+                    .get(entity)
+                    .unwrap()
+                    .hit_points,
+                expected
+            );
+        }
+    }
+}
+
 /// Apply one runtime metaproperty relation change without rebuilding unrelated
 /// live state. Only component types contributed by the changed branch are
 /// removed and then recomposed from the remaining authored/dynamic ancestry.
@@ -2643,6 +2700,10 @@ fn apply_meta_property_relation(
         .iter()
         .filter_map(|template| entity_info.entity_to_properties.get(template))
         .flat_map(|properties| properties.iter().cloned())
+        // A named donor's own identity is metadata, not a live object rename.
+        .filter(|property| {
+            property.component_type_id() != std::any::TypeId::of::<dark::properties::PropSymName>()
+        })
         .collect::<Vec<_>>();
     let affected_types = affected_properties
         .iter()
@@ -13509,6 +13570,35 @@ impl MissionCore {
                         entity_id,
                         dark::properties::PropRenderAlpha(alpha.clamp(0.0, 1.0)),
                     );
+                }
+                Effect::SetSlayResult { entity_id, result } => {
+                    self.world
+                        .add_component(entity_id, dark::properties::PropSlayResult(result));
+                }
+                Effect::ResurrectEntity { entity_id } => {
+                    if resurrect_hit_points(&mut self.world, entity_id) {
+                        self.script_world.dispatch(Message {
+                            to: entity_id,
+                            payload: MessagePayload::Resurrected,
+                        });
+                    }
+                }
+
+                Effect::SetWorldPresence { entity_id, present } => {
+                    self.world.add_component(entity_id, PropHasRefs(present));
+                    if present {
+                        self.make_physical(entity_id);
+                    } else {
+                        self.hit_boxes.remove_entity(
+                            entity_id,
+                            &mut self.world,
+                            &mut self.script_world,
+                            &mut self.physics,
+                            &mut self.id_to_physics,
+                        );
+                        self.physics.remove(entity_id);
+                        self.id_to_physics.remove(&entity_id);
+                    }
                 }
                 Effect::SetVisibility { entity_id, visible } => {
                     let is_alive = self

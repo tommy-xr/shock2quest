@@ -39,6 +39,13 @@ pub(crate) fn entity_class_template_id(world: &World, entity: EntityId) -> Optio
         })
 }
 
+/// Whether authored death policy dispatches Slain while retaining the object.
+pub(crate) fn retain_on_slay(world: &World, entity: EntityId) -> bool {
+    world
+        .borrow::<View<dark::properties::PropSlayResult>>()
+        .is_ok_and(|props| props.get(entity).is_ok_and(|p| p.0 == 1))
+}
+
 /// Resolve contact damage and freeze against the owning receiver. Damage goes
 /// through the struck hitbox so limb scaling and ragdoll metadata survive.
 /// Non-damage stims and immune receivers do not emit a zero-damage AI alert.

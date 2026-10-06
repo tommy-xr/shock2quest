@@ -634,6 +634,10 @@ pub struct PropCharGenRo(pub i32);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropHasRefs(pub bool);
 
+/// Dark damage policy: 0 normal, 1 retain after Slain, 2 terminate, 3 destroy.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropSlayResult(pub i32);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropImmobile(pub bool);
 
@@ -2035,6 +2039,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$HitPoints",
             PropHitPoints::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$SlayResul",
+            |reader, _len| read_i32(reader),
+            PropSlayResult,
             accumulator::latest,
         ),
         define_prop(

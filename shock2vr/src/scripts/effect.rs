@@ -1130,6 +1130,19 @@ pub enum Effect {
         entity_id: EntityId,
         visible: bool,
     },
+    /// Materialization changes references and physics together.
+    SetWorldPresence {
+        entity_id: EntityId,
+        present: bool,
+    },
+    SetSlayResult {
+        entity_id: EntityId,
+        result: i32,
+    },
+    /// Dark damage-service resurrection: restore max HP and notify retained AI.
+    ResurrectEntity {
+        entity_id: EntityId,
+    },
 
     /// Change allegiance while retaining the entity and its current pose.
     SetAITeam {
