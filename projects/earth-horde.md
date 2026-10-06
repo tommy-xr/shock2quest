@@ -149,11 +149,27 @@ horde access cards or reward-room locks.
 
 Trainers remain in the subway: stats at the west end, tech at the east end,
 and weapons/psi on the east platform's back wall. The weapons trainer is clear
-of the large containment cabinet. Three replicators serve the street: west,
-south wall, and far east end. Their separate RepScreen displays and wall-mounted
-height follow authored MedSci machines. All three cabinet backs contact their
-walls; the south-wall ammunition shop avoids the sloped buttresses, vehicles,
-and containment device. Outlets face accessible approaches.
+of the large containment cabinet. Five replicators serve the street; their
+separate displays and wall-mounted height follow authored MedSci machines.
+Cabinet backs contact surveyed walls and their outlets face clear approaches.
+
+| Location | Normal catalog | Hacked addition |
+| --- | --- | --- |
+| West supplies | Standard clips, med patches, psi boosters, maintenance tools, detox patches, Toxin-A | Auto-repair device replaces med patches |
+| South wall ammunition | Standard/AP clips, pellets, rifled slugs, timed/proximity grenades | French-Epstein Device replaces standard clips |
+| Far east supplies | Prisms, batteries, small/large empty beakers, shotgun, med patches | Recycler replaces shotgun |
+| Beside west supplies | Laser pistol, assault rifle, grenade launcher, EMP rifle, stasis generator, fusion cannon | Discounted weapons |
+| East inner wall, west of far east supplies | BrawnBoost, EndurBoost, SwiftBoost, SmartBoost, ExperTech, LabAssistant | Discounted implants |
+
+The weapon and implant specialists **start broken**; the three everyday shops
+start functional. Their MFD/tricorder shows static and a Repair control until
+repaired. They use the authored Repair 3 requirement and three-nanite attempt,
+or an auto-repair device can bypass the skill/minigame. A failed attempt leaves
+the machine available to retry. Repairs and hacks persist in saves.
+
+Catalog page arrows expose all six items. Hacking the everyday shops adds the
+three tools for 35/45/75 nanites respectively and discounts their remaining
+stock. Standard clips and med patches remain available from another shop.
 
 ## Start at a wave / jump cheat
 

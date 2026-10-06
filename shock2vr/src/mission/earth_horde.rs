@@ -309,12 +309,28 @@ impl EntityPopulator for HordePopulation {
             [54.5, 23.55, 24.0],
             90.0,
         );
+        let heavy_weapons = add(
+            60_013,
+            -463,
+            "West street heavy weapons",
+            [-3.0, 23.55, 32.7],
+            0.0,
+        );
+        let implants = add(
+            60_014,
+            -463,
+            "East street implants",
+            [50.0, 23.55, 27.9],
+            0.0,
+        );
         // Retail replicators are an assembly: RepBase is only the cabinet.
         // Match the separate RepScreen and its authored local offset.
         for (index, position, yaw) in [
             (0, [0.0, 23.40, 33.04], 0.0),
             (1, [25.0, 23.40, 8.16], 180.0),
             (2, [54.84, 23.40, 24.0], 90.0),
+            (3, [-3.0, 23.40, 33.04], 0.0),
+            (4, [50.0, 23.40, 28.24], 0.0),
         ] {
             add(60_040 + index, -464, "Replicator display", position, yaw);
         }
@@ -370,6 +386,16 @@ impl EntityPopulator for HordePopulation {
                     90.0,
                 ),
             ),
+            (
+                heavy_weapons,
+                60_033,
+                add(60_033, -327, "Heavy weapon outlet", [-3.0, 21.0, 30.8], 0.0),
+            ),
+            (
+                implants,
+                60_034,
+                add(60_034, -327, "Implant outlet", [50.0, 21.0, 26.0], 0.0),
+            ),
         ];
         let containment = super::earth_containment::populate(&mut add);
         drop(add);
@@ -420,7 +446,12 @@ impl EntityPopulator for HordePopulation {
                 },
             );
         }
-        for (entity, items, costs) in [
+        // Everyday supplies remain available immediately. Specialist cabinets
+        // use RepBase's authored Repair 3 / three-nanite repair attempt.
+        for shop in [heavy_weapons, implants] {
+            world.add_component(shop, PropObjState(ObjectState::Broken));
+        }
+        for (entity, items, costs, hacked_extra) in [
             (
                 supply,
                 [
@@ -432,32 +463,67 @@ impl EntityPopulator for HordePopulation {
                     "Anti-Annelid Toxin",
                 ],
                 [8, 10, 8, 12, 8, 10],
-            ),
-            (
-                east_supply,
-                [
-                    "Standard Clip",
-                    "Med Patch",
-                    "Psi Booster",
-                    "Maintenance Tool",
-                    "Detox Patch",
-                    "Anti-Annelid Toxin",
-                ],
-                [8, 10, 8, 12, 8, 10],
+                Some((1, "Molec. Analyzer", 35)),
             ),
             (
                 specialty,
                 [
-                    "Pellet Shot Box",
+                    "Standard Clip",
                     "AP Clip",
-                    "Portable Battery",
+                    "Pellet Shot Box",
                     "Rifled Slug Box",
-                    "Psi Booster",
+                    "Timed Grenade",
+                    "Prox. Grenade",
+                ],
+                [8, 12, 10, 8, 12, 16],
+                Some((0, "French-Epstein Device", 45)),
+            ),
+            (
+                east_supply,
+                [
+                    "Small Prism",
+                    "Portable Battery",
+                    "Small Beaker",
+                    "Large Beaker",
+                    "Shotgun",
                     "Med Patch",
                 ],
-                [10, 12, 10, 8, 8, 10],
+                [10, 10, 8, 12, 45, 10],
+                Some((4, "Recycler", 75)),
+            ),
+            (
+                heavy_weapons,
+                [
+                    "Laser Pistol",
+                    "Assault Rifle",
+                    "Gren Launcher",
+                    "EMP Rifle",
+                    "Stasis Field Generator",
+                    "Fusion Cannon",
+                ],
+                [70, 110, 90, 120, 100, 180],
+                None,
+            ),
+            (
+                implants,
+                [
+                    "BrawnBoost",
+                    "EndurBoost",
+                    "SwiftBoost",
+                    "SmartBoost",
+                    "ExperTech",
+                    "LabAssistant",
+                ],
+                [40, 40, 40, 40, 55, 55],
+                None,
             ),
         ] {
+            let mut hacked_items = items.map(str::to_ascii_lowercase);
+            let mut hacked_costs = costs.map(|cost| cost * 3 / 4);
+            if let Some((slot, name, cost)) = hacked_extra {
+                hacked_items[slot] = name.to_ascii_lowercase();
+                hacked_costs[slot] = cost;
+            }
             world.add_component(
                 entity,
                 (
@@ -466,8 +532,8 @@ impl EntityPopulator for HordePopulation {
                         costs,
                     },
                     PropReplicatorHackedContents {
-                        object_names: items.map(str::to_ascii_lowercase),
-                        costs: costs.map(|c| c * 3 / 4),
+                        object_names: hacked_items,
+                        costs: hacked_costs,
                     },
                 ),
             );
@@ -484,17 +550,25 @@ pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
             "unknown horde enemy: {name}"
         );
     }
-    for contents in core
-        .world
-        .borrow::<View<PropReplicatorContents>>()
-        .unwrap()
-        .iter()
     {
-        for name in contents.object_names.iter().filter(|name| !name.is_empty()) {
-            assert!(
-                core.template_name_to_template_id.contains_key(name),
-                "unknown horde shop item: {name}"
-            );
+        let (normal, hacked) = core
+            .world
+            .borrow::<(
+                View<PropReplicatorContents>,
+                View<PropReplicatorHackedContents>,
+            )>()
+            .unwrap();
+        for names in normal
+            .iter()
+            .map(|c| &c.object_names)
+            .chain(hacked.iter().map(|c| &c.object_names))
+        {
+            for name in names.iter().filter(|name| !name.is_empty()) {
+                assert!(
+                    core.template_name_to_template_id.contains_key(name),
+                    "unknown horde shop item: {name}"
+                );
+            }
         }
     }
     {
