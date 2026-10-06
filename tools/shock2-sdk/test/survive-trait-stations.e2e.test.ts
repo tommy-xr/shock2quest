@@ -61,7 +61,7 @@ test("Survive replaces every payphone with a wall-mounted, wave-gated trait stat
     await game.step({ frames: 2 });
     await check(wave);
   }
-  const unlockedSave = `${save}_unlocked`;
+  const unlockedSave = `survive_trait_phones_unlocked_${Date.now()}`;
   await game.save(unlockedSave);
   await game.load(unlockedSave);
   await game.step({ frames: 1 });
