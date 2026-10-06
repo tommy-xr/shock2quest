@@ -43,8 +43,8 @@ mod hazard_objects;
 pub mod healing_item;
 mod homing;
 pub(crate) mod impact_sound;
-pub(crate) mod shodan_shot;
 mod shodan_head;
+pub(crate) mod shodan_shot;
 
 pub mod immolate;
 mod implant;

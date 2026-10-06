@@ -51,4 +51,17 @@ test("SHODAN real rifle hits drive both authored screen stages across save/load"
   assert.equal(await find(821), undefined);
   assert.equal(await find(822), undefined);
   assert.equal((await game.info()).player.life_state, "alive");
+  // Exercise actual lethal removal after the resumed stage, without injected
+  // damage. The unit regression separately covers one committed 125→0 hit.
+  await shootTo(5);
+  const dyingHead = await find(298); assert.ok(dyingHead);
+  await game.player.aimAt(dyingHead.id, { visibility: "required", hitbox: "torso" });
+  await game.step({ frames: 25 });
+  await game.input.set("right_hand.trigger_value", 1);
+  await game.step({ frames: 2 });
+  await game.input.set("right_hand.trigger_value", 0);
+  await game.step({ frames: 5 });
+  assert.equal(await find(298), undefined, "the ordinary final bullet removes the head");
+  assert.equal(await find(821), undefined);
+  assert.equal(await find(822), undefined);
 });
