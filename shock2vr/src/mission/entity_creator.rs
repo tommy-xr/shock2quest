@@ -1383,20 +1383,33 @@ fn create_physics_representation_unfiltered(
     // why a death pose needs no model bounds: it is posed at draw time from an
     // `AnimationPlayer`, which bakes no bounds, so it would otherwise fall
     // through to the rest-pose box below.
-    if v_death_pose.get(entity_id).is_ok() {
+    if let Ok(death_pose) = v_death_pose.get(entity_id) {
         if let (Ok(pos), Ok(creature_type)) = (v_pos.get(entity_id), v_creature.get(entity_id)) {
             let creature_def = get_creature_definition(creature_type.0).unwrap();
             let bbox = creature_def.bounding_size;
-            let radius = bbox.x.max(bbox.z) / 2.0;
+            let radius = death_pose
+                .capsule
+                .map(|c| c.radius)
+                .unwrap_or_else(|| bbox.x.max(bbox.z) / 2.0);
             let creature_shape = PhysicsShape::Capsule {
-                height: radius.max(bbox.y - radius * 2.0),
+                height: death_pose
+                    .capsule
+                    .map(|c| c.height - radius * 2.0)
+                    .unwrap_or_else(|| radius.max(bbox.y - radius * 2.0)),
                 radius,
             };
             let rigid_body_handle = physics.add_dynamic(
                 entity_id,
                 pos.position,
                 pos.rotation,
-                vec3(0.0, -creature_def.physics_offset_height, 0.0),
+                vec3(
+                    0.0,
+                    death_pose
+                        .capsule
+                        .map(|c| c.center_y)
+                        .unwrap_or(-creature_def.physics_offset_height),
+                    0.0,
+                ),
                 creature_shape,
                 CollisionGroup::corpse(),
                 false,
@@ -1604,8 +1617,8 @@ fn create_physics_representation_unfiltered(
                 v_phys_type.get(entity_id).ok(),
                 v_phys_dimensions.get(entity_id).ok(),
             );
-            let height = match creature_shape {
-                PhysicsShape::Capsule { height, radius } => height + 2.0 * radius,
+            let (height, radius) = match creature_shape {
+                PhysicsShape::Capsule { height, radius } => (height + 2.0 * radius, radius),
                 _ => unreachable!("live creature shape is always a capsule"),
             };
             let (entities, mut capsules) = world
@@ -1614,7 +1627,11 @@ fn create_physics_representation_unfiltered(
             entities.add_component(
                 entity_id,
                 &mut capsules,
-                RuntimePropCreatureCapsule { center_y, height },
+                RuntimePropCreatureCapsule {
+                    center_y,
+                    height,
+                    radius,
+                },
             );
             rigid_body_handle = physics.add_dynamic(
                 entity_id,
