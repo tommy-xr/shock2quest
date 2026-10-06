@@ -10609,6 +10609,11 @@ impl MissionCore {
                         self.flat_ui.close();
                         self.weapon_settings_gun = None;
                         self.flat_ui.utilities.inspect_entity(weapon);
+                        // Effects run after the regular utility refresh. Fill
+                        // the reader before this frame renders its title.
+                        self.flat_ui
+                            .utilities
+                            .refresh(&self.world, asset_cache, &self.entity_info);
                     }
                 }
 

@@ -64,15 +64,16 @@ pub(crate) fn emit(
     font: &dyn engine::Font,
 ) -> f32 {
     let height = font.base_height();
+    let width = LINE_WIDTH.min(canvas.size().x - origin.x);
     let mut y = origin.y;
     for message in messages
         .iter()
         .take(MAX_LINES)
         .filter(|text| !text.is_empty())
     {
-        for line in engine::wrap_text_to_width(font, message, height, LINE_WIDTH) {
+        for line in engine::wrap_text_to_width(font, message, height, width) {
             canvas.text_native(
-                Rect::new(origin.x, y, LINE_WIDTH, height),
+                Rect::new(origin.x, y, width, height),
                 &line,
                 FONT,
                 HAlign::Left,
@@ -85,12 +86,11 @@ pub(crate) fn emit(
     (y - origin.y - MESSAGE_SPACING).max(height)
 }
 
-/// DrawOverlayText's 640x480 positions. The inventory occupies the top strip
-/// in use mode. Dark's extra 70px at native widths >=800 avoids its hacking
-/// tab; our entire HUD (including that tab) scales from a 640x480 canvas, so
-/// applying that physical-screen correction here would move only the text.
+/// DrawOverlayText's 640x480 positions. In use mode, keep clear of both the
+/// inventory strip and the MFD's 252px canvas (including its side controls).
+/// This is shared canvas placement, so flat and VR reserve the same space.
 pub(crate) fn flat_origin(use_mode: bool) -> Vector2<f32> {
-    vec2(ORIGIN.x, if use_mode { 130.0 } else { ORIGIN.y })
+    if use_mode { vec2(258.0, 130.0) } else { ORIGIN }
 }
 
 /// The same message block, tightly sized for a world-space panel. Increasing
@@ -205,6 +205,32 @@ pub(crate) mod tests {
             assert_eq!(font, crate::ui::MESSAGE_FONT);
             assert_eq!(*font_size, 0.0, "use native font size");
             assert!(engine::measure_text_width(&StubFont, text, 11.0) <= 446.0);
+        }
+    }
+
+    #[test]
+    fn use_mode_messages_clear_side_controls_and_wrap_inside_the_canvas() {
+        let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
+        emit(
+            &mut canvas,
+            flat_origin(true),
+            &["Installed laser pointer. ".repeat(8)],
+            &StubFont,
+        );
+        assert!(canvas.element_count() > 1, "exercise wrapping");
+        for element in canvas.elements() {
+            let rect = element.rect();
+            assert!(rect.x >= 2.0 + 252.0 + 4.0);
+            assert!(rect.x + rect.w <= canvas.size().x);
+            if let crate::ui::UiElement::Text { text, .. } = element {
+                assert!(
+                    engine::measure_text_width(
+                        &StubFont,
+                        text,
+                        engine::Font::base_height(&StubFont)
+                    ) <= rect.w
+                );
+            }
         }
     }
 
