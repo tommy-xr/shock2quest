@@ -1,0 +1,31 @@
+name: SDK Build & Unit Test
+
+# Rust workflows exclude SDK-only edits; this job owns their build and tests.
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "tools/shock2-sdk/**"
+      - ".github/workflows/sdk-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools/shock2-sdk
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tools/shock2-sdk/package-lock.json
+      - run: npm ci
+      # Compile all fixtures and run asset-independent tests. Licensed game
+      # data is only needed by the separately opted-in SHOCK2_E2E suite.
+      - run: npm test

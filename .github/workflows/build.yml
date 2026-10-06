@@ -5,6 +5,8 @@ on:
     branches: [ "**" ]
     paths-ignore:
       - '**/*.md'
+      - 'tools/shock2-sdk/**'
+      - '.github/workflows/sdk-tests.yml'
   # Not needed with wildcard branches
   # pull_request:
   #   branches: ["main"]
