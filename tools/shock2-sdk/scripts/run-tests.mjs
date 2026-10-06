@@ -24,7 +24,8 @@ if (process.env.SHOCK2_E2E === "1" && !process.env.SHOCK2_RUNTIME_BINARY) {
 const grouped = process.platform !== "win32";
 const child = spawn(process.execPath, ["--test", ...process.argv.slice(2)], {
   stdio: "inherit",
-  // Give the test runner, workers and their runtimes one owned process group.
+  // Give the runner and workers one owned group. SDK runtimes are detached;
+  // their worker's signal hook shuts down those separately owned groups.
   detached: grouped,
 });
 let interrupted;
@@ -43,18 +44,20 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     if (interrupted) return;
     interrupted = signal;
     signalTree(signal);
-    escalation = setTimeout(() => signalTree("SIGKILL"), 2000);
+    escalation = new Promise(resolve => setTimeout(() => {
+      signalTree("SIGKILL");
+      resolve();
+    }, 2000));
   });
 }
 const res = await new Promise(resolve => {
   child.once("error", error => resolve({ error }));
   child.once("exit", (status, signal) => resolve({ status, signal }));
 });
-// The runner may exit before a worker's runtime. Finish the interrupted group
-// before reporting a verdict, so a wrapper-only signal cannot orphan it.
+// A runner may exit before workers have handled the signal. Preserve the grace
+// period so their SDK hooks can kill detached runtimes before we kill workers.
 if (interrupted) {
-  clearTimeout(escalation);
-  signalTree("SIGKILL");
+  await escalation;
 }
 let code;
 if (res.error) {
