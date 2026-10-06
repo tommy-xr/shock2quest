@@ -5336,10 +5336,24 @@ impl PhysicsWorld {
             .unwrap_or(pose)
             .inverse_transform_point(&point![from.x, from.y, from.z]);
         let to = pose.inverse_transform_point(&point![to.x, to.y, to.z]);
+        let sphere_pose = Isometry::translation(from.x, from.y, from.z);
+        let sphere = Ball::new(radius);
+        // A zero-length cast can miss a sphere already inside a cuboid. Held
+        // guards and the opening damage sample must still recognize overlap.
+        if rapier3d::parry::query::intersection_test(
+            &sphere_pose,
+            &sphere,
+            &Isometry::identity(),
+            shape,
+        )
+        .unwrap_or(false)
+        {
+            return Some(0.0);
+        }
         rapier3d::parry::query::cast_shapes(
-            &Isometry::translation(from.x, from.y, from.z),
+            &sphere_pose,
             &(to - from),
-            &Ball::new(radius),
+            &sphere,
             &Isometry::identity(),
             &Vector::zeros(),
             shape,
@@ -9430,6 +9444,28 @@ mod tests {
                 )
                 .is_none(),
             "passing above the wrench is not a block"
+        );
+        assert_eq!(
+            world.sweep_sphere_against_entity(
+                vec3(0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, 0.0),
+                0.1,
+                guard,
+                None,
+            ),
+            Some(0.0),
+            "an already overlapping stationary guard must count"
+        );
+        assert_eq!(
+            world.sweep_sphere_against_entity(
+                vec3(0.0, 2.0, 0.0),
+                vec3(0.0, 2.0, 0.0),
+                0.1,
+                guard,
+                None,
+            ),
+            None,
+            "stationary separation must not become a block"
         );
         world.set_position_rotation2(guard, vec3(1.0, 0.0, 0.0), identity_quat());
         assert!(

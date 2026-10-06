@@ -452,14 +452,18 @@ swing-speed threshold is required to block. Held ranged guns also guard, costing
 psi amps and dropped items cannot guard. Melee parries are free. Gun guards work
 without the experimental physical-held-items flag. The first contact wins, so
 a pipe that reaches the player before the weapon still damages. Each attack can
-connect only once.
+connect only once. Guards can intercept the windup of an attack, before the
+pipe's authored damage window opens; idle poses cannot parry, and windup still
+cannot damage the player.
 
 Under **Pause → Developer → Visualizations → Combat**, enable **Melee contact
 volumes** (`melee_volumes`) to show the held weapon in red and the retail
-wrist-to-tip pipe spheres: gray outside the contact window, yellow while active,
-cyan during recoil. Enable **Creature hitboxes** (`show_hitboxes`) for green
+wrist-to-tip pipe spheres: purple during parryable windup, yellow during the
+damage window, cyan during recoil, and gray outside the attack. Enable
+**Creature hitboxes** (`show_hitboxes`) for green
 creature hurtboxes. Both overlays are visible in the headset. Entity detail exposes
-`PipeAttack` (window, consumption, recovery and parry count), and the animation
+`PipeAttack` (`active` damage window, `guardable` parry window, consumption,
+recovery and parry count), and the animation
 endpoint exposes `recoil`. `/v1/audio/recent` records the resolved metal clang;
 player `hand_feedback.haptics.sequence` reports the blocking hand's pulse.
 

@@ -1,5 +1,6 @@
 //! Physical pipe attacks in VR. Retail's humanoid weapon is four spheres
-//! along wrist 15 -> tip 17 (shkcrhum.cpp), enabled by MF_TRIGGER2/3. Resolve
+//! along wrist 15 -> tip 17 (shkcrhum.cpp), damaging during MF_TRIGGER2/3.
+//! Guards can intercept the windup too, before the pipe passes through them. Resolve
 //! their swept contacts before billing damage, so a nearer guard wins even
 //! when the same tick also reaches the player. Other melee stays unchanged.
 
@@ -62,7 +63,10 @@ fn target_pose(world: &World, physics: &PhysicsWorld, entity: EntityId) -> Optio
 
 #[derive(Component, Clone, Default, serde::Serialize)]
 pub(crate) struct PipeAttack {
+    /// Authored damage window.
     pub active: bool,
+    /// Current attack can be intercepted, including its pre-contact windup.
+    pub guardable: bool,
     pub consumed: bool,
     pub recovering: bool,
     pub parries: u64,
@@ -78,6 +82,8 @@ pub(crate) struct PipeAttack {
     frame: u32,
     #[serde(skip)]
     closing: bool,
+    #[serde(skip)]
+    starting: bool,
 }
 
 pub(crate) fn uses_physical_pipe(world: &World, entity: EntityId) -> bool {
@@ -154,16 +160,21 @@ pub(crate) fn observe(
     state.wrist = wrist;
     state.tip = tip;
     state.recovering = player.is_recoiling();
-    if flags.contains(MotionFlags::MELEE_CONTACT_START) {
+    state.starting = flags.contains(MotionFlags::MELEE_CONTACT_START);
+    if state.starting {
         state.active = true;
         state.consumed = false;
-        // The path before this flag is windup, not an attack sweep.
-        state.previous = None;
+        // Keep guard history across the opening flag. Damage below still
+        // excludes the pre-flag sweep, but an interception must not disappear.
     }
     state.closing = flags.contains(MotionFlags::MELEE_CONTACT_END) || player.is_queue_empty();
     if state.recovering {
         state.active = false;
     }
+    // A held weapon can physically obstruct a windup before the damage flag.
+    // Only the current attack clip qualifies; idle/walk/recoil poses cannot parry.
+    state.guardable =
+        state.active || player.has_upcoming_motion_flag(MotionFlags::MELEE_CONTACT_START);
     world.add_component(entity, state);
 }
 
@@ -178,8 +189,12 @@ fn contact_time(
     state: &PipeAttack,
     physics: &PhysicsWorld,
     target: EntityId,
+    sweep: bool,
 ) -> Option<(f32, Vector3<f32>)> {
-    let (previous_wrist, previous_tip) = state.previous.unwrap_or((state.wrist, state.tip));
+    let (previous_wrist, previous_tip) = state
+        .previous
+        .filter(|_| sweep)
+        .unwrap_or((state.wrist, state.tip));
     let previous = points(previous_wrist, previous_tip);
     let current = points(state.wrist, state.tip);
     previous
@@ -202,7 +217,11 @@ fn contact_time(
                     RADIUS,
                     &shape,
                     target_pose(world, physics, target)? * offset,
-                    state.targets.get(&target).map(|pose| pose * offset),
+                    state
+                        .targets
+                        .get(&target)
+                        .filter(|_| sweep)
+                        .map(|pose| pose * offset),
                 )
             } else {
                 physics.sweep_sphere_against_entity(
@@ -210,10 +229,12 @@ fn contact_time(
                     to,
                     RADIUS,
                     target,
-                    state.targets.get(&target).copied(),
+                    state.targets.get(&target).filter(|_| sweep).copied(),
                 )
             };
-            time.map(|time| (time, from + (to - from) * time))
+            // A discrete opening-frame damage sample happens at the END of
+            // this tick; an earlier guard sweep must win that comparison.
+            time.map(|time| (if sweep { time } else { 1.0 }, from + (to - from) * time))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
 }
@@ -281,19 +302,22 @@ pub(crate) fn resolve(
             .unwrap()
             .get(entity)
             .is_ok_and(|hp| hp.hit_points > 0);
-        if state.active && !state.consumed && alive && uses_physical_pipe(world, entity) {
+        if state.guardable && !state.consumed && alive && uses_physical_pipe(world, entity) {
             let participants = [Some(entity), Some(player), guards[0], guards[1]]
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>();
-            let body_hit = contact_time(world, &state, physics, player)
+            let body_hit = state
+                .active
+                .then(|| contact_time(world, &state, physics, player, !state.starting))
+                .flatten()
                 .filter(|(_, point)| unobstructed(physics, &state, *point, &participants));
             let block = guards
                 .iter()
                 .enumerate()
                 .filter_map(|(hand, guard)| {
                     let guard = (*guard)?;
-                    let (time, point) = contact_time(world, &state, physics, guard)?;
+                    let (time, point) = contact_time(world, &state, physics, guard, true)?;
                     if !unobstructed(physics, &state, point, &participants) {
                         return None;
                     }
@@ -305,6 +329,7 @@ pub(crate) fn resolve(
             {
                 state.consumed = true;
                 state.active = false;
+                state.guardable = false;
                 state.recovering = true;
                 state.parries += 1;
                 if is_ranged_guard(world, guard) {
@@ -347,6 +372,7 @@ pub(crate) fn resolve(
         }
         if state.closing || !alive {
             state.active = false;
+            state.guardable = false;
         }
         state.targets = guards
             .into_iter()
@@ -370,6 +396,8 @@ pub(crate) fn debug_geometry(world: &World) -> Vec<engine::scene::SceneObject> {
                 vec3(0.2, 1.0, 0.9)
             } else if state.active {
                 vec3(1.0, 0.8, 0.1)
+            } else if state.guardable {
+                vec3(0.7, 0.4, 1.0)
             } else {
                 vec3(0.4, 0.4, 0.4)
             };
@@ -406,4 +434,41 @@ pub(crate) fn debug_geometry(world: &World) -> Vec<engine::scene::SceneObject> {
         }
     }
     objects
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::physics::{CollisionGroup, DynamicPhysicsOptions, PhysicsShape};
+
+    #[test]
+    fn opening_damage_sample_does_not_precede_a_guard_sweep() {
+        let world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let target = EntityId::from_inner(123).unwrap();
+        physics.add_dynamic(
+            target,
+            vec3(0.0, 0.0, 0.0),
+            cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.05, 0.5, 0.05)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        let state = PipeAttack {
+            wrist: [0.0; 3],
+            tip: [0.0; 3],
+            previous: Some(([-1.0, 0.0, 0.0], [-1.0, 0.0, 0.0])),
+            ..Default::default()
+        };
+        let guard = contact_time(&world, &state, &physics, target, true).unwrap();
+        let opening_damage = contact_time(&world, &state, &physics, target, false).unwrap();
+        assert!(guard.0 > 0.0 && guard.0 < 1.0);
+        assert_eq!(opening_damage.0, 1.0);
+        assert!(
+            guard.0 < opening_damage.0,
+            "the earlier guard intercepts the opening damage sample"
+        );
+    }
 }
