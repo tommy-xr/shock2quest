@@ -166,6 +166,7 @@ pub struct PathFollowSteeringStrategy {
     target: PathTarget,
     path: Vec<Vector3<f32>>,
     next_waypoint: usize,
+    flying: bool,
     /// Goal position the current path was computed against
     path_goal: Option<Vector3<f32>>,
     repath_cooldown: f32,
@@ -229,6 +230,7 @@ impl PathFollowSteeringStrategy {
             target,
             path: Vec::new(),
             next_waypoint: 0,
+            flying: false,
             path_goal: None,
             repath_cooldown: 0.0,
             stall_waypoint: usize::MAX,
@@ -290,7 +292,10 @@ impl PathFollowSteeringStrategy {
         // reset the waypoint-progress check above forever while the body
         // stays put - fall back to net displacement
         match self.displacement_anchor {
-            Some((anchor, _)) if xz_distance(position, anchor) >= DISPLACEMENT_STALL_DISTANCE => {
+            Some((anchor, _))
+                if travel_distance(position, anchor, self.flying)
+                    >= DISPLACEMENT_STALL_DISTANCE =>
+            {
                 self.displacement_anchor = Some((position, 0.0));
                 // Real movement: the next stall (if any) is a fresh incident,
                 // not a continuation of a pinned body
@@ -358,6 +363,8 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // animation-driven movement
         let (position_point, _forward) = ai_util::get_position_and_forward(world, entity_id);
         let position = position_point.to_vec();
+        let flying = crate::creature::is_flying_creature(world, entity_id);
+        self.flying = flying;
 
         self.repath_cooldown = (self.repath_cooldown - time.elapsed.as_secs_f32()).max(0.0);
 
@@ -428,6 +435,38 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                             .then_some(response.exclusion_expires_at)
                             .flatten();
                         self.path = response.waypoints;
+                        if flying {
+                            // Portal waypoints lie on the navigation floor. Keep
+                            // the authored hover offset there. The final marker
+                            // can already float; clamp it above the physical
+                            // floor rather than adding the offset twice.
+                            let hover = world
+                                .borrow::<View<dark::properties::PropAIMoveZOffset>>()
+                                .unwrap()
+                                .get(entity_id)
+                                .map(|p| p.0)
+                                .unwrap_or(0.0);
+                            let last = self.path.len().saturating_sub(1);
+                            for point in self.path.iter_mut().take(last).skip(1) {
+                                point.y += hover;
+                            }
+                            if let Some(goal) = self.path.last_mut() {
+                                if let Some(floor) = physics
+                                    .ray_cast2_as_actor(
+                                        vec3_to_point3(*goal),
+                                        -Vector3::unit_y(),
+                                        12.0,
+                                        InternalCollisionGroups::WORLD,
+                                        Some(entity_id),
+                                        true,
+                                    )
+                                    .filter(|hit| hit.hit_normal.y > 0.55)
+                                {
+                                    goal.y = goal.y.max(floor.hit_point.y + hover);
+                                }
+                            }
+                        }
+
                         self.path_version += 1;
                         self.path_goal = Some(response.goal);
                         // waypoint 0 is the position the query started from
@@ -487,7 +526,13 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
 
         let needs_repath = match (self.path_goal, desired_goal) {
             (None, _) => true,
-            (Some(prev), Some(now)) => xz_distance(prev, now) > REPATH_TARGET_DRIFT,
+            (Some(prev), Some(now)) => {
+                if flying {
+                    (prev - now).magnitude() > REPATH_TARGET_DRIFT
+                } else {
+                    xz_distance(prev, now) > REPATH_TARGET_DRIFT
+                }
+            }
             (Some(_), None) => false,
         };
 
@@ -519,8 +564,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 PathTarget::Point(point) => Some(point),
             };
             match goal {
-                // TODO: derive movement bits from the creature (small
-                // creature / fly / swim) - everything walks for now
+                // Skeletal flyers follow authored flight links.
                 Some(goal) if budget_available() => {
                     // Jitter the cooldown so AIs alerted in the same moment
                     // (e.g. an alarm or DebugAlertAll) don't re-path on the
@@ -544,11 +588,15 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         entity: entity_id.inner(),
                         start: position,
                         goal,
-                        movement_bits: MovementBits::WALK,
+                        movement_bits: if flying {
+                            MovementBits::WALK | MovementBits::FLY
+                        } else {
+                            MovementBits::WALK
+                        },
                         now_seconds: time.total.as_secs_f32(),
                         // A scripted goto's marker may float over a floor
                         // the actor cannot reach; it walks beneath it instead
-                        any_floor: matches!(self.target, PathTarget::Entity(_)),
+                        any_floor: !flying && matches!(self.target, PathTarget::Entity(_)),
                     });
                 }
                 // Budget exhausted: defer to a later frame, cooldown untouched
@@ -563,7 +611,17 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             }
         }
 
-        self.next_waypoint = advance_waypoint(position, &self.path, self.next_waypoint);
+        if flying {
+            while self
+                .path
+                .get(self.next_waypoint)
+                .is_some_and(|point| (*point - position).magnitude() < WAYPOINT_ADVANCE_DISTANCE)
+            {
+                self.next_waypoint += 1;
+            }
+        } else {
+            self.next_waypoint = advance_waypoint(position, &self.path, self.next_waypoint);
+        }
 
         if self.published_path_version != Some(self.path_version) {
             self.published_path_version = Some(self.path_version);
@@ -639,7 +697,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // waypoint (blocked by a prop, another AI, or bad geometry), drop
         // the path so the next re-path - or wander goal - starts fresh
         // instead of pushing into the obstacle forever.
-        let distance = xz_distance(position, waypoint);
+        let distance = travel_distance(position, waypoint, flying);
         let clocks = self.advance_stall_clocks(
             service.movement_hold(entity_id.inner()),
             position,
@@ -774,7 +832,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     retreat.z - position.z,
                     pinned
                 );
-                let unstick_effect = if pinned {
+                let unstick_effect = if pinned && !flying {
                     // A nudge is a teleport, so both the trip and the landing
                     // are probed (see `probe_nudge`): an unchecked one aimed
                     // through a wall drops the body out of the level entirely.
@@ -1300,6 +1358,14 @@ fn waypoint_reached(position: Vector3<f32>, waypoint: Vector3<f32>) -> bool {
         && (position.y - waypoint.y).abs() < WAYPOINT_ADVANCE_HEIGHT
 }
 
+fn travel_distance(a: Vector3<f32>, b: Vector3<f32>, flying: bool) -> f32 {
+    if flying {
+        (a - b).magnitude()
+    } else {
+        xz_distance(a, b)
+    }
+}
+
 /// Horizontal distance; AI position and waypoint heights differ slightly
 /// (feet vs cell floor), so Y is checked separately with its own tolerance
 fn xz_distance(a: Vector3<f32>, b: Vector3<f32>) -> f32 {
@@ -1340,8 +1406,20 @@ mod tests {
     use super::*;
     use cgmath::vec3;
 
-    /// Stand `seconds` in one spot, `distance` from the waypoint, under
-    /// `hold`. Answers whether the displacement watchdog fired.
+    #[test]
+    fn vertical_progress_counts_only_for_flyers() {
+        for flying in [false, true] {
+            let mut follower = PathFollowSteeringStrategy::to_point(vec3(0.0, -20.0, 0.0));
+            follower.flying = flying;
+            follower.advance_stall_clocks(MovementHold::None, vec3(0.0, 0.0, 0.0), 20.0, 0.1);
+            let moved = follower
+                .advance_stall_clocks(MovementHold::None, vec3(0.0, -2.0, 0.0), 18.0, 0.1)
+                .moved;
+            assert_eq!(moved, flying);
+        }
+    }
+
+    /// Stand in one spot under `hold`; report whether the watchdog fired.
     fn stand_still(
         follower: &mut PathFollowSteeringStrategy,
         hold: MovementHold,

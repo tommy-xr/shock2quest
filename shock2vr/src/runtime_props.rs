@@ -55,6 +55,10 @@ pub struct RuntimePropAITargetAwareness {
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropLocomotionScale(pub f32);
 
+/// Consume-on-read velocity for skeletal flyers, whose clips contain no stride.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropFlightVelocity(pub Vector3<f32>);
+
 /// Live creature capsule measured from the model at spawn. Rebuilt with the
 /// physics body after loading, so AI sensing uses the same vertical geometry.
 #[derive(Component, Clone, Copy)]

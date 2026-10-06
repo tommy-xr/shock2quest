@@ -331,6 +331,13 @@ pub fn get_entity_creature(world: &World, entity_id: EntityId) -> Option<Arc<Cre
     get_creature_definition(creature_type.0)
 }
 
+/// Authored skeletal flyers use flight navigation and a velocity motor rather
+/// than walk animation root motion. Zero gravity alone does not imply flight.
+pub fn is_flying_creature(world: &World, entity_id: EntityId) -> bool {
+    get_entity_creature(world, entity_id)
+        .is_some_and(|creature| creature.actor_type == ActorType::Overlord)
+}
+
 /// Where a creature senses from, relative to its origin. A creature whose
 /// collider is raised above the origin looks, feels for door sensors and
 /// whiskers from the collider's centre, not from ankle height where a ray

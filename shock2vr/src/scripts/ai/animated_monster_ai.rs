@@ -27,6 +27,24 @@ use super::{
     behavior::*,
     steering::{STALL_SECONDS, Steering, SteeringOutput},
 };
+/// Bound each integration step by the remaining 3D distance, including a
+/// purely vertical goal. A holding/arrived flyer must not retain its last speed.
+fn flight_motor_velocity(
+    travel: Option<cgmath::Vector3<f32>>,
+    speed: f32,
+    dt: f32,
+    moving: bool,
+) -> cgmath::Vector3<f32> {
+    let Some(travel) = travel.filter(|_| moving && dt > 0.0) else {
+        return vec3(0.0, 0.0, 0.0);
+    };
+    let distance = travel.magnitude();
+    if distance <= 0.001 {
+        return vec3(0.0, 0.0, 0.0);
+    }
+    travel / distance * speed.max(0.0).min(distance / dt)
+}
+
 // Default timing constants for monsters (in seconds)
 const DEFAULT_ESCALATE_SECONDS: f32 = 1.5;
 const DEFAULT_DECAY_SECONDS: f32 = 3.0;
@@ -1876,6 +1894,9 @@ impl Script for AnimatedMonsterAI {
                 Effect::NoEffect,
             ));
 
+        let flight_travel = steering_output.travel;
+        let flight_heading = steering_output.desired_heading;
+
         // Keep looking at a player this creature can actually see, so the
         // sighting survives long enough to escalate (see
         // `should_orient_on_target`). The behavior's own steering effects
@@ -1912,6 +1933,38 @@ impl Script for AnimatedMonsterAI {
             door_wait_seconds.is_some() || self.current_behavior.borrow().holds_position(),
             heading_held,
         );
+
+        let rotation_effect = if crate::creature::is_flying_creature(world, entity_id) {
+            let speed = world
+                .borrow::<View<dark::properties::PropAIMoveSpeed>>()
+                .unwrap()
+                .get(entity_id)
+                .map(|p| p.0)
+                .unwrap_or(1.4 / SCALE_FACTOR)
+                * 7.5;
+            let moving = self.current_behavior.borrow().is_locomotion()
+                && !self.current_behavior.borrow().holds_position()
+                && door_wait_seconds.is_none()
+                && !heading_held;
+            let mut velocity =
+                flight_motor_velocity(flight_travel, speed, time.elapsed.as_secs_f32(), moving);
+            // Horizontal flight still slows while turning toward its route.
+            // Pure ascent/descent needs no yaw and can continue during a turn.
+            let facing_scale = locomotion_scale_for_heading_error(clamp_to_minimal_delta_angle(
+                flight_heading - self.current_heading,
+            ));
+            velocity.x *= facing_scale;
+            velocity.z *= facing_scale;
+            Effect::Multiple(vec![
+                rotation_effect,
+                Effect::SetAIProperty {
+                    entity_id,
+                    update: crate::scripts::AIPropertyUpdate::FlightVelocity { velocity },
+                },
+            ])
+        } else {
+            rotation_effect
+        };
 
         // A finished scripted sequence (its final queued effects were drained
         // by the steer above - scripted_state only reports Finished once they
@@ -3446,6 +3499,31 @@ mod tests {
             }
             panic!("the turn clip never ended");
         }
+    }
+
+    #[test]
+    fn flight_motor_descends_and_stops_without_overshooting() {
+        let down = flight_motor_velocity(Some(vec3(0.0, -4.0, 0.0)), 4.2, 1.0 / 60.0, true);
+        assert_eq!(down, vec3(0.0, -4.2, 0.0));
+        let near = flight_motor_velocity(Some(vec3(0.0, -0.01, 0.0)), 4.2, 1.0 / 60.0, true);
+        assert!((near.y / 60.0 + 0.01).abs() < 0.00001);
+        assert_eq!(
+            flight_motor_velocity(None, 4.2, 1.0 / 60.0, true),
+            vec3(0.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            flight_motor_velocity(Some(vec3(0.0, -4.0, 0.0)), 4.2, 1.0 / 60.0, false),
+            vec3(0.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn only_authored_skeletal_flyers_get_the_flight_motor() {
+        let mut world = World::new();
+        let ground = world.add_entity((dark::properties::PropCreature(0),));
+        let flyer = world.add_entity((dark::properties::PropCreature(5),));
+        assert!(!crate::creature::is_flying_creature(&world, ground));
+        assert!(crate::creature::is_flying_creature(&world, flyer));
     }
 
     fn locomotion_scale(effects: &[Effect]) -> Option<f32> {
