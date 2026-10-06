@@ -120,12 +120,8 @@ impl RoomPortal {
 // Define a function to compute the bounding box from a set of 6 planes.
 fn bounding_box_from_planes(planes: &Vec<Plane<f32>>) -> Aabb3<f32> {
     // Initialize the min and max corners of the bounding box.
-    let mut min_corner = Point3::new(std::f32::INFINITY, std::f32::INFINITY, std::f32::INFINITY);
-    let mut max_corner = Point3::new(
-        std::f32::NEG_INFINITY,
-        std::f32::NEG_INFINITY,
-        std::f32::NEG_INFINITY,
-    );
+    let mut min_corner = Point3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut max_corner = Point3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
 
     // Loop over each plane and compute its intersection with the other planes.
     let len = planes.len();
