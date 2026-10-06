@@ -64,13 +64,16 @@ for (const synthetic of [false, true])
                   await game.step({ frames: 180 });
                 }
                 const ammo = ammoOf(await game.entities.detail(id));
-                const prior = new Set(
-                  (await game.entities.byTemplate(-3544)).map((e) => e.id),
-                );
+                // Impact effects expire and their exposed entity IDs can be
+                // reused during the shot cooldown. Collision audio records the
+                // actual impact point under a monotonic event sequence instead.
+                const prior = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
                 await fireOnce(game);
                 await game.step({ frames: 20 });
-                const hits = (await game.entities.byTemplate(-3544)).filter(
-                  (e) => !prior.has(e.id),
+                const hits = (await game.audio.recent()).sounds.filter(
+                  (sound) => sound.sequence > prior &&
+                    sound.tags.some(([key, value]) => key === "event" && value === "collision") &&
+                    sound.tags.some(([key, value]) => key === "ammotype" && value === "std"),
                 );
                 const spent: number =
                   ammo - ammoOf(await game.entities.detail(id));
