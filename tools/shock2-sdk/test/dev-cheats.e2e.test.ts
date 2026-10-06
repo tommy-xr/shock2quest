@@ -1,3 +1,4 @@
+import { launchDeveloperGame } from "./helpers/developer-game.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -71,8 +72,8 @@ async function positions(game: GameServer, filter: string): Promise<string[]> {
 test(
   "the pause overlay's Cheats page rains items into the running mission",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 600_000 },
-  async () => {
-    await using game = await GameServer.launch({ mission: "medsci1.mis" });
+  async (t) => {
+    await using game = await launchDeveloperGame(t, { mission: "medsci1.mis" });
     await game.step({ frames: 30 });
 
     const wrenchesBefore = await count(game, "Wrench");
@@ -208,8 +209,8 @@ test(
 test(
   "exposure cheats accumulate independently and clear both while paused",
   { skip: !e2eEnabled, timeout: 120_000 },
-  async () => {
-    await using game = await GameServer.launch({ mission: "debug_minimal" });
+  async (t) => {
+    await using game = await launchDeveloperGame(t, { mission: "debug_minimal" });
     await game.step({ frames: 1 });
     await game.input.trigger("TogglePauseMenu");
     await game.step({ frames: 2 });
@@ -217,14 +218,14 @@ test(
     await click(game, DEV_ACTION);
 
     for (const [index, radiation, toxin] of [
-      [6, 10, 0],
-      [6, 20, 0],
-      [7, 20, 10],
-      [7, 20, 20],
-      [8, 0, 0],
-      [8, 0, 0],
-      [7, 0, 10],
-      [6, 10, 10],
+      [7, 10, 0],
+      [7, 20, 0],
+      [8, 20, 10],
+      [8, 20, 20],
+      [9, 0, 0],
+      [9, 0, 0],
+      [8, 0, 10],
+      [7, 10, 10],
     ]) {
       await click(game, row(index));
       const info = await game.info();

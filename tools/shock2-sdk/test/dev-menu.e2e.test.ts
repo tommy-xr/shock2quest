@@ -1,3 +1,4 @@
+import { launchDeveloperGame } from "./helpers/developer-game.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -65,8 +66,8 @@ async function paramValue(game: GameServer, key: string): Promise<number> {
 test(
   "the flat Developer screen steps a param with < and > and leaves with Done",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 300_000 },
-  async () => {
-    await using game = await GameServer.launch({ mission: "main_menu" });
+  async (t) => {
+    await using game = await launchDeveloperGame(t, { mission: "main_menu" });
     await game.step({ frames: 10 });
 
     // The dedicated Developer button opens the Developer scene.
@@ -131,8 +132,8 @@ function panelDepth(objects: SceneObjectSummary[]): number {
 test(
   "the VR Developer screen's > visibly moves the live panel",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 300_000 },
-  async () => {
-    await using game = await GameServer.launch({
+  async (t) => {
+    await using game = await launchDeveloperGame(t, {
       mission: "main_menu",
       debugFlags: ["--vr"],
     });
@@ -178,8 +179,8 @@ test(
 test(
   "the pause overlay's Developer page tunes without leaving the mission",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 600_000 },
-  async () => {
-    await using game = await GameServer.launch({ mission: "medsci1.mis" });
+  async (t) => {
+    await using game = await launchDeveloperGame(t, { mission: "medsci1.mis" });
     await game.step({ frames: 30 });
 
     await game.input.trigger("TogglePauseMenu");
@@ -228,8 +229,8 @@ test(
 test(
   "the flat Developer screen launches a debug scene and can back out of the list",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 300_000 },
-  async () => {
-    await using game = await GameServer.launch({ mission: "main_menu" });
+  async (t) => {
+    await using game = await launchDeveloperGame(t, { mission: "main_menu" });
     await game.step({ frames: 10 });
     await click(game, DEVELOPER_BUTTON);
     assert.equal((await game.info()).mission, "developer");
@@ -269,8 +270,8 @@ test(
 test(
   "the flat Developer screen launches a full mission from the Missions tab",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 600_000 },
-  async () => {
-    await using game = await GameServer.launch({ mission: "main_menu" });
+  async (t) => {
+    await using game = await launchDeveloperGame(t, { mission: "main_menu" });
     await game.step({ frames: 10 });
     await click(game, DEVELOPER_BUTTON);
     assert.equal((await game.info()).mission, "developer");
@@ -302,8 +303,8 @@ test(
 test(
   "the VR Developer screen launches a debug scene through the controller ray",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 300_000 },
-  async () => {
-    await using game = await GameServer.launch({
+  async (t) => {
+    await using game = await launchDeveloperGame(t, {
       mission: "main_menu",
       debugFlags: ["--vr"],
     });
@@ -328,8 +329,8 @@ for (const vr of [false, true]) {
   test(
     `${vr ? "VR" : "flat"} categories preserve location and keep Locked editable`,
     { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 300_000 },
-    async () => {
-      await using game = await GameServer.launch({
+    async (t) => {
+      await using game = await launchDeveloperGame(t, {
         mission: "main_menu",
         debugFlags: vr ? ["--vr"] : [],
       });
@@ -365,11 +366,15 @@ for (const vr of [false, true]) {
 
       await press(back);
       await press(back);
+      // Root also contains the invulnerability parameter; scroll once to
+      // expose Locked in the last visible row.
+      await press([447, 308]);
       await press(category(8)); // Locked
       await press(category(0)); // Hands & gloves
       const locked = (await game.devParams.list()).params.find(p => p.key === "glove_forward_cm");
       assert.equal(locked?.locked, true);
-      await press([425, 66]);
+      // This short list has no scroll gutter, so its arrow uses the full width.
+      await press([449, 66]);
       assert.equal(await paramValue(game, "glove_forward_cm"), -14.5);
       await game.devParams.set("glove_forward_cm", -15);
       assert.equal(await paramValue(game, "glove_forward_cm"), -15);
