@@ -26,7 +26,6 @@ pub fn create_wrist_hud_panels(
         return Vec::new();
     }
     let bio = readouts::BioReadout::from_world(world);
-    let hazards = super::hazards::HazardReadout::from_world(world);
     let alarm = crate::security_alarm::status(world).hud_seconds();
     let mut objects = Vec::new();
     for (i, hand) in [Handedness::Left, Handedness::Right]
@@ -43,16 +42,10 @@ pub fn create_wrist_hud_panels(
             let alarm_canvas = alarm
                 .map(super::alarm_panel::build_panel_canvas)
                 .unwrap_or_else(|| crate::ui::UiCanvas::new(super::alarm_panel::PANEL));
-            for (canvas, offset_x) in [
-                (super::hazards::wrist_canvas(&hazards), 0.0),
-                (alarm_canvas, if hazards.active() { 0.13 } else { 0.0 }),
-            ] {
-                if canvas.element_count() == 0 {
-                    continue;
-                }
-                objects.extend(canvas.render_world_space(
+            if alarm_canvas.element_count() > 0 {
+                objects.extend(alarm_canvas.render_world_space(
                     asset_cache,
-                    wrist_hologram_transform(root, canvas.size(), offset_x),
+                    wrist_hologram_transform(root, alarm_canvas.size(), 0.0),
                     None,
                     None,
                     0.001,
@@ -72,7 +65,7 @@ pub fn create_wrist_hud_panels(
             let width = 0.32;
             // Leave the full hazard panel unobscured when a left-hand weapon
             // also needs to explain a skill refusal.
-            let notice_y = if hand == Handedness::Left && (hazards.active() || alarm.is_some()) {
+            let notice_y = if hand == Handedness::Left && alarm.is_some() {
                 0.17
             } else {
                 0.06
@@ -437,10 +430,7 @@ mod tests {
 
     #[test]
     fn holograms_share_a_lower_hinge_and_lift_at_45_degrees() {
-        for size in [
-            super::super::hazards::SIZE,
-            super::super::alarm_panel::PANEL,
-        ] {
+        for size in [super::super::alarm_panel::PANEL] {
             let transform = wrist_hologram_transform(Matrix4::identity(), size, 0.0);
             let lower = transform * cgmath::vec4(0.0, -0.5, 0.0, 1.0);
             let upper = transform * cgmath::vec4(0.0, 0.5, 0.0, 1.0);

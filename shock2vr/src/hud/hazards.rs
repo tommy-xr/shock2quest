@@ -1,4 +1,4 @@
-//! A single pixel layout for flat, cyber-interface, and wrist hazard readouts.
+//! A single pixel layout for flat, VR HUD, and cyber-interface hazard readouts.
 use crate::{
     scripts::radiation::{ActiveRadiation, RadiationRooms},
     ui::{HAlign, Rect, UiCanvas, VAlign},
@@ -6,7 +6,8 @@ use crate::{
 use cgmath::{Vector2, vec2};
 use shipyard::{UniqueView, World};
 
-pub const SIZE: Vector2<f32> = vec2(128.0, 66.0);
+#[cfg(test)]
+const SIZE: Vector2<f32> = vec2(128.0, 66.0);
 pub const SCREEN_ORIGIN: Vector2<f32> = vec2(10.0, 345.0);
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HazardReadout {
@@ -34,13 +35,6 @@ impl HazardReadout {
 }
 
 pub fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, state: &HazardReadout) {
-    emit_layout(canvas, origin, state, false);
-}
-
-// All presentations stack active hazards from the bottom. The wrist only
-// centers toxin icons and adds a frame at this named layout boundary; both
-// renderers consume the same resolved canvas pixels.
-fn emit_layout(canvas: &mut UiCanvas, origin: Vector2<f32>, state: &HazardReadout, wrist: bool) {
     if !state.active() {
         return;
     }
@@ -50,45 +44,12 @@ fn emit_layout(canvas: &mut UiCanvas, origin: Vector2<f32>, state: &HazardReadou
     let radiation_visible = state.exposed || state.radiation > 0.0;
     let toxin_y = if radiation_visible { 0.0 } else { 34.0 };
     let overflow = state.toxin > 5.0;
-    let toxin_width = if overflow {
-        128.0
-    } else {
-        pips.saturating_sub(1) as f32 * 22.0 + 25.0
-    };
-    let toxin_x = if wrist {
-        (128.0 - toxin_width) * 0.5
-    } else {
-        0.0
-    };
-    if wrist && pips > 0 {
-        // Reuse only the original meter's edge pixels, not its RADIATED label.
-        for (dest, source) in [
-            (
-                at(0.0, toxin_y, 128.0, 1.0),
-                Rect::new(32.0, 0.0, 96.0, 1.0),
-            ),
-            (
-                at(0.0, toxin_y + 31.0, 128.0, 1.0),
-                Rect::new(32.0, 31.0, 96.0, 1.0),
-            ),
-            (at(0.0, toxin_y, 1.0, 32.0), Rect::new(32.0, 0.0, 1.0, 32.0)),
-            (
-                at(127.0, toxin_y, 1.0, 32.0),
-                Rect::new(32.0, 0.0, 1.0, 32.0),
-            ),
-        ] {
-            canvas.cropped_image(dest, "radback.pcx", source, vec2(128.0, 32.0));
-        }
-    }
     for i in 0..pips {
-        canvas.image(
-            at(toxin_x + i as f32 * 22.0, toxin_y, 25.0, 32.0),
-            "poisicon.pcx",
-        );
+        canvas.image(at(i as f32 * 22.0, toxin_y, 25.0, 32.0), "poisicon.pcx");
     }
     if overflow {
         canvas.text_native(
-            at(toxin_x + 113.0, toxin_y, 15.0, 32.0),
+            at(113.0, toxin_y, 15.0, 32.0),
             "+",
             "mainfont.fon",
             HAlign::Center,
@@ -112,12 +73,6 @@ fn emit_layout(canvas: &mut UiCanvas, origin: Vector2<f32>, state: &HazardReadou
         "radmeter.pcx",
         (state.radiation / 35.0).clamp(0.0, 1.0),
     );
-}
-
-pub fn wrist_canvas(state: &HazardReadout) -> UiCanvas {
-    let mut canvas = UiCanvas::new(SIZE);
-    emit_layout(&mut canvas, vec2(0.0, 0.0), state, true);
-    canvas
 }
 
 #[cfg(test)]
@@ -149,36 +104,18 @@ mod tests {
     }
 
     #[test]
-    fn active_hazards_stack_from_the_bottom_in_flat_and_wrist_layouts() {
-        for (toxin, radiation, x, y) in [
-            (1.0, 0.0, 51.5, 34.0),
-            (3.0, 0.0, 29.5, 34.0),
-            (3.0, 18.0, 29.5, 0.0),
-            (7.0, 18.0, 0.0, 0.0),
+    fn active_hazards_stack_from_the_bottom_on_the_shared_canvas() {
+        for (toxin, radiation, y) in [
+            (1.0, 0.0, 34.0),
+            (3.0, 0.0, 34.0),
+            (3.0, 18.0, 0.0),
+            (7.0, 18.0, 0.0),
         ] {
             let state = HazardReadout {
                 toxin,
                 radiation,
                 exposed: false,
             };
-            let wrist = wrist_canvas(&state);
-            let first_pip = wrist
-                .elements()
-                .iter()
-                .find(|e| {
-                    matches!(e,
-                        UiElement::Image { texture, .. } if texture == "poisicon.pcx"
-                    )
-                })
-                .unwrap();
-            assert_eq!(first_pip.rect(), Rect::new(x, y, 25.0, 32.0));
-            assert_eq!(
-                wrist
-                    .elements()
-                    .iter()
-                    .any(|e| matches!(e, UiElement::Bar { .. })),
-                radiation > 0.0
-            );
             let mut flat = UiCanvas::new(SIZE);
             emit(&mut flat, vec2(0.0, 0.0), &state);
             assert_eq!(flat.elements()[0].rect(), Rect::new(0.0, y, 25.0, 32.0));
@@ -194,11 +131,5 @@ mod tests {
                 );
             }
         }
-        assert_eq!(wrist_canvas(&HazardReadout::default()).element_count(), 0);
-        let radiation_only = wrist_canvas(&HazardReadout {
-            radiation: 18.0,
-            ..Default::default()
-        });
-        assert_eq!(radiation_only.element_count(), 3);
     }
 }
