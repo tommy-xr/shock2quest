@@ -278,7 +278,14 @@ fn research_text(world: &World, entity_id: EntityId) -> String {
     } else if status.complete {
         "Research complete. The item is now ready for use. Select the report button to review your findings.".to_owned()
     } else if status.active {
-        property_fallback(world, entity_id)
+        if world
+            .borrow::<UniqueView<QuestInfo>>()
+            .is_ok_and(|q| q.research().ignore_chemicals)
+        {
+            crate::research::CHEMICAL_FREE_STATUS.to_owned()
+        } else {
+            property_fallback(world, entity_id)
+        }
     } else {
         "Research suspended. Double-click this item to resume.".to_owned()
     }

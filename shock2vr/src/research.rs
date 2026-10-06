@@ -119,10 +119,15 @@ fn backfill_component<T>(
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct ResearchState {
+    /// Run rule for Survive: skill and time still apply, but chemicals do not.
+    pub(crate) ignore_chemicals: bool,
     active_template_id: Option<i32>,
     progress: HashMap<i32, ResearchProgress>,
     reports: u32,
 }
+
+pub(crate) const CHEMICAL_FREE_STATUS: &str =
+    "Research in progress. Chemicals are not required in Survive.";
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 struct ResearchProgress {
@@ -214,6 +219,7 @@ impl ResearchState {
         template_id: i32,
         chemicals: Option<&PropChemicalNeeded>,
     ) -> ResearchStatus {
+        let chemicals = chemicals.filter(|_| !self.ignore_chemicals);
         let progress = self.progress.get(&template_id).cloned().unwrap_or_default();
         ResearchStatus {
             authored_seconds: progress.authored_seconds,
@@ -235,6 +241,7 @@ impl ResearchState {
         chemicals: Option<&PropChemicalNeeded>,
         report_mask: u32,
     ) -> AdvanceResearchResult {
+        let chemicals = chemicals.filter(|_| !self.ignore_chemicals);
         if self.active_template_id != Some(template_id) {
             return AdvanceResearchResult::InProgress;
         }
@@ -296,6 +303,9 @@ impl ResearchState {
         chemical_sym_name: &str,
         chemicals: &PropChemicalNeeded,
     ) -> bool {
+        if self.ignore_chemicals {
+            return false;
+        }
         let Some(template_id) = self.active_template_id else {
             return false;
         };
@@ -452,6 +462,37 @@ mod tests {
             }),
             thresholds_secs: [30, 60, 240, 0, 0, 0, 0],
         }
+    }
+
+    #[test]
+    fn chemical_free_runs_keep_skill_timing_reports_and_saved_progress() {
+        let mut state = ResearchState {
+            ignore_chemicals: true,
+            ..Default::default()
+        };
+        let chemicals = toxin_chemicals();
+        assert_eq!(
+            state.begin(-1341, 2, 1),
+            BeginResearchResult::SkillRequired(2)
+        );
+        assert_eq!(state.begin(-1341, 2, 2), BeginResearchResult::Started);
+        // Research 2 advances two authored seconds per real second.
+        assert_eq!(
+            state.advance(-1341, 150.0, 2, 1.0, 600.0, Some(&chemicals), 0x10),
+            AdvanceResearchResult::InProgress
+        );
+        let status = state.status(-1341, Some(&chemicals));
+        assert_eq!(status.authored_seconds, 300.0);
+        assert_eq!(status.needed_chemical, None);
+        assert!(!state.provide_chemical("Chem #4", &chemicals));
+        let mut loaded: ResearchState =
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        assert_eq!(
+            loaded.advance(-1341, 150.0, 2, 1.0, 600.0, Some(&chemicals), 0x10),
+            AdvanceResearchResult::Completed
+        );
+        assert!(loaded.has_report(0x10));
+        assert!(loaded.is_complete(-1341));
     }
 
     #[test]

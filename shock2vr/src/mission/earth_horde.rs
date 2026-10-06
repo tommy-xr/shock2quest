@@ -512,6 +512,7 @@ pub(crate) fn provision(core: &mut MissionCore, assets: &mut AssetCache) {
         // quest. Seed completed knowledge before any shop vial initializes;
         // ResearchableScript normalizes every future copy, including on load.
         let research = quests.research_mut();
+        research.ignore_chemicals = true;
         research.begin(-1341, 0, 0);
         research.advance(-1341, 0.0, 1, 1.0, 0.0, None, 0);
     }
