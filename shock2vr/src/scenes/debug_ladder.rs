@@ -33,8 +33,8 @@
 //! - `z = 72`  trench: ladder up a trench wall to a ceiling, exit onto the shelf (eng1 317).
 //! - `z = 84`  mid-mount: step off a ledge onto a rung stack (hydro2 551).
 //! - `z = 96`  jump grab: jump from a pipe onto a ladder (rick2 210).
-//! - `z = 108` nerve: Many's organic climbable surface (many 211), without
-//!   narrow rungs/rails. VR grips the face and keeps the tracked glove pose.
+//! - `z = 108` nerve: three stacked Many organic surfaces (many 211), without
+//!   narrow rungs/rails. Climb 9.6 units and hand off across entity boundaries.
 //!
 //! Mission surfaces are one-sided faces, so the repro stations build them from
 //! thin slabs: a thick box would block top-out probes that start inside it
@@ -71,6 +71,7 @@ const LADDER_RUNG: i32 = -178;
 const NERVE_LADDER: i32 = -3656;
 const NERVE_Z: f32 = 108.0;
 const NERVE_HEIGHT: f32 = 3.1957629;
+const NERVE_COUNT: usize = 3;
 
 /// Ladder heights in world units (SS2 feet / 2.5).
 const LADDER_16_HEIGHT: f32 = 6.4;
@@ -506,13 +507,6 @@ fn repro_ladders() -> Vec<Effect> {
     // Mission +Z (into the ladder) is -X here: a -90 degree yaw.
     let mission_yaw = Quaternion::from_angle_y(Deg(-90.0));
     let mut effects = vec![
-        // Unlike the metal ladders, nerve_l2 is one-sided: its visible face
-        // needs the opposite yaw to face the station's +X approach.
-        spawn_at_oriented(
-            NERVE_LADDER,
-            Point3::new(STATION_FACE_X, NERVE_HEIGHT / 2.0, NERVE_Z),
-            mission_yaw,
-        ),
         lane_ladder(
             LADDER_16,
             SETBACK_Z,
@@ -526,6 +520,15 @@ fn repro_ladders() -> Vec<Effect> {
             mission_yaw * Quaternion::new(0.5, -0.5, 0.5, 0.5),
         ),
     ];
+    for index in 0..NERVE_COUNT {
+        // Stack unscaled authored surfaces. Unlike the metal ladders,
+        // nerve_l2 is one-sided and needs the opposite yaw to face +X.
+        effects.push(spawn_at_oriented(
+            NERVE_LADDER,
+            Point3::new(STATION_FACE_X, NERVE_HEIGHT * (index as f32 + 0.5), NERVE_Z),
+            mission_yaw,
+        ));
+    }
     for w in [-3.68, -0.48, 2.72] {
         effects.push(spawn_at_oriented(
             RICK_CONDUIT,
@@ -1119,8 +1122,8 @@ fn guides() -> Vec<Guide> {
             NERVE_Z,
             [
                 "NERVE SURFACE (z 108)",
-                "many.mis 211 - Nerve_Ladder",
-                "Grip the face, then pull down.",
+                "many.mis 211 - 3 stacked surfaces",
+                "Grip, pull, and hand off to climb.",
                 "No bar wrap: glove follows controller.",
             ],
             None,

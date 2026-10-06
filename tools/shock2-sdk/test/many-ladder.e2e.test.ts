@@ -13,8 +13,9 @@ test(
     await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
     await game.step({ frames: 5 });
     const { entities } = await game.entities.list({ filter: "Nerve_Ladder" });
-    assert.equal(entities.length, 1, "the Many station uses the shipped nerve ladder");
-    const nerve = await game.physics.ladder(entities[0].id);
+    assert.equal(entities.length, 3, "the tall Many station stacks three shipped nerve ladders");
+    const lowest = entities.reduce((a, b) => a.position[1] < b.position[1] ? a : b);
+    const nerve = await game.physics.ladder(lowest.id);
     assert.equal(nerve.model, "nerve_l2");
     assert.deepEqual(nerve.rungs, [], "organic strands are too thick for a rung wrap");
     assert.deepEqual(nerve.rails, []);
@@ -39,6 +40,24 @@ test(
       await game.step({ frames: 30 });
       assert.equal((await game.info()).player.climb.grips.length, 0, "opening releases the surface");
     }
+
+    // Climb through both seams with ordinary alternating grip/pull input.
+    await teleportVerified(game, { x: -6.3, y: 1.5, z: 108 });
+    await game.step({ frames: 30 });
+    const visited = new Set<number>();
+    for (let stroke = 0; stroke < 24; stroke++) {
+      const hand = stroke % 2 === 0 ? "left" : "right";
+      const other = hand === "left" ? "right" : "left";
+      const body = await game.player.position();
+      const hold = await vrGrab(game, hand, [-6.7, body.y + 0.75, 108 + (hand === "left" ? 0.35 : -0.35)]);
+      assert.equal(hold.kind, "ladder");
+      assert.ok(entities.some((entity) => entity.id === hold.entity_id));
+      visited.add(hold.entity_id!);
+      await game.input.set(`${other}_hand.squeeze`, 0);
+      await vrPull(game, hand, [0, -0.3, 0], 18);
+    }
+    assert.equal(visited.size, 3, "handed off through all three authored surfaces");
+    assert.ok((await game.player.position()).y > 7, "climbed beyond both seams");
   },
 );
 
