@@ -13,17 +13,22 @@ test("Smasher waits for release and adds six base damage before target armor", {
   await game.player.spawnItem(-928);
   await game.input.trigger("EquipWrench");
   await game.step({ frames: 5 });
-  const [droid] = await game.entities.byTemplate(593);
-  assert.ok(droid);
-  const [x, y, z] = (await game.entities.detail(droid.id)).position;
-  await game.player.teleport({ x: x + 1.2, y: y + 1, z });
-  await game.step({ frames: 60 });
-  await game.player.aimAt(droid, { hitbox: "torso", visibility: "required" });
-  await game.step({ frames: 3 });
-  const hp = async () => Number((await game.entities.detail(droid.id)).properties.find(p => p.name === "HitPoints")!.value);
-  // The droid's WeaponBash receptron halves the Wrench's authored 9 damage.
-  // A charged strike adds six before that reduction, then rounds HP loss.
-  for (const [hold, expected] of [[6, 5], [80, 8]]) {
+  const save = `os_smasher_damage_${Date.now()}`;
+  assert.ok((await game.save(save)).success);
+  // Both inherited sources (6 + 9) emit. Charging adds six to each source
+  // before the droid halves their total; only the final HP loss rounds.
+  for (const [hold, expected] of [[6, Math.round((6 + 9) * 0.5)], [80, Math.round((6 + 6 + 9 + 6) * 0.5)]]) {
+    // Independent strikes need a fresh full-health receiver: together these
+    // contacts would kill the 20-HP droid and hide damage behind HP clamping.
+    assert.ok((await game.load(save)).success);
+    const [droid] = await game.entities.byTemplate(593);
+    assert.ok(droid);
+    const [x, y, z] = (await game.entities.detail(droid.id)).position;
+    await game.player.teleport({ x: x + 1.2, y: y + 1, z });
+    await game.step({ frames: 60 });
+    await game.player.aimAt(droid, { hitbox: "torso", visibility: "required" });
+    await game.step({ frames: 3 });
+    const hp = async () => Number((await game.entities.detail(droid.id)).properties.find(p => p.name === "HitPoints")!.value);
     const before = await hp();
     await game.input.set("right_hand.trigger", 1);
     await game.step({ frames: hold });
