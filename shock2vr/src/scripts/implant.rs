@@ -7,6 +7,15 @@ const STATE_KEY: &str = "shock2vr.implant";
 #[derive(Default)]
 pub struct Implant {
     elapsed: f32,
+    armor: bool,
+}
+impl Implant {
+    pub fn powered_armor() -> Self {
+        Self {
+            armor: true,
+            ..Self::default()
+        }
+    }
 }
 impl Script for Implant {
     fn handle_message(
@@ -17,16 +26,22 @@ impl Script for Implant {
         message: &MessagePayload,
     ) -> Effect {
         match message {
-            MessagePayload::EquipImplant { slot } => Effect::EquipImplant {
+            MessagePayload::Frob if self.armor => Effect::ToggleArmor { entity_id: id },
+            MessagePayload::TurnOn { .. } if self.armor => Effect::EquipArmor { entity_id: id },
+            MessagePayload::TurnOff { .. } if self.armor => {
+                self.elapsed = 0.0;
+                Effect::UnequipArmor { entity_id: id }
+            }
+            MessagePayload::EquipImplant { slot } if !self.armor => Effect::EquipImplant {
                 entity_id: id,
                 slot: *slot,
             },
             MessagePayload::Frob => Effect::ToggleImplant { entity_id: id },
-            MessagePayload::Drop => {
+            MessagePayload::Drop if !self.armor => {
                 self.elapsed = 0.0;
                 Effect::UnequipImplant { entity_id: id }
             }
-            MessagePayload::Recharge => Effect::AdjustImplantEnergy {
+            MessagePayload::Recharge => Effect::AdjustEquipmentEnergy {
                 entity_id: id,
                 amount: implants::recharge_capacity(world),
                 recharge: true,
@@ -41,14 +56,23 @@ impl Script for Implant {
         _physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
-        if !world
+        if self.armor {
+            if crate::armor::needs_unequip(world, id) {
+                self.elapsed = 0.0;
+                return Effect::UnequipArmor { entity_id: id };
+            }
+            if crate::armor::active(world) != Some(id) {
+                self.elapsed = 0.0;
+                return Effect::NoEffect;
+            }
+        } else if !world
             .borrow::<View<RuntimePropImplantSlot>>()
             .is_ok_and(|v| v.contains(id))
         {
             self.elapsed = 0.0;
             return Effect::NoEffect;
         }
-        if !implants::equipped(world).contains(&Some(id)) {
+        if !self.armor && !implants::equipped(world).contains(&Some(id)) {
             self.elapsed = 0.0;
             return Effect::UnequipImplant { entity_id: id };
         }
@@ -72,7 +96,7 @@ impl Script for Implant {
         let ticks = (self.elapsed / rate).floor();
         self.elapsed -= ticks * rate;
         if ticks > 0.0 {
-            Effect::AdjustImplantEnergy {
+            Effect::AdjustEquipmentEnergy {
                 entity_id: id,
                 amount: -ticks * amount,
                 recharge: false,
@@ -151,7 +175,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             step(&mut restored, &world, 1),
-            Effect::AdjustImplantEnergy {
+            Effect::AdjustEquipmentEnergy {
                 amount: -1.0,
                 recharge: false,
                 ..
@@ -159,7 +183,7 @@ mod tests {
         ));
         assert!(matches!(
             step(&mut restored, &world, 25),
-            Effect::AdjustImplantEnergy { amount: -2.0, .. }
+            Effect::AdjustEquipmentEnergy { amount: -2.0, .. }
         ));
         world.add_component(implant, PropEnergy(0.0));
         assert!(matches!(step(&mut restored, &world, 10), Effect::NoEffect));

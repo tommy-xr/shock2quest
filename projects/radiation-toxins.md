@@ -63,6 +63,8 @@ Frob equips one hazard armor and one WormHeart implant, using carried entity
 identity; equipped markers persist through saves/transitions. Research-required
 items cannot equip until their object state permits use. This is a minimal
 integration with existing inventory use, not a complete armor/implant slot UI.
+The later [armor audit and implementation](armor.md) adds the shared chest
+control, combat protection, power drain, and Worm Skin behavior.
 Strong Metabolism is now purchasable through the existing live-trait gate.
 
 Patches consume their exact source item only when they reduce contamination.

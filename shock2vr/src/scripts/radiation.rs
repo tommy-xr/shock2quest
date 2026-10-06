@@ -580,22 +580,7 @@ mod tests {
 /// Protection is evaluated at use time, so removing armor or expiring psi
 /// immediately changes subsequent exposure without curing existing status.
 pub fn hazard_protection(world: &World) -> dark::properties::PropArmor {
-    let mut result = dark::properties::PropArmor::default();
-    let carried = super::script_util::player_carried_items(world);
-    if let Ok(armor) = world.borrow::<View<dark::properties::PropArmor>>() {
-        if let Ok(equipped) =
-            world.borrow::<View<crate::runtime_props::RuntimePropHazardEquipment>>()
-        {
-            for entity in carried {
-                if equipped.get(entity).is_ok() {
-                    if let Ok(value) = armor.get(entity) {
-                        result = *value;
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    let mut result = crate::armor::protection(world);
     result.radiation = result.radiation.clamp(0.0, 100.0);
     result.toxic = result.toxic.clamp(0.0, 100.0);
     result

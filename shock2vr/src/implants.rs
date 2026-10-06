@@ -153,6 +153,9 @@ pub fn effective_stats(world: &World) -> Option<PlayerStats> {
             _ => {}
         }
     }
+    if crate::armor::active(world).is_some_and(|id| crate::armor::worm(world, id)) {
+        stats.psionic_ability += 2;
+    }
     // Fold timed modifiers in last so the 1..=8 clamp covers implants too;
     // clearing them keeps a later `effective()` on the result from re-adding.
     use crate::player_stats::Stat;

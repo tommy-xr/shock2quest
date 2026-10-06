@@ -277,6 +277,8 @@ pub struct FlatUiHost {
     /// Read-only paperdoll contents, in physical left/right holster order.
     holster_items: [Option<CursorItem>; 2],
     implant_items: [Option<CursorItem>; 2],
+    armor_item: Option<CursorItem>,
+    armor_status: String,
     implant_energy: [f32; 2],
     implant_locked: [bool; 2],
     hand_ammo: [crate::hud::ammo_panel::AmmoReadout; 2],
@@ -365,6 +367,8 @@ impl FlatUiHost {
             hand_items: [None, None],
             holster_items: [None, None],
             implant_items: [None, None],
+            armor_item: None,
+            armor_status: String::new(),
             implant_energy: [0.0; 2],
             implant_locked: [false; 2],
             hand_ammo: Default::default(),
@@ -520,6 +524,29 @@ impl FlatUiHost {
     ) {
         self.hand_ammo = items
             .map(|entity| crate::hud::ammo_panel::AmmoReadout::for_weapon(world, entity, true));
+        self.armor_item = crate::armor::equipped(world).map(|entity| {
+            let mut item = make_cursor_item(world, entity);
+            item.label = crate::hud::resolve_item_name(asset_cache, world, entity).or(item.label);
+            item
+        });
+        self.armor_status = self
+            .armor_item
+            .as_ref()
+            .map(|item| {
+                if crate::armor::powered(world, item.entity) {
+                    format!("{:.0}%", crate::implants::energy(world, item.entity))
+                } else if crate::armor::worm(world, item.entity) {
+                    "+2 PSI".into()
+                } else {
+                    let protection = crate::armor::protection(world);
+                    if protection.combat > 0.0 {
+                        format!("DEF{:.0}%", protection.combat)
+                    } else {
+                        format!("HAZ{:.0}%", protection.radiation.max(protection.toxic))
+                    }
+                }
+            })
+            .unwrap_or_default();
         let implants = crate::implants::equipped(world);
         self.implant_energy = implants.map(|id| {
             id.map(|id| crate::implants::energy(world, id))
@@ -583,6 +610,19 @@ impl FlatUiHost {
             return None;
         }
         let pointer = self.cursor_canvas?;
+        if armor_readout_rect(self.strip_rect()?).contains(pointer) {
+            return Some(
+                self.armor_item
+                    .as_ref()
+                    .map(|item| {
+                        format!(
+                            "Armor: {}. Use to remove.",
+                            item.label.as_deref().unwrap_or("Equipped")
+                        )
+                    })
+                    .unwrap_or_else(|| "Armor: use armor in your inventory to equip it".into()),
+            );
+        }
         if let Some(slot) = implant_readout_rects(self.strip_rect()?)
             .iter()
             .position(|r| r.contains(pointer))
@@ -785,6 +825,7 @@ impl FlatUiHost {
             .iter_mut()
             .chain(self.holster_items.iter_mut())
             .chain(self.implant_items.iter_mut())
+            .chain(std::iter::once(&mut self.armor_item))
         {
             if item.as_ref().is_some_and(|item| item.entity == entity) {
                 *item = None;
@@ -1190,6 +1231,22 @@ impl FlatUiHost {
                 return (Vec::new(), actions);
             }
         }
+        if strip_rect.is_some_and(|r| armor_readout_rect(r).contains(canvas_pos)) {
+            self.hover_close = false;
+            let messages = if pressed_edge && self.cursor_item.is_none() {
+                self.armor_item
+                    .as_ref()
+                    .map(|item| Message {
+                        to: item.entity,
+                        payload: MessagePayload::Frob,
+                    })
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            return (messages, Vec::new());
+        }
         if let Some(slot) = strip_rect.and_then(|r| {
             implant_readout_rects(r)
                 .iter()
@@ -1575,6 +1632,31 @@ impl FlatUiHost {
                     }
                 }
             }
+            let chest = armor_readout_rect(rect);
+            let title = Rect::new(chest.x, chest.y, chest.w, 10.0);
+            canvas.image(title, "frame.pcx");
+            canvas.text_native_fit(
+                title,
+                "ARMOR",
+                NAME_STRIP_FONT,
+                HAlign::Center,
+                VAlign::Middle,
+            );
+            if let Some(item) = &self.armor_item {
+                if let Some(icon) = &item.icon {
+                    canvas.fitted_object_icon(
+                        Rect::new(chest.x + 2.0, chest.y + 11.0, chest.w - 4.0, chest.h - 22.0),
+                        icon,
+                    );
+                }
+                canvas.text_native_fit(
+                    Rect::new(chest.x, chest.y + chest.h - 10.0, chest.w, 10.0),
+                    &self.armor_status,
+                    NAME_STRIP_FONT,
+                    HAlign::Center,
+                    VAlign::Middle,
+                );
+            }
             for (slot, well) in implant_readout_rects(rect).into_iter().enumerate() {
                 if let Some(item) = &self.implant_items[slot] {
                     if let Some(icon) = &item.icon {
@@ -1786,6 +1868,27 @@ impl FlatUiHost {
                         screen_rect: self.to_screen_rect(r),
                     },
                 ));
+                let chest = armor_readout_rect(rect);
+                elements.push(crate::game_scene::DebugUiElement {
+                    kind: "button".into(),
+                    texture: self.armor_item.as_ref().and_then(|i| i.icon.clone()),
+                    text: Some(
+                        self.armor_item
+                            .as_ref()
+                            .map(|i| {
+                                format!(
+                                    "{} {}",
+                                    i.label.as_deref().unwrap_or("Armor"),
+                                    self.armor_status
+                                )
+                            })
+                            .unwrap_or_else(|| "Empty".into()),
+                    ),
+                    label: Some("Armor".into()),
+                    entity_id: self.armor_item.as_ref().map(|i| i.entity.inner() as i32),
+                    rect: [chest.x, chest.y, chest.w, chest.h],
+                    screen_rect: self.to_screen_rect(chest),
+                });
                 elements.extend(implant_readout_rects(rect).into_iter().enumerate().map(
                     |(slot, r)| {
                         let item = self.implant_items[slot].as_ref();
@@ -1985,6 +2088,17 @@ fn mirrored_arm_rect(strip: Rect) -> Rect {
         strip.y,
         EXTRA_ARM_WIDTH * STRIP_SCALE,
         strip.h,
+    )
+}
+
+/// Original ShockInv equip_rects[kEquipArmor], shared by drawing and both pointers.
+fn armor_readout_rect(strip: Rect) -> Rect {
+    let scale = strip.w / 636.0;
+    Rect::new(
+        strip.x + 563.0 * scale,
+        strip.y + 16.0 * scale,
+        69.0 * scale,
+        67.0 * scale,
     )
 }
 

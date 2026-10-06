@@ -248,7 +248,17 @@ pub enum Effect {
         entity_id: EntityId,
         amount: f32,
     },
-    ToggleHazardArmor {
+    UnequipArmor {
+        entity_id: EntityId,
+    },
+    DrainWormArmor {
+        entity_id: EntityId,
+        ticks: i32,
+    },
+    EquipArmor {
+        entity_id: EntityId,
+    },
+    ToggleArmor {
         entity_id: EntityId,
     },
     InstallWeaponUpgrade {
@@ -272,7 +282,7 @@ pub enum Effect {
     UnequipImplant {
         entity_id: EntityId,
     },
-    AdjustImplantEnergy {
+    AdjustEquipmentEnergy {
         entity_id: EntityId,
         amount: f32,
         recharge: bool,

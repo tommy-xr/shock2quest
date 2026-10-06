@@ -3335,6 +3335,9 @@ impl MissionCore {
         world.add_unique(
             crate::mission::stim_response::GlobalContactStims::from_entity_info(&entity_info_rc),
         );
+        world.add_unique(crate::armor::ArmorEffects::from_entity_info(
+            &entity_info_rc,
+        ));
         world.add_unique(crate::psi::PsychoReflectiveScreenFactor::from_entity_info(
             &entity_info_rc,
         ));
@@ -8204,6 +8207,7 @@ impl MissionCore {
                 &self.world,
                 entity_id,
             ));
+            receptrons.extend(crate::armor::active_receptrons(&self.world, entity_id));
             let maybe_damage = crate::mission::stim_response::resolve_stim_damage(
                 &receptrons,
                 stim_template_id,
@@ -10262,12 +10266,14 @@ impl MissionCore {
                         self.refresh_implant_effects();
                     }
                 }
-                Effect::AdjustImplantEnergy {
+                Effect::AdjustEquipmentEnergy {
                     entity_id,
                     amount,
                     recharge,
                 } => {
-                    if crate::implants::kind(&self.world, entity_id).is_none() {
+                    if crate::implants::kind(&self.world, entity_id).is_none()
+                        && !crate::armor::powered(&self.world, entity_id)
+                    {
                         continue;
                     }
                     let before = crate::implants::energy(&self.world, entity_id);
@@ -10282,7 +10288,8 @@ impl MissionCore {
                         // Retail BaseImplant uses bb07 when its power runs out.
                         // Announce the committed edge once, not each depleted frame.
                         if after == 0.0
-                            && crate::implants::equipped(&self.world).contains(&Some(entity_id))
+                            && (crate::implants::equipped(&self.world).contains(&Some(entity_id))
+                                || crate::armor::equipped(&self.world) == Some(entity_id))
                         {
                             effects.push_back(crate::scripts::script_util::announce(
                                 entity_id, "bb07",
@@ -10292,47 +10299,61 @@ impl MissionCore {
                     }
                 }
 
-                Effect::ToggleHazardArmor { entity_id } => {
-                    if self.world.borrow::<View<PropObjState>>().is_ok_and(|v| {
-                        v.get(entity_id)
-                            .is_ok_and(|s| s.0 == dark::properties::ObjectState::Unresearched)
-                    }) {
+                Effect::UnequipArmor { entity_id } => {
+                    self.world
+                        .remove::<crate::runtime_props::RuntimePropHazardEquipment>(entity_id);
+                    self.refresh_implant_effects();
+                }
+                Effect::DrainWormArmor { entity_id, ticks } => {
+                    if crate::armor::active(&self.world) != Some(entity_id) {
                         continue;
                     }
-                    if !crate::scripts::script_util::player_carried_items(&self.world)
-                        .contains(&entity_id)
-                    {
-                        continue;
+                    let player = self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .unwrap()
+                        .entity_id;
+                    let mut psi = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropPsiState>>()
+                        .unwrap();
+                    let points = (&mut psi)
+                        .get(player)
+                        .map(|p| {
+                            let spent = ticks.min(p.psi_points.max(0));
+                            p.psi_points -= spent;
+                            spent
+                        })
+                        .unwrap_or(0);
+                    drop(psi);
+                    if ticks > points {
+                        effects.push_back(Effect::AdjustHitPoints {
+                            entity_id: player,
+                            delta: -(ticks - points),
+                        });
                     }
-                    let armor = self
-                        .world
-                        .borrow::<View<dark::properties::PropArmor>>()
-                        .is_ok_and(|v| v.get(entity_id).is_ok());
-                    let implant = self
-                        .world
-                        .borrow::<View<dark::properties::PropImplantDesc>>()
-                        .is_ok_and(|v| v.get(entity_id).is_ok_and(|v| v.0 == 12));
-                    if !armor && !implant {
-                        continue;
+                }
+                Effect::EquipArmor { entity_id } => {
+                    if crate::armor::equipped(&self.world) != Some(entity_id) {
+                        effects.push_front(Effect::ToggleArmor { entity_id });
+                    }
+                }
+                Effect::ToggleArmor { entity_id } => {
+                    let was_equipped = crate::armor::equipped(&self.world) == Some(entity_id);
+                    if !was_equipped {
+                        if let Err(text) = crate::armor::validate_equip(&self.world, entity_id) {
+                            effects.push_back(Effect::ShowMessage { text });
+                            continue;
+                        }
                     }
                     let mut equipped = self
                         .world
                         .borrow::<ViewMut<crate::runtime_props::RuntimePropHazardEquipment>>()
                         .unwrap();
-                    let was_equipped = equipped.get(entity_id).is_ok();
-                    let armors = self
-                        .world
-                        .borrow::<View<dark::properties::PropArmor>>()
-                        .unwrap();
-                    let to_remove: Vec<_> = (&equipped)
-                        .iter()
-                        .with_id()
-                        .filter_map(|(id, _)| (armors.get(id).is_ok() == armor).then_some(id))
-                        .collect();
-                    for id in to_remove {
+                    let ids: Vec<_> = (&equipped).iter().with_id().map(|(id, _)| id).collect();
+                    for id in ids {
                         equipped.remove(id);
                     }
-                    drop(armors);
                     drop(equipped);
                     if !was_equipped {
                         self.world.add_component(
@@ -10340,11 +10361,15 @@ impl MissionCore {
                             crate::runtime_props::RuntimePropHazardEquipment,
                         );
                     }
-                    game_log!(
-                        INFO,
-                        "Equipment {}",
-                        if was_equipped { "removed" } else { "equipped" }
-                    );
+                    self.refresh_implant_effects();
+                    effects.push_back(Effect::ShowMessage {
+                        text: if was_equipped {
+                            "Armor removed."
+                        } else {
+                            "Armor equipped."
+                        }
+                        .into(),
+                    });
                 }
 
                 Effect::AcquireKeyCard { key_card } => {
@@ -19170,6 +19195,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         name: "Exp".to_string(),
                         value: exp.to_string(),
                     });
+                }
+                if self.world.borrow::<View<dark::properties::PropArmor>>().is_ok_and(|v| v.contains(id)) {
+                    properties.push(DebugPropertyInfo { name: "ArmorEquipped".into(), value: (crate::armor::equipped(&self.world) == Some(id)).to_string() });
+                    if crate::armor::powered(&self.world, id) {
+                        properties.push(DebugPropertyInfo { name: "Energy".into(), value: crate::implants::energy(&self.world, id).to_string() });
+                    }
                 }
                 if let Some(kind) = crate::implants::kind(&self.world, id) {
                     properties.push(DebugPropertyInfo {

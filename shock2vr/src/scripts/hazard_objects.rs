@@ -8,7 +8,6 @@ pub enum HazardObject {
     Cleanse(bool),
     Environment,
     EngineCleanup,
-    Armor,
 }
 impl Script for HazardObject {
     fn handle_message(
@@ -94,9 +93,6 @@ impl Script for HazardObject {
             }
             Self::Environment if matches!(msg, MessagePayload::TurnOn { .. }) => {
                 Effect::ClearEnvironmentalRadiation
-            }
-            Self::Armor if matches!(msg, MessagePayload::Frob) => {
-                Effect::ToggleHazardArmor { entity_id }
             }
             _ => Effect::NoEffect,
         }

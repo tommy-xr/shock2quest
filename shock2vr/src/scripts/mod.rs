@@ -7,6 +7,7 @@ pub mod stasis;
 mod swarm;
 
 mod apparition;
+mod armor;
 mod auto_install_soft;
 mod base_button;
 mod base_egg;
@@ -1077,7 +1078,7 @@ impl ScriptWorld {
             // many.micontain
             "brain" => Box::new(overlord::Brain),
             "wormheartimplant" => Box::new(implant::Implant::default()),
-            "wormskin" => Box::new(hazard_objects::HazardObject::Armor),
+            "wormskin" => Box::new(armor::Armor::default()),
             // shodan.mis
             "toggleshodantexture" => Box::new(NoopScript::new()),
             "changedelay" => Box::new(NoopScript::new()), //?
@@ -1282,7 +1283,7 @@ impl ScriptWorld {
             "wormpilescript" => Box::new(crate::item_tools::WormPile),
             "traptoxincleanse" => Box::new(hazard_objects::HazardObject::Cleanse(true)),
             "trapradcleanse" => Box::new(hazard_objects::HazardObject::Cleanse(false)),
-            "armorscript" => Box::new(hazard_objects::HazardObject::Armor),
+            "armorscript" => Box::new(armor::Armor::default()),
             "battery" => Box::new(UnimplementedScript::new(&script_name)),
             "healingstation" => Box::new(UnimplementedScript::new(&script_name)),
             "brokenhealingstation" => Box::new(UnimplementedScript::new(&script_name)),
@@ -1317,7 +1318,7 @@ impl ScriptWorld {
             "freehack" => Box::new(NoopScript::new()),
 
             // hydro3
-            "poweredarmor" => Box::new(UnimplementedScript::new(&script_name)),
+            "poweredarmor" => Box::new(implant::Implant::powered_armor()),
 
             // ops2
             "slotmachine" => Box::new(UnimplementedScript::new(&script_name)),
