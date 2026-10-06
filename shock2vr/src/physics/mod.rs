@@ -88,7 +88,8 @@ fn active_hooks_for(group: CollisionGroup) -> ActiveHooks {
 ///
 /// The leaf still pushes along the contact normal, which is what shoves an
 /// actor standing in the doorway out of the leaf's way.
-struct MovingTerrainContactHooks {
+struct MovingTerrainContactHooks<'a> {
+    ignored_pairs: &'a HashSet<(u128, u128)>,
     /// This frame's timestep, to turn a kinematic body's pending move into a
     /// speed. Rapier derives kinematic velocities *after* contact
     /// modification runs, so `linvel()` in here is last frame's - and the
@@ -96,7 +97,14 @@ struct MovingTerrainContactHooks {
     dt: Real,
 }
 
-impl PhysicsHooks for MovingTerrainContactHooks {
+impl PhysicsHooks for MovingTerrainContactHooks<'_> {
+    fn filter_contact_pair(&self, context: &PairFilterContext) -> Option<SolverFlags> {
+        let a = context.colliders[context.collider1].user_data;
+        let b = context.colliders[context.collider2].user_data;
+        (!self.ignored_pairs.contains(&(a.min(b), a.max(b))))
+            .then_some(SolverFlags::COMPUTE_IMPULSES)
+    }
+
     fn modify_solver_contacts(&self, context: &mut ContactModificationContext) {
         if self.dt <= 0.0 || context.normal.y.abs() >= SIDE_CONTACT_MAX_NORMAL_Y {
             return;
@@ -3530,6 +3538,7 @@ impl PlayerHandle {
 const HELD_ITEM_SKIN: f32 = 0.01;
 
 pub struct PhysicsWorld {
+    ignored_collision_pairs: HashSet<(u128, u128)>,
     gravity: Vector<Real>,
     integration_parameters: IntegrationParameters,
     physics_pipeline: PhysicsPipeline,
@@ -3979,7 +3988,10 @@ impl PhysicsWorld {
             if let Some(collider) = self.collider_set.get_mut(collider_handle) {
                 collider.set_collision_groups(group.collision);
                 collider.set_solver_groups(group.solver);
-                collider.set_active_hooks(active_hooks_for(group));
+                collider.set_active_hooks(
+                    active_hooks_for(group)
+                        | (collider.active_hooks() & ActiveHooks::FILTER_CONTACT_PAIRS),
+                );
             }
         }
     }
@@ -4009,7 +4021,10 @@ impl PhysicsWorld {
                 .with_object_collision_properties(collision_type, ai_collides);
                 collider.set_collision_groups(group.collision);
                 collider.set_solver_groups(group.solver);
-                collider.set_active_hooks(active_hooks_for(group));
+                collider.set_active_hooks(
+                    active_hooks_for(group)
+                        | (collider.active_hooks() & ActiveHooks::FILTER_CONTACT_PAIRS),
+                );
             }
         }
     }
@@ -6017,7 +6032,28 @@ impl PhysicsWorld {
         (fraction, stopped_by)
     }
 
+    /// Script-driven collision exemptions (retail PhysCollision "ignore").
+    /// Filtering before the solver matters: ignoring only the event would still
+    /// bounce a BOUNCE projectile off the exempt object. Scripts recreate these
+    /// derived pairs when a mission/save instantiates its bodies.
+    pub fn ignore_collision_pairs(&mut self, entity_id: EntityId, others: &[EntityId]) {
+        let a = entity_id.inner() as u128;
+        for other in others {
+            let b = other.inner() as u128;
+            self.ignored_collision_pairs.insert((a.min(b), a.max(b)));
+        }
+        for (_, collider) in self.collider_set.iter_mut() {
+            if collider.user_data == a {
+                collider
+                    .set_active_hooks(collider.active_hooks() | ActiveHooks::FILTER_CONTACT_PAIRS);
+            }
+        }
+    }
+
     pub fn remove(&mut self, entity_id: EntityId) {
+        let removed = entity_id.inner() as u128;
+        self.ignored_collision_pairs
+            .retain(|(a, b)| *a != removed && *b != removed);
         let entity_as_int = entity_id.inner() as u128;
         let mut bodies_to_remove = Vec::new();
         for (handle, body) in self.rigid_body_set.iter() {
@@ -6276,6 +6312,7 @@ impl PhysicsWorld {
         );
 
         PhysicsWorld {
+            ignored_collision_pairs: HashSet::new(),
             gravity,
             integration_parameters,
             collider_set,
@@ -6716,6 +6753,7 @@ impl PhysicsWorld {
                 &mut self.multibody_joint_set,
                 &mut self.ccd_solver,
                 &MovingTerrainContactHooks {
+                    ignored_pairs: &self.ignored_collision_pairs,
                     dt: self.integration_parameters.dt,
                 },
                 &self.events,
@@ -10185,6 +10223,64 @@ mod tests {
             end.x > -4.5 && end.y > 1.5,
             "the mantle must leave the player standing beyond the upper lip, ended {end:?}"
         );
+    }
+
+    #[test]
+    fn shodan_shot_collision_exemption_passes_shield_but_still_hits_world() {
+        // The third case begins overlapping the shield, as a mid-flight
+        // restored body can. The exclusion must work on its very first step.
+        for (excluded, start_x) in [(false, 0.0), (true, 0.0), (true, 0.85)] {
+            let mut world = PhysicsWorld::new();
+            let shot = EntityId::from_inner(7001).unwrap();
+            let shield = EntityId::from_inner(7002).unwrap();
+            let wall = EntityId::from_inner(7003).unwrap();
+            let handle = world.add_dynamic(
+                shot,
+                vec3(start_x, 5.0, 0.0),
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                PhysicsShape::Sphere(0.1),
+                CollisionGroup::entity(),
+                false,
+                DynamicPhysicsOptions {
+                    gravity_scale: 0.0,
+                    restitution: 0.0,
+                    friction: 0.0,
+                },
+            );
+            for (id, x) in [(shield, 1.0), (wall, 3.0)] {
+                world.add_kinematic(
+                    id,
+                    vec3(x, 5.0, 0.0),
+                    identity_quat(),
+                    vec3(0.0, 0.0, 0.0),
+                    vec3(0.2, 5.0, 5.0),
+                    CollisionGroup::entity(),
+                    false,
+                );
+            }
+            if excluded {
+                world.ignore_collision_pairs(shot, &[shield]);
+                // Later group synchronization must retain the exemption hook.
+                world.set_collision_group(shot, CollisionGroup::entity());
+                world.apply_object_collision_properties(shot, None, true);
+            }
+            world.rigid_body_set[handle].set_linvel(vector![3.0, 0.0, 0.0], true);
+            let mut player =
+                world.create_player(vec3(30.0, 5.0, 0.0), EntityId::from_inner(7004).unwrap());
+            step(&mut world, &mut player, 90);
+            let x = world.rigid_body_set[handle].translation().x;
+            if excluded {
+                assert!(
+                    x > 2.5 && x < 3.0,
+                    "must pass shield and stop at ordinary wall: {x}"
+                );
+                world.remove(shot);
+                assert!(world.ignored_collision_pairs.is_empty());
+            } else {
+                assert!(x < 1.0, "ordinary projectile must still hit shield: {x}");
+            }
+        }
     }
 
     fn step(world: &mut PhysicsWorld, player: &mut PlayerHandle, frames: usize) {

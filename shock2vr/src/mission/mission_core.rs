@@ -9199,6 +9199,15 @@ impl MissionCore {
         created
     }
 
+    /// One applier for script-derived contact rules, usable while instantiating
+    /// bodies as well as by the regular effect queue.
+    fn apply_collision_exclusion_effect(physics: &mut PhysicsWorld, effect: Effect) {
+        let Effect::IgnoreCollisionPairs { entity_id, others } = effect else {
+            unreachable!("contact setup must produce collision exclusions")
+        };
+        physics.ignore_collision_pairs(entity_id, &others);
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn create_entity_with_position_and_rider_depth(
         &mut self,
@@ -9414,6 +9423,20 @@ impl MissionCore {
 
         let v_initial_velocity = world.borrow::<View<PropPhysInitialVelocity>>().unwrap();
         if let Some(rigid_body) = created_entity.rigid_body {
+            if crate::scripts::script_util::entity_has_script(
+                world,
+                created_entity.entity_id,
+                "ShodanShot",
+            ) {
+                // This is derived body setup, including on load. Waiting for
+                // the ordinary script update would allow one shield bounce
+                // before initialization, especially for a mid-flight save.
+                let effect = crate::scripts::shodan_shot::initial_collision_effect(
+                    created_entity.entity_id,
+                    world,
+                );
+                Self::apply_collision_exclusion_effect(physics, effect);
+            }
             if crate::scripts::script_util::entity_has_script(
                 world,
                 created_entity.entity_id,
@@ -13401,6 +13424,9 @@ impl MissionCore {
                 Effect::DestroyEntity { entity_id } => {
                     info!("!!!Destroying entity: {:?}", entity_id);
                     self.destroy_entity(entity_id);
+                }
+                effect @ Effect::IgnoreCollisionPairs { .. } => {
+                    Self::apply_collision_exclusion_effect(&mut self.physics, effect);
                 }
                 Effect::ResetGravity { entity_id } => {
                     self.physics.set_gravity(entity_id, 1.0);

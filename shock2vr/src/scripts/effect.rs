@@ -1192,6 +1192,12 @@ pub enum Effect {
         progress: f32,
     },
 
+    /// Ignore physical contacts for these pairs without changing either object's groups.
+    IgnoreCollisionPairs {
+        entity_id: EntityId,
+        others: Vec<EntityId>,
+    },
+
     ResetGravity {
         entity_id: EntityId,
     },
