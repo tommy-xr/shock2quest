@@ -143,6 +143,9 @@ fn restore_newly_parsed_authored_data(
     }
 
     restore_missing_component!(PropEcology);
+    // The actively used Many pre-arena checkpoint predates this property.
+    // Restore only missing authored values; saved BrainDead mortality wins.
+    restore_missing_component!(dark::properties::PropSlayResult);
     restore_missing_component!(PropEcoType);
     restore_missing_component!(PropEcoState);
     restore_missing_component!(PropSpawn);
@@ -218,6 +221,35 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn active_projection_checkpoint_restores_missing_policy_but_preserves_saved_mortality() {
+        use dark::properties::PropSlayResult;
+        let mut authored = SystemShock2EntityInfo::empty();
+        let mut level = SystemShock2EntityInfo::empty();
+        for id in [10, 11] {
+            authored
+                .entity_to_properties
+                .insert(id, vec![Arc::new(Box::new(PropSlayResult(1)))]);
+            level.entity_to_properties.insert(id, vec![]);
+        }
+        let mut world = World::new();
+        let missing = world.add_entity(());
+        let mortal = world.add_entity(PropSlayResult(0));
+        restore_newly_parsed_authored_data(
+            &authored,
+            &level,
+            &HashMap::new(),
+            &HashMap::from([
+                (10, WrappedEntityId(missing)),
+                (11, WrappedEntityId(mortal)),
+            ]),
+            &mut world,
+        );
+        let props = world.borrow::<View<PropSlayResult>>().unwrap();
+        assert_eq!(props.get(missing).unwrap().0, 1);
+        assert_eq!(props.get(mortal).unwrap().0, 0);
+    }
 
     #[test]
     fn legacy_unlooted_researchable_backfills_newly_parsed_metadata() {
