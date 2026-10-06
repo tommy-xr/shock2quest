@@ -35,6 +35,10 @@ test(
     await game.step({ frames: 30 });
     const [creature] = (await game.entities.list({ filter: "OG-Pipe", limit: 10 })).entities;
     assert.ok(creature, "SpawnDebugMonster should put a creature in front of the player");
+    // A level muzzle ray now clears this hybrid's fitted capsule. Aim at its
+    // live torso so this tests contact detonation, not a mine flying overhead.
+    await game.player.aimAt(creature, { hitbox: "torso", visibility: "required" });
+    await game.step({ frames: 1 });
     const healthBefore = hitPoints(await game.entities.detail(creature.id));
 
     const startPsi = (await game.info()).player.psi_points;
