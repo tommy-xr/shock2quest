@@ -5822,7 +5822,6 @@ impl MissionCore {
                 })
             }),
             game_options.presentation_mode == crate::PresentationMode::Vr
-                && !self.use_mode
                 && self.player_is_alive()
                 && self.player_controls_enabled,
             time.elapsed.as_secs_f32(),
@@ -6207,7 +6206,9 @@ impl MissionCore {
         // moment the hand is full - so this cannot fire on a masked squeeze.)
         //
         let strip_deposits = strip_deposit_entities(
-            on_strip,
+            // A physical holster owns its release even if the hand's ray
+            // also crosses the inventory. Never give one item two owners.
+            std::array::from_fn(|i| on_strip[i] && holster_actions[i].is_none()),
             [left_hand_held, right_hand_held],
             [
                 hands_input.left_hand.squeeze_value < crate::ui::VR_TRIGGER_THRESHOLD,

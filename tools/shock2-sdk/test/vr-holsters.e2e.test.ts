@@ -37,7 +37,8 @@ async function reach(
 
 for (const hand of ["left", "right"] as const) {
   for (const slot of [0, 1]) {
-  test(`${hand} hand, holster ${slot} preserves the exact weapon and ammunition`, { skip: !enabled, timeout: 180_000 }, async () => {
+  for (const useMode of [false, true]) {
+  test(`${hand} hand, holster ${slot}, interface ${useMode ? "open" : "closed"} preserves the exact weapon and ammunition`, { skip: !enabled, timeout: 180_000 }, async () => {
     await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
     await game.step({ frames: 30 });
     assert.deepEqual((await game.info()).player.stats?.os_traits, [], "no upgrade required");
@@ -50,6 +51,10 @@ for (const hand of ["left", "right"] as const) {
     await game.entities.sendMessage(item.id, { type: "SetGunCondition", condition: 57 });
     await game.step({ frames: 1 });
     const ammo = ammoOf(await game.entities.detail(item.id));
+    if (useMode) {
+      await game.input.trigger("ToggleUseMode");
+      await game.step({ frames: 5 });
+    }
     if (hand === "right") {
       // Holsters are dedicated capacity even when the largest backpack is full.
       for (let i = 0; i < 45; i++) await game.player.spawnItem(-1221);
@@ -71,6 +76,7 @@ for (const hand of ["left", "right"] as const) {
     assert.equal(ammoOf(await game.entities.detail(item.id)), ammo, "drawing with trigger held must not fire");
     assert.equal((await game.info()).player.wielded_gun_condition, 57);
   });
+}
 }
 }
 
@@ -157,8 +163,7 @@ test("holstered weapon survives real mission save, load, and transition", { skip
   assert.ok(cell);
   await aimVrHandAtCanvas(game, ui.panel_pose!, [cell.rect[0] + cell.rect[2] / 2, cell.rect[1] + cell.rect[3] / 2], { hand: "right", squeeze: 1 });
   await game.step({ frames: 5 });
-  await game.input.trigger("ToggleUseMode");
-  await game.step({ frames: 5 });
+  // Keep the interface open while transferring directly from backpack to thigh.
   assert.equal((await game.info()).player.right_hand_entity_id, item.id);
   const ammo = ammoOf(await game.entities.detail(item.id));
   await reach(game, "right", 0);
