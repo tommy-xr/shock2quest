@@ -291,7 +291,7 @@ pub struct VrInteraction {
     glove_renderer: RefCell<Option<Option<GloveRenderer>>>,
     /// Which hands hold a climbing hold, and which one moves the body.
     hand_climb: crate::vr_climb::HandClimb,
-    climb_members: [Option<(crate::physics::ClimbGrip, crate::ladder_holds::LadderMember)>; 2],
+    climb_members: [Option<climb_visual::HeldMember>; 2],
     climb_visuals: [climb_visual::ClimbVisual; 2],
     grip_kinematics: Option<[crate::vr_grip::GripKinematics; 2]>,
     grip_geometry: HashMap<String, Option<GripGeometry>>,
@@ -1498,12 +1498,13 @@ impl PlayerInteraction for VrInteraction {
                 self.climb_visuals[i] = Default::default();
                 continue;
             }
-            let target = self.climb_members[i].and_then(|(grip, member)| {
+            let target = self.climb_members[i].and_then(|held| {
                 climb_visual::attached_pose(
                     &self.grip_kinematics.as_ref()?[i],
                     [Handedness::Left, Handedness::Right][i],
-                    grip,
-                    member,
+                    held.grip,
+                    held.member,
+                    held.wrist_rotation,
                 )
             });
             self.visual_hands[i] = self.climb_visuals[i].update(poses[i], target, self.step_dt);
@@ -1674,6 +1675,7 @@ impl PlayerInteraction for VrInteraction {
                     .map_or(true, |entities| entities.is_alive(entity_id))
             },
         );
+        let previous_members = self.climb_members;
         self.climb_members = [None; 2];
         for (hand, anchor) in self.hand_climb.grips() {
             self.climb_members[hand as usize] =
@@ -1684,7 +1686,13 @@ impl PlayerInteraction for VrInteraction {
                     if member.face_normal.dot(grip.normal).abs() <= 0.1 {
                         grip.normal = anchor.hand_world_at_grab - grip.point;
                     }
-                    (grip, member)
+                    climb_visual::HeldMember::capture(
+                        previous_members[hand as usize],
+                        grip,
+                        member,
+                        ctx.pawn_rotation
+                            * [&ctx.input.left_hand, &ctx.input.right_hand][hand as usize].rotation,
+                    )
                 });
         }
         frame
