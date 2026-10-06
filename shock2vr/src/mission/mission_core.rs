@@ -3889,57 +3889,22 @@ impl MissionCore {
         }
 
         let nav_bridges = game_options.experimental_features.contains("nav_bridges");
-        // Vet nav crossings (island bridges, relaxed blocking-cell
-        // traversal) against real geometry: a torso-height ray between the
-        // two points must be clear, so routes can't run through railings,
-        // thin walls (issue #481), or furniture spanning the corridor
-        // (issue #489). Doors and creatures don't count as blockers - doors
-        // open at runtime and creatures wander off - so the ray advances
-        // past those hits (bounded).
+        // Validate the actual synthesized crossing at creature width before
+        // the first physics step. Operable doors are gated by live door state;
+        // creatures are transient obstacles handled by steering.
         let nav_validator = |from: cgmath::Vector3<f32>, to: cgmath::Vector3<f32>| -> bool {
-            let delta = to - from;
-            let total = delta.magnitude();
-            if total <= f32::EPSILON {
-                return true;
-            }
-            let direction = delta / total;
-            let mut origin = Point3::new(from.x, from.y, from.z);
-            let mut remaining = total;
-            // A crossing rarely stacks more than a couple of pass-through
-            // entities; bail as blocked beyond that
-            for _ in 0..4 {
-                let Some(hit) = physics.ray_cast2_as_actor(
-                    origin,
-                    direction,
-                    remaining,
-                    crate::physics::InternalCollisionGroups::WORLD
-                        | crate::physics::InternalCollisionGroups::ENTITIES,
-                    None,
-                    true,
-                ) else {
-                    return true;
-                };
-                let pass_through = hit
-                    .maybe_entity_id
-                    .map(|id| {
-                        crate::scripts::ai::ai_util::is_entity_door(&world, id)
-                            || world
-                                .borrow::<View<PropCreature>>()
-                                .map(|v| v.contains(id))
-                                .unwrap_or(false)
-                    })
-                    .unwrap_or(false);
-                if !pass_through {
-                    return false;
-                }
-                let travelled = (hit.hit_point - origin).magnitude() + 0.05;
-                if travelled >= remaining {
-                    return true;
-                }
-                remaining -= travelled;
-                origin += direction * travelled;
-            }
-            false
+            physics.navigation_crossing_is_clear(
+                from,
+                to,
+                crate::pathfinding::AGENT_WIDTH * 0.5,
+                &|id| {
+                    !crate::scripts::ai::ai_util::is_entity_door(&world, id)
+                        && !world
+                            .borrow::<View<PropCreature>>()
+                            .map(|v| v.contains(id))
+                            .unwrap_or(false)
+                },
+            )
         };
         let pathfinding_service = abstract_mission.path_database.as_ref().map(|db| {
             Arc::new(PathfindingService::with_nav_options(
@@ -20651,6 +20616,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 queries: stats.queries,
                 stressed_retries: stats.stressed_retries,
                 no_route: stats.no_route,
+                dijkstra_searches: stats.dijkstra_searches,
                 blocked_links: stats.blocked_links,
                 blocked_cells: stats.blocked_cells,
             }
@@ -20721,7 +20687,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             return false;
         }
 
-        // Two of these are not script messages at all: they write a property
+        // Some of these are not script messages at all: they write a property
         // the way the effect appliers do, so a test can put an object into a
         // state that normally takes a long detour to reach.
         match message {
@@ -20748,6 +20714,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     return false;
                 };
                 gun_state.condition = condition.clamp(0.0, 100.0);
+                return true;
+            }
+            DebugEntityMessage::SetLocked { locked } => {
+                crate::scripts::script_util::set_entity_locked(&mut self.world, id, locked);
                 return true;
             }
             DebugEntityMessage::SetObjectState { state } => {
@@ -20807,7 +20777,8 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             // Handled above: these write state instead of dispatching.
             DebugEntityMessage::SetGunCondition { .. }
             | DebugEntityMessage::PlayMotion { .. }
-            | DebugEntityMessage::SetObjectState { .. } => {
+            | DebugEntityMessage::SetObjectState { .. }
+            | DebugEntityMessage::SetLocked { .. } => {
                 tracing::error!("send_entity_message: {:?} reached the dispatch path", id);
                 return false;
             }

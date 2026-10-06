@@ -5238,6 +5238,76 @@ impl PhysicsWorld {
             .is_some_and(|body| body.is_sleeping())
     }
 
+    /// Creature-width torso sweep used while loading the navigation graph.
+    /// Read colliders directly: the broad phase is empty before the first
+    /// physics step, and its cached poses do not yet include spawned bodies.
+    pub(crate) fn navigation_crossing_is_clear(
+        &self,
+        from: Vector3<f32>,
+        to: Vector3<f32>,
+        radius: f32,
+        can_hit: &dyn Fn(EntityId) -> bool,
+    ) -> bool {
+        use rapier3d::parry::bounding_volume::BoundingVolume;
+        let shape = Ball::new(radius);
+        let pose = Isometry::translation(from.x, from.y, from.z);
+        let end_pose = Isometry::translation(to.x, to.y, to.z);
+        let swept_bounds = shape
+            .compute_aabb(&pose)
+            .merged(&shape.compute_aabb(&end_pose));
+        let delta = vec_to_nvec(to - from);
+        let groups = InteractionGroups::new(
+            InternalCollisionGroups::ACTOR.bits.into(),
+            (InternalCollisionGroups::WORLD | InternalCollisionGroups::ENTITIES)
+                .bits
+                .into(),
+            Default::default(),
+        );
+        self.collider_set.iter().all(|(_, collider)| {
+            if !collider.is_enabled()
+                || collider.is_sensor()
+                || !groups.test(collider.collision_groups())
+                || EntityId::from_inner(collider.user_data as u64).is_some_and(|id| !can_hit(id))
+            {
+                return true;
+            }
+            let other_pose = collider
+                .parent()
+                .and_then(|h| self.rigid_body_set.get(h))
+                .map(|body| {
+                    body.position() * collider.position_wrt_parent().copied().unwrap_or_default()
+                })
+                .unwrap_or(*collider.position());
+            if !swept_bounds.intersects(&collider.shape().compute_aabb(&other_pose)) {
+                return true;
+            }
+            // Coincident bridge vertices still require room for a body.
+            if delta.norm_squared() <= f32::EPSILON {
+                return !rapier3d::parry::query::intersection_test(
+                    &pose,
+                    &shape,
+                    &other_pose,
+                    collider.shape(),
+                )
+                .unwrap_or(true);
+            }
+            rapier3d::parry::query::cast_shapes(
+                &pose,
+                &delta,
+                &shape,
+                &other_pose,
+                &Vector::zeros(),
+                collider.shape(),
+                rapier3d::parry::query::ShapeCastOptions {
+                    max_time_of_impact: 1.0,
+                    stop_at_penetration: true,
+                    ..Default::default()
+                },
+            )
+            .is_ok_and(|hit| hit.is_none())
+        })
+    }
+
     /// Validate a placed solid volume against terrain and live physical objects.
     /// Sensors (selection proxies/triggers) do not occupy space. Read body poses
     /// directly so kinematic doors moved since the last step are checked too.
@@ -11474,6 +11544,26 @@ mod tests {
         step(&mut world, &mut player, 1);
         assert!(!world.set_player_crouch(false, &mut player));
         assert_player_capsule_dimensions(&world, &player, 6.0, 2.4);
+    }
+
+    #[test]
+    fn navigation_sweep_uses_body_width_before_the_first_physics_step() {
+        let mut world = PhysicsWorld::new();
+        let obstacle = EntityId::from_inner(10).unwrap();
+        world.add_collider(
+            obstacle,
+            ColliderBuilder::cuboid(0.1, 0.5, 0.1)
+                .translation(vector![1.0, 1.4, 0.4])
+                .build(),
+        );
+        let from = vec3(0.0, 1.4, 0.0);
+        let to = vec3(2.0, 1.4, 0.0);
+        assert!(!world.navigation_crossing_is_clear(from, to, 0.48, &|_| true));
+        assert!(world.navigation_crossing_is_clear(from, to, 0.1, &|_| true));
+        // Doors/creatures are excluded by the mission's semantic predicate.
+        assert!(world.navigation_crossing_is_clear(from, to, 0.48, &|id| id != obstacle));
+        let shared_vertex = vec3(1.0, 1.4, 0.0);
+        assert!(!world.navigation_crossing_is_clear(shared_vertex, shared_vertex, 0.48, &|_| true));
     }
 
     /// The scene-wide query pipeline the climb/top-out helpers take.
