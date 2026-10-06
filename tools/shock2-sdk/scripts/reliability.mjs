@@ -12,6 +12,8 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildRuntime } from "./build-runtime.mjs";
 
 const count = Number(process.argv[2] ?? 10);
 const pattern = process.argv[3];
@@ -28,6 +30,17 @@ const files = readdirSync(testDir)
 if (files.length === 0) {
   console.error(`No compiled e2e tests in ${testDir}/ - run \`npm run build\` first.`);
   process.exit(1);
+}
+
+if (!process.env.SHOCK2_RUNTIME_BINARY) {
+  try {
+    const runtime = buildRuntime(fileURLToPath(new URL("../../../", import.meta.url)));
+    process.env.SHOCK2_RUNTIME_BINARY = runtime.binary;
+    process.on("exit", runtime.cleanup);
+  } catch (error) {
+    console.error(`reliability: FAIL (${error.message})`);
+    process.exit(1);
+  }
 }
 
 let passed = 0;
