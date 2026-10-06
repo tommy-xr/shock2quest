@@ -39,12 +39,13 @@ test(
     await game.step({ frames: 10 });
 
     // Setup: stand midway between Hydro3's two authored Baby Arachnids and
-    // alert them. Their production chase brings the lightweight live actor
+    // pin their chase until contact. An unpinned alert can decay or switch to
+    // an attack before both arrive. Their production chase brings the live actor
     // capsules to opposite sides of the player, reproducing #819 without a
     // debug-spawned stand-in or a hardcoded runtime entity id.
     await game.player.teleport({ x: 50.55, y: -3.16, z: -26.6 });
     await game.step({ frames: 5 });
-    await game.input.trigger("DebugAlertAll");
+    await game.input.trigger("DebugForceChase");
 
     let north: EntitySummary | undefined;
     let south: EntitySummary | undefined;
@@ -75,14 +76,7 @@ test(
     // Freeze their chase only after the real AI has established contact. This
     // keeps the wedge deterministic while retaining the production creature
     // bodies/colliders that caused the saved-game trap.
-    await game.entities.sendMessage(north.id, {
-      type: "SetAlertness",
-      level: "Lowest",
-    });
-    await game.entities.sendMessage(south.id, {
-      type: "SetAlertness",
-      level: "Lowest",
-    });
+    await game.input.trigger("DebugCalmAll");
     await game.step({ frames: 2 });
     const bracketInfo = await game.info();
 
