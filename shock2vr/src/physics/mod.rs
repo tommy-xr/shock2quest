@@ -329,7 +329,8 @@ const PLAYER_SLOPE_MIN_HORIZONTAL_NORMAL_SQUARED: f32 = 0.0076;
 const PLAYER_SLOPE_MIN_FLOOR_NORMAL: f32 = 0.25;
 
 /// Legacy PR threshold, retained for gameplay review: a continuous unsupported
-/// drop of 50 SS2 feet (20 world units) is treated as fatal before landing.
+/// drop of 50 SS2 feet (20 world units) is treated as fatal before landing,
+/// unless the current descent has a clear capsule path into authored water.
 ///
 /// The tracker resets on sustained terrain contact, direct relocation,
 /// climbing, moving support, and authored non-downward gravity, so this is an
@@ -3057,6 +3058,7 @@ pub struct LevelGeometry {
     collider: Collider,
     per_triangle_material: Vec<u16>,
     material_names: Vec<String>,
+    water_surfaces: Vec<Triangle>,
 }
 
 impl LevelGeometry {
@@ -3068,6 +3070,7 @@ impl LevelGeometry {
             collider,
             per_triangle_material: Vec::new(),
             material_names: Vec::new(),
+            water_surfaces: Vec::new(),
         }
     }
 }
@@ -3087,6 +3090,19 @@ pub fn build_level_geometry(level: &SystemShock2Level) -> Option<LevelGeometry> 
         collider,
         per_triangle_material: triangles.per_triangle_material,
         material_names: triangles.material_names,
+        water_surfaces: level
+            .all_geometry
+            .iter()
+            .filter(|geometry| geometry.is_water_surface())
+            .flat_map(|geometry| geometry.verts.chunks_exact(3))
+            .map(|vertices| {
+                Triangle::new(
+                    vec_to_npoint(vertices[0].position),
+                    vec_to_npoint(vertices[1].position),
+                    vec_to_npoint(vertices[2].position),
+                )
+            })
+            .collect(),
     })
 }
 
@@ -3096,6 +3112,33 @@ struct LevelTriangles {
     indices: Vec<[u32; 3]>,
     per_triangle_material: Vec<u16>,
     material_names: Vec<String>,
+}
+
+/// The water must lie directly below this frame's player position, and the
+/// whole capsule must be able to reach it. A lower pool behind a floor or wall
+/// is not a safe landing. Query-only water triangles never enter Rapier's
+/// collider set, so this cannot turn the surface into a solid floor.
+fn clear_water_landing(
+    water_surfaces: &[Triangle],
+    queries: &QueryPipeline,
+    position: Vector<Real>,
+    shape: &dyn Shape,
+) -> bool {
+    let ray = Ray::new(Point::from(position), vector![0.0, -1.0, 0.0]);
+    let Some(distance) = water_surfaces
+        .iter()
+        .filter_map(|triangle| triangle.cast_local_ray(&ray, Real::MAX, false))
+        .filter(|distance| *distance >= 0.0)
+        .min_by(Real::total_cmp)
+    else {
+        return false;
+    };
+    shape_sweep_is_clear(
+        queries,
+        position,
+        position + vector![0.0, -distance, 0.0],
+        shape,
+    )
 }
 
 /// The trimesh and its per-triangle materials, pushed together in one pass so
@@ -3281,6 +3324,7 @@ impl FatalFallTracker {
         target_y: Real,
         touches_traversable_surface: bool,
         has_explicit_support: bool,
+        has_water_landing: bool,
     ) -> bool {
         if has_explicit_support {
             self.relocate(target_y);
@@ -3301,7 +3345,12 @@ impl FatalFallTracker {
         // A jump or an upward impulse starts measuring from its apex, not the
         // last floor. This keeps the rule about actual downward travel.
         self.reference_y = self.reference_y.max(target_y);
-        let fatal = self.reference_y - target_y >= PLAYER_FATAL_FALL_DISTANCE && !self.reported;
+        // Water below defers the decision, but is not support: preserve the
+        // original fall distance and reported state, including across saves.
+        // Steering out of the pool's column must immediately restore the guard.
+        let fatal = self.reference_y - target_y >= PLAYER_FATAL_FALL_DISTANCE
+            && !self.reported
+            && !has_water_landing;
         if fatal {
             self.reported = true;
         }
@@ -3509,6 +3558,9 @@ pub struct PhysicsWorld {
     /// the same surface. Debug scenes build their own trimeshes and have none.
     level_surface_materials: Option<std::sync::Arc<LevelSurfaceMaterials>>,
 
+    // Authored water boundaries are query-only: never solid collision geometry.
+    water_surfaces: Vec<Triangle>,
+
     entity_id_to_body: HashMap<EntityId, RigidBodyHandle>,
 
     // Per-face grip bits (Dark `PropPhysAttr.climbable`) for climbable
@@ -3663,7 +3715,10 @@ impl PhysicsWorld {
             mut collider,
             per_triangle_material,
             material_names,
+            water_surfaces,
         } = geometry;
+
+        self.water_surfaces.extend(water_surfaces);
 
         collider.user_data = entity_id.inner() as u128;
         collider.set_collision_groups(InteractionGroups {
@@ -6235,6 +6290,7 @@ impl PhysicsWorld {
             rigid_body_set,
             no_bodies: RigidBodySet::new(),
             level_surface_materials: None,
+            water_surfaces: Vec::new(),
             rigid_bodies_with_forces: Vec::new(),
             // TODO:
             // physics_hooks: Box::new(physics_hooks),
@@ -6635,6 +6691,9 @@ impl PhysicsWorld {
         // (tram floor + walls/buttons) therefore advance as one physical body,
         // matching Dark's source->destination attachment flow.
         self.update_kinematic_attachments();
+        // The mission sampled PlayerMedium before this physics step applies
+        // last frame's kinematic target. Retain that height for water entry.
+        let medium_sample_y = self.get_player_translation(player_handle).y;
         self.sample_player_velocity(player_handle);
         self.drive_held_items();
 
@@ -6665,7 +6724,8 @@ impl PhysicsWorld {
         self.has_stepped = true;
 
         // Update character controller
-        let (mut collision_events, character_body) = { self.move_player(request, player_handle) };
+        let (mut collision_events, character_body) =
+            self.move_player(request, player_handle, medium_sample_y);
         let translation = nvec_to_cgmath(*character_body.translation());
 
         let mut additional_collision_events = { self.events.get_and_clear_events() };
@@ -7048,6 +7108,7 @@ impl PhysicsWorld {
         &mut self,
         request: PlayerMoveRequest,
         player_handle: &mut PlayerHandle,
+        medium_sample_y: f32,
     ) -> (Vec<CollisionEvent>, &RigidBody) {
         let hand_climb = match request {
             PlayerMoveRequest::HandClimb { translation } => Some(vec_to_nvec(translation)),
@@ -7591,22 +7652,41 @@ impl PhysicsWorld {
             })
             .flatten();
 
-        let character_body = &mut self.rigid_body_set[player_handle.character_handle];
-        let pos = character_body.position();
-        let target = pos.translation.vector + mvt.translation;
+        let target = self.rigid_body_set[player_handle.character_handle]
+            .position()
+            .translation
+            .vector
+            + mvt.translation;
         let has_explicit_support = swimming
             || player_handle.support.is_some()
             || player_handle.is_climbing
             || gravity_scale <= 0.0;
+        // Only probe water after the legacy guard's distance is reached.
+        // Repeat from the live position instead of caching an eventual landing:
+        // input or a moving obstacle can change the available route mid-fall.
+        let has_water_landing = !has_explicit_support
+            && !player_handle.fatal_fall.reported
+            && player_handle.fatal_fall.reference_y - target.y >= PLAYER_FATAL_FALL_DISTANCE
+            && clear_water_landing(
+                &self.water_surfaces,
+                &self.player_movement_queries(dispatcher, movement_filter),
+                // Medium is sampled at the start of the step. Probe from
+                // that same height so the frame crossing the surface remains
+                // safe until next frame observes PlayerMedium::Water.
+                vector![target.x, medium_sample_y.max(target.y), target.z],
+                character_shape.as_ref(),
+            );
         if player_handle.fatal_fall.update(
             target.y,
             player_movement.touches_traversable_surface,
             has_explicit_support,
+            has_water_landing,
         ) {
             collision_events.push(CollisionEvent::FatalFall {
                 entity_id: player_id,
             });
         }
+        let character_body = &mut self.rigid_body_set[player_handle.character_handle];
         if scripted_top_out_frame {
             // Dark's mantle states directly drive their preflighted target
             // locations. Rapier's kinematic next-position path still clips the
@@ -10139,6 +10219,162 @@ mod tests {
         assert_eq!(world.get_rotation2(actor).unwrap(), identity_quat());
     }
 
+    fn add_test_pool(world: &mut PhysicsWorld, y: f32, half_width: f32) {
+        world.water_surfaces.extend([
+            Triangle::new(
+                point![-half_width, y, -half_width],
+                point![half_width, y, half_width],
+                point![half_width, y, -half_width],
+            ),
+            Triangle::new(
+                point![-half_width, y, -half_width],
+                point![-half_width, y, half_width],
+                point![half_width, y, half_width],
+            ),
+        ]);
+    }
+
+    #[test]
+    fn deep_fall_into_authored_water_survives_until_swimming() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 35.0, 0.0), EntityId::from_inner(1001).unwrap());
+        add_test_pool(&mut world, -5.9, 10.0);
+        let mut entered_water = false;
+        for _ in 0..240 {
+            let medium = if world.get_player_translation(&player).y <= -5.9 {
+                entered_water = true;
+                PlayerMedium::Water
+            } else {
+                PlayerMedium::Air
+            };
+            let (_, events) = world.update_player_movement(
+                PlayerMoveRequest::Walk {
+                    movement: vec3(0.0, 0.0, 0.0),
+                    facing: vec3(0.0, 0.0, 1.0),
+                    jump_pressed: false,
+                    push_to_climb: false,
+                    medium,
+                },
+                &mut player,
+            );
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, CollisionEvent::FatalFall { .. })),
+                "intended pool entry must not die in midair at {:?}",
+                world.get_player_translation(&player),
+            );
+        }
+        assert!(entered_water, "the player must reach and enter the pool");
+        let floating_y = world.get_player_translation(&player).y;
+        assert!(
+            floating_y > -6.4,
+            "water must arrest the descent: {floating_y}"
+        );
+    }
+
+    #[test]
+    fn deep_fall_exact_water_surface_crossing_survives_pre_step_air_sample() {
+        let mut world = PhysicsWorld::new();
+        add_test_pool(&mut world, 0.0, 10.0);
+        let mut player =
+            world.create_player(vec3(0.0, 0.0, 0.0), EntityId::from_inner(1001).unwrap());
+        // An ongoing long descent lands exactly on the authored boundary at
+        // the mission's medium sample. Rapier still has the next downward
+        // target to apply, and the boundary's sampled cell may remain Air.
+        player.fatal_fall = FatalFallTracker::new(35.0);
+        world.rigid_body_set[player.character_handle]
+            .set_next_kinematic_translation(vector![0.0, -0.2, 0.0]);
+        let (_, events) = world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, CollisionEvent::FatalFall { .. })),
+            "zero-distance water entry must remain safe until the next medium sample",
+        );
+        assert!(world.get_player_translation(&player).y < 0.0);
+    }
+
+    #[test]
+    fn deep_fall_water_below_solid_floor_does_not_exempt_fatal_descent() {
+        let (mut world, _) = world_with_floor();
+        let mut player =
+            world.create_player(vec3(5.0, 35.0, 0.0), EntityId::from_inner(1001).unwrap());
+        add_test_pool(&mut world, -5.9, 10.0);
+        let mut fatal = false;
+        for _ in 0..130 {
+            fatal |= world
+                .update(vec3(0.0, 0.0, 0.0), &mut player)
+                .1
+                .iter()
+                .any(|event| matches!(event, CollisionEvent::FatalFall { .. }));
+        }
+        assert!(fatal, "water behind a solid floor cannot protect a fall");
+    }
+
+    #[test]
+    fn deep_fall_water_path_checks_capsule_width_not_just_center_ray() {
+        let mut world = PhysicsWorld::new();
+        add_test_pool(&mut world, -5.9, 10.0);
+        // A vertical obstruction misses the center ray but catches the body.
+        let mut wall = ColliderBuilder::cuboid(0.1, 6.0, 2.0)
+            .translation(vector![0.4, 2.0, 0.0])
+            .build();
+        wall.set_collision_groups(CollisionGroup::entity().collision);
+        world.collider_set.insert(wall);
+        let mut player =
+            world.create_player(vec3(0.0, 35.0, 0.0), EntityId::from_inner(1001).unwrap());
+        let mut fatal = false;
+        for _ in 0..120 {
+            fatal |= world
+                .update(vec3(0.0, 0.0, 0.0), &mut player)
+                .1
+                .iter()
+                .any(|event| matches!(event, CollisionEvent::FatalFall { .. }));
+        }
+        assert!(
+            fatal,
+            "the capsule must fit the whole route down into water"
+        );
+    }
+
+    #[test]
+    fn deep_fall_leaving_water_column_after_save_restores_original_guard() {
+        let mut world = PhysicsWorld::new();
+        add_test_pool(&mut world, -5.9, 1.0);
+        let mut player =
+            world.create_player(vec3(0.0, 35.0, 0.0), EntityId::from_inner(1001).unwrap());
+        for _ in 0..120 {
+            let events = world.update(vec3(0.0, 0.0, 0.0), &mut player).1;
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, CollisionEvent::FatalFall { .. }))
+            );
+        }
+        assert!(world.get_player_translation(&player).y < 15.0);
+        // Same serialized state used by campaign saves: deferring a water
+        // landing must neither reset the fall reference nor consume its event.
+        let saved = serde_json::to_string(&player.fall_state()).unwrap();
+        player.restore_fall_state(serde_json::from_str(&saved).unwrap());
+        assert_eq!(player.fatal_fall.reference_y, 35.0);
+        let mut fatalities = 0;
+        for _ in 0..20 {
+            fatalities += world
+                .update(vec3(0.2, 0.0, 0.0), &mut player)
+                .1
+                .iter()
+                .filter(|event| matches!(event, CollisionEvent::FatalFall { .. }))
+                .count();
+        }
+        assert!(world.get_player_translation(&player).x > 1.0);
+        assert_eq!(
+            fatalities, 1,
+            "leaving the pool column restores the already-due guard exactly once"
+        );
+    }
+
     #[test]
     fn unsupported_fall_beyond_survivable_distance_emits_one_fatal_event() {
         let mut world = PhysicsWorld::new();
@@ -10195,7 +10431,7 @@ mod tests {
         for step in 1..=150 {
             let y = -(step as f32) * 0.2;
             let brushes_surface = step % 25 == 0;
-            events += tracker.update(y, brushes_surface, false) as usize;
+            events += tracker.update(y, brushes_surface, false, false) as usize;
         }
 
         assert_eq!(events, 1, "one interrupted descent is still one fatal fall");
@@ -10214,7 +10450,7 @@ mod tests {
             let y = -(step as f32) * 0.2;
             let touches_surface =
                 movement_touches_traversable_surface(true, true, true, vector![0.0, -0.2, 0.0]);
-            events += tracker.update(y, touches_surface, false) as usize;
+            events += tracker.update(y, touches_surface, false, false) as usize;
         }
 
         assert_eq!(
@@ -10234,7 +10470,7 @@ mod tests {
             let touches_surface =
                 movement_touches_traversable_surface(false, true, true, vector![0.1, -0.2, 0.0]);
             assert!(
-                !tracker.update(y, touches_surface, false),
+                !tracker.update(y, touches_surface, false, false),
                 "sustained terrain contact must remain safe at y={y}"
             );
         }
@@ -10242,7 +10478,7 @@ mod tests {
         // Once the player leaves it, a new full-distance fall is fatal.
         let mut fatal = false;
         for step in 1..=110 {
-            fatal |= tracker.update(-step as f32 * 0.2, false, false);
+            fatal |= tracker.update(-step as f32 * 0.2, false, false, false);
         }
         assert!(fatal, "leaving the slope must arm a new fatal fall");
     }
@@ -15297,6 +15533,7 @@ mod tests {
                 collider,
                 per_triangle_material: vec![0, 1],
                 material_names: vec!["metal".to_owned(), "fabric".to_owned()],
+                water_surfaces: Vec::new(),
             },
         );
         let materials = world.level_surface_materials.clone().unwrap();
