@@ -37,6 +37,7 @@ pub mod debug_melee;
 pub mod debug_minimal;
 pub mod debug_nd_materials;
 pub mod debug_particles;
+mod debug_pool;
 pub mod debug_protocol_droid;
 pub mod debug_psi;
 pub mod debug_ragdoll;
@@ -178,6 +179,12 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
         debug_interactions::create_debug_interactions_scene,
     ),
     ("debug_ladder", create_debug_ladder_scene),
+    ("debug_rec_pool", |global, options, assets, audio| {
+        debug_pool::REC_POOL.create(global, options, assets, audio)
+    }),
+    ("debug_many_pool", |global, options, assets, audio| {
+        debug_pool::MANY_POOL.create(global, options, assets, audio)
+    }),
     ("debug_psi", create_debug_psi_scene),
     (
         "debug_research",
@@ -640,6 +647,8 @@ mod tests {
             "debug_hud",
             "debug_weapons",
             "debug_nd_materials",
+            "debug_rec_pool",
+            "debug_many_pool",
         ] {
             assert!(names.contains(&expected), "'{expected}' is missing");
         }

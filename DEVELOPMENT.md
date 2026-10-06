@@ -646,6 +646,35 @@ radius represents collision clearance, not torso geometry.
 Restart the game after saving; include the saved asset in your next Quest deploy.
 Hand-held card poses remain in the Hand grips editor (`--grip scipass`).
 
+#### Swimming pools (`debug_rec_pool`, `debug_many_pool`)
+
+These presets load the real `rec1.mis` and `many.mis` terrain and water cells,
+without mission objects or room scripts. Switchable baked lights stay on so
+the geometry remains visible without light entities. Both are available in
+the Developer scene picker and on desktop/debug runtimes:
+
+```bash
+cargo dbgr --mission debug_rec_pool --vr
+cargo dbgr --mission debug_many_pool --vr
+cargo dr --mission debug_rec_pool --vr
+```
+
+Omit `--vr` for flatscreen. `debug_rec_pool` starts in the Athletics pool next
+to its west rim; `debug_many_pool` starts in deep water facing a sloping exit.
+Move with the right stick in the direction you look, including up/down;
+hold X/A to rise independently of your gaze. With an empty hand at the solid
+rim, squeeze grip and lower the hand to pull yourself up, just like a ladder.
+Grabbing alone holds your position; a deliberate pull with your head above
+the edge completes the climb onto a clear landing. The Many basin slopes up
+to its rim, so you can also swim toward it and walk out with the stick.
+
+Re-launch the preset from Developer to reset. The debug runtime can reset
+through `DebugReloadLevel` (`POST /v1/input/action`), which returns to the
+preset spawn without restoring campaign entities. Preset spawn positions are
+body centers: rec `(12.35, -6.25, -231.1)`, many `(41.3, 9.3, 45)`.
+Avoid teleporting closer to the Many rim: its submerged slope can intersect
+the standing capsule even when the head appears above water.
+
 #### Research lab (`debug_research`)
 
 Open `debug_research` in the Developer scene picker, or run:
