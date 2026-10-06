@@ -20,6 +20,9 @@ test(
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({ mission: "debug_melee" });
+    // The debug melee gallery has an untrained character. Meet the pistol's
+    // requirement so trigger pulls exercise hitboxes rather than skill refusal.
+    await game.player.setStats({ skills: { standard_weapons: 1 } });
     await game.step({ frames: 30 });
 
     await game.player.spawnItem("Pistol");
