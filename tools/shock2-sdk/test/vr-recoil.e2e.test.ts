@@ -49,7 +49,8 @@ for (const [name, template, hand] of [
         gun.id,
       );
       await game.input.set("head.rotation", [0, 0, 0, 1]);
-      await game.input.set(`${hand}_hand.position`, [0, 1, 0]);
+      // Keep the recoil sweep clear of the pawn and nearby cryo geometry.
+      await game.input.set(`${hand}_hand.position`, [0, 1, -0.8]);
       await game.input.set(`${hand}_hand.rotation`, [
         0,
         Math.SQRT1_2,
@@ -81,11 +82,14 @@ for (const [name, template, hand] of [
       await game.input.set(`${hand}_hand.trigger`, 1);
       await game.step({ frames: 1 });
       await game.input.set(`${hand}_hand.trigger`, 0);
+      // Measure the kick before the fast return spring has recovered.
+      let peakBackward = (await body()).position[0] - initial.position[0];
       let peakAngle = rotationDifferenceDegrees(
         initial.rotation,
         (await body()).rotation,
       );
       await game.step({ frames: 1 });
+      peakBackward = Math.max(peakBackward, (await body()).position[0] - initial.position[0]);
       peakAngle = Math.max(
         peakAngle,
         rotationDifferenceDegrees(initial.rotation, (await body()).rotation),
@@ -95,6 +99,7 @@ for (const [name, template, hand] of [
       await game.input.set(`${hand}_hand.trigger`, 1);
       await game.step({ frames: 1 });
       await game.input.set(`${hand}_hand.trigger`, 0);
+      peakBackward = Math.max(peakBackward, (await body()).position[0] - initial.position[0]);
       peakAngle = Math.max(
         peakAngle,
         rotationDifferenceDegrees(initial.rotation, (await body()).rotation),
@@ -106,6 +111,7 @@ for (const [name, template, hand] of [
       );
       for (let frame = 0; frame < 12; frame++) {
         await game.step({ frames: 1 });
+        peakBackward = Math.max(peakBackward, (await body()).position[0] - initial.position[0]);
         peakAngle = Math.max(
           peakAngle,
           rotationDifferenceDegrees(initial.rotation, (await body()).rotation),
@@ -113,8 +119,8 @@ for (const [name, template, hand] of [
       }
       const kicked = await body();
       assert.ok(
-        kicked.position[0] > initial.position[0] + 0.005,
-        "gun kicks backward from the barrel direction",
+        peakBackward > 0.005,
+        `gun kicks backward from the barrel direction: peak ${peakBackward}`,
       );
       assert.ok(
         peakAngle > 1,
