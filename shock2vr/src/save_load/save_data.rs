@@ -130,6 +130,9 @@ pub struct GlobalData {
     pub is_crouched: bool,
     /// Preserve the measured descent when saving during an unsupported fall.
     pub player_fall_state: Option<crate::physics::FatalFallTracker>,
+    /// Seed the loaded body before room sensor effects rebuild their ownership.
+    /// Non-mission scenes have no player body to snapshot.
+    pub player_gravity_scale: Option<f32>,
 }
 
 #[cfg(test)]
@@ -151,6 +154,7 @@ mod tests {
             active_mission: "earth.mis".to_owned(),
             is_crouched: false,
             player_fall_state: None,
+            player_gravity_scale: None,
         }
     }
 
@@ -164,6 +168,40 @@ mod tests {
                 current: 4,
                 maximum: 60,
             },
+        }
+    }
+
+    #[test]
+    fn player_gravity_round_trip_preserves_first_queued_movement() {
+        use crate::physics::PhysicsWorld;
+        use shipyard::EntityId;
+
+        for gravity in [1.0, 0.05, 0.01, 0.0, -0.05] {
+            let entity = EntityId::from_inner(1001).unwrap();
+            let mut saved = global_data(None);
+            let mut original = PhysicsWorld::new();
+            let mut original_player = original.create_player(saved.position, entity);
+            original.set_gravity(entity, gravity);
+            saved.player_gravity_scale = Some(original.get_player_gravity(&original_player));
+            let decoded: GlobalData =
+                serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
+            let mut restored = PhysicsWorld::new();
+            let mut restored_player = restored.create_player(decoded.position, entity);
+            restored
+                .restore_player_gravity(&restored_player, decoded.player_gravity_scale.unwrap());
+
+            for frame in 0..3 {
+                original.update(vec3(0.0, 0.0, 0.0), &mut original_player);
+                restored.update(vec3(0.0, 0.0, 0.0), &mut restored_player);
+                let expected = original.get_player_translation(&original_player);
+                let actual = restored.get_player_translation(&restored_player);
+                assert_eq!(actual, expected, "gravity {gravity}, frame {frame}");
+            }
+            let expected_y = saved.position.y - 2.0 * 0.2 * gravity;
+            assert!(
+                (restored.get_player_translation(&restored_player).y - expected_y).abs() < 0.00001,
+                "restored gravity must govern the first two applied movements: {gravity}",
+            );
         }
     }
 

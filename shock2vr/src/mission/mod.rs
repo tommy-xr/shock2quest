@@ -313,6 +313,14 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.player_is_crouched()
     }
 
+    fn player_gravity_scale(&self) -> Option<f32> {
+        Some(
+            self.mission_core
+                .physics
+                .get_player_gravity(&self.mission_core.player_handle),
+        )
+    }
+
     fn player_fall_state(&self) -> Option<crate::physics::FatalFallTracker> {
         Some(self.mission_core.player_handle.fall_state())
     }
