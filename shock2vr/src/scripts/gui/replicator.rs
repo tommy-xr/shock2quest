@@ -41,6 +41,7 @@ enum ReplicatorPanel {
 pub struct ReplicatorState {
     /// The last box clicked, framed with REPSEL like retail's selection.
     selected: Option<usize>,
+    page: usize,
     panel: ReplicatorPanel,
     hack: HackState,
 }
@@ -48,6 +49,7 @@ pub struct ReplicatorState {
 #[derive(Clone)]
 pub enum ReplicatorMsg {
     SelectItem(usize),
+    Page(usize),
     OpenHack,
     OpenRepair,
     Repair(KeyPadMsg),
@@ -58,6 +60,18 @@ pub enum ReplicatorMsg {
 struct ReplicatorInventory {
     costs: [i32; 6],
     object_names: [String; 6],
+}
+
+impl ReplicatorInventory {
+    fn last_page(&self) -> usize {
+        usize::from(
+            self.object_names
+                .iter()
+                .zip(self.costs)
+                .skip(BOXES.len())
+                .any(|(name, cost)| !name.is_empty() && cost > 0),
+        )
+    }
 }
 
 fn active_inventory(world: &World, entity_id: EntityId) -> Option<ReplicatorInventory> {
@@ -90,8 +104,8 @@ fn active_inventory(world: &World, entity_id: EntityId) -> Option<ReplicatorInve
     }
 }
 
-/// REPLIC.PCX's four item boxes, 142x62. Retail shows only the first four
-/// catalog slots.
+/// REPLIC.PCX's four item boxes, 142x62. Page through all six authored slots
+/// without changing the retail box layout.
 const BOXES: [Rect; 4] = [
     Rect::new(10.0, 8.0, 142.0, 62.0),
     Rect::new(10.0, 74.0, 142.0, 62.0),
@@ -247,13 +261,34 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                 .with_size(vec2(188.0, 296.0)),
         ];
         if let Some(contents) = active_inventory(world, entity_id) {
+            let page = state.page.min(contents.last_page());
+            if contents.last_page() > 0 {
+                for (target, image, label, y) in [
+                    (0, "pgup0.pcx", "replicator-previous-page", 104.0),
+                    (1, "pgdn0.pcx", "replicator-next-page", 142.0),
+                ] {
+                    if target != page {
+                        components.push(
+                            gui::button(ReplicatorMsg::Page(target))
+                                .with_image(image)
+                                .with_label(label)
+                                .with_rect(Rect::new(157.0, y, 18.0, 26.0)),
+                        );
+                    }
+                }
+                components.push(super::PanelText::text(
+                    &format!("{}/2", page + 1),
+                    Rect::new(155.0, 180.0, 24.0, super::PanelText::line_height(world)),
+                ));
+            }
             let entity_metadata = world.borrow::<UniqueView<GlobalEntityMetadata>>().unwrap();
-            for (i, ((obj_name, authored_cost), rect)) in contents
+            for ((i, (obj_name, authored_cost)), rect) in contents
                 .object_names
                 .iter()
                 .zip(contents.costs)
-                .zip(BOXES)
                 .enumerate()
+                .skip(page * BOXES.len())
+                .zip(BOXES)
             {
                 if obj_name.is_empty() || authored_cost <= 0 {
                     continue;
@@ -392,6 +427,22 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         msg: &ReplicatorMsg,
     ) -> (ReplicatorState, Effect) {
         match msg {
+            ReplicatorMsg::Page(page) => {
+                if state.panel != ReplicatorPanel::Inventory {
+                    return (state.clone(), Effect::NoEffect);
+                }
+                let Some(contents) = active_inventory(world, entity_id) else {
+                    return (state.clone(), Effect::NoEffect);
+                };
+                (
+                    ReplicatorState {
+                        page: (*page).min(contents.last_page()),
+                        selected: None,
+                        ..state.clone()
+                    },
+                    Effect::NoEffect,
+                )
+            }
             ReplicatorMsg::SelectItem(slot) => {
                 // Retail frames the clicked box whether or not it vends.
                 let state = ReplicatorState {
@@ -430,6 +481,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                             selected: None,
                             panel: ReplicatorPanel::Hacking,
                             hack: HackState::default(),
+                            page: 0,
                         },
                         Effect::NoEffect,
                     )
@@ -613,6 +665,65 @@ mod tests {
             Some(crate::ui::ImageKind::ObjectIconFit),
             "PropObjIcon art must key palette index 0 and preserve its aspect ratio"
         );
+    }
+
+    #[test]
+    fn catalog_pages_keep_global_slot_prices_and_hide_controls_when_broken() {
+        let mut world = World::new();
+        world.add_unique(GlobalEntityMetadata(HashMap::from([(
+            "item".into(),
+            EntityMetadata {
+                template_id: -1,
+                obj_icon: Some("icn_pist.pcx".into()),
+                obj_short_name: Some("Item".into()),
+                obj_name: None,
+            },
+        )])));
+        let shop = world.add_entity((
+            PropReplicatorContents {
+                costs: [10, 11, 12, 13, 14, 15],
+                object_names: std::array::from_fn(|_| "item".into()),
+            },
+            PropReplicatorHackedContents {
+                costs: [20, 21, 22, 23, 24, 25],
+                object_names: std::array::from_fn(|_| "item".into()),
+            },
+        ));
+        let slots = |components: Vec<GuiComponent<ReplicatorMsg>>| {
+            components
+                .into_iter()
+                .filter_map(|c| match c {
+                    GuiComponent::Button {
+                        on_click: Some(ReplicatorMsg::SelectItem(slot)),
+                        ..
+                    } => Some(slot),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let state = ReplicatorState::default();
+        assert_eq!(
+            slots(ReplicatorGui.get_components(&None, shop, &world, &state)),
+            vec![0, 1, 2, 3]
+        );
+        let (page, _) = ReplicatorGui.handle_msg(shop, &world, &state, &ReplicatorMsg::Page(1));
+        assert_eq!(
+            slots(ReplicatorGui.get_components(&None, shop, &world, &page)),
+            vec![4, 5]
+        );
+        assert_eq!(replicator_quote(&world, shop, 5), Some(("item".into(), 15)));
+        world.add_component(shop, PropObjState(ObjectState::Hacked));
+        assert_eq!(replicator_quote(&world, shop, 5), Some(("item".into(), 25)));
+        world.add_component(shop, PropObjState(ObjectState::Broken));
+        let broken = ReplicatorGui.get_components(&None, shop, &world, &page);
+        assert!(!broken.iter().any(|c| matches!(
+            c,
+            GuiComponent::Button {
+                on_click: Some(ReplicatorMsg::Page(_) | ReplicatorMsg::SelectItem(_)),
+                ..
+            }
+        )));
+        assert!(replicator_quote(&world, shop, 5).is_none());
     }
 
     #[test]
