@@ -54,7 +54,9 @@ for (const [name, template, sag, enabled, hand, overrides] of [
         gun.id,
       );
       await game.input.set("head.rotation", [0, 0, 0, 1]);
-      await game.input.set(`${hand}_hand.position`, [0, 1, 0]);
+      // Keep the long-gun support socket in front of the body. Beside the
+      // waist, a squeeze belongs to the ammo pouch instead of weapon support.
+      await game.input.set(`${hand}_hand.position`, [0, 1, -0.8]);
       await game.input.set(`${hand}_hand.rotation`, [
         0,
         Math.SQRT1_2,
