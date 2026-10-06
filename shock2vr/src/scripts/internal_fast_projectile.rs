@@ -19,7 +19,7 @@ use crate::{
     util::{get_position_from_transform, get_rotation_from_forward_vector},
 };
 
-use super::{Effect, MessagePayload, Script};
+use super::{Effect, Message, MessagePayload, Script};
 
 /// How far an impact spang is backed off the surface it struck - just enough
 /// to keep it out of the world, matching the original engine's hair-width
@@ -110,6 +110,23 @@ impl Script for InternalFastProjectileScript {
                         bone: None,
                     })
                 }),
+                // Ray projectiles bypass Rapier's collision-message dispatch.
+                // Notify the owning victim even when its receptrons absorb all
+                // damage: collision-driven shield feedback still needs the hit.
+                Effect::Send {
+                    msg: Message {
+                        to: crate::util::resolve_proxy_entity(world, hit_entity_id),
+                        payload: MessagePayload::Collided {
+                            with: entity_id,
+                            contact: Some(crate::physics::CollisionContact {
+                                point: hit_point.to_vec(),
+                                normal: hit_normal,
+                                closing_speed: None,
+                                surface_material,
+                            }),
+                        },
+                    },
+                },
                 Effect::DrawDebugLines {
                     lines: vec![(start_point, hit_point, color)],
                 },
@@ -325,6 +342,58 @@ mod tests {
     use cgmath::{Quaternion, point3, vec3};
     use dark::properties::PropCreature;
     use shipyard::{EntityId, World};
+
+    #[test]
+    fn absorbed_fast_projectile_still_notifies_the_struck_script() {
+        use crate::scripts::{Effect, MessagePayload, Script};
+        use cgmath::{Matrix4, SquareMatrix};
+        use dark::properties::{
+            Link, Links, PropTemplateId, ReceptronEffect, ReceptronOptions, ToLink,
+        };
+        let mut world = World::new();
+        let victim = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: -50,
+                to_entity_id: None,
+                link: Link::Receptron(ReceptronOptions {
+                    order: 70,
+                    effect: ReceptronEffect::Abort,
+                }),
+            }],
+        });
+        let projectile = world.add_entity((
+            PropTemplateId { template_id: -40 },
+            crate::runtime_props::RuntimePropTransform(Matrix4::identity()),
+            RuntimePropPlayerFiredProjectile,
+        ));
+        world.add_unique(crate::mission::stim_response::GlobalContactStims(
+            std::collections::HashMap::from([(-40, vec![(-50, 10.0)])]),
+        ));
+        let mut physics = PhysicsWorld::new();
+        let player_id = world.add_entity(());
+        let mut player = physics.create_player(vec3(10.0, 0.0, 0.0), player_id);
+        physics.add_kinematic(
+            victim,
+            vec3(0.0, 0.0, 5.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(2.0, 2.0, 2.0),
+            crate::physics::CollisionGroup::selectable(),
+            false,
+        );
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let effects = Effect::flatten(vec![
+            super::InternalFastProjectileScript::new(vec3(0.0, 0.0, 1.0)).update(
+                projectile,
+                &world,
+                &physics,
+                &crate::time::Time::default(),
+            ),
+        ]);
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Send { msg } if matches!(msg.payload, MessagePayload::Damage { .. }))));
+        assert!(effects.iter().any(|effect| matches!(effect, Effect::DestroyEntity { entity_id } if *entity_id == projectile)));
+        assert!(effects.iter().any(|effect| matches!(effect, Effect::Send { msg } if msg.to == victim && matches!(msg.payload, MessagePayload::Collided { with, contact: Some(_) } if with == projectile))), "absorbed hits must still reach collision-driven feedback scripts");
+    }
 
     #[test]
     fn grub_shots_hit_segments_beyond_support_and_miss_empty_support_volume() {
