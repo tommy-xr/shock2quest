@@ -92,7 +92,7 @@ test(
 /** Climb the ledge ladder hand over hand until the body centre is at `height`. */
 async function climbLedgeLadderTo(game: GameServer, height: number): Promise<Hand> {
   await standAt(game, LEDGE_STAND);
-  const { anchor } = await vrClimbLadder(game, { near: LEDGE_RUNG, untilY: height });
+  const { anchor } = await vrClimbLadder(game, { near: await ledgeLadderHold(game, 2.0), untilY: height });
   const climbed = (await game.info()).player;
   assert.ok(climbed.position[1] >= height, `hand over hand only reached ${climbed.position[1]}`);
   assert.equal(climbed.climb.grips[0].kind, "ladder");
@@ -121,7 +121,7 @@ for (const [station, z, top] of [["ledge", LEDGE_Z, LEDGE_TOP], ["stacked-rung",
       async () => {
         await using game = await launchVr();
         await standAt(game, [LEDGE_STAND[0], LEDGE_STAND[1], z]);
-        const { anchor } = await vrClimbLadder(game, { near: [LEDGE_RUNG[0], LEDGE_RUNG[1], z], untilY: top - 0.9 });
+        const { anchor } = await vrClimbLadder(game, { near: [-6.9, 2.0, z], untilY: top - 0.9 });
         const { heights, landed } = await vrTopOut(game, otherHand(anchor), [depth, top + 0.05, z]);
         assert.equal((await game.info()).player.climb.grips.length, 0);
         assert.ok(
