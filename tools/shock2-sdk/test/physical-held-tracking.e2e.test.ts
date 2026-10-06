@@ -22,14 +22,20 @@ for (const hand of ["left", "right"] as const) {
     await game.input.set("head.rotation", [0, 0, 0, 1]);
     await game.input.set(`${hand}_hand.position`, [0.25, 0.95, -0.65]);
     await game.input.set(`${hand}_hand.rotation`, [0, 0, 0, 1]);
+    // Keep the locomotion loop on open floor, clear of the weapons bench
+    // and items left by cycling the roster. Obstruction has separate coverage.
+    await game.player.teleport({ x: 5, y: 2, z: 5 });
     await game.step({ frames: 90 });
 
     const snapshot = async () => {
       const player = (await game.info()).player;
       const pawn = player.position;
       const draws = (await game.scene.objects({ entityId: gun.id })).objects;
-      assert.ok(draws.length > 0, "the held weapon must be rendered");
-      return { pawn, rotation: player.rotation, relative: quatRotate(quatConjugate(player.rotation), sub(draws[0]!.position, pawn)) };
+      // The held entity also owns status/MFD quads. Their positions can
+      // change with locomotion independently of the weapon mesh itself.
+      const weapon = draws.find(draw => draw.source === "entity");
+      assert.ok(weapon, "the held weapon mesh must be rendered");
+      return { pawn, rotation: player.rotation, relative: quatRotate(quatConjugate(player.rotation), sub(weapon.position, pawn)) };
     };
     const original = await snapshot();
     await game.input.set(`${hand}_hand.position`, [0.45, 0.95, -0.65]);
