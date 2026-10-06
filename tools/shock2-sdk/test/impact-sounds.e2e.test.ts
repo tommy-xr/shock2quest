@@ -42,6 +42,10 @@ test(
       mission: "medsci1.mis",
     });
 
+    // Meet the pistol's authored Standard Weapons requirement; an untrained
+    // player refuses to fire, which cannot exercise collision audio.
+    await game.player.setStats({ skills: { standard_weapons: 1 } });
+
     // Wield the pistol (first DebugCycleWeapon roster entry).
     await game.step({ frames: 5 });
     await game.input.trigger("DebugCycleWeapon");
