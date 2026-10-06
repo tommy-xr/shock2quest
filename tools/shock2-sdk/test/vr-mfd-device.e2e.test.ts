@@ -285,13 +285,17 @@ test("loot uses the cyber interface or held device without a world quad", {
   await game.step({ frames: 30 });
   const [crate] = await game.entities.byTemplate(307);
   assert.ok(crate);
-  await game.player.teleport({ x: crate.position[0] - 1.2, y: 21.404, z: crate.position[2] });
+  // Stand clear of the crate so the calibrated reaching palm does not enter
+  // a shoulder-backpack region, which takes priority over world interaction.
+  await game.player.teleport({ x: crate.position[0] - 2, y: crate.position[1] + 1, z: crate.position[2] });
   await game.step({ frames: 60 });
   const aim = await game.player.aimAt(crate.id, { hitbox: "center", visibility: "required" });
   assert.ok(aim.target_confirmed);
   const uiBodies = async () => (await game.physics.bodies()).bodies.filter(b => b.collision_groups.includes("ui")).length;
   async function frob() {
     await aimVrHandAt(game, aim.world_point, .3, 0, 0, { hand: "right" });
+    assert.equal((await game.info()).player.hand_feedback?.shoulder_backpack?.near[1], false,
+      "world frob must start outside the backpack gesture region");
     await game.input.set("right_hand.trigger", 1);
     await game.step({ frames: 2 });
     await game.input.set("right_hand.trigger", 0);
