@@ -60,6 +60,12 @@ async function boosterStripElement(
   return element;
 }
 
+async function boosterCount(game: GameServer, id: number): Promise<number> {
+  const count = (await game.entities.detail(id)).properties.find(p => p.name === "StackCount");
+  assert.ok(count, "Psi Booster exposes its stack count");
+  return Number(count.value);
+}
+
 async function useBooster(game: GameServer, boosterId: number): Promise<void> {
   const element = await boosterStripElement(game, boosterId);
   await clickUiElement(game, element);
@@ -410,24 +416,21 @@ test(
       "the authored ReducePsi entry lesson should set psi to five",
     );
 
-    const boosters: EntitySummary[] = [];
+    let collectedBoosters = 0;
     for (const templateId of PSI_BOOSTERS) {
       const booster = await exactlyOne(game, templateId, "authored Psi Booster");
-      // Authored SPHERE physics leaves the nearby booth floor, rather than a
-      // synthetic model-bounds box, supporting the player. Let that placement
-      // resolve before deriving the production crosshair ray.
+      // Stage above the booth floor and settle before aiming. Placing the
+      // eye level with the vial embeds the capsule below its support.
       await earthWorldUse(game, booster, {
-        horizontalOffset: 0.1,
-        verticalOffset: -PLAYER_EYE_HEIGHT_WORLD,
-        settleFrames: 1,
+        horizontalOffset: 0.5,
+        verticalOffset: 1,
+        settleFrames: 30,
       });
-      assert.ok(
-        (await game.player.inventory()).items.some(
-          (item) => item.entity_id === booster.id,
-        ),
-        `normal world-use should physically carry booster ${templateId}`,
-      );
-      boosters.push(booster);
+      collectedBoosters += 1;
+      const stack = await exactlyOne(game, PSI_BOOSTERS[0]!, "carried Psi Booster stack");
+      assert.ok((await game.player.inventory()).items.some(item => item.entity_id === stack.id));
+      assert.equal(await boosterCount(game, stack.id), collectedBoosters,
+        `normal world-use must add authored booster ${templateId} to the carried stack`);
     }
 
     const amp = await exactlyOne(game, PSI_AMP, "authored Psi Amp");
@@ -461,23 +464,18 @@ test(
       "normal Cryokinesis projectile should damage the real Training Droid",
     );
 
-    // aimAtEntity deliberately exercises save/load; carried entities receive
-    // fresh runtime ids on load just like the droid. Re-resolve the boosters
-    // through their stable mission template ids before using them.
-    const liveBoosters: EntitySummary[] = [];
-    for (const booster of boosters) {
-      liveBoosters.push(
-        await exactlyOne(game, booster.template_id, "loaded Psi Booster"),
-      );
-    }
+    // Acquisitions merge into the first booster. Save/load renumbers its runtime
+    // handle, so resolve the surviving stack through its stable mission id.
+    const liveStack = await exactlyOne(game, PSI_BOOSTERS[0]!, "loaded Psi Booster stack");
+    assert.equal(await boosterCount(game, liveStack.id), collectedBoosters);
 
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
 
     let expectedPsi = psiBeforeCast - 1;
-    let expectedBoosters = liveBoosters.length;
-    for (const booster of liveBoosters) {
-      await useBooster(game, booster.id);
+    let expectedBoosters = collectedBoosters;
+    while (expectedBoosters > 0) {
+      await useBooster(game, liveStack.id);
       expectedPsi = Math.min(expectedPsi + 20, maximumPsi);
       expectedBoosters -= 1;
       assert.equal(
@@ -485,17 +483,16 @@ test(
         expectedPsi,
         "each Psi Booster restores 20 without exceeding the authored maximum",
       );
-      assert.equal(
-        (await game.entities.byTemplate(booster.template_id)).length,
-        0,
-        `inventory use must consume exactly the authored booster ${booster.template_id}`,
-      );
-      assert.equal(
-        (await game.player.inventory()).items.filter(
-          (item) => item.name === "Psi Booster",
-        ).length,
-        expectedBoosters,
-      );
+      const remaining = await game.entities.byTemplate(liveStack.template_id);
+      if (expectedBoosters > 0) {
+        assert.equal(remaining.length, 1, "partially used booster stack survives");
+        assert.equal(await boosterCount(game, remaining[0]!.id), expectedBoosters,
+          "inventory use consumes exactly one dose");
+      } else {
+        assert.equal(remaining.length, 0, "last dose removes the empty booster stack");
+      }
+      assert.equal((await game.player.inventory()).items.filter(item => item.name === "Psi Booster").length,
+        expectedBoosters > 0 ? 1 : 0);
     }
     assert.equal(psiPoints(await game.info()), maximumPsi, "third booster clamps at max psi");
 
