@@ -52,6 +52,8 @@ test(
       "selecting an unowned weapon must not spawn it",
     );
 
+    // This all-weapons fixture needs the full 15-column backpack.
+    await game.player.setStats({ strength: 6 });
     const equipped = new Map<string, number>();
     for (const binding of WEAPON_BINDINGS) {
       const item = await game.player.spawnItem(binding.templateId);
