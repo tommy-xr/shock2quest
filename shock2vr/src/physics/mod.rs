@@ -10316,7 +10316,9 @@ mod tests {
             world.rigid_body_set[handle].set_linvel(vector![3.0, 0.0, 0.0], true);
             let mut player =
                 world.create_player(vec3(30.0, 5.0, 0.0), EntityId::from_inner(7004).unwrap());
-            step(&mut world, &mut player, 90);
+            // PhysicsWorld uses 120 Hz substeps; allow two seconds for the
+            // shot to reach and settle against the wall three units away.
+            step(&mut world, &mut player, 240);
             let x = world.rigid_body_set[handle].translation().x;
             if excluded {
                 assert!(
