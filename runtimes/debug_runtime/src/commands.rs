@@ -993,6 +993,9 @@ pub struct PlayerInfo {
     /// no psi pool. See `shock2vr::PlayerStateSnapshot`.
     pub psi_points: Option<i32>,
     pub max_psi_points: Option<i32>,
+    /// Saved game-scale alcohol level and current overlay intensity.
+    pub alcohol_level: f32,
+    pub alcohol_intensity: f32,
     /// Accumulated retail radiation level (0 when clear).
     pub radiation_level: f32,
     pub toxin_level: f32,

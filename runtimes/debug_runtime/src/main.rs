@@ -2699,6 +2699,8 @@ fn capture_frame_snapshot(
                 max_psi_points: state
                     .as_ref()
                     .and_then(|s| s.psi_points.map(|(_, max)| max)),
+                alcohol_level: state.as_ref().map(|s| s.alcohol_level).unwrap_or(0.0),
+                alcohol_intensity: state.as_ref().map(|s| s.alcohol_intensity).unwrap_or(0.0),
                 radiation_level: state.as_ref().map(|s| s.radiation_level).unwrap_or(0.0),
                 toxin_level: state.as_ref().map(|s| s.toxin_level).unwrap_or(0.0),
                 selected_psi_power: state.as_ref().and_then(|s| s.selected_psi_power.clone()),

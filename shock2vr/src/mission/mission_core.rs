@@ -2031,6 +2031,9 @@ fn apply_liquor_use(world: &World, entity_id: EntityId) -> ComestibleUseOutcome 
     let outcome = apply_comestible_use(world, entity_id, 1);
     if outcome != ComestibleUseOutcome::NotUsed {
         update_player_psi_points(world, |points| points.saturating_sub(4));
+        if let Ok(mut alcohol) = world.borrow::<UniqueViewMut<crate::alcohol::AlcoholVital>>() {
+            alcohol.drink();
+        }
     }
     outcome
 }
@@ -3323,6 +3326,7 @@ impl MissionCore {
 
         world.add_unique(GlobalEntityMetadata(template_name_to_template_id.clone()));
         world.add_unique(Time::default());
+        world.add_unique(crate::alcohol::AlcoholVital::default());
         world.add_unique(crate::melee_swing::MeleeSwings::default());
         world.add_unique(speech_registry);
         world.add_unique(DebugOptions {
@@ -4578,6 +4582,10 @@ impl MissionCore {
         // Life-state effects go first so a scene-replacing GameOver cannot
         // clobber a same-frame quick-load arriving in `command_effects`.
         let mut effects = life_state_effects;
+        self.world
+            .borrow::<UniqueViewMut<crate::alcohol::AlcoholVital>>()
+            .unwrap()
+            .update(time.elapsed.as_secs_f32());
         if let Some(healing) = crate::scripts::healing_item::tick_player_healing(
             &self.world,
             time.elapsed.as_secs_f32(),
@@ -15492,6 +15500,16 @@ impl MissionCore {
         options: &crate::GameOptions,
     ) -> Vec<SceneObject> {
         let mut ret = vec![];
+        if self.player_is_alive() {
+            if let Some(layer) = self
+                .world
+                .borrow::<UniqueView<crate::alcohol::AlcoholVital>>()
+                .unwrap()
+                .render(view, projection)
+            {
+                ret.push(layer);
+            }
+        }
         if !self.use_mode {
             let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             ret.extend(self.reference_grid.render(
@@ -22051,6 +22069,7 @@ mod comestible_use_tests {
 
     fn world_with_player(hit_points: i32, carried: bool) -> (World, EntityId, EntityId) {
         let mut world = World::new();
+        world.add_unique(crate::alcohol::AlcoholVital::default());
         let food = world.add_entity(());
         let inventory = world.add_entity(if carried {
             Links {
@@ -22107,12 +22126,26 @@ mod comestible_use_tests {
             );
             assert_eq!(player_hit_points(&world, player), expected_hp);
             assert_eq!(crate::scripts::player_psi_points(&world), expected_psi);
+            assert_eq!(
+                world
+                    .borrow::<UniqueView<crate::alcohol::AlcoholVital>>()
+                    .unwrap()
+                    .level(),
+                1.0
+            );
             world.delete_entity(bottle);
             assert_eq!(
                 apply_liquor_use(&world, bottle),
                 ComestibleUseOutcome::NotUsed
             );
             assert_eq!(crate::scripts::player_psi_points(&world), expected_psi);
+            assert_eq!(
+                world
+                    .borrow::<UniqueView<crate::alcohol::AlcoholVital>>()
+                    .unwrap()
+                    .level(),
+                1.0
+            );
         }
     }
 
@@ -22137,6 +22170,13 @@ mod comestible_use_tests {
             );
             assert_eq!(player_hit_points(&world, player), 20);
             assert_eq!(crate::scripts::player_psi_points(&world), 10);
+            assert_eq!(
+                world
+                    .borrow::<UniqueView<crate::alcohol::AlcoholVital>>()
+                    .unwrap()
+                    .level(),
+                0.0
+            );
         }
     }
 
@@ -22171,6 +22211,13 @@ mod comestible_use_tests {
             ComestibleUseOutcome::Consumed
         );
         assert_eq!(player_hit_points(&world, player), 21);
+        assert_eq!(
+            world
+                .borrow::<UniqueView<crate::alcohol::AlcoholVital>>()
+                .unwrap()
+                .level(),
+            0.0
+        );
     }
 
     #[test]

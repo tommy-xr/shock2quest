@@ -40,6 +40,7 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
         in vec3 viewPosition;
         uniform mat4 projection;
         uniform float gridCells;
+        uniform float wavePhase;
 
         uniform vec3 color;
         uniform float intensity;
@@ -60,12 +61,26 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
                 vec2 tangent = viewPosition.xy / max(-viewPosition.z, 0.0001);
                 radius = length(tangent * vec2(projection[0][0], projection[1][1]));
             }
+            vec3 tint = color;
+            if (wavePhase >= 0.0) {
+                // Distort the translucent pattern's UVs, not the tracked view.
+                // The aperture uses the original UV radius so waves never
+                // cross the clear aiming area. Both eyes share one sim phase.
+                vec2 uv = texCoord * 2.0 - 1.0;
+                uv += 0.06 * vec2(sin(uv.y * 5.0 + wavePhase),
+                                 cos(uv.x * 4.0 - wavePhase));
+                float wave = 0.5 + 0.5 * sin(uv.y * 12.0 + uv.x * 4.0
+                                           + 1.5 * sin(uv.x * 5.0 - wavePhase)
+                                           + wavePhase);
+                pattern = 0.25 + 0.75 * wave * wave;
+                tint = mix(color, vec3(0.25, 0.48, 0.58), wave * 0.4);
+            }
             float span = max(outerRadius - innerRadius, 0.0001);
             float t = clamp((radius - innerRadius) / span, 0.0, 1.0);
             // Smoothstep, so the rim has no visible banding edge where it
             // meets the clear centre.
             float ramp = t * t * (3.0 - 2.0 * t);
-            fragColor = vec4(color, pattern * ramp * intensity);
+            fragColor = vec4(tint, pattern * ramp * intensity);
         }
 "#;
 
@@ -78,6 +93,7 @@ struct Uniforms {
     inner_radius_loc: i32,
     outer_radius_loc: i32,
     grid_cells_loc: i32,
+    wave_phase_loc: i32,
 }
 
 static SHADER_PROGRAM: OnceCell<(ShaderProgram, Uniforms)> = OnceCell::new();
@@ -92,6 +108,15 @@ pub struct VignetteMaterial {
     inner_radius: f32,
     outer_radius: f32,
     grid_cells: f32,
+    /// Negative disables waves for all existing damage and comfort masks.
+    wave_phase: f32,
+}
+
+impl VignetteMaterial {
+    /// Animate only the translucent pattern. Does not modify projection or depth.
+    pub fn set_wave_phase(&mut self, phase: f32) {
+        self.wave_phase = phase;
+    }
 }
 
 impl Material for VignetteMaterial {
@@ -138,6 +163,10 @@ impl Material for VignetteMaterial {
                     inner_radius_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("innerRadius").as_ptr(),
+                    ),
+                    wave_phase_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("wavePhase").as_ptr(),
                     ),
                     grid_cells_loc: gl::GetUniformLocation(
                         shader.gl_id,
@@ -195,6 +224,7 @@ impl Material for VignetteMaterial {
             gl::Uniform1f(uniforms.inner_radius_loc, self.inner_radius);
             gl::Uniform1f(uniforms.outer_radius_loc, self.outer_radius);
             gl::Uniform1f(uniforms.grid_cells_loc, self.grid_cells);
+            gl::Uniform1f(uniforms.wave_phase_loc, self.wave_phase);
         }
         true
     }
@@ -213,6 +243,7 @@ pub fn create(
         inner_radius,
         outer_radius,
         grid_cells: 0.0,
+        wave_phase: -1.0,
     })
 }
 
@@ -226,5 +257,6 @@ pub fn create_grid(color: Vector3<f32>, intensity: f32, cells: f32) -> Box<dyn M
         inner_radius: 0.5,
         outer_radius: 0.85,
         grid_cells: cells.max(1.0),
+        wave_phase: -1.0,
     })
 }

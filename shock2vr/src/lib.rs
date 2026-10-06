@@ -1,3 +1,4 @@
+pub mod alcohol;
 pub mod armor;
 pub mod audio_log;
 pub mod benchmark_scene;
@@ -805,6 +806,9 @@ pub struct PlayerStateSnapshot {
     /// The player's psi pool (current, max), or `None` when the player has no
     /// psi state (e.g. gamesys not loaded).
     pub psi_points: Option<(i32, i32)>,
+    /// Game-scale alcohol units and eased overlay intensity (0..1).
+    pub alcohol_level: f32,
+    pub alcohol_intensity: f32,
     /// Accumulated retail `RadLevel` after ambient absorption. Zero when the
     /// player has no active radiation status.
     pub radiation_level: f32,
@@ -989,6 +993,14 @@ impl Game {
                         .ok()
                         .map(|p| (p.psi_points, p.max_psi_points))
                 }),
+            alcohol_level: world
+                .borrow::<shipyard::UniqueView<crate::alcohol::AlcoholVital>>()
+                .map(|vital| vital.level())
+                .unwrap_or(0.0),
+            alcohol_intensity: world
+                .borrow::<shipyard::UniqueView<crate::alcohol::AlcoholVital>>()
+                .map(|vital| vital.intensity())
+                .unwrap_or(0.0),
             toxin_level: world
                 .borrow::<shipyard::UniqueView<crate::scripts::radiation::ActiveRadiation>>()
                 .map(|state| state.toxin_level())
