@@ -73,24 +73,22 @@ for (const vr of [false, true]) {
 }
 
 for (const mission of ["medsci1.mis", "debug_minimal"]) {
-  test(`object lighting preserves disabled/no-world-rep shading: ${mission}`,
+  test(`object lighting toggles live in missions and debug scenes: ${mission}`,
     { skip: !enabled, timeout: 180_000 }, async () => {
       await using game = await GameServer.launch({ mission });
       await game.step({ frames: 5 });
-      if (mission.endsWith(".mis")) {
-        const { objects } = await game.scene.objects();
-        assert.ok(objects.some(object => object.lighting != null), "enabled by default");
-        await game.devParams.set("object_lighting", 0);
-        await game.step({ frames: 1 });
-      }
+      // Debug scenes now supply their own key/fill lights even without a
+      // mission world representation. The same live toggle controls both.
+      const initial = await game.scene.objects();
+      assert.ok(initial.objects.some(object => object.lighting != null), "enabled by default");
+      await game.devParams.set("object_lighting", 0);
+      await game.step({ frames: 1 });
       const { objects } = await game.scene.objects();
       assert.ok(objects.length > 0);
       assert.ok(objects.every(object => object.lighting == null));
-      if (mission.endsWith(".mis")) {
-        await game.devParams.reset("object_lighting");
-        await game.step({ frames: 1 });
-        const restored = await game.scene.objects();
-        assert.ok(restored.objects.some(object => object.lighting != null), "reset enables lighting live");
-      }
+      await game.devParams.reset("object_lighting");
+      await game.step({ frames: 1 });
+      const restored = await game.scene.objects();
+      assert.ok(restored.objects.some(object => object.lighting != null), "reset enables lighting live");
     });
 }
