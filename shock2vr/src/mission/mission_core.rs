@@ -14244,6 +14244,17 @@ impl MissionCore {
                         .show(text, now, duration);
                 }
 
+                Effect::SetSurvivalStatus(status) => {
+                    if let Ok(mut current) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::hud::SurvivalStatus>>()
+                    {
+                        *current = status;
+                    } else {
+                        self.world.add_unique(status);
+                    }
+                }
+
                 Effect::ShowWeaponSkillRequirement {
                     entity_id,
                     requirement,
@@ -16570,6 +16581,10 @@ impl MissionCore {
 
         // Start with built in scene objects
         let mut scene = self.scene_objects.clone();
+        scene.extend(crate::hud::survival_status::render(
+            &self.world,
+            asset_cache,
+        ));
         scene.extend(crate::weapon_attachments::render_lasers(
             &self.world,
             &self.physics,
