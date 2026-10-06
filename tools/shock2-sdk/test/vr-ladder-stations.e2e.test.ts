@@ -443,13 +443,14 @@ for (const face of ["near", "far"] as const) {
     async () => {
       await using game = await launchAt(SHORT, [face === "near" ? -0.5 : -1.5, 1.5, 0]);
       if (face === "far") {
-        // Turn round (left stick) to face +x.
-        await game.input.set("left_hand.thumbstick", [1, 0]);
-        for (let f = 0; f < 400 && (await viewRight(game))[2] < 0.999; f += 1) {
+        // Snap turning is edge-triggered: six 30-degree flicks face +X.
+        for (let turn = 0; turn < 6; turn++) {
+          await game.input.set("left_hand.thumbstick", [1, 0]);
+          await game.step({ frames: 1 });
+          await game.input.set("left_hand.thumbstick", [0, 0]);
           await game.step({ frames: 1 });
         }
-        await game.input.set("left_hand.thumbstick", [0, 0]);
-        await game.step({ frames: 2 });
+        assert.ok((await viewRight(game))[2] > 0.999, "face the ladder from its far side");
       }
       const { heights } = await vrClimbLadder(game, { near: at(SHORT, -1, 0.8), untilY: STANDING + 0.4 });
       await shootTrail(game, `vr-short-${face}`, { oblique: true });
