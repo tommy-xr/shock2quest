@@ -12,7 +12,9 @@ use std::{
     time::Duration,
 };
 
-use cgmath::{Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, vec3};
+use cgmath::{
+    Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3, SquareMatrix, vec3,
+};
 use dark::{properties::*, ss2_entity_info::SystemShock2EntityInfo};
 use engine::assets::asset_cache::AssetCache;
 use rand::{Rng, RngCore, SeedableRng};
@@ -238,6 +240,30 @@ impl EntityPopulator for HordePopulation {
             );
         }
 
+        // Replace both street and both subway payphones. Mission IDs are stable;
+        // runtime entity IDs are not. Keep the slot even if an object is absent.
+        let mut phone_positions = vec![None; OS_WAVES.len()];
+        for (index, id) in [591, 680, 1013, 1018].into_iter().enumerate() {
+            if let Some(phone) = population.template_to_entity_id.remove(&id) {
+                let position = world
+                    .borrow::<View<PropPosition>>()
+                    .unwrap()
+                    .get(phone.0)
+                    .ok()
+                    .cloned();
+                if let Some(mut position) = position {
+                    // payphone faces local -Z; traitma faces +Z and has a
+                    // shallower back. Move its pivot toward the wall, leaving
+                    // it in the room for cell culling: the closest wall is
+                    // 0.284 behind a phone pivot (subway object 1013).
+                    position.position += position.rotation.rotate_vector(vec3(0.0, 0.0, 0.25));
+                    position.rotation = position.rotation * Quaternion::from_angle_y(Deg(180.0));
+                    phone_positions[index] = Some(position);
+                    world.delete_entity(phone.0);
+                }
+            }
+        }
+
         let mut add = |id: i32, template: i32, name: &str, pos: [f32; 3], yaw: f32| {
             let entity = world.add_entity(());
             entity_creator::initialize_entity_with_props(
@@ -345,8 +371,7 @@ impl EntityPopulator for HordePopulation {
         {
             add(60_020 + index as i32, *template, name, *position, *yaw);
         }
-        // West landing wall is continuous here (x6.8); the old wider bank
-        // crossed the doorway at z50. Keep all four clear of its light fixture.
+        // Trait stations occupy the former payphone locations.
         let mut os_stations = vec![];
         for (index, wave) in OS_WAVES.iter().enumerate() {
             os_stations.push(add(
@@ -403,6 +428,11 @@ impl EntityPopulator for HordePopulation {
             world.add_component(
                 station,
                 (
+                    phone_positions[index].clone().unwrap_or(PropPosition {
+                        position: vec3(7.25, 24.0, 43.0 + index as f32 * 1.6),
+                        rotation: Quaternion::from_angle_y(Deg(-90.0)),
+                        cell: u16::MAX,
+                    }),
                     PropLocked(index > 0),
                     PropRenderAlpha(if index == 0 { 1.0 } else { 0.35 }),
                 ),
@@ -902,7 +932,7 @@ impl HordeDirector {
     fn status(&self) -> Effect {
         let text = match self.phase {
             Phase::Rest => format!(
-                "Wave {} in {}s | Shops: street | Trainers: subway | OS: landing",
+                "Wave {} in {}s | Shops: street | Trainers: subway | OS: former phones",
                 self.wave + 1,
                 self.clock.ceil() as u32
             ),
@@ -1170,7 +1200,7 @@ impl Script for HordeDirector {
                 });
             }
             effects.extend(unlock_os_stations(world, self.wave + 1));
-            effects.push(Effect::ShowMessage { text: "EARTH: CONTAINMENT | Pistol + psi amp in inventory | Trainers in subway; shops on street; OS bank at the stair landing: start / waves 3/6/9".into() });
+            effects.push(Effect::ShowMessage { text: "EARTH: CONTAINMENT | Pistol + psi amp in inventory | Trainers in subway; shops on street; OS upgrades at former phones: start / waves 3/6/9".into() });
         }
         if !self.music_synced {
             effects.push(self.music());
