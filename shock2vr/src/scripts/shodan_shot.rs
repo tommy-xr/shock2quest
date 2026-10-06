@@ -73,8 +73,9 @@ impl Script for ShodanShot {
             return Effect::NoEffect;
         }
         self.impact_handled = true;
-        // Preserve the projectile's authored ShodanStim and corpse explosion;
-        // this is the same terminal-contact path as other slow projectiles.
+        // Preserve the authored corpse explosion and shared contact handling.
+        // Stock ShodanStim16 uses Null (dormant), not Contact: actual stock
+        // damage comes from the corpse's radius source, not an invented 16-point hit.
         terminal_impact_effects(world, physics, entity_id, *with, *contact, true, true)
     }
 }
@@ -165,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn shodan_shot_authored_bounce_delivers_one_stim16_and_one_slay() {
+    fn shodan_shot_active_contact_variant_delivers_one_stim16_and_one_slay() {
         use crate::{
             mission::stim_response::GlobalContactStims,
             scripts::internal_collision_type::InternalCollisionType,
@@ -176,6 +177,9 @@ mod tests {
         use dark::properties::{Link, Links, ToLink};
 
         let (mut world, shot, _, victim) = fixture(0);
+        // Explicit active Contact variant: stock ShodanStim16 is Null and
+        // deliberately absent from this map. This covers inherited/modified
+        // contact sources without activating the shipped dormant source.
         world.add_unique(GlobalContactStims(HashMap::from([(
             -3496,
             vec![(-4351, 16.0)],
