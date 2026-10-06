@@ -13,6 +13,7 @@ import type { AnimationState, Quat, Vec3 } from "../src/types.js";
 function makeSample(overrides: Partial<AnimationState>): AnimationState {
   return {
     entity_id: 1,
+    recoil: false,
     clip: "ogsidle1",
     frame: 0,
     num_frames: 44,

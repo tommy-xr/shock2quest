@@ -819,6 +819,8 @@ pub struct DebugUiElement {
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugAnimationState {
     pub entity_id: i32,
+    /// The interrupted attack is rewinding without damage flags/root travel.
+    pub recoil: bool,
     /// Currently playing clip (queue head), `None` when the queue is empty.
     pub clip: Option<String>,
     pub frame: u32,
@@ -1299,6 +1301,11 @@ pub struct DebugPathfindingStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DebugEntityMessage {
+    /// Play an authored motion by name for reproducible contact/pose tests.
+    /// This replaces the clip, not the actor's AI or damage handling.
+    PlayMotion {
+        name: String,
+    },
     Hazard {
         toxin: bool,
         amount: f32,

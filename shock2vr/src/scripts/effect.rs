@@ -862,6 +862,13 @@ pub enum Effect {
         impact: Option<crate::scripts::DamageImpact>,
     },
 
+    /// Debug-runtime reproduction of one authored motion, without choosing
+    /// randomly among a schema's attacks. Still emits normal animation flags.
+    DebugPlayMotion {
+        entity_id: EntityId,
+        name: String,
+    },
+
     /// Play the matching clip next, replacing any clip still playing, over the
     /// incoming clip's authored blend (see `AnimationPlayer::queue_animation`).
     QueueAnimationBySchema {

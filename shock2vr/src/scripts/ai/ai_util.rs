@@ -800,6 +800,16 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
         return Effect::NoEffect;
     }
 
+    melee_contact_damage(world, entity_id, target_entity_id)
+}
+
+/// Authored damage after a physical contact is already established. A pipe
+/// touching the player does not need the old range/FOV approximation again.
+pub(crate) fn melee_contact_damage(
+    world: &World,
+    entity_id: EntityId,
+    target_entity_id: EntityId,
+) -> Effect {
     let Some(weapon_template_id) = melee_weapon_template(world, entity_id) else {
         return Effect::NoEffect;
     };
