@@ -5,6 +5,7 @@ import { add, dot, normalize, quatConjugate, quatFromTo, quatMultiply, quatNorma
 
 export * from "../../src/vec.js";
 import type { Hand } from "../../src/vr-pose.js";
+import type { Quat } from "../../src/vec.js";
 export type { Hand };
 
 /**
@@ -47,7 +48,7 @@ export async function aimVrHandAtCanvas(
   const aim = facing === "panel" ? scale(normal, -1) : normal;
   const rotation = quatFromTo([0, 0, -1], aim);
 
-  await game.input.set(`${hand}_hand.position`, position);
+  await game.input.set(`${hand}_hand.position`, await rawHandPosition(game, position, rotation));
   await game.input.set(`${hand}_hand.rotation`, rotation);
   await game.input.set(`${hand}_hand.trigger`, trigger);
   await game.input.set(`${hand}_hand.squeeze`, squeeze);
@@ -87,12 +88,21 @@ export async function aimVrHandAt(
       eyeHeight: snapshot.player.camera_offset[1],
     });
   }
-  await game.input.set(`${hand}_hand.position`, localHand);
+  const rawLocal = await rawHandPosition(game, localHand, localHandRotation);
+  await game.input.set(`${hand}_hand.position`, rawLocal);
   await game.input.set(`${hand}_hand.rotation`, localHandRotation);
   await game.input.set(`${hand}_hand.trigger`, trigger);
   await game.input.set(`${hand}_hand.squeeze`, squeeze);
   await game.step({ frames: 3 });
-  return { start: worldHand, target, local: localHand };
+  return { start: worldHand, target, local: rawLocal };
+}
+
+/** Input channels are raw controller poses; helpers place the calibrated hand. */
+async function rawHandPosition(game: GameServer, position: Vec3, rotation: Quat): Promise<Vec3> {
+  const forward = (await game.devParams.list()).params.find(p => p.key === "glove_forward_cm");
+  if (!forward || typeof forward.value !== "number") throw new Error("Missing glove calibration");
+  // METERS_PER_WORLD_UNIT = 0.3048 metres/foot * SCALE_FACTOR 2.5.
+  return sub(position, quatRotate(rotation, [0, 0, -forward.value * 0.01 / 0.762]));
 }
 
 /** One canvas pixel of a world panel in world units (`gui::GUI_PIXEL_TO_WORLD_SIZE`). */
