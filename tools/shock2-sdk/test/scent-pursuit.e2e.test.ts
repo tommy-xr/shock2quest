@@ -11,6 +11,9 @@ for (const { name, expired, speed, samples, frames } of [
     skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000,
   }, async () => {
     await using game = await GameServer.launch({ mission: "debug_interactions" });
+    // The observer hides below the floor. Fatal-fall damage must not unload
+    // the mission while the hybrid follows (or ignores) the scent trail.
+    await game.devParams.set("cheat", 1);
     await game.step({ frames: 60 });
     await game.player.teleport({ x: 0, y: 1.244, z: 4 });
     await game.step({ frames: 30 });
@@ -49,6 +52,7 @@ for (const { name, expired, speed, samples, frames } of [
     let farthestX = 0;
     for (let sample = 0; sample < 100; sample++) {
       await game.step({ frames: 6 });
+      assert.ok((await game.info()).player.hit_points! > 0, "the hidden observer remains alive");
       const detail = await game.entities.detail(hybrid.id);
       assert.notEqual(detail.properties.find(p => p.name === "AITargetVisible")?.value, "true",
         "the player is hidden below the solid floor for the entire pursuit");
@@ -61,7 +65,9 @@ for (const { name, expired, speed, samples, frames } of [
       message.sequence > messageSequence && message.to.entity_id === hybrid.id);
     assert.ok(!messages.some(message => ["HeardNoise", "Damage"].includes(message.payload)),
       "no subsequent sound or hit supplies the unseen positions");
-    assert.ok(knownPositions.every(position => position[0] > -12 && position[1] > 0),
+    const trailMinX = Math.min(...trail.map(position => position[0]));
+    assert.ok(trailMinX > -20, "the trail stays well clear of the hidden observer at x=-30");
+    assert.ok(knownPositions.every(position => position[0] >= trailMinX - 0.1 && position[0] < 0.1 && position[1] > 0),
       "tracking never reveals the player's true hidden position");
     if (expired) {
       assert.ok(knownPositions.every(position => Math.abs(position[0]) < 0.1),

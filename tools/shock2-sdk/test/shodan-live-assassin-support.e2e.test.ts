@@ -25,6 +25,9 @@ test(
     await using game = await GameServer.launch({
       mission: "shodan.mis",
     });
+    // This long terrain/AI observation must survive damage to the player
+    // while the authored spikes and hostile creatures remain active.
+    await game.devParams.set("cheat", 1);
     await game.step({ frames: 10 });
 
     const assassin = only(
@@ -60,6 +63,7 @@ test(
     // long authored loop while sampling between its waypoints.
     for (let sample = 0; sample < 20; sample += 1) {
       await game.step({ frames: 300 });
+      assert.ok((await game.info()).player.hit_points! > 0, "the observer remains alive");
       samples.push(
         only(
           await game.entities.byTemplate(LIVE_ASSASSIN),
