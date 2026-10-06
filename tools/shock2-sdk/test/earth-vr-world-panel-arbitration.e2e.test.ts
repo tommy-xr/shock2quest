@@ -7,7 +7,7 @@ import {
   carriedNaniteTotal,
 } from "./helpers/earth-replicator.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
+import { add, aimVrHandAt, drawPersonalCard, quatRotate } from "./helpers/vr-hand.js";
 
 // Production-VR regression for #962. The test opens and hacks Earth Technical
 // Training's authored replicator through its physical panel, then holds one
@@ -104,7 +104,7 @@ async function clickPanelPoint(
   await game.step({ frames: 2 });
 }
 
-async function vrFrobEntity(game: GameServer, entity: EntitySummary): Promise<void> {
+async function collectNanites(game: GameServer, entity: EntitySummary): Promise<void> {
   const target = (await game.entities.detail(entity.id)).position;
   await teleportVerified(game, {
     x: target[0] + 0.5,
@@ -120,9 +120,11 @@ async function vrFrobEntity(game: GameServer, entity: EntitySummary): Promise<vo
     ignore_sensors: true,
   });
   assert.equal(hit.entity_id, entity.id, "production hand ray must hit frob target");
-  await game.input.set("right_hand.trigger", 1);
+  await game.input.set("right_hand.squeeze", 1);
   await game.step({ frames: 1 });
-  await game.input.set("right_hand.trigger", 0);
+  assert.equal((await game.info()).player.right_hand_entity_id, entity.id,
+    "the physical grip must hold the nanite pile before release collects it");
+  await game.input.set("right_hand.squeeze", 0);
   await game.step({ frames: 2 });
 }
 
@@ -143,10 +145,11 @@ async function openReplicator(
     hitbox: "center",
     visibility: "required",
   });
-  await aimVrHandAt(game, aim.world_point, 0.35);
-  await game.input.set("right_hand.trigger", 1);
-  await game.step({ frames: 1 });
-  await game.input.set("right_hand.trigger", 0);
+  // Replicators now require an actual personal-card scan in VR.
+  await drawPersonalCard(game);
+  await aimVrHandAt(game, aim.world_point, 0.02, 1);
+  await game.step({ frames: 5 });
+  await game.input.set("right_hand.squeeze", 0);
   await game.step({ frames: 5 });
   await uiPanel(game);
 }
@@ -200,6 +203,9 @@ test(
       mission: "earth.mis",
       debugFlags: ["--vr"],
     });
+    // This regression targets the world-mounted panel's two-hand arbitration;
+    // the default tricorder presentation routes fixture interaction elsewhere.
+    await game.devParams.set("vr_mfd_device", 0);
     await game.step({ frames: 5 });
 
     const [nanites] = await game.entities.byTemplate(EARTH_NANITES);
@@ -207,7 +213,7 @@ test(
     assert.ok(nanites, "Earth should contain authored nanite pile 257");
     assert.ok(replicator, "Earth should contain authored RepBase 262");
 
-    await vrFrobEntity(game, nanites);
+    await collectNanites(game, nanites);
     assert.equal(await carriedNaniteTotal(game), 250);
     await openReplicator(game, replicator);
     await hackReplicator(game, replicator);
