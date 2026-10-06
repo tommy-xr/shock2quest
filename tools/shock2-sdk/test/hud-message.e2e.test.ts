@@ -248,13 +248,17 @@ test(
     const [pile] = await game.entities.byTemplate(257);
     assert.ok(pile, "Earth nanite pile must be present");
     const [x, y, z] = pile.position;
-    await game.player.teleport({ x: x + 0.3, y: y + 0.15, z: z + 0.3 });
+    // Give the world grab room in front of the player; standing over the pile
+    // puts the reaching palm in a shoulder-backpack region that owns squeeze.
+    await game.player.teleport({ x: x + 0.8, y: y + 1, z: z + 0.8 });
     await game.step({ frames: 120 });
     const aim = await game.player.aimAt(pile.id, { hitbox: "center", visibility: "required" });
     assert.ok(aim.target_confirmed);
     const since = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
 
     await aimVrHandAt(game, aim.world_point, 0.35, 0);
+    assert.equal((await game.info()).player.hand_feedback?.shoulder_backpack?.near[1], false,
+      "world pickup must start outside the backpack gesture region");
     await game.input.set("right_hand.squeeze", 1);
     await game.step({ frames: 12 });
     assert.equal((await game.info()).player.right_hand_entity_id, pile.id);
