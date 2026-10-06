@@ -3260,11 +3260,24 @@ fn sensors_overlapping(
     pos: &Isometry<Real>,
     shape: &dyn Shape,
 ) -> HashSet<EntityId> {
-    queries
+    let mut overlapping: HashSet<_> = queries
         .intersect_shape(*pos, shape)
         .filter(|(_handle, collider)| collider.is_sensor())
         .filter_map(|(_handle, collider)| EntityId::from_inner(collider.user_data as u64))
-        .collect()
+        .collect();
+    // The convex shape query can miss a capsule deeply embedded in a large
+    // room cuboid. Containing a point of the player shape proves overlap too,
+    // without changing the exact shape test at edges. The origin check keeps
+    // this valid for offset/compound shapes whose center lies in empty space.
+    if shape.contains_local_point(&Point::origin()) {
+        overlapping.extend(
+            queries
+                .intersect_point(pos.translation.vector.into())
+                .filter(|(_handle, collider)| collider.is_sensor())
+                .filter_map(|(_handle, collider)| EntityId::from_inner(collider.user_data as u64)),
+        );
+    }
+    overlapping
 }
 
 /// ENTER/EXIT events for a change in the set of sensors containing the player.
@@ -14876,6 +14889,72 @@ mod tests {
             sensor_transition_events(&previous, &previous, player_id).is_empty(),
             "unchanged occupancy is not an edge"
         );
+    }
+
+    #[test]
+    fn room_sensor_overlap_does_not_treat_empty_shape_origin_as_solid() {
+        let mut world = PhysicsWorld::new();
+        let sensor = EntityId::from_inner(3000).unwrap();
+        world.add_collider(sensor, ColliderBuilder::ball(0.25).sensor(true).build());
+        let mut player =
+            world.create_player(vec3(10.0, 10.0, 10.0), EntityId::from_inner(2000).unwrap());
+        world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let shape = SharedShape::compound(vec![(
+            Isometry::translation(2.0, 0.0, 0.0),
+            SharedShape::ball(0.25),
+        )]);
+        let queries = world.broad_phase.as_query_pipeline(
+            world.narrow_phase.query_dispatcher(),
+            &world.rigid_body_set,
+            &world.collider_set,
+            QueryFilter::new().predicate(&is_sensor_collider),
+        );
+        assert!(sensors_overlapping(&queries, &Isometry::identity(), shape.as_ref()).is_empty());
+        // Move the actual ball into the sensor; its origin is still outside.
+        assert!(
+            sensors_overlapping(
+                &queries,
+                &Isometry::translation(-2.0, 0.0, 0.0),
+                shape.as_ref(),
+            )
+            .contains(&sensor)
+        );
+    }
+
+    #[test]
+    fn room_sensor_deep_capsule_overlap_does_not_emit_false_exits() {
+        let mut world = PhysicsWorld::new();
+        let sensor = EntityId::from_inner(3000).unwrap();
+        world.add_collider(
+            sensor,
+            ColliderBuilder::cuboid(4.9, 12.9, 4.9)
+                .translation(vector![32.0, -73.2, 32.0])
+                .sensor(true)
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(32.0, -66.0, 32.0), EntityId::from_inner(2000).unwrap());
+        world.rigid_body_set[player.character_handle].set_gravity_scale(0.01, true);
+        let mut enters = 0;
+        for _ in 0..600 {
+            let (_, events) = world.update(vec3(0.0, 0.0, 0.0), &mut player);
+            for event in events {
+                match event {
+                    CollisionEvent::BeginIntersect { sensor_id, .. } if sensor_id == sensor => {
+                        enters += 1
+                    }
+                    CollisionEvent::EndIntersect { sensor_id, .. } if sensor_id == sensor => {
+                        panic!(
+                            "capsule deep inside room exited at {:?}",
+                            world.get_player_translation(&player)
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(enters, 1);
+        assert!(world.get_player_translation(&player).y > -68.0);
     }
 
     /// A validated move (`/v1/player/move`, the automation navigation

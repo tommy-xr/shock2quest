@@ -13475,6 +13475,21 @@ impl MissionCore {
                             .add_component(entity_id, PropRenderType(render_type));
                     }
                 }
+                Effect::RegenerateHitPoints {
+                    entity_id,
+                    amount,
+                    cap,
+                } => {
+                    super::health_effects::regenerate_hit_points(
+                        &self.world,
+                        entity_id,
+                        amount,
+                        cap,
+                    );
+                }
+                Effect::SetRenderAlphaFromHitPoints { entity_id } => {
+                    super::health_effects::set_alpha_from_hit_points(&mut self.world, entity_id);
+                }
                 Effect::SetRenderAlpha { entity_id, alpha } => {
                     self.world.add_component(
                         entity_id,
@@ -18846,6 +18861,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         let hit_points = self
             .world
             .run(|v: View<dark::properties::PropHitPoints>| v.get(id).ok().map(|hp| hp.hit_points));
+        let render_alpha = self
+            .world
+            .run(|v: View<dark::properties::PropRenderAlpha>| v.get(id).ok().map(|alpha| alpha.0));
         let max_hit_points = self
             .world
             .run(|v: View<dark::properties::PropMaxHitPoints>| {
@@ -18995,6 +19013,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "HitPoints".to_string(),
                         value: hit_points.to_string(),
+                    });
+                }
+                if let Some(render_alpha) = render_alpha {
+                    properties.push(DebugPropertyInfo {
+                        name: "RenderAlpha".to_string(),
+                        value: render_alpha.to_string(),
                     });
                 }
                 if let Some(max_hit_points) = max_hit_points {
