@@ -30,6 +30,12 @@ test(
 
     await game.step({ frames: 30 });
     const { pistol, clips } = await pickupEarthWeapons(game, 3);
+    await game.player.setStats({ skills: { standard_weapons: 1 } });
+    // Pickup staging puts the eye beside the display. Lift the body clear of
+    // the floor before the longer reload scenario can fall out of the world.
+    const [x, y, z] = (await game.info()).player.position;
+    await game.player.teleport({ x, y: y + 1, z });
+    await game.step({ frames: 30 });
     const pistolId = pistol.id;
     assert.equal(ammoOf(await game.entities.detail(pistolId)), 0, "Earth pistol starts empty");
 
