@@ -7,7 +7,7 @@ import { aimVrHandAt, quatFromTo } from "./helpers/vr-hand.js";
 
 for (const [weapon, template] of [["Laser Pistol", -2474], ["EMP Rifle", -235]] as const) {
   for (const vr of [false, true]) {
-    test(`${weapon} reveals its bolt after the LaserShot delay in ${vr ? "VR" : "flat"}`,
+    test(`${weapon} ${template === -235 ? "renders its enhanced particle bolt" : "reveals its bolt after the LaserShot delay"} in ${vr ? "VR" : "flat"}`,
       { skip: process.env.SHOCK2_E2E !== "1" }, async () => {
         await using game = await GameServer.launch({ mission: "debug_weapons", debugFlags: vr ? ["--vr"] : [] });
         await game.step({ frames: 10 });
@@ -31,13 +31,23 @@ for (const [weapon, template] of [["Laser Pistol", -2474], ["EMP Rifle", -235]] 
         assert.equal((await game.scene.objects({entityId: shot.id})).objects.length, 0,
           "the bolt starts hidden while it clears the muzzle");
         await game.step({ frames: 4 });
-        assert.ok((await game.scene.objects({entityId: shot.id})).objects.length > 0,
-          "LaserShot must submit its bolt mesh after the 50ms reveal delay");
         const entities = (await game.entities.list()).entities;
         if (template === -235) {
-          assert.ok(entities.some(e => e.name === "EMP Blue"), "the authored blue bitmap rider remains");
-          assert.ok(entities.some(e => e.name === "EMP2"), "the authored disk rider remains");
+          // Remaster art deliberately replaces the legacy parent mesh with
+          // layered particle riders. Verify their actual draws, not just ECS
+          // existence, so an invisible replacement still fails this test.
+          assert.equal((await game.scene.objects({entityId: shot.id})).objects.length, 0,
+            "the enhanced effect suppresses the legacy EMP parent mesh");
+          for (const name of ["EMP Blue", "EMP2"]) {
+            const rider = entities.find(e => e.name === name);
+            assert.ok(rider, `the authored ${name} rider remains`);
+            const draws = (await game.scene.objects({entityId: rider.id})).objects;
+            assert.ok(draws.some(draw => draw.source === "particle"),
+              `${name} must submit its enhanced particle layers`);
+          }
         } else {
+          assert.ok((await game.scene.objects({entityId: shot.id})).objects.length > 0,
+            "LaserShot must submit its bolt mesh after the 50ms reveal delay");
           assert.ok(entities.some(e => e.name === "Blue Laser Trail"));
         }
       });
