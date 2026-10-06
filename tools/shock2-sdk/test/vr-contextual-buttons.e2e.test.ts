@@ -6,6 +6,7 @@ import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
 import { cycleToWeapon } from "./helpers/weapon.js";
+import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 
 // The Touch face buttons: the LOWER one (left X / right A) is jump on both
 // hands whatever they hold, and the UPPER one (left Y / right B) is contextual
@@ -90,7 +91,8 @@ test(
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
-    await grabPistol(game);
+    const pistol = await grabPistol(game);
+    await unlockWeaponAlternateFire(game);
 
     // The gun hand's upper button handles the weapon rather than reaching a
     // player-owned panel.
