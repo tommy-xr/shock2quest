@@ -36,3 +36,17 @@ export async function vrHandLocalDelta(
   const { player } = await game.info();
   return quatRotate(quatConjugate(player.rotation), worldDelta);
 }
+
+/** A real ledge-station rung/rail, rather than the old solid ladder face. */
+export async function ledgeLadderHold(game: GameServer, height: number, rail = false): Promise<Vec3> {
+  const ladder = (await game.entities.byTemplate(-2558)).find(e => Math.abs(e.position[2]) < 0.01);
+  if (!ladder) throw new Error("debug_ladder ledge ladder missing");
+  const holds = await game.physics.ladder(ladder.id);
+  if (rail) {
+    const [bottom, top] = holds.rails.reduce((a, b) => a[1][2] < b[1][2] ? a : b);
+    const t = Math.max(0, Math.min(1, (height - bottom[1]) / (top[1] - bottom[1])));
+    return bottom.map((v, i) => v + (top[i] - v) * t) as Vec3;
+  }
+  const [a, b] = holds.rungs.reduce((a, b) => Math.abs(a[0][1] - height) < Math.abs(b[0][1] - height) ? a : b);
+  return a.map((v, i) => (v + b[i]) / 2) as Vec3;
+}

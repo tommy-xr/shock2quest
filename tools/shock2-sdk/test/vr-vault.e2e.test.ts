@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { GameServer, otherHand, vrClimbLadder, vrGrab, vrPull, vrTopOut, vrVault } from "../src/index.js";
 import type { Hand, Vec3 } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { vrHandLocalDelta } from "./helpers/vr-climb.js";
+import { ledgeLadderHold, vrHandLocalDelta } from "./helpers/vr-climb.js";
 
 // Finishing the mantle: a hand on a ledge gets the body onto it. Once the eye
 // clears the lip the hand is lying on, the grips let go and the scripted
@@ -36,7 +36,6 @@ const MANTLE_STAND: Vec3 = [FLUSH_X, 1.5, MANTLE_Z];
 const MANTLE_LIP: Vec3 = [-6.9, 2.75, MANTLE_Z - 0.15];
 /** Against the ledge ladder, and a rung within reach from the floor. */
 const LEDGE_STAND: Vec3 = [FLUSH_X, 1.5, LEDGE_Z];
-const LEDGE_RUNG: Vec3 = [-6.8, 2.6, LEDGE_Z];
 /** Deck holds from the ledge ladder: just past the lip, and as deep as an arm
  * on the ladder reaches (about 0.35 wu). */
 const DECK_LIP: Vec3 = [-7.05, 6.05, LEDGE_Z];
@@ -205,7 +204,7 @@ test(
     // On the ledge ladder with the eye far below the block top, pulling climbs
     // and nothing else.
     await standAt(game, LEDGE_STAND);
-    await vrGrab(game, "right", LEDGE_RUNG);
+    await vrGrab(game, "right", await ledgeLadderHold(game, 2.0));
     const path = await vrPull(game, "right", [0, -1.0, 0], 30, (p) => p.climb.vaulting);
     assert.equal(path.length, 30, `vaulted at frame ${path.length} with the eye far below the lip`);
     climb = (await game.info()).player.climb;
@@ -270,13 +269,14 @@ test("debug_ladder (VR): crouch on the deck, hook the ladder cap and descend", {
   await game.input.set("crouch", 1);
   await game.step({ frames: 5 });
   const before = (await game.info()).player.position;
-  await vrGrab(game, "right", [-6.9, 6.45, LEDGE_Z]);
+  const cap = await ledgeLadderHold(game, 6.3, true);
+  await vrGrab(game, "right", cap);
   const start = (await game.input.state()).right_hand.position;
   const caught = (await game.info()).player;
   assert.equal(caught.climb.grips.length, 1, "catch from above the cap");
   assert.equal(caught.climb.grips[0].kind, "ladder");
   assert.ok(Math.abs(caught.position[0] - before[0]) < 0.05, "catch must not snap the body");
-  const hook = (await game.physics.grip([-6.9, 6.45, LEDGE_Z])).grip!;
+  const hook = (await game.physics.grip(cap)).grip!;
   assert.ok(Math.abs(hook.normal[0]) > 0.9 && Math.abs(hook.normal[1]) < 0.01,
     `catch an actual side, not the masked cap: ${hook.normal}`);
 
