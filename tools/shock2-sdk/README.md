@@ -248,6 +248,12 @@ click); tracking channels are not. The format and mapping are documented in
 - `GameServer.launch` finds the cargo workspace by walking up from `cwd`;
   pass `repoRoot` to override. First launch may take minutes while cargo
   compiles; the default readiness timeout is 5 minutes.
+- The E2E and reliability runners build `debug_runtime` once, copy Cargo's
+  reported executable to a temporary directory, and use it for the whole run.
+  This avoids repeated Cargo locks and keeps concurrent rebuilds from changing
+  the code under test. The copy is removed when the runner exits.
+  For an explicitly prebuilt executable, set `SHOCK2_RUNTIME_BINARY` or pass
+  `runtimeBinary` to `GameServer.launch`; its freshness is then your responsibility.
 - SDK-launched runtimes get `--idle-timeout-secs 600`: if the owning process is
   SIGKILLed (so neither `shutdown()` nor the SIGINT/SIGTERM hook runs), the
   runtime exits by itself after ten quiet minutes instead of holding ~700 MB.
