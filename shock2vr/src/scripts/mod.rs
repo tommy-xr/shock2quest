@@ -64,6 +64,7 @@ mod melee_weapon;
 mod obj_consume_button;
 mod once_room;
 mod once_router;
+mod overlord;
 mod picture_swap;
 pub mod player_script;
 mod psi_amp_script;
@@ -391,6 +392,8 @@ pub enum MessagePayload {
     },
 
     Slay, // kill the entity
+    BrainDead,
+    Resurrected,
 
     // Interaction events
     // Raw hover event
@@ -1069,7 +1072,7 @@ impl ScriptWorld {
             "trapdestroyteleport" => Box::new(TrapDestroyTeleport::new()),
             "triggerdamage" => Box::new(TriggerDamage::new()),
             // many.micontain
-            "brain" => Box::new(NoopScript::new()),
+            "brain" => Box::new(overlord::Brain),
             "wormheartimplant" => Box::new(implant::Implant::default()),
             "wormskin" => Box::new(hazard_objects::HazardObject::Armor),
             // shodan.mis
@@ -1288,7 +1291,7 @@ impl ScriptWorld {
             "trapmetapropbylist" => Box::new(NoopScript::new()),
 
             // eng2
-            "overlord" => Box::new(UnimplementedScript::new(&script_name)),
+            "overlord" => Box::new(overlord::Overlord::new()),
             "freemodify" => Box::new(free_modify::FreeModify),
             "manybrain" => Box::new(UnimplementedScript::new(&script_name)),
             "trapsuicide" => Box::new(UnimplementedScript::new(&script_name)),
@@ -1528,7 +1531,9 @@ impl ScriptWorld {
             };
             let payload = researched_damage.as_ref().unwrap_or(&msg.payload);
 
-            if matches!(msg.payload, MessagePayload::Slay) {
+            if matches!(msg.payload, MessagePayload::Slay)
+                && !script_util::retain_on_slay(world, to_entity_id)
+            {
                 slayed_entities.insert(to_entity_id);
             }
 
@@ -1627,7 +1632,9 @@ impl ScriptWorld {
                             other => ret.push(other),
                         }
                     }
-                    ret.push(Effect::SlayEntity { entity_id });
+                    if !script_util::retain_on_slay(world, entity_id) {
+                        ret.push(Effect::SlayEntity { entity_id });
+                    }
                 }
                 Effect::Send { msg } => self.message_queue.push(msg),
                 _ => ret.push(eff),

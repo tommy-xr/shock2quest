@@ -1004,6 +1004,15 @@ impl AnimatedMonsterAI {
     /// re-dispatch queued when no crumple motion is found), so the crumple
     /// and death sound play only once.
     fn enter_death(&mut self, world: &World, entity_id: EntityId) -> Effect {
+        if super::super::script_util::retain_on_slay(world, entity_id) {
+            // Slain still reaches scripts, but this policy retains the object.
+            return Effect::Send {
+                msg: Message {
+                    to: entity_id,
+                    payload: MessagePayload::Slay,
+                },
+            };
+        }
         self.stun = None;
         self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
         self.is_dead = true;
@@ -1576,7 +1585,9 @@ impl Script for AnimatedMonsterAI {
         // killed monster must start in its inert state: queueing the fresh
         // script's idle clip would stand the corpse up, then its completion
         // would enter the normal death path and replay the crumple + speech.
-        if is_killed(entity_id, world) {
+        if is_killed(entity_id, world)
+            && !super::super::script_util::retain_on_slay(world, entity_id)
+        {
             self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
             self.is_dead = true;
             // This corpse did not enter death in this runtime, so it must not
@@ -1637,6 +1648,11 @@ impl Script for AnimatedMonsterAI {
         // would replace DeadBehavior and resurrect it. Still publish the
         // behavior so introspection shows "Dead", and release a sensor the
         // ray was intersecting at death so its end-intersect isn't stranded.
+        if is_killed(entity_id, world)
+            && super::super::script_util::retain_on_slay(world, entity_id)
+        {
+            return Effect::NoEffect;
+        }
         if self.is_dead || is_killed(entity_id, world) {
             self.stun = None;
             // A corpse recreated by save/load also latches is_dead so stale
@@ -2061,6 +2077,20 @@ impl Script for AnimatedMonsterAI {
         physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
+        if matches!(msg, MessagePayload::Resurrected) {
+            self.is_dead = false;
+            self.handoff_emitted = false;
+            self.death_elapsed = 0.0;
+            self.death_impact = None;
+            self.took_damage = false;
+            self.stun = None;
+            return self.initialize(entity_id, world);
+        }
+        if is_killed(entity_id, world)
+            && super::super::script_util::retain_on_slay(world, entity_id)
+        {
+            return Effect::NoEffect;
+        }
         if let MessagePayload::Stun {
             duration_seconds,
             tags,
@@ -4341,6 +4371,24 @@ mod tests {
             "a link death has no crumple or death speech, got {effects:?}"
         );
         assert!(monster.handoff_emitted, "a removed body must not ragdoll");
+    }
+
+    #[test]
+    fn retained_lethal_hit_notifies_slay_without_loot_or_ai_death() {
+        let (mut world, entity) = world_with_monster_and_player(Deg(0.0));
+        world.add_component(entity, dark::properties::PropSlayResult(1));
+        let (monster, effects) = kill(&world, entity);
+        assert!(
+            !monster.is_dead,
+            "retained Slain must not latch ordinary AI death"
+        );
+        assert!(effects.iter().any(|effect| matches!(effect, Effect::Send { msg } if msg.to == entity && matches!(msg.payload, MessagePayload::Slay))));
+        assert!(effects.iter().all(|effect| !matches!(
+            effect,
+            Effect::GenerateLoot { .. }
+                | Effect::SlayEntity { .. }
+                | Effect::SpawnCorpseRagdoll { .. }
+        )));
     }
 
     /// Organics author no death links: they keep the crumple + death speech.
