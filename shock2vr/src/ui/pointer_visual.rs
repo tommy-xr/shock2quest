@@ -26,10 +26,6 @@ const BEAM_HALO_RADIUS: f32 = 0.012;
 const BEAM_CORE_RADIUS: f32 = 0.0025;
 /// Clear air between the panel's frontmost canvas layer and the beam's tip.
 const BEAM_TIP_CLEARANCE: f32 = VR_COMPONENT_Z_STEP * 2.0;
-/// Floor on how squarely a ray may meet the panel before the pull-back below
-/// stops scaling. Without it a ray grazing the panel edge would end its beam
-/// arbitrarily far back from the panel.
-const MIN_APPROACH: f32 = 0.25;
 /// Size of the fallback controller proxy: a stubby box at the hand, aimed down
 /// the ray. Only drawn when the glove model is unavailable.
 const CONTROLLER_PROXY_SIZE: Vector3<f32> = Vector3 {
@@ -115,15 +111,10 @@ pub fn pointer_beam_end(
     // second intersection of the same ray.
     let hit = canvas_to_panel_world(canvas_size, panel, ray.canvas_hit?);
 
-    // Stop short *along the beam* rather than along the panel normal, so the
-    // tip stays on the aimed-at point from any viewpoint without burying itself
-    // in the canvas layers.
-    let approach = -ray.direction.dot(panel.normal());
-    let lift = tip_lift(panel_layers);
-    let pull = lift / approach.max(MIN_APPROACH);
-    // A ray grazing past MIN_APPROACH stops short of clearing the stack; top
-    // the rest up along the normal so the tip never sinks under a label.
-    Some(hit - ray.direction * pull + panel.normal() * (lift - pull * approach).max(0.0))
+    // Lift perpendicular to the canvas so the marker retains the clicked
+    // pixel's X/Y. Pulling back along an oblique controller ray displaces the
+    // dot across small MFD buttons when viewed from the player's eyes.
+    Some(hit + panel.normal() * tip_lift(panel_layers))
 }
 
 /// A unit cube scaled to `scale` and placed at `center`, oriented by `rotation`.
@@ -349,7 +340,10 @@ fn render_pointer_rays(
         }
 
         if let Some(end) = end.filter(|_| style.dot_size > 0.0) {
-            objects.push(dot_object(end, panel, style.colors[1], style.dot_size));
+            // On a handheld screen a metre-sized preference can obscure an
+            // entire node. Limit the dot to sixteen canvas pixels across.
+            let size = style.dot_size.min(16.0 * panel.size.x / canvas_size.x);
+            objects.push(dot_object(end, panel, style.colors[1], size));
         }
     }
     objects
@@ -404,10 +398,12 @@ mod tests {
         let panel = test_panel();
         let hit = canvas_to_panel_world(CANVAS, &panel, target);
         let tip = end(&pass, 0).expect("a ray on the panel must draw a beam");
-        // The tip stays *on the ray* - it marks the aimed-at point from any
-        // viewpoint, rather than being shoved sideways off the beam.
-        let off_ray = (tip - hit) - ray_component(tip - hit, pass.rays[0].direction);
-        assert!(off_ray.magnitude() < 1e-4, "the tip must sit on the ray");
+        let displacement = tip - hit;
+        let lateral = displacement - panel.normal() * displacement.dot(panel.normal());
+        assert!(
+            lateral.magnitude() < 1e-4,
+            "the tip must mark the clicked canvas pixel"
+        );
         // ...and it clears the panel's whole canvas layer stack, rather than
         // burying itself in the very label it is pointing at.
         assert!(
@@ -444,7 +440,7 @@ mod tests {
     fn a_grazing_ray_still_lifts_its_tip_clear_of_the_canvas() {
         let panel = test_panel();
         let hit = canvas_to_panel_world(CANVAS, &panel, vec2(500.0, 120.0));
-        // Approach 0.1, well under MIN_APPROACH.
+        // A strongly oblique controller ray must not displace the marker.
         let direction =
             (panel.normal() * -0.1 + panel.rotation.rotate_vector(vec3(1.0, 0.0, 0.0))).normalize();
         let mut ray = pass(
@@ -456,10 +452,6 @@ mod tests {
         ray.direction = direction;
         let tip = pointer_beam_end(&ray, CANVAS, &panel, LAYERS).unwrap();
         assert!((tip - hit).dot(panel.normal()) >= tip_lift(LAYERS) - 1e-4);
-    }
-
-    fn ray_component(v: Vector3<f32>, direction: Vector3<f32>) -> Vector3<f32> {
-        direction * v.dot(direction)
     }
 
     #[test]
