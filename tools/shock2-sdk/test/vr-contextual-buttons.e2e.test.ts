@@ -92,7 +92,7 @@ test(
     });
     await game.step({ frames: 30 });
     const pistol = await grabPistol(game);
-    await unlockWeaponAlternateFire(game, pistol);
+    await unlockWeaponAlternateFire(game);
 
     // The gun hand's upper button handles the weapon rather than reaching a
     // player-owned panel.
