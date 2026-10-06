@@ -6758,18 +6758,18 @@ impl MissionCore {
                 .then_some(entity)
             });
             let focus_mode = crate::dev_params::get_bool(crate::dev_params::VR_MFD_FOCUS_SCAN);
+            // Keep an active connection (and its paid minigame) when the arm
+            // wanders across a target. Closing rearms dwell; trigger scans stay explicit.
             let focused = self.device_scanner.focus(
-                (self.flat_ui.device && focus_mode)
+                (self.flat_ui.device && focus_mode && self.flat_ui.active_panel().is_none())
                     .then(|| hit.map(|(entity, ..)| entity))
                     .flatten(),
                 time.elapsed.as_secs_f32(),
             );
-            let requested = if focus_mode {
-                focused
-            } else if trigger_edge {
+            let requested = if trigger_edge {
                 hit.map(|(entity, ..)| entity)
             } else {
-                None
+                focused
             };
             let scan = if stowed_panel.is_some() {
                 None // Belt previews must not activate readers or consume items.

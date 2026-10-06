@@ -2467,7 +2467,7 @@ mod tests {
     fn handheld_panel_survives_scan_range_but_closes_when_leaving() {
         let mut world = World::new();
         let panel = world.add_entity(dark::properties::PropPosition {
-            position: cgmath::vec3(6.0, 0.0, 0.0),
+            position: cgmath::vec3(7.5 / crate::METERS_PER_WORLD_UNIT, 0.0, 0.0),
             rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
             cell: 0,
         });

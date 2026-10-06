@@ -229,13 +229,39 @@ test("scanned world weapons offer state-specific repair and modify boards", {
   assert.ok(await art("iface/modify.pcx"), "the scanned world gun opens its Modify chooser");
   assert.ok((await game.ui.state()).active_panel?.elements.some(e => e.label === "upgrade_AlternateFire"),
     "the chooser offers a real weapon upgrade");
+  await click("upgrade_ExtendedCapacity");
+  await click("upgrade_confirm");
+  assert.ok(await art("modify.pcx"), "the scanned world gun opens its Modify board");
+  for (let i = 0; i < 5; i++) await game.player.spawnItem("20 Nanites");
+  await click("start-hack");
+  const paidBalance = (await game.info()).player.stats?.nanites;
+  await game.devParams.set("vr_mfd_focus_scan", 1);
+  const scans = (await game.info()).player.hand_feedback!.body_gear!.personal_card.scans;
+  await aimMfdAt(game, aim.world_point, 1.1, 1, 0, { hand: "left", lookAtTarget: false });
+  await game.step({ frames: 40 });
+  assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.scans, scans,
+    "reacquiring the gun cannot replace a paid minigame");
+  assert.ok(await art("modify.pcx"));
+  assert.ok((await game.ui.state()).active_panel?.elements.some(e => e.label === "reset-hack"),
+    "the paid board remains active");
+  assert.equal((await game.info()).player.stats?.nanites, paidBalance);
   await game.entities.sendMessage(gun.id, { type: "SetObjectState", state: "Broken" });
   await game.entities.sendMessage(gun.id, { type: "SetGunCondition", condition: 30 });
   await game.step({ frames: 2 });
   await scan();
+  assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.scans, scans + 1,
+    "the holding trigger explicitly rescans even with focus scanning enabled");
   assert.ok(!(await game.ui.state()).active_panel?.elements.some(e => e.label === "modify"));
   await click("repair");
   assert.ok(await art("iface/repair.pcx"), "the same broken gun opens its Repair board");
+  await click("close");
+  assert.equal((await game.ui.state()).active_panel, null);
+  await aimMfdAt(game, aim.world_point, 1.1, 1, 0, { hand: "left", lookAtTarget: false });
+  await game.step({ frames: 40 });
+  assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.last_scan, gun.id);
+  assert.ok((await game.ui.state()).active_panel?.elements.some(e => e.label === "repair"),
+    "closing the connection lets automatic scanning resume with the gun's settings");
+  assert.equal((await game.info()).player.hand_feedback!.body_gear!.personal_card.scans, scans + 2);
 });
 
 
@@ -423,6 +449,15 @@ test("focus scan opens a held weapon without trigger and does not repeat", {
   await game.step({ frames: 90 });
   assert.equal((await card()).scans, scans, "steady focus scans only once");
   assert.ok((await game.ui.state()).active_panel, "focus opens the weapon panel");
+  const connected = (await game.ui.state()).active_panel;
+  // Looking away and reacquiring used to scan again and reset the panel.
+  await game.input.set("left_hand.rotation", [0, 1, 0, 0]);
+  await game.step({ frames: 30 });
+  await aimMfdAt(game, (await game.entities.detail(gun.id)).position, .3, 1, 0,
+    { hand: "left", lookAtTarget: false });
+  await game.step({ frames: 40 });
+  assert.equal((await card()).scans, scans, "arm motion cannot rescan an open connection");
+  assert.equal((await game.ui.state()).active_panel?.entity_id, connected!.entity_id);
 });
 
 for (const hand of ["left", "right"] as const) {
