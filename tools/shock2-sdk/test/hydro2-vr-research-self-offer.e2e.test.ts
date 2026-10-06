@@ -257,6 +257,12 @@ test(
 
     // Walk out of the world panel's ordinary auto-close range, then return.
     // Its own-host priority would otherwise select Research instead of the vial.
+    // The physical drop can land behind the panel we last faced. Aim at the
+    // settled vial so backward movement actually increases distance from it.
+    const retreatStart = (await game.info()).player;
+    await game.input.lookAtWorldPoint((await game.entities.detail(toxin.id)).position, {
+      eyeHeight: retreatStart.camera_offset[1],
+    });
     let retreatFrames = 0;
     await game.input.set("right_hand.thumbstick", [0, -1]);
     while ((await uiBodies(game)).length > 0 && retreatFrames < 80) {
