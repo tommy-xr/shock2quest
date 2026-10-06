@@ -17,6 +17,10 @@ import { buildRuntime } from "./build-runtime.mjs";
 
 const count = Number(process.argv[2] ?? 10);
 const pattern = process.argv[3];
+if (!Number.isSafeInteger(count) || count < 1) {
+  console.error("reliability: count must be a positive safe integer");
+  process.exit(1);
+}
 
 const testDir = "dist/test";
 const files = readdirSync(testDir)
