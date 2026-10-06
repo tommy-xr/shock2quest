@@ -138,7 +138,7 @@ impl PathfindingFrameBudget {
     /// exhausted - the caller should defer to a later frame.
     pub fn try_acquire(&self) -> bool {
         self.0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1))
             .is_ok()
     }
 }
