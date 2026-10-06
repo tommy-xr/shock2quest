@@ -267,6 +267,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn timestamp_gaps_hold_frames_and_preserve_audio_tail() {
+        crate::init().unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/timestamp-gaps.mkv");
+        let mut player = VideoPlayer::from_filename(fixture.to_str().unwrap()).unwrap();
+        let first = player.get_current_frame().bytes;
+        player.advance_by_time(Duration::from_millis(400));
+        assert_eq!(
+            player.get_current_frame().bytes,
+            first,
+            "the first image must hold until the next PTS at 0.5s"
+        );
+        assert!(!player.is_finished());
+        player.advance_by_time(Duration::from_millis(100));
+        let second = player.get_current_frame().bytes;
+        assert_ne!(second, first);
+        player.advance_by_time(Duration::from_millis(900));
+        assert_eq!(
+            player.get_current_frame().bytes,
+            second,
+            "the second image must hold through its one-second timestamp gap"
+        );
+        player.advance_by_time(Duration::from_millis(100));
+        let third = player.get_current_frame().bytes;
+        assert_ne!(third, second);
+        player.advance_by_time(Duration::from_millis(1400));
+        assert_eq!(player.get_current_frame().bytes, third);
+        assert!(
+            !player.is_finished(),
+            "video EOF must not cut the 3s audio tail"
+        );
+        player.advance_by_time(Duration::from_millis(100));
+        assert!(player.is_finished());
+    }
+
     /// A container that reports no duration has only EOF to signal completion,
     /// so playback must still advance frame by frame and finish.
     #[test]
