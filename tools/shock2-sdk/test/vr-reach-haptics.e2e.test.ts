@@ -52,6 +52,7 @@ for (const hand of ["left", "right"] as const) {
 
 test("enlarged holster accepts a release thirty centimetres below its mesh", { skip: !enabled, timeout: 180_000 }, async () => {
   await using game = await GameServer.launch({ mission: "debug_interactions", debugFlags: ["--vr"] });
+  await game.devParams.set("vr_holster_radius", 0.30);
   await game.step({ frames: 30 });
   const item = (await game.entities.list()).entities.find(e => e.template_id === -928)!;
   const grab = await aimVrHandAt(game, item.position, 0.2, 1);
