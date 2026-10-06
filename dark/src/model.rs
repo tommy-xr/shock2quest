@@ -7,7 +7,7 @@ use crate::{
     ss2_bin_obj_loader::{self, SystemShock2ObjectMesh, Vhot},
     ss2_skeleton::{self, AnimationInfo, Bone, Skeleton},
 };
-use cgmath::{Matrix4, SquareMatrix, Transform, Vector2};
+use cgmath::{EuclideanSpace, Matrix4, Point3, SquareMatrix, Transform, Vector2, Vector3};
 use collision::{Aabb, Aabb3};
 use engine::{
     assets::asset_cache::AssetCache,
@@ -62,6 +62,7 @@ pub struct SubObject {
 
 #[derive(Clone)]
 pub struct StaticModel {
+    interaction_triangles: Rc<Vec<[Vector3<f32>; 3]>>,
     scene_objects: Vec<SceneObject>,
     bounding_box: Aabb3<f32>,
     vhots: Vec<Vhot>,
@@ -88,6 +89,7 @@ impl StaticModel {
             .collect::<Vec<SceneObject>>();
 
         StaticModel {
+            interaction_triangles: model.interaction_triangles.clone(),
             scene_objects: new_scene_objects,
             bounding_box: model.bounding_box,
             vhots: model.vhots.clone(),
@@ -284,6 +286,31 @@ pub enum InnerModel {
     Animated(AnimatedModel),
 }
 
+/// Resolve the static object's authored sub-object transform just as rendering does.
+fn object_interaction_triangles(mesh: &SystemShock2ObjectMesh) -> Vec<[Vector3<f32>; 3]> {
+    let transforms = ss2_bin_obj_loader::sub_object_transforms(mesh);
+    ss2_bin_obj_loader::to_vertices(mesh)
+        .into_values()
+        .flat_map(|vertices| {
+            vertices
+                .chunks_exact(3)
+                .map(|triangle| {
+                    std::array::from_fn(|i| {
+                        let vertex = &triangle[i];
+                        let transform = transforms
+                            .get(vertex.bone_indices[0] as usize)
+                            .map(|(_, transform)| *transform)
+                            .unwrap_or_else(Matrix4::identity);
+                        transform
+                            .transform_point(Point3::from_vec(vertex.position))
+                            .to_vec()
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 pub struct Model {
     inner: InnerModel,
@@ -341,6 +368,7 @@ impl Model {
             Model {
                 transform: Matrix4::identity(),
                 inner: InnerModel::Static(StaticModel {
+                    interaction_triangles: Rc::new(object_interaction_triangles(&static_mesh)),
                     scene_objects,
                     bounding_box,
                     vhots: static_mesh.vhots.clone(),
@@ -444,12 +472,24 @@ impl Model {
             Model {
                 transform: Matrix4::identity(),
                 inner: InnerModel::Static(StaticModel {
+                    interaction_triangles: Rc::new(Vec::new()),
                     scene_objects,
                     bounding_box,
                     vhots: vec![],
                     sub_objects: vec![],
                 }),
             }
+        }
+    }
+
+    /// Local mesh surfaces for stationary fixtures with hollow selection bounds.
+    /// Animated models deliberately have no static surface approximation.
+    pub fn static_interaction_triangles(&self) -> Option<&[[Vector3<f32>; 3]]> {
+        match &self.inner {
+            InnerModel::Static(model) if !model.interaction_triangles.is_empty() => {
+                Some(&model.interaction_triangles)
+            }
+            _ => None,
         }
     }
 
@@ -768,6 +808,7 @@ mod tests {
         Model {
             transform: Matrix4::identity(),
             inner: InnerModel::Static(StaticModel {
+                interaction_triangles: Rc::new(Vec::new()),
                 scene_objects: vec![object],
                 bounding_box: Aabb3::new(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 1.0)),
                 vhots: Vec::new(),
