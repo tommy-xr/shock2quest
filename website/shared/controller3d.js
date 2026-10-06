@@ -12,7 +12,7 @@ const PROFILE = "https://cdn.jsdelivr.net/npm/@webxr-input-profiles/assets@1.0/d
 
 // Mode part name -> glTF component root, per hand.
 const ROOTS = {
-  L: { stick: "xr_standard_thumbstick", trigger: "xr_standard_trigger", grip: "xr_standard_squeeze", upper: "y_button", lower: "x_button", menu: "menu" },
+  L: { stick: "xr_standard_thumbstick", trigger: "xr_standard_trigger", grip: "xr_standard_squeeze", upper: "y_button", lower: "x_button" },
   R: { stick: "xr_standard_thumbstick", trigger: "xr_standard_trigger", grip: "xr_standard_squeeze", upper: "b_button", lower: "a_button" },
 };
 
@@ -30,6 +30,17 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
   renderer.toneMappingExposure = 0.8;
   container.appendChild(renderer.domElement);
   renderer.domElement.style.cssText = "display:block;width:100%;height:100%;touch-action:pan-y;cursor:grab";
+
+  // The Touch Plus profile omits Menu from its model. Show its state explicitly
+  // beside the pair, using the same mode/recording timing as the modeled buttons.
+  const menu = document.createElement("span");
+  menu.dataset.controllerInput = "L.menu";
+  menu.textContent = "LEFT MENU";
+  menu.hidden = true;
+  menu.style.cssText = "position:absolute;left:12px;bottom:12px;padding:5px 8px;border:1px solid currentColor;background:#09242b;font:600 11px monospace;letter-spacing:1px;pointer-events:none";
+  menu.style.color = accent;
+  container.style.position = "relative";
+  container.appendChild(menu);
 
   const scene = new THREE.Scene();
   scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
@@ -81,6 +92,7 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
     });
 
   function apply() {
+    menu.hidden = !mode?.hot.L.includes("menu");
     for (const [hand, { parts }] of Object.entries(hands)) {
       const hot = new Set(mode ? mode.hot[hand] : []);
       for (const [part, { meshes, responses }] of Object.entries(parts)) {
@@ -102,6 +114,7 @@ export function createControllerView(container, { accent = "#39e1e6" } = {}) {
   // a part glows while pressed.
   const replay = ({ video, timeline }) => {
     const state = sampleInputs(timeline, video.currentTime);
+    menu.hidden = !state.L.menu?.pressed;
     for (const [hand, { parts }] of Object.entries(hands)) {
       for (const [part, { meshes, responses }] of Object.entries(parts)) {
         const s = state[hand][part];
