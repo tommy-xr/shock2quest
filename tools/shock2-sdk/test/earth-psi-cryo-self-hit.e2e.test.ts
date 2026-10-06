@@ -48,9 +48,11 @@ const PLAYER_CAPSULE_RADIUS = 1.2 / 2.5;
  * hip - not contrived poses.
  */
 const CLOSE_HOLDS: Array<[string, number[]]> = [
-  ["chest", [0.35, 1.1, 0.45]],
+  // Controller poses include the current glove-forward calibration and amp
+  // grip. Keep the radial precondition below: it catches future grip drift.
+  ["chest", [0.2, 1.1, 0.2]],
   ["in at the body", [0.2, 1.05, 0.2]],
-  ["hip", [0.35, 0.9, 0.35]],
+  ["hip", [0.2, 0.9, 0.2]],
 ];
 
 test(
