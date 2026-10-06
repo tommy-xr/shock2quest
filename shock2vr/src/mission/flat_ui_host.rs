@@ -1635,13 +1635,7 @@ impl FlatUiHost {
             let chest = armor_readout_rect(rect);
             let title = Rect::new(chest.x, chest.y, chest.w, 10.0);
             canvas.image(title, "frame.pcx");
-            canvas.text_native_fit(
-                title,
-                "ARMOR",
-                NAME_STRIP_FONT,
-                HAlign::Center,
-                VAlign::Middle,
-            );
+            canvas.text_native_fit(title, "ARMOR", MFD_FONT, HAlign::Center, VAlign::Middle);
             if let Some(item) = &self.armor_item {
                 if let Some(icon) = &item.icon {
                     canvas.fitted_object_icon(
@@ -1652,7 +1646,7 @@ impl FlatUiHost {
                 canvas.text_native_fit(
                     Rect::new(chest.x, chest.y + chest.h - 10.0, chest.w, 10.0),
                     &self.armor_status,
-                    NAME_STRIP_FONT,
+                    MFD_FONT,
                     HAlign::Center,
                     VAlign::Middle,
                 );
