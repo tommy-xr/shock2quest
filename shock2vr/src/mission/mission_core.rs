@@ -16279,7 +16279,22 @@ impl MissionCore {
                     continue;
                 }
 
-                let particle_systems = particle_system.render();
+                let mut particle_systems = particle_system.render();
+                let debug_tag = Rc::new(engine::scene::SceneObjectDebugTag {
+                    entity_id: Some(particle_entity_id.inner()),
+                    name: v_sym_name
+                        .get(*particle_entity_id)
+                        .ok()
+                        .map(|n| n.0.clone()),
+                    model: v_model_name
+                        .get(*particle_entity_id)
+                        .ok()
+                        .map(|m| m.0.clone()),
+                    source: Some("particle".to_owned()),
+                });
+                for object in &mut particle_systems {
+                    object.set_debug_tag(Some(debug_tag.clone()));
+                }
                 scene.extend(particle_systems);
             }
         }
