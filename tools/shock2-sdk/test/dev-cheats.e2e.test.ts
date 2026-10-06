@@ -9,6 +9,7 @@ import {
   DEV_DONE,
   clickCanvas as click,
   pauseEntry,
+  vrClickCanvasPoint,
 } from "./helpers/frontend-menu.js";
 
 // The Cheats page (`shock2vr::ui::cheats_panel`): a second page of the
@@ -33,6 +34,50 @@ const RAIN_MODULES = row(2);
 const HUNT_ME = row(3);
 const CALM_ALL = row(5);
 const MAX_STATS = row(6);
+const RAIN_GADGETS = row(10);
+
+for (const vr of [false, true]) {
+  test(`Rain gadgets spawns usable devices and implants (${vr ? "VR" : "flat"})`, {
+    skip: !e2eEnabled,
+    timeout: 120_000,
+  }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_minimal", debugFlags: vr ? ["--vr"] : [] });
+    const clickPoint = vr ? vrClickCanvasPoint : click;
+    const gadgets = [
+      "French-Epstein Device", "Molec. Analyzer", "ICE Pick",
+      "BrawnBoost", "EndurBoost", "SwiftBoost", "SmartBoost", "LabAssistant",
+      "ExperTech", "WormBlood", "WormHeart", "WormMind",
+    ];
+    await game.step({ frames: 1 });
+    const before = new Set((await game.entities.list({ limit: 200 })).entities.map(e => e.id));
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 2 });
+    await clickPoint(game, PAUSE_DEVELOPER);
+    await clickPoint(game, DEV_ACTION);
+
+    for (const clicks of [1, 2]) {
+      await clickPoint(game, RAIN_GADGETS);
+      assert.equal((await game.info()).paused, true, "spawning leaves the menu open");
+      const spawned = (await game.entities.list({ limit: 200 })).entities.filter(e => !before.has(e.id));
+      assert.deepEqual(
+        spawned.map(e => e.name).sort(),
+        Array.from({ length: clicks }, () => gadgets).flat().sort(),
+        "each click adds exactly one of each device and supported implant",
+      );
+      assert.equal(new Set(spawned.map(e => e.position.join(","))).size, spawned.length,
+        "repeated clicks must use distinct spawn points");
+    }
+
+    await clickPoint(game, DEV_DONE);
+    await clickPoint(game, DEV_DONE);
+    await clickPoint(game, PAUSE_CONTINUE);
+    await game.step({ frames: 120 });
+    assert.equal((await game.info()).paused, false);
+    const settled = (await game.entities.list({ limit: 200 })).entities.filter(e => !before.has(e.id));
+    assert.deepEqual(settled.map(e => e.name).sort(), [...gadgets, ...gadgets].sort(),
+      "gadgets survive initialization and settle as ordinary world pickups");
+  });
+}
 
 /**
  * Open the Cheats page from a running mission, click one row, close back out

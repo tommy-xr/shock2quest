@@ -163,6 +163,25 @@ pub static CHEATS: &[Cheat] = &[
         label: "Clear radiation + toxin",
         action: CheatAction::ClearExposure,
     },
+    Cheat {
+        label: "Rain gadgets",
+        // One of each device and supported implant. RunFast (-1344) and
+        // WormBlend (-762) have unimplemented scripts; spawning them panics.
+        action: CheatAction::Rain(&[
+            -1488, // French-Epstein device
+            -74,   // Auto-repair unit (Molec. Analyzer)
+            -73,   // ICE Pick
+            -101,  // BrawnBoost
+            -102,  // EndurBoost
+            -103,  // SwiftBoost
+            -104,  // SmartBoost
+            -969,  // LabAssistant
+            -1661, // ExperTech
+            -106,  // WormBlood
+            -1334, // WormHeart
+            -1660, // WormMind
+        ]),
+    },
 ];
 
 /// The last cheat applied while this page has been open, so the page can say

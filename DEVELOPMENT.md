@@ -551,6 +551,12 @@ Repeated clicks add another 10 points, even with protective equipment equipped.
 Clear resets both stored exposure levels to zero; environmental hazards can
 expose you again after resuming. These cheats work in flatscreen and VR.
 
+**Rain gadgets** drops one French-Epstein device, one auto-repair unit, one
+ICE-pick, and each of the nine supported implants around the player. Click it
+again for another set, then resume to pick them up. Implants retain their normal
+energy and research requirements; the inert RunFast and WormBlend templates are
+excluded.
+
 The **Developer** screen (from the main menu, or the pause overlay's Developer
 page) hosts the live-tunable parameters registered in
 `shock2vr/src/dev_params.rs` - panel distance, pause dim, FOV override, and the
