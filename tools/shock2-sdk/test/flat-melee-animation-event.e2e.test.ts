@@ -44,6 +44,8 @@ test(
     const [x, y, z] = (await game.entities.detail(droid.id)).position;
     await game.player.teleport({ x: x + 1.2, y: y + 1, z });
     await game.step({ frames: 60 });
+    // Keep Strength's additive bonus out of this authored-contact timing test.
+    await game.player.setStats({ strength: 1 });
     const aim = await game.player.aimAt(droid, {
       hitbox: "torso",
       visibility: "required",
@@ -80,8 +82,8 @@ test(
     const afterImpact = hitPoints(await game.entities.detail(droid.id));
     assert.equal(
       afterImpact,
-      before - 5,
-      "MF_TRIGGER1 should resolve one authored Wrench hit: WeaponBash 9 × the droid's 0.5 receptron, rounded to 5 HP",
+      before - 8,
+      "MF_TRIGGER1 should resolve one authored Wrench hit: inherited WeaponBash sources (6 + 9) × the droid's 0.5 receptron, rounded to 8 HP",
     );
 
     await game.step({ frames: 80 });
