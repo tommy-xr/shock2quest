@@ -15,22 +15,24 @@ export class HttpError extends Error {
 export class HttpClient {
   constructor(public readonly baseUrl: string) {}
 
-  async get<T>(path: string): Promise<T> {
-    return this.request<T>("GET", path);
+  async get<T>(path: string, signal?: AbortSignal): Promise<T> {
+    return this.request<T>("GET", path, undefined, signal);
   }
 
-  async post<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>("POST", path, body);
+  async post<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+    return this.request<T>("POST", path, body, signal);
   }
 
   private async request<T>(
     method: string,
     path: string,
     body?: unknown,
+    signal?: AbortSignal,
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const response = await fetch(url, {
       method,
+      signal,
       headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
