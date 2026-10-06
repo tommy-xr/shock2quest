@@ -1709,6 +1709,65 @@ fn create_physics_representation_unfiltered(
             } else if v_creature_pose.get(entity_id).is_ok() {
                 frob_group = frob_group.non_solid_to_characters();
             }
+            // A replicator's hopper is hollow. Its enclosing selection box
+            // intercepts every pickup ray to a purchase resting inside it.
+            // With no authored physics model, use the static visible surface
+            // for its existing query-only body; contacts remain disabled.
+            if v_phys_type.get(entity_id).is_err()
+                && crate::scripts::script_util::entity_has_script(
+                    world,
+                    entity_id,
+                    "ReplicatorScript",
+                )
+            {
+                if let Some(triangles) = maybe_model
+                    .as_ref()
+                    .and_then(|model| model.static_interaction_triangles())
+                {
+                    let vertices = triangles
+                        .iter()
+                        .flatten()
+                        .map(|p| {
+                            rapier3d::na::Point3::new(
+                                p.x * model_scale.x,
+                                p.y * model_scale.y,
+                                p.z * model_scale.z,
+                            )
+                        })
+                        .collect();
+                    let indices = (0..triangles.len() as u32)
+                        .map(|i| [3 * i, 3 * i + 1, 3 * i + 2])
+                        .collect();
+                    if let Ok(shape) = rapier3d::prelude::SharedShape::trimesh(vertices, indices) {
+                        let handle = physics.add_kinematic_shared_shape(
+                            entity_id,
+                            pos.position,
+                            qrotation,
+                            shape,
+                            Vector3::zero(),
+                            frob_group,
+                            false,
+                        );
+                        // RepBase is a frame: the screen filling its upper
+                        // half is a separate, noninteractive RepScreen prop,
+                        // not this model. Retain selection over that display,
+                        // while the lower hopper uses only visible surfaces.
+                        let screen_size = vec3(
+                            abs_dimensions.x * model_scale.x,
+                            abs_dimensions.y * model_scale.y * 0.5,
+                            abs_dimensions.z * model_scale.z,
+                        );
+                        physics.add_interaction_cuboid(
+                            handle,
+                            entity_id,
+                            model_bounds_center + vec3(0.0, screen_size.y * 0.5, 0.0),
+                            screen_size,
+                            frob_group,
+                        );
+                        return Some(handle);
+                    }
+                }
+            }
             rigid_body_handle = physics.add_kinematic(
                 entity_id,
                 pos.position,

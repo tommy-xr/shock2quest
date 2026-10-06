@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
+import { GameServer } from "../src/index.js";
 import type { UiElement, UiPanel } from "../src/types.js";
 import { clickUiElement } from "./helpers/ui.js";
 
@@ -219,12 +219,16 @@ test(
       "closing the replicator MFD should return control to world interaction",
     );
 
-    const [bombX, bombY, bombZ] = worldDetail.position;
+    // Use the supported standing position in front of the machine. The hopper
+    // lip hides the purchase from a camera placed at the item's floor height.
+    // RepBase's old enclosing selection box also blocked the visible item
+    // from here: the same squeeze reopened its MFD instead of collecting it.
     await game.player.teleport({
-      x: bombX + 0.2,
-      y: bombY - PLAYER_EYE_HEIGHT_WORLD,
-      z: bombZ,
+      x: x + 2,
+      y,
+      z: z + 2,
     });
+    await game.step({ frames: 90 });
     const aim = await game.player.aimAt(resonator, {
       hitbox: "center",
       visibility: "required",
