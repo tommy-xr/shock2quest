@@ -2657,6 +2657,78 @@ mod resurrection_health_tests {
     }
 }
 
+fn effective_meta_templates(
+    hierarchy: &HashMap<i32, Vec<i32>>,
+    entity_template_id: i32,
+    state: &RuntimePropMetaProperties,
+) -> Vec<i32> {
+    let excluded = state.removed.iter().copied().collect::<HashSet<_>>();
+    let mut effective = template_lineage_excluding(hierarchy, entity_template_id, &excluded);
+    effective.push(entity_template_id);
+    for added in &state.added {
+        for template in template_lineage_excluding(hierarchy, *added, &excluded)
+            .into_iter()
+            .chain(std::iter::once(*added))
+        {
+            if !effective.contains(&template) {
+                effective.push(template);
+            }
+        }
+    }
+    effective
+}
+
+/// Receptrons are inherited links, not component properties. Apply only the
+/// donor delta so live SwitchLinks, attachments, inventory and unrelated
+/// receiver edits remain intact. Links and the relation delta already save.
+fn recompose_meta_receptrons(
+    world: &mut World,
+    info: &SystemShock2EntityInfo,
+    entity: EntityId,
+    before: &[i32],
+    after: &[i32],
+) {
+    let receivers = |donor: &i32| {
+        info.template_to_links
+            .get(donor)
+            .into_iter()
+            .flat_map(|links| links.to_links.iter())
+            .filter(|link| matches!(link.link, Link::Receptron(_)))
+    };
+    let removed = before
+        .iter()
+        .filter(|id| !after.contains(id))
+        .flat_map(receivers)
+        .collect::<Vec<_>>();
+    let added = after
+        .iter()
+        .filter(|id| !before.contains(id))
+        .flat_map(receivers)
+        .collect::<Vec<_>>();
+    if removed.is_empty() && added.is_empty() {
+        return;
+    }
+    let mut links = world
+        .borrow::<View<Links>>()
+        .ok()
+        .and_then(|links| links.get(entity).ok().cloned())
+        .unwrap_or_else(Links::empty);
+    for removed in removed {
+        if let Some(index) = links.to_links.iter().position(|live| {
+            live.to_template_id == removed.to_template_id &&
+            matches!((&live.link, &removed.link), (Link::Receptron(a), Link::Receptron(b)) if a == b)
+        }) { links.to_links.remove(index); }
+    }
+    links
+        .to_links
+        .extend(added.into_iter().map(|link| dark::properties::ToLink {
+            to_template_id: link.to_template_id,
+            to_entity_id: None, // Receptrons target stimulus archetypes, not instances.
+            link: link.link.clone(),
+        }));
+    world.add_component(entity, links);
+}
+
 /// Apply one runtime metaproperty relation change without rebuilding unrelated
 /// live state. Only component types contributed by the changed branch are
 /// removed and then recomposed from the remaining authored/dynamic ancestry.
@@ -2690,6 +2762,7 @@ fn apply_meta_property_relation(
     if add == present {
         return true;
     }
+    let previous_templates = effective_meta_templates(hierarchy, entity_template_id, &state);
     if add {
         state.removed.retain(|id| *id != meta_template_id);
         if !statically_inherited && !state.added.contains(&meta_template_id) {
@@ -2729,20 +2802,14 @@ fn apply_meta_property_relation(
         }
     }
 
-    let excluded = state.removed.iter().copied().collect::<HashSet<_>>();
-    let mut effective_templates =
-        template_lineage_excluding(hierarchy, entity_template_id, &excluded);
-    effective_templates.push(entity_template_id);
-    for added in &state.added {
-        for template in template_lineage_excluding(hierarchy, *added, &excluded) {
-            if !effective_templates.contains(&template) {
-                effective_templates.push(template);
-            }
-        }
-        if !effective_templates.contains(added) {
-            effective_templates.push(*added);
-        }
-    }
+    let effective_templates = effective_meta_templates(hierarchy, entity_template_id, &state);
+    recompose_meta_receptrons(
+        world,
+        entity_info,
+        entity_id,
+        &previous_templates,
+        &effective_templates,
+    );
 
     for template in effective_templates {
         if let Some(properties) = entity_info.entity_to_properties.get(&template) {
@@ -2765,6 +2832,185 @@ mod meta_property_tests {
 
     fn boxed_property<T: Property + 'static>(property: T) -> Arc<Box<dyn Property>> {
         Arc::new(Box::new(property))
+    }
+
+    #[test]
+    fn meta_receptrons_block_real_projectile_resolution_without_rebuilding_live_state() {
+        use dark::properties::{ReceptronEffect, ReceptronOptions, TemplateLinks, ToTemplateLink};
+        const BASE: i32 = -10;
+        const META: i32 = -20;
+        const VICTIM: i32 = 30;
+        const PROJECTILE: i32 = -40;
+        const STIM: i32 = -50;
+        let damage = ReceptronOptions {
+            order: 10,
+            effect: ReceptronEffect::Damage {
+                multiplier: 1.0,
+                use_intensity: true,
+            },
+        };
+        let abort = ReceptronOptions {
+            order: 70,
+            effect: ReceptronEffect::Abort,
+        };
+        let hierarchy = HashMap::from([(VICTIM, vec![BASE]), (META, vec![BASE])]);
+        let mut info = SystemShock2EntityInfo::empty();
+        info.template_to_links.insert(
+            BASE,
+            TemplateLinks {
+                to_links: vec![ToTemplateLink {
+                    to_template_id: STIM,
+                    link: Link::Receptron(damage.clone()),
+                }],
+            },
+        );
+        info.template_to_links.insert(
+            META,
+            TemplateLinks {
+                to_links: vec![ToTemplateLink {
+                    to_template_id: STIM,
+                    link: Link::Receptron(abort),
+                }],
+            },
+        );
+        info.entity_to_properties.insert(
+            META,
+            vec![boxed_property(dark::properties::PropSymName(
+                "Invulnerable".into(),
+            ))],
+        );
+        let mut world = World::new();
+        let switch_target = world.add_entity(());
+        let victim = world.add_entity((
+            PropTemplateId {
+                template_id: VICTIM,
+            },
+            PropHitPoints { hit_points: 73 },
+            dark::properties::PropSymName("live-brain-name".into()),
+            Links {
+                to_links: vec![
+                    dark::properties::ToLink {
+                        to_template_id: STIM,
+                        to_entity_id: None,
+                        link: Link::Receptron(damage),
+                    },
+                    dark::properties::ToLink {
+                        to_template_id: 99,
+                        to_entity_id: Some(WrappedEntityId(switch_target)),
+                        link: Link::SwitchLink,
+                    },
+                ],
+            },
+        ));
+        let projectile = world.add_entity(PropTemplateId {
+            template_id: PROJECTILE,
+        });
+        world.add_unique(crate::mission::stim_response::GlobalContactStims(
+            HashMap::from([(PROJECTILE, vec![(STIM, 10.0)])]),
+        ));
+        let resolved_damage = |world: &World| {
+            Effect::flatten(vec![
+                crate::scripts::script_util::projectile_contact_effects(
+                    world, projectile, victim, None,
+                ),
+            ])
+            .into_iter()
+            .filter_map(|effect| match effect {
+                Effect::Send {
+                    msg:
+                        Message {
+                            payload: MessagePayload::Damage { amount, .. },
+                            ..
+                        },
+                } => Some(amount),
+                _ => None,
+            })
+            .sum::<f32>()
+        };
+        assert_eq!(resolved_damage(&world), 10.0);
+        assert!(apply_meta_property_relation(
+            &mut world, &info, &hierarchy, victim, META, true
+        ));
+        assert_eq!(
+            resolved_damage(&world),
+            0.0,
+            "adding authored Abort must block real projectile damage before HP changes"
+        );
+        assert!(apply_meta_property_relation(
+            &mut world, &info, &hierarchy, victim, META, true
+        ));
+        {
+            let links = world.borrow::<View<Links>>().unwrap();
+            let links = links.get(victim).unwrap();
+            assert_eq!(
+                links.to_links.len(),
+                3,
+                "shared donor is not duplicated and repeated Add is idempotent"
+            );
+            assert!(
+                links
+                    .to_links
+                    .iter()
+                    .any(|link| matches!(link.link, Link::SwitchLink)
+                        && link.to_entity_id.is_some_and(|id| id.0 == switch_target))
+            );
+        }
+        assert_eq!(
+            world
+                .borrow::<View<PropHitPoints>>()
+                .unwrap()
+                .get(victim)
+                .unwrap()
+                .hit_points,
+            73
+        );
+        assert_eq!(
+            world
+                .borrow::<View<dark::properties::PropSymName>>()
+                .unwrap()
+                .get(victim)
+                .unwrap()
+                .0,
+            "live-brain-name"
+        );
+        // These are the existing same-build saved components, not new state.
+        let links_json =
+            serde_json::to_value(world.borrow::<View<Links>>().unwrap().get(victim).unwrap())
+                .unwrap();
+        let meta_json = serde_json::to_value(
+            world
+                .borrow::<View<RuntimePropMetaProperties>>()
+                .unwrap()
+                .get(victim)
+                .unwrap(),
+        )
+        .unwrap();
+        world.add_component(
+            victim,
+            (
+                serde_json::from_value::<Links>(links_json).unwrap(),
+                serde_json::from_value::<RuntimePropMetaProperties>(meta_json).unwrap(),
+            ),
+        );
+        assert_eq!(resolved_damage(&world), 0.0);
+        assert!(apply_meta_property_relation(
+            &mut world, &info, &hierarchy, victim, META, false
+        ));
+        assert_eq!(
+            resolved_damage(&world),
+            10.0,
+            "removing protection restores the original damage response exactly once"
+        );
+        assert_eq!(
+            world
+                .borrow::<View<Links>>()
+                .unwrap()
+                .get(victim)
+                .unwrap()
+                .to_links
+                .len(),
+            2
+        );
     }
 
     #[test]
