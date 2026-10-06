@@ -239,6 +239,12 @@ click); tracking channels are not. The format and mapping are documented in
 
 ## Notes
 
+- The full e2e and reliability commands check for the required 25th Anniversary
+  `sshock2.kpf` and `mods/` before compiling or starting runtimes, and print the
+  selected data root. Set `DARK_ASSET_PATH` explicitly when multiple installs
+  exist. To investigate a targeted legacy scenario, invoke `SHOCK2_E2E=1 node
+  --test dist/test/<scenario>.e2e.test.js` directly after building.
+
 - `GameServer.launch` finds the cargo workspace by walking up from `cwd`;
   pass `repoRoot` to override. First launch may take minutes while cargo
   compiles; the default readiness timeout is 5 minutes.
