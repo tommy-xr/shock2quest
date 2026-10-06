@@ -1,4 +1,3 @@
-import { unlockWeaponAlternateFire } from "./helpers/weapon-upgrades.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
@@ -26,7 +25,7 @@ for (const setting of [0, 1]) {
           await game.step({ frames: 60 });
         assert.equal((await game.info()).player.reloading, false);
         if (setting) {
-          await unlockWeaponAlternateFire(game);
+          // Biological weapons have both modes innately; no upgrade is offered.
           await game.input.trigger("CycleGunSetting");
           await game.step({ frames: 2 });
         }
