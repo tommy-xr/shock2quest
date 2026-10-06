@@ -29,6 +29,9 @@ export interface LaunchOptions {
   debugFlags?: string[];
   /** Repo root containing the cargo workspace (default: walk up from cwd). */
   repoRoot?: string;
+  /** Prebuilt executable. Defaults to SHOCK2_RUNTIME_BINARY, then cargo run.
+   * The E2E runner builds and pins one executable for the entire run. */
+  runtimeBinary?: string;
   /**
    * Max time to wait for the server to come up, in milliseconds.
    * Default 300_000 - the first launch may compile the runtime from scratch.
@@ -297,11 +300,7 @@ export class GameServer extends Game implements AsyncDisposable {
     // impossible test failures, so fail loudly instead.
     const instanceId = randomUUID();
 
-    const args = [
-      "run",
-      "-p",
-      "debug_runtime",
-      "--",
+    const runtimeArgs = [
       "--mission",
       options.mission,
       // 0 = let the OS assign; the child tells us what it got.
@@ -319,7 +318,10 @@ export class GameServer extends Game implements AsyncDisposable {
     ];
 
     const logLines: string[] = [];
-    const child = spawn("cargo", args, {
+    const binary = options.runtimeBinary ?? process.env.SHOCK2_RUNTIME_BINARY;
+    const command = binary || "cargo";
+    const args = binary ? runtimeArgs : ["run", "-p", "debug_runtime", "--", ...runtimeArgs];
+    const child = spawn(command, args, {
       cwd: repoRoot,
       env: {
         ...process.env,
@@ -397,7 +399,7 @@ export class GameServer extends Game implements AsyncDisposable {
         // timeout - and an unhandled 'error' throws.
         const onSpawnError = (error: Error) => {
           settle();
-          reject(new Error(`could not spawn cargo: ${error.message}`));
+          reject(new Error(`could not spawn ${command}: ${error.message}`));
         };
         const timer = setTimeout(() => {
           settle();
