@@ -26,6 +26,20 @@ pub struct LadderHolds {
     pub rails: Vec<Segment>,
 }
 
+/// The model member selected by a snapped grip, kept distinct from the collider face.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberKind {
+    Rung,
+    Rail,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LadderMember {
+    pub kind: MemberKind,
+    pub axis: Vector3<f32>,
+    pub face_normal: Vector3<f32>,
+}
+
 /// Faces whose extents along a member's key axis (y for rungs, x for rails)
 /// overlap or come this close fold into one member: a rung's cylinder faces,
 /// a rail's segments.
@@ -142,6 +156,38 @@ impl LadderHolds {
             .filter(|&(_, distance)| distance <= reach)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(p, _)| p)
+    }
+
+    /// Recover the held member from its snapped point, using the same ordering
+    /// and distance policy as acquisition. Rungs win an exact rung/rail tie.
+    pub fn member_at(&self, point: Vector3<f32>) -> Option<LadderMember> {
+        let normal = self
+            .rungs
+            .first()
+            .zip(self.rails.first())
+            .and_then(|(rung, rail)| {
+                let normal = (rung[1] - rung[0]).cross(rail[1] - rail[0]);
+                (normal.magnitude2() > 1e-8).then(|| normal.normalize())
+            })?;
+        self.rungs
+            .iter()
+            .map(|s| (MemberKind::Rung, s))
+            .chain(self.rails.iter().map(|s| (MemberKind::Rail, s)))
+            .map(|(kind, &[a, b])| {
+                (
+                    kind,
+                    b - a,
+                    (crate::pathfinding::closest_point_on_segment(a, b, point) - point)
+                        .magnitude2(),
+                )
+            })
+            .filter(|(_, axis, distance)| axis.magnitude2() > 1e-8 && *distance < 1e-6)
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(kind, axis, _)| LadderMember {
+                kind,
+                axis: axis.normalize(),
+                face_normal: normal,
+            })
     }
 
     /// These holds placed in the world by the ladder entity's transform.
@@ -352,5 +398,25 @@ mod tests {
         let placed = holds.transformed(&transform);
         assert!((placed.rungs[0][0] - vec3(10.0, 2.0, 0.4)).magnitude() < 1e-5);
         assert!((face_normal(&transform) - vec3(1.0, 0.0, 0.0)).magnitude() < 1e-5);
+    }
+    #[test]
+    fn snapped_points_retain_their_model_member_and_rotated_axis() {
+        let holds = LadderHolds {
+            rungs: vec![[vec3(-1.0, 1.0, 0.0), vec3(1.0, 1.0, 0.0)]],
+            rails: vec![[vec3(1.0, 0.0, 0.0), vec3(1.0, 2.0, 0.0)]],
+        };
+        assert_eq!(
+            holds.member_at(vec3(0.0, 1.0, 0.0)).unwrap().kind,
+            MemberKind::Rung
+        );
+        assert_eq!(
+            holds.member_at(vec3(1.0, 1.5, 0.0)).unwrap().kind,
+            MemberKind::Rail
+        );
+        assert!(holds.member_at(vec3(0.0, 1.5, 0.0)).is_none());
+        let rotated = holds.transformed(&Matrix4::from_angle_y(cgmath::Deg(90.0)));
+        let rung = rotated.member_at(vec3(0.0, 1.0, 0.0)).unwrap();
+        assert!(rung.axis.dot(-Vector3::unit_z()) > 0.999);
+        assert!(rung.face_normal.dot(Vector3::unit_x()) > 0.999);
     }
 }

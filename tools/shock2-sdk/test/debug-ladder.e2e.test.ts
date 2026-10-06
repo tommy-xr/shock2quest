@@ -34,6 +34,7 @@ const STATIONS: Station[] = [
   { name: "arch (far face)", z: 8, x: ARCH_FAR_X, topY: 6.4 },
   { name: "stack", z: -8, topY: 9.0 },
   { name: "short", z: 16, topY: 1.6, freestanding: true },
+  { name: "Many nerve surface", z: 108, topY: 3 * 3.1957629, freestanding: true },
   { name: "mantle", z: 24, topY: 3.0, mantle: true },
   { name: "wall", z: -16, topY: 6.0, climbable: false },
 ];

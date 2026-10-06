@@ -33,6 +33,8 @@
 //! - `z = 72`  trench: ladder up a trench wall to a ceiling, exit onto the shelf (eng1 317).
 //! - `z = 84`  mid-mount: step off a ledge onto a rung stack (hydro2 551).
 //! - `z = 96`  jump grab: jump from a pipe onto a ladder (rick2 210).
+//! - `z = 108` nerve: three stacked Many organic surfaces (many 211), without
+//!   narrow rungs/rails. Climb 9.6 units and hand off across entity boundaries.
 //!
 //! Mission surfaces are one-sided faces, so the repro stations build them from
 //! thin slabs: a thick box would block top-out probes that start inside it
@@ -64,6 +66,12 @@ use crate::{
 const LADDER_16: i32 = -2558;
 const LADDER_4: i32 = -2556;
 const LADDER_RUNG: i32 = -178;
+/// many.mis 211 uses this template unchanged. Its thick organic strands offer
+/// surface grips, not the model-member snapping used by the metal ladders.
+const NERVE_LADDER: i32 = -3656;
+const NERVE_Z: f32 = 108.0;
+const NERVE_HEIGHT: f32 = 3.1957629;
+const NERVE_COUNT: usize = 3;
 
 /// Ladder heights in world units (SS2 feet / 2.5).
 const LADDER_16_HEIGHT: f32 = 6.4;
@@ -96,7 +104,7 @@ const MANTLE_HEIGHT: f32 = 3.0;
 const WALL_Z: f32 = -16.0;
 
 /// The repro lanes reach this far along +z; the floor covers them.
-const FLOOR_MAX_Z: f32 = 110.0;
+const FLOOR_MAX_Z: f32 = 122.0;
 
 type SceneBox = (Vector3<f32>, Vector3<f32>, Vector3<f32>);
 
@@ -512,6 +520,15 @@ fn repro_ladders() -> Vec<Effect> {
             mission_yaw * Quaternion::new(0.5, -0.5, 0.5, 0.5),
         ),
     ];
+    for index in 0..NERVE_COUNT {
+        // Stack unscaled authored surfaces. Unlike the metal ladders,
+        // nerve_l2 is one-sided and needs the opposite yaw to face +X.
+        effects.push(spawn_at_oriented(
+            NERVE_LADDER,
+            Point3::new(STATION_FACE_X, NERVE_HEIGHT * (index as f32 + 0.5), NERVE_Z),
+            mission_yaw,
+        ));
+    }
     for w in [-3.68, -0.48, 2.72] {
         effects.push(spawn_at_oriented(
             RICK_CONDUIT,
@@ -664,7 +681,8 @@ pub fn create_debug_ladder_scene(
          climbable flag and colliders are the production ones. Mission repros: z=36 capped ladder\n\
          (rick1 532), z=48 setback pit under a deck (rick1 488), z=60 deck hole (rick1 499),\n\
          z=72 trench ladder (eng1 317), z=84 mid-ladder mount (hydro2 551), z=96 jump grab\n\
-         (rick2 210). Each station's sign names its case and start pad (cyan); yellow marks the\n\
+         (rick2 210), z=108 nerve surface (many 211, no bar snapping). Each station's sign\n\
+         names its case and start pad (cyan); yellow marks the\n\
          route, green the correct end. Repro stations are enclosed: step on a station's magenta\n\
          \"to\" pad (beside its sign) to go to its start pad, and on its \"exit\" pad to come back\n\
          (or POST /v1/player/teleport to the position on the sign)."
@@ -1100,6 +1118,16 @@ fn guides() -> Vec<Guide> {
         trench,
         midmount,
         jump,
+        Guide::basic(
+            NERVE_Z,
+            [
+                "NERVE SURFACE (z 108)",
+                "many.mis 211 - 3 stacked surfaces",
+                "Grip, pull, and hand off to climb.",
+                "No bar wrap: glove follows controller.",
+            ],
+            None,
+        ),
     ]
 }
 
