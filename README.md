@@ -88,6 +88,8 @@ In VR, bring the held tool close to a weapon and pull the trigger or release
 it onto the weapon; the weapon can be in your other hand. The preview shows
 condition gained and the one-tool cost. Maintenance skill determines the gain;
 broken weapons need repair first. A refused use consumes nothing.
+Auto-repair devices use the same drag or close-contact gesture on a broken
+item, consume one device, and bypass the Repair skill and minigame.
 
 Empty hands ease toward a partial point at usable controls or a partial grip
 near reachable items, occupied holsters, stocked ammo pouches, and climbing holds.

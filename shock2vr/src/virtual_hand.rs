@@ -364,13 +364,13 @@ impl VirtualHand {
             held_by_other_hand
                 .filter(|target| {
                     (hand_position - other_hand_position).magnitude() <= TWO_HAND_TOOL_REACH
-                        && crate::scripts::maintenance::offers_to(world, tool, *target)
+                        && crate::item_tools::offers_to(world, tool, *target)
                 })
                 .or_else(|| {
                     result.as_ref().and_then(|hit| {
                         let target = hit.maybe_entity_id?;
                         ((hit.hit_point - ray_start).magnitude() <= TWO_HAND_TOOL_REACH
-                            && crate::scripts::maintenance::offers_to(world, tool, target))
+                            && crate::item_tools::offers_to(world, tool, target))
                         .then_some(target)
                     })
                 })
@@ -388,8 +388,7 @@ impl VirtualHand {
                         motion: release,
                     }];
 
-                    let is_maintenance =
-                        crate::scripts::maintenance::is_maintenance_tool(world, entity_id);
+                    let is_maintenance = crate::item_tools::is_tool(world, entity_id);
                     let target = if is_maintenance {
                         maintenance_target
                     } else {
@@ -499,10 +498,10 @@ impl VirtualHand {
 
         hand.maintenance_target = hand.get_held_entity().and(maintenance_target);
         let observed = if let Some(target) = hand.maintenance_target {
-            if matches!(
-                crate::scripts::maintenance::maintenance_outcome(world, Some(target)),
-                crate::scripts::maintenance::MaintenanceOutcome::Restored { .. }
-            ) {
+            if hand
+                .get_held_entity()
+                .is_some_and(|tool| crate::item_tools::can_apply(world, tool, target))
+            {
                 HandAffordance::Frobbable
             } else {
                 HandAffordance::Blocked
@@ -633,8 +632,8 @@ impl VirtualHand {
     pub(crate) fn maintenance_preview(&self, world: &World) -> Option<String> {
         let tool = self.get_held_entity()?;
         let target = self.maintenance_target?;
-        crate::scripts::maintenance::offers_to(world, tool, target)
-            .then(|| crate::scripts::maintenance::preview(world, target))
+        crate::item_tools::offers_to(world, tool, target)
+            .then(|| crate::item_tools::preview(world, tool, target))
     }
 
     pub(crate) fn feedback_diagnostics(&self) -> serde_json::Value {

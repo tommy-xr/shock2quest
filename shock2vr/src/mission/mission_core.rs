@@ -8891,11 +8891,10 @@ impl MissionCore {
         use crate::mission::flat_ui_host::FlatUiDragAction;
         match action {
             FlatUiDragAction::Maintain { tool, target } => {
-                vec![crate::scripts::maintenance::apply(
-                    &self.world,
+                vec![Effect::ApplyItemTool {
                     tool,
-                    Some(target),
-                )]
+                    target: Some(target),
+                }]
             }
             FlatUiDragAction::ToggleMap => vec![Effect::ToggleMap],
             FlatUiDragAction::Place(entity_id) => vec![crate::scripts::script_util::announce(
@@ -12416,6 +12415,13 @@ impl MissionCore {
                     }
                 }
 
+                Effect::ApplyItemTool { tool, target } => {
+                    let applied = crate::item_tools::apply(&self.world, tool, target);
+                    // Finish this use before validating another queued gesture.
+                    for effect in Effect::flatten(vec![applied]).into_iter().rev() {
+                        effects.push_front(effect);
+                    }
+                }
                 Effect::ReplaceEntity {
                     entity_id,
                     template_id,
@@ -17135,7 +17141,18 @@ impl MissionCore {
                         fraction,
                     ));
                 }
-                VirtualHandEffect::OutMessage { message } => self.script_world.dispatch(message),
+                VirtualHandEffect::OutMessage { message } => {
+                    if let MessagePayload::ProvideForConsumption { entity: tool } = message.payload
+                        && crate::item_tools::is_tool(&self.world, tool)
+                    {
+                        deferred.push(Effect::ApplyItemTool {
+                            tool,
+                            target: Some(message.to),
+                        });
+                    } else {
+                        self.script_world.dispatch(message);
+                    }
+                }
                 VirtualHandEffect::ApplyForce {
                     entity_id,
                     force,

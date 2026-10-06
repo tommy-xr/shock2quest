@@ -149,7 +149,7 @@ fn refusal_message(world: &World, outcome: MaintenanceOutcome) -> String {
 
 /// Use one of `tool` up. The tool stacks (`P$StackCoun`), so a stack of more
 /// than one loses a unit and only the last one destroys the object.
-fn consume_tool(world: &World, tool: EntityId) -> Effect {
+pub(crate) fn consume_tool(world: &World, tool: EntityId) -> Effect {
     let stack = world
         .borrow::<View<PropStackCount>>()
         .ok()
