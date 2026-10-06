@@ -1,5 +1,6 @@
 name: SDK Build & Unit Test
 
+# Rust workflows exclude SDK-only edits; this job owns their build and tests.
 on:
   push:
     branches: ["**"]
