@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer, setHandWorldPose, attachSupportHand } from "../src/index.js";
 import type { Vec3, ResolvedGrip } from "../src/types.js";
-import { add, aimVrHandAt, type Quat } from "./helpers/vr-hand.js";
+import { add, aimVrHandAt, cross, normalize, scale, type Quat } from "./helpers/vr-hand.js";
 import { ammoOf, cycleToWeapon } from "./helpers/weapon.js";
 
 const v = (p: ResolvedGrip["offset"]): Vec3 => [p.x, p.y, p.z];
@@ -60,6 +60,33 @@ for (const [primary, mission, triple, physical, gripOffset = 0] of [
       await attachSupportHand(game, primary);
     }
     assert.equal((await support()).attached, true);
+    // Overshooting the closed end by .25 world units used to detach at the
+    // common support grip's .12 limit. The pump stays on its authored rail.
+    await setHandWorldPose(game, (await game.info()).player, other,
+      add(origin, travel.map(x => -x / Math.hypot(...travel) * .25) as Vec3), q(before.controller_rotation));
+    await game.step({ frames: 10 });
+    assert.equal((await support()).attached, true, "ordinary pump overshoot stays attached");
+    assert.ok((await state()).fraction < .01, "overshoot clamps at the closed rail end");
+    await place(0);
+    await game.step({ frames: 10 });
+    const sideways = scale(normalize(cross(travel, [0, 1, 0])), .25);
+    await setHandWorldPose(game, (await game.info()).player, other,
+      add(origin, sideways), q(before.controller_rotation));
+    await game.step({ frames: 10 });
+    assert.equal((await support()).attached, true, "off-axis motion stays attached to the rail");
+    assert.ok((await state()).fraction >= 0 && (await state()).fraction <= 1);
+    await place(0);
+    await game.step({ frames: 10 });
+    await setHandWorldPose(game, (await game.info()).player, other,
+      add(origin, scale(normalize(travel), -1)), q(before.controller_rotation));
+    await game.step({ frames: 10 });
+    assert.equal((await support()).attached, false, "an egregious pull still detaches");
+    await game.input.set(`${other}_hand.squeeze`, 0);
+    await place(0);
+    await game.step({ frames: 10 });
+    await game.input.set(`${other}_hand.squeeze`, 1);
+    await game.step({ frames: 10 });
+    assert.equal((await support()).attached, true, "a fresh squeeze reattaches after a large pull");
     if (triple) {
       await game.input.trigger("CycleGunSetting");
       await game.step({ frames: 2 });
