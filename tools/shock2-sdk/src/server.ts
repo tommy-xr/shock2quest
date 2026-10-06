@@ -438,7 +438,7 @@ export class GameServer extends Game implements AsyncDisposable {
     liveServers.add(server);
 
     try {
-      await server.waitUntilReady(Math.max(1_000, deadline - Date.now()));
+      await server.waitUntilReady(Math.max(1, deadline - Date.now()));
     } catch (error) {
       server.killProcessTree();
       server.releaseResources();
@@ -469,8 +469,11 @@ export class GameServer extends Game implements AsyncDisposable {
         // mean the child died and something else rebound the port between the
         // marker and this request. Cross-talk with a foreign runtime looks
         // like impossible test failures, so keep failing loudly on it.
+        // One deadline covers headers AND bodies of both readiness requests.
+        // Checking the clock only after fetch returns cannot bound a hung loop.
+        const signal = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
         const health = await this.client.get<{ instance_id?: string | null }>(
-          "/v1/health",
+          "/v1/health", signal,
         );
         if (
           this.instanceId !== undefined &&
@@ -485,48 +488,52 @@ export class GameServer extends Game implements AsyncDisposable {
         // HTTP server starts before - and can outlive - the game thread,
         // so /v1/health alone would accept a runtime whose game thread
         // crashed during mission load.)
-        await this.info();
+        await this.client.get("/v1/info", signal);
         return;
       } catch (error) {
         if (Date.now() >= deadline) {
           throw new Error(`server not ready after ${timeoutMs}ms: ${error}`);
         }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, Math.min(1000, Math.max(0, deadline - Date.now()))));
       }
     }
   }
 
   /** Gracefully stop the runtime; escalates to a process-group SIGKILL if it doesn't exit. */
   override async shutdown(): Promise<void> {
-    // If our child already exited, the port is no longer ours - another
-    // agent's runtime may have rebound it, and an HTTP shutdown would stop
-    // THEIR instance. Only speak to the port while our child owns it.
-    if (!this.childIsDead()) {
-      try {
-        // The runtime rejects shutdowns without its instance id, so a stale
-        // client on another checkout can't kill it - include ours.
-        await this.client.post("/v1/shutdown", {
-          instance_id: this.instanceId,
-        });
-      } catch {
-        // Server may already be down; fall through to process cleanup.
-      }
-    }
     const child = this.child;
-    if (child === undefined || this.childIsDead()) {
-      this.releaseResources();
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      const killTimer = setTimeout(() => {
-        this.killProcessTree();
-      }, 10_000);
-      child.once("exit", () => {
-        clearTimeout(killTimer);
-        resolve();
+    const controller = new AbortController();
+    // Arm the deadline before HTTP: a live server with a hung game loop may
+    // never answer /shutdown, so awaiting that response first defeats SIGKILL.
+    const killTimer = setTimeout(() => {
+      controller.abort();
+      if (!this.childIsDead()) this.killProcessTree();
+    }, 10_000);
+    let onExit: (() => void) | undefined;
+    const exited = child === undefined || this.childIsDead()
+      ? Promise.resolve()
+      : new Promise<void>(resolve => {
+        onExit = resolve;
+        child.once("exit", onExit);
       });
-    });
-    this.releaseResources();
+    try {
+      // An exited child's old port may belong to another runtime now.
+      if (!this.childIsDead()) {
+        try {
+          await this.client.post("/v1/shutdown", {
+            instance_id: this.instanceId,
+          }, controller.signal);
+        } catch {
+          // Server may already be down; the same deadline bounds process exit.
+        }
+      }
+      await exited;
+    } finally {
+      clearTimeout(killTimer);
+      controller.abort();
+      if (onExit) child?.removeListener("exit", onExit);
+      this.releaseResources();
+    }
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
