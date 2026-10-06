@@ -176,13 +176,13 @@ impl Script for PsiSwordController {
             return Effect::NoEffect;
         };
         let target = crate::util::resolve_proxy_entity(world, target);
-        let damage = crate::mission::stim_response::contact_stim_damage_with_bonus(
+        let damage = crate::scripts::melee_weapon::authored_template_contact_damage(
             world,
             psi_sword::WEAPON,
             target,
-            crate::scripts::melee_weapon::player_melee_damage_scale(world),
             self.charge.bonus(),
-        );
+        )
+        .unwrap_or(0.0);
         if damage <= 0.0 {
             return Effect::NoEffect;
         }

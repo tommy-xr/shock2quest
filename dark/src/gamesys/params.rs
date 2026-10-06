@@ -64,6 +64,20 @@ pub struct SkillParams {
     pub organ_damage: f32,
 }
 
+/// Retail `MELEESTR`: additive melee damage for effective Strength 1..=8.
+#[derive(Debug, Clone)]
+pub struct MeleeStrengthParams(pub [i32; 8]);
+
+impl MeleeStrengthParams {
+    pub fn read<T: io::Read + io::Seek>(
+        toc: &ChunkFileTableOfContents,
+        reader: &mut T,
+    ) -> Option<Self> {
+        let [values] = read_table::<_, 8, 1>(toc, reader, "MELEESTR")?;
+        Some(Self(values))
+    }
+}
+
 /// Retail `GAMEPARAM` (`sGameParams`): 19 packed little-endian floats.
 /// Agility consumes `speed[AGI-1]`; the other authored fields remain data only.
 #[derive(Debug, Clone, PartialEq)]
@@ -214,6 +228,30 @@ mod tests {
     use std::io::Cursor;
 
     use super::{GameParams, SkillParams};
+
+    #[test]
+    fn melee_strength_table_preserves_signed_values_and_chunk_bounds() {
+        let mut bytes = vec![0_u8; 512];
+        bytes[..4].copy_from_slice(&400_u32.to_le_bytes());
+        bytes[400..404].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[404..412].copy_from_slice(b"MELEESTR");
+        bytes[416..420].copy_from_slice(&280_u32.to_le_bytes());
+        let expected = [-1_i32, 1, 2, 3, 4, 6, 10, 15];
+        for (index, value) in expected.iter().enumerate() {
+            bytes[304 + index * 4..308 + index * 4].copy_from_slice(&value.to_le_bytes());
+        }
+        for length in 0_u32..=32 {
+            bytes[420..424].copy_from_slice(&length.to_le_bytes());
+            let mut reader = Cursor::new(&bytes);
+            let toc = crate::ss2_chunk_file_reader::read_table_of_contents(&mut reader);
+            let parsed = super::MeleeStrengthParams::read(&toc, &mut reader);
+            if length == 32 {
+                assert_eq!(parsed.unwrap().0, expected);
+            } else {
+                assert!(parsed.is_none());
+            }
+        }
+    }
 
     #[test]
     fn parses_game_params_speed_after_throw_and_bash_fields() {

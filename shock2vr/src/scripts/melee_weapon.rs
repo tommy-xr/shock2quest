@@ -21,21 +21,7 @@ pub(super) fn player_melee_damage_scale(world: &World) -> f32 {
                 .player_stats()
                 .has_os_trait(crate::scripts::gui::TRAIT_LETHAL_WEAPON)
         });
-    // Let temporary Strength (Might or an implant) increase both flat and VR
-    // damage. Keep the port's existing authored damage at the trained level;
-    // the retail manual specifies that STR raises melee damage but not its
-    // numerical curve, so this modest per-level scale is port tuning.
-    let trained_strength = world
-        .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
-        .map(|quests| quests.player_stats().strength)
-        .unwrap_or(1);
-    let effective_strength = crate::implants::effective_stats(world)
-        .map(|stats| stats.strength)
-        .unwrap_or(trained_strength);
-    let strength_scale = 1.0 + 0.1 * (effective_strength - trained_strength) as f32;
-    strength_scale
-        * crate::scripts::berserk::melee_damage_multiplier(world)
-        * if lethal { 1.35 } else { 1.0 }
+    crate::scripts::berserk::melee_damage_multiplier(world) * if lethal { 1.35 } else { 1.0 }
 }
 
 /// Contact damage for the player's authored melee weapons (`PropLimbModel`).
@@ -336,6 +322,17 @@ pub(super) fn authored_contact_damage(
     bonus: f32,
 ) -> Option<f32> {
     let template_id = entity_class_template_id(world, weapon)?;
+    authored_template_contact_damage(world, template_id, victim, bonus)
+}
+
+/// Both the physical weapon and the flat psi blade resolve the same response
+/// before retail's additive Strength adjustment (ShockPlayerDamageFilter).
+pub(super) fn authored_template_contact_damage(
+    world: &World,
+    template_id: i32,
+    victim: EntityId,
+    bonus: f32,
+) -> Option<f32> {
     let damage = contact_stim_damage_with_bonus(
         world,
         template_id,
@@ -343,7 +340,22 @@ pub(super) fn authored_contact_damage(
         player_melee_damage_scale(world),
         bonus,
     );
-    (damage > 0.0).then_some(damage)
+    // A Strength bonus cannot manufacture a response to an immune target.
+    if damage <= 0.0 {
+        return None;
+    }
+    let strength = crate::implants::effective_stats(world)
+        .map(|stats| stats.strength)
+        .unwrap_or(1)
+        .clamp(1, 8) as usize;
+    let params = world.borrow::<shipyard::UniqueView<crate::mission::GlobalMeleeStrengthParams>>();
+    let table = params
+        .as_ref()
+        .ok()
+        .and_then(|params| params.0.as_ref())
+        .map(|params| params.0)
+        .unwrap_or([0, 1, 2, 3, 4, 6, 10, 15]);
+    Some((damage + table[strength - 1] as f32).max(0.0))
 }
 
 fn contact_damage_effect(
@@ -711,6 +723,71 @@ mod tests {
                 .collect(),
         });
         (world, weapon, target)
+    }
+
+    #[test]
+    fn trained_and_temporary_strength_use_authored_melee_damage() {
+        use crate::player_stats::{Stat, TimedStatModifier};
+        use shipyard::UniqueViewMut;
+        use std::time::Duration;
+        for mode in [PresentationMode::Flat, PresentationMode::Vr] {
+            let (world, weapon, target) = test_world(mode);
+            world.add_unique(crate::quest_info::QuestInfo::new());
+            let damage = || authored_contact_damage(&world, weapon, target, 0.0).unwrap();
+            let low = damage();
+            for (index, bonus) in [0, 1, 2, 3, 4, 6, 10, 15].into_iter().enumerate() {
+                world
+                    .borrow::<UniqueViewMut<crate::quest_info::QuestInfo>>()
+                    .unwrap()
+                    .player_stats_mut()
+                    .strength = index as i32 + 1;
+                assert_eq!(damage(), low + bonus as f32);
+            }
+            {
+                let mut quests = world
+                    .borrow::<UniqueViewMut<crate::quest_info::QuestInfo>>()
+                    .unwrap();
+                quests.player_stats_mut().strength = 6;
+                quests.player_stats_mut().apply_modifier(TimedStatModifier {
+                    source: "psi:might".into(),
+                    stat: Stat::Strength,
+                    delta: 2,
+                    remaining: Duration::from_secs(10),
+                });
+            }
+            assert_eq!(damage(), low + 15.0);
+            world
+                .borrow::<UniqueViewMut<crate::quest_info::QuestInfo>>()
+                .unwrap()
+                .player_stats_mut()
+                .tick_modifiers(Duration::from_secs(10));
+            assert_eq!(damage(), low + 6.0);
+            world.add_unique(crate::mission::GlobalMeleeStrengthParams(Some(
+                dark::gamesys::MeleeStrengthParams([0, 0, 0, 0, 0, -100, 0, 0]),
+            )));
+            assert_eq!(damage(), 0.0, "signed authored penalties never heal");
+        }
+    }
+
+    #[test]
+    fn strength_is_added_after_target_armor_and_cannot_bypass_immunity() {
+        for multiplier in [0.0, 0.5] {
+            let (world, weapon, target) = test_world_with_victim_receptrons(
+                PresentationMode::Flat,
+                vec![(WEAPON_BASH, damage_receptron(16, multiplier))],
+            );
+            let mut quests = crate::quest_info::QuestInfo::new();
+            quests.player_stats_mut().strength = 6;
+            world.add_unique(quests);
+            assert_eq!(
+                authored_contact_damage(&world, weapon, target, 0.0),
+                if multiplier == 0.0 {
+                    None
+                } else {
+                    Some(WEAPON_BASH_INTENSITY * 0.5 + 6.0)
+                }
+            );
+        }
     }
 
     fn damage_receptron(order: i32, multiplier: f32) -> ReceptronOptions {

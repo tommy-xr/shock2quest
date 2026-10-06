@@ -2525,6 +2525,10 @@ pub struct GlobalSkillParams(pub Option<dark::gamesys::SkillParams>);
 #[derive(Unique)]
 pub struct GlobalGameParams(pub Option<dark::gamesys::GameParams>);
 
+/// Authored additive melee damage by effective Strength.
+#[derive(Unique)]
+pub struct GlobalMeleeStrengthParams(pub Option<dark::gamesys::MeleeStrengthParams>);
+
 /// Whether `template_id` is `class_template_id` or inherits from it, given a
 /// template-inheritance hierarchy (MetaProp parent map). A free function
 /// (rather than only the `GlobalTemplateHierarchy` method below) so callers
@@ -3291,6 +3295,9 @@ impl MissionCore {
         world.add_unique(GlobalHrmParams(game_entity_info.hrm_params().cloned()));
         world.add_unique(GlobalSkillParams(game_entity_info.skill_params().cloned()));
         world.add_unique(GlobalGameParams(game_entity_info.game_params().cloned()));
+        world.add_unique(GlobalMeleeStrengthParams(
+            game_entity_info.melee_strength_params().cloned(),
+        ));
         let (mut psi_powers, psi_selection) = crate::psi::build_psi_power_registry(&entity_info_rc);
         world.add_unique(crate::psi_defenses::PowerReceptrons::from_registry(
             &entity_info_rc,
