@@ -12,8 +12,8 @@ import { aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
 // The VR cyber interface's pointer bridge (slice 3): a controller ray meets
 // the anchored panel, and where it lands drives the SAME host the flat mouse
-// drives - hover, the cursor-is-the-item drag, and (on the squeeze) the
-// grab-to-hand path loot panels already use.
+// drives for hover and buttons. Inventory movement uses a physical squeeze
+// and release, like the grab-to-hand path on loot panels.
 //
 // Negative-first: on the parent the interface has no pointer at all - /v1/ui
 // reports no `panel_pose` and no `pointer`, so aiming at a slot changes
@@ -32,7 +32,7 @@ function slotFor(ui: UiState, entityId: number): UiElement | undefined {
 }
 
 test(
-  "a VR controller ray hovers, clicks and drags on the cyber-interface canvas",
+  "a VR controller ray hovers and moves inventory items with a grab",
   { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" },
   async () => {
     await using game = await GameServer.launch({
@@ -81,45 +81,36 @@ test(
       "a ray pointed away from the panel must not report a canvas hit",
     );
 
-    // Click: the trigger is the LMB analog - it lifts the item onto the cursor.
-    await clickCanvasWithRay(game, panel, slotCenter);
-    ui = await game.ui.state();
-    assert.equal(
-      ui.cursor?.entity_id,
-      wrench.entity_id,
-      "a trigger pull on a slot must lift the item onto the cursor",
-    );
-    assert.equal(
-      slotFor(ui, wrench.entity_id),
-      undefined,
-      "the lifted item leaves the strip grid while it rides the cursor",
-    );
-
-    // Drag + place: a click on an empty slot puts it down again, and the item
-    // reappears in the grid.
-    const emptySlot: [number, number] = [slotCenter[0] + 105, slotCenter[1]];
-    await clickCanvasWithRay(game, panel, emptySlot);
-    ui = await game.ui.state();
-    assert.equal(ui.cursor, null, "clicking an empty slot must place the item");
-    assert.ok(
-      slotFor(ui, wrench.entity_id),
-      "the placed item must be back in the strip grid",
-    );
-
-    // Empty panel space is still the interface, not the 3D view: a click there
-    // must not throw the item into the world.
-    await clickCanvasWithRay(game, panel, slotCenter);
-    assert.equal((await game.ui.state()).cursor?.entity_id, wrench.entity_id);
-    await clickCanvasWithRay(game, panel, [400, 400]);
-    assert.equal(
-      (await game.ui.state()).cursor?.entity_id,
-      wrench.entity_id,
-      "a click on empty panel space must keep the held item",
-    );
-    // Put it back so the grab below has a slot to take from.
+    // VR inventory uses physical hands; a trigger on this non-usable item
+    // does not create a flat cursor or remove it from the backpack.
     await clickCanvasWithRay(game, panel, slotCenter);
     ui = await game.ui.state();
     assert.equal(ui.cursor, null);
+    assert.ok(slotFor(ui, wrench.entity_id));
+
+    await aimVrHandAtCanvas(game, panel, slotCenter, { squeeze: 1 });
+    await game.step({ frames: 5 });
+    assert.equal((await game.info()).player.right_hand_entity_id, wrench.entity_id);
+    assert.equal(slotFor(await game.ui.state(), wrench.entity_id), undefined);
+
+    // Move to a different free strip cell while gripping, then release to
+    // place the same physical item back in the backpack.
+    const emptySlot: [number, number] = [slotCenter[0] + 105, slotCenter[1]];
+    await aimVrHandAtCanvas(game, panel, emptySlot, { squeeze: 1 });
+    await game.step({ frames: 3 });
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 5 });
+    assert.equal((await game.info()).player.right_hand_entity_id, null);
+    ui = await game.ui.state();
+    const placed = slotFor(ui, wrench.entity_id);
+    assert.ok(placed, "the released item returns to the strip grid");
+    assert.ok(center(placed)[0] > slotCenter[0], "the item moved to the new column");
+    assert.equal(ui.cursor, null, "physical placement creates no flat cursor");
+
+    const inventory = await game.player.inventory();
+    await clickCanvasWithRay(game, panel, [400, 400]);
+    assert.deepEqual(await game.player.inventory(), inventory,
+      "empty panel chrome must not throw an inventory item into the world");
   },
 );
 
