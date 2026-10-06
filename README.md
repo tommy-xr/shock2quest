@@ -93,6 +93,10 @@ item, consume one device, and bypass the Repair skill and minigame.
 Recyclers use the same gesture to convert an item's entire stack into nanites;
 the preview shows its value. The recycler itself is reusable.
 
+Broken replicators show static in the MFD and tricorder. Select their Repair
+control to attempt the skill-gated repair minigame; a win restores the catalog,
+and a failed attempt leaves the machine broken and available for another try.
+
 Empty hands ease toward a partial point at usable controls or a partial grip
 near reachable items, occupied holsters, stocked ammo pouches, and climbing holds.
 These previews only pose the fingers; squeeze or pull the trigger to interact.
