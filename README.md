@@ -84,7 +84,8 @@ stick up/down for tiers and left/right for purchased powers; confirm with its
 upper button or trigger. Each amp remembers its current and alternate powers.
 
 **Parrying.** Meet a pipe hybrid's incoming pipe with your held wrench or other
-melee weapon to block it. Placement matters: a stationary guard works, but the
+melee weapon to block it. Guns can also block, costing 5 condition points per
+parry; a gun at zero condition cannot block. Placement matters: a stationary guard works, but the
 pipe must touch your weapon before it touches you. A block clangs, pulses the
 blocking controller, and sends the hybrid's swing back to its ready pose.
 

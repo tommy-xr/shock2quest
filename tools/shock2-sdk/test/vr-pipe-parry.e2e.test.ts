@@ -17,7 +17,7 @@ async function attackState(game: GameServer, entity: number): Promise<PipeAttack
   return property ? JSON.parse(property.value) as PipeAttack : undefined;
 }
 
-async function stage(game: GameServer, guard: boolean, motion = "bh413001", hand: "left" | "right" = "right") {
+async function stage(game: GameServer, guard: boolean, motion = "bh413001", hand: "left" | "right" = "right", weapon = "Wrench") {
   // Let the unarmed actors settle before bringing the player and wrench in.
   // Spawning the weapon first alerts the approaching hybrids prematurely.
   await game.step({ frames: 61 });
@@ -27,8 +27,8 @@ async function stage(game: GameServer, guard: boolean, motion = "bh413001", hand
   assert.ok(enemy, "debug_melee must contain a live pipe hybrid");
   await game.player.teleport({ x: -6, y: 1.244, z: 0 });
   await game.input.set(`${hand}_hand.squeeze`, 1);
-  await game.input.set(`${hand}_hand.position`, guard ? (motion === "bh413004" ? [-1, 0.65, -0.4] : [-1, -0.4, 0.4]) : [-0.15, 0.2, -0.7]);
-  const wrench = await game.player.spawnItem("Wrench", { hand });
+  await game.input.set(`${hand}_hand.position`, guard ? (motion === "bh413004" ? [-1, 0.65, -0.4] : [-1, weapon === "Wrench" ? -0.4 : 0, 0.4]) : [-0.15, 0.2, -0.7]);
+  const held = await game.player.spawnItem(weapon, { hand });
   await game.entities.sendMessage(enemy.id, { type: "SetAlertness", level: "High" });
   await game.step({ frames: 2 });
   // Pin the authored motion, not its damage: natural schema selection can
@@ -37,7 +37,7 @@ async function stage(game: GameServer, guard: boolean, motion = "bh413001", hand
   await game.entities.sendMessage(enemy.id, { type: "PlayMotion", name: motion });
   await game.step({ frames: 1 });
   assert.equal((await game.entities.animation(enemy.id))?.clip, motion);
-  return { enemy, wrench };
+  return { enemy, held };
 }
 
 for (const [motion, hand] of [["bh413001", "right"], ["bh413004", "right"], ["bh413001", "left"]] as const) {
@@ -108,4 +108,59 @@ test(`a ${placement} VR wrench does not block the player hit`,
     assert.equal((await game.entities.animation(enemy.id))?.recoil, false);
   });
 
+}
+
+async function gunState(game: GameServer, entity: number) {
+  const properties = (await game.entities.detail(entity)).properties;
+  return Object.fromEntries(properties.filter(p => ["Condition", "Ammo"].includes(p.name)).map(p => [p.name, Number(p.value)]));
+}
+
+for (const [condition, hand, physical] of [[100, "right", false], [100, "left", false], [2.5, "right", false], [0, "right", false], [100, "right", true]] as const) {
+  test(`VR ${hand} shotgun parry charges condition once from ${condition} (physical=${physical})`, { skip: !enabled, timeout: 600_000 }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_melee", debugFlags: physical ? ["--vr", "--experimental", "physical_held_items"] : ["--vr"] });
+    const { enemy, held: gun } = await stage(game, true, "bh413001", hand, "Shotgun");
+    await game.entities.sendMessage(gun.entity_id, { type: "SetGunCondition", condition });
+    const otherHand = hand === "right" ? "left" : "right";
+    await game.input.set(`${otherHand}_hand.squeeze`, 1);
+    await game.input.set(`${otherHand}_hand.position`, [-0.15, 0.2, -0.7]);
+    const other = await game.player.spawnItem("Pistol", { hand: otherHand });
+    const initial = await gunState(game, gun.entity_id);
+    const audioBefore = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
+    const hp = (await game.info()).player.hit_points!;
+    for (let frame = 0; frame < 180; frame++) {
+      await game.step({ frames: 1 });
+      if ((await attackState(game, enemy.id))?.consumed) break;
+    }
+    assert.equal((await attackState(game, enemy.id))?.parries, condition > 0 ? 1 : 0);
+    assert.equal((await game.info()).player.hit_points, condition > 0 ? hp : hp - 10);
+    await game.step({ frames: 18 });
+    const after = await gunState(game, gun.entity_id);
+    assert.equal(after.Condition, Math.max(0, condition - 5));
+    assert.equal(after.Ammo, initial.Ammo, "blocking cannot consume ammunition");
+    assert.equal((await gunState(game, other.entity_id)).Condition, 100, "the other hand is not charged");
+    if (condition > 0) {
+      const clangs = (await game.audio.recent()).sounds.filter(s => s.sequence > audioBefore && /^hmetmet[34]$/.test(s.sample));
+      assert.equal(clangs.length, 1, "gun parries must resolve one metal clang");
+    }
+  });
+}
+
+for (const placement of ["side", "dropped"] as const) {
+  test(`a ${placement} shotgun neither blocks nor loses condition`, { skip: !enabled, timeout: 600_000 }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_melee", debugFlags: ["--vr"] });
+    const { enemy, held } = await stage(game, placement === "dropped", "bh413001", "right", "Shotgun");
+    if (placement === "dropped") {
+      await game.input.set("right_hand.squeeze", 0);
+      await game.step({ frames: 1 });
+      assert.equal((await game.info()).player.right_hand_entity_id, null);
+    }
+    const hp = (await game.info()).player.hit_points!;
+    for (let frame = 0; frame < 180; frame++) {
+      await game.step({ frames: 1 });
+      if ((await attackState(game, enemy.id))?.consumed) break;
+    }
+    assert.equal((await attackState(game, enemy.id))?.parries, 0);
+    assert.equal((await game.info()).player.hit_points, hp - 10);
+    assert.equal((await gunState(game, held.entity_id)).Condition, 100);
+  });
 }

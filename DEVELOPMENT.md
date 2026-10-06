@@ -447,9 +447,12 @@ selection rather than a shared setting.
 
 `cargo dbgr --mission debug_melee --vr --port 0` provides live pipe hybrids and
 a rack of melee weapons. Hold a wrench across the incoming pipe: no trigger or
-swing-speed threshold is required to block. Only held melee weapons guard;
-dropped items and guns do not. The first contact wins, so a pipe that reaches
-the player before the wrench still damages. Each attack can connect only once.
+swing-speed threshold is required to block. Held ranged guns also guard, costing
+5 condition points per successful block (clamped at zero); zero-condition guns,
+psi amps and dropped items cannot guard. Melee parries are free. Gun guards work
+without the experimental physical-held-items flag. The first contact wins, so
+a pipe that reaches the player before the weapon still damages. Each attack can
+connect only once.
 
 Under **Pause → Developer → Visualizations → Combat**, enable **Melee contact
 volumes** (`melee_volumes`) to show the held weapon in red and the retail
@@ -466,7 +469,7 @@ to High, step, then send `{"type":"PlayMotion","name":"bh413001"}` to its
 attack; `bh413004` is a high sweep. This selects the clip while preserving normal
 AI, animation flags and collision handling. The SDK regression is
 `test/vr-pipe-parry.e2e.test.ts`; it covers both directions, missed guards,
-recovery, damage, sound and haptics. Other enemy types and flatscreen retain
+recovery, damage, sound, haptics and ranged-weapon condition costs. Other enemy types and flatscreen retain
 their existing melee resolution.
 
 ### VR implant sockets

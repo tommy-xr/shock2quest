@@ -5303,11 +5303,6 @@ impl PhysicsWorld {
         let body = self
             .rigid_body_set
             .get(*self.entity_id_to_body.get(&entity)?)?;
-        let previous_pose = previous_pose.unwrap_or(*body.position());
-        let from = previous_pose.inverse_transform_point(&point![from.x, from.y, from.z]);
-        let to = body
-            .position()
-            .inverse_transform_point(&point![to.x, to.y, to.z]);
         body.colliders()
             .iter()
             .filter_map(|handle| {
@@ -5315,24 +5310,48 @@ impl PhysicsWorld {
                 if !collider.is_enabled() {
                     return None;
                 }
-                rapier3d::parry::query::cast_shapes(
-                    &Isometry::translation(from.x, from.y, from.z),
-                    &(to - from),
-                    &Ball::new(radius),
-                    &collider.position_wrt_parent().copied().unwrap_or_default(),
-                    &Vector::zeros(),
+                let local = collider.position_wrt_parent().copied().unwrap_or_default();
+                Self::sweep_sphere_against_shape(
+                    from,
+                    to,
+                    radius,
                     collider.shape(),
-                    rapier3d::parry::query::ShapeCastOptions {
-                        max_time_of_impact: 1.0,
-                        stop_at_penetration: true,
-                        ..Default::default()
-                    },
+                    body.position() * local,
+                    previous_pose.map(|pose| pose * local),
                 )
-                .ok()
-                .flatten()
-                .map(|hit| hit.time_of_impact)
             })
             .min_by(f32::total_cmp)
+    }
+
+    /// Relative-motion query also used by held guns without a rigid body.
+    pub(crate) fn sweep_sphere_against_shape(
+        from: Vector3<f32>,
+        to: Vector3<f32>,
+        radius: f32,
+        shape: &dyn rapier3d::parry::shape::Shape,
+        pose: Isometry<Real>,
+        previous_pose: Option<Isometry<Real>>,
+    ) -> Option<f32> {
+        let from = previous_pose
+            .unwrap_or(pose)
+            .inverse_transform_point(&point![from.x, from.y, from.z]);
+        let to = pose.inverse_transform_point(&point![to.x, to.y, to.z]);
+        rapier3d::parry::query::cast_shapes(
+            &Isometry::translation(from.x, from.y, from.z),
+            &(to - from),
+            &Ball::new(radius),
+            &Isometry::identity(),
+            &Vector::zeros(),
+            shape,
+            rapier3d::parry::query::ShapeCastOptions {
+                max_time_of_impact: 1.0,
+                stop_at_penetration: true,
+                ..Default::default()
+            },
+        )
+        .ok()
+        .flatten()
+        .map(|hit| hit.time_of_impact)
     }
 
     /// Exact overlap of two entities' authored colliders, including sensors.

@@ -9,7 +9,7 @@ use cgmath::{EuclideanSpace, InnerSpace, Point3, Vector3, vec3};
 use dark::{
     SCALE_FACTOR,
     motion::{AnimationPlayer, MotionFlags},
-    properties::PropHitPoints,
+    properties::{PropGunState, PropHitPoints, PropPlayerGun, PropPosition},
 };
 use rapier3d::prelude::{Isometry, Real};
 use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
@@ -27,6 +27,38 @@ use crate::{
 
 const RADIUS: f32 = 0.4 / SCALE_FACTOR;
 const RECOIL: Duration = Duration::from_millis(280);
+
+/// Mesh-fitted guard bounds, independent of the experimental gun rigid bodies.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct GunGuard {
+    pub size: Vector3<f32>,
+    pub center: Vector3<f32>,
+}
+
+pub(crate) fn is_ranged_guard(world: &World, entity: EntityId) -> bool {
+    crate::mission::presentation_is_vr(world)
+        && !crate::wielded_weapon::is_psi_amp(world, entity)
+        && world
+            .borrow::<View<PropPlayerGun>>()
+            .is_ok_and(|v| v.get(entity).is_ok())
+        && world
+            .borrow::<View<PropGunState>>()
+            .is_ok_and(|v| v.get(entity).is_ok())
+}
+
+fn target_pose(world: &World, physics: &PhysicsWorld, entity: EntityId) -> Option<Isometry<Real>> {
+    physics.entity_body_pose(entity).or_else(|| {
+        let positions = world.borrow::<View<PropPosition>>().ok()?;
+        let p = positions.get(entity).ok()?;
+        let q = p.rotation;
+        Some(Isometry::from_parts(
+            rapier3d::na::Translation3::new(p.position.x, p.position.y, p.position.z),
+            rapier3d::na::UnitQuaternion::from_quaternion(rapier3d::na::Quaternion::new(
+                q.s, q.v.x, q.v.y, q.v.z,
+            )),
+        ))
+    })
+}
 
 #[derive(Component, Clone, Default, serde::Serialize)]
 pub(crate) struct PipeAttack {
@@ -142,6 +174,7 @@ fn points(wrist: [f32; 3], tip: [f32; 3]) -> [Vector3<f32>; 4] {
 }
 
 fn contact_time(
+    world: &World,
     state: &PipeAttack,
     physics: &PhysicsWorld,
     target: EntityId,
@@ -153,15 +186,34 @@ fn contact_time(
         .into_iter()
         .zip(current)
         .filter_map(|(from, to)| {
-            physics
-                .sweep_sphere_against_entity(
+            let gun = world
+                .borrow::<View<GunGuard>>()
+                .ok()
+                .and_then(|v| v.get(target).ok().copied())
+                .filter(|_| is_ranged_guard(world, target));
+            let time = if let Some(gun) = gun {
+                let offset = Isometry::translation(gun.center.x, gun.center.y, gun.center.z);
+                let shape = rapier3d::prelude::Cuboid::new(
+                    rapier3d::na::Vector3::new(gun.size.x, gun.size.y, gun.size.z) * 0.5,
+                );
+                PhysicsWorld::sweep_sphere_against_shape(
+                    from,
+                    to,
+                    RADIUS,
+                    &shape,
+                    target_pose(world, physics, target)? * offset,
+                    state.targets.get(&target).map(|pose| pose * offset),
+                )
+            } else {
+                physics.sweep_sphere_against_entity(
                     from,
                     to,
                     RADIUS,
                     target,
                     state.targets.get(&target).copied(),
                 )
-                .map(|time| (time, from + (to - from) * time))
+            };
+            time.map(|time| (time, from + (to - from) * time))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
 }
@@ -204,7 +256,17 @@ pub(crate) fn resolve(
             [player.left_hand_entity_id, player.right_hand_entity_id],
         )
     };
-    let guards = guards.map(|guard| guard.filter(|id| is_vr_melee_weapon(world, *id)));
+    let guards = guards.map(|guard| {
+        guard.filter(|id| {
+            is_vr_melee_weapon(world, *id)
+                || (is_ranged_guard(world, *id)
+                    && world
+                        .borrow::<View<PropGunState>>()
+                        .unwrap()
+                        .get(*id)
+                        .is_ok_and(|gun| gun.condition > 0.0))
+        })
+    });
     let attacks = world
         .borrow::<View<PipeAttack>>()
         .unwrap()
@@ -224,14 +286,14 @@ pub(crate) fn resolve(
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>();
-            let body_hit = contact_time(&state, physics, player)
+            let body_hit = contact_time(world, &state, physics, player)
                 .filter(|(_, point)| unobstructed(physics, &state, *point, &participants));
             let block = guards
                 .iter()
                 .enumerate()
                 .filter_map(|(hand, guard)| {
                     let guard = (*guard)?;
-                    let (time, point) = contact_time(&state, physics, guard)?;
+                    let (time, point) = contact_time(world, &state, physics, guard)?;
                     if !unobstructed(physics, &state, point, &participants) {
                         return None;
                     }
@@ -245,6 +307,12 @@ pub(crate) fn resolve(
                 state.active = false;
                 state.recovering = true;
                 state.parries += 1;
+                if is_ranged_guard(world, guard) {
+                    effects.push(Effect::AdjustWeaponCondition {
+                        entity_id: guard,
+                        delta: -5.0,
+                    });
+                }
                 if let Some(animation) = animations.get_mut(&entity) {
                     *animation = animation.recoil(RECOIL);
                 }
@@ -284,7 +352,7 @@ pub(crate) fn resolve(
             .into_iter()
             .flatten()
             .chain(std::iter::once(player))
-            .filter_map(|entity| physics.entity_body_pose(entity).map(|pose| (entity, pose)))
+            .filter_map(|entity| target_pose(world, physics, entity).map(|pose| (entity, pose)))
             .collect();
         world.add_component(entity, state);
     }
@@ -295,7 +363,7 @@ pub(crate) fn resolve(
 
 pub(crate) fn debug_geometry(world: &World) -> Vec<engine::scene::SceneObject> {
     let states = world.borrow::<View<PipeAttack>>().unwrap();
-    states
+    let mut objects: Vec<_> = states
         .iter()
         .flat_map(|state| {
             let color = if state.recovering {
@@ -309,5 +377,33 @@ pub(crate) fn debug_geometry(world: &World) -> Vec<engine::scene::SceneObject> {
                 .into_iter()
                 .map(move |point| dark::hit_box::draw_debug_wire_sphere(point, RADIUS, color))
         })
-        .collect()
+        .collect();
+    let player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+    let guns = world.borrow::<View<GunGuard>>().unwrap();
+    let positions = world.borrow::<View<PropPosition>>().unwrap();
+    for entity in [player.left_hand_entity_id, player.right_hand_entity_id]
+        .into_iter()
+        .flatten()
+    {
+        if !is_ranged_guard(world, entity) {
+            continue;
+        }
+        if let (Ok(gun), Ok(pose)) = (guns.get(entity), positions.get(entity)) {
+            let shapes = HashMap::from([(
+                0,
+                dark::hit_box::HitBoxShape::Cuboid {
+                    half_extents: gun.size * 0.5,
+                    center: gun.center,
+                },
+            )]);
+            let transform = cgmath::Matrix4::from_translation(pose.position)
+                * cgmath::Matrix4::from(pose.rotation);
+            objects.extend(dark::hit_box::draw_debug_hit_box_shapes(
+                &shapes,
+                &[transform],
+                vec3(1.0, 0.25, 0.25),
+            ));
+        }
+    }
+    objects
 }

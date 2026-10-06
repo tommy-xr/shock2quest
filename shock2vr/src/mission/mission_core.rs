@@ -17495,6 +17495,10 @@ impl MissionCore {
                     center,
                 } => {
                     self.physics.fit_held_item_cuboid(entity_id, size, center);
+                    if crate::pipe_melee::is_ranged_guard(&self.world, entity_id) {
+                        self.world
+                            .add_component(entity_id, crate::pipe_melee::GunGuard { size, center });
+                    }
                 }
                 VirtualHandEffect::SpawnEntity {
                     template_id,
