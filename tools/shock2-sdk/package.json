@@ -13,19 +13,19 @@
     }
   },
   "scripts": {
-    "prebuild": "node scripts/check-deps.mjs",
+    "prebuild": "node scripts/check-deps.mjs && node scripts/clean-dist.mjs",
     "build": "tsc",
     "pretest": "node scripts/check-deps.mjs",
-    "test": "tsc && node scripts/run-tests.mjs \"dist/test/*.test.js\"",
-    "pretest:e2e": "node scripts/check-deps.mjs && npm run clean:saves",
-    "test:e2e": "tsc && SHOCK2_E2E=1 node scripts/run-tests.mjs --test-concurrency=1 \"dist/test/*.test.js\"",
+    "test": "npm run build && node scripts/run-tests.mjs \"dist/test/*.test.js\"",
+    "pretest:e2e": "node scripts/check-deps.mjs",
+    "test:e2e": "npm run build && node scripts/clean-test-saves.mjs && SHOCK2_E2E=1 node scripts/run-tests.mjs --test-concurrency=1 \"dist/test/*.test.js\"",
     "pretest:e2e:reliability": "node scripts/check-deps.mjs",
-    "test:e2e:reliability": "tsc && node scripts/reliability.mjs",
+    "test:e2e:reliability": "npm run build && node scripts/reliability.mjs",
     "preanim-smoothness": "node scripts/check-deps.mjs",
-    "anim-smoothness": "tsc && node dist/scripts/anim-smoothness.js",
+    "anim-smoothness": "npm run build && node dist/scripts/anim-smoothness.js",
     "preai-reachability": "node scripts/check-deps.mjs",
-    "ai-reachability": "tsc && node dist/scripts/ai-reachability.js",
-    "clean:saves": "tsc && node scripts/clean-test-saves.mjs",
+    "ai-reachability": "npm run build && node dist/scripts/ai-reachability.js",
+    "clean:saves": "npm run build && node scripts/clean-test-saves.mjs",
     "posttest:e2e": "node scripts/clean-test-saves.mjs"
   },
   "engines": {
