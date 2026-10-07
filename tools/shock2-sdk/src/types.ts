@@ -1103,6 +1103,7 @@ export interface UiCursor {
 
 /** Active-presentation UI snapshot (GET /v1/ui). */
 export interface UiState {
+  water?: { submerged: boolean; remaining_seconds: number; maximum_seconds: number; tint: number };
   mode: "shooter" | "use" | "device" | "psi_hack";
   /** The open MFD panel, or null when none is open. */
   active_panel: UiPanel | null;

@@ -1532,6 +1532,7 @@ fn process_command(
                         messages: ui.messages,
                         banner: ui.banner,
                         security_alarm: ui.security_alarm,
+                        water: ui.water,
                     }
                 })
                 .unwrap_or(commands::UiStateResult {
@@ -1550,6 +1551,7 @@ fn process_command(
                     messages: Vec::new(),
                     banner: None,
                     security_alarm: None,
+                    water: None,
                 });
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send ui state - receiver dropped");

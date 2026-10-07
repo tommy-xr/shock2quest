@@ -110,6 +110,7 @@ pub use hand_glove::{GloveRenderer, HandLight};
 /// can re-measure the melee `_h` contact offsets off the shipped rigs with the
 /// same maths the wield uses.
 pub use vr_config::{Handedness, MeleePosedArm, melee_contact_offset};
+pub mod swimming;
 pub mod vr_climb;
 pub mod vr_crouch;
 pub mod vr_grip;
@@ -2747,6 +2748,21 @@ impl Game {
         // rim by ~13 degrees and drag the ramp onto the crosshair. The same
         // clamp the cameras use is a no-op standing.
         eye_position.y = eye_position.y.min(self.player_eye_cap_above_center());
+
+        let water = swimming::WaterStatus::from_world(self.active_game_scene.world());
+        if water.tint > 0.001 {
+            let mut layer = hit_feedback::vignette_layer_at_pose(
+                self.view_extents,
+                Matrix4::from_translation(eye_position)
+                    * Matrix4::from(util::get_rotation_from_forward_vector(-eye_forward)),
+                vec3(0.05, 0.3, 0.38),
+                water.tint,
+                (0.0, 0.65),
+                "underwater-tint",
+            );
+            layer.set_transform(pawn_to_world * layer.get_transform());
+            scene.push(layer);
+        }
 
         // The hit tint occupies the explicit scene-overlay layer: over the
         // world, behind scene UI and the pause menu, identically in flat and

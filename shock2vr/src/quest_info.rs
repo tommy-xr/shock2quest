@@ -31,6 +31,7 @@ pub struct CollectedLog {
 
 #[derive(Deserialize, Serialize, Unique, Clone, Debug)]
 pub struct QuestInfo {
+    pub(crate) breath: crate::swimming::Breath,
     /// Fixed at campaign creation. A typed field keeps invalid quest-bit values
     /// and generic quest mutations from changing the campaign rules.
     difficulty: dark::gamesys::Difficulty,
@@ -69,6 +70,7 @@ impl QuestInfo {
 
     pub fn with_difficulty(difficulty: dark::gamesys::Difficulty) -> Self {
         QuestInfo {
+            breath: Default::default(),
             difficulty,
             security_hack_seconds_remaining: 0.0,
             quest_bit_values: HashMap::new(),

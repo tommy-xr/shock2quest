@@ -154,3 +154,5 @@ pub(crate) fn hud_strings(world: &World) -> HudStrings {
 
 pub(crate) mod hazards;
 pub(crate) mod reticle;
+
+pub mod breath;

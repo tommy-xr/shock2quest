@@ -677,6 +677,7 @@ pub struct DebugSkillLevelsRequest {
 /// container, ...), with its clickable elements - see `projects/flat-ui.md`.
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugUiState {
+    pub water: Option<crate::swimming::WaterStatus>,
     pub mode: String,
     pub active_panel: Option<DebugUiPanel>,
     /// The top-docked inventory strip (Tab metagame mode): the player's
@@ -1094,6 +1095,7 @@ pub trait DebuggableScene {
     /// UI).
     fn ui_state(&self) -> DebugUiState {
         DebugUiState {
+            water: None,
             mode: "shooter".to_string(),
             active_panel: None,
             strip: None,
