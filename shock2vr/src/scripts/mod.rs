@@ -43,6 +43,7 @@ mod hazard_objects;
 pub mod healing_item;
 mod homing;
 pub(crate) mod impact_sound;
+mod shodan_head;
 pub(crate) mod shodan_shot;
 
 pub mod immolate;
@@ -370,6 +371,14 @@ pub enum MessagePayload {
         /// seeds the death ragdoll's reaction.
         impact: Option<DamageImpact>,
     }, // damage the entity
+
+    /// The central HP applier has committed this change. Unlike `Damage`,
+    /// these totals include actual protection/clamping and are delivered
+    /// synchronously before a queued lethal effect can remove the object.
+    HitPointsChanged {
+        previous: i32,
+        current: i32,
+    },
 
     // The entity heard a noise (gunfire, etc.) at this position - an AI
     // alerts and investigates the source, without the noise being an attack.
@@ -1082,7 +1091,7 @@ impl ScriptWorld {
             // shodan.mis
             "toggleshodantexture" => Box::new(NoopScript::new()),
             "changedelay" => Box::new(NoopScript::new()), //?
-            "shodanhead" => Box::new(NoopScript::new()),  //?
+            "shodanhead" => Box::new(shodan_head::ShodanHead::default()),
             "shodanshield" => Box::new(shodan_shield::ShodanShield::new()),
             "seatplayer" => Box::new(TrapTeleportPlayer::new()), // This is used in final battle -does this do anything else besides teleport?
             "dieshodandie" => Box::new(DieShodanDie::new()),
@@ -1395,6 +1404,35 @@ impl ScriptWorld {
     pub fn remove_entity(&mut self, entity_id: EntityId) {
         self.entity_to_scripts.remove(&entity_id);
         self.entity_has_initialized.remove(&entity_id);
+    }
+
+    /// Observe committed health while the entity (including a lethally hit
+    /// one) still owns its scripts. The caller applies returned effects before
+    /// pending death effects; queuing this message would lose lethal observers.
+    pub(crate) fn notify_hit_points_changed(
+        &mut self,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity: EntityId,
+        previous: i32,
+        current: i32,
+    ) -> Vec<Effect> {
+        if previous == current {
+            return Vec::new();
+        }
+        let message = MessagePayload::HitPointsChanged { previous, current };
+        let effects = self
+            .entity_to_scripts
+            .get_mut(&entity)
+            .into_iter()
+            .flatten()
+            .map(|instance| {
+                instance
+                    .script
+                    .handle_message(entity, world, physics, &message)
+            })
+            .collect();
+        Effect::flatten(effects)
     }
 
     pub fn dispatch(&mut self, message: Message) {

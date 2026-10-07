@@ -10478,6 +10478,19 @@ impl MissionCore {
                         delta,
                         crate::dev_params::get_bool(crate::dev_params::CHEAT),
                     ) {
+                        // Observe the committed pool before a following SlayEntity
+                        // can discard the target's scripts. In particular, one
+                        // lethal blow can cross both SHODAN screen thresholds.
+                        let reactions = self.script_world.notify_hit_points_changed(
+                            &self.world,
+                            &self.physics,
+                            entity_id,
+                            previous,
+                            hp,
+                        );
+                        for reaction in reactions.into_iter().rev() {
+                            effects.push_front(reaction);
+                        }
                         // Every HP change flows through here (weapon, stim,
                         // collision damage) - trace it with the resulting
                         // total so a mysterious death is attributable.
@@ -22791,6 +22804,60 @@ mod hit_point_delta_tests {
         assert_eq!(
             apply_hit_point_delta(&world, creature, player, -15, true),
             Some((40, 25))
+        );
+    }
+
+    #[test]
+    fn committed_lethal_pool_notifies_both_head_stages_before_owner_removal() {
+        use dark::properties::{
+            Link, Links, PropMaxHitPoints, PropSymName, ToLink, WrappedEntityId,
+        };
+
+        let (mut world, player, head) = world_with(125);
+        world.add_component(head, PropMaxHitPoints { hit_points: 125 });
+        let targets = [world.add_entity(()), world.add_entity(())];
+        for (name, target) in ["Screen1Trap", "Screen2Trap"].into_iter().zip(targets) {
+            world.add_entity((
+                PropSymName(name.to_owned()),
+                Links {
+                    to_links: vec![ToLink {
+                        to_template_id: 1,
+                        to_entity_id: Some(WrappedEntityId(target)),
+                        link: Link::SwitchLink,
+                    }],
+                },
+            ));
+        }
+        let mut scripts = crate::scripts::ScriptWorld::new();
+        scripts.add_entity(head, "ShodanHead");
+        let (previous, current) =
+            apply_hit_point_delta(&world, head, player, -1000, false).unwrap();
+        assert_eq!((previous, current), (125, 0));
+        let reactions = scripts.notify_hit_points_changed(
+            &world,
+            &PhysicsWorld::new(),
+            head,
+            previous,
+            current,
+        );
+        let messages = reactions
+            .into_iter()
+            .filter_map(|effect| match effect {
+                Effect::Send { msg } => Some(msg),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        // The returned messages own router/target identities, not the dying
+        // head. Subsequent removal cannot discard either authored transition.
+        world.delete_entity(head);
+        assert_eq!(
+            messages.iter().map(|msg| msg.to).collect::<Vec<_>>(),
+            targets
+        );
+        assert!(
+            messages
+                .iter()
+                .all(|msg| matches!(msg.payload, MessagePayload::TurnOn { from } if from != head))
         );
     }
 
