@@ -1,0 +1,89 @@
+SHOCK2QUEST_STARTUP mission=debug_minimal init_ms=1885.673
+SHOCK2QUEST_REFRESH_CHANGED from_hz=72.000 to_hz=90.000
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=READY
+SHOCK2QUEST_REFRESH_RATES target_hz=90.000 available_hz=[72.0, 80.0, 90.0, 120.0]
+SHOCK2QUEST_READY mission=debug_minimal target_refresh_hz=90.000 requested_refresh_hz=90.000 refresh_hz=90.000 eye_width=1680 eye_height=1760
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=FOCUSED
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=76 skipped=0 fps=75.363 frame_ms=13.269 update_ms=0.412 scene_ms=0.051 left_eye_ms=0.472 right_eye_ms=0.104 finish_ms=0.001 submit_ms=0.341
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.936 frame_ms=11.119 update_ms=0.378 scene_ms=0.048 left_eye_ms=0.204 right_eye_ms=0.079 finish_ms=0.001 submit_ms=0.326
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=STOPPING
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE
+SHOCK2QUEST_REFRESH_CHANGED from_hz=90.000 to_hz=72.000
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=READY
+SHOCK2QUEST_REFRESH_RATES target_hz=90.000 available_hz=[72.0, 80.0, 90.0, 120.0]
+SHOCK2QUEST_REFRESH_CHANGED from_hz=72.000 to_hz=90.000
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=FOCUSED
+SHOCK2QUEST_READY mission=debug_minimal target_refresh_hz=90.000 requested_refresh_hz=90.000 refresh_hz=90.000 eye_width=1680 eye_height=1760
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=89 skipped=0 fps=88.510 frame_ms=11.298 update_ms=0.393 scene_ms=0.051 left_eye_ms=0.223 right_eye_ms=0.079 finish_ms=0.001 submit_ms=0.333
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=91 skipped=0 fps=89.956 frame_ms=11.117 update_ms=0.413 scene_ms=0.055 left_eye_ms=0.209 right_eye_ms=0.091 finish_ms=0.001 submit_ms=0.352
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=91 skipped=0 fps=90.021 frame_ms=11.109 update_ms=0.446 scene_ms=0.059 left_eye_ms=0.218 right_eye_ms=0.082 finish_ms=0.001 submit_ms=0.372
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.986 frame_ms=11.113 update_ms=0.479 scene_ms=0.064 left_eye_ms=0.236 right_eye_ms=0.087 finish_ms=0.001 submit_ms=0.389
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=91 skipped=0 fps=90.055 frame_ms=11.104 update_ms=0.470 scene_ms=0.058 left_eye_ms=0.231 right_eye_ms=0.083 finish_ms=0.001 submit_ms=0.376
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.997 frame_ms=11.112 update_ms=0.452 scene_ms=0.056 left_eye_ms=0.214 right_eye_ms=0.088 finish_ms=0.001 submit_ms=0.387
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=91 skipped=0 fps=90.416 frame_ms=11.060 update_ms=0.453 scene_ms=0.058 left_eye_ms=0.212 right_eye_ms=0.079 finish_ms=0.001 submit_ms=0.363
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.949 frame_ms=11.117 update_ms=0.365 scene_ms=0.046 left_eye_ms=0.170 right_eye_ms=0.061 finish_ms=0.001 submit_ms=0.295
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=STOPPING
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE
+SHOCK2QUEST_REFRESH_CHANGED from_hz=90.000 to_hz=72.000
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=READY
+SHOCK2QUEST_REFRESH_RATES target_hz=90.000 available_hz=[72.0, 80.0, 90.0, 120.0]
+SHOCK2QUEST_XR_VIEWS_UNTRACKED mission=debug_minimal flags=ViewStateFlags(0)
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=FOCUSED
+SHOCK2QUEST_REFRESH_CHANGED from_hz=72.000 to_hz=90.000
+SHOCK2QUEST_XR_VIEWS_TRACKED mission=debug_minimal untracked_frames=4
+SHOCK2QUEST_READY mission=debug_minimal target_refresh_hz=90.000 requested_refresh_hz=90.000 refresh_hz=90.000 eye_width=1680 eye_height=1760
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=85 skipped=3 fps=84.066 frame_ms=11.895 update_ms=0.400 scene_ms=0.050 left_eye_ms=0.206 right_eye_ms=0.069 finish_ms=0.001 submit_ms=0.337
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=91 skipped=0 fps=90.063 frame_ms=11.103 update_ms=0.444 scene_ms=0.058 left_eye_ms=0.222 right_eye_ms=0.088 finish_ms=0.001 submit_ms=0.358
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.919 frame_ms=11.121 update_ms=0.467 scene_ms=0.062 left_eye_ms=0.223 right_eye_ms=0.079 finish_ms=0.001 submit_ms=0.369
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.996 frame_ms=11.112 update_ms=0.464 scene_ms=0.060 left_eye_ms=0.222 right_eye_ms=0.083 finish_ms=0.001 submit_ms=0.370
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=91 skipped=0 fps=90.003 frame_ms=11.111 update_ms=0.463 scene_ms=0.062 left_eye_ms=0.224 right_eye_ms=0.081 finish_ms=0.001 submit_ms=0.370
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=91 skipped=0 fps=90.448 frame_ms=11.056 update_ms=0.482 scene_ms=0.059 left_eye_ms=0.216 right_eye_ms=0.080 finish_ms=0.001 submit_ms=0.397
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.988 frame_ms=11.113 update_ms=0.454 scene_ms=0.057 left_eye_ms=0.208 right_eye_ms=0.087 finish_ms=0.001 submit_ms=0.381
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.951 frame_ms=11.117 update_ms=0.391 scene_ms=0.050 left_eye_ms=0.200 right_eye_ms=0.069 finish_ms=0.001 submit_ms=0.318
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=STOPPING
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=READY
+SHOCK2QUEST_REFRESH_RATES target_hz=90.000 available_hz=[72.0, 80.0, 90.0, 120.0]
+SHOCK2QUEST_READY mission=debug_minimal target_refresh_hz=90.000 requested_refresh_hz=90.000 refresh_hz=90.000 eye_width=1680 eye_height=1760
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=FOCUSED
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=67 skipped=0 fps=66.716 frame_ms=14.989 update_ms=0.395 scene_ms=0.052 left_eye_ms=4.021 right_eye_ms=0.069 finish_ms=0.001 submit_ms=0.732
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=91 skipped=0 fps=89.997 frame_ms=11.111 update_ms=0.426 scene_ms=0.054 left_eye_ms=0.221 right_eye_ms=0.076 finish_ms=0.001 submit_ms=0.365
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.636 frame_ms=11.156 update_ms=0.393 scene_ms=0.049 left_eye_ms=0.194 right_eye_ms=0.075 finish_ms=0.001 submit_ms=0.336
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.833 frame_ms=11.132 update_ms=0.451 scene_ms=0.057 left_eye_ms=0.225 right_eye_ms=0.080 finish_ms=0.001 submit_ms=0.366
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.945 frame_ms=11.118 update_ms=0.466 scene_ms=0.058 left_eye_ms=0.234 right_eye_ms=0.083 finish_ms=0.001 submit_ms=0.379
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.943 frame_ms=11.118 update_ms=0.406 scene_ms=0.053 left_eye_ms=0.194 right_eye_ms=0.073 finish_ms=0.001 submit_ms=0.332
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.996 frame_ms=11.112 update_ms=0.451 scene_ms=0.056 left_eye_ms=0.201 right_eye_ms=0.080 finish_ms=0.001 submit_ms=0.367
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.968 frame_ms=11.115 update_ms=0.379 scene_ms=0.048 left_eye_ms=0.178 right_eye_ms=0.065 finish_ms=0.001 submit_ms=0.310
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=STOPPING
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=IDLE
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=READY
+SHOCK2QUEST_REFRESH_RATES target_hz=90.000 available_hz=[72.0, 80.0, 90.0, 120.0]
+SHOCK2QUEST_READY mission=debug_minimal target_refresh_hz=90.000 requested_refresh_hz=90.000 refresh_hz=90.000 eye_width=1680 eye_height=1760
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=SYNCHRONIZED
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=VISIBLE
+SHOCK2QUEST_XR_STATE mission=debug_minimal state=FOCUSED
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=65 skipped=0 fps=64.971 frame_ms=15.391 update_ms=0.374 scene_ms=0.047 left_eye_ms=4.615 right_eye_ms=0.064 finish_ms=0.001 submit_ms=0.739
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.814 frame_ms=11.134 update_ms=0.423 scene_ms=0.053 left_eye_ms=0.209 right_eye_ms=0.079 finish_ms=0.001 submit_ms=0.347
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=91 skipped=0 fps=90.133 frame_ms=11.095 update_ms=0.451 scene_ms=0.057 left_eye_ms=0.218 right_eye_ms=0.083 finish_ms=0.002 submit_ms=0.365
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.880 frame_ms=11.126 update_ms=0.469 scene_ms=0.060 left_eye_ms=0.230 right_eye_ms=0.082 finish_ms=0.001 submit_ms=0.384
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.951 frame_ms=11.117 update_ms=0.468 scene_ms=0.059 left_eye_ms=0.226 right_eye_ms=0.080 finish_ms=0.001 submit_ms=0.381
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.963 frame_ms=11.116 update_ms=0.460 scene_ms=0.057 left_eye_ms=0.206 right_eye_ms=0.081 finish_ms=0.001 submit_ms=0.363
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=90 skipped=0 fps=89.989 frame_ms=11.112 update_ms=0.453 scene_ms=0.061 left_eye_ms=0.211 right_eye_ms=0.077 finish_ms=0.001 submit_ms=0.355
+SHOCK2QUEST_PERF mission=debug_minimal focused=true samples=91 skipped=0 fps=90.014 frame_ms=11.109 update_ms=0.371 scene_ms=0.047 left_eye_ms=0.166 right_eye_ms=0.059 finish_ms=0.001 submit_ms=0.292

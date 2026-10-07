@@ -1,0 +1,6 @@
+diff --git a/runtimes/oculus_runtime/src/refresh_rate.rs b/runtimes/oculus_runtime/src/refresh_rate.rs
+--- a/runtimes/oculus_runtime/src/refresh_rate.rs
++++ b/runtimes/oculus_runtime/src/refresh_rate.rs
+@@ -1 +1 @@
+-pub const TARGET_HZ: f32 = 90.0;
++pub const TARGET_HZ: f32 = 120.0;

@@ -1,0 +1,94 @@
+{
+  "name": "rec1-six-hybrids",
+  "mission": "rec1.mis",
+  "player_position": [
+    -5.3,
+    0.5,
+    -213
+  ],
+  "camera_eye": [
+    -5,
+    1,
+    -218
+  ],
+  "camera_look_at": [
+    -5,
+    -3.8,
+    -230
+  ],
+  "subject_model": "grunt_p",
+  "expected_subject_meshes": 12,
+  "object_lighting": false,
+  "lights_on": true,
+  "light_templates": [
+    711,
+    714,
+    799,
+    801,
+    802,
+    805,
+    800,
+    404,
+    402,
+    406,
+    401,
+    368,
+    1043,
+    1361,
+    280,
+    715
+  ],
+  "remove_templates": [
+    1546
+  ],
+  "spawns": [
+    {
+      "template_id": -397,
+      "position": [
+        -9,
+        -5.1,
+        -227
+      ]
+    },
+    {
+      "template_id": -397,
+      "position": [
+        -9,
+        -5.1,
+        -232
+      ]
+    },
+    {
+      "template_id": -397,
+      "position": [
+        -5,
+        -5.1,
+        -227
+      ]
+    },
+    {
+      "template_id": -397,
+      "position": [
+        -5,
+        -5.1,
+        -232
+      ]
+    },
+    {
+      "template_id": -397,
+      "position": [
+        -1,
+        -5.1,
+        -227
+      ]
+    },
+    {
+      "template_id": -397,
+      "position": [
+        -1,
+        -5.1,
+        -232
+      ]
+    }
+  ]
+}
