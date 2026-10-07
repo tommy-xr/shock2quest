@@ -134,7 +134,14 @@ for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as 
       if (model === "sg_h") {
         const pump = (await game.entities.detail(weapon.id)).properties.find(p => p.name === "ShotgunPump");
         assert.ok(pump);
-        assert.equal(JSON.parse(pump.value).phase, "Spent", "handoff cannot bypass the required pump cycle");
+        const previousPump = beforeHandoff.properties.find(p => p.name === "ShotgunPump");
+        assert.ok(previousPump);
+        // Bringing the still-gripped fore-end toward the primary hand can
+        // eject the spent shell now that ordinary overshoot stays attached.
+        // Handoff must preserve that real stroke, not reset or finish it.
+        assert.deepEqual(JSON.parse(pump.value), JSON.parse(previousPump.value),
+          "handoff preserves the chamber state and pump position");
+        assert.notEqual(JSON.parse(pump.value).phase, "Ready", "handoff cannot bypass the required pump cycle");
       }
     });
   }

@@ -151,8 +151,8 @@ impl SupportProfile {
             && self.grab_radius.is_finite()
             && (0.01..=0.15).contains(&self.grab_radius)
             && self.release_distance.is_finite()
-            && (self.grab_radius..=0.3).contains(&self.release_distance)
-            && (20.0..=120.0).contains(&self.max_swing_degrees)
+            && (self.grab_radius..=1.0).contains(&self.release_distance)
+            && (20.0..=180.0).contains(&self.max_swing_degrees)
     }
 
     /// Shared runtime/editor support glove placement from the same palm anchor.
@@ -455,7 +455,20 @@ mod tests {
         );
         profile.release_distance = 0.02;
         assert!(!profile.is_valid());
-        profile.release_distance = 0.12;
+        profile.release_distance = 0.6;
+        profile.max_swing_degrees = 150.0;
+        assert!(
+            profile.is_valid(),
+            "manual pump retention allows broad hand motion"
+        );
+        assert!(profile.allows_swing(Vector3::unit_y(), Vector3::unit_x()));
+        assert!(!profile.allows_swing(Vector3::unit_y(), -Vector3::unit_y()));
+        profile.release_distance = 1.01;
+        assert!(!profile.is_valid());
+        profile.release_distance = 0.6;
+        profile.max_swing_degrees = 181.0;
+        assert!(!profile.is_valid());
+        profile.max_swing_degrees = 150.0;
         profile.curls[0] = f32::NAN;
         assert!(!profile.is_valid());
     }
