@@ -2939,6 +2939,7 @@ pub struct MissionCore {
     pub id_to_physics: HashMap<EntityId, RigidBodyHandle>,
     pub id_to_particle_system: HashMap<EntityId, crate::particle_effects::ParticleEffect>,
     immolate_flames: Option<ParticleSystem>,
+    water_feedback: crate::swimming::WaterFeedback,
     held_recovery_particles: Vec<ParticleSystem>,
     #[allow(dead_code)]
     pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
@@ -3430,6 +3431,7 @@ impl MissionCore {
         world.add_unique(crate::psi_radar::Radar::default());
         world.add_unique(crate::psi_seekersense::Seekersense::default());
         world.add_unique(crate::scripts::healing_item::ActiveHealing::default());
+        world.add_unique(crate::swimming::WaterStatus::default());
         world.add_unique(crate::scripts::radiation::ActiveRadiation::default());
         world.add_unique(crate::scripts::radiation::RadiationRooms::default());
         world.add_unique(crate::scripts::radiation::HazardResistance(
@@ -3982,6 +3984,7 @@ impl MissionCore {
             id_to_bitmap,
             id_to_particle_system: HashMap::new(),
             immolate_flames: None,
+            water_feedback: Default::default(),
             held_recovery_particles: Vec::new(),
             template_name_to_template_id,
             mission_object_name_to_id,
@@ -5063,6 +5066,63 @@ impl MissionCore {
             })
             .unwrap_or_else(|| vec3(0.0, -center, 0.0));
 
+        let body_center = self.physics.get_player_translation(&self.player_handle);
+        let mut head_local = input_context.head.position;
+        head_local.y = head_local
+            .y
+            .min(crate::physics::player_eye_cap_above_center(stance));
+        let head_world = new_character_pos + new_rotation * head_local;
+        let in_water = |point| {
+            self.spatial_data
+                .as_deref()
+                .and_then(|spatial| spatial.get_cell_from_position(point))
+                .is_some_and(|cell| cell.medium == dark::mission::CellMedium::Water)
+        };
+        // A small hysteresis band prevents tracked-head jitter at the waterline
+        // from repeatedly restarting the dive/surface samples.
+        let head_probe = head_world
+            + vec3(
+                0.0,
+                if crate::swimming::WaterStatus::from_world(&self.world).submerged {
+                    -0.04
+                } else {
+                    0.04
+                },
+                0.0,
+            );
+        let water_medium = if in_water(head_probe) {
+            3
+        } else if in_water(body_center) {
+            2
+        } else if in_water(body_center - vec3(0.0, center - 0.05, 0.0)) {
+            1
+        } else {
+            0
+        };
+        effects.extend(
+            self.water_feedback.update(
+                &self.world,
+                crate::swimming::WaterFrame {
+                    elapsed: time.elapsed,
+                    head: head_world,
+                    forward: new_rotation * input_context.head.rotation * vec3(0.0, 0.0, -1.0),
+                    medium: water_medium,
+                    travel: self.player_handle.self_translation(),
+                    swimming_input: !self.player_handle.is_climbing()
+                        && (input_context.right_hand.thumbstick.magnitude() > 0.05
+                            || input_context.jump
+                            || input_context.jump_button_held
+                            || self.button_jump_held),
+                    alive: !player_health_depleted,
+                    player: self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .unwrap()
+                        .entity_id,
+                },
+            ),
+        );
+
         if !time.elapsed.is_zero() {
             // Player footsteps, paced by the distance the player just walked
             // under their own power (platform carry already removed). Only on
@@ -5075,7 +5135,7 @@ impl MissionCore {
                         self_translation: self.player_handle.self_translation(),
                         is_grounded: self.player_handle.is_grounded(),
                         is_crouched: self.player_handle.is_crouched(),
-                        is_climbing: self.player_handle.is_climbing(),
+                        is_climbing: self.player_handle.is_climbing() || water_medium > 0,
                     });
             if let Some(footstep) = footstep {
                 // The deck the foot landed on: `new_character_pos` is the pawn
@@ -16432,6 +16492,7 @@ impl MissionCore {
             }
         }
         if options.render_particles {
+            scene.extend(self.water_feedback.render());
             for particles in &self.held_recovery_particles {
                 scene.extend(particles.render());
             }
@@ -19929,6 +19990,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             }
         });
         let mut state = crate::game_scene::DebugUiState {
+            water: Some(crate::swimming::WaterStatus::from_world(&self.world)),
             mode: if self.use_mode {
                 "use".to_string()
             } else {
@@ -22333,6 +22395,9 @@ impl crate::game_scene::GameScene for MissionCore {
     }
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
+        if let Some(handle) = self.water_feedback.take_ambience() {
+            stop_sound(audio_context, handle);
+        }
         if let Some(handle) = self.klaxon.take() {
             stop_sound(audio_context, handle);
         }

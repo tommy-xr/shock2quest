@@ -750,6 +750,7 @@ pub struct UiStateResult {
     /// The station security alarm; `Some` exactly while one is up, which is
     /// when the HUD shows its badge and countdown.
     pub security_alarm: Option<shock2vr::game_scene::DebugSecurityAlarm>,
+    pub water: Option<shock2vr::swimming::WaterStatus>,
 }
 
 /// A single carried item.

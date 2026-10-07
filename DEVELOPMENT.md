@@ -714,6 +714,22 @@ body centers: rec `(12.35, -6.25, -231.1)`, many `(41.3, 9.3, 45)`.
 Avoid teleporting closer to the Many rim: its submerged slope can intersect
 the standing capsule even when the head appears above water.
 
+Breathing is measured at the player's head, independently of swimming at the
+body. Air capacity is **60 + 10 × effective Endurance seconds** (70 s at END 1,
+120 s at END 6), in both presentations. At 30 seconds remaining, a status
+message and beep warn of low air. There is no persistent oxygen meter.
+Exhaustion costs 3 HP every 3 seconds, with
+the normal hurt sound and hit feedback. Surfacing refills air at 5× real time.
+Remaining air and the damage interval survive saves and level transitions.
+
+Water feedback uses the shipped wading, surface-swim, underwater-stroke,
+diving, surfacing, splash and underwater-ambience sounds. Movement sounds are
+paced by actual movement; idle floating is quiet apart from the underwater
+loop. A faint blue-green peripheral tint and small rising bubbles identify
+head immersion without moving the camera. The shared renderer applies the
+tint behind the HUD. `/v1/ui` exposes `water` (immersion, remaining/capacity
+seconds, tint) for deterministic checks. This does not change buoyancy.
+
 #### Research lab (`debug_research`)
 
 Open `debug_research` in the Developer scene picker, or run:
