@@ -28,7 +28,7 @@ const VERTEX_SHADER_SOURCE: &str = r#"
             texCoord = inTex;
             vec3 v_right = vec3(view[0].x, view[1].x, view[2].x);
             vec3 v_up = vec3(view[0].y, view[1].y, view[2].y);          
-            vec3 billboard_center = world[3].xyz;
+            vec3 billboard_center = waveWorldPosition(world[3]).xyz;
 
             vec3 adjusted_pos = billboard_center + inPos.x * v_right * scale + inPos.y * v_up * scale;
             gl_Position = projection * view * vec4(adjusted_pos, 1.0);
@@ -59,6 +59,7 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
 "#;
 
 struct Uniforms {
+    world_wave: crate::scene::world_wave::Uniforms,
     world_loc: i32,
     view_loc: i32,
     projection_loc: i32,
@@ -117,6 +118,7 @@ where
         self.diffuse_texture.bind0(render_context);
         unsafe {
             gl::UseProgram(shader_program.gl_id);
+            uniforms.world_wave.bind(render_context.world_wave);
 
             let projection = render_context.projection_matrix;
 
@@ -157,7 +159,7 @@ where
             // ------------------------------------
             // vertex shader
             let vertex_shader = crate::shader::build(
-                VERTEX_SHADER_SOURCE,
+                &[crate::scene::world_wave::GLSL, VERTEX_SHADER_SOURCE].concat(),
                 crate::shader::ShaderType::Vertex,
                 is_opengl_es,
             );
@@ -173,6 +175,7 @@ where
                 let shader = crate::shader_program::link(&vertex_shader, &fragment_shader);
 
                 let uniforms = Uniforms {
+                    world_wave: crate::scene::world_wave::Uniforms::new(shader.gl_id),
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
                     view_loc: gl::GetUniformLocation(shader.gl_id, c_str!("view").as_ptr()),
                     in_color_loc: gl::GetUniformLocation(shader.gl_id, c_str!("inColor").as_ptr()),

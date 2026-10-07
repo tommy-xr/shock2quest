@@ -1,6 +1,6 @@
 use dark::properties::{PropHitPoints, PropMaxHitPoints, PropPsiState};
 use serde::{Deserialize, Serialize};
-use shipyard::{EntityId, Get, UniqueView, View, ViewMut, World};
+use shipyard::{EntityId, Get, UniqueView, UniqueViewMut, View, ViewMut, World};
 
 use crate::mission::PlayerInfo;
 
@@ -49,12 +49,13 @@ impl PlayerVitalPool {
     }
 }
 
-/// Player health and psi state that follows the player between missions and is
+/// Player health, psi and alcohol state that follows the player between missions and is
 /// stored independently from mission entities and held-item serialization.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlayerVitals {
     pub hit_points: PlayerVitalPool,
     pub psi_points: PlayerVitalPool,
+    pub alcohol: crate::alcohol::AlcoholVital,
 }
 
 impl PlayerVitals {
@@ -69,6 +70,10 @@ impl PlayerVitals {
         let psi = psi_points.get(player).ok()?;
 
         Some(PlayerVitals {
+            alcohol: world
+                .borrow::<UniqueView<crate::alcohol::AlcoholVital>>()
+                .map(|vital| *vital)
+                .unwrap_or_default(),
             hit_points: PlayerVitalPool {
                 current: hp.hit_points,
                 maximum: i32::try_from(max_hp.hit_points).unwrap_or(i32::MAX),
@@ -85,6 +90,12 @@ impl PlayerVitals {
     /// persisted snapshot therefore wins exactly, while malformed saves cannot
     /// create negative maximums or overfilled pools.
     pub(crate) fn restore(self, world: &World, player: EntityId) {
+        // Mission creation already installs a sober vital. add_unique alone
+        // does not replace that storage, so assign the saved value explicitly.
+        world.add_unique(crate::alcohol::AlcoholVital::default());
+        *world
+            .borrow::<UniqueViewMut<crate::alcohol::AlcoholVital>>()
+            .unwrap() = self.alcohol.normalized();
         let hit_points = self.hit_points.clamped();
         let psi_points = self.psi_points.clamped();
 
@@ -126,12 +137,36 @@ mod tests {
     }
 
     #[test]
+    fn alcohol_restore_replaces_the_destination_missions_default_vital() {
+        let (source, source_player) = player_world();
+        let mut alcohol = crate::alcohol::AlcoholVital::default();
+        for _ in 0..3 {
+            alcohol.drink();
+        }
+        alcohol.update(1.0);
+        source.add_unique(alcohol);
+        let saved = PlayerVitals::capture(&source, source_player).unwrap();
+        let saved: PlayerVitals =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let (destination, destination_player) = player_world();
+        destination.add_unique(crate::alcohol::AlcoholVital::default());
+        saved.restore(&destination, destination_player);
+        assert_eq!(
+            PlayerVitals::capture(&destination, destination_player)
+                .unwrap()
+                .alcohol,
+            alcohol
+        );
+    }
+
+    #[test]
     fn captures_current_and_maximum_pools_exactly() {
         let (world, player) = player_world();
 
         assert_eq!(
             PlayerVitals::capture(&world, player),
             Some(PlayerVitals {
+                alcohol: Default::default(),
                 hit_points: PlayerVitalPool {
                     current: 27,
                     maximum: 35,
@@ -148,6 +183,7 @@ mod tests {
     fn restore_preserves_maximums_and_clamps_currents() {
         let (world, player) = player_world();
         PlayerVitals {
+            alcohol: Default::default(),
             hit_points: PlayerVitalPool {
                 current: 80,
                 maximum: 52,
@@ -163,6 +199,7 @@ mod tests {
         assert_eq!(
             restored,
             PlayerVitals {
+                alcohol: Default::default(),
                 hit_points: PlayerVitalPool {
                     current: 52,
                     maximum: 52,
@@ -181,6 +218,7 @@ mod tests {
     fn restore_limits_malformed_extreme_maxima_before_later_adjustments() {
         let (world, player) = player_world();
         PlayerVitals {
+            alcohol: Default::default(),
             hit_points: PlayerVitalPool {
                 current: i32::MAX,
                 maximum: i32::MAX,

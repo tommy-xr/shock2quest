@@ -40,7 +40,7 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
 
             worldNormal = unlit ? vec3(0.0) : normalize(normalMatrix * inNormal);
 
-            gl_Position = projection * view * worldPosition;
+            gl_Position = projection * view * waveWorldPosition(worldPosition);
         }
 "#;
 
@@ -175,6 +175,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
 "#;
 
 struct UnifiedUniforms {
+    world_wave: crate::scene::world_wave::Uniforms,
     self_depth: super::self_depth::Uniforms,
     incidence: IncidenceUniforms,
     render_pass: super::render_pass::Uniforms,
@@ -256,6 +257,7 @@ where
         }
         unsafe {
             gl::UseProgram(shader_program.gl_id);
+            uniforms.world_wave.bind(render_context.world_wave);
             uniforms.self_depth.bind(render_context.self_depth);
             uniforms
                 .incidence
@@ -415,7 +417,7 @@ where
         let build = |capture| {
             // Build and compile unified shader program with 6-spotlight support
             let vertex_shader = crate::shader::build(
-                UNIFIED_VERTEX_SHADER_SOURCE,
+                &[crate::scene::world_wave::GLSL, UNIFIED_VERTEX_SHADER_SOURCE].concat(),
                 crate::shader::ShaderType::Vertex,
                 is_opengl_es,
             );
@@ -443,6 +445,7 @@ where
 
                 // Get uniform locations for all shader variables
                 let uniforms = UnifiedUniforms {
+                    world_wave: crate::scene::world_wave::Uniforms::new(shader.gl_id),
                     self_depth: super::self_depth::Uniforms::new(shader.gl_id),
                     incidence: IncidenceUniforms::new(shader.gl_id),
                     render_pass: super::render_pass::Uniforms::new(shader.gl_id),

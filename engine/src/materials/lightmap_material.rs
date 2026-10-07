@@ -40,7 +40,7 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
             worldPos = worldPosition.xyz;
             worldNormal = normalize(mat3(world) * inNormal);
 
-            gl_Position = projection * view * worldPosition;
+            gl_Position = projection * view * waveWorldPosition(worldPosition);
         }
 "#;
 
@@ -141,6 +141,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
 "#;
 
 struct UnifiedUniforms {
+    world_wave: crate::scene::world_wave::Uniforms,
     // Basic transformation matrices
     world_loc: i32,
     view_loc: i32,
@@ -201,6 +202,7 @@ impl LightmapMaterial {
             self.diffuse_texture.bind1(render_context);
 
             gl::UseProgram(shader_program.gl_id);
+            uniforms.world_wave.bind(render_context.world_wave);
 
             let projection = render_context.projection_matrix;
 
@@ -285,7 +287,7 @@ impl Material for LightmapMaterial {
         let _ = UNIFIED_SHADER_PROGRAM.get_or_init(|| {
             // Build and compile unified shader program with lightmaps + 6-spotlight support
             let vertex_shader = crate::shader::build(
-                UNIFIED_VERTEX_SHADER_SOURCE,
+                &[crate::scene::world_wave::GLSL, UNIFIED_VERTEX_SHADER_SOURCE].concat(),
                 crate::shader::ShaderType::Vertex,
                 is_opengl_es,
             );
@@ -301,6 +303,7 @@ impl Material for LightmapMaterial {
 
                 // Get uniform locations for all shader variables
                 let uniforms = UnifiedUniforms {
+                    world_wave: crate::scene::world_wave::Uniforms::new(shader.gl_id),
                     // Basic transformation matrices
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
                     view_loc: gl::GetUniformLocation(shader.gl_id, c_str!("view").as_ptr()),

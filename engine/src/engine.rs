@@ -2,6 +2,9 @@
 pub struct EngineRenderContext {
     pub time: f32,
 
+    /// Per-object visual displacement, installed by SceneObject at draw time.
+    pub world_wave: crate::scene::world_wave::WorldWave,
+
     /// Renderer-owned self-occlusion mask; callers start with None.
     pub self_depth: crate::scene::self_depth::Phase,
 

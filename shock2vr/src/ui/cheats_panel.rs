@@ -72,6 +72,8 @@ pub enum CheatAction {
     AddToxin,
     /// Clear accumulated contamination without disabling environmental sources.
     ClearExposure,
+    MaxAlcohol,
+    ClearAlcohol,
 }
 
 /// One entry in the list: the row's label and what clicking it does.
@@ -181,6 +183,14 @@ pub static CHEATS: &[Cheat] = &[
             -1334, // WormHeart
             -1660, // WormMind
         ]),
+    },
+    Cheat {
+        label: "Max out alcohol",
+        action: CheatAction::MaxAlcohol,
+    },
+    Cheat {
+        label: "Clear alcohol",
+        action: CheatAction::ClearAlcohol,
     },
 ];
 

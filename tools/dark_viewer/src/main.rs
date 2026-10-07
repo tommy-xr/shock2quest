@@ -422,6 +422,7 @@ pub fn main() {
 
         let render_context = engine::EngineRenderContext {
             self_depth: engine::scene::self_depth::Phase::None,
+            world_wave: Default::default(),
             ambient_light_intensity: 1.0,
             level_light_intensity: 1.0,
             time: if cli.screenshot.is_some() {

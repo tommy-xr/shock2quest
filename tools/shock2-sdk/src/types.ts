@@ -751,6 +751,9 @@ export interface PlayerSnapshot {
    * no psi pool. */
   psi_points: number | null;
   max_psi_points: number | null;
+  /** Saved game-scale alcohol level and eased visual intensity (0..1). */
+  alcohol_level: number;
+  alcohol_intensity: number;
   /** Accumulated retail radiation level (zero when clear). */
   radiation_level: number;
   toxin_level: number;

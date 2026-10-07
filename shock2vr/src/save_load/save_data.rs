@@ -159,7 +159,13 @@ mod tests {
     }
 
     fn sample_vitals() -> PlayerVitals {
+        let mut alcohol = crate::alcohol::AlcoholVital::default();
+        for _ in 0..3 {
+            alcohol.drink();
+        }
+        alcohol.update(1.0);
         PlayerVitals {
+            alcohol,
             hit_points: PlayerVitalPool {
                 current: 27,
                 maximum: 35,

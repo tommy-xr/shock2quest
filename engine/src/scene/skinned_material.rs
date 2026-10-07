@@ -79,7 +79,7 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
             worldPos = worldPosition.xyz;
             worldNormal = normalize(normalMatrix * mod_normal);
 
-            gl_Position = projection * view * worldPosition;
+            gl_Position = projection * view * waveWorldPosition(worldPosition);
         }
 "#;
 
@@ -221,6 +221,7 @@ pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
 "#;
 
 struct UnifiedUniforms {
+    world_wave: crate::scene::world_wave::Uniforms,
     self_depth: super::self_depth::Uniforms,
     incidence: IncidenceUniforms,
     render_pass: super::render_pass::Uniforms,
@@ -324,6 +325,7 @@ impl SkinnedMaterial {
             .bind1(render_context);
         unsafe {
             gl::UseProgram(shader_program.gl_id);
+            uniforms.world_wave.bind(render_context.world_wave);
             uniforms.self_depth.bind(render_context.self_depth);
             uniforms
                 .incidence
@@ -516,7 +518,7 @@ impl Material for SkinnedMaterial {
         let build = |capture| {
             // Build and compile unified shader program with 6-spotlight support for skinned meshes
             let vertex_shader = crate::shader::build(
-                UNIFIED_VERTEX_SHADER_SOURCE,
+                &[crate::scene::world_wave::GLSL, UNIFIED_VERTEX_SHADER_SOURCE].concat(),
                 crate::shader::ShaderType::Vertex,
                 is_opengl_es,
             );
@@ -561,6 +563,7 @@ impl Material for SkinnedMaterial {
                     gl::GetUniformLocation(shader.gl_id, c_str!("bone_matrices[0]").as_ptr());
 
                 let uniforms = UnifiedUniforms {
+                    world_wave: crate::scene::world_wave::Uniforms::new(shader.gl_id),
                     self_depth: super::self_depth::Uniforms::new(shader.gl_id),
                     incidence: IncidenceUniforms::new(shader.gl_id),
                     render_pass: super::render_pass::Uniforms::new(shader.gl_id),
