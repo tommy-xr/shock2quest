@@ -96,7 +96,7 @@ pub enum FlatUiDragAction {
         tool: EntityId,
         target: EntityId,
     },
-    ApplyItemUse(crate::scripts::item_tool::ItemUse, EntityId),
+    ApplyItemUse(crate::scripts::item_psi::ItemUse, EntityId),
     /// One of the AMMOFULL readout's controls was clicked (fire-mode setting,
     /// reload, ammo cycle, psi selector). Not tied to a cursor item - the
     /// target is the entity in the last drawn readout, never a hand lookup.
@@ -250,7 +250,7 @@ pub struct FlatUiHost {
     /// The item lifted onto the cursor (the original's "cursor IS the item"
     /// drag, §2.4). `Some` between a lift and the place/throw that clears it.
     cursor_item: Option<CursorItem>,
-    item_use: Option<crate::scripts::item_tool::ItemUse>,
+    item_use: Option<crate::scripts::item_psi::ItemUse>,
     /// Resolved inventory destination, drawn by the shared canvas in both presentations.
     placement_preview: Option<PlacementPreview>,
     /// The most recent lift, for double-click (wield) detection. Counts down
@@ -509,7 +509,7 @@ impl FlatUiHost {
             .then(|| crate::item_tools::preview(world, tool, target))
     }
 
-    pub fn begin_item_use(&mut self, request: crate::scripts::item_tool::ItemUse) {
+    pub fn begin_item_use(&mut self, request: crate::scripts::item_psi::ItemUse) {
         self.cursor_item = None;
         self.last_lift = None;
         self.item_use = Some(request);
@@ -1366,23 +1366,6 @@ impl FlatUiHost {
             }
             if over_strip {
                 let held = self.cursor_item.as_ref().unwrap().entity;
-                if let Some(recycler) = self.strip_item_at(canvas_pos).filter(|target| {
-                    *target != held && crate::scripts::item_tool::is_recycler(world, *target)
-                }) {
-                    self.cursor_item = None;
-                    self.last_lift = None;
-                    return (
-                        Vec::new(),
-                        vec![FlatUiDragAction::ApplyItemUse(
-                            crate::scripts::item_tool::ItemUse {
-                                tool: recycler,
-                                power: None,
-                                effective_psi: 0,
-                            },
-                            held,
-                        )],
-                    );
-                }
                 // Double-click on the just-lifted item's slot wields it (the
                 // second press of a quick same-spot double-click) rather than
                 // placing - the faithful single-button equip gesture.

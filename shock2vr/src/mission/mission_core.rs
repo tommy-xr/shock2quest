@@ -10464,12 +10464,12 @@ impl MissionCore {
                             );
                         }
                         self.flat_ui.begin_item_use(request);
-                        effects.push_front(crate::scripts::item_tool::message(request.prompt()));
+                        effects.push_front(crate::scripts::item_psi::message(request.prompt()));
                     }
                 }
                 Effect::ApplyItemUse { request, target } => {
                     if self.player_is_alive() {
-                        let result = crate::scripts::item_tool::resolve(
+                        let result = crate::scripts::item_psi::resolve(
                             &self.world,
                             request,
                             target,

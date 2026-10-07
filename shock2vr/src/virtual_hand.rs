@@ -388,20 +388,12 @@ impl VirtualHand {
                         motion: release,
                     }];
 
-                    // Feeding the held Recycler is a deliberate close release,
-                    // independent of the maintenance tool's weapon targeting.
-                    let recycler_target = held_by_other_hand.filter(|target| {
-                        (hand_position - other_hand_position).magnitude() <= TWO_HAND_TOOL_REACH
-                            && crate::scripts::item_tool::is_recycler(world, *target)
-                    });
                     let is_maintenance = crate::item_tools::is_tool(world, entity_id);
-                    let target = recycler_target.or_else(|| {
-                        if is_maintenance {
-                            maintenance_target
-                        } else {
-                            result.as_ref().and_then(|hit| hit.maybe_entity_id)
-                        }
-                    });
+                    let target = if is_maintenance {
+                        maintenance_target
+                    } else {
+                        result.as_ref().and_then(|hit| hit.maybe_entity_id)
+                    };
                     if let Some(target) = target {
                         msgs.push(VirtualHandEffect::OutMessage {
                             message: Message {

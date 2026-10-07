@@ -394,12 +394,12 @@ fn cast_selected_power(
         return cast_sustained_power(world, amp_entity, &power, effective_psi);
     }
 
-    if super::item_tool::is_item_power(power.template_id) {
-        return super::item_tool::begin(
+    if super::item_psi::is_item_power(power.template_id) {
+        return super::item_psi::begin(
             world,
-            super::item_tool::ItemUse {
+            super::item_psi::ItemUse {
                 tool: amp_entity,
-                power: Some(power.template_id),
+                power: power.template_id,
                 effective_psi,
             },
         );

@@ -42,7 +42,7 @@ async function castAt(game: GameServer, name: string, target: number, overload =
   return psi!;
 }
 
-test("flat item powers and Recycler use authored values through inventory gestures", {
+test("flat item powers use authored values through inventory gestures", {
   skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000,
 }, async () => {
   await using game = await GameServer.launch({ mission: "debug_psi" });
@@ -88,16 +88,15 @@ test("flat item powers and Recycler use authored values through inventory gestur
   assert.equal((await game.info()).player.stats!.nanites, money - 20 + 8, "4 * (0.8 + 0.2 * PSI 6)");
   assert.equal((await game.info()).player.psi_points, psi - 4);
 
-  // Feed the last hypo to the portable Recycler by dragging it onto the device.
-  const before = (await game.info()).player.stats!.nanites;
-  await clickUiElement(game, await slot(game, patch));
-  assert.equal((await game.ui.state()).cursor?.entity_id, patch);
+  // Main's shared tool gesture remains authoritative: drag Recycler onto the
+  // target, rather than reinstalling this PR's older inverse-feeding handler.
+  const beforeRecycle = (await game.info()).player.stats!.nanites;
   await clickUiElement(game, await slot(game, recycler));
-  assert.equal((await game.info()).player.stats!.nanites, before + 2);
-  const items = (await game.player.inventory()).items;
-  assert.ok(!items.some(i => i.entity_id === patch));
-  assert.ok(items.some(i => i.entity_id === recycler), "the Recycler is reusable");
-  assert.equal((await game.ui.state()).cursor, null);
+  assert.equal((await game.ui.state()).cursor?.entity_id, recycler);
+  await clickUiElement(game, await slot(game, patch));
+  assert.equal((await game.info()).player.stats!.nanites, beforeRecycle + 2);
+  assert.ok(!(await game.player.inventory()).items.some(i => i.entity_id === patch));
+  assert.ok((await game.player.inventory()).items.some(i => i.entity_id === recycler));
 
   // Cancel a pending cast with Tab. Opening again must restore ordinary inventory clicks.
   await shooter(game);
@@ -129,7 +128,7 @@ test("flat item powers and Recycler use authored values through inventory gestur
 });
 
 for (const toolHand of ["right", "left"] as const) {
-  test(`VR ${toolHand}-hand psi targets the opposite item and Recycler accepts a release`, {
+  test(`VR ${toolHand}-hand psi targets the opposite item`, {
     skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000,
   }, async () => {
     const { aimVrHandAt } = await import("./helpers/vr-hand.js");
@@ -172,34 +171,6 @@ for (const toolHand of ["right", "left"] as const) {
     assert.equal(await property(game, patch.id, "StackCount"), 1);
     assert.equal((await game.info()).player.psi_points, psi - 4);
     assert.ok((await game.player.inventory()).items.some(i => i.entity_id === amp.id && i.location === `${toolHand}_hand`));
-
-    await game.input.set(`${toolHand}_hand.squeeze`, 0); await game.step({ frames: 3 });
-    const recycler = await grab(-71, toolHand);
-    // Bring the held target to the Recycler. Contact alone must leave it intact.
-    await game.input.set(`${targetHand}_hand.position`, recycler.pose.local);
-    await game.input.set(`${targetHand}_hand.rotation`, [0, 0, 0, 1]);
-    await game.step({ frames: 5 });
-    const before = (await game.info()).player.stats!.nanites;
-    assert.equal(await property(game, patch.id, "StackCount"), 1);
-    // Close-contact trigger use is also supported; exercise the feed gesture here.
-    await game.input.set(`${targetHand}_hand.squeeze`, 0); await game.step({ frames: 5 });
-    assert.equal((await game.info()).player.stats!.nanites, before + 2, "deliberate feed earns authored nanites");
-    assert.ok(!(await game.player.inventory()).items.some(i => i.entity_id === patch.id));
-    assert.ok((await game.player.inventory()).items.some(i => i.entity_id === recycler.id && i.location === `${toolHand}_hand`));
-    assert.equal((await game.physics.bodies({ entityId: patch.id })).bodies.length, 0);
-
-    const clip = await grab(-1358, targetHand);
-    const originalCount = await property(game, clip.id, "StackCount");
-    await game.input.set(`${targetHand}_hand.position`, [
-      recycler.pose.local[0] + 1, recycler.pose.local[1], recycler.pose.local[2],
-    ]);
-    await game.step({ frames: 3 });
-    const beforeDrop = (await game.info()).player.stats!.nanites;
-    await game.input.set(`${targetHand}_hand.squeeze`, 0);
-    await game.step({ frames: 5 });
-    assert.equal((await game.info()).player.stats!.nanites, beforeDrop, "dropping away from the Recycler awards nothing");
-    assert.equal(await property(game, clip.id, "StackCount"), originalCount, "ordinary release preserves the item");
-    assert.ok((await game.physics.bodies({ entityId: clip.id })).bodies.length > 0, "the dropped clip remains in the world");
 
   });
 }

@@ -1,28 +1,27 @@
-//! Item operations shared by the psi amp and the portable Recycler.
+//! Item-targeted psi operations, resolved against live inventory state.
 //!
 //! Scripts name the source and target; the mission resolves the operation against
 //! live state before applying its effects. This prevents two queued gestures from
-//! spending the same points, recycling a deleted object, or losing a stack update.
-use cgmath::InnerSpace;
+//! spending the same points, transmuting a deleted object, or losing a stack update.
 use dark::properties::{
-    PropAlchemy, PropEnergy, PropFabricate, PropFabricateCost, PropGunState, PropRecycle,
-    PropStackCount, PropStackIncrement,
+    PropAlchemy, PropEnergy, PropFabricate, PropFabricateCost, PropGunState, PropStackCount,
+    PropStackIncrement,
 };
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
-use super::{Effect, MessagePayload, Script, script_util};
-use crate::{mission::PlayerInfo, physics::PhysicsWorld};
+use super::{Effect, script_util};
+use crate::mission::PlayerInfo;
 
 pub const ELECTRO_PSI: i32 = -3151;
 pub const FABRICATE: i32 = -3149;
 pub const ALCHEMY: i32 = -1147;
 
 /// A captured cast, not a reservation of currency or an item. Revalidated when
-/// an inventory target is chosen. None denotes the physical Recycler.
+/// an inventory target is chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ItemUse {
     pub tool: EntityId,
-    pub power: Option<i32>,
+    pub power: i32,
     pub effective_psi: i32,
 }
 
@@ -39,34 +38,25 @@ pub fn is_item_power(template: i32) -> bool {
     matches!(template, ELECTRO_PSI | FABRICATE | ALCHEMY)
 }
 
-pub fn is_recycler(world: &World, entity: EntityId) -> bool {
-    script_util::entity_has_script(world, entity, "Recycler")
-}
-
 impl ItemUse {
     pub fn valid(self, world: &World) -> bool {
         if !script_util::player_carried_items(world).contains(&self.tool) {
             return false;
         }
-        match self.power {
-            None => is_recycler(world, self.tool),
-            Some(id) => {
-                crate::wielded_weapon::held_in_hand(world, self.tool)
-                    && crate::wielded_weapon::is_psi_amp(world, self.tool)
-                    && is_item_power(id)
-                    && crate::psi_amp_selection::selected_power(world, self.tool)
-                        .is_some_and(|p| p.template_id == id)
-                    && super::psi_amp_script::power_is_known(world, id)
-            }
-        }
+        crate::wielded_weapon::held_in_hand(world, self.tool)
+            && crate::wielded_weapon::is_psi_amp(world, self.tool)
+            && is_item_power(self.power)
+            && crate::psi_amp_selection::selected_power(world, self.tool)
+                .is_some_and(|p| p.template_id == self.power)
+            && super::psi_amp_script::power_is_known(world, self.power)
     }
 
     pub fn prompt(self) -> &'static str {
         match self.power {
-            Some(ELECTRO_PSI) => "Select charge target (Tab cancels)",
-            Some(FABRICATE) => "Select copy target (Tab cancels)",
-            Some(ALCHEMY) => "Select alchemy target (Tab cancels)",
-            _ => "Select recycle target (Tab cancels)",
+            ELECTRO_PSI => "Select charge target (Tab cancels)",
+            FABRICATE => "Select copy target (Tab cancels)",
+            ALCHEMY => "Select alchemy target (Tab cancels)",
+            _ => "Select item target (Tab cancels)",
         }
     }
 }
@@ -96,42 +86,6 @@ pub fn begin(world: &World, request: ItemUse) -> Effect {
     }
 }
 
-pub struct Recycler;
-impl Script for Recycler {
-    fn handle_message(
-        &mut self,
-        entity: EntityId,
-        world: &World,
-        _: &PhysicsWorld,
-        msg: &MessagePayload,
-    ) -> Effect {
-        match msg {
-            MessagePayload::ProvideForConsumption { entity: target } => Effect::ApplyItemUse {
-                request: ItemUse {
-                    tool: entity,
-                    power: None,
-                    effective_psi: 0,
-                },
-                target: *target,
-            },
-            MessagePayload::Frob | MessagePayload::TriggerPull
-                if crate::mission::mission_core::presentation_is_vr(world) =>
-            {
-                message("Hold the Recycler and release an item into it with your other hand.")
-            }
-            MessagePayload::Frob | MessagePayload::TriggerPull => begin(
-                world,
-                ItemUse {
-                    tool: entity,
-                    power: None,
-                    effective_psi: 0,
-                },
-            ),
-            _ => Effect::NoEffect,
-        }
-    }
-}
-
 pub fn message(text: impl Into<String>) -> Effect {
     Effect::ShowMessage { text: text.into() }
 }
@@ -142,8 +96,7 @@ pub fn message(text: impl Into<String>) -> Effect {
 pub fn resolve(world: &World, request: ItemUse, target: EntityId, roll: i32) -> Effect {
     if !request.valid(world)
         || target == request.tool
-        || !(script_util::player_carried_items(world).contains(&target)
-            || (request.power.is_none() && released_into_recycler(world, request.tool, target)))
+        || !script_util::player_carried_items(world).contains(&target)
     {
         return message("Select a different item you are carrying.");
     }
@@ -153,24 +106,7 @@ pub fn resolve(world: &World, request: ItemUse, target: EntityId, roll: i32) -> 
     if count <= 0 {
         return Effect::NoEffect;
     }
-    let Some(power_id) = request.power else {
-        let value = prop!(world, target, PropRecycle).map(|p| p.0).unwrap_or(0);
-        let Some(amount) = value.checked_mul(count).filter(|v| *v > 0) else {
-            return message("This item cannot be recycled.");
-        };
-        return Effect::combine(vec![
-            Effect::DestroyEntity { entity_id: target },
-            Effect::AwardNanites { amount },
-            script_util::play_environmental_sound(
-                world,
-                request.tool,
-                "activate",
-                Vec::new(),
-                engine::audio::AudioHandle::new(),
-            ),
-            message(format!("Recycled for {amount} nanites.")),
-        ]);
-    };
+    let power_id = request.power;
     let Some(power) = crate::psi_amp_selection::selected_power(world, request.tool) else {
         return Effect::NoEffect;
     };
@@ -293,22 +229,6 @@ pub fn resolve(world: &World, request: ItemUse, target: EntityId, roll: i32) -> 
     Effect::combine(result)
 }
 
-/// A fed item has just left its hand, so it is already a world object when the
-/// queued offer runs. Accept it only beside a held Recycler; a distant ray hit
-/// or a discarded item elsewhere must never be consumed.
-fn released_into_recycler(world: &World, recycler: EntityId, target: EntityId) -> bool {
-    if !crate::wielded_weapon::held_in_hand(world, recycler) {
-        return false;
-    }
-    let Ok(transforms) = world.borrow::<View<crate::runtime_props::RuntimePropTransform>>() else {
-        return false;
-    };
-    let (Ok(tool), Ok(item)) = (transforms.get(recycler), transforms.get(target)) else {
-        return false;
-    };
-    (tool.0.w.truncate() - item.0.w.truncate()).magnitude2() <= 0.6 * 0.6
-}
-
 fn fabrication_chance(data: [f32; 4], psi: i32) -> i32 {
     (data[0] + data[1] * psi.max(0) as f32).clamp(0.0, 100.0) as i32
 }
@@ -337,7 +257,7 @@ mod tests {
     use dark::properties::{Links, PropPsiPower, PropPsiState, PropScripts, PropTemplateId};
     use std::collections::{HashMap, HashSet};
 
-    fn fixture(power: Option<i32>) -> (World, ItemUse, EntityId) {
+    fn fixture(power: i32) -> (World, ItemUse, EntityId) {
         let mut world = World::new();
         let player = world.add_entity(PropPsiState {
             psi_points: 20,
@@ -348,14 +268,7 @@ mod tests {
         let tool = world.add_entity((
             PropTemplateId { template_id: -247 },
             PropScripts {
-                scripts: vec![
-                    if power.is_some() {
-                        "PsiAmpScript"
-                    } else {
-                        "Recycler"
-                    }
-                    .into(),
-                ],
+                scripts: vec!["PsiAmpScript".into()],
                 inherits: false,
             },
             Links { to_links: vec![] },
@@ -377,7 +290,8 @@ mod tests {
         quest.player_stats_mut().award_nanites(100);
         quest.player_stats_mut().skills.maintenance = 2;
         world.add_unique(quest);
-        if let Some(id) = power {
+        {
+            let id = power;
             world.add_component(
                 tool,
                 AmpSelection {
@@ -435,7 +349,7 @@ mod tests {
 
     #[test]
     fn vr_targets_the_opposite_hand_in_either_configuration() {
-        let (world, request, target) = fixture(Some(ELECTRO_PSI));
+        let (world, request, target) = fixture(ELECTRO_PSI);
         world.add_unique(GlobalPresentationMode(crate::PresentationMode::Vr));
         for swapped in [false, true] {
             if swapped {
@@ -457,7 +371,7 @@ mod tests {
     }
     #[test]
     fn flat_begins_a_picker_without_spending_and_changed_power_invalidates_it() {
-        let (mut world, request, _) = fixture(Some(ELECTRO_PSI));
+        let (mut world, request, _) = fixture(ELECTRO_PSI);
         assert!(matches!(
             begin(&world, request),
             Effect::BeginItemUse { .. }
@@ -473,7 +387,7 @@ mod tests {
     }
     #[test]
     fn recharge_is_scaled_clamped_and_preserves_the_target() {
-        let (mut world, request, target) = fixture(Some(ELECTRO_PSI));
+        let (mut world, request, target) = fixture(ELECTRO_PSI);
         world.add_component(target, PropEnergy(25.0));
         assert!(
             effects(&world, request, target, 1)
@@ -491,7 +405,7 @@ mod tests {
     }
     #[test]
     fn fabrication_uses_authored_quantity_and_cost_and_failure_only_spends_psi() {
-        let (mut world, request, target) = fixture(Some(FABRICATE));
+        let (mut world, request, target) = fixture(FABRICATE);
         world.add_component(target, (PropFabricate(6), PropFabricateCost(45)));
         let success = effects(&world, request, target, 60);
         assert!(
@@ -518,8 +432,8 @@ mod tests {
         assert!(no_payment(&effects(&world, request, target, 1)));
     }
     #[test]
-    fn alchemy_consumes_one_clip_while_recycler_consumes_the_whole_stack() {
-        let (mut world, request, target) = fixture(Some(ALCHEMY));
+    fn alchemy_consumes_one_clip_or_the_remaining_partial_stack() {
+        let (mut world, request, target) = fixture(ALCHEMY);
         world.add_component(target, (PropAlchemy(1.25), PropStackIncrement(6)));
         let result = effects(&world, request, target, 1);
         assert!(
@@ -544,28 +458,10 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Effect::AwardNanites { amount: 3 }))
         );
-        let (mut world, request, target) = fixture(None);
-        world.add_component(target, PropRecycle(2));
-        let result = effects(&world, request, target, 1);
-        assert!(
-            result
-                .iter()
-                .any(|e| matches!(e, Effect::DestroyEntity {entity_id} if *entity_id == target))
-        );
-        assert!(
-            result
-                .iter()
-                .any(|e| matches!(e, Effect::AwardNanites { amount: 24 }))
-        );
-        assert!(
-            !result.iter().any(
-                |e| matches!(e, Effect::DestroyEntity {entity_id} if *entity_id == request.tool)
-            )
-        );
     }
     #[test]
     fn ineligible_empty_unowned_and_self_targets_never_spend() {
-        for power in [None, Some(ELECTRO_PSI), Some(FABRICATE), Some(ALCHEMY)] {
+        for power in [ELECTRO_PSI, FABRICATE, ALCHEMY] {
             let (mut world, request, target) = fixture(power);
             assert!(no_payment(&effects(&world, request, target, 1)));
             assert!(no_payment(&effects(&world, request, request.tool, 1)));
@@ -576,7 +472,6 @@ mod tests {
                     PropFabricate(1),
                     PropFabricateCost(1),
                     PropAlchemy(1.0),
-                    PropRecycle(1),
                     PropStackCount(0),
                 ),
             );
@@ -593,7 +488,7 @@ mod tests {
     fn malformed_values_and_overflow_cannot_mint_nanites_or_wrap_a_stack() {
         assert_eq!(transmutation_yield(f32::NAN, 1.0, 6, 1), 0);
         assert_eq!(transmutation_yield(f32::INFINITY, 1.0, 6, 1), 0);
-        let (mut world, request, target) = fixture(Some(FABRICATE));
+        let (mut world, request, target) = fixture(FABRICATE);
         world.add_component(target, (PropStackCount(i32::MAX), PropFabricate(1)));
         assert!(no_payment(&effects(&world, request, target, 1)));
         assert_eq!(fabrication_chance([30.0, 10.0, 0.0, 0.0], 8), 100);
