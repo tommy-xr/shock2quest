@@ -61,6 +61,7 @@ pub(crate) mod internal_switch_held_model;
 mod laser_shot;
 mod level_change_button;
 pub mod maintenance;
+mod many_brain;
 mod many_ride;
 pub(crate) mod melee_charge;
 mod melee_weapon;
@@ -1306,7 +1307,7 @@ impl ScriptWorld {
             // eng2
             "overlord" => Box::new(overlord::Overlord::new()),
             "freemodify" => Box::new(free_modify::FreeModify),
-            "manybrain" => Box::new(UnimplementedScript::new(&script_name)),
+            "manybrain" => Box::new(many_brain::ManyBrain::new()),
             "trapsuicide" => Box::new(UnimplementedScript::new(&script_name)),
             // many ride?
             "paralyzeplayers" => Box::new(ParalyzePlayers::new()),
