@@ -1034,7 +1034,15 @@ impl AnimatedMonsterAI {
             self.handoff_emitted = true;
             return Effect::combine(vec![
                 Effect::GenerateLoot { entity_id },
-                Effect::SlayEntity { entity_id },
+                // Notify authored death scripts (for example TriggerDestroy)
+                // before debris teardown. ScriptWorld delivers this inline and
+                // then emits the one SlayEntity effect for permanent deaths.
+                Effect::Send {
+                    msg: Message {
+                        to: entity_id,
+                        payload: MessagePayload::Slay,
+                    },
+                },
             ]);
         }
 
@@ -4377,7 +4385,7 @@ mod tests {
         assert!(
             effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::SlayEntity { .. })),
+                .any(|effect| matches!(effect, Effect::Send { msg } if msg.to == entity_id && matches!(msg.payload, MessagePayload::Slay))),
             "expected a link death, got {effects:?}"
         );
         assert!(
@@ -4388,6 +4396,80 @@ mod tests {
             "a link death has no crumple or death speech, got {effects:?}"
         );
         assert!(monster.handoff_emitted, "a removed body must not ragdoll");
+    }
+
+    #[test]
+    fn lethal_link_death_notifies_trigger_destroy_before_teardown_once() {
+        use crate::scripts::{
+            ScriptWorld, trap_qb_set::TrapQBSet, trigger_destroy::TriggerDestroy,
+        };
+        use dark::properties::{
+            Link, Links, PropQuestBitName, PropQuestBitValue, QuestBitValue, ToLink,
+            WrappedEntityId,
+        };
+        let (mut world, entity) = world_with_monster_and_player(Deg(0.0));
+        let qb = world.add_entity((
+            PropQuestBitName("OverlordDoor".into()),
+            PropQuestBitValue(QuestBitValue::INCOMPLETE),
+        ));
+        world.add_component(
+            entity,
+            Links {
+                to_links: vec![
+                    ToLink {
+                        to_template_id: -1425,
+                        to_entity_id: None,
+                        link: Link::Flinderize(dark::properties::FlinderizeOptions {
+                            count: 1,
+                            impulse: 0.0,
+                            scatter: false,
+                            offset: vec3(0.0, 0.0, 0.0),
+                        }),
+                    },
+                    ToLink {
+                        to_template_id: 151,
+                        to_entity_id: Some(WrappedEntityId(qb)),
+                        link: Link::SwitchLink,
+                    },
+                ],
+            },
+        );
+        let mut scripts = ScriptWorld::new();
+        scripts.add_entity2(entity, Box::new(AnimatedMonsterAI::new()));
+        scripts.add_entity2(entity, Box::new(TriggerDestroy::new()));
+        scripts.add_entity2(qb, Box::new(TrapQBSet::new()));
+        scripts.dispatch(Message {
+            to: entity,
+            payload: MessagePayload::Damage {
+                amount: 100.0,
+                impact: None,
+            },
+        });
+        let effects = scripts.update(&world, &PhysicsWorld::new(), &Time::default());
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|e| matches!(e, Effect::GenerateLoot { entity_id } if *entity_id == entity))
+                .count(),
+            1
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|e| matches!(e, Effect::SlayEntity { entity_id } if *entity_id == entity))
+                .count(),
+            1
+        );
+        scripts.remove_entity(entity);
+        world.delete_entity(entity);
+        let relayed = scripts.update(&world, &PhysicsWorld::new(), &Time::default());
+        assert_eq!(relayed.iter().filter(|e| matches!(e, Effect::SetQuestBit { quest_bit_name, .. } if quest_bit_name == "OverlordDoor")).count(), 1, "death relay must survive source teardown: {relayed:?}");
+        assert!(
+            !scripts
+                .update(&world, &PhysicsWorld::new(), &Time::default())
+                .iter()
+                .any(|e| matches!(e, Effect::SetQuestBit { .. }))
+        );
     }
 
     #[test]
