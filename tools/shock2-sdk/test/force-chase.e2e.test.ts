@@ -30,13 +30,18 @@ test(
       experimental: ["nav_bridges"],
     });
 
+    await game.devParams.set("cheat", 1); // Keep the convergence observer alive.
     await game.step({ frames: 10 });
+    const hiddenPosition = await game.player.position();
 
     // The spawn point is the sealed cryo recovery room (AI-unreachable by
     // design); measure convergence toward a player standing in the open
     // deck instead.
-    await game.player.teleport({ x: -14.0, y: 0.5, z: -30.0 });
-    await game.step({ frames: 10 });
+    // z=-30 falls into an unreachable recess: every hybrid gets only a
+    // partial path, and legitimate detours can increase straight-line range.
+    // This lower-deck corridor has full routes from multiple uncapped hybrids.
+    await game.player.teleport({ x: -15.0, y: -3.0, z: 30.0 });
+    await game.step({ frames: 60 });
 
     const hybrids = (await game.entities.list({ filter: "OG-", limit: 20 })).entities.filter(
       (e) => e.name.startsWith("OG-"),
@@ -75,7 +80,13 @@ test(
       pinned.length >= 2,
       `expected at least 2 hybrids to take the pinned alertness, got ${pinned.length}`,
     );
-    const probe = pinned[0];
+    const reachable = [];
+    for (const hybrid of pinned) {
+      if ((await game.pathfinding.route(hybrid.position, playerPos))?.reachable) reachable.push(hybrid);
+    }
+    assert.ok(reachable.length >= 2,
+      "multiple pinned hybrids must have complete walk routes to the observer");
+    const probe = reachable[0];
     await game.step({ frames: 600 });
     detail = await game.entities.detail(probe.id);
     assert.ok(
@@ -88,6 +99,7 @@ test(
     // legitimately walled off - furniture-sealed rooms, locked doors - so
     // require progress from several, not all).
     await game.step({ frames: 1200 });
+    assert.equal((await game.info()).player.life_state, "alive", "the chase observer stays alive");
     let closer = 0;
     let minFinal = Infinity;
     let sumDelta = 0;
@@ -108,10 +120,9 @@ test(
       `expected at least 2 of ${hybrids.length} hybrids to close on the player, got ${closer}`,
     );
     // Aggregate convergence metric: total approach across the fleet. The
-    // main-branch baseline measures ~-17 over 90s with everything the old
-    // graph allowed; a healthy pinned chase on the fixed graph clears -25
-    // in this 30s window with room to spare. Guards regressions in the
-    // pathfinding graph or steering without depending on any single hybrid.
+    // reachable corridor leaves room for substantial collective progress
+    // in this 30s window. Guard graph/steering regressions without depending
+    // on one hybrid's exact route or animation timing.
     assert.ok(
       sumDelta <= -20.0,
       `expected the fleet to approach by 20+ units total, got ${sumDelta.toFixed(1)}`,
@@ -122,6 +133,11 @@ test(
       minFinal < 15.0,
       `expected a hybrid to reach engagement range, closest ended at ${minFinal.toFixed(1)}`,
     );
+
+    // Hide before testing decay: an AI that arrived can now see the observer,
+    // which would legitimately re-alert it after clearing the debug pin.
+    await game.player.teleport(hiddenPosition);
+    await game.step({ frames: 2 });
 
     // DebugCalmAll clears the pin: alertness decays freely again.
     await game.input.trigger("DebugCalmAll");
