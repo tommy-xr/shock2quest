@@ -648,9 +648,9 @@ only change visualization flags, never fit settings or tuning values.
 
 **Visualizations → Show position** (`show_position`) displays the player's
 world X/Y/Z coordinates and each hand ray's surface-hit coordinates, rounded to
-two decimal places for object placement. White laser spots stay visible at both
-hits without holding a trigger, including while holding an item. The debug rays
-reach distant walls and floors without extending grab/use range; a miss or
+two decimal places for object placement. White laser beams connect both hands to
+their hit spots without holding a trigger, including while holding an item. The
+debug rays reach distant walls and floors without extending grab/use range; a miss or
 untracked hand reads `no hit`. The display updates live in flat and VR. It defaults
 off and participates in All on / All off. VR places the shared readout on an upright
 panel with lazy recentering; it is hidden while the cyber interface, pause menu,
