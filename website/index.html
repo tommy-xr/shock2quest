@@ -170,18 +170,16 @@ footer{max-width:1160px;margin:60px auto 0;padding:24px 20px 40px;border-top:1px
 
 <section id="install">
   <div class="kicker">Install</div>
-  <h2 class="sec">Sideload in three steps.</h2>
+  <h2 class="sec">Install with SideQuest.</h2>
   <div class="card install">
-    <p class="req">Quest in Developer Mode · <span class="mono">adb</span> · System Shock 2: 25th Anniversary Remaster (<a data-l="gog" href="#">GOG</a> / <a data-l="steam" href="#">Steam</a>)</p>
+    <p class="req">Quest · Windows, macOS, or Linux computer · USB data cable · System Shock 2: 25th Anniversary Remaster (<a data-l="gog" href="#">GOG</a> / <a data-l="steam" href="#">Steam</a>)</p>
     <ol>
+      <li><b>Set up SideQuest</b>Get the desktop <a href="https://sidequestvr.com/setup-howto">Advanced Installer</a> and follow its Developer Mode setup. Connect your Quest by USB and accept <strong>Allow USB debugging</strong> in the headset.</li>
       <li><b>Download the APK</b><a data-l="release" href="#">Latest release ↗</a></li>
-      <li><b>Install it over USB</b><div class="code">adb install -r shock2quest-&lt;version&gt;.apk</div></li>
-      <li><b>Copy your game files</b><div class="code">adb shell mkdir -p /sdcard/shock2quest/mods
-adb push *.kpf /sdcard/shock2quest/
-adb push mods/*.kpf /sdcard/shock2quest/mods/
-adb push cutscenes /sdcard/shock2quest/</div></li>
+      <li><b>Install the APK</b>In SideQuest, choose <strong>Install APK file from folder on computer</strong>, select the download, and wait for installation to finish.</li>
+      <li><b>Copy your game files</b>Use SideQuest's file manager to create <span class="mono">/sdcard/shock2quest/</span>. Copy <span class="mono">sshock2.kpf</span>, the KPF files inside <span class="mono">mods/</span>, and the whole <span class="mono">cutscenes/</span> folder there, keeping the folder structure.</li>
     </ol>
-    <p class="req" style="margin:8px 0 0">Launch from Unknown Sources. Windows commands and updating: <a data-l="install" href="#">INSTALL.md</a></p>
+    <p class="req" style="margin:8px 0 0">Launch from Unknown Sources. No terminal needed. <a data-l="install" href="#">Full setup, file-copy instructions, updates, and the ADB alternative ↗</a></p>
   </div>
 </section>
 

@@ -23,8 +23,9 @@ Once installed, copy `sshock2.kpf` and the `mods/` folder from it - see [DEVELOP
 ## Running
 
 Download the signed Quest APK from the [latest release](https://github.com/tommy-xr/shock2quest/releases/latest),
-then follow the [installation instructions](INSTALL.md) to sideload it and copy
-your remaster game files.
+then follow the [installation instructions](INSTALL.md) to install it and copy
+your remaster game files with SideQuest's desktop Advanced Installer. No terminal
+is needed; ADB instructions are also available.
 
 ### Controls
 
