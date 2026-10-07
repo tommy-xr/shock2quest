@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit and Run E2E Tests"
+  short_description: "Audit full E2E suites and verify focused fixes"
+  default_prompt: "Use $audit-and-run-e2e-tests to run this repository’s E2E suite, diagnose failures, and verify focused fixes."
